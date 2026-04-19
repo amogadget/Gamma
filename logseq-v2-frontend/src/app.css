@@ -166,7 +166,7 @@ body {
 
 .collapseBtn {
   margin-top: 2px;
-  width: 20px;
+  width: 16px;
   height: 20px;
   border: none;
   background: transparent;
@@ -372,9 +372,9 @@ body {
 
 .collapseSpacer {
   display: inline-block;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
+  width: 16px;
+  min-width: 16px;
+  height: 20px;
 }
 
 .highlightDotBtn {
@@ -390,12 +390,6 @@ body {
   border-radius: 999px;
 }
 
-.collapseSpacer {
-  display: inline-block;
-  width: 28px;
-  min-width: 28px;
-  height: 28px;
-}
 
 .layoutControls {
   display: flex;
@@ -659,15 +653,14 @@ body {
   display: flex;
   align-items: flex-start;
   gap: 0;
-  margin-left: 8px;
 }
 .sortableBlockWrap > .dragHandle {
   flex: 0 0 auto;
-  width: 22px;
+  width: 16px;
   min-height: 32px;
   padding: 0;
   margin-top: 0;
-  margin-right: 2px;
+  margin-right: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -695,4 +688,35 @@ body {
 .sortableBlockWrap > .blockRowWrap {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+
+/* equal-width dot slot for alignment between highlight and non-highlight blocks */
+.dotSlot { width: 16px; min-width: 16px; display: inline-flex; align-items: center; justify-content: center; }
+.dotSlotEmpty { height: 16px; }
+
+
+/* Logseq-style depth guide lines (one per depth level) */
+.sortableBlockWrap[data-depth] { position: relative; }
+.sortableBlockWrap[data-depth]::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  left: 0;
+  background-image:
+    linear-gradient(to right, #2e2e2e 1px, transparent 1px);
+  background-size: 14px 100%;
+  background-repeat: repeat-x;
+  pointer-events: none;
+  width: calc(14px * var(--depth, 0));
+  margin-left: -14px;  /* align with the start of this block's depth indent */
+  opacity: 0.6;
+}
+
+
+/* Logseq-style nested children container */
+.blockChildren {
+  border-left: 1px solid #3a3a3a;
+  padding-left: 14px;
+  margin-left: 11px;  /* align line under the dot column of parent */
 }

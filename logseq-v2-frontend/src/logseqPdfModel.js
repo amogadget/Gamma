@@ -122,7 +122,9 @@ export function flattenBlocks(blocks, depth = 0, parentId = null) {
   const out = [];
   for (const b of blocks || []) {
     out.push(withLegacyAccessors({ ...b, depth, parentId }));
-    out.push(...flattenBlocks(b.children || [], depth + 1, b.id));
+    if (!b.collapsed) {
+      out.push(...flattenBlocks(b.children || [], depth + 1, b.id));
+    }
   }
   return out;
 }

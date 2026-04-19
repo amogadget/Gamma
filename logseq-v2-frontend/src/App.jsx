@@ -35,6 +35,7 @@ import {
   updateBlockTree,
   removeBlockTree,
   flattenBlocks,
+  withLegacyAccessors,
   addHighlightAsBlock,
   blocksToHighlights,
   normalizeBlocks
@@ -285,11 +286,10 @@ function BlockRow({
     <div className="blockRowWrap">
       <div
         className={`blockRow ${focusedId === block.id ? "focused" : ""}`}
-        style={{ marginLeft: `${depth * 22}px` }}
         onMouseDown={(e) => {
           // Don't hijack clicks on interactive children (buttons, textarea, inputs, links)
-          const tag = e.target.tagName;
-          if (tag === "BUTTON" || tag === "TEXTAREA" || tag === "INPUT" || tag === "A") return;
+          // Skip if click is on or inside an interactive element (button, textarea, input, link)
+          if (e.target.closest("button, textarea, input, a")) return;
           setFocusedId(block.id);
           if (!readOnly && !block.editMode) {
             // Stash click coordinates so the textarea-mount effect can place the cursor here.
@@ -309,9 +309,12 @@ function BlockRow({
           >
             {block.collapsed ? "▸" : "▾"}
           </button>
-        ) : isHighlight ? (
+        ) : (
+          <span className="collapseSpacer" />
+        )}
+        {isHighlight && !block.editMode ? (
           <button
-            className="collapseBtn highlightDotBtn"
+            className="collapseBtn highlightDotBtn dotSlot"
             onClick={(e) => {
               e.stopPropagation();
               onJump(block.highlightId);
@@ -324,7 +327,7 @@ function BlockRow({
             />
           </button>
         ) : (
-          <span className="collapseSpacer" />
+          <span className="dotSlot dotSlotEmpty" />
         )}
 
         <div className="blockBody">
@@ -419,6 +422,28 @@ function SortableBlockRow({ block, ...rowProps }) {
       >⋮⋮</button>
       <BlockRow block={block} {...rowProps} />
     </div>
+  );
+}
+
+function BlockTree({ blocks, readOnly, rowProps }) {
+  if (!blocks || blocks.length === 0) return null;
+  return (
+    <>
+      {blocks.map((rawBlock) => { const block = withLegacyAccessors(rawBlock); return (
+        <React.Fragment key={block.id}>
+          {!readOnly ? (
+            <SortableBlockRow block={block} depth={0} {...rowProps} />
+          ) : (
+            <BlockRow block={block} depth={0} {...rowProps} />
+          )}
+          {!block.collapsed && block.children && block.children.length > 0 ? (
+            <div className="blockChildren">
+              <BlockTree blocks={block.children} readOnly={readOnly} rowProps={rowProps} />
+            </div>
+          ) : null}
+        </React.Fragment>
+      );})}
+    </>
   );
 }
 
@@ -1060,6 +1085,7 @@ export default function App() {
                   },
                 };
                 const rootIds = (blocks || []).map((b) => b.id);
+                const allIds = flattenBlocks(blocks).map((b) => b.id);
                 return (
                   <DndContext
                     sensors={dndSensors}
@@ -1068,6 +1094,7 @@ export default function App() {
                       if (readOnly) return;
                       const { active, over } = e;
                       if (!over || active.id === over.id) return;
+                      // B1: only root-to-root drops take effect; nested drops are no-ops pending B3
                       const oldIdx = rootIds.indexOf(active.id);
                       const newIdx = rootIds.indexOf(over.id);
                       if (oldIdx < 0 || newIdx < 0) return;
@@ -1075,24 +1102,8 @@ export default function App() {
                       setBlocks(nextBlocks);
                     }}
                   >
-                    <SortableContext items={rootIds} strategy={verticalListSortingStrategy}>
-                      {visibleBlocks.map((block) =>
-                        block.depth === 0 && !readOnly ? (
-                          <SortableBlockRow
-                            key={block.id}
-                            block={block}
-                            depth={block.depth}
-                            {...rowProps}
-                          />
-                        ) : (
-                          <BlockRow
-                            key={block.id}
-                            block={block}
-                            depth={block.depth}
-                            {...rowProps}
-                          />
-                        )
-                      )}
+                    <SortableContext items={allIds} strategy={verticalListSortingStrategy}>
+                      <BlockTree blocks={blocks} readOnly={readOnly} rowProps={rowProps} />
                     </SortableContext>
                   </DndContext>
                 );
