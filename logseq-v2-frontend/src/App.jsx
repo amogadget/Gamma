@@ -294,12 +294,6 @@ function BlockRow({
         className={`blockRow ${focusedId === block.id ? "focused" : ""}`}
         onMouseDown={(e) => {
           if (e.target.closest("button, textarea, input, a")) return;
-          // Home mode: page-blocks open the PDF on click, not enter edit mode
-          if (block._pageId && typeof onPageOpen === "function") {
-            e.preventDefault();
-            onPageOpen(block);
-            return;
-          }
           setFocusedId(block.id);
           if (!readOnly && !block.editMode) {
             clickPosRef.current = { x: e.clientX, y: e.clientY };
@@ -335,6 +329,12 @@ function BlockRow({
               style={{ background: block.color || COLORS[0] }}
             />
           </button>
+        ) : block._pageId && typeof onPageOpen === "function" ? (
+          <button
+            className="collapseBtn dotSlot pageBulletBtn"
+            onClick={(e) => { e.stopPropagation(); onPageOpen(block); }}
+            title="Open page"
+          >•</button>
         ) : (
           <span className="dotSlot dotSlotEmpty" />
         )}
