@@ -469,6 +469,8 @@ export default function App() {
   const [pdfUrl, setPdfUrl] = useState("");
   const [docId, setDocId] = useState("");
   const [pdfPageId, setPdfPageId] = useState("");
+  const [summary, setSummary] = useState("");
+  const [summaryEditing, setSummaryEditing] = useState(false);
   const [blocks, setBlocks] = useState([]);
   const [status, setStatus] = useState("Ready.");
   const [loading, setLoading] = useState(false);
@@ -813,6 +815,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setPdfPageId(page.id);
       setPdfTitle(page.title || defaultTitle);
       setPdfUrl(proxiedUrl);
+      apiJson(`${API}/pages/${page.id}`).then((full) => setSummary(full.summary || "")).catch(() => setSummary(""));
       const newUrl = `${window.location.pathname}?page=${encodeURIComponent(page.id)}`;
       window.history.replaceState({}, "", newUrl);
       // Sync markdown content (non-critical; fire-and-forget-ish)
@@ -857,6 +860,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     try {
       const page = await apiJson(`${API}/pages/${pageId}`);
       if (!page) throw new Error("Page not found");
+      setSummary(page.summary || "");
       if (page.source_url) {
         // Delegate to openPdf; it will resolve to this page via doc_id lookup.
         // But openPdf also rewrites URL to ?src=..., which we now override at the end.
@@ -893,6 +897,19 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setStatus(`Page open failed: ${err.message}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function saveSummary(newValue) {
+    if (!pdfPageId || readOnly) return;
+    try {
+      await apiJson(`${API}/pages/${pdfPageId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ summary: newValue || "" }),
+      });
+    } catch (err) {
+      setStatus(`Summary save failed: ${err.message}`);
     }
   }
 
@@ -950,8 +967,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       children: [],
       collapsed: false,
       properties: {
-        // Use the quote slot for the first-block preview
-        quote: p.preview || "",
+        // Prefer the user-edited summary; fall back to first-block preview for pages without summaries.
+        quote: p.summary || p.preview || "",
       },
       // Stash the real page id for later (3b will use this to open the PDF)
       _pageId: p.id,
@@ -1167,6 +1184,57 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           ) : null}
 
           <div className="blockList">
+            {pdfPageId && !readOnly && !homeMode ? (
+              <div className="summaryFrontmatter">
+                <span className="summaryFrontmatterLabel">summary::</span>
+                {summaryEditing ? (
+                  <textarea
+                    className="summaryFrontmatterInput"
+                    value={summary}
+                    onChange={(e) => {
+                      setSummary(e.target.value);
+                      // Auto-grow to fit content
+                      e.target.style.height = "auto";
+                      e.target.style.height = e.target.scrollHeight + "px";
+                    }}
+                    onBlur={() => {
+                      setSummaryEditing(false);
+                      saveSummary(summary);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        setSummaryEditing(false);
+                        saveSummary(summary);
+                      } else if (e.key === "Escape") {
+                        e.preventDefault();
+                        setSummaryEditing(false);
+                        // Restore last-saved value? For simplicity, commit current value.
+                        saveSummary(summary);
+                      }
+                    }}
+                    ref={(el) => {
+                      // Autosize when mounted with pre-existing content
+                      if (el) {
+                        el.style.height = "auto";
+                        el.style.height = el.scrollHeight + "px";
+                      }
+                    }}
+                    autoFocus
+                    rows={1}
+                    placeholder="Add a summary..."
+                  />
+                ) : (
+                  <span
+                    className={`summaryFrontmatterValue ${summary ? "" : "empty"}`}
+                    onClick={() => setSummaryEditing(true)}
+                    title="Click to edit"
+                  >
+                    {summary || "Add a summary..."}
+                  </span>
+                )}
+              </div>
+            ) : null}
             {homeMode && recentPages.length > 0 ? (
               <div className="recentPagesRow">
                 <div className="recentPagesLabel">Recent</div>
@@ -1179,7 +1247,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       title={p.title}
                     >
                       <div className="recentCardTitle">{p.title || "Untitled"}</div>
-                      <div className="recentCardMeta">{formatRelativeTime(p.updated_at)}</div>
+                      <div className="recentCardMeta">{p.summary || formatRelativeTime(p.updated_at)}</div>
                     </button>
                   ))}
                 </div>

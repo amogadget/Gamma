@@ -174,8 +174,9 @@ class PageCreateRequest(BaseModel):
     title: str
 
 class PageUpdateRequest(BaseModel):
-    title: str
-    content: str
+    summary: str | None = None
+    title: str | None = None
+    content: str | None = None
 
 def ensure_pages_db():
     with sqlite3.connect(PAGES_DB) as conn:
@@ -204,6 +205,10 @@ def ensure_pages_db():
                 for (pid,), k in zip(existing, keys):
                     conn.execute("UPDATE pages SET position = ? WHERE id = ?", (k, pid))
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_position ON pages(position)")
+        # Migration: add summary column for a per-page, user-editable short description
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(pages)").fetchall()]
+        if "summary" not in cols:
+            conn.execute("ALTER TABLE pages ADD COLUMN summary TEXT")
         # Migration: add source_url for one-click page-to-PDF open
         cols = [row[1] for row in conn.execute("PRAGMA table_info(pages)").fetchall()]
         if "source_url" not in cols:
@@ -246,7 +251,7 @@ async def list_pages():
     with sqlite3.connect(PAGES_DB) as conn:
         rows = conn.execute(
             """
-            SELECT p.id, p.title, p.updated_at, p.doc_id, p.position, p.source_url,
+            SELECT p.id, p.title, p.updated_at, p.doc_id, p.position, p.source_url, p.summary,
                    (SELECT content FROM blocks b
                     WHERE b.page_id = p.id AND b.parent_id IS NULL
                     ORDER BY b.position ASC LIMIT 1)
@@ -256,7 +261,7 @@ async def list_pages():
         ).fetchall()
     out = []
     for row in rows:
-        preview = (row[6] or "").strip()
+        preview = (row[7] or "").strip()
         if len(preview) > 120:
             preview = preview[:120] + "..."
         out.append({
@@ -266,6 +271,7 @@ async def list_pages():
             "doc_id": row[3],
             "position": row[4],
             "source_url": row[5],
+            "summary": row[6] or "",
             "preview": preview,
         })
     return out
@@ -308,7 +314,7 @@ async def get_page(page_id: str):
     ensure_pages_db()
     with sqlite3.connect(PAGES_DB) as conn:
         row = conn.execute(
-            "SELECT id, title, content, updated_at, doc_id, source_url FROM pages WHERE id = ?",
+            "SELECT id, title, content, updated_at, doc_id, source_url, summary FROM pages WHERE id = ?",
             (page_id,)
         ).fetchone()
     if not row:
@@ -320,6 +326,7 @@ async def get_page(page_id: str):
         "updated_at": row[3],
         "doc_id": row[4],
         "source_url": row[5],
+        "summary": row[6] or "",
     }
 
 @app.put("/api/pages/{page_id}")
@@ -327,9 +334,22 @@ async def update_page(page_id: str, payload: PageUpdateRequest):
     ensure_pages_db()
     now = page_now()
     with sqlite3.connect(PAGES_DB) as conn:
+        # Only update fields the client explicitly sent. updated_at always bumps.
+        sets = ["updated_at = ?"]
+        values = [now]
+        if payload.title is not None:
+            sets.append("title = ?")
+            values.append((payload.title or "").strip() or "Untitled")
+        if payload.content is not None:
+            sets.append("content = ?")
+            values.append(payload.content)
+        if payload.summary is not None:
+            sets.append("summary = ?")
+            values.append(payload.summary)
+        values.append(page_id)
         cur = conn.execute(
-            "UPDATE pages SET title = ?, content = ?, updated_at = ? WHERE id = ?",
-            ((payload.title or "").strip() or "Untitled", payload.content or "", now, page_id)
+            f"UPDATE pages SET {', '.join(sets)} WHERE id = ?",
+            values,
         )
         conn.commit()
         if cur.rowcount == 0:
