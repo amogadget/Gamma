@@ -694,7 +694,7 @@ body {
 /* equal-width dot slot for alignment between highlight and non-highlight blocks */
 .dotSlot { width: 16px; min-width: 16px; display: inline-flex; align-items: center; justify-content: center; }
 .dotSlotEmpty { height: 16px; }
-.pageBulletBtn { font-size: 10px; color: #555; }
+.pageBulletBtn { font-size: 16px; color: #fff; line-height: 1; }
 .pageBulletBtn:hover { color: #4a9eff; }
 
 

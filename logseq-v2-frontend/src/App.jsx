@@ -342,7 +342,7 @@ function BlockRow({
         <div className="blockBody">
           {block._isRecent ? <span className="recentIndicator" title="In recent">★</span> : null}
           <div className="blockMeta">
-            {block.page ? `page ${block.page}` : "note"}
+            {block._pageId ? (block._sourceUrl ? "pdf" : "") : block.page ? `p.${block.page}` : "note"}
           </div>
 
           {!readOnly && block.editMode ? (
@@ -1133,7 +1133,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         {notesVisible && (<div className={`splitter splitter-${orientation}`}><div className="splitterGrab" onPointerDown={startResize} aria-label="Drag to resize" role="separator"><span className="splitterGrabDot" /></div></div>)}
 
         {notesVisible && (<div className="sidebar" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-height": `${sidebarHeight}px` }}>
-          <div className="pageTitleRow">
+          {!homeMode && <div className="pageTitleRow">
             {titleEditing && !readOnly && focusedBlockId ? (
               <input
                 className="titleEdit"
@@ -1158,7 +1158,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               >{focusedBlockId ? (pdfTitle || (docId ? getPdfPageTitle(docId, inputUrl) : "Untitled")) : "PDF Notes"}</h3>
             )}
 
-          </div>
+          </div>}
 
           {inputUrl ? (
             <div className="pageHeaderMeta">
