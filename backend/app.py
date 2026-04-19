@@ -760,7 +760,6 @@ class UBByDocCreate(BaseModel):
 
 @app.get("/api/blocks/by-doc/{doc_id}")
 async def ub_get_by_doc(doc_id: str):
-    ensure_pages_db()
     with sqlite3.connect(PAGES_DB) as conn:
         row = conn.execute(
             "SELECT id, parent_id, position, content, properties, created_at, updated_at "
@@ -773,7 +772,6 @@ async def ub_get_by_doc(doc_id: str):
 
 @app.post("/api/blocks/by-doc/{doc_id}")
 async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate):
-    ensure_pages_db()
     with sqlite3.connect(PAGES_DB) as conn:
         row = conn.execute(
             "SELECT id, parent_id, position, content, properties, created_at, updated_at "
@@ -816,7 +814,6 @@ async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate):
 
 @app.get("/api/blocks/{block_id}/children")
 async def ub_get_children(block_id: str):
-    ensure_pages_db()
     with sqlite3.connect(PAGES_DB) as conn:
         if block_id != "root":
             if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
@@ -830,7 +827,6 @@ async def ub_get_children(block_id: str):
 
 @app.get("/api/blocks/{block_id}/subtree")
 async def ub_get_subtree(block_id: str):
-    ensure_pages_db()
     with sqlite3.connect(PAGES_DB) as conn:
         rows = ub_fetch_subtree(conn, block_id)
     if not rows:
@@ -853,7 +849,6 @@ async def ub_get_subtree(block_id: str):
 
 @app.get("/api/blocks/{block_id}")
 async def ub_get_block(block_id: str):
-    ensure_pages_db()
     with sqlite3.connect(PAGES_DB) as conn:
         row = conn.execute(
             "SELECT id, parent_id, position, content, properties, created_at, updated_at "
@@ -866,7 +861,6 @@ async def ub_get_block(block_id: str):
 
 @app.post("/api/blocks")
 async def ub_create_block(payload: UBCreateRequest):
-    ensure_pages_db()
     block_id = secrets.token_urlsafe(9)
     now = page_now()
     with sqlite3.connect(PAGES_DB) as conn:
@@ -892,7 +886,6 @@ async def ub_create_block(payload: UBCreateRequest):
 
 @app.put("/api/blocks/{block_id}")
 async def ub_update_block(block_id: str, payload: UBUpdateRequest):
-    ensure_pages_db()
     now = page_now()
     with sqlite3.connect(PAGES_DB) as conn:
         row = conn.execute(
@@ -919,7 +912,6 @@ async def ub_update_block(block_id: str, payload: UBUpdateRequest):
 async def ub_delete_block(block_id: str):
     if block_id == "root":
         raise HTTPException(status_code=400, detail="cannot delete root block")
-    ensure_pages_db()
     with sqlite3.connect(PAGES_DB) as conn:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="block not found")
@@ -927,11 +919,67 @@ async def ub_delete_block(block_id: str):
         conn.commit()
     return {"ok": True, "id": block_id}
 
+def ub_flatten_tree(tree, parent_id, result, now):
+    """Recursively flatten a nested block tree into flat rows with fractional positions."""
+    n = len(tree or [])
+    if n == 0:
+        return
+    keys = generate_n_keys_between(None, None, n=n)
+    for node, key in zip(tree, keys):
+        props = node.get("properties") or {}
+        if isinstance(props, str):
+            try: props = _json.loads(props)
+            except Exception: props = {}
+        node_id = node.get("id") or secrets.token_urlsafe(9)
+        result.append({
+            "id": node_id,
+            "parent_id": parent_id,
+            "position": key,
+            "content": node.get("content", "") or "",
+            "properties": _json.dumps(props),
+            "created_at": node.get("created_at") or now,
+            "updated_at": now,
+        })
+        ub_flatten_tree(node.get("children") or [], node_id, result, now)
+
+class UBPutChildrenRequest(BaseModel):
+    blocks: list
+
+@app.put("/api/blocks/{block_id}/children")
+async def ub_put_children(block_id: str, payload: UBPutChildrenRequest):
+    """Replace all children of a block with the provided nested tree."""
+    now = page_now()
+    rows: list = []
+    ub_flatten_tree(payload.blocks, block_id, rows, now)
+    with sqlite3.connect(PAGES_DB) as conn:
+        if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="block not found")
+        conn.execute(
+            """
+            WITH RECURSIVE subtree AS (
+                SELECT id FROM unified_blocks WHERE parent_id = ?
+                UNION ALL
+                SELECT ub.id FROM unified_blocks ub JOIN subtree s ON ub.parent_id = s.id
+            )
+            DELETE FROM unified_blocks WHERE id IN (SELECT id FROM subtree)
+            """,
+            (block_id,),
+        )
+        for r in rows:
+            conn.execute(
+                "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (r["id"], r["parent_id"], r["position"], r["content"],
+                 r["properties"], r["created_at"], r["updated_at"]),
+            )
+        conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, block_id))
+        conn.commit()
+    return {"ok": True, "count": len(rows), "updated_at": now}
+
 @app.post("/api/blocks/{block_id}/reorder")
 async def ub_reorder_block(block_id: str, payload: UBReorderRequest):
     if block_id == "root":
         raise HTTPException(status_code=400, detail="cannot reorder root block")
-    ensure_pages_db()
     with sqlite3.connect(PAGES_DB) as conn:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="block not found")

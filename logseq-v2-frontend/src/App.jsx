@@ -461,29 +461,35 @@ export default function App() {
   const params = new URLSearchParams(window.location.search);
   const initialUrl = params.get("src") || params.get("url") || "";
   const initialShare = params.get("share") || "";
-  const initialPageId = params.get("page") || "";
+  const initialBlockId = params.get("block") || params.get("page") || "";
   const readOnly = Boolean(initialShare);
-  // Home mode: no PDF loaded and not in a shared view; render pages list instead of block tree.
 
   const [inputUrl, setInputUrl] = useState(initialUrl);
   const [pdfUrl, setPdfUrl] = useState("");
   const [docId, setDocId] = useState("");
-  const [pdfPageId, setPdfPageId] = useState("");
+  const [focusedBlockId, setFocusedBlockId] = useState("");
+  const [focusedBlock, setFocusedBlock] = useState(null);
   const [summary, setSummary] = useState("");
   const [summaryEditing, setSummaryEditing] = useState(false);
   const [blocks, setBlocks] = useState([]);
+  const [homeBlocks, setHomeBlocks] = useState([]);
+  const [homeEditingId, setHomeEditingId] = useState(null);
   const [status, setStatus] = useState("Ready.");
   const [loading, setLoading] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [sidebarHeight, setSidebarHeight] = useState(280);
   const [orientation, setOrientation] = useState("horizontal");
   const [pdfHidden, setPdfHidden] = useState(false);
-  const [pages, setPages] = useState([]);
+  const pageTitleSaveTimerRef = useRef(null);
+
+  function fetchHomeBlocks() {
+    return apiJson(`${API}/blocks/root/children`)
+      .then((data) => setHomeBlocks(Array.isArray(data.children) ? data.children : []))
+      .catch(() => setHomeBlocks([]));
+  }
+
   useEffect(() => {
-    fetch(`${API}/pages`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((data) => setPages(Array.isArray(data) ? data : []))
-      .catch(() => setPages([]));
+    fetchHomeBlocks();
   }, []);
   const pendingJumpRef = useRef(null);
   const dndSensors = useSensors(
@@ -525,7 +531,7 @@ export default function App() {
   }, [blocks, readOnly]);
 
   useEffect(() => {
-    if (readOnly || !pdfPageId) return;
+    if (readOnly || !focusedBlockId) return;
     if (suppressAutosaveRef.current) {
       suppressAutosaveRef.current = false;
       return;
@@ -634,7 +640,7 @@ export default function App() {
 
   useEffect(() => {
     if (initialShare) resolveShare(initialShare);
-    else if (initialPageId) openPage(initialPageId);
+    else if (initialBlockId) openBlock(initialBlockId);
     else if (initialUrl) openPdf(initialUrl);
   }, []);
 
@@ -665,13 +671,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     return cleaned ? `PDF Notes - ${cleaned}` : `PDF Notes - ${targetDocId}`;
   }
 
-  async function loadBlocks(pageId) {
+  async function loadBlocksForBlock(blockId) {
     try {
-      const payload = await apiJson(`${API}/pages/${pageId}/blocks`);
+      const data = await apiJson(`${API}/blocks/${blockId}/subtree`);
+      const children = normalizeBlocks((data.block?.children) || []);
       suppressAutosaveRef.current = true;
-      const tree = normalizeBlocks(payload.blocks || []);
-      setBlocks(tree);
-      return tree;
+      setBlocks(children);
+      return children;
     } catch {
       suppressAutosaveRef.current = true;
       setBlocks([]);
@@ -679,56 +685,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
-  async function getOrCreatePageForDoc(targetDocId, defaultTitle, legacyTitles) {
+  async function getOrCreateBlockForDoc(targetDocId, defaultTitle, sourceUrl) {
     if (!targetDocId) throw new Error("docId required");
-    return await apiJson(`${API}/pages/by-doc/${targetDocId}`, {
+    return await apiJson(`${API}/blocks/by-doc/${targetDocId}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        default_title: defaultTitle || `PDF Notes - ${targetDocId}`,
-        legacy_title: (legacyTitles && legacyTitles[0]) || null
-      })
+      body: JSON.stringify({ default_title: defaultTitle || `PDF Notes - ${targetDocId}`, source_url: sourceUrl || null })
     });
-  }
-
-  async function getPageForDocReadOnly(targetDocId) {
-    if (!targetDocId) return null;
-    try {
-      return await apiJson(`${API}/pages/by-doc/${targetDocId}`);
-    } catch {
-      return null;
-    }
-  }
-
-  async function syncPdfPage(nextBlocks, targetDocId = docId, targetInputUrl = inputUrl, titleOverride) {
-    if (!targetDocId || readOnly) return;
-
-    const defaultTitle = getPdfPageTitle(targetDocId, targetInputUrl);
-    // legacy titles to try if doc_id has never been seen: URL-based, then bare-docId fallback
-    const legacyTitles = [defaultTitle, `PDF Notes - ${targetDocId}`];
-    const page = await getOrCreatePageForDoc(targetDocId, defaultTitle, legacyTitles);
-
-    const title = ((titleOverride ?? pdfTitle ?? page.title ?? defaultTitle) || "").trim() || defaultTitle;
-    const content = blocksToPageMarkdown(title, targetInputUrl, targetDocId, nextBlocks);
-
-    await apiJson(`${API}/pages/${page.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, content })
-    });
-
-    setPdfPageId(page.id);
-    if (pdfTitle !== title) setPdfTitle(title);
-    return page;
   }
 
   async function renameTitle(newTitle) {
-    if (readOnly || !pdfPageId || !docId) return;
+    if (readOnly || !focusedBlockId) return;
     const trimmed = (newTitle || "").trim();
     const finalTitle = trimmed || getPdfPageTitle(docId, inputUrl);
     setPdfTitle(finalTitle);
+    setFocusedBlock((b) => b ? { ...b, content: finalTitle } : b);
     try {
-      await syncPdfPage(blocks, docId, inputUrl, finalTitle);
+      await apiJson(`${API}/blocks/${focusedBlockId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: finalTitle })
+      });
+      setHomeBlocks((prev) => prev.map((b) => b.id === focusedBlockId ? { ...b, content: finalTitle } : b));
       setStatus(`Renamed to "${finalTitle}"`);
     } catch (err) {
       setStatus(`Rename failed: ${err.message}`);
@@ -736,14 +714,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   }
 
   async function persistBlocks(nextBlocks) {
-    if (readOnly || !pdfPageId) return;
-    await apiJson(`${API}/pages/${pdfPageId}/blocks`, {
+    if (readOnly || !focusedBlockId) return;
+    await apiJson(`${API}/blocks/${focusedBlockId}/children`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ blocks: nextBlocks })
     });
-    // Also keep the page's markdown content in sync for pages.html viewer
-    await syncPdfPage(nextBlocks, docId, inputUrl);
   }
 
   async function uploadPdf(file) {
@@ -770,14 +746,16 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       // Open the uploaded PDF directly (bypass openPdf's URL-resolution path)
       const sourceUrl = data.source_url;
       const defaultTitle = getPdfPageTitle(data.doc_id, sourceUrl);
-      const page = await getOrCreatePageForDoc(data.doc_id, defaultTitle, [defaultTitle, `PDF Notes - ${data.doc_id}`]);
-      const nextBlocks = await loadBlocks(page.id);
+      const block = await getOrCreateBlockForDoc(data.doc_id, defaultTitle, sourceUrl);
+      const nextBlocks = await loadBlocksForBlock(block.id);
       setDocId(data.doc_id);
       setInputUrl(sourceUrl);
-      setPdfPageId(page.id);
-      setPdfTitle(page.title || defaultTitle);
+      setFocusedBlockId(block.id);
+      setFocusedBlock(block);
+      setPdfTitle(block.content || defaultTitle);
+      setSummary(block.properties?.summary || "");
       setPdfUrl(sourceUrl);
-      const newUrl = `${window.location.pathname}?page=${encodeURIComponent(page.id)}`;
+      const newUrl = `${window.location.pathname}?block=${encodeURIComponent(block.id)}`;
       window.history.replaceState({}, "", newUrl);
       setStatus(`Uploaded ${file.name} (${data.doc_id})`);
     } catch (err) {
@@ -806,19 +784,19 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         resolvedDocId = await getDocIdForUrl(finalUrl);
         proxiedUrl = `${API}/pdf?source_url=${encodeURIComponent(finalUrl)}`;
       }
-      // Resolve page + load blocks FIRST, before setPdfUrl, to avoid mid-render highlight race
+      // Resolve block + load children FIRST, before setPdfUrl, to avoid mid-render highlight race
       const defaultTitle = getPdfPageTitle(resolvedDocId, finalUrl);
-      const page = await getOrCreatePageForDoc(resolvedDocId, defaultTitle, [defaultTitle, `PDF Notes - ${resolvedDocId}`]);
-      const nextBlocks = await loadBlocks(page.id);
+      const block = await getOrCreateBlockForDoc(resolvedDocId, defaultTitle, finalUrl);
+      const nextBlocks = await loadBlocksForBlock(block.id);
       setDocId(resolvedDocId);
       setInputUrl(finalUrl);
-      setPdfPageId(page.id);
-      setPdfTitle(page.title || defaultTitle);
+      setFocusedBlockId(block.id);
+      setFocusedBlock(block);
+      setPdfTitle(block.content || defaultTitle);
+      setSummary(block.properties?.summary || "");
       setPdfUrl(proxiedUrl);
-      apiJson(`${API}/pages/${page.id}`).then((full) => setSummary(full.summary || "")).catch(() => setSummary(""));
-      const newUrl = `${window.location.pathname}?page=${encodeURIComponent(page.id)}`;
+      const newUrl = `${window.location.pathname}?block=${encodeURIComponent(block.id)}`;
       window.history.replaceState({}, "", newUrl);
-      // Sync markdown content (non-critical; fire-and-forget-ish)
       setStatus(`Loaded ${resolvedDocId}`);
     } catch (err) {
       setStatus(`Open failed: ${err.message}`);
@@ -832,20 +810,30 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     setStatus("Resolving share link...");
     try {
       const data = await apiJson(`${API}/share/${token}`);
-      // Resolve page + load blocks BEFORE setPdfUrl (avoid getPageView race)
-      const existingPage = await getPageForDocReadOnly(data.doc_id);
-      if (existingPage) {
-        await loadBlocks(existingPage.id);
-        setPdfPageId(existingPage.id);
-        setPdfTitle(existingPage.title || getPdfPageTitle(data.doc_id, data.source_url));
-      } else {
-        setBlocks([]);
-        setPdfTitle(getPdfPageTitle(data.doc_id, data.source_url));
+      const src = data.source_url || "";
+      const isLocal = src.startsWith("/api/");
+      const proxiedUrl = isLocal ? src : src ? `${API}/pdf?source_url=${encodeURIComponent(src)}` : "";
+
+      let block = null;
+      try { block = await apiJson(`${API}/blocks/by-doc/${data.doc_id}`); } catch {}
+
+      let childBlocks = [];
+      if (block) {
+        try {
+          const subtreeData = await apiJson(`${API}/blocks/${block.id}/subtree`);
+          childBlocks = normalizeBlocks(subtreeData.block?.children || []);
+        } catch {}
       }
+
+      suppressAutosaveRef.current = true;
+      setFocusedBlockId(block?.id || "");
+      setFocusedBlock(block || null);
+      setPdfTitle(block?.content || getPdfPageTitle(data.doc_id, src));
+      setBlocks(childBlocks);
       setDocId(data.doc_id);
-      setInputUrl(data.source_url);
-      setPdfUrl(data.source_url);
-      setStatus(`Loaded shared doc ${data.doc_id}`);
+      setInputUrl(src);
+      setPdfUrl(proxiedUrl);
+      setStatus("Loaded shared doc.");
     } catch (err) {
       setStatus(`Share open failed: ${err.message}`);
     } finally {
@@ -853,60 +841,61 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
-  async function openPage(pageId) {
-    if (!pageId || readOnly) return;
+  async function openBlock(blockId) {
+    if (!blockId || readOnly) return;
     setLoading(true);
-    setStatus("Opening page...");
+    setStatus("Opening...");
     try {
-      const page = await apiJson(`${API}/pages/${pageId}`);
-      if (!page) throw new Error("Page not found");
-      setSummary(page.summary || "");
-      if (page.source_url) {
-        // Delegate to openPdf; it will resolve to this page via doc_id lookup.
-        // But openPdf also rewrites URL to ?src=..., which we now override at the end.
-        await openPdf(page.source_url);
+      const subtreeData = await apiJson(`${API}/blocks/${blockId}/subtree`);
+      const block = subtreeData.block;
+      if (!block) throw new Error("Block not found");
+      const props = block.properties || {};
+      const childBlocks = normalizeBlocks(block.children || []);
+
+      suppressAutosaveRef.current = true;
+      setFocusedBlockId(blockId);
+      setFocusedBlock(block);
+      setPdfTitle(block.content || "Untitled");
+      setSummary(props.summary || "");
+      setDocId(props.doc_id || "");
+
+      if (props.source_url) {
+        const src = props.source_url;
+        const isLocal = src.startsWith("/api/");
+        const proxiedUrl = isLocal ? src : `${API}/pdf?source_url=${encodeURIComponent(src)}`;
+        setInputUrl(src);
+        setPdfUrl(proxiedUrl);
+        setBlocks(childBlocks);
       } else {
-        // No PDF: load blocks directly and show page-only view.
-        let nextBlocks = await loadBlocks(pageId);
-        setDocId(page.doc_id || "");
-        setPdfUrl("");
         setInputUrl("");
-        setPdfPageId(pageId);
-        setPdfTitle(page.title || "Untitled");
-        // If the page has no blocks, seed an empty first block (Logseq/Notion pattern)
-        if (!nextBlocks || nextBlocks.length === 0) {
-          const seedId = Math.random().toString(36).slice(2, 10);
-          const seedBlock = {
-            id: seedId,
-            content: "",
-            children: [],
-            collapsed: false,
-            editMode: true,
-            properties: {},
-          };
+        setPdfUrl("");
+        if (childBlocks.length === 0 && !readOnly) {
+          const seedId = makeId();
           suppressAutosaveRef.current = true;
           pendingFocusRef.current = seedId;
-          setBlocks([seedBlock]);
+          setBlocks([{ id: seedId, content: "", children: [], collapsed: false, editMode: true, properties: {} }]);
+        } else {
+          setBlocks(childBlocks);
         }
-        setStatus(`Loaded page ${page.title || pageId}`);
       }
-      // Always end at ?page=<id>
-      const newUrl = `${window.location.pathname}?page=${encodeURIComponent(pageId)}`;
+
+      const newUrl = `${window.location.pathname}?block=${encodeURIComponent(blockId)}`;
       window.history.replaceState({}, "", newUrl);
+      setStatus("Ready.");
     } catch (err) {
-      setStatus(`Page open failed: ${err.message}`);
+      setStatus(`Open failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
   }
 
   async function saveSummary(newValue) {
-    if (!pdfPageId || readOnly) return;
+    if (!focusedBlockId || readOnly) return;
     try {
-      await apiJson(`${API}/pages/${pdfPageId}`, {
+      await apiJson(`${API}/blocks/${focusedBlockId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ summary: newValue || "" }),
+        body: JSON.stringify({ properties: { summary: newValue || "" } }),
       });
     } catch (err) {
       setStatus(`Summary save failed: ${err.message}`);
@@ -951,33 +940,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   }
 
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
-  const homeMode = !pdfUrl && !pdfPageId && !readOnly;
+  const homeMode = !pdfUrl && !focusedBlockId && !readOnly;
+  const pageOnly = !pdfUrl && !!focusedBlockId && !readOnly;
   const recentPages = useMemo(() => {
-    return [...pages]
+    return [...homeBlocks]
       .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""))
       .slice(0, 4);
-  }, [pages]);
-  const recentIds = useMemo(() => new Set(recentPages.map((p) => p.id)), [recentPages]);
-  const pageOnly = !pdfUrl && !!pdfPageId && !readOnly;
-  // Synthesize blocks from the pages list for home mode rendering
+  }, [homeBlocks]);
+  const recentIds = useMemo(() => new Set(recentPages.map((b) => b.id)), [recentPages]);
   const pageBlocks = useMemo(() => {
-    return pages.map((p) => ({
-      id: `page-${p.id}`,
-      content: p.title || "Untitled",
+    return homeBlocks.map((b) => ({
+      id: b.id,
+      content: b.content || "Untitled",
       children: [],
       collapsed: false,
-      properties: {
-        // Prefer the user-edited summary; fall back to first-block preview for pages without summaries.
-        quote: p.summary || p.preview || "",
-      },
-      // Stash the real page id for later (3b will use this to open the PDF)
-      _pageId: p.id,
-      _docId: p.doc_id,
-      _position: p.position,
-      _sourceUrl: p.source_url,
-      _isRecent: recentIds.has(p.id),
+      properties: { quote: b.properties?.summary || "" },
+      _pageId: b.id,
+      _position: b.position,
+      _sourceUrl: b.properties?.source_url,
+      _isRecent: recentIds.has(b.id),
+      editMode: homeEditingId === b.id,
     }));
-  }, [pages, recentIds]);
+  }, [homeBlocks, recentIds, homeEditingId]);
   const highlights = useMemo(() => blocksToHighlights(blocks), [blocks]);
   useEffect(() => {
     if (pdfHidden) return;
@@ -1184,7 +1168,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           ) : null}
 
           <div className="blockList">
-            {pdfPageId && !readOnly && !homeMode ? (
+            {focusedBlockId && !readOnly && !homeMode ? (
               <div className="summaryFrontmatter">
                 <span className="summaryFrontmatterLabel">summary::</span>
                 {summaryEditing ? (
@@ -1239,15 +1223,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               <div className="recentPagesRow">
                 <div className="recentPagesLabel">Recent</div>
                 <div className="recentPagesGrid">
-                  {recentPages.map((p) => (
+                  {recentPages.map((b) => (
                     <button
-                      key={p.id}
+                      key={b.id}
                       className="recentCard"
-                      onClick={() => openPage(p.id)}
-                      title={p.title}
+                      onClick={() => openBlock(b.id)}
+                      title={b.content}
                     >
-                      <div className="recentCardTitle">{p.title || "Untitled"}</div>
-                      <div className="recentCardMeta">{p.summary || formatRelativeTime(p.updated_at)}</div>
+                      <div className="recentCardTitle">{b.content || "Untitled"}</div>
+                      <div className="recentCardMeta">{b.properties?.summary || formatRelativeTime(b.updated_at)}</div>
                     </button>
                   ))}
                 </div>
@@ -1264,19 +1248,31 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   registerRef,
                   readOnly,
                   onPageOpen: (pageBlock) => {
-                    if (pageBlock._pageId) {
-                      openPage(pageBlock._pageId);
-                    } else {
-                      setStatus("Page has no id.");
-                    }
+                    if (pageBlock._pageId) openBlock(pageBlock._pageId);
                   },
                   onChangeText: (id, text) => {
                     if (readOnly) return;
-                    const next = setBlockText(blocks, id, text);
-                    setBlocks(next);
+                    if (homeMode) {
+                      setHomeBlocks((prev) => prev.map((b) => b.id === id ? { ...b, content: text } : b));
+                      if (pageTitleSaveTimerRef.current) clearTimeout(pageTitleSaveTimerRef.current);
+                      pageTitleSaveTimerRef.current = setTimeout(() => {
+                        apiJson(`${API}/blocks/${id}`, {
+                          method: "PUT",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ content: text }),
+                        }).catch((err) => setStatus(`Rename failed: ${err}`));
+                      }, 500);
+                      return;
+                    }
+                    setBlocks(setBlockText(blocks, id, text));
                   },
                   onStartEdit: (id, editMode) => {
                     if (readOnly) return;
+                    if (homeMode) {
+                      if (editMode) pendingFocusRef.current = id;
+                      setHomeEditingId(editMode ? id : null);
+                      return;
+                    }
                     if (editMode) pendingFocusRef.current = id;
                     const next = setBlockEditMode(blocks, id, editMode);
                     setBlocks(next);
@@ -1286,6 +1282,24 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   },
                   onEnterSibling: (id) => {
                     if (readOnly) return;
+                    if (homeMode) {
+                      const idx = pageBlocks.findIndex((b) => b.id === id);
+                      if (idx < 0) return;
+                      const before = pageBlocks[idx]._position || null;
+                      const after = pageBlocks[idx + 1]?._position || null;
+                      apiJson(`${API}/blocks`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ parent_id: "root", content: "", before, after }),
+                      })
+                        .then((created) => fetchHomeBlocks().then(() => {
+                          pendingFocusRef.current = created.id;
+                          setHomeEditingId(created.id);
+                          setFocusedId(created.id);
+                        }))
+                        .catch((err) => setStatus(`Create failed: ${err}`));
+                      return;
+                    }
                     const { blocks: next, newId } = addSiblingBlock(blocks, id);
                     pendingFocusRef.current = newId;
                     setBlocks(next);
@@ -1299,13 +1313,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     setFocusedId(newId);
                   },
                   onIndent: (id) => {
-                    if (readOnly) return;
+                    if (readOnly || homeMode) return;
                     const next = indentBlock(blocks, id);
                     setBlocks(next);
                     setFocusedId(id);
                   },
                   onOutdent: (id) => {
-                    if (readOnly) return;
+                    if (readOnly || homeMode) return;
                     const next = outdentBlock(blocks, id);
                     setBlocks(next);
                     setFocusedId(id);
@@ -1316,6 +1330,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   },
                   onDelete: (id) => {
                     if (readOnly) return;
+                    if (homeMode) {
+                      apiJson(`${API}/blocks/${id}`, { method: "DELETE" })
+                        .then(() => fetchHomeBlocks())
+                        .catch((err) => setStatus(`Delete failed: ${err}`));
+                      return;
+                    }
                     setBlocks(removeBlockTree(blocks, id));
                   },
                 };
@@ -1388,16 +1408,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         const sourceBlock = pageBlocks[sourceIdx];
                         const pageId = sourceBlock._pageId;
                         if (!pageId) return;
-                        fetch(`${API}/pages/reorder`, {
+                        apiJson(`${API}/blocks/${pageId}/reorder`, {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ id: pageId, before, after }),
+                          body: JSON.stringify({ before, after }),
                         })
-                          .then((r) => (r.ok ? r.json() : Promise.reject(r)))
-                          .then(() => fetch(`${API}/pages`))
-                          .then((r) => r.json())
-                          .then((data) => setPages(Array.isArray(data) ? data : []))
-                          .catch((err) => setStatus(`Page reorder failed: ${err}`));
+                          .then(() => fetchHomeBlocks())
+                          .catch((err) => setStatus(`Reorder failed: ${err}`));
                         return;
                       }
                       const sourceId = active.id;
