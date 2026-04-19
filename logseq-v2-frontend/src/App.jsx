@@ -36,6 +36,11 @@ import {
   removeBlockTree,
   flattenBlocks,
   withLegacyAccessors,
+  isDescendant,
+  findBlockContext,
+  extractBlock,
+  insertSibling,
+  insertChild,
   addHighlightAsBlock,
   blocksToHighlights,
   normalizeBlocks
@@ -1137,17 +1142,35 @@ export default function App() {
                       draggingIdRef.current = null;
                     }}
                     onDragEnd={(e) => {
+                      const dt = dropTarget;
                       setDropTarget(null);
                       draggingIdRef.current = null;
                       if (readOnly) return;
-                      const { active, over } = e;
-                      if (!over || active.id === over.id) return;
-                      // B1: only root-to-root drops take effect; nested drops are no-ops pending B3
-                      const oldIdx = rootIds.indexOf(active.id);
-                      const newIdx = rootIds.indexOf(over.id);
-                      if (oldIdx < 0 || newIdx < 0) return;
-                      const nextBlocks = arrayMove(blocks, oldIdx, newIdx);
-                      setBlocks(nextBlocks);
+                      const { active } = e;
+                      if (!active || !dt) return;
+                      const sourceId = active.id;
+                      const { targetId, above, depth } = dt;
+                      if (sourceId === targetId) return;
+                      if (isDescendant(blocks, sourceId, targetId)) return;
+                      const extracted = extractBlock(blocks, sourceId);
+                      if (!extracted) return;
+                      const { extracted: sourceBlock, remaining } = extracted;
+                      const targetCtx = findBlockContext(remaining, targetId);
+                      if (!targetCtx) return;
+                      const targetDepth = targetCtx.depth;
+                      let next;
+                      if (depth === targetDepth + 1) {
+                        next = insertChild(remaining, targetId, sourceBlock, false);
+                      } else if (depth === targetDepth) {
+                        next = insertSibling(remaining, targetId, sourceBlock, !above);
+                      } else if (depth < targetDepth) {
+                        const ancestorId = targetCtx.ancestors[depth];
+                        if (!ancestorId) return;
+                        next = insertSibling(remaining, ancestorId, sourceBlock, !above);
+                      } else {
+                        return;
+                      }
+                      if (next) setBlocks(next);
                     }}
                   >
                     <SortableContext items={allIds} strategy={verticalListSortingStrategy}>

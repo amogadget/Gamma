@@ -316,3 +316,104 @@ function blocksToMarkdownLines(blocks, depth) {
   }
   return lines;
 }
+
+
+// --- Phase B3 tree helpers ---
+
+// True if `descendantId` is inside the subtree rooted at `ancestorId`
+export function isDescendant(blocks, ancestorId, descendantId) {
+  if (ancestorId === descendantId) return true;
+  for (const b of blocks || []) {
+    if (b.id === ancestorId) {
+      return containsId(b.children || [], descendantId);
+    }
+    const hit = isDescendant(b.children || [], ancestorId, descendantId);
+    if (hit) return true;
+  }
+  return false;
+}
+
+function containsId(blocks, id) {
+  for (const b of blocks || []) {
+    if (b.id === id) return true;
+    if (containsId(b.children || [], id)) return true;
+  }
+  return false;
+}
+
+// Find a block by id along with its parent chain and position
+// Returns { block, parentId, index, depth, ancestors: [id, ...] } or null
+export function findBlockContext(blocks, id, depth = 0, ancestors = []) {
+  const list = blocks || [];
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    if (b.id === id) {
+      return {
+        block: b,
+        parentId: ancestors[ancestors.length - 1] ?? null,
+        index: i,
+        depth,
+        ancestors,
+      };
+    }
+    const found = findBlockContext(b.children || [], id, depth + 1, [...ancestors, b.id]);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Extract a block (with subtree) from the tree, returning both the extracted block and the remaining tree.
+export function extractBlock(blocks, id) {
+  const list = blocks || [];
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    if (b.id === id) {
+      const extracted = b;
+      const remaining = [...list.slice(0, i), ...list.slice(i + 1)];
+      return { extracted, remaining };
+    }
+    const sub = extractBlock(b.children || [], id);
+    if (sub) {
+      const newChildren = sub.remaining;
+      const newBlock = { ...b, children: newChildren };
+      const newList = [...list.slice(0, i), newBlock, ...list.slice(i + 1)];
+      return { extracted: sub.extracted, remaining: newList };
+    }
+  }
+  return null;
+}
+
+// Insert `newBlock` as a sibling of `siblingId` (after=true means after, else before)
+export function insertSibling(blocks, siblingId, newBlock, after) {
+  const list = blocks || [];
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    if (b.id === siblingId) {
+      const insertAt = after ? i + 1 : i;
+      return [...list.slice(0, insertAt), newBlock, ...list.slice(insertAt)];
+    }
+    const childResult = insertSibling(b.children || [], siblingId, newBlock, after);
+    if (childResult !== b.children) {
+      return [...list.slice(0, i), { ...b, children: childResult }, ...list.slice(i + 1)];
+    }
+  }
+  return list;
+}
+
+// Insert `newBlock` as a child of `parentId` (atEnd=true for last child, else first)
+export function insertChild(blocks, parentId, newBlock, atEnd = false) {
+  const list = blocks || [];
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    if (b.id === parentId) {
+      const existing = b.children || [];
+      const newChildren = atEnd ? [...existing, newBlock] : [newBlock, ...existing];
+      return [...list.slice(0, i), { ...b, children: newChildren }, ...list.slice(i + 1)];
+    }
+    const childResult = insertChild(b.children || [], parentId, newBlock, atEnd);
+    if (childResult !== b.children) {
+      return [...list.slice(0, i), { ...b, children: childResult }, ...list.slice(i + 1)];
+    }
+  }
+  return list;
+}
