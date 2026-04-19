@@ -405,13 +405,13 @@ function SortableBlockRow({ block, ...rowProps }) {
   } = useSortable({ id: block.id });
 
   const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
+    transform: isDragging ? CSS.Transform.toString(transform) : undefined,
+    transition: isDragging ? transition : undefined,
     opacity: isDragging ? 0.4 : 1,
   };
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes} className="sortableBlockWrap">
+    <div ref={setNodeRef} style={style} {...attributes} className="sortableBlockWrap" data-block-id={block.id} data-depth={rowProps.depth || 0}>
       <button
         className="dragHandle"
         ref={setActivatorNodeRef}
@@ -468,6 +468,9 @@ export default function App() {
       activationConstraint: { distance: 4 },
     })
   );
+  // Phase B2a: drop indicator state
+  const [dropTarget, setDropTarget] = useState(null); // { targetId, above, rect }
+  const draggingIdRef = useRef(null);
   const [notesVisible, setNotesVisible] = useState(true);
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
@@ -1090,7 +1093,52 @@ export default function App() {
                   <DndContext
                     sensors={dndSensors}
                     collisionDetection={closestCenter}
+                    onDragStart={(e) => {
+                      draggingIdRef.current = e.active.id;
+                    }}
+                    onDragMove={(e) => {
+                      if (!e.active) return;
+                      const activatorRect = e.activatorEvent && typeof e.activatorEvent.clientY === "number"
+                        ? { x: e.activatorEvent.clientX, y: e.activatorEvent.clientY }
+                        : null;
+                      if (!activatorRect) return;
+                      const pointerX = activatorRect.x + (e.delta?.x || 0);
+                      const pointerY = activatorRect.y + (e.delta?.y || 0);
+                      const rows = document.querySelectorAll(".sortableBlockWrap[data-block-id]");
+                      let best = null;
+                      for (const row of rows) {
+                        const id = row.getAttribute("data-block-id");
+                        if (!id || id === draggingIdRef.current) continue;
+                        const r = row.getBoundingClientRect();
+                        if (pointerY >= r.top && pointerY <= r.bottom) {
+                          const above = pointerY < r.top + r.height / 2;
+                          const targetDepth = parseInt(row.getAttribute("data-depth") || "0", 10);
+                          // Valid depth range: 0 to targetDepth + 1 (allow nesting one deeper)
+                          // Snap pointer X to nearest valid depth relative to the row's left edge
+                          const indentStep = 14;
+                          const baseLeft = r.left; // row's left edge in viewport coords
+                          const rawDepth = Math.round((pointerX - baseLeft - 28) / indentStep);
+                          const depth = Math.max(0, Math.min(targetDepth + 1, targetDepth + rawDepth - targetDepth));
+                          // Simpler: clamp rawDepth directly between 0 and targetDepth + 1
+                          const clampedDepth = Math.max(0, Math.min(targetDepth + 1, rawDepth));
+                          best = {
+                            targetId: id,
+                            above,
+                            depth: clampedDepth,
+                            rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom },
+                          };
+                          break;
+                        }
+                      }
+                      setDropTarget(best);
+                    }}
+                    onDragCancel={() => {
+                      setDropTarget(null);
+                      draggingIdRef.current = null;
+                    }}
                     onDragEnd={(e) => {
+                      setDropTarget(null);
+                      draggingIdRef.current = null;
                       if (readOnly) return;
                       const { active, over } = e;
                       if (!over || active.id === over.id) return;
@@ -1105,6 +1153,28 @@ export default function App() {
                     <SortableContext items={allIds} strategy={verticalListSortingStrategy}>
                       <BlockTree blocks={blocks} readOnly={readOnly} rowProps={rowProps} />
                     </SortableContext>
+                    {dropTarget && (() => {
+                      const indentStep = 14;
+                      const baseOffset = 28;
+                      const lineLeft = dropTarget.rect.left + baseOffset + dropTarget.depth * indentStep;
+                      return (
+                        <div
+                          className="dropIndicator"
+                          style={{
+                            position: "fixed",
+                            top: dropTarget.above ? dropTarget.rect.top : dropTarget.rect.bottom,
+                            left: lineLeft,
+                            width: Math.max(40, dropTarget.rect.width - (baseOffset + dropTarget.depth * indentStep)),
+                            height: 2,
+                            background: "#4a9eff",
+                            pointerEvents: "none",
+                            zIndex: 1000,
+                            transform: "translateY(-1px)",
+                            transition: "left 25ms ease-out",
+                          }}
+                        />
+                      );
+                    })()}
                   </DndContext>
                 );
               })()
