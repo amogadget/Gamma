@@ -204,6 +204,16 @@ def ensure_pages_db():
                 for (pid,), k in zip(existing, keys):
                     conn.execute("UPDATE pages SET position = ? WHERE id = ?", (k, pid))
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_position ON pages(position)")
+        # Migration: add source_url for one-click page-to-PDF open
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(pages)").fetchall()]
+        if "source_url" not in cols:
+            conn.execute("ALTER TABLE pages ADD COLUMN source_url TEXT")
+            # Backfill: uploaded PDFs are content-hashed, we can reconstruct their URL
+            rows = conn.execute("SELECT id, doc_id FROM pages WHERE doc_id IS NOT NULL").fetchall()
+            for pid, did in rows:
+                upload_path = UPLOAD_DIR / f"{did}.pdf"
+                if upload_path.exists():
+                    conn.execute("UPDATE pages SET source_url = ? WHERE id = ?", (f"/api/uploads/{did}.pdf", pid))
 
         # Blocks table (Logseq-style: one row per block, tree via parent_id + position)
         conn.execute(
@@ -235,7 +245,7 @@ async def list_pages():
     with sqlite3.connect(PAGES_DB) as conn:
         rows = conn.execute(
             """
-            SELECT p.id, p.title, p.updated_at, p.doc_id, p.position,
+            SELECT p.id, p.title, p.updated_at, p.doc_id, p.position, p.source_url,
                    (SELECT content FROM blocks b
                     WHERE b.page_id = p.id AND b.parent_id IS NULL
                     ORDER BY b.position ASC LIMIT 1)
@@ -245,7 +255,7 @@ async def list_pages():
         ).fetchall()
     out = []
     for row in rows:
-        preview = (row[5] or "").strip()
+        preview = (row[6] or "").strip()
         if len(preview) > 120:
             preview = preview[:120] + "..."
         out.append({
@@ -254,6 +264,7 @@ async def list_pages():
             "updated_at": row[2],
             "doc_id": row[3],
             "position": row[4],
+            "source_url": row[5],
             "preview": preview,
         })
     return out
@@ -296,7 +307,7 @@ async def get_page(page_id: str):
     ensure_pages_db()
     with sqlite3.connect(PAGES_DB) as conn:
         row = conn.execute(
-            "SELECT id, title, content, updated_at FROM pages WHERE id = ?",
+            "SELECT id, title, content, updated_at, doc_id, source_url FROM pages WHERE id = ?",
             (page_id,)
         ).fetchone()
     if not row:
@@ -305,7 +316,9 @@ async def get_page(page_id: str):
         "id": row[0],
         "title": row[1],
         "content": row[2],
-        "updated_at": row[3]
+        "updated_at": row[3],
+        "doc_id": row[4],
+        "source_url": row[5],
     }
 
 @app.put("/api/pages/{page_id}")
@@ -387,6 +400,7 @@ async def get_page_by_doc(doc_id: str):
 class PageByDocCreate(BaseModel):
     default_title: str
     legacy_title: str | None = None  # for backfill from old title-keyed pages
+    source_url: str | None = None
 
 
 @app.post("/api/pages/by-doc/{doc_id}")
@@ -395,10 +409,14 @@ async def get_or_create_page_by_doc(doc_id: str, payload: PageByDocCreate):
     with sqlite3.connect(PAGES_DB) as conn:
         # 1. Try doc_id lookup first
         row = conn.execute(
-            "SELECT id, title, content, updated_at FROM pages WHERE doc_id = ?",
+            "SELECT id, title, content, updated_at, source_url FROM pages WHERE doc_id = ?",
             (doc_id,)
         ).fetchone()
         if row:
+            # Opportunistic: backfill source_url if missing and client provided one
+            if (not row[4]) and payload.source_url:
+                conn.execute("UPDATE pages SET source_url = ? WHERE id = ?", (payload.source_url, row[0]))
+                conn.commit()
             return {"id": row[0], "title": row[1], "content": row[2], "updated_at": row[3]}
 
         # 2. Backfill: look for legacy title-keyed page with this title, claim it
@@ -417,8 +435,8 @@ async def get_or_create_page_by_doc(doc_id: str, payload: PageByDocCreate):
         title = (payload.default_title or "").strip() or "Untitled"
         now = page_now()
         conn.execute(
-            "INSERT INTO pages (id, title, content, updated_at, doc_id) VALUES (?, ?, ?, ?, ?)",
-            (page_id, title, "", now, doc_id)
+            "INSERT INTO pages (id, title, content, updated_at, doc_id, source_url) VALUES (?, ?, ?, ?, ?, ?)",
+            (page_id, title, "", now, doc_id, payload.source_url)
         )
         conn.commit()
     return {"id": page_id, "title": title, "content": "", "updated_at": now}

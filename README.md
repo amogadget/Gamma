@@ -9,32 +9,56 @@ A self-hosted, Logseq-inspired PDF annotation server. Highlight PDFs in your bro
 
 - Open any PDF by URL or upload it directly (drag-and-drop).
 - Select text to create a highlight with optional comment and color.
-- Highlights appear as top-level blocks in a Logseq-style outliner sidebar.
-- Add free notes, nest them under highlights, reorder blocks by drag.
-- Everything auto-saves. Reloading a PDF restores highlights, notes, structure, and title.
+- Highlights appear as top-level blocks in a Logseq-style outliner.
+- Add free notes, nest them under highlights, reorder blocks by drag (siblings and children).
+- Browse all your annotated pages from a home view. Pages themselves are reorderable.
+- Open a page with no PDF attached — just notes, like a Logseq page.
+- Everything auto-saves. Reloading a page restores highlights, notes, structure, and title.
 - Generate a read-only share link for any annotated PDF.
-- The main editor is password-protected via Caddy basic auth; shared links remain public.
+- Password-protect the editor via Caddy basic auth; shared links remain public.
+
+## Inspired by Logseq
+
+Logseq is an excellent outliner-based knowledge-management tool. Gamma takes several ideas from it that work well for PDF annotation specifically:
+
+- **Everything is a block.** Highlights and free notes aren't different entities — both are rows in the same `blocks` table, distinguished only by whether they carry a `highlight_id` property. Both can be nested, reordered, styled identically.
+- **Pages are the top-level container.** A PDF corresponds to exactly one page; all its highlights and notes live as blocks inside that page.
+- **Outliner editing.** Enter for sibling, Tab for indent, Shift+Tab for outdent, Backspace on empty to delete. One-click to edit, cursor lands near the click point.
+- **Drop indicator for tree drags.** Like Logseq, Gamma shows a single horizontal blue line during drag; its horizontal position snaps to valid nesting depths (sibling of current, first child of target, or sibling of any ancestor).
+- **Nested guide lines.** The vertical line to the left of nested blocks mimics Logseq's `.block-children` border-left pattern.
+- **Fractional indexing for page order.** Custom ordering of pages persists across reorder without renumbering, using the same `a0`, `a1`, `a0V` key scheme Logseq uses for blocks.
+
+Gamma is narrower than Logseq — no graph view, no block references, no daily journal, no queries. The feature set is tuned for "I want to annotate PDFs and keep the notes organized as a tree."
+
+## View modes
+
+The app has three coexisting modes, each derived from what's in the URL:
+
+- **Home** (`/`) — when no PDF is loaded, shows a list of all your pages as blocks. Each entry shows the page title and a preview of its first block. Click a page to open it. Pages are drag-reorderable.
+- **PDF + notes** (`/?page=<id>`, page has a source URL) — side-by-side (or stacked) PDF viewer and block tree. The default working view. Close-PDF (X button) temporarily hides the viewer, letting the block tree fill the width; clicking a highlight dot re-opens the PDF and jumps to that highlight.
+- **Page only** (`/?page=<id>`, page has no source URL) — just the block tree, full-width. Create notes without a PDF attached, or use the home-page-style to collect thoughts.
+
+Shared links (`/?share=<token>`) are a separate public read-only view: PDF + block tree, but editing and navigation are locked.
 
 ## Architecture
 
 Three pieces:
 
-1. **Backend** (`backend/app.py`) — a FastAPI app serving a small JSON API on top of two SQLite databases:
+1. **Backend** (`backend/app.py`) — a FastAPI app over two SQLite databases:
    - `data.db` — annotations (legacy, kept for backward compat) and shares.
-   - `pages.db` — pages and blocks (the Logseq-style outliner). Every PDF gets one page; highlights and free notes are both stored as rows in the `blocks` table, keyed by `parent_id` and `position`, with highlight-specific data in a JSON `properties` column.
-2. **Frontend** (`logseq-v2-frontend/`) — a React + Vite SPA.
-   - `src/App.jsx` — main component. Handles routing between editor/shared mode, PDF loading, block tree rendering, drag-and-drop, autosave.
-   - `src/logseqPdfModel.js` — the block tree operations (insert, indent/outdent, flatten, etc.) and highlight↔block conversions.
+   - `pages.db` — pages and blocks. Every PDF gets one page; highlights and free notes are both rows in `blocks`, keyed by `parent_id` + `position`, with highlight-specific data in a JSON `properties` column. Pages themselves are fractionally indexed for custom ordering.
+2. **Frontend** (`logseq-v2-frontend/`) — React + Vite.
+   - `src/App.jsx` — main component. Routing, PDF loading, block tree render, drag-and-drop, autosave.
+   - `src/logseqPdfModel.js` — block tree operations (insert, indent/outdent, flatten, extract, sibling/child insertion, cycle check).
    - `src/app.css` — dark-theme styling.
-   - `public/pages.html` — a legacy standalone page viewer (used by the "Pages" button in the toolbar). Still served, but no longer the source of truth.
-3. **Reverse proxy** — Caddy routes `annotation.amogadgetlab.com` to the frontend dev server and `/api/*` to the backend. Basic auth protects everything except shared links (`?share=...`) and static assets.
+3. **Reverse proxy** — Caddy routes the domain to the frontend and `/api/*` to the backend. Basic auth protects everything except shared links.
 
 ## Running locally
 
 ### Prerequisites
 
-- Python 3.11+ (FastAPI + uvicorn)
-- Node.js 18+ (Vite)
+- Python 3.11+
+- Node.js 18+
 - Caddy (optional, only if you want domain routing + auth)
 
 ### Backend
@@ -43,11 +67,11 @@ Three pieces:
 cd backend
 python3 -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn aiosqlite pydantic python-multipart
+pip install fastapi uvicorn aiosqlite pydantic python-multipart fractional-indexing
 uvicorn app:app --host 127.0.0.1 --port 9001
 ```
 
-The backend auto-creates `data.db` and `pages.db` on first start, and migrates any existing `annotations` rows into the `blocks` table.
+The backend auto-creates `data.db` and `pages.db` on first start, runs all pending migrations (adds `doc_id`, `position`, and `source_url` columns to `pages` as needed), and seeds the `blocks` table from any existing `annotations` rows.
 
 ### Frontend
 
@@ -63,7 +87,7 @@ npm run build && npm run preview    # production build on :4173
 
 In development, proxy `/api/*` from the frontend to `127.0.0.1:9001` via a Vite proxy config or Caddy. See `vite.config.js` for the current setup.
 
-For production-style hosting with basic auth, use a Caddyfile like:
+For production-style hosting with basic auth:
 
 ```caddyfile
 your-domain.com {
@@ -99,32 +123,44 @@ Generate the bcrypt hash with `caddy hash-password`.
 
 - **PDF loading**: open by URL or upload (max 50 MB, content-hashed for dedup).
 - **Highlights**: select text, pick color, add comment. Right-click to delete.
-- **Outliner sidebar**: highlights and notes as nested blocks. Enter for sibling, Tab for indent, Shift+Tab for outdent, Backspace on empty for delete.
-- **Rich text**: markdown + KaTeX math rendering in view mode, raw markdown in edit mode. Click to edit, cursor lands near the click point.
-- **Drag to reorder**: hover over a root block's left edge, grab the ⋮⋮ handle, drop to reorder.
-- **Layout toggles**: side-by-side (default) or stacked (PDF above notes). Hide notes to see only the PDF.
-- **Renameable page title**: click the title above the blocks to rename.
+- **Outliner block tree**: highlights and free notes rendered as nested blocks with Logseq-style vertical guide lines. Enter for sibling, Tab for indent, Shift+Tab for outdent, Backspace on empty to delete.
+- **Rich text**: markdown + KaTeX math in view mode, raw markdown in edit mode. One-click to edit; cursor lands near the click point.
+- **Drag-and-drop blocks**: hover over a block's left edge, grab the ⋮⋮ handle. Drop as sibling or as child. Cycle prevention rejects drops that would nest a block into its own subtree. Horizontal line indicator slides to show intended depth.
+- **Page home view**: all pages listed as blocks, orderable via drag, click to open.
+- **Pages without PDF**: pages with no source URL open as block-tree-only; useful for free-form notes.
+- **Close-PDF**: X button on the viewer hides the PDF temporarily while keeping it loaded. Clicking a highlight dot re-opens the viewer and jumps to that highlight.
+- **Layout toggles**: side-by-side (default) or stacked. Hide notes to see only the PDF.
+- **Renameable page title**: click the title to rename.
 - **Share links**: read-only URL, public, PDF + highlights + notes all preserved.
-- **Password protection**: main editor gated by Caddy basic auth; shared links stay public.
-- **Mobile**: dedicated drag handle on the splitter for touch, drop-target-friendly hit areas.
+- **Password protection**: editor gated by Caddy basic auth; shared links stay public.
+- **Mobile**: dedicated drag handle on the splitter for touch.
+
+## URL routing
+
+- `/` → home view (pages list).
+- `/?page=<page_id>` → open a page (with or without PDF).
+- `/?share=<token>` → public read-only view of a shared page.
+- `/?src=<url>` → legacy, redirects to `?page=<id>` after loading.
 
 ## Known limitations
 
-- Only root-level blocks can be reordered via drag-and-drop. Nested blocks move as a unit with their parent. Dragging nested blocks between parents is not implemented — see "Future work."
-- The `pages.html` legacy page viewer is still reachable via the "Pages" button in the toolbar. It doesn't fully integrate with the new block schema — it reads from the `pages.content` markdown field, which is kept in sync on every save but isn't the source of truth.
-- Shared links are exempt from auth via URL query parameter. This is a soft boundary: anyone who guesses `?share=<token>` lands on a broken page (if the token's invalid) rather than the editor, but the auth prompt is bypassed. For stronger protection, use app-level auth instead of Caddy basic auth.
-- Autosave is debounced at 500 ms. Closing the tab within that window after a change can lose the last keystroke.
+- The `pages.html` legacy page viewer is no longer reachable via the toolbar but is still served. It reads from the `pages.content` markdown field, kept in sync on every save, but isn't the source of truth.
+- Shared links are exempt from auth via URL query parameter. This is a soft boundary — anyone with a valid token can view; invalid token lands on a broken page. For stronger protection, use app-level auth instead of Caddy basic auth.
+- Autosave is debounced at 500 ms. Closing the tab within that window can lose the last keystroke.
 - No conflict handling for simultaneous edits across tabs/devices. Last write wins.
-- Uploaded PDFs are stored content-hashed under `uploads/`. There's no cleanup for orphans (PDFs whose pages/blocks have been deleted).
+- Uploaded PDFs are stored content-hashed under `uploads/`. No cleanup for orphans whose pages/blocks have been deleted.
+- `collapsed` state on blocks is UI-only; reloading restores everything expanded.
 
 ## Future work
 
-- Drag-and-drop phase B: nested blocks, drop-on-block-as-child.
-- Three-mode right pane: notes / page list / hidden.
-- Close-PDF → page list view fills the screen.
+- "Recent" carousel at the top of the home view.
+- Drag-to-reorder the page list on the home view (backend endpoint exists; frontend wiring pending).
 - Logseq EDN import.
+- Block references and backlinks.
 - Conflict resolution / multi-device sync.
 - Public read-only deployment mode (no auth, share-only).
+- Cleanup of orphaned uploaded PDFs.
+- Persist `collapsed` state across reload.
 
 ## Directory layout
 
@@ -141,7 +177,7 @@ pdf-share/
 │   │   ├── app.css
 │   │   └── main.jsx
 │   ├── public/
-│   │   ├── pages.html            # legacy page viewer
+│   │   ├── pages.html            # legacy page viewer (not used from toolbar)
 │   │   └── pdf.worker.min.mjs
 │   ├── package.json
 │   └── vite.config.js
@@ -151,14 +187,15 @@ pdf-share/
 
 ## History
 
-The codebase went through several layered iterations before landing here. An earlier frontend (`rph-frontend`) accumulated feature layers — share links, colored highlights, resizable sidebar, logseq-style outliner, page-sync logic, custom flash animations, overlapping CSS — to the point where debugging any one feature meant fighting the others. The current code is `logseq-v2-frontend`, started as a clean rewrite keeping only the share-link flow, with later additions built on a consistent block-based data model.
+The codebase went through several layered iterations before landing here. An earlier frontend (`rph-frontend`) accumulated feature layers — share links, colored highlights, resizable sidebar, outliner, page-sync logic, custom flash animations, overlapping CSS — to the point where debugging any one feature meant fighting the others. The current code is `logseq-v2-frontend`, started as a clean rewrite keeping only the share-link flow, with later additions built on a consistent block-based data model.
 
-Notable architectural decisions made during the rewrite:
+Notable architectural decisions:
 
 - Pages are the top-level container for a PDF's annotations (Logseq model), not the annotations themselves.
-- Highlights are just blocks with a `highlight_id` property; free notes are blocks without. Both persist identically, both can be reordered, both can have children.
-- Block ordering uses a plain integer `position` column, not fractional indexing. Simpler, fine for the expected scale.
+- Highlights are blocks with a `highlight_id` property; free notes are blocks without. Both persist identically, both can be reordered, both can have children.
+- Block ordering within a page uses a plain integer `position` column, not fractional indexing. Page ordering on the home view uses fractional indexing so reorders only touch the moved page, not every sibling.
 - The `annotations` table in `data.db` is kept for backward compatibility but is no longer the source of truth — `blocks` in `pages.db` is. A one-time startup migration seeds the blocks table from existing annotations.
+- URL routing moved from `?src=<url>` to `?page=<id>` as the canonical form. `?src=...` still works but redirects to `?page=...` after loading the page record.
 
 ## License
 

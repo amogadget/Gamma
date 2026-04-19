@@ -221,6 +221,7 @@ function BlockRow({
   focusedId,
   setFocusedId,
   onJump,
+  onPageOpen,
   onChangeText,
   onEnterSibling,
   onAddChild,
@@ -292,12 +293,15 @@ function BlockRow({
       <div
         className={`blockRow ${focusedId === block.id ? "focused" : ""}`}
         onMouseDown={(e) => {
-          // Don't hijack clicks on interactive children (buttons, textarea, inputs, links)
-          // Skip if click is on or inside an interactive element (button, textarea, input, link)
           if (e.target.closest("button, textarea, input, a")) return;
+          // Home mode: page-blocks open the PDF on click, not enter edit mode
+          if (block._pageId && typeof onPageOpen === "function") {
+            e.preventDefault();
+            onPageOpen(block);
+            return;
+          }
           setFocusedId(block.id);
           if (!readOnly && !block.editMode) {
-            // Stash click coordinates so the textarea-mount effect can place the cursor here.
             clickPosRef.current = { x: e.clientX, y: e.clientY };
             e.preventDefault();
             onStartEdit(block.id, true);
@@ -456,6 +460,7 @@ export default function App() {
   const params = new URLSearchParams(window.location.search);
   const initialUrl = params.get("src") || params.get("url") || "";
   const initialShare = params.get("share") || "";
+  const initialPageId = params.get("page") || "";
   const readOnly = Boolean(initialShare);
   // Home mode: no PDF loaded and not in a shared view; render pages list instead of block tree.
 
@@ -626,6 +631,7 @@ export default function App() {
 
   useEffect(() => {
     if (initialShare) resolveShare(initialShare);
+    else if (initialPageId) openPage(initialPageId);
     else if (initialUrl) openPdf(initialUrl);
   }, []);
 
@@ -747,7 +753,7 @@ export default function App() {
       setPdfPageId(page.id);
       setPdfTitle(page.title || defaultTitle);
       setPdfUrl(sourceUrl);
-      const newUrl = `${window.location.pathname}?src=${encodeURIComponent(sourceUrl)}`;
+      const newUrl = `${window.location.pathname}?page=${encodeURIComponent(page.id)}`;
       window.history.replaceState({}, "", newUrl);
       syncPdfPage(nextBlocks, data.doc_id, sourceUrl, page.title || defaultTitle).catch(() => {});
       setStatus(`Uploaded ${file.name} (${data.doc_id})`);
@@ -786,7 +792,7 @@ export default function App() {
       setPdfPageId(page.id);
       setPdfTitle(page.title || defaultTitle);
       setPdfUrl(proxiedUrl);
-      const newUrl = `${window.location.pathname}?src=${encodeURIComponent(finalUrl)}`;
+      const newUrl = `${window.location.pathname}?page=${encodeURIComponent(page.id)}`;
       window.history.replaceState({}, "", newUrl);
       // Sync markdown content (non-critical; fire-and-forget-ish)
       syncPdfPage(nextBlocks, resolvedDocId, finalUrl, page.title || defaultTitle).catch(() => {});
@@ -819,6 +825,52 @@ export default function App() {
       setStatus(`Loaded shared doc ${data.doc_id}`);
     } catch (err) {
       setStatus(`Share open failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function openPage(pageId) {
+    if (!pageId || readOnly) return;
+    setLoading(true);
+    setStatus("Opening page...");
+    try {
+      const page = await apiJson(`${API}/pages/${pageId}`);
+      if (!page) throw new Error("Page not found");
+      if (page.source_url) {
+        // Delegate to openPdf; it will resolve to this page via doc_id lookup.
+        // But openPdf also rewrites URL to ?src=..., which we now override at the end.
+        await openPdf(page.source_url);
+      } else {
+        // No PDF: load blocks directly and show page-only view.
+        let nextBlocks = await loadBlocks(pageId);
+        setDocId(page.doc_id || "");
+        setPdfUrl("");
+        setInputUrl("");
+        setPdfPageId(pageId);
+        setPdfTitle(page.title || "Untitled");
+        // If the page has no blocks, seed an empty first block (Logseq/Notion pattern)
+        if (!nextBlocks || nextBlocks.length === 0) {
+          const seedId = Math.random().toString(36).slice(2, 10);
+          const seedBlock = {
+            id: seedId,
+            content: "",
+            children: [],
+            collapsed: false,
+            editMode: true,
+            properties: {},
+          };
+          suppressAutosaveRef.current = false;
+          pendingFocusRef.current = seedId;
+          setBlocks([seedBlock]);
+        }
+        setStatus(`Loaded page ${page.title || pageId}`);
+      }
+      // Always end at ?page=<id>
+      const newUrl = `${window.location.pathname}?page=${encodeURIComponent(pageId)}`;
+      window.history.replaceState({}, "", newUrl);
+    } catch (err) {
+      setStatus(`Page open failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -862,7 +914,8 @@ export default function App() {
   }
 
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
-  const homeMode = !pdfUrl && !readOnly;
+  const homeMode = !pdfUrl && !pdfPageId && !readOnly;
+  const pageOnly = !pdfUrl && !!pdfPageId && !readOnly;
   // Synthesize blocks from the pages list for home mode rendering
   const pageBlocks = useMemo(() => {
     return pages.map((p) => ({
@@ -878,6 +931,7 @@ export default function App() {
       _pageId: p.id,
       _docId: p.doc_id,
       _position: p.position,
+      _sourceUrl: p.source_url,
     }));
   }, [pages]);
   const highlights = useMemo(() => blocksToHighlights(blocks), [blocks]);
@@ -982,8 +1036,8 @@ export default function App() {
         </div>
       )}
 
-      <div className={`main ${(pdfHidden || homeMode) ? "pdfHidden" : ""}`}>
-        <div className={`viewerWrap ${(pdfHidden || homeMode) ? "pdfHidden" : ""}`}>
+      <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
+        <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
           {pdfUrl && !pdfHidden ? (
             <button
               className="pdfCloseBtn"
@@ -1096,6 +1150,13 @@ export default function App() {
                   onJump: jumpToHighlightId,
                   registerRef,
                   readOnly,
+                  onPageOpen: (pageBlock) => {
+                    if (pageBlock._pageId) {
+                      openPage(pageBlock._pageId);
+                    } else {
+                      setStatus("Page has no id.");
+                    }
+                  },
                   onChangeText: (id, text) => {
                     if (readOnly) return;
                     const next = setBlockText(blocks, id, text);
