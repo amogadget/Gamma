@@ -1,0 +1,312 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Pages</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: #111;
+      color: #eee;
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 260px 1fr;
+    }
+    .sidebar {
+      border-right: 1px solid #333;
+      overflow: auto;
+      padding: 12px;
+      background: #171717;
+    }
+    .main {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      min-width: 0;
+      min-height: 0;
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid #333;
+      background: #181818;
+    }
+    .toolbar input {
+      flex: 1;
+      min-width: 0;
+      background: #222;
+      color: #eee;
+      border: 1px solid #444;
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    .toolbar button, .sidebar button {
+      background: #2a2a2a;
+      color: #eee;
+      border: 1px solid #555;
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    .content {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      min-height: 0;
+      min-width: 0;
+    }
+    textarea {
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      resize: none;
+      border: none;
+      outline: none;
+      padding: 16px;
+      font: 15px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      background: #141414;
+      color: #eee;
+    }
+    .preview {
+      overflow: auto;
+      padding: 20px;
+      border-left: 1px solid #333;
+      background: #101010;
+    }
+    .pageItem {
+      padding: 10px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      margin-top: 10px;
+      cursor: pointer;
+      background: #1d1d1d;
+    }
+    .pageItem.active {
+      border-color: #666;
+      background: #252525;
+    }
+    .pageTitle {
+      font-weight: 600;
+    }
+    .pageMeta {
+      font-size: 12px;
+      color: #aaa;
+      margin-top: 4px;
+    }
+    .topRow {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .status {
+      font-size: 13px;
+      color: #aaa;
+      padding: 12px;
+      border-bottom: 1px solid #333;
+      background: #151515;
+    }
+    .preview h1, .preview h2, .preview h3 {
+      margin-top: 1.2em;
+    }
+    .preview code {
+      background: #1d1d1d;
+      padding: 2px 4px;
+      border-radius: 4px;
+    }
+    .preview pre {
+      background: #1d1d1d;
+      padding: 12px;
+      border-radius: 8px;
+      overflow: auto;
+    }
+    .preview a {
+      color: #8ab4ff;
+    }
+  </style>
+</head>
+<body>
+  <div class="sidebar">
+    <div class="topRow">
+      <strong>Pages</strong>
+      <button id="newBtn">New</button>
+    </div>
+    <div id="pageList"></div>
+  </div>
+
+  <div class="main">
+    <div class="toolbar">
+      <input id="titleInput" placeholder="Page title" />
+      <button id="saveBtn">Save</button>
+    </div>
+    <div class="status" id="status">Ready.</div>
+    <div class="content">
+      <textarea id="editor" placeholder="# Notes"></textarea>
+      <div class="preview" id="preview"></div>
+    </div>
+  </div>
+
+  <script>
+    const pageList = document.getElementById("pageList");
+    const titleInput = document.getElementById("titleInput");
+    const editor = document.getElementById("editor");
+    const preview = document.getElementById("preview");
+    const statusEl = document.getElementById("status");
+    const newBtn = document.getElementById("newBtn");
+    const saveBtn = document.getElementById("saveBtn");
+
+    let currentPageId = null;
+    let pages = [];
+
+    function setStatus(s) {
+      statusEl.textContent = s;
+    }
+
+    function escapeHtml(str) {
+      return (str || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function preprocessWikiLinks(md) {
+      return (md || "").replace(/\[\[([^\]]+)\]\]/g, (_, rawTitle) => {
+        const title = rawTitle.trim();
+        return `<a href="#" class="wikilink" data-page-title="${escapeHtml(title)}">[[${escapeHtml(title)}]]</a>`;
+      });
+    }
+
+    function renderPreview() {
+      const preprocessed = preprocessWikiLinks(editor.value || "");
+      preview.innerHTML = marked.parse(preprocessed);
+    }
+
+    editor.addEventListener("input", renderPreview);
+
+    async function apiJson(url, options = {}) {
+      const r = await fetch(url, options);
+      if (!r.ok) {
+        throw new Error(await r.text());
+      }
+      return await r.json();
+    }
+
+    function renderPageList() {
+      pageList.innerHTML = "";
+      for (const p of pages) {
+        const div = document.createElement("div");
+        div.className = "pageItem" + (p.id === currentPageId ? " active" : "");
+        div.innerHTML = `
+          <div class="pageTitle"></div>
+          <div class="pageMeta"></div>
+        `;
+        div.querySelector(".pageTitle").textContent = p.title || "Untitled";
+        div.querySelector(".pageMeta").textContent = p.updated_at || "";
+        div.onclick = () => openPage(p.id);
+        pageList.appendChild(div);
+      }
+    }
+
+    async function loadPages() {
+      pages = await apiJson("/api/pages");
+      renderPageList();
+    }
+
+    async function openPage(pageId) {
+      const p = await apiJson(`/api/pages/${pageId}`);
+      currentPageId = p.id;
+      titleInput.value = p.title || "";
+      editor.value = p.content || "";
+      renderPreview();
+      renderPageList();
+
+      const u = new URL(window.location.href);
+      u.searchParams.set("page", p.id);
+      history.replaceState({}, "", u.toString());
+
+      setStatus(`Opened ${p.title}`);
+    }
+
+    async function createPage() {
+      const title = window.prompt("New page title", "Untitled");
+      if (title === null) return;
+      const p = await apiJson("/api/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title })
+      });
+      await loadPages();
+      await openPage(p.id);
+    }
+
+    async function savePage() {
+      if (!currentPageId) {
+        setStatus("No page open.");
+        return;
+      }
+      await apiJson(`/api/pages/${currentPageId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: titleInput.value || "Untitled",
+          content: editor.value || ""
+        })
+      });
+      await loadPages();
+      setStatus("Saved.");
+    }
+
+    preview.addEventListener("click", async (e) => {
+      const link = e.target.closest(".wikilink");
+      if (!link) return;
+      e.preventDefault();
+
+      const rawTitle = (link.dataset.pageTitle || "").trim();
+      if (!rawTitle) return;
+
+      await loadPages();
+      const existing = pages.find(
+        (p) => (p.title || "").trim().toLowerCase() === rawTitle.toLowerCase()
+      );
+
+      if (existing) {
+        await openPage(existing.id);
+        return;
+      }
+
+      const created = await apiJson("/api/pages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: rawTitle })
+      });
+
+      await loadPages();
+      await openPage(created.id);
+    });
+
+    newBtn.onclick = createPage;
+    saveBtn.onclick = savePage;
+
+    async function boot() {
+      renderPreview();
+      await loadPages();
+      const params = new URLSearchParams(window.location.search);
+      const page = params.get("page");
+      if (page) {
+        try {
+          await openPage(page);
+          return;
+        } catch {}
+      }
+      if (pages.length > 0) {
+        await openPage(pages[0].id);
+      }
+    }
+
+    boot();
+  </script>
+</body>
+</html>

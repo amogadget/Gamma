@@ -1,0 +1,14 @@
+archive/
+node_modules/
+venv/
+__pycache__/
+*.pyc
+*.db
+*.db.bak*
+uploads/
+*.log
+.vite/
+dist/
+**/.backup/
+*.bak
+*.bak.*
