@@ -1134,7 +1134,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
         {notesVisible && (<div className="sidebar" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-height": `${sidebarHeight}px` }}>
           <div className="pageTitleRow">
-            {titleEditing && !readOnly && docId ? (
+            {titleEditing && !readOnly && focusedBlockId ? (
               <input
                 className="titleEdit"
                 autoFocus
@@ -1148,14 +1148,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               />
             ) : (
               <h3
-                className={!readOnly && docId ? "titleText editable" : "titleText"}
-                title={!readOnly && docId ? "Click to rename" : undefined}
+                className={!readOnly && focusedBlockId ? "titleText editable" : "titleText"}
+                title={!readOnly && focusedBlockId ? "Click to rename" : undefined}
                 onClick={() => {
-                  if (readOnly || !docId) return;
-                  setTitleDraft(pdfTitle || getPdfPageTitle(docId, inputUrl));
+                  if (readOnly || !focusedBlockId) return;
+                  setTitleDraft(pdfTitle || (docId ? getPdfPageTitle(docId, inputUrl) : "Untitled"));
                   setTitleEditing(true);
                 }}
-              >{docId ? (pdfTitle || getPdfPageTitle(docId, inputUrl)) : "PDF Notes"}</h3>
+              >{focusedBlockId ? (pdfTitle || (docId ? getPdfPageTitle(docId, inputUrl) : "Untitled")) : "PDF Notes"}</h3>
             )}
 
           </div>
