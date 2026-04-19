@@ -656,3 +656,295 @@ def migrate_annotations_to_blocks():
 
 # Run migration at import time (after ensure_pages_db has been defined and called above)
 migrate_annotations_to_blocks()
+
+
+# ---------------------------------------------------------------------------
+# Unified blocks API  (/api/blocks/*)
+# ---------------------------------------------------------------------------
+
+def ub_rows_to_tree(rows):
+    """Convert flat (id, parent_id, position, content, properties, created_at, updated_at)
+    rows from unified_blocks into a nested tree sorted by position at each level."""
+    by_parent: dict = {}
+    by_id: dict = {}
+    for r in rows:
+        node = {
+            "id": r[0],
+            "parent_id": r[1],
+            "position": r[2],
+            "content": r[3] or "",
+            "properties": _json.loads(r[4] or "{}"),
+            "created_at": r[5],
+            "updated_at": r[6],
+            "children": [],
+        }
+        by_id[node["id"]] = node
+        by_parent.setdefault(r[1], []).append(node)
+    for plist in by_parent.values():
+        plist.sort(key=lambda n: n["position"])
+    for node in by_id.values():
+        node["children"] = by_parent.get(node["id"], [])
+    return by_parent.get(None, [])
+
+def ub_fetch_subtree(conn, block_id: str):
+    """Fetch a block + all its descendants from unified_blocks."""
+    rows = conn.execute(
+        """
+        WITH RECURSIVE subtree AS (
+            SELECT id, parent_id, position, content, properties, created_at, updated_at
+            FROM unified_blocks WHERE id = ?
+            UNION ALL
+            SELECT ub.id, ub.parent_id, ub.position, ub.content, ub.properties, ub.created_at, ub.updated_at
+            FROM unified_blocks ub JOIN subtree s ON ub.parent_id = s.id
+        )
+        SELECT id, parent_id, position, content, properties, created_at, updated_at FROM subtree
+        """,
+        (block_id,),
+    ).fetchall()
+    return rows
+
+def ub_delete_subtree(conn, block_id: str):
+    """Delete a block and all its descendants."""
+    conn.execute(
+        """
+        WITH RECURSIVE subtree AS (
+            SELECT id FROM unified_blocks WHERE id = ?
+            UNION ALL
+            SELECT ub.id FROM unified_blocks ub JOIN subtree s ON ub.parent_id = s.id
+        )
+        DELETE FROM unified_blocks WHERE id IN (SELECT id FROM subtree)
+        """,
+        (block_id,),
+    )
+
+def ub_last_child_position(conn, parent_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT position FROM unified_blocks WHERE parent_id = ? ORDER BY position DESC LIMIT 1",
+        (parent_id,),
+    ).fetchone()
+    return row[0] if row else None
+
+def ub_block_to_dict(row) -> dict:
+    return {
+        "id": row[0],
+        "parent_id": row[1],
+        "position": row[2],
+        "content": row[3] or "",
+        "properties": _json.loads(row[4] or "{}"),
+        "created_at": row[5],
+        "updated_at": row[6],
+    }
+
+# Pydantic models for unified blocks
+class UBCreateRequest(BaseModel):
+    parent_id: str
+    content: str = ""
+    properties: dict = {}
+    before: str | None = None   # fractional position of the sibling before this one
+    after: str | None = None    # fractional position of the sibling after this one
+
+class UBUpdateRequest(BaseModel):
+    content: str | None = None
+    properties: dict | None = None
+
+class UBReorderRequest(BaseModel):
+    parent_id: str | None = None   # if provided, also reparents the block
+    before: str | None = None
+    after: str | None = None
+
+class UBByDocCreate(BaseModel):
+    default_title: str
+    source_url: str | None = None
+
+# Route order matters: static-prefix routes must come before /{id}
+
+@app.get("/api/blocks/by-doc/{doc_id}")
+async def ub_get_by_doc(doc_id: str):
+    ensure_pages_db()
+    with sqlite3.connect(PAGES_DB) as conn:
+        row = conn.execute(
+            "SELECT id, parent_id, position, content, properties, created_at, updated_at "
+            "FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?",
+            (doc_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="block not found for doc_id")
+    return ub_block_to_dict(row)
+
+@app.post("/api/blocks/by-doc/{doc_id}")
+async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate):
+    ensure_pages_db()
+    with sqlite3.connect(PAGES_DB) as conn:
+        row = conn.execute(
+            "SELECT id, parent_id, position, content, properties, created_at, updated_at "
+            "FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?",
+            (doc_id,),
+        ).fetchone()
+        if row:
+            # Opportunistic backfill of source_url
+            if payload.source_url:
+                props = _json.loads(row[4] or "{}")
+                if not props.get("source_url"):
+                    props["source_url"] = payload.source_url
+                    now = page_now()
+                    conn.execute(
+                        "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
+                        (_json.dumps(props), now, row[0]),
+                    )
+                    conn.commit()
+            return ub_block_to_dict(row)
+
+        # Create new block under root
+        block_id = secrets.token_urlsafe(9)
+        title = (payload.default_title or "").strip() or "Untitled"
+        now = page_now()
+        last_pos = ub_last_child_position(conn, "root")
+        new_pos = generate_key_between(last_pos, None)
+        props = {"doc_id": doc_id}
+        if payload.source_url:
+            props["source_url"] = payload.source_url
+        conn.execute(
+            "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
+            "VALUES (?, 'root', ?, ?, ?, ?, ?)",
+            (block_id, new_pos, title, _json.dumps(props), now, now),
+        )
+        conn.commit()
+    return {
+        "id": block_id, "parent_id": "root", "position": new_pos,
+        "content": title, "properties": props, "created_at": now, "updated_at": now,
+    }
+
+@app.get("/api/blocks/{block_id}/children")
+async def ub_get_children(block_id: str):
+    ensure_pages_db()
+    with sqlite3.connect(PAGES_DB) as conn:
+        if block_id != "root":
+            if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
+                raise HTTPException(status_code=404, detail="block not found")
+        rows = conn.execute(
+            "SELECT id, parent_id, position, content, properties, created_at, updated_at "
+            "FROM unified_blocks WHERE parent_id = ? ORDER BY position ASC",
+            (block_id,),
+        ).fetchall()
+    return {"children": [ub_block_to_dict(r) for r in rows]}
+
+@app.get("/api/blocks/{block_id}/subtree")
+async def ub_get_subtree(block_id: str):
+    ensure_pages_db()
+    with sqlite3.connect(PAGES_DB) as conn:
+        rows = ub_fetch_subtree(conn, block_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="block not found")
+    # Build a full id→node map, wire children, then return the root node by id
+    by_id: dict = {}
+    for r in rows:
+        by_id[r[0]] = {
+            "id": r[0], "parent_id": r[1], "position": r[2],
+            "content": r[3] or "", "properties": _json.loads(r[4] or "{}"),
+            "created_at": r[5], "updated_at": r[6], "children": [],
+        }
+    for node in by_id.values():
+        parent = by_id.get(node["parent_id"])
+        if parent:
+            parent["children"].append(node)
+    for node in by_id.values():
+        node["children"].sort(key=lambda n: n["position"])
+    return {"block": by_id.get(block_id)}
+
+@app.get("/api/blocks/{block_id}")
+async def ub_get_block(block_id: str):
+    ensure_pages_db()
+    with sqlite3.connect(PAGES_DB) as conn:
+        row = conn.execute(
+            "SELECT id, parent_id, position, content, properties, created_at, updated_at "
+            "FROM unified_blocks WHERE id = ?",
+            (block_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="block not found")
+    return ub_block_to_dict(row)
+
+@app.post("/api/blocks")
+async def ub_create_block(payload: UBCreateRequest):
+    ensure_pages_db()
+    block_id = secrets.token_urlsafe(9)
+    now = page_now()
+    with sqlite3.connect(PAGES_DB) as conn:
+        if payload.parent_id != "root":
+            if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (payload.parent_id,)).fetchone():
+                raise HTTPException(status_code=404, detail="parent block not found")
+        try:
+            new_pos = generate_key_between(payload.before, payload.after)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"invalid before/after: {e}")
+        conn.execute(
+            "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (block_id, payload.parent_id, new_pos, payload.content,
+             _json.dumps(payload.properties), now, now),
+        )
+        conn.commit()
+    return {
+        "id": block_id, "parent_id": payload.parent_id, "position": new_pos,
+        "content": payload.content, "properties": payload.properties,
+        "created_at": now, "updated_at": now,
+    }
+
+@app.put("/api/blocks/{block_id}")
+async def ub_update_block(block_id: str, payload: UBUpdateRequest):
+    ensure_pages_db()
+    now = page_now()
+    with sqlite3.connect(PAGES_DB) as conn:
+        row = conn.execute(
+            "SELECT properties FROM unified_blocks WHERE id = ?", (block_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="block not found")
+        sets = ["updated_at = ?"]
+        values: list = [now]
+        if payload.content is not None:
+            sets.append("content = ?")
+            values.append(payload.content)
+        if payload.properties is not None:
+            existing = _json.loads(row[0] or "{}")
+            existing.update(payload.properties)
+            sets.append("properties = ?")
+            values.append(_json.dumps(existing))
+        values.append(block_id)
+        conn.execute(f"UPDATE unified_blocks SET {', '.join(sets)} WHERE id = ?", values)
+        conn.commit()
+    return {"ok": True, "updated_at": now}
+
+@app.delete("/api/blocks/{block_id}")
+async def ub_delete_block(block_id: str):
+    if block_id == "root":
+        raise HTTPException(status_code=400, detail="cannot delete root block")
+    ensure_pages_db()
+    with sqlite3.connect(PAGES_DB) as conn:
+        if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="block not found")
+        ub_delete_subtree(conn, block_id)
+        conn.commit()
+    return {"ok": True, "id": block_id}
+
+@app.post("/api/blocks/{block_id}/reorder")
+async def ub_reorder_block(block_id: str, payload: UBReorderRequest):
+    if block_id == "root":
+        raise HTTPException(status_code=400, detail="cannot reorder root block")
+    ensure_pages_db()
+    with sqlite3.connect(PAGES_DB) as conn:
+        if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="block not found")
+        try:
+            new_pos = generate_key_between(payload.before, payload.after)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"invalid before/after: {e}")
+        sets = ["position = ?", "updated_at = ?"]
+        values: list = [new_pos, page_now()]
+        if payload.parent_id is not None:
+            sets.append("parent_id = ?")
+            values.append(payload.parent_id)
+        values.append(block_id)
+        conn.execute(f"UPDATE unified_blocks SET {', '.join(sets)} WHERE id = ?", values)
+        conn.commit()
+    return {"ok": True, "id": block_id, "position": new_pos}
