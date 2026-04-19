@@ -340,6 +340,7 @@ function BlockRow({
         )}
 
         <div className="blockBody">
+          {block._isRecent ? <span className="recentIndicator" title="In recent">★</span> : null}
           <div className="blockMeta">
             {block.page ? `page ${block.page}` : "note"}
           </div>
@@ -635,7 +636,28 @@ export default function App() {
     else if (initialUrl) openPdf(initialUrl);
   }, []);
 
-  function getPdfPageTitle(targetDocId, targetInputUrl) {
+  function formatRelativeTime(iso) {
+  if (!iso) return "";
+  // Backend sends naive ISO (no tz suffix), but the values are UTC. Append Z so JS parses them as UTC.
+  const then = new Date(/[Zz]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + "Z").getTime();
+  const now = Date.now();
+  const secs = Math.max(1, Math.floor((now - then) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) return `${weeks}w ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo ago`;
+  const years = Math.floor(days / 365);
+  return `${years}y ago`;
+}
+
+function getPdfPageTitle(targetDocId, targetInputUrl) {
     const tail = (targetInputUrl || "").split("/").pop() || "";
     const cleaned = decodeURIComponent(tail).trim();
     return cleaned ? `PDF Notes - ${cleaned}` : `PDF Notes - ${targetDocId}`;
@@ -755,7 +777,6 @@ export default function App() {
       setPdfUrl(sourceUrl);
       const newUrl = `${window.location.pathname}?page=${encodeURIComponent(page.id)}`;
       window.history.replaceState({}, "", newUrl);
-      syncPdfPage(nextBlocks, data.doc_id, sourceUrl, page.title || defaultTitle).catch(() => {});
       setStatus(`Uploaded ${file.name} (${data.doc_id})`);
     } catch (err) {
       setStatus(`Upload failed: ${err.message}`);
@@ -795,7 +816,6 @@ export default function App() {
       const newUrl = `${window.location.pathname}?page=${encodeURIComponent(page.id)}`;
       window.history.replaceState({}, "", newUrl);
       // Sync markdown content (non-critical; fire-and-forget-ish)
-      syncPdfPage(nextBlocks, resolvedDocId, finalUrl, page.title || defaultTitle).catch(() => {});
       setStatus(`Loaded ${resolvedDocId}`);
     } catch (err) {
       setStatus(`Open failed: ${err.message}`);
@@ -860,7 +880,7 @@ export default function App() {
             editMode: true,
             properties: {},
           };
-          suppressAutosaveRef.current = false;
+          suppressAutosaveRef.current = true;
           pendingFocusRef.current = seedId;
           setBlocks([seedBlock]);
         }
@@ -915,6 +935,12 @@ export default function App() {
 
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
   const homeMode = !pdfUrl && !pdfPageId && !readOnly;
+  const recentPages = useMemo(() => {
+    return [...pages]
+      .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""))
+      .slice(0, 4);
+  }, [pages]);
+  const recentIds = useMemo(() => new Set(recentPages.map((p) => p.id)), [recentPages]);
   const pageOnly = !pdfUrl && !!pdfPageId && !readOnly;
   // Synthesize blocks from the pages list for home mode rendering
   const pageBlocks = useMemo(() => {
@@ -932,8 +958,9 @@ export default function App() {
       _docId: p.doc_id,
       _position: p.position,
       _sourceUrl: p.source_url,
+      _isRecent: recentIds.has(p.id),
     }));
-  }, [pages]);
+  }, [pages, recentIds]);
   const highlights = useMemo(() => blocksToHighlights(blocks), [blocks]);
   useEffect(() => {
     if (pdfHidden) return;
@@ -1140,6 +1167,24 @@ export default function App() {
           ) : null}
 
           <div className="blockList">
+            {homeMode && recentPages.length > 0 ? (
+              <div className="recentPagesRow">
+                <div className="recentPagesLabel">Recent</div>
+                <div className="recentPagesGrid">
+                  {recentPages.map((p) => (
+                    <button
+                      key={p.id}
+                      className="recentCard"
+                      onClick={() => openPage(p.id)}
+                      title={p.title}
+                    >
+                      <div className="recentCardTitle">{p.title || "Untitled"}</div>
+                      <div className="recentCardMeta">{formatRelativeTime(p.updated_at)}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             {(homeMode ? pageBlocks : visibleBlocks).length === 0 ? (
               <div className="empty">{homeMode ? "No pages yet — open a PDF above to get started." : "No blocks yet."}</div>
             ) : (
@@ -1207,7 +1252,7 @@ export default function App() {
                   },
                 };
                 const rootIds = (blocks || []).map((b) => b.id);
-                const allIds = flattenBlocks(blocks).map((b) => b.id);
+                const allIds = homeMode ? pageBlocks.map((b) => b.id) : flattenBlocks(blocks).map((b) => b.id);
                 return (
                   <DndContext
                     sensors={dndSensors}
@@ -1262,6 +1307,31 @@ export default function App() {
                       if (readOnly) return;
                       const { active } = e;
                       if (!active || !dt) return;
+                      // Home mode: reorder pages via the API, not the local tree
+                      if (homeMode) {
+                        const sourceIdx = pageBlocks.findIndex((b) => b.id === active.id);
+                        const targetIdx = pageBlocks.findIndex((b) => b.id === dt.targetId);
+                        if (sourceIdx < 0 || targetIdx < 0 || sourceIdx === targetIdx) return;
+                        const remaining = pageBlocks.filter((_, i) => i !== sourceIdx);
+                        const adjustedTargetIdx = targetIdx > sourceIdx ? targetIdx - 1 : targetIdx;
+                        const dropIdx = dt.above ? adjustedTargetIdx : adjustedTargetIdx + 1;
+                        const before = remaining[dropIdx - 1]?._position ?? null;
+                        const after = remaining[dropIdx]?._position ?? null;
+                        const sourceBlock = pageBlocks[sourceIdx];
+                        const pageId = sourceBlock._pageId;
+                        if (!pageId) return;
+                        fetch(`${API}/pages/reorder`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ id: pageId, before, after }),
+                        })
+                          .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+                          .then(() => fetch(`${API}/pages`))
+                          .then((r) => r.json())
+                          .then((data) => setPages(Array.isArray(data) ? data : []))
+                          .catch((err) => setStatus(`Page reorder failed: ${err}`));
+                        return;
+                      }
                       const sourceId = active.id;
                       const { targetId, above, depth } = dt;
                       if (sourceId === targetId) return;

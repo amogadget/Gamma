@@ -235,7 +235,8 @@ def ensure_pages_db():
         conn.commit()
 
 def page_now():
-    return datetime.utcnow().isoformat()
+    # Emit UTC ISO string with Z suffix so clients parse it correctly.
+    return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 ensure_pages_db()
 
