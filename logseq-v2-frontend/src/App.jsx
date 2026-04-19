@@ -457,6 +457,7 @@ export default function App() {
   const initialUrl = params.get("src") || params.get("url") || "";
   const initialShare = params.get("share") || "";
   const readOnly = Boolean(initialShare);
+  // Home mode: no PDF loaded and not in a shared view; render pages list instead of block tree.
 
   const [inputUrl, setInputUrl] = useState(initialUrl);
   const [pdfUrl, setPdfUrl] = useState("");
@@ -469,6 +470,13 @@ export default function App() {
   const [sidebarHeight, setSidebarHeight] = useState(280);
   const [orientation, setOrientation] = useState("horizontal");
   const [pdfHidden, setPdfHidden] = useState(false);
+  const [pages, setPages] = useState([]);
+  useEffect(() => {
+    fetch(`${API}/pages`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setPages(Array.isArray(data) ? data : []))
+      .catch(() => setPages([]));
+  }, []);
   const pendingJumpRef = useRef(null);
   const dndSensors = useSensors(
     useSensor(PointerSensor, {
@@ -509,7 +517,7 @@ export default function App() {
   }, [blocks, readOnly]);
 
   useEffect(() => {
-    if (readOnly) return;
+    if (readOnly || !pdfPageId) return;
     if (suppressAutosaveRef.current) {
       suppressAutosaveRef.current = false;
       return;
@@ -854,6 +862,24 @@ export default function App() {
   }
 
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
+  const homeMode = !pdfUrl && !readOnly;
+  // Synthesize blocks from the pages list for home mode rendering
+  const pageBlocks = useMemo(() => {
+    return pages.map((p) => ({
+      id: `page-${p.id}`,
+      content: p.title || "Untitled",
+      children: [],
+      collapsed: false,
+      properties: {
+        // Use the quote slot for the first-block preview
+        quote: p.preview || "",
+      },
+      // Stash the real page id for later (3b will use this to open the PDF)
+      _pageId: p.id,
+      _docId: p.doc_id,
+      _position: p.position,
+    }));
+  }, [pages]);
   const highlights = useMemo(() => blocksToHighlights(blocks), [blocks]);
   useEffect(() => {
     if (pdfHidden) return;
@@ -956,8 +982,8 @@ export default function App() {
         </div>
       )}
 
-      <div className={`main ${pdfHidden ? "pdfHidden" : ""}`}>
-        <div className={`viewerWrap ${pdfHidden ? "pdfHidden" : ""}`}>
+      <div className={`main ${(pdfHidden || homeMode) ? "pdfHidden" : ""}`}>
+        <div className={`viewerWrap ${(pdfHidden || homeMode) ? "pdfHidden" : ""}`}>
           {pdfUrl && !pdfHidden ? (
             <button
               className="pdfCloseBtn"
@@ -1060,8 +1086,8 @@ export default function App() {
           ) : null}
 
           <div className="blockList">
-            {visibleBlocks.length === 0 ? (
-              <div className="empty">No blocks yet.</div>
+            {(homeMode ? pageBlocks : visibleBlocks).length === 0 ? (
+              <div className="empty">{homeMode ? "No pages yet — open a PDF above to get started." : "No blocks yet."}</div>
             ) : (
               (() => {
                 const rowProps = {
@@ -1201,7 +1227,7 @@ export default function App() {
                     }}
                   >
                     <SortableContext items={allIds} strategy={verticalListSortingStrategy}>
-                      <BlockTree blocks={blocks} readOnly={readOnly} rowProps={rowProps} />
+                      <BlockTree blocks={homeMode ? pageBlocks : blocks} readOnly={readOnly} rowProps={rowProps} />
                     </SortableContext>
                     {dropTarget && (() => {
                       const indentStep = 14;
