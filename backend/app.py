@@ -171,7 +171,9 @@ class PageReorderRequest(BaseModel):
     after: str | None = None
 
 class PageCreateRequest(BaseModel):
-    title: str
+    title: str | None = None
+    before: str | None = None
+    after: str | None = None
 
 class PageUpdateRequest(BaseModel):
     summary: str | None = None
@@ -237,6 +239,24 @@ def ensure_pages_db():
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_blocks_page ON blocks(page_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_blocks_parent ON blocks(parent_id)")
+
+        # Unified block tree — everything is a block
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS unified_blocks (
+                id         TEXT PRIMARY KEY,
+                parent_id  TEXT REFERENCES unified_blocks(id),
+                position   TEXT NOT NULL,
+                content    TEXT NOT NULL DEFAULT '',
+                properties TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ub_parent ON unified_blocks(parent_id, position)"
+        )
         conn.commit()
 
 def page_now():
@@ -283,11 +303,17 @@ async def create_page(payload: PageCreateRequest):
     title = (payload.title or "").strip() or "Untitled"
     now = page_now()
     with sqlite3.connect(PAGES_DB) as conn:
-        last = conn.execute(
-            "SELECT position FROM pages WHERE position IS NOT NULL ORDER BY position DESC LIMIT 1"
-        ).fetchone()
-        last_pos = last[0] if last else None
-        new_pos = generate_key_between(last_pos, None)
+        if payload.before is not None or payload.after is not None:
+            try:
+                new_pos = generate_key_between(payload.before, payload.after)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid before/after keys: {e}")
+        else:
+            last = conn.execute(
+                "SELECT position FROM pages WHERE position IS NOT NULL ORDER BY position DESC LIMIT 1"
+            ).fetchone()
+            last_pos = last[0] if last else None
+            new_pos = generate_key_between(last_pos, None)
         conn.execute(
             "INSERT INTO pages (id, title, content, updated_at, position) VALUES (?, ?, ?, ?, ?)",
             (page_id, title, "", now, new_pos)
@@ -365,6 +391,19 @@ from fastapi.responses import FileResponse
 UPLOADS_DIR = Path("/home/ubuntu/pdf-share/uploads")
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+
+@app.delete("/api/pages/{page_id}")
+async def delete_page(page_id: str):
+    ensure_pages_db()
+    with sqlite3.connect(PAGES_DB) as conn:
+        # Delete blocks first, then the page
+        conn.execute("DELETE FROM blocks WHERE page_id = ?", (page_id,))
+        cur = conn.execute("DELETE FROM pages WHERE id = ?", (page_id,))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="page not found")
+    return {"ok": True, "id": page_id}
+
 
 @app.post("/api/uploads")
 async def upload_pdf(file: UploadFile = File(...)):
