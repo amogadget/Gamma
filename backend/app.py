@@ -158,11 +158,17 @@ async def proxy_pdf(source_url: str):
 
 
 import sqlite3
+from fractional_indexing import generate_key_between, generate_n_keys_between
 from datetime import datetime
 
 # --- pages API (phase 1) ---
 
 PAGES_DB = "/home/ubuntu/pdf-share/backend/pages.db"
+
+class PageReorderRequest(BaseModel):
+    id: str
+    before: str | None = None
+    after: str | None = None
 
 class PageCreateRequest(BaseModel):
     title: str
@@ -188,6 +194,16 @@ def ensure_pages_db():
         if "doc_id" not in cols:
             conn.execute("ALTER TABLE pages ADD COLUMN doc_id TEXT")
             conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_pages_doc_id ON pages(doc_id) WHERE doc_id IS NOT NULL")
+        # Migration: add position (fractional index) column, backfill existing rows with sequential keys
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(pages)").fetchall()]
+        if "position" not in cols:
+            conn.execute("ALTER TABLE pages ADD COLUMN position TEXT")
+            existing = conn.execute("SELECT id FROM pages ORDER BY updated_at DESC").fetchall()
+            if existing:
+                keys = generate_n_keys_between(None, None, n=len(existing))
+                for (pid,), k in zip(existing, keys):
+                    conn.execute("UPDATE pages SET position = ? WHERE id = ?", (k, pid))
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_pages_position ON pages(position)")
 
         # Blocks table (Logseq-style: one row per block, tree via parent_id + position)
         conn.execute(
@@ -218,12 +234,29 @@ async def list_pages():
     ensure_pages_db()
     with sqlite3.connect(PAGES_DB) as conn:
         rows = conn.execute(
-            "SELECT id, title, updated_at FROM pages ORDER BY updated_at DESC"
+            """
+            SELECT p.id, p.title, p.updated_at, p.doc_id, p.position,
+                   (SELECT content FROM blocks b
+                    WHERE b.page_id = p.id AND b.parent_id IS NULL
+                    ORDER BY b.position ASC LIMIT 1)
+            FROM pages p
+            ORDER BY p.position ASC, p.updated_at DESC
+            """
         ).fetchall()
-    return [
-        {"id": row[0], "title": row[1], "updated_at": row[2]}
-        for row in rows
-    ]
+    out = []
+    for row in rows:
+        preview = (row[5] or "").strip()
+        if len(preview) > 120:
+            preview = preview[:120] + "..."
+        out.append({
+            "id": row[0],
+            "title": row[1],
+            "updated_at": row[2],
+            "doc_id": row[3],
+            "position": row[4],
+            "preview": preview,
+        })
+    return out
 
 @app.post("/api/pages")
 async def create_page(payload: PageCreateRequest):
@@ -232,12 +265,31 @@ async def create_page(payload: PageCreateRequest):
     title = (payload.title or "").strip() or "Untitled"
     now = page_now()
     with sqlite3.connect(PAGES_DB) as conn:
+        last = conn.execute(
+            "SELECT position FROM pages WHERE position IS NOT NULL ORDER BY position DESC LIMIT 1"
+        ).fetchone()
+        last_pos = last[0] if last else None
+        new_pos = generate_key_between(last_pos, None)
         conn.execute(
-            "INSERT INTO pages (id, title, content, updated_at) VALUES (?, ?, ?, ?)",
-            (page_id, title, "", now)
+            "INSERT INTO pages (id, title, content, updated_at, position) VALUES (?, ?, ?, ?, ?)",
+            (page_id, title, "", now, new_pos)
         )
         conn.commit()
-    return {"id": page_id, "title": title, "content": "", "updated_at": now}
+    return {"id": page_id, "title": title, "content": "", "updated_at": now, "position": new_pos}
+@app.post("/api/pages/reorder")
+async def reorder_page(payload: PageReorderRequest):
+    ensure_pages_db()
+    try:
+        new_pos = generate_key_between(payload.before, payload.after)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid before/after keys: {e}")
+    with sqlite3.connect(PAGES_DB) as conn:
+        cur = conn.execute("UPDATE pages SET position = ? WHERE id = ?", (new_pos, payload.id))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Page not found")
+        conn.commit()
+    return {"id": payload.id, "position": new_pos}
+
 
 @app.get("/api/pages/{page_id}")
 async def get_page(page_id: str):
