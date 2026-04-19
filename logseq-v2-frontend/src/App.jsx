@@ -468,6 +468,8 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [sidebarHeight, setSidebarHeight] = useState(280);
   const [orientation, setOrientation] = useState("horizontal");
+  const [pdfHidden, setPdfHidden] = useState(false);
+  const pendingJumpRef = useRef(null);
   const dndSensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: { distance: 4 },
@@ -840,6 +842,11 @@ export default function App() {
   }
 
   function jumpToHighlightId(highlightId) {
+    if (pdfHidden) {
+      pendingJumpRef.current = highlightId;
+      setPdfHidden(false);
+      return;
+    }
     const target = highlights.find((h) => h.id === highlightId);
     if (!target) return;
     scrollToRef.current(target);
@@ -848,6 +855,18 @@ export default function App() {
 
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
   const highlights = useMemo(() => blocksToHighlights(blocks), [blocks]);
+  useEffect(() => {
+    if (pdfHidden) return;
+    const id = pendingJumpRef.current;
+    if (!id) return;
+    setTimeout(() => {
+      if (scrollToRef.current) {
+        const h = (highlights || []).find((x) => x.id === id);
+        if (h) scrollToRef.current(h);
+      }
+      pendingJumpRef.current = null;
+    }, 100);
+  }, [pdfHidden, highlights]);
 
   return (
     <div
@@ -886,13 +905,13 @@ export default function App() {
             <button onClick={createShareLink} disabled={!pdfUrl || loading}>
               Create share link
             </button>
-            <button
-              className="pagesBtn"
-              onClick={() => window.open("/pages.html", "_blank")}
-              title="Open pages index"
-            >
-              Pages
-            </button>
+            {pdfUrl && pdfHidden ? (
+              <button
+                className="pdfShowBtn"
+                onClick={() => setPdfHidden(false)}
+                title="Show PDF"
+              >Show PDF</button>
+            ) : null}
             <button
               className="orientationBtn"
               onClick={() => setOrientation((o) => (o === "horizontal" ? "vertical" : "horizontal"))}
@@ -937,8 +956,16 @@ export default function App() {
         </div>
       )}
 
-      <div className="main">
-        <div className="viewerWrap">
+      <div className={`main ${pdfHidden ? "pdfHidden" : ""}`}>
+        <div className={`viewerWrap ${pdfHidden ? "pdfHidden" : ""}`}>
+          {pdfUrl && !pdfHidden ? (
+            <button
+              className="pdfCloseBtn"
+              onClick={() => setPdfHidden(true)}
+              title="Close PDF"
+              aria-label="Close PDF"
+            >×</button>
+          ) : null}
           {pdfUrl ? (
             <PdfLoader
               url={pdfUrl}

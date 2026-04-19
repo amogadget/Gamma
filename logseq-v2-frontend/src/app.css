@@ -720,3 +720,34 @@ body {
   padding-left: 14px;
   margin-left: 11px;  /* align line under the dot column of parent */
 }
+
+
+/* Close-PDF feature */
+.viewerWrap.pdfHidden { display: none; }
+.pdfCloseBtn {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  z-index: 20;
+  background: transparent;
+  color: #ccc;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.pdfCloseBtn:hover { background: #2a2a2a; color: #fff; }
+
+/* When PDF is hidden, sidebar takes full width */
+.main.pdfHidden .sidebar,
+.layout-horizontal .main.pdfHidden .sidebar,
+.layout-vertical .main.pdfHidden .sidebar {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  max-width: none !important;
+  height: 100% !important;
+  border-left: none !important;
+}
