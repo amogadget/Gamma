@@ -334,7 +334,7 @@ function BlockRow({
             className="collapseBtn dotSlot pageBulletBtn"
             onClick={(e) => { e.stopPropagation(); onPageOpen(block); }}
             title="Open page"
-          >•</button>
+          ><span className="pageBulletDot" /></button>
         ) : (
           <span className="dotSlot dotSlotEmpty" />
         )}
@@ -342,7 +342,7 @@ function BlockRow({
         <div className="blockBody">
           {block._isRecent ? <span className="recentIndicator" title="In recent">★</span> : null}
           <div className="blockMeta">
-            {block._pageId ? (block._sourceUrl ? "pdf" : "") : block.page ? `p.${block.page}` : "note"}
+            {block._pageId ? (block._sourceUrl ? "PDF annotation" : "regular note") : block.page ? `p.${block.page}` : "note"}
           </div>
 
           {!readOnly && block.editMode ? (
@@ -508,6 +508,12 @@ export default function App() {
   const [pdfTitle, setPdfTitle] = useState("");
   const [titleEditing, setTitleEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+
+  useEffect(() => {
+    document.title = pdfTitle
+      ? `${pdfTitle} — Gamma`
+      : "Gamma — Annotate PDFs, Share Your Thinking";
+  }, [pdfTitle]);
 
   const scrollToRef = useRef(() => {});
   const flashTimerRef = useRef(null);
@@ -1231,7 +1237,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       title={b.content}
                     >
                       <div className="recentCardTitle">{b.content || "Untitled"}</div>
-                      <div className="recentCardMeta">{b.properties?.summary || formatRelativeTime(b.updated_at)}</div>
+                      <div className="recentCardMeta">
+                        {b.properties?.summary && <span className="recentCardSummary">{b.properties.summary}</span>}
+                        <span className="recentCardTime">{formatRelativeTime(b.updated_at)}</span>
+                      </div>
                     </button>
                   ))}
                 </div>

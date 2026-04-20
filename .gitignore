@@ -1,4 +1,6 @@
 archive/
+HANDOFF.md
+STATUS.md
 node_modules/
 venv/
 __pycache__/
