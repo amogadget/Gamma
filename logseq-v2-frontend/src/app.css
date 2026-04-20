@@ -694,8 +694,9 @@ body {
 /* equal-width dot slot for alignment between highlight and non-highlight blocks */
 .dotSlot { width: 16px; min-width: 16px; display: inline-flex; align-items: center; justify-content: center; }
 .dotSlotEmpty { height: 16px; }
-.pageBulletBtn { font-size: 16px; color: #fff; line-height: 1; }
+.pageBulletBtn { color: #fff; }
 .pageBulletBtn:hover { color: #4a9eff; }
+.pageBulletDot { display: inline-block; width: 10px; height: 10px; border-radius: 999px; background: currentColor; }
 
 
 /* Logseq-style depth guide lines (one per depth level) */
@@ -806,7 +807,12 @@ body {
 .recentCardMeta {
   font-size: 11px;
   color: #888;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
+.recentCardSummary { color: #aaa; }
+.recentCardTime { color: #666; }
 
 /* --- Indicator in main list for recent pages --- */
 .recentIndicator {
