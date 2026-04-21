@@ -370,7 +370,7 @@ function BlockRow({
                 } else if (e.key === "ArrowLeft" && (block.children?.length || 0) > 0 && !block.collapsed) {
                   e.preventDefault();
                   onToggle(block.id);
-                } else if (e.key === "Backspace" && !(block.content || "").trim() && !(block.quote || "").trim()) {
+                } else if (e.key === "Backspace" && (block._isEmpty || !(block.content || "").trim()) && !(block.quote || "").trim()) {
                   e.preventDefault();
                   onDelete(block.id);
                 }
@@ -398,6 +398,13 @@ function BlockRow({
             </div>
           ) : null}
         </div>
+        {block._pageId && !block._sourceUrl && !readOnly ? (
+          <button
+            className="blockDeleteBtn"
+            title="Delete note"
+            onClick={(e) => { e.stopPropagation(); onDelete(block.id); }}
+          >×</button>
+        ) : null}
       </div>
     </div>
   );
@@ -965,6 +972,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       _position: b.position,
       _sourceUrl: b.properties?.source_url,
       _isRecent: recentIds.has(b.id),
+      _isEmpty: !b.content,
       editMode: homeEditingId === b.id,
     }));
   }, [homeBlocks, recentIds, homeEditingId]);
