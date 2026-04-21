@@ -1,0 +1,30 @@
+<svg width="340" height="72" viewBox="0 0 340 72" fill="none" xmlns="http://www.w3.org/2000/svg" id="svg-logo-dark">
+      <defs>
+        <radialGradient id="sg-logo-dark" cx="50" cy="40" r="22" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#e8a020" stop-opacity="0.3"/>
+          <stop offset="60%" stop-color="#e8a020" stop-opacity="0.08"/>
+          <stop offset="100%" stop-color="#e8a020" stop-opacity="0"/>
+        </radialGradient>
+        <clipPath id="clip-logo-dark">
+          <rect x="12" y="12" width="48" height="48" rx="11"/>
+        </clipPath>
+      </defs>
+      <!-- icon background -->
+      <rect x="12" y="12" width="48" height="48" rx="11" fill="#1e1e1c"/>
+      <!-- scattered light glow (clipped to icon) -->
+      <rect x="12" y="12" width="48" height="48" rx="11" fill="url(#sg-logo-dark)"/>
+      <!-- standing wave — both branches, m=1 at this scale -->
+      <g clip-path="url(#clip-logo-dark)">
+        <path d="M 16 36 C 22 27 30 27 36 36 C 42 45 50 45 56 36" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 16 36 C 22 45 30 45 36 36 C 42 27 50 27 56 36" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <!-- FP mirrors -->
+        <path d="M 16 13 Q 9 36 16 59" stroke="#e8a020" stroke-width="4.5" fill="none" stroke-linecap="round" opacity="0.88"/>
+        <path d="M 56 13 Q 63 36 56 59" stroke="#e8a020" stroke-width="4.5" fill="none" stroke-linecap="round" opacity="0.88"/>
+        <!-- Γ sans-serif -->
+        <rect x="21" y="20" width="26" height="5" rx="1.2" fill="#eeebe4"/>
+        <rect x="21" y="20" width="5" height="28" rx="1.2" fill="#eeebe4"/>
+      </g>
+      <!-- wordmark -->
+      <text x="76" y="36" font-family="Space Grotesk, sans-serif" font-weight="600" font-size="20" fill="#eeebe4" letter-spacing="-0.3">Gamma</text>
+      <text x="76" y="54" font-family="Space Grotesk, sans-serif" font-weight="400" font-size="12" fill="#7a7870" letter-spacing="0.04em">PDF Annotator</text>
+    </svg>
