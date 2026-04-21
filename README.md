@@ -1,3 +1,9 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./logos/gamma-logo-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./logos/gamma-logo-light.svg">
+  <img alt="Logo" src="./logos/gamma-logo-light.svg">
+</picture>
+
 # Gamma PDF Annotator
 
 A self-hosted, Logseq-inspired PDF annotation server. Highlight PDFs in your browser, organize your notes as nested outliner blocks, and share read-only annotated copies via link.
