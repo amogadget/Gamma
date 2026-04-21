@@ -164,6 +164,31 @@ body {
   background: #232323;
 }
 
+.blockDeleteBtn {
+  flex: 0 0 auto;
+  align-self: center;
+  border: none;
+  background: transparent;
+  color: #555;
+  font-size: 18px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.1s, color 0.1s;
+}
+
+.blockRow:hover .blockDeleteBtn,
+.blockRow.focused .blockDeleteBtn {
+  opacity: 1;
+}
+
+.blockDeleteBtn:hover {
+  color: #e05c5c;
+  background: #2a1a1a;
+}
+
 .collapseBtn {
   margin-top: 2px;
   width: 16px;
