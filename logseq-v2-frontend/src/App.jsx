@@ -487,6 +487,7 @@ export default function App() {
   const [sidebarHeight, setSidebarHeight] = useState(280);
   const [orientation, setOrientation] = useState("horizontal");
   const [pdfHidden, setPdfHidden] = useState(false);
+  const [pdfScale, setPdfScale] = useState("page-width");
   const pageTitleSaveTimerRef = useRef(null);
 
   function fetchHomeBlocks() {
@@ -1068,6 +1069,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           >
             {orientation === "horizontal" ? "⬍ Stack" : "⬌ Side-by-side"}
           </button>
+          {pdfUrl && pdfHidden ? (
+            <button
+              className="pdfShowBtn"
+              onClick={() => setPdfHidden(false)}
+              title="Show PDF"
+            >Show PDF</button>
+          ) : null}
           <button
             className="notesBtn"
             onClick={() => setNotesVisible((v) => !v)}
@@ -1088,6 +1096,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               aria-label="Close PDF"
             >×</button>
           ) : null}
+          {pdfUrl && !pdfHidden ? (
+            <div className="pdfZoomOverlay">
+              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "0.8" : String(Math.max(0.4, +(n - 0.2).toFixed(1))); })} title="Zoom out">−</button>
+              <span className="pdfZoomLevel">{pdfScale === "page-width" ? "Width" : `${Math.round(parseFloat(pdfScale) * 100)}%`}</span>
+              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "1.2" : String(Math.min(4, +(n + 0.2).toFixed(1))); })} title="Zoom in">+</button>
+              <button onClick={() => setPdfScale("auto")} title="Fit to width">Width</button>
+            </div>
+          ) : null}
           {pdfUrl ? (
             <PdfLoader
               url={pdfUrl}
@@ -1099,6 +1115,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               {(pdfDocument) => (
                 <PdfHighlighter
                   pdfDocument={pdfDocument}
+                  pdfScaleValue={pdfScale}
                   enableAreaSelection={() => false}
                   onScrollChange={() => {}}
                   scrollRef={(scrollTo) => {
