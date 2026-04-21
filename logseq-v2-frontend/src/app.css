@@ -769,6 +769,48 @@ body {
 }
 .pdfCloseBtn:hover { background: #2a2a2a; color: #fff; }
 
+.pdfZoomOverlay {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(30, 30, 30, 0.85);
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 4px 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+.viewerWrap:hover .pdfZoomOverlay {
+  opacity: 1;
+  pointer-events: auto;
+}
+.pdfZoomOverlay button {
+  background: transparent;
+  border: none;
+  color: #eee;
+  font-size: 16px;
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.pdfZoomOverlay button:hover { background: #444; }
+.pdfZoomLevel {
+  color: #ccc;
+  font-size: 12px;
+  min-width: 36px;
+  text-align: center;
+}
+
 /* When PDF is hidden, sidebar takes full width */
 .main.pdfHidden .sidebar,
 .layout-horizontal .main.pdfHidden .sidebar,
