@@ -810,6 +810,13 @@ body {
   min-width: 36px;
   text-align: center;
 }
+.pdfFitWidthBtn {
+  font-size: 12px !important;
+  color: #ccc !important;
+  width: auto !important;
+  min-width: 40px !important;
+  padding: 0 6px !important;
+}
 
 /* When PDF is hidden, sidebar takes full width */
 .main.pdfHidden .sidebar,
