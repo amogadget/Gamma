@@ -1099,9 +1099,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           {pdfUrl && !pdfHidden ? (
             <div className="pdfZoomOverlay">
               <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "0.8" : String(Math.max(0.4, +(n - 0.2).toFixed(1))); })} title="Zoom out">−</button>
-              <span className="pdfZoomLevel">{pdfScale === "page-width" ? "Width" : `${Math.round(parseFloat(pdfScale) * 100)}%`}</span>
+              <span className="pdfZoomLevel">{isNaN(parseFloat(pdfScale)) ? "Width" : `${Math.round(parseFloat(pdfScale) * 100)}%`}</span>
               <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "1.2" : String(Math.min(4, +(n + 0.2).toFixed(1))); })} title="Zoom in">+</button>
-              <button onClick={() => setPdfScale("auto")} title="Fit to width">Width</button>
+              <button className="pdfFitWidthBtn" onClick={() => setPdfScale("auto")} title="Fit to width">Width</button>
             </div>
           ) : null}
           {pdfUrl ? (
