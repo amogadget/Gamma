@@ -18,7 +18,7 @@ import {
   PdfHighlighter,
   Highlight
 } from "react-pdf-highlighter";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -222,6 +222,7 @@ function BlockRow({
   setFocusedId,
   onJump,
   onEnterAttachMode,
+  onUnlinkHighlight,
   onPageOpen,
   onChangeText,
   onEnterSibling,
@@ -262,12 +263,12 @@ function BlockRow({
   // Resolve cross-note refs found in content
   useEffect(() => {
     if (!block.content || !onFetchRefs) return;
-    const ids = [...block.content.matchAll(/\[\[([a-z0-9]+)\]\]/g)].map((m) => m[1]);
+    const ids = [...block.content.matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)].map((m) => m[1]);
     const unknown = ids.filter((id) => !allBlocks?.find((b) => b.id === id) && !refCache?.[id]);
     if (unknown.length > 0) onFetchRefs(unknown);
   }, [block.content]);
 
-  function insertRef(id, content) {
+  function insertRef(b) {
     const ta = ref.current;
     if (!ta) return;
     const val = ta.value;
@@ -276,12 +277,12 @@ function BlockRow({
     const match = before.match(/\[\[([^\]\n]*)$/);
     if (!match) return;
     const triggerStart = cursor - match[0].length;
-    const newVal = val.slice(0, triggerStart) + `[[${id}]]` + val.slice(cursor);
+    const newVal = val.slice(0, triggerStart) + `[[${b.id}]]` + val.slice(cursor);
     onChangeText(block.id, newVal);
-    if (content && onCacheRef) onCacheRef(id, content);
+    if (b.content && onCacheRef) onCacheRef(b.id, b);
     setRefPopup(null);
     requestAnimationFrame(() => {
-      const newCursor = triggerStart + `[[${id}]]`.length;
+      const newCursor = triggerStart + `[[${b.id}]]`.length;
       ta.setSelectionRange(newCursor, newCursor);
       ta.focus();
     });
@@ -387,6 +388,13 @@ function BlockRow({
                     : 'rgba(140,140,140,0.5)'
               }} />
             </button>
+            {!block.position && block.properties?.linked_highlight_id && onUnlinkHighlight ? (
+              <button
+                className="collapseBtn attachModeBtn"
+                title="Unlink highlight"
+                onClick={(e) => { e.stopPropagation(); onUnlinkHighlight(block.id); }}
+              >⊘</button>
+            ) : null}
             {!block.position && !block.properties?.linked_highlight_id && onEnterAttachMode ? (
               <button
                 className="collapseBtn attachModeBtn"
@@ -438,7 +446,7 @@ function BlockRow({
                 if (refPopup && searchResults.length > 0) {
                   if (e.key === "ArrowDown") { e.preventDefault(); setRefSelectedIdx((i) => Math.min(i + 1, searchResults.length - 1)); return; }
                   if (e.key === "ArrowUp") { e.preventDefault(); setRefSelectedIdx((i) => Math.max(i - 1, 0)); return; }
-                  if (e.key === "Enter") { e.preventDefault(); insertRef(searchResults[refSelectedIdx].id, searchResults[refSelectedIdx].content); return; }
+                  if (e.key === "Enter") { e.preventDefault(); insertRef(searchResults[refSelectedIdx]); return; }
                   if (e.key === "Escape") { e.preventDefault(); setRefPopup(null); return; }
                 }
                 if (e.key === "Enter" && !e.shiftKey) {
@@ -469,26 +477,33 @@ function BlockRow({
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm, remarkMath]}
                   rehypePlugins={[rehypeKatex]}
+                  urlTransform={(url) => url.startsWith("blockref:") ? url : defaultUrlTransform(url)}
                   components={{
                     a: ({ href, children }) => {
                       if (href?.startsWith("blockref:")) {
                         const refId = href.slice(9);
                         const refBlock = allBlocks?.find((b) => b.id === refId) || refCache?.[refId];
                         return (
-                          <span
+                          <a
+                            href={`?block=${refId}`}
                             className="blockRefChip"
                             title={refBlock?.page_title ? `From: ${refBlock.page_title}` : undefined}
-                            onClick={(e) => { e.stopPropagation(); onBlockRefClick?.(refId); }}
+                            onClick={(e) => {
+                              if (e.metaKey || e.ctrlKey) return;
+                              e.preventDefault();
+                              e.stopPropagation();
+                              onBlockRefClick?.(refId);
+                            }}
                           >
                             {refBlock?.content || String(children)}
-                          </span>
+                          </a>
                         );
                       }
                       return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
                     }
                   }}
                 >
-                  {(block.content || "").replace(/\[\[([a-z0-9]+)\]\]/g, "[$1](blockref:$1)")}
+                  {(block.content || "").replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
                 </ReactMarkdown>
               ) : (
                 <div className="blockPlaceholder">(empty)</div>
@@ -521,37 +536,43 @@ function BlockRow({
             background: "#1e1e1e",
             border: "1px solid #444",
             borderRadius: 6,
-            minWidth: 260,
-            maxHeight: 220,
+            minWidth: 280,
+            maxHeight: 320,
             overflowY: "auto",
             boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
           }}
         >
           {searchResults.map((b, i) => (
-            <button
-              key={b.id}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => insertRef(b.id, b.content)}
-              style={{
-                display: "block",
-                width: "100%",
-                padding: "6px 12px",
-                background: i === refSelectedIdx ? "#2a3a4a" : "transparent",
-                color: "#ddd",
-                border: "none",
-                textAlign: "left",
-                cursor: "pointer",
-              }}
-            >
-              <div style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {b.content || "(empty)"}
-              </div>
-              {b.page_title && (
-                <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {b.page_title}
+            <div key={b.id} style={{ borderBottom: i < searchResults.length - 1 ? "1px solid #333" : "none" }}>
+              {b.ancestors && b.ancestors.length > 0 && (
+                <div style={{ padding: "3px 12px 0", fontSize: 11, color: "#777", lineHeight: 1.4 }}>
+                  {b.ancestors.map((a, j) => (
+                    <span key={a.id}>
+                      {j > 0 && <span style={{ color: "#555", margin: "0 3px" }}>&rsaquo;</span>}
+                      <span>{a.content || "(untitled)"}</span>
+                    </span>
+                  ))}
                 </div>
               )}
-            </button>
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => insertRef(b)}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  padding: "6px 12px",
+                  background: i === refSelectedIdx ? "#2a3a4a" : "transparent",
+                  color: "#ddd",
+                  border: "none",
+                  textAlign: "left",
+                  cursor: "pointer",
+                }}
+              >
+                <div style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {b.content || "(empty)"}
+                </div>
+              </button>
+            </div>
           ))}
         </div>
       )}
@@ -678,8 +699,11 @@ export default function App() {
   const [attachModeBlockId, setAttachModeBlockId] = useState(null);
   const attachModeBlockIdRef = useRef(null);
   const [attachContextMenu, setAttachContextMenu] = useState(null); // {x, y, highlight}
+  const blocksRef = useRef(blocks);
+  blocksRef.current = blocks;
   const blockRefs = useRef({});
   const pendingFocusRef = useRef(null);
+  const pendingBlockScrollRef = useRef(null);
   const autosaveTimerRef = useRef(null);
   const suppressAutosaveRef = useRef(true); // skip initial mount + doc loads
 
@@ -694,6 +718,17 @@ export default function App() {
     if (ref?.current) {
       ref.current.focus();
       pendingFocusRef.current = null;
+    }
+  }, [blocks, readOnly]);
+
+  useEffect(() => {
+    if (!pendingBlockScrollRef.current || readOnly) return;
+    const id = pendingBlockScrollRef.current;
+    const row = document.querySelector(`[data-block-id="${id}"]`);
+    if (row) {
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      setFocusedId(id);
+      pendingBlockScrollRef.current = null;
     }
   }, [blocks, readOnly]);
 
@@ -732,6 +767,40 @@ export default function App() {
     }
     document.addEventListener("contextmenu", onContext, true); // capture phase
     return () => document.removeEventListener("contextmenu", onContext, true);
+  }, [readOnly]);
+
+  // left-click on a PDF highlight jumps to its block in the sidebar
+  useEffect(() => {
+    if (readOnly) return;
+    function onPointerDown(e) {
+      if (e.button !== 0) return;
+      if (e.pointerType !== "mouse") return;
+      if (attachModeBlockIdRef.current) return;
+      const stack = document.elementsFromPoint(e.clientX, e.clientY);
+      for (const el of stack) {
+        let cur = el;
+        while (cur && cur !== document.body) {
+          if (cur.dataset && cur.dataset.highlightId) {
+            e.stopPropagation();
+            const hlId = cur.dataset.highlightId;
+            const block = flattenBlocks(blocksRef.current).find(
+              (b) => b.properties?.highlight_id === hlId,
+            );
+            if (block) {
+              const row = document.querySelector(`[data-block-id="${block.id}"]`);
+              if (row) {
+                row.scrollIntoView({ block: "center", behavior: "smooth" });
+                setFocusedId(block.id);
+              }
+            }
+            return;
+          }
+          cur = cur.parentElement;
+        }
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
   }, [readOnly]);
 
   function deleteHighlight(highlightId) {
@@ -785,8 +854,8 @@ export default function App() {
     } catch (_) {}
   }
 
-  function onCacheRef(id, content) {
-    setRefCache((prev) => prev[id] ? prev : { ...prev, [id]: { content } });
+  function onCacheRef(id, blockData) {
+    setRefCache((prev) => prev[id] ? prev : { ...prev, [id]: blockData });
   }
 
   function triggerFlash(highlightId) {
@@ -844,7 +913,23 @@ export default function App() {
 
   useEffect(() => {
     if (initialShare) resolveShare(initialShare);
-    else if (initialBlockId) openBlock(initialBlockId);
+    else if (initialBlockId) {
+      (async () => {
+        try {
+          const data = await apiJson(`${API}/block-search?ids=${encodeURIComponent(initialBlockId)}`);
+          const block = data.blocks?.[0];
+          const rootId = block?.page_root_id;
+          if (rootId && rootId !== initialBlockId) {
+            pendingBlockScrollRef.current = initialBlockId;
+            openBlock(rootId);
+          } else {
+            openBlock(initialBlockId);
+          }
+        } catch {
+          openBlock(initialBlockId);
+        }
+      })();
+    }
     else if (initialUrl) openPdf(initialUrl);
   }, []);
 
@@ -1199,6 +1284,19 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     await loadBlocksForBlock(focusedBlockId);
     setAttachModeBlockId(null);
     setAttachContextMenu(null);
+  }
+
+  async function unlinkHighlightFromBlock(blockId) {
+    await fetch(`/api/blocks/${blockId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: {
+          linked_highlight_id: null,
+        },
+      }),
+    });
+    await loadBlocksForBlock(focusedBlockId);
   }
 
   function jumpToHighlightId(highlightId) {
@@ -1611,6 +1709,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   setFocusedId,
                   onJump: jumpToHighlightId,
                   onEnterAttachMode: readOnly ? null : setAttachModeBlockId,
+                  onUnlinkHighlight: readOnly ? null : unlinkHighlightFromBlock,
                   registerRef,
                   readOnly,
                   allBlocks: flattenBlocks(blocks),
@@ -1618,11 +1717,31 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   refCache,
                   onFetchRefs,
                   onCacheRef,
-                  onBlockRefClick: (id) => {
-                    const r = blockRefs.current[id];
-                    if (r?.current) {
-                      r.current.scrollIntoView({ block: "center", behavior: "smooth" });
+                  onBlockRefClick: async (id) => {
+                    // search full tree (including collapsed) for the block
+                    function findBlock(list) {
+                      for (const b of list || []) {
+                        if (b.id === id) return b;
+                        const found = findBlock(b.children || []);
+                        if (found) return found;
+                      }
+                      return null;
+                    }
+                    if (findBlock(blocks)) {
+                      const row = document.querySelector(`[data-block-id="${id}"]`);
+                      if (row) {
+                        row.scrollIntoView({ block: "center", behavior: "smooth" });
+                      }
                       setFocusedId(id);
+                    } else {
+                      pendingBlockScrollRef.current = id;
+                      const cached = refCache[id];
+                      const rootId = cached?.page_root_id;
+                      if (rootId && rootId !== id) {
+                        await openBlock(rootId);
+                      } else {
+                        await openBlock(id);
+                      }
                     }
                   },
                   onPageOpen: (pageBlock) => {
