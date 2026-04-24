@@ -128,7 +128,10 @@ Generate the bcrypt hash with `caddy hash-password`.
 ## Features
 
 - **PDF loading**: open by URL or upload (max 50 MB, content-hashed for dedup).
-- **Highlights**: select text, pick color, add comment. Right-click to delete.
+- **Highlights**: select text, pick color, add comment. Right-click to delete or change color.
+- **Logseq EDN import**: import Logseq PDF-highlight exports (EDN + MD + PDF) — preserves highlight positions, notes, and block tree structure.
+- **Attach mode**: link orphaned notes to existing PDF highlights — click ⊕ then left-click a highlight. Linked block jumps to the highlight and inherits its color.
+- **Cross-note block references**: type `[[` in any block to search and insert a reference to another block. References render as clickable chips that jump to the target.
 - **Outliner block tree**: highlights and free notes rendered as nested blocks with Logseq-style vertical guide lines. Enter for sibling, Tab for indent, Shift+Tab for outdent, Backspace on empty to delete.
 - **Rich text**: markdown + KaTeX math in view mode, raw markdown in edit mode. One-click to edit; cursor lands near the click point.
 - **Drag-and-drop blocks**: hover over a block's left edge, grab the ⋮⋮ handle. Drop as sibling or as child. Cycle prevention rejects drops that would nest a block into its own subtree. Horizontal line indicator slides to show intended depth.
@@ -161,8 +164,8 @@ Generate the bcrypt hash with `caddy hash-password`.
 
 - "Recent" carousel at the top of the home view.
 - Drag-to-reorder the page list on the home view (backend endpoint exists; frontend wiring pending).
-- Logseq EDN import.
-- Block references and backlinks.
+- Unlink / re-attach for blocks with a linked highlight.
+- Block backlinks (reverse references — "what links here").
 - Conflict resolution / multi-device sync.
 - Public read-only deployment mode (no auth, share-only).
 - Cleanup of orphaned uploaded PDFs.

@@ -221,6 +221,7 @@ function BlockRow({
   focusedId,
   setFocusedId,
   onJump,
+  onEnterAttachMode,
   onPageOpen,
   onChangeText,
   onEnterSibling,
@@ -231,10 +232,60 @@ function BlockRow({
   onDelete,
   onStartEdit,
   registerRef,
-  readOnly
+  readOnly,
+  allBlocks,
+  onBlockRefClick,
+  refCache,
+  onFetchRefs,
+  onCacheRef,
+  highlightColors,
 }) {
   const ref = useRef(null);
   const clickPosRef = useRef(null);
+  const [refPopup, setRefPopup] = useState(null); // { query, rect }
+  const [refSelectedIdx, setRefSelectedIdx] = useState(0);
+  const [searchResults, setSearchResults] = useState([]);
+
+  useEffect(() => {
+    if (!refPopup) { setSearchResults([]); return; }
+    const q = refPopup.query;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/block-search?q=${encodeURIComponent(q)}&limit=8`);
+        const data = await res.json();
+        setSearchResults((data.blocks || []).filter((b) => b.id !== block.id));
+      } catch (_) { setSearchResults([]); }
+    }, 120);
+    return () => clearTimeout(timer);
+  }, [refPopup?.query, block.id]);
+
+  // Resolve cross-note refs found in content
+  useEffect(() => {
+    if (!block.content || !onFetchRefs) return;
+    const ids = [...block.content.matchAll(/\[\[([a-z0-9]+)\]\]/g)].map((m) => m[1]);
+    const unknown = ids.filter((id) => !allBlocks?.find((b) => b.id === id) && !refCache?.[id]);
+    if (unknown.length > 0) onFetchRefs(unknown);
+  }, [block.content]);
+
+  function insertRef(id, content) {
+    const ta = ref.current;
+    if (!ta) return;
+    const val = ta.value;
+    const cursor = ta.selectionStart;
+    const before = val.slice(0, cursor);
+    const match = before.match(/\[\[([^\]\n]*)$/);
+    if (!match) return;
+    const triggerStart = cursor - match[0].length;
+    const newVal = val.slice(0, triggerStart) + `[[${id}]]` + val.slice(cursor);
+    onChangeText(block.id, newVal);
+    if (content && onCacheRef) onCacheRef(id, content);
+    setRefPopup(null);
+    requestAnimationFrame(() => {
+      const newCursor = triggerStart + `[[${id}]]`.length;
+      ta.setSelectionRange(newCursor, newCursor);
+      ta.focus();
+    });
+  }
 
   useEffect(() => {
     registerRef(block.id, ref);
@@ -316,19 +367,34 @@ function BlockRow({
           <span className="collapseSpacer" />
         )}
         {isHighlight && !block.editMode ? (
-          <button
-            className="collapseBtn highlightDotBtn dotSlot"
-            onClick={(e) => {
-              e.stopPropagation();
-              onJump(block.highlightId);
-            }}
-            title="Jump to highlight"
-          >
-            <span
-              className="highlightDot"
-              style={{ background: block.color || COLORS[0] }}
-            />
-          </button>
+          <>
+            <button
+              className="collapseBtn highlightDotBtn dotSlot"
+              onClick={(e) => { e.stopPropagation(); onJump(block.highlightId); }}
+              title={
+                block.position
+                  ? "Jump to highlight"
+                  : block.properties?.linked_highlight_id
+                    ? "Jump to linked highlight"
+                    : "Jump to page (no exact position)"
+              }
+            >
+              <span className="highlightDot" style={{
+                background: block.position
+                  ? (block.color || COLORS[0])
+                  : block.properties?.linked_highlight_id
+                    ? (highlightColors?.[block.properties.linked_highlight_id] || COLORS[0])
+                    : 'rgba(140,140,140,0.5)'
+              }} />
+            </button>
+            {!block.position && !block.properties?.linked_highlight_id && onEnterAttachMode ? (
+              <button
+                className="collapseBtn attachModeBtn"
+                title="Attach to a PDF highlight"
+                onClick={(e) => { e.stopPropagation(); onEnterAttachMode(block.id); }}
+              >⊕</button>
+            ) : null}
+          </>
         ) : block._pageId && typeof onPageOpen === "function" ? (
           <button
             className="collapseBtn dotSlot pageBulletBtn"
@@ -352,9 +418,29 @@ function BlockRow({
               className="blockEditor"
               data-block-id={block.id}
               value={block.content || ""}
-              onChange={(e) => onChangeText(block.id, e.target.value)}
-              onBlur={() => onStartEdit(block.id, false)}
+              onChange={(e) => {
+                onChangeText(block.id, e.target.value);
+                const cursor = e.target.selectionStart;
+                const before = e.target.value.slice(0, cursor);
+                const match = before.match(/\[\[([^\]\n]*)$/);
+                if (match) {
+                  setRefPopup({ query: match[1], rect: e.target.getBoundingClientRect() });
+                  setRefSelectedIdx(0);
+                } else {
+                  setRefPopup(null);
+                }
+              }}
+              onBlur={() => {
+                onStartEdit(block.id, false);
+                setTimeout(() => setRefPopup(null), 120);
+              }}
               onKeyDown={(e) => {
+                if (refPopup && searchResults.length > 0) {
+                  if (e.key === "ArrowDown") { e.preventDefault(); setRefSelectedIdx((i) => Math.min(i + 1, searchResults.length - 1)); return; }
+                  if (e.key === "ArrowUp") { e.preventDefault(); setRefSelectedIdx((i) => Math.max(i - 1, 0)); return; }
+                  if (e.key === "Enter") { e.preventDefault(); insertRef(searchResults[refSelectedIdx].id, searchResults[refSelectedIdx].content); return; }
+                  if (e.key === "Escape") { e.preventDefault(); setRefPopup(null); return; }
+                }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   onEnterSibling(block.id);
@@ -383,8 +469,26 @@ function BlockRow({
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm, remarkMath]}
                   rehypePlugins={[rehypeKatex]}
+                  components={{
+                    a: ({ href, children }) => {
+                      if (href?.startsWith("blockref:")) {
+                        const refId = href.slice(9);
+                        const refBlock = allBlocks?.find((b) => b.id === refId) || refCache?.[refId];
+                        return (
+                          <span
+                            className="blockRefChip"
+                            title={refBlock?.page_title ? `From: ${refBlock.page_title}` : undefined}
+                            onClick={(e) => { e.stopPropagation(); onBlockRefClick?.(refId); }}
+                          >
+                            {refBlock?.content || String(children)}
+                          </span>
+                        );
+                      }
+                      return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+                    }
+                  }}
                 >
-                  {block.content}
+                  {(block.content || "").replace(/\[\[([a-z0-9]+)\]\]/g, "[$1](blockref:$1)")}
                 </ReactMarkdown>
               ) : (
                 <div className="blockPlaceholder">(empty)</div>
@@ -406,6 +510,51 @@ function BlockRow({
           >×</button>
         ) : null}
       </div>
+      {refPopup && searchResults.length > 0 && (
+        <div
+          className="refPopup"
+          style={{
+            position: "fixed",
+            top: refPopup.rect.bottom + 4,
+            left: refPopup.rect.left,
+            zIndex: 2000,
+            background: "#1e1e1e",
+            border: "1px solid #444",
+            borderRadius: 6,
+            minWidth: 260,
+            maxHeight: 220,
+            overflowY: "auto",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
+          }}
+        >
+          {searchResults.map((b, i) => (
+            <button
+              key={b.id}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => insertRef(b.id, b.content)}
+              style={{
+                display: "block",
+                width: "100%",
+                padding: "6px 12px",
+                background: i === refSelectedIdx ? "#2a3a4a" : "transparent",
+                color: "#ddd",
+                border: "none",
+                textAlign: "left",
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                {b.content || "(empty)"}
+              </div>
+              {b.page_title && (
+                <div style={{ fontSize: 11, color: "#888", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  {b.page_title}
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -480,6 +629,7 @@ export default function App() {
   const [summaryEditing, setSummaryEditing] = useState(false);
   const [blocks, setBlocks] = useState([]);
   const [homeBlocks, setHomeBlocks] = useState([]);
+  const [refCache, setRefCache] = useState({}); // { [blockId]: { content, page_title } }
   const [homeEditingId, setHomeEditingId] = useState(null);
   const [status, setStatus] = useState("Ready.");
   const [loading, setLoading] = useState(false);
@@ -525,6 +675,9 @@ export default function App() {
 
   const scrollToRef = useRef(() => {});
   const flashTimerRef = useRef(null);
+  const [attachModeBlockId, setAttachModeBlockId] = useState(null);
+  const attachModeBlockIdRef = useRef(null);
+  const [attachContextMenu, setAttachContextMenu] = useState(null); // {x, y, highlight}
   const blockRefs = useRef({});
   const pendingFocusRef = useRef(null);
   const autosaveTimerRef = useRef(null);
@@ -597,6 +750,43 @@ export default function App() {
     const nextBlocks = removeBlockTree(blocks, blockId);
     setBlocks(nextBlocks);
     // persistBlocks will fire via autosave; no need to duplicate.
+  }
+
+  function changeHighlightColor(highlightId, newColor) {
+    if (readOnly) return;
+    function findHighlightBlockId(list) {
+      for (const b of list || []) {
+        if (b.properties?.highlight_id === highlightId) return b.id;
+        const found = findHighlightBlockId(b.children || []);
+        if (found) return found;
+      }
+      return null;
+    }
+    const blockId = findHighlightBlockId(blocks);
+    if (!blockId) return;
+    const next = updateBlockTree(blocks, blockId, (b) => ({
+      ...b,
+      properties: { ...b.properties, color: newColor }
+    }));
+    setBlocks(next);
+  }
+
+  async function onFetchRefs(ids) {
+    try {
+      const res = await fetch(`/api/block-search?ids=${ids.join(",")}`);
+      const data = await res.json();
+      if (data.blocks?.length) {
+        setRefCache((prev) => {
+          const next = { ...prev };
+          data.blocks.forEach((b) => { next[b.id] = b; });
+          return next;
+        });
+      }
+    } catch (_) {}
+  }
+
+  function onCacheRef(id, content) {
+    setRefCache((prev) => prev[id] ? prev : { ...prev, [id]: { content } });
   }
 
   function triggerFlash(highlightId) {
@@ -779,6 +969,47 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
+  async function importLogseq(files) {
+    if (readOnly) return;
+    const all = Array.from(files);
+    const pdfFile = all.find((f) => f.name.endsWith('.pdf'));
+    const ednFile = all.find((f) => f.name.endsWith('.edn'));
+    const mdFile  = all.find((f) => f.name.endsWith('.md'));
+    if (!pdfFile || !ednFile) {
+      setStatus("Select at least a .pdf and .edn file.");
+      return;
+    }
+    setLoading(true);
+    setStatus(`Importing ${pdfFile.name}...`);
+    try {
+      const form = new FormData();
+      form.append("pdf", pdfFile);
+      form.append("edn", ednFile);
+      if (mdFile) form.append("md", mdFile);
+      const resp = await fetch(`${API}/import/logseq`, { method: "POST", body: form });
+      if (!resp.ok) throw new Error(await resp.text());
+      const data = await resp.json();
+      // Block was already created by the import endpoint; just load it.
+      const block = await getOrCreateBlockForDoc(data.doc_id, pdfFile.name.replace('.pdf', ''), data.source_url);
+      await loadBlocksForBlock(block.id);
+      setDocId(data.doc_id);
+      setInputUrl(data.source_url);
+      setFocusedBlockId(block.id);
+      setFocusedBlock(block);
+      setPdfTitle(block.content || pdfFile.name.replace('.pdf', ''));
+      setSummary(block.properties?.summary || "");
+      setPdfUrl(data.source_url);
+      await fetchHomeBlocks();
+      const newUrl = `${window.location.pathname}?block=${encodeURIComponent(block.id)}`;
+      window.history.replaceState({}, "", newUrl);
+      setStatus(`Imported ${data.imported} highlights from ${pdfFile.name}`);
+    } catch (err) {
+      setStatus(`Import failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function openPdf(sourceUrl) {
     if (!sourceUrl || readOnly) return;
     setLoading(true);
@@ -941,16 +1172,73 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     setStatus("Highlight saved.");
   }
 
+  useEffect(() => { attachModeBlockIdRef.current = attachModeBlockId; }, [attachModeBlockId]);
+
+  // Escape cancels attach mode
+  useEffect(() => {
+    if (!attachModeBlockId) return;
+    const onKey = (e) => { if (e.key === 'Escape') { setAttachModeBlockId(null); setAttachContextMenu(null); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [attachModeBlockId]);
+
+  async function linkHighlightToBlock(blockId, highlight) {
+    // Store a pointer to the existing highlight's id, NOT a copy of its position.
+    // Copying the position would create a duplicate visual highlight on the PDF at the same spot.
+    // The jump logic resolves linked_highlight_id → scrolls to the real highlight.
+    await fetch(`/api/blocks/${blockId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        properties: {
+          linked_highlight_id: highlight.id,
+          pdf_page: highlight.position.pageNumber,
+        },
+      }),
+    });
+    await loadBlocksForBlock(focusedBlockId);
+    setAttachModeBlockId(null);
+    setAttachContextMenu(null);
+  }
+
   function jumpToHighlightId(highlightId) {
     if (pdfHidden) {
       pendingJumpRef.current = highlightId;
       setPdfHidden(false);
       return;
     }
+    // Try own highlight first
     const target = highlights.find((h) => h.id === highlightId);
-    if (!target) return;
-    scrollToRef.current(target);
-    triggerFlash(highlightId);
+    if (target) {
+      // Pass {position} directly rather than the full highlight object so
+      // react-pdf-highlighter always uses the position data, not a potentially
+      // stale internal id lookup.
+      scrollToRef.current({ position: target.position });
+      triggerFlash(highlightId);
+      return;
+    }
+    const block = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === highlightId);
+    // Block was linked to an existing highlight via attach mode
+    const linkedId = block?.properties?.linked_highlight_id;
+    if (linkedId) {
+      const linkedTarget = highlights.find((h) => h.id === linkedId);
+      if (linkedTarget) {
+        scrollToRef.current({ position: linkedTarget.position });
+        triggerFlash(linkedId);
+        return;
+      }
+    }
+    // Fallback: page-level jump
+    const page = block?.properties?.pdf_page;
+    if (page) {
+      scrollToRef.current({
+        position: {
+          pageNumber: page,
+          boundingRect: { x1: 0, y1: 0, x2: 0, y2: 0, width: 1, height: 1, pageNumber: page },
+          rects: [],
+        },
+      });
+    }
   }
 
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
@@ -983,9 +1271,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     const id = pendingJumpRef.current;
     if (!id) return;
     setTimeout(() => {
-      if (scrollToRef.current) {
-        const h = (highlights || []).find((x) => x.id === id);
-        if (h) scrollToRef.current(h);
+      let scrollTarget = (highlights || []).find((x) => x.id === id);
+      if (!scrollTarget) {
+        const b = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === id);
+        const linkedId = b?.properties?.linked_highlight_id;
+        if (linkedId) scrollTarget = (highlights || []).find((x) => x.id === linkedId);
+      }
+      if (scrollTarget && scrollToRef.current) {
+        scrollToRef.current({ position: scrollTarget.position });
       }
       pendingJumpRef.current = null;
     }, 100);
@@ -1049,6 +1342,21 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             >
               {notesVisible ? "Hide notes" : "Show notes"}
             </button>
+            <label
+              className="importLogseqBtn"
+              title="Import Logseq PDF highlights (.pdf + .edn)"
+              style={{ cursor: loading ? "not-allowed" : "pointer" }}
+            >
+              Import Logseq
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.edn,.md"
+                style={{ display: "none" }}
+                disabled={loading}
+                onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; }}
+              />
+            </label>
           </div>
           <div className="status">{status}</div>
         </>
@@ -1086,6 +1394,24 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </div>
       )}
 
+      {attachModeBlockId && (
+        <div className="attachModeBanner">
+          Click a PDF highlight to link it
+          <button onClick={() => { setAttachModeBlockId(null); setAttachContextMenu(null); }}>Cancel</button>
+        </div>
+      )}
+      {attachContextMenu && (
+        <div
+          className="attachContextMenu"
+          style={{ left: attachContextMenu.x, top: attachContextMenu.y }}
+          onMouseLeave={() => setAttachContextMenu(null)}
+        >
+          <button onClick={() => linkHighlightToBlock(attachModeBlockId, attachContextMenu.highlight)}>
+            Link highlight here
+          </button>
+        </div>
+      )}
+
       <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
         <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
           {pdfUrl && !pdfHidden ? (
@@ -1101,7 +1427,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "0.8" : String(Math.max(0.4, +(n - 0.2).toFixed(1))); })} title="Zoom out">−</button>
               <span className="pdfZoomLevel">{isNaN(parseFloat(pdfScale)) ? "Width" : `${Math.round(parseFloat(pdfScale) * 100)}%`}</span>
               <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "1.2" : String(Math.min(4, +(n + 0.2).toFixed(1))); })} title="Zoom in">+</button>
-              <button className="pdfFitWidthBtn" onClick={() => setPdfScale("auto")} title="Fit to width">Width</button>
+              <button className="pdfFitWidthBtn" onClick={() => setPdfScale("page-width")} title="Fit to width">Width</button>
             </div>
           ) : null}
           {pdfUrl ? (
@@ -1144,8 +1470,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     <div
                       key={`${highlight.id}-${flashingId === highlight.id ? "flash" : "base"}`}
                       data-highlight-id={highlight.id}
-                      className={flashingId === highlight.id ? "colorWrap flashWrap" : "colorWrap"}
+                      className={`colorWrap${flashingId === highlight.id ? " flashWrap" : ""}${attachModeBlockId ? " attachModeTarget" : ""}`}
                       style={{ "--highlight-color": highlight.color || COLORS[0] }}
+                      onClick={attachModeBlockId ? (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setAttachContextMenu({ x: e.clientX, y: e.clientY, highlight });
+                      } : undefined}
                     >
                       <Highlight
                         isScrolledTo={false}
@@ -1279,8 +1610,21 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   focusedId,
                   setFocusedId,
                   onJump: jumpToHighlightId,
+                  onEnterAttachMode: readOnly ? null : setAttachModeBlockId,
                   registerRef,
                   readOnly,
+                  allBlocks: flattenBlocks(blocks),
+                  highlightColors: Object.fromEntries(highlights.map(h => [h.id, h.color])),
+                  refCache,
+                  onFetchRefs,
+                  onCacheRef,
+                  onBlockRefClick: (id) => {
+                    const r = blockRefs.current[id];
+                    if (r?.current) {
+                      r.current.scrollIntoView({ block: "center", behavior: "smooth" });
+                      setFocusedId(id);
+                    }
+                  },
                   onPageOpen: (pageBlock) => {
                     if (pageBlock._pageId) openBlock(pageBlock._pageId);
                   },
@@ -1530,6 +1874,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               boxShadow: "0 4px 12px rgba(0,0,0,0.5)"
             }}
           >
+            <div style={{ padding: "6px 10px 4px", borderBottom: "1px solid #444", display: "flex", gap: 6 }}>
+              {COLORS.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => {
+                    changeHighlightColor(highlightMenu.id, c);
+                    setHighlightMenu(null);
+                  }}
+                  title="Change color"
+                  style={{
+                    width: 20,
+                    height: 20,
+                    borderRadius: "50%",
+                    background: c,
+                    border: "2px solid #555",
+                    cursor: "pointer",
+                    padding: 0,
+                    flexShrink: 0
+                  }}
+                />
+              ))}
+            </div>
             <button
               onClick={() => {
                 deleteHighlight(highlightMenu.id);
