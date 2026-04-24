@@ -34,7 +34,7 @@ Logseq is an excellent outliner-based knowledge-management tool. Gamma takes sev
 - **Nested guide lines.** The vertical line to the left of nested blocks mimics Logseq's `.block-children` border-left pattern.
 - **Fractional indexing for page order.** Custom ordering of pages persists across reorder without renumbering, using the same `a0`, `a1`, `a0V` key scheme Logseq uses for blocks.
 
-Gamma is narrower than Logseq — no graph view, no block references, no daily journal, no queries. The feature set is tuned for "I want to annotate PDFs and keep the notes organized as a tree."
+Gamma is narrower than Logseq — no graph view, no daily journal, no queries. The feature set is tuned for "I want to annotate PDFs and keep the notes organized as a tree."
 
 ## View modes
 
@@ -52,7 +52,7 @@ Three pieces:
 
 1. **Backend** (`backend/app.py`) — a FastAPI app over two SQLite databases:
    - `data.db` — annotations (legacy, kept for backward compat) and shares.
-   - `pages.db` — pages and blocks. Every PDF gets one page; highlights and free notes are both rows in `blocks`, keyed by `parent_id` + `position`, with highlight-specific data in a JSON `properties` column. Pages themselves are fractionally indexed for custom ordering.
+   - `pages.db` — a `unified_blocks` table with a self-referential `parent_id` (root-level blocks are pages; everything else is nested blocks). Highlights and free notes are both rows, distinguished by whether they carry a `highlight_id` property in JSON. Ordering uses fractional indexing via the `position` column. Legacy `pages` and `blocks` tables remain for backward compatibility.
 2. **Frontend** (`logseq-v2-frontend/`) — React + Vite.
    - `src/App.jsx` — main component. Routing, PDF loading, block tree render, drag-and-drop, autosave.
    - `src/logseqPdfModel.js` — block tree operations (insert, indent/outdent, flatten, extract, sibling/child insertion, cycle check).
@@ -148,6 +148,7 @@ Generate the bcrypt hash with `caddy hash-password`.
 
 - `/` → home view (pages list).
 - `/?page=<page_id>` → open a page (with or without PDF).
+- `/?block=<block_id>` → open the page containing this block, then scroll to it.
 - `/?share=<token>` → public read-only view of a shared page.
 - `/?src=<url>` → legacy, redirects to `?page=<id>` after loading.
 
@@ -159,17 +160,17 @@ Generate the bcrypt hash with `caddy hash-password`.
 - No conflict handling for simultaneous edits across tabs/devices. Last write wins.
 - Uploaded PDFs are stored content-hashed under `uploads/`. No cleanup for orphans whose pages/blocks have been deleted.
 - `collapsed` state on blocks is UI-only; reloading restores everything expanded.
+- Block references inside collapsed parents cannot scroll into view (DOM element not rendered).
 
 ## Future work
 
 - "Recent" carousel at the top of the home view.
-- Drag-to-reorder the page list on the home view (backend endpoint exists; frontend wiring pending).
-- Unlink / re-attach for blocks with a linked highlight.
 - Block backlinks (reverse references — "what links here").
 - Conflict resolution / multi-device sync.
 - Public read-only deployment mode (no auth, share-only).
 - Cleanup of orphaned uploaded PDFs.
 - Persist `collapsed` state across reload.
+- Migration of legacy `blocks` table data into `unified_blocks`.
 
 ## Directory layout
 
