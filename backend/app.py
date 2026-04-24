@@ -981,7 +981,7 @@ async def import_logseq(
         edn_by_quote[quote.strip()] = {
             'quote': quote.strip(),
             'page': page,
-            'color': (h.get('properties') or {}).get('color', 'yellow'),
+            'color': _map_color((h.get('properties') or {}).get('color', 'yellow')),
             'position': {
                 'pageNumber': page,
                 'boundingRect': add_page(bounding),
@@ -1127,6 +1127,95 @@ def migrate_annotations_to_blocks():
 
 # Run migration at import time (after ensure_pages_db has been defined and called above)
 migrate_annotations_to_blocks()
+
+
+def migrate_legacy_blocks_to_unified():
+    """One-time migration: move blocks from legacy `blocks` table into
+    `unified_blocks` if they don't already exist there. Matches legacy
+    pages to unified_block roots via doc_id, then inserts each block
+    as a child of that root with fractional-index positions."""
+    ensure_pages_db()
+    now = page_now()
+    with sqlite3.connect(PAGES_DB) as conn:
+        # Find legacy blocks not yet in unified_blocks
+        rows = conn.execute(
+            """
+            SELECT b.id, b.page_id, b.content, b.properties, b.created_at, p.doc_id
+            FROM blocks b
+            JOIN pages p ON b.page_id = p.id
+            WHERE b.id NOT IN (SELECT id FROM unified_blocks)
+            ORDER BY b.page_id, b.position
+            """
+        ).fetchall()
+
+        if not rows:
+            return
+
+        # Map doc_id → unified_block root id
+        doc_to_root = {}
+        for r in conn.execute(
+            "SELECT json_extract(properties, '$.doc_id'), id "
+            "FROM unified_blocks WHERE parent_id = 'root'"
+        ).fetchall():
+            if r[0]:
+                doc_to_root[r[0]] = r[1]
+
+        # Group blocks by target root for batch position generation
+        root_blocks: dict = {}
+        for row in rows:
+            block_id, page_id, content, props, created, doc_id = row
+            if not doc_id:
+                continue  # pages without a doc_id (non-PDF notes) — skip
+            root_id = doc_to_root.get(doc_id)
+            if not root_id:
+                continue  # no matching unified_block root — skip
+            root_blocks.setdefault(root_id, []).append(row)
+
+        migrated = 0
+        for root_id, block_rows in root_blocks.items():
+            # Skip blocks whose quote already exists under this root (EDN import
+            # may have already created them). Dedup by stripped quote text.
+            existing_quotes = {
+                (r[0] or "").strip() for r in conn.execute(
+                    "SELECT json_extract(properties, '$.quote') "
+                    "FROM unified_blocks WHERE parent_id = ?",
+                    (root_id,),
+                ).fetchall()
+                if r[0]
+            }
+            filtered = []
+            for row in block_rows:
+                props_dict = _json.loads(row[3] or "{}") if isinstance(row[3], str) else (row[3] or {})
+                quote = (props_dict.get("quote") or "").strip()
+                if quote and quote in existing_quotes:
+                    continue
+                filtered.append(row)
+            if not filtered:
+                continue
+
+            last_pos = ub_last_child_position(conn, root_id)
+            pos_keys = generate_n_keys_between(last_pos, None, n=len(filtered))
+            for (block_id, _, content, props, created, _), pos_key in zip(filtered, pos_keys):
+                # Map legacy color names to app rgba colors
+                props_dict = _json.loads(props or "{}") if isinstance(props, str) else (props or {})
+                props_dict["color"] = _map_color(props_dict.get("color", "yellow"))
+                try:
+                    conn.execute(
+                        "INSERT INTO unified_blocks "
+                        "(id, parent_id, position, content, properties, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (block_id, root_id, pos_key, content or "",
+                         _json.dumps(props_dict), created or now, now),
+                    )
+                    migrated += 1
+                except sqlite3.IntegrityError:
+                    pass
+
+        if migrated:
+            conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id IN ({})".format(
+                ",".join("?" * len(root_blocks))), (now, *root_blocks.keys()))
+            conn.commit()
+            print(f"[migrate] moved {migrated} legacy blocks into unified_blocks")
 
 
 # ---------------------------------------------------------------------------
@@ -1467,3 +1556,7 @@ async def ub_reorder_block(block_id: str, payload: UBReorderRequest):
         conn.execute(f"UPDATE unified_blocks SET {', '.join(sets)} WHERE id = ?", values)
         conn.commit()
     return {"ok": True, "id": block_id, "position": new_pos}
+
+
+# --- run startup migrations ---
+migrate_legacy_blocks_to_unified()
