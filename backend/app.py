@@ -599,6 +599,7 @@ async def put_blocks(page_id: str, payload: BlocksPutRequest):
 @app.get("/api/block-search")
 async def block_search(q: str = "", ids: str = "", limit: int = 10):
     ensure_pages_db()
+    results = []
     with sqlite3.connect(PAGES_DB) as conn:
         if ids:
             id_list = [i.strip() for i in ids.split(",") if i.strip()]
@@ -606,21 +607,46 @@ async def block_search(q: str = "", ids: str = "", limit: int = 10):
                 return {"blocks": []}
             placeholders = ",".join("?" * len(id_list))
             rows = conn.execute(
-                f"SELECT b.id, b.content, b.page_id, p.title FROM blocks b JOIN pages p ON b.page_id = p.id WHERE b.id IN ({placeholders})",
+                f"SELECT id, content, parent_id FROM unified_blocks WHERE id IN ({placeholders})",
                 id_list,
             ).fetchall()
         else:
             rows = conn.execute(
                 """
-                SELECT b.id, b.content, b.page_id, p.title
-                FROM blocks b JOIN pages p ON b.page_id = p.id
-                WHERE b.content LIKE ? AND b.content != ''
-                ORDER BY b.updated_at DESC
+                SELECT id, content, parent_id
+                FROM unified_blocks
+                WHERE content LIKE ? AND content != ''
+                ORDER BY updated_at DESC
                 LIMIT ?
                 """,
                 (f"%{q}%", limit),
             ).fetchall()
-    return {"blocks": [{"id": r[0], "content": r[1], "page_id": r[2], "page_title": r[3]} for r in rows]}
+        for r in rows:
+            block_id, content, parent_id = r[0], r[1], r[2]
+            block = {"id": block_id, "content": content}
+            # walk up parent chain to collect ancestors + page root
+            ancestors = []
+            cur = parent_id
+            page_root_id = block_id
+            while cur and cur != "root":
+                prow = conn.execute(
+                    "SELECT id, content, parent_id FROM unified_blocks WHERE id=?",
+                    (cur,),
+                ).fetchone()
+                if prow:
+                    ancestors.append({"id": prow[0], "content": prow[1]})
+                    page_root_id = prow[0]
+                    cur = prow[2]
+                else:
+                    break
+            if ancestors:
+                ancestors.reverse()
+                block["ancestors"] = ancestors
+            block["page_root_id"] = page_root_id
+            # page title is the root ancestor's content, or own content if root
+            block["page_title"] = ancestors[0]["content"] if ancestors else content
+            results.append(block)
+    return {"blocks": results}
 
 
 # --- Logseq EDN import ---

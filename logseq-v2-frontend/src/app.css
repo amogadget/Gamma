@@ -289,6 +289,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: baseline;
+  text-decoration: none;
 }
 .blockRefChip:hover {
   background: #2a4f7a;
@@ -1005,6 +1006,7 @@ body {
   cursor: pointer;
 }
 .attachModeTarget { cursor: pointer; }
+[data-highlight-id] { cursor: pointer; }
 .attachContextMenu {
   position: fixed;
   z-index: 2000;
