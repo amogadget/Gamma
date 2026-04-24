@@ -258,30 +258,52 @@ async def block_search(q: str = "", ids: str = "", limit: int = 10):
                 """,
                 (f"%{q}%", limit),
             ).fetchall()
+        if not rows:
+            return {"blocks": []}
+
+        # Fetch all ancestor chains in one recursive CTE
+        row_ids = [r[0] for r in rows]
+        id_placeholders = ",".join("?" * len(row_ids))
+        anc_rows = conn.execute(
+            f"""
+            WITH RECURSIVE chain AS (
+                SELECT id AS descendant_id, parent_id, 0 AS depth
+                FROM unified_blocks WHERE id IN ({id_placeholders})
+                UNION ALL
+                SELECT c.descendant_id, u.parent_id, c.depth + 1
+                FROM unified_blocks u
+                JOIN chain c ON u.id = c.parent_id
+                WHERE u.parent_id IS NOT NULL AND u.parent_id != 'root'
+            )
+            SELECT c.descendant_id, u.id, u.content, c.depth
+            FROM chain c
+            JOIN unified_blocks u ON u.id = c.parent_id
+            ORDER BY c.descendant_id, c.depth DESC
+            """,
+            row_ids,
+        ).fetchall()
+
+        # Build ancestor lookup: descendant_id → [(id, content), ...] from root to parent
+        ancestors_by_id: dict = {}
+        page_root_by_id: dict = {}
+        for descendant_id, anc_id, anc_content, depth in anc_rows:
+            if anc_id == "root":
+                continue  # "root" is a virtual parent, not a real page
+            ancestors_by_id.setdefault(descendant_id, []).append({"id": anc_id, "content": anc_content})
+            if descendant_id not in page_root_by_id:
+                page_root_by_id[descendant_id] = anc_id
+
         for r in rows:
             block_id, content, parent_id = r[0], r[1], r[2]
             block = {"id": block_id, "content": content}
-            # walk up parent chain to collect ancestors + page root
-            ancestors = []
-            cur = parent_id
-            page_root_id = block_id
-            while cur and cur != "root":
-                prow = conn.execute(
-                    "SELECT id, content, parent_id FROM unified_blocks WHERE id=?",
-                    (cur,),
-                ).fetchone()
-                if prow:
-                    ancestors.append({"id": prow[0], "content": prow[1]})
-                    page_root_id = prow[0]
-                    cur = prow[2]
-                else:
-                    break
+            ancestors = ancestors_by_id.get(block_id)
             if ancestors:
-                ancestors.reverse()
                 block["ancestors"] = ancestors
-            block["page_root_id"] = page_root_id
-            # page title is the root ancestor's content, or own content if root
-            block["page_title"] = ancestors[0]["content"] if ancestors else content
+                block["page_root_id"] = page_root_by_id.get(block_id, block_id)
+                block["page_title"] = ancestors[0]["content"]
+            else:
+                block["page_root_id"] = block_id
+                block["page_title"] = content
             results.append(block)
     return {"blocks": results}
 
