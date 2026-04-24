@@ -197,6 +197,21 @@ export function toggleCollapsed(blocks, id) {
   return updateBlockTree(blocks, id, (b) => ({ ...b, collapsed: !b.collapsed }));
 }
 
+export function expandToBlock(blocks, targetId) {
+  let found = false;
+  function walk(list) {
+    return (list || []).map((b) => {
+      if (b.id === targetId) { found = true; return { ...b }; }
+      if (b.children && b.children.length > 0) {
+        const newChildren = walk(b.children);
+        if (found) return { ...b, collapsed: false, children: newChildren };
+      }
+      return b;
+    });
+  }
+  return walk(blocks);
+}
+
 function makeNewBlock({ parentId = null, properties = {} } = {}) {
   return {
     id: makeBlockId(),

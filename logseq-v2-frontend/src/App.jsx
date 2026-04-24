@@ -32,6 +32,7 @@ import {
   indentBlock,
   outdentBlock,
   toggleCollapsed,
+  expandToBlock,
   updateBlockTree,
   removeBlockTree,
   flattenBlocks,
@@ -729,6 +730,11 @@ export default function App() {
       row.scrollIntoView({ block: "center", behavior: "smooth" });
       setFocusedId(id);
       pendingBlockScrollRef.current = null;
+    } else if (flattenBlocks(blocks).some((b) => b.id === id)) {
+      // Block exists but is inside a collapsed parent — expand and try again
+      setBlocks((prev) => expandToBlock(prev, id));
+    } else {
+      // Block not in tree yet — keep ref and wait for next blocks change
     }
   }, [blocks, readOnly]);
 
@@ -1718,7 +1724,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   onFetchRefs,
                   onCacheRef,
                   onBlockRefClick: async (id) => {
-                    // search full tree (including collapsed) for the block
                     function findBlock(list) {
                       for (const b of list || []) {
                         if (b.id === id) return b;
@@ -1728,6 +1733,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       return null;
                     }
                     if (findBlock(blocks)) {
+                      suppressAutosaveRef.current = true;
+                      setBlocks((prev) => expandToBlock(prev, id));
+                      // Wait for React to render expanded ancestors, then scroll
+                      await new Promise((r) => setTimeout(r, 0));
                       const row = document.querySelector(`[data-block-id="${id}"]`);
                       if (row) {
                         row.scrollIntoView({ block: "center", behavior: "smooth" });
