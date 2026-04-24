@@ -47,6 +47,40 @@ async def health():
     return {"ok": True}
 
 
+# --- AI chat (uses ANTHROPIC_ env vars for API key + base URL) ---
+import os
+
+AI_API_KEY = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
+AI_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+AI_MODEL = os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-4-7")
+
+class AIChatRequest(BaseModel):
+    prompt: str
+
+@app.post("/api/ai/chat")
+async def ai_chat(payload: AIChatRequest):
+    if not AI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured (missing ANTHROPIC_AUTH_TOKEN)")
+    import urllib.request as _ur
+    body = _json.dumps({
+        "model": AI_MODEL,
+        "max_tokens": 400,
+        "messages": [{"role": "user", "content": payload.prompt}],
+    }).encode()
+    req = _ur.Request(f"{AI_BASE_URL}/v1/messages", data=body, headers={
+        "x-api-key": AI_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+    })
+    try:
+        with _ur.urlopen(req, timeout=30) as resp:
+            data = _json.loads(resp.read())
+        text = "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
+        return {"response": text}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
+
+
 @app.get("/api/annotations/{doc_id}")
 async def get_annotations(doc_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
