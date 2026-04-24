@@ -1,4 +1,8 @@
 import secrets
+import json
+import re
+import random
+import string
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from urllib.request import Request, urlopen
@@ -590,6 +594,447 @@ async def put_blocks(page_id: str, payload: BlocksPutRequest):
         conn.execute("UPDATE pages SET updated_at = ? WHERE id = ?", (now, page_id))
         conn.commit()
     return {"ok": True, "count": len(rows), "updated_at": now}
+
+
+@app.get("/api/block-search")
+async def block_search(q: str = "", ids: str = "", limit: int = 10):
+    ensure_pages_db()
+    with sqlite3.connect(PAGES_DB) as conn:
+        if ids:
+            id_list = [i.strip() for i in ids.split(",") if i.strip()]
+            if not id_list:
+                return {"blocks": []}
+            placeholders = ",".join("?" * len(id_list))
+            rows = conn.execute(
+                f"SELECT b.id, b.content, b.page_id, p.title FROM blocks b JOIN pages p ON b.page_id = p.id WHERE b.id IN ({placeholders})",
+                id_list,
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT b.id, b.content, b.page_id, p.title
+                FROM blocks b JOIN pages p ON b.page_id = p.id
+                WHERE b.content LIKE ? AND b.content != ''
+                ORDER BY b.updated_at DESC
+                LIMIT ?
+                """,
+                (f"%{q}%", limit),
+            ).fetchall()
+    return {"blocks": [{"id": r[0], "content": r[1], "page_id": r[2], "page_title": r[3]} for r in rows]}
+
+
+# --- Logseq EDN import ---
+
+def _parse_edn(text):
+    """Minimal EDN parser covering Logseq's highlight export format."""
+    pos = [0]
+
+    def skip():
+        while pos[0] < len(text):
+            c = text[pos[0]]
+            if c in ' \t\n\r,':
+                pos[0] += 1
+            elif c == ';':  # line comment
+                while pos[0] < len(text) and text[pos[0]] != '\n':
+                    pos[0] += 1
+            else:
+                break
+
+    def val():
+        skip()
+        if pos[0] >= len(text):
+            raise ValueError("unexpected end")
+        c = text[pos[0]]
+        if c == '{':
+            return parse_map()
+        if c in '([':
+            close = ')' if c == '(' else ']'
+            pos[0] += 1
+            items = []
+            while True:
+                skip()
+                if text[pos[0]] == close:
+                    pos[0] += 1
+                    return items
+                items.append(val())
+        if c == '"':
+            return parse_str()
+        if c == ':':
+            return parse_kw()
+        if c == '#':
+            pos[0] += 1
+            tag = parse_sym()
+            skip()
+            v = val()
+            return v  # discard tag (e.g. #uuid → just the string)
+        if c == '-' or c.isdigit():
+            return parse_num()
+        sym = parse_sym()
+        if sym == 'true': return True
+        if sym == 'false': return False
+        if sym == 'nil': return None
+        return sym
+
+    def parse_map():
+        pos[0] += 1  # '{'
+        d = {}
+        while True:
+            skip()
+            if text[pos[0]] == '}':
+                pos[0] += 1
+                return d
+            k = val()
+            v = val()
+            d[k] = v
+
+    def parse_str():
+        pos[0] += 1  # '"'
+        buf = []
+        while pos[0] < len(text):
+            c = text[pos[0]]
+            if c == '"':
+                pos[0] += 1
+                return ''.join(buf)
+            if c == '\\':
+                pos[0] += 1
+                esc = text[pos[0]]
+                buf.append({'n':'\n','t':'\t','r':'\r','"':'"','\\':'\\','/':'/'}.get(esc, esc))
+            else:
+                buf.append(c)
+            pos[0] += 1
+        raise ValueError("unterminated string")
+
+    def parse_kw():
+        pos[0] += 1  # ':'
+        return parse_sym()
+
+    def parse_sym():
+        start = pos[0]
+        while pos[0] < len(text) and text[pos[0]] not in ' \t\n\r,{}()[]"':
+            pos[0] += 1
+        return text[start:pos[0]]
+
+    def parse_num():
+        start = pos[0]
+        if text[pos[0]] == '-':
+            pos[0] += 1
+        while pos[0] < len(text) and (text[pos[0]].isdigit() or text[pos[0]] == '.'):
+            pos[0] += 1
+        s = text[start:pos[0]]
+        return float(s) if '.' in s else int(s)
+
+    return val()
+
+
+def _make_block_id():
+    return ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
+
+
+# Logseq named colors → app rgba colors (closest match)
+_LOGSEQ_COLORS = {
+    'yellow': 'rgba(255, 226, 143, 0.65)',
+    'orange': 'rgba(255, 226, 143, 0.65)',
+    'red':    'rgba(255, 226, 143, 0.65)',
+    'green':  'rgba(170, 235, 170, 0.65)',
+    'blue':   'rgba(155, 205, 255, 0.65)',
+    'purple': 'rgba(230, 180, 255, 0.65)',
+    'pink':   'rgba(230, 180, 255, 0.65)',
+}
+
+def _map_color(c):
+    """Map a Logseq color name to the app's closest rgba color."""
+    return _LOGSEQ_COLORS.get(str(c).lower().strip(), 'rgba(255, 226, 143, 0.65)')
+
+
+def _parse_logseq_md(text):
+    """Parse a Logseq PDF-highlights .md file into a block tree."""
+    lines = text.split('\n')
+
+    def count_tabs(line):
+        n = 0
+        while n < len(line) and line[n] == '\t':
+            n += 1
+        return n
+
+    root = {'content': '', 'indent': -1, 'properties': {}, 'children': []}
+    stack = [root]
+    i = 0
+    # skip front-matter (lines before first bare `-` or tab-indented block)
+    while i < len(lines):
+        l = lines[i].rstrip()
+        if re.match(r'^\t*- ?', l):
+            break
+        i += 1
+
+    while i < len(lines):
+        line = lines[i].rstrip()
+        tabs = count_tabs(line)
+        rest = line[tabs:]
+
+        if rest == '-' or rest.startswith('- '):
+            content = rest[2:].strip() if rest.startswith('- ') else ''
+            props = {}
+            j = i + 1
+            # consume property continuation lines (same tab depth + 2 spaces)
+            prop_prefix = '\t' * tabs + '  '
+            while j < len(lines):
+                pl = lines[j].rstrip()
+                if pl.startswith(prop_prefix) and not pl[len(prop_prefix):].startswith('- '):
+                    prop_body = pl[len(prop_prefix):]
+                    if ':: ' in prop_body:
+                        k, v = prop_body.split(':: ', 1)
+                        props[k.strip()] = v.strip()
+                    j += 1
+                else:
+                    break
+            i = j
+            block = {'content': content, 'indent': tabs, 'properties': props, 'children': []}
+            while len(stack) > 1 and stack[-1]['indent'] >= tabs:
+                stack.pop()
+            stack[-1]['children'].append(block)
+            stack.append(block)
+        else:
+            i += 1
+
+    return root['children']
+
+
+def _collect_notes(block):
+    """Return note text from direct non-annotation children."""
+    return [c['content'] for c in block.get('children', [])
+            if c['properties'].get('ls-type') != 'annotation' and c['content']]
+
+
+def _md_to_ordered_blocks(md_blocks, edn_by_quote, edn_by_uuid):
+    """
+    Walk the MD tree in document order and produce import blocks.
+    Matched annotations → highlight blocks (EDN position data).
+    Unmatched annotations / plain blocks → plain note blocks.
+    Returns (ordered_blocks, used_edn_quotes).
+    """
+    ordered = []
+    used_quotes = set()
+
+    def make_highlight(edn, notes, color_name):
+        bid = _make_block_id()
+        pos = edn['position']
+        page = edn['page']
+        color = _map_color(color_name or edn.get('color', 'yellow'))
+        ordered.append({
+            'id': bid,
+            'content': notes,
+            'properties': json.dumps({
+                'highlight_id': bid,
+                'color': color,
+                'quote': edn['quote'],
+                'pdf_page': page,
+                'pdf_position': pos,
+            }),
+        })
+        used_quotes.add(edn['quote'])
+
+    def make_note(content):
+        if content:
+            ordered.append({'id': _make_block_id(), 'content': content, 'properties': json.dumps({})})
+
+    def process(block):
+        props = block['properties']
+        content = block['content'].strip()
+        is_annotation = props.get('ls-type') == 'annotation'
+
+        if is_annotation and content:
+            notes = '\n'.join(_collect_notes(block)).strip()
+            uid = props.get('id', '')
+            edn = edn_by_uuid.get(uid) or edn_by_quote.get(content.strip())
+            if edn:
+                make_highlight(edn, notes, props.get('hl-color'))
+            else:
+                # Still a real highlight — just no bounding box in this EDN snapshot
+                page = props.get('hl-page', '')
+                color = _map_color(props.get('hl-color', 'yellow'))
+                bid = _make_block_id()
+                ordered.append({
+                    'id': bid,
+                    'content': notes,
+                    'properties': json.dumps({
+                        'highlight_id': bid,
+                        'color': color,
+                        'quote': content,
+                        'pdf_page': int(page) if page else None,
+                        'pdf_position': None,
+                    }),
+                })
+            # Recurse only into annotation children
+            for child in block.get('children', []):
+                if child['properties'].get('ls-type') == 'annotation':
+                    process(child)
+        elif content and not is_annotation and not content.startswith('#') and content not in ('-', ''):
+            make_note(content)
+            for child in block.get('children', []):
+                process(child)
+        else:
+            for child in block.get('children', []):
+                process(child)
+
+    for block in md_blocks:
+        process(block)
+    return ordered, used_quotes
+
+
+def _edn_highlight_to_block(h, index):
+    bid = _make_block_id()
+    pos_edn = h.get('position', {})
+    page = h.get('page') or pos_edn.get('page') or 1
+    bounding = pos_edn.get('bounding', {})
+    rects = pos_edn.get('rects', [])
+
+    def add_page(r):
+        return {**{k: v for k, v in r.items()}, 'pageNumber': page}
+
+    pdf_position = {
+        'pageNumber': page,
+        'boundingRect': add_page(bounding),
+        'rects': [add_page(r) for r in rects],
+    }
+
+    props = h.get('properties', {})
+    color = _map_color(props.get('color', 'yellow'))
+    quote = (h.get('content') or {}).get('text', '')
+
+    return {
+        'id': bid,
+        'parent_id': None,
+        'position': index,
+        'content': '',
+        'properties': json.dumps({
+            'highlight_id': bid,
+            'color': color,
+            'quote': quote,
+            'pdf_page': page,
+            'pdf_position': pdf_position,
+        }),
+    }
+
+
+@app.post("/api/import/logseq")
+async def import_logseq(
+    pdf: UploadFile = File(...),
+    edn: UploadFile = File(...),
+    md: UploadFile = File(None),
+):
+    # 1. Validate and store PDF
+    pdf_bytes = await pdf.read()
+    if len(pdf_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="PDF too large")
+    if len(pdf_bytes) < 4 or pdf_bytes[:4] != b"%PDF":
+        raise HTTPException(status_code=400, detail="not a valid PDF")
+    digest = hashlib.sha256(pdf_bytes).hexdigest()[:24]
+    target = UPLOADS_DIR / f"{digest}.pdf"
+    if not target.exists():
+        target.write_bytes(pdf_bytes)
+    source_url = f"/api/uploads/{digest}.pdf"
+
+    # 2. Parse EDN → build quote→highlight lookup
+    edn_text = (await edn.read()).decode('utf-8')
+    try:
+        parsed = _parse_edn(edn_text)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"invalid EDN: {e}")
+    edn_highlights = parsed.get('highlights', []) if isinstance(parsed, dict) else []
+
+    # Build lookup by quote text for MD matching (strip whitespace for robustness)
+    edn_by_quote = {}
+    for h in edn_highlights:
+        quote = (h.get('content') or {}).get('text', '')
+        pos_edn = h.get('position', {})
+        page = h.get('page') or pos_edn.get('page') or 1
+        bounding = pos_edn.get('bounding', {})
+        rects = pos_edn.get('rects', [])
+        def add_page(r, pg=page):
+            return {**{k: v for k, v in r.items()}, 'pageNumber': pg}
+        edn_by_quote[quote.strip()] = {
+            'quote': quote.strip(),
+            'page': page,
+            'color': (h.get('properties') or {}).get('color', 'yellow'),
+            'position': {
+                'pageNumber': page,
+                'boundingRect': add_page(bounding),
+                'rects': [add_page(r) for r in rects],
+            },
+        }
+
+    # 3. Build import blocks ordered by MD (if provided), EDN-only at end
+    if md is not None:
+        md_text = (await md.read()).decode('utf-8')
+        md_blocks_parsed = _parse_logseq_md(md_text)
+        edn_by_uuid = {
+            h.get('id', ''): edn_by_quote[(h.get('content') or {}).get('text', '')]
+            for h in edn_highlights
+            if h.get('id') and (h.get('content') or {}).get('text', '') in edn_by_quote
+        }
+        import_blocks, used_quotes = _md_to_ordered_blocks(md_blocks_parsed, edn_by_quote, edn_by_uuid)
+        # Append EDN highlights not referenced in MD, sorted by page number
+        edn_only = [h for h in edn_highlights
+                    if (h.get('content') or {}).get('text', '').strip() not in used_quotes]
+        edn_only.sort(key=lambda h: h.get('page') or (h.get('position') or {}).get('page') or 0)
+        for h in edn_only:
+            import_blocks.append(_edn_highlight_to_block(h, 0))
+    else:
+        import_blocks = [_edn_highlight_to_block(h, 0) for h in edn_highlights]
+
+    # 4. Get or create unified_block for this doc
+    title = (pdf.filename or digest).removesuffix('.pdf')
+    now = page_now()
+    ensure_pages_db()
+    with sqlite3.connect(PAGES_DB) as conn:
+        row = conn.execute(
+            "SELECT id FROM unified_blocks WHERE json_extract(properties,'$.doc_id') = ?",
+            (digest,),
+        ).fetchone()
+        if row:
+            block_id = row[0]
+        else:
+            block_id = secrets.token_urlsafe(9)
+            last_pos = ub_last_child_position(conn, "root")
+            new_pos = generate_key_between(last_pos, None)
+            props = _json.dumps({"doc_id": digest, "source_url": source_url})
+            conn.execute(
+                "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
+                "VALUES (?,'root',?,?,?,?,?)",
+                (block_id, new_pos, title, props, now, now),
+            )
+
+        # 5. Append blocks, skip already-imported quotes
+        existing_quotes = {
+            r[0] for r in conn.execute(
+                "SELECT json_extract(properties,'$.quote') FROM unified_blocks WHERE parent_id=?",
+                (block_id,),
+            ).fetchall()
+        }
+        n = max(1, len(import_blocks))
+        last_child_pos = ub_last_child_position(conn, block_id)
+        positions = generate_n_keys_between(last_child_pos, None, n=n)
+        inserted = 0
+        for b, pos_key in zip(import_blocks, positions):
+            bprops = json.loads(b['properties']) if isinstance(b['properties'], str) else b.get('properties', {})
+            quote = bprops.get('quote', '')
+            if quote and quote in existing_quotes:
+                continue
+            conn.execute(
+                "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (b['id'], block_id, pos_key,
+                 b.get('content', ''),
+                 b['properties'] if isinstance(b['properties'], str) else json.dumps(b.get('properties', {})),
+                 now, now),
+            )
+            if quote:
+                existing_quotes.add(quote)
+            inserted += 1
+        conn.execute("UPDATE unified_blocks SET updated_at=? WHERE id=?", (now, block_id))
+        conn.commit()
+
+    return {"ok": True, "block_id": block_id, "doc_id": digest, "source_url": source_url, "imported": inserted}
 
 
 # --- one-time migration: annotations table -> blocks table (per page) ---
