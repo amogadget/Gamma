@@ -653,6 +653,9 @@ export default function App() {
   const [homeBlocks, setHomeBlocks] = useState([]);
   const [refCache, setRefCache] = useState({}); // { [blockId]: { content, page_title } }
   const [backlinks, setBacklinks] = useState([]);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
   const [homeEditingId, setHomeEditingId] = useState(null);
   const [status, setStatus] = useState("Ready.");
   const [loading, setLoading] = useState(false);
@@ -1319,6 +1322,31 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     await loadBlocksForBlock(focusedBlockId);
   }
 
+  async function sendChatMessage() {
+    const text = chatInput.trim();
+    if (!text || chatLoading) return;
+    setChatInput("");
+    setChatMessages((prev) => [...prev, { role: "user", text }]);
+    setChatLoading(true);
+    try {
+      // Build context from current page blocks
+      const context = flattenBlocks(blocks).map((b) => b.content).filter(Boolean).join("\n").slice(0, 3000);
+      const prompt = context
+        ? `You are a research assistant. The user is reading a PDF with these notes/highlights:\n\n${context}\n\nUser: ${text}\n\nRespond concisely.`
+        : text;
+      const data = await apiJson(`${API}/ai/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt }),
+      });
+      setChatMessages((prev) => [...prev, { role: "ai", text: data.response || "(no response)" }]);
+    } catch (err) {
+      setChatMessages((prev) => [...prev, { role: "ai", text: `Error: ${err.message}` }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
   function jumpToHighlightId(highlightId) {
     if (pdfHidden) {
       pendingJumpRef.current = highlightId;
@@ -1644,6 +1672,36 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <div className="pageHeaderMeta">
               <div className="pageHeaderLabel">Source PDF</div>
               <div className="pageHeaderUrl">{inputUrl}</div>
+            </div>
+          ) : null}
+
+          {!homeMode ? (
+            <div className="chatPanel">
+              <div className="chatMessages">
+                {chatMessages.length === 0 ? (
+                  <div className="chatEmpty">Ask AI about this page…</div>
+                ) : (
+                  chatMessages.map((m, i) => (
+                    <div key={i} className={`chatMsg ${m.role}`}>
+                      <div className="chatMsgText">{m.text}</div>
+                    </div>
+                  ))
+                )}
+                {chatLoading ? <div className="chatMsg ai"><div className="chatMsgText">…</div></div> : null}
+              </div>
+              <form
+                className="chatInputRow"
+                onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
+              >
+                <input
+                  className="chatInput"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Ask about this page…"
+                  disabled={chatLoading}
+                />
+                <button className="chatSendBtn" type="submit" disabled={chatLoading || !chatInput.trim()}>Send</button>
+              </form>
             </div>
           ) : null}
 
