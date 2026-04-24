@@ -652,6 +652,7 @@ export default function App() {
   const [blocks, setBlocks] = useState([]);
   const [homeBlocks, setHomeBlocks] = useState([]);
   const [refCache, setRefCache] = useState({}); // { [blockId]: { content, page_title } }
+  const [backlinks, setBacklinks] = useState([]);
   const [homeEditingId, setHomeEditingId] = useState(null);
   const [status, setStatus] = useState("Ready.");
   const [loading, setLoading] = useState(false);
@@ -737,6 +738,19 @@ export default function App() {
       // Block not in tree yet — keep ref and wait for next blocks change
     }
   }, [blocks, readOnly]);
+
+  // Fetch backlinks for the focused block
+  useEffect(() => {
+    if (!focusedBlockId || readOnly) { setBacklinks([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiJson(`${API}/blocks/${focusedBlockId}/backlinks`);
+        if (!cancelled) setBacklinks(data.backlinks || []);
+      } catch { if (!cancelled) setBacklinks([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [focusedBlockId, readOnly]);
 
   useEffect(() => {
     if (readOnly || !focusedBlockId) return;
@@ -1683,6 +1697,38 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     {summary || "Add a summary..."}
                   </span>
                 )}
+              </div>
+            ) : null}
+            {!homeMode && backlinks.length > 0 ? (
+              <div className="backlinksPanel">
+                <div className="backlinksLabel">Backlinks ({backlinks.length})</div>
+                <div className="backlinksList">
+                  {backlinks.map((bl) => (
+                    <button
+                      key={bl.id}
+                      className="backlinkItem"
+                      title={bl.page_title ? `From: ${bl.page_title}` : undefined}
+                      onClick={() => {
+                        const row = document.querySelector(`[data-block-id="${bl.id}"]`);
+                        if (row) {
+                          row.scrollIntoView({ block: "center", behavior: "smooth" });
+                          setFocusedId(bl.id);
+                        } else if (bl.page_root_id && bl.page_root_id !== focusedBlockId) {
+                          pendingBlockScrollRef.current = bl.id;
+                          openBlock(bl.page_root_id);
+                        } else {
+                          pendingBlockScrollRef.current = bl.id;
+                          setBlocks((prev) => expandToBlock(prev, bl.id));
+                        }
+                      }}
+                    >
+                      <div className="backlinkContent">{bl.content || "(empty)"}</div>
+                      {bl.page_title && bl.page_title !== bl.content ? (
+                        <div className="backlinkPage">{bl.page_title}</div>
+                      ) : null}
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : null}
             {homeMode && recentPages.length > 0 ? (
