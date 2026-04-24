@@ -1152,5 +1152,62 @@ async def ub_reorder_block(block_id: str, payload: UBReorderRequest):
     return {"ok": True, "id": block_id, "position": new_pos}
 
 
+@app.get("/api/blocks/{block_id}/backlinks")
+async def ub_get_backlinks(block_id: str):
+    """Return all blocks that reference `block_id` via [[block_id]] syntax."""
+    with sqlite3.connect(PAGES_DB) as conn:
+        rows = conn.execute(
+            "SELECT id, content, parent_id FROM unified_blocks "
+            "WHERE id != ? AND content LIKE ? "
+            "ORDER BY updated_at DESC LIMIT 50",
+            (block_id, f"%[[{block_id}]]%"),
+        ).fetchall()
+
+        if not rows:
+            return {"backlinks": []}
+
+        # Collect ancestor chains via CTE (same pattern as block_search)
+        row_ids = [r[0] for r in rows]
+        id_placeholders = ",".join("?" * len(row_ids))
+        anc_rows = conn.execute(
+            f"""
+            WITH RECURSIVE chain AS (
+                SELECT id AS descendant_id, parent_id, 0 AS depth
+                FROM unified_blocks WHERE id IN ({id_placeholders})
+                UNION ALL
+                SELECT c.descendant_id, u.parent_id, c.depth + 1
+                FROM unified_blocks u
+                JOIN chain c ON u.id = c.parent_id
+                WHERE u.parent_id IS NOT NULL AND u.parent_id != 'root'
+            )
+            SELECT c.descendant_id, u.id, u.content, c.depth
+            FROM chain c
+            JOIN unified_blocks u ON u.id = c.parent_id
+            WHERE u.id != 'root'
+            ORDER BY c.descendant_id, c.depth DESC
+            """,
+            row_ids,
+        ).fetchall()
+
+        ancestors_by_id: dict = {}
+        page_root_by_id: dict = {}
+        for descendant_id, anc_id, anc_content, depth in anc_rows:
+            ancestors_by_id.setdefault(descendant_id, []).append({"id": anc_id, "content": anc_content})
+            if descendant_id not in page_root_by_id:
+                page_root_by_id[descendant_id] = anc_id
+
+        results = []
+        for r in rows:
+            bid, content, parent_id = r[0], r[1], r[2]
+            ancestors = ancestors_by_id.get(bid)
+            results.append({
+                "id": bid,
+                "content": content,
+                "page_root_id": page_root_by_id.get(bid, bid),
+                "page_title": ancestors[0]["content"] if ancestors else content,
+            })
+    return {"backlinks": results}
+
+
 # --- run startup migrations ---
 migrate_legacy_blocks_to_unified()
