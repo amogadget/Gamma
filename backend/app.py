@@ -56,16 +56,41 @@ AI_MODEL = os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-4-7")
 
 class AIChatRequest(BaseModel):
     prompt: str
+    doc_id: str = ""
 
 @app.post("/api/ai/chat")
 async def ai_chat(payload: AIChatRequest):
     if not AI_API_KEY:
         raise HTTPException(status_code=503, detail="AI not configured (missing ANTHROPIC_AUTH_TOKEN)")
+
+    # Build context: extract PDF text if doc_id provided
+    context = ""
+    if payload.doc_id:
+        pdf_path = UPLOADS_DIR / f"{payload.doc_id}.pdf"
+        if pdf_path.exists():
+            try:
+                from PyPDF2 import PdfReader
+                reader = PdfReader(str(pdf_path))
+                pages_text = []
+                for page in reader.pages:
+                    t = page.extract_text()
+                    if t:
+                        pages_text.append(t)
+                context = "\n\n".join(pages_text)
+                if len(context) > 8000:
+                    context = context[:8000] + "\n…[truncated]"
+            except Exception:
+                context = "(PDF text extraction failed)"
+
+    full_prompt = payload.prompt
+    if context:
+        full_prompt = f"You are a research assistant. The user is reading a PDF. Here is the PDF text:\n\n{context}\n\nUser question: {payload.prompt}\n\nRespond concisely, referencing specific parts of the text when relevant."
+
     import urllib.request as _ur
     body = _json.dumps({
         "model": AI_MODEL,
         "max_tokens": 400,
-        "messages": [{"role": "user", "content": payload.prompt}],
+        "messages": [{"role": "user", "content": full_prompt}],
     }).encode()
     req = _ur.Request(f"{AI_BASE_URL}/v1/messages", data=body, headers={
         "x-api-key": AI_API_KEY,

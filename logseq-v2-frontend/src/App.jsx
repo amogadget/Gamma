@@ -1329,15 +1329,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     setChatMessages((prev) => [...prev, { role: "user", text }]);
     setChatLoading(true);
     try {
-      // Build context from current page blocks
-      const context = flattenBlocks(blocks).map((b) => b.content).filter(Boolean).join("\n").slice(0, 3000);
-      const prompt = context
-        ? `You are a research assistant. The user is reading a PDF with these notes/highlights:\n\n${context}\n\nUser: ${text}\n\nRespond concisely.`
-        : text;
       const data = await apiJson(`${API}/ai/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ prompt: text, doc_id: docId || "" }),
       });
       setChatMessages((prev) => [...prev, { role: "ai", text: data.response || "(no response)" }]);
     } catch (err) {
