@@ -855,23 +855,69 @@ body {
 }
 
 
-/* --- Home: recent pages carousel --- */
-.recentPagesRow {
+/* --- Home: carousel sections --- */
+.carouselRow {
   margin-bottom: 20px;
   padding: 0 4px;
 }
-.recentPagesLabel {
+.carouselLabel {
   font-size: 12px;
   color: #888;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: 8px;
 }
-.recentPagesGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+.carouselTrackWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.carouselTrack {
+  display: flex;
   gap: 10px;
-  max-width: 100%;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  padding: 4px 0;
+  flex: 1;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.carouselTrack::-webkit-scrollbar {
+  height: 4px;
+}
+.carouselTrack::-webkit-scrollbar-thumb {
+  background: #3f3f3f;
+  border-radius: 2px;
+}
+.carouselArrow {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #3f3f3f;
+  background: #1d1d1d;
+  color: #ccc;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.85;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.carouselArrow:hover {
+  opacity: 1;
+  background: #2a2a2a;
+}
+.carouselArrowLeft {
+  left: -14px;
+}
+.carouselArrowRight {
+  right: -14px;
 }
 .recentCard {
   display: flex;
@@ -972,6 +1018,51 @@ body {
   overflow: hidden;            /* no scrollbar; auto-height handles growth */
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+.categoryFrontmatter {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 10px 8px 10px;
+  margin: -10px 0 14px 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.categoryFrontmatterValue {
+  color: #bbb;
+  flex: 1;
+  min-width: 0;
+  cursor: text;
+  min-height: 18px;
+}
+.categoryFrontmatterValue.empty {
+  color: #555;
+  font-style: italic;
+}
+.categoryFrontmatterValue:hover {
+  color: #ccc;
+}
+.categoryBadge {
+  display: inline-block;
+  background: #2a2a2a;
+  color: #7ab8f5;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.categoryFrontmatterInput {
+  color: #ddd;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  font: inherit;
+  padding: 0;
+  font-family: inherit;
 }
 
 /* Attach mode */
