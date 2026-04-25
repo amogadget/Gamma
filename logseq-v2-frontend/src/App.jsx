@@ -650,6 +650,8 @@ export default function App() {
   const [focusedBlock, setFocusedBlock] = useState(null);
   const [summary, setSummary] = useState("");
   const [summaryEditing, setSummaryEditing] = useState(false);
+  const [category, setCategory] = useState("");
+  const [categoryEditing, setCategoryEditing] = useState(false);
   const [blocks, setBlocks] = useState([]);
   const [homeBlocks, setHomeBlocks] = useState([]);
   const [refCache, setRefCache] = useState({}); // { [blockId]: { content, page_title } }
@@ -1103,6 +1105,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setFocusedBlock(block);
       setPdfTitle(block.content || defaultTitle);
       setSummary(block.properties?.summary || "");
+      setCategory(block.properties?.category || "");
       setPdfUrl(sourceUrl);
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(block.id)}`;
       window.history.replaceState({}, "", newUrl);
@@ -1143,6 +1146,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setFocusedBlock(block);
       setPdfTitle(block.content || pdfFile.name.replace('.pdf', ''));
       setSummary(block.properties?.summary || "");
+      setCategory(block.properties?.category || "");
       setPdfUrl(data.source_url);
       await fetchHomeBlocks();
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(block.id)}`;
@@ -1184,6 +1188,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setFocusedBlock(block);
       setPdfTitle(block.content || defaultTitle);
       setSummary(block.properties?.summary || "");
+      setCategory(block.properties?.category || "");
       setPdfUrl(proxiedUrl);
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(block.id)}`;
       window.history.replaceState({}, "", newUrl);
@@ -1247,6 +1252,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setFocusedBlock(block);
       setPdfTitle(block.content || "Untitled");
       setSummary(props.summary || "");
+      setCategory(props.category || "");
       setDocId(props.doc_id || "");
 
       if (props.source_url) {
@@ -1289,6 +1295,21 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       });
     } catch (err) {
       setStatus(`Summary save failed: ${err.message}`);
+    }
+  }
+
+  async function saveCategory(newValue) {
+    if (!focusedBlockId || readOnly) return;
+    try {
+      await apiJson(`${API}/blocks/${focusedBlockId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ properties: { category: newValue || "" } }),
+      });
+      // Refresh home blocks so the category carousel updates
+      fetchHomeBlocks();
+    } catch (err) {
+      setStatus(`Category save failed: ${err.message}`);
     }
   }
 
@@ -1739,55 +1760,89 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
           <div className="blockList">
             {focusedBlockId && !readOnly && !homeMode ? (
-              <div className="summaryFrontmatter">
-                <span className="summaryFrontmatterLabel">summary::</span>
-                {summaryEditing ? (
-                  <textarea
-                    className="summaryFrontmatterInput"
-                    value={summary}
-                    onChange={(e) => {
-                      setSummary(e.target.value);
-                      // Auto-grow to fit content
-                      e.target.style.height = "auto";
-                      e.target.style.height = e.target.scrollHeight + "px";
-                    }}
-                    onBlur={() => {
-                      setSummaryEditing(false);
-                      saveSummary(summary);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
+              <>
+                <div className="summaryFrontmatter">
+                  <span className="summaryFrontmatterLabel">summary::</span>
+                  {summaryEditing ? (
+                    <textarea
+                      className="summaryFrontmatterInput"
+                      value={summary}
+                      onChange={(e) => {
+                        setSummary(e.target.value);
+                        e.target.style.height = "auto";
+                        e.target.style.height = e.target.scrollHeight + "px";
+                      }}
+                      onBlur={() => {
                         setSummaryEditing(false);
                         saveSummary(summary);
-                      } else if (e.key === "Escape") {
-                        e.preventDefault();
-                        setSummaryEditing(false);
-                        // Restore last-saved value? For simplicity, commit current value.
-                        saveSummary(summary);
-                      }
-                    }}
-                    ref={(el) => {
-                      // Autosize when mounted with pre-existing content
-                      if (el) {
-                        el.style.height = "auto";
-                        el.style.height = el.scrollHeight + "px";
-                      }
-                    }}
-                    autoFocus
-                    rows={1}
-                    placeholder="Add a summary..."
-                  />
-                ) : (
-                  <span
-                    className={`summaryFrontmatterValue ${summary ? "" : "empty"}`}
-                    onClick={() => setSummaryEditing(true)}
-                    title="Click to edit"
-                  >
-                    {summary || "Add a summary..."}
-                  </span>
-                )}
-              </div>
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !e.shiftKey) {
+                          e.preventDefault();
+                          setSummaryEditing(false);
+                          saveSummary(summary);
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          setSummaryEditing(false);
+                          saveSummary(summary);
+                        }
+                      }}
+                      ref={(el) => {
+                        if (el) {
+                          el.style.height = "auto";
+                          el.style.height = el.scrollHeight + "px";
+                        }
+                      }}
+                      autoFocus
+                      rows={1}
+                      placeholder="Add a summary..."
+                    />
+                  ) : (
+                    <span
+                      className={`summaryFrontmatterValue ${summary ? "" : "empty"}`}
+                      onClick={() => setSummaryEditing(true)}
+                      title="Click to edit"
+                    >
+                      {summary || "Add a summary..."}
+                    </span>
+                  )}
+                </div>
+                <div className="categoryFrontmatter">
+                  <span className="summaryFrontmatterLabel">category::</span>
+                  {categoryEditing ? (
+                    <input
+                      className="categoryFrontmatterInput"
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
+                      onBlur={() => {
+                        setCategoryEditing(false);
+                        saveCategory(category);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          setCategoryEditing(false);
+                          saveCategory(category);
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          setCategoryEditing(false);
+                          saveCategory(category);
+                        }
+                      }}
+                      autoFocus
+                      placeholder="e.g. machine-learning"
+                    />
+                  ) : (
+                    <span
+                      className={`categoryFrontmatterValue ${category ? "" : "empty"}`}
+                      onClick={() => setCategoryEditing(true)}
+                      title="Click to edit"
+                    >
+                      {category ? <span className="categoryBadge">{category}</span> : "Add a category..."}
+                    </span>
+                  )}
+                </div>
+              </>
             ) : null}
             {!homeMode && backlinks.length > 0 ? (
               <div className="backlinksPanel">
@@ -1821,27 +1876,91 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </div>
               </div>
             ) : null}
-            {homeMode && recentPages.length > 0 ? (
-              <div className="recentPagesRow">
-                <div className="recentPagesLabel">Recent</div>
-                <div className="recentPagesGrid">
-                  {recentPages.map((b) => (
-                    <button
-                      key={b.id}
-                      className="recentCard"
-                      onClick={() => openBlock(b.id)}
-                      title={b.content}
-                    >
-                      <div className="recentCardTitle">{b.content || "Untitled"}</div>
-                      <div className="recentCardMeta">
-                        {b.properties?.summary && <span className="recentCardSummary">{b.properties.summary}</span>}
-                        <span className="recentCardTime">{formatRelativeTime(b.updated_at)}</span>
+            {homeMode ? (() => {
+              const sorted = [...homeBlocks].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+              // Group by category
+              const categories = {};
+              const uncategorized = [];
+              for (const b of homeBlocks) {
+                const cat = (b.properties?.category || "").trim();
+                if (cat) {
+                  if (!categories[cat]) categories[cat] = [];
+                  categories[cat].push(b);
+                } else {
+                  uncategorized.push(b);
+                }
+              }
+              // Sort each category by updated_at
+              for (const cat of Object.keys(categories)) {
+                categories[cat].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
+              }
+              const sectionList = Object.keys(categories).sort();
+              return (
+                <>
+                  {/* Recent — all pages, scrollable carousel */}
+                  <div className="carouselRow">
+                    <div className="carouselLabel">Recent</div>
+                    <div className="carouselTrackWrap">
+                      <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
+                      <div className="carouselTrack" ref={(el) => { if (el) { el._scroll = el; } }}>
+                        {sorted.map((b) => (
+                          <button key={b.id} className="recentCard" onClick={() => openBlock(b.id)} title={b.content}>
+                            <div className="recentCardTitle">{b.content || "Untitled"}</div>
+                            <div className="recentCardMeta">
+                              {b.properties?.summary && <span className="recentCardSummary">{b.properties.summary}</span>}
+                              <span className="recentCardTime">{formatRelativeTime(b.updated_at)}</span>
+                            </div>
+                          </button>
+                        ))}
                       </div>
-                    </button>
+                      <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
+                    </div>
+                  </div>
+                  {/* Category sections */}
+                  {sectionList.map((cat) => (
+                    <div key={cat} className="carouselRow">
+                      <div className="carouselLabel"># {cat}</div>
+                      <div className="carouselTrackWrap">
+                        <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
+                        <div className="carouselTrack">
+                          {categories[cat].map((b) => (
+                            <button key={b.id} className="recentCard" onClick={() => openBlock(b.id)} title={b.content}>
+                              <div className="recentCardTitle">{b.content || "Untitled"}</div>
+                              <div className="recentCardMeta">
+                                {b.properties?.summary && <span className="recentCardSummary">{b.properties.summary}</span>}
+                                <span className="recentCardTime">{formatRelativeTime(b.updated_at)}</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
+                      </div>
+                    </div>
                   ))}
-                </div>
-              </div>
-            ) : null}
+                  {/* Uncategorized */}
+                  {uncategorized.length > 0 ? (
+                    <div className="carouselRow">
+                      <div className="carouselLabel">All</div>
+                      <div className="carouselTrackWrap">
+                        <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
+                        <div className="carouselTrack">
+                          {uncategorized.map((b) => (
+                            <button key={b.id} className="recentCard" onClick={() => openBlock(b.id)} title={b.content}>
+                              <div className="recentCardTitle">{b.content || "Untitled"}</div>
+                              <div className="recentCardMeta">
+                                {b.properties?.summary && <span className="recentCardSummary">{b.properties.summary}</span>}
+                                <span className="recentCardTime">{formatRelativeTime(b.updated_at)}</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                        <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              );
+            })() : null}
             {(homeMode ? pageBlocks : visibleBlocks).length === 0 ? (
               <div className="empty">{homeMode ? "No pages yet — open a PDF above to get started." : "No blocks yet."}</div>
             ) : (
