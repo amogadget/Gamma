@@ -877,6 +877,7 @@ body {
   gap: 10px;
   overflow-x: auto;
   scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
   padding: 4px 0;
   flex: 1;
   -webkit-overflow-scrolling: touch;
@@ -920,8 +921,8 @@ body {
   right: -14px;
 }
 .recentCard {
-  flex: 0 0 auto;
-  width: 156px;
+  flex: 0 0 calc(25% - 7.5px);
+  min-width: 100px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -934,6 +935,7 @@ body {
   text-align: left;
   color: #e6e6e6;
   font: inherit;
+  scroll-snap-align: start;
   transition: background 120ms ease, border-color 120ms ease;
   min-height: 58px;
 }
@@ -958,7 +960,13 @@ body {
   flex-direction: column;
   gap: 2px;
 }
-.recentCardSummary { color: #aaa; }
+.recentCardSummary {
+  color: #aaa;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+}
 .recentCardTime { color: #666; }
 
 /* --- Indicator in main list for recent pages --- */
