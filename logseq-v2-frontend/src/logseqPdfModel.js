@@ -26,6 +26,10 @@ export function blockQuote(b) {
   return b?.properties?.quote || "";
 }
 
+export function blockCollapsed(b) {
+  return b?.properties?.collapsed ?? false;
+}
+
 export function blockHighlightId(b) {
   return b?.properties?.highlight_id || null;
 }
@@ -194,7 +198,11 @@ export function setBlockEditMode(blocks, id, editMode) {
 }
 
 export function toggleCollapsed(blocks, id) {
-  return updateBlockTree(blocks, id, (b) => ({ ...b, collapsed: !b.collapsed }));
+  return updateBlockTree(blocks, id, (b) => ({
+    ...b,
+    collapsed: !b.collapsed,
+    properties: { ...b.properties, collapsed: !b.collapsed },
+  }));
 }
 
 export function expandToBlock(blocks, targetId) {
@@ -291,7 +299,7 @@ export function blocksToHighlights(blocks) {
 export function normalizeBlocks(blocks) {
   return (blocks || []).map((b) => ({
     ...b,
-    collapsed: b.collapsed ?? false,
+    collapsed: b.properties?.collapsed ?? false,
     editMode: false,
     children: normalizeBlocks(b.children || []),
   }));
