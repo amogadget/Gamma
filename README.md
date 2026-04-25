@@ -142,6 +142,7 @@ Generate the bcrypt hash with `caddy hash-password`.
 - **Attach mode**: link orphaned notes to existing PDF highlights — click ⊕ then left-click a highlight. Linked block jumps to the highlight and inherits its color.
 - **Cross-note block references**: type `[[` in any block to search and insert a reference to another block. References render as clickable chips that jump to the target.
 - **AI chat assistant**: sidebar chatbox sends your question + the PDF's extracted text (up to 8000 chars) to an Anthropic-compatible API (DeepSeek by default). Supports uploaded PDFs and URLs. Configured via `ANTHROPIC_AUTH_TOKEN` env var.
+- **Session persistence**: last-opened page, collapsed states, zoom, orientation, PDF toggle, notes toggle, and splitter position survive page reload (localStorage + block properties).
 - **Outliner block tree**: highlights and free notes rendered as nested blocks with Logseq-style vertical guide lines. Enter for sibling, Tab for indent, Shift+Tab for outdent, Backspace on empty to delete.
 - **Rich text**: markdown + KaTeX math in view mode, raw markdown in edit mode. One-click to edit; cursor lands near the click point.
 - **Drag-and-drop blocks**: hover over a block's left edge, grab the ⋮⋮ handle. Drop as sibling or as child. Cycle prevention rejects drops that would nest a block into its own subtree. Horizontal line indicator slides to show intended depth.
@@ -169,7 +170,6 @@ Generate the bcrypt hash with `caddy hash-password`.
 - Autosave is debounced at 500 ms. Closing the tab within that window can lose the last keystroke.
 - No conflict handling for simultaneous edits across tabs/devices. Last write wins.
 - Uploaded PDFs are stored content-hashed under `uploads/`. No cleanup for orphans whose pages/blocks have been deleted.
-- `collapsed` state on blocks is UI-only; reloading restores everything expanded.
 - Block references inside collapsed parents cannot scroll into view (DOM element not rendered).
 
 ## Future work
@@ -179,7 +179,6 @@ Generate the bcrypt hash with `caddy hash-password`.
 - Conflict resolution / multi-device sync.
 - Public read-only deployment mode (no auth, share-only).
 - Cleanup of orphaned uploaded PDFs.
-- Persist `collapsed` state across reload.
 - Migration of legacy `blocks` table data into `unified_blocks`.
 
 ## Directory layout
