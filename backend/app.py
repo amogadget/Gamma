@@ -116,7 +116,7 @@ async def ai_chat(payload: AIChatRequest):
     import urllib.request as _ur
     body = _json.dumps({
         "model": AI_MODEL,
-        "max_tokens": 400,
+        "max_tokens": 4096,
         "system": f"You are a research assistant helping the user understand a PDF they are reading. The user may ask questions about the document. Be concise and reference specific parts of the text when relevant." if context else "",
         "messages": [{"role": "user", "content": f"Here is the PDF text:\n\n{context}\n\nUser question: {payload.prompt}" if context else payload.prompt}],
     }).encode()

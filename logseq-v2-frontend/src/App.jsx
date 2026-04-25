@@ -46,7 +46,7 @@ import {
   blocksToHighlights,
   normalizeBlocks
 } from "./logseqPdfModel";
-import { loadSession, saveSession } from "./sessionState";
+import { loadSession, saveSession, clearSession } from "./sessionState";
 
 const API = "/api";
 
@@ -1482,7 +1482,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           <div className="topbar">
             <button
               className="homeBtn"
-              onClick={() => { window.location.href = "/"; }}
+              onClick={() => { clearSession(); window.location.href = "/"; }}
               title="Home"
               aria-label="Home"
             >
