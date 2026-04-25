@@ -920,6 +920,8 @@ body {
   right: -14px;
 }
 .recentCard {
+  flex: 0 0 auto;
+  width: 156px;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -1035,6 +1037,9 @@ body {
   min-width: 0;
   cursor: text;
   min-height: 18px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 .categoryFrontmatterValue.empty {
   color: #555;

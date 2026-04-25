@@ -961,7 +961,10 @@ export default function App() {
       // Bare `/` — try restore last session
       const session = loadSession();
       if (session.focusedBlockId) {
-        openBlock(session.focusedBlockId);
+        openBlock(session.focusedBlockId).catch(() => {
+          clearSession();
+          setFocusedBlockId("");
+        });
       }
     }
   }, []);
@@ -985,7 +988,7 @@ export default function App() {
       return;
     }
     saveSession({
-      focusedBlockId,
+      focusedBlockId: focusedBlockId || undefined,
       pdfScale,
       orientation,
       pdfHidden,
@@ -1280,6 +1283,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setStatus("Ready.");
     } catch (err) {
       setStatus(`Open failed: ${err.message}`);
+      // If this was a session restore attempt that failed, clear it
+      if (!window.location.search.includes("block=")) clearSession();
     } finally {
       setLoading(false);
     }
@@ -1830,7 +1835,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         }
                       }}
                       autoFocus
-                      placeholder="e.g. machine-learning"
+                      placeholder="tag1, tag2, ..."
                     />
                   ) : (
                     <span
@@ -1838,7 +1843,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       onClick={() => setCategoryEditing(true)}
                       title="Click to edit"
                     >
-                      {category ? <span className="categoryBadge">{category}</span> : "Add a category..."}
+                      {category ? (
+                        category.split(",").map((t, i) => t.trim() ? <span key={i} className="categoryBadge">{t.trim()}</span> : null)
+                      ) : "Add categories..."}
                     </span>
                   )}
                 </div>
@@ -1878,18 +1885,21 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             ) : null}
             {homeMode ? (() => {
               const sorted = [...homeBlocks].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
-              // Group by category
+              // Group by category (comma-separated — a page can be in multiple)
               const categories = {};
-              const uncategorized = [];
+              const seenInCategory = new Set();
               for (const b of homeBlocks) {
-                const cat = (b.properties?.category || "").trim();
-                if (cat) {
-                  if (!categories[cat]) categories[cat] = [];
-                  categories[cat].push(b);
-                } else {
-                  uncategorized.push(b);
+                const raw = (b.properties?.category || "").trim();
+                if (raw) {
+                  const tags = raw.split(",").map((t) => t.trim()).filter(Boolean);
+                  for (const t of tags) {
+                    if (!categories[t]) categories[t] = [];
+                    categories[t].push(b);
+                  }
+                  seenInCategory.add(b.id);
                 }
               }
+              const uncategorized = homeBlocks.filter((b) => !seenInCategory.has(b.id));
               // Sort each category by updated_at
               for (const cat of Object.keys(categories)) {
                 categories[cat].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
