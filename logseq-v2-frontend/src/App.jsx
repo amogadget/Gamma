@@ -46,6 +46,7 @@ import {
   blocksToHighlights,
   normalizeBlocks
 } from "./logseqPdfModel";
+import { loadSession, saveSession } from "./sessionState";
 
 const API = "/api";
 
@@ -954,7 +955,43 @@ export default function App() {
       })();
     }
     else if (initialUrl) openPdf(initialUrl);
+    else {
+      // Bare `/` — try restore last session
+      const session = loadSession();
+      if (session.focusedBlockId) {
+        openBlock(session.focusedBlockId);
+      }
+    }
   }, []);
+
+  // Restore viewer/layout prefs from session on mount
+  useEffect(() => {
+    const session = loadSession();
+    if (session.pdfScale != null) setPdfScale(session.pdfScale);
+    if (session.orientation) setOrientation(session.orientation);
+    if (session.pdfHidden != null) setPdfHidden(session.pdfHidden);
+    if (session.notesVisible != null) setNotesVisible(session.notesVisible);
+    if (session.sidebarWidth != null) setSidebarWidth(session.sidebarWidth);
+    if (session.sidebarHeight != null) setSidebarHeight(session.sidebarHeight);
+  }, []);
+
+  // Persist session state on relevant changes (skip initial mount)
+  const firstRenderRef = useRef(true);
+  useEffect(() => {
+    if (firstRenderRef.current) {
+      firstRenderRef.current = false;
+      return;
+    }
+    saveSession({
+      focusedBlockId,
+      pdfScale,
+      orientation,
+      pdfHidden,
+      notesVisible,
+      sidebarWidth,
+      sidebarHeight,
+    });
+  }, [focusedBlockId, pdfScale, orientation, pdfHidden, notesVisible, sidebarWidth, sidebarHeight]);
 
   function formatRelativeTime(iso) {
   if (!iso) return "";
