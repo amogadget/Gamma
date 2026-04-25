@@ -52,7 +52,7 @@ import os
 
 AI_API_KEY = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
 AI_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
-AI_MODEL = os.environ.get("ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-4-7")
+AI_MODEL = os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", "deepseek-v4-flash")
 
 class AIChatRequest(BaseModel):
     prompt: str
@@ -65,8 +65,33 @@ async def ai_chat(payload: AIChatRequest):
 
     # Build context: extract PDF text if doc_id provided
     context = ""
+    extracted = ""
     if payload.doc_id:
         pdf_path = UPLOADS_DIR / f"{payload.doc_id}.pdf"
+        if not pdf_path.exists():
+            # PDF not saved locally yet — try download from source_url if we have one
+            print(f"[ai_chat] PDF NOT FOUND at {pdf_path}, attempting download from source_url")
+            try:
+                import sqlite3
+                with sqlite3.connect(PAGES_DB) as conn:
+                    row = conn.execute(
+                        "SELECT properties FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?",
+                        (payload.doc_id,),
+                    ).fetchone()
+                if row:
+                    props = _json.loads(row[0] or "{}")
+                    src = props.get("source_url") or props.get("sourceUrl") or ""
+                    if src:
+                        from urllib.request import Request as _Req, urlopen as _urlopen
+                        dl_req = _Req(src, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/pdf,*/*;q=0.8"})
+                        with _urlopen(dl_req, timeout=30) as dl_resp:
+                            pdf_data = dl_resp.read()
+                        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+                        pdf_path.write_bytes(pdf_data)
+                        print(f"[ai_chat] downloaded {len(pdf_data)} bytes from {src}")
+            except Exception as dl_err:
+                print(f"[ai_chat] download failed: {dl_err}")
+
         if pdf_path.exists():
             try:
                 from PyPDF2 import PdfReader
@@ -77,20 +102,23 @@ async def ai_chat(payload: AIChatRequest):
                     if t:
                         pages_text.append(t)
                 context = "\n\n".join(pages_text)
+                extracted = f"{len(pages_text)} pages, {len(context)} chars"
                 if len(context) > 8000:
                     context = context[:8000] + "\n…[truncated]"
-            except Exception:
+            except Exception as e:
                 context = "(PDF text extraction failed)"
+                print(f"[ai_chat] extraction error: {e}")
+        else:
+            print(f"[ai_chat] PDF still not found after download attempt")
 
-    full_prompt = payload.prompt
-    if context:
-        full_prompt = f"You are a research assistant. The user is reading a PDF. Here is the PDF text:\n\n{context}\n\nUser question: {payload.prompt}\n\nRespond concisely, referencing specific parts of the text when relevant."
+    print(f"[ai_chat] context={extracted or repr(context)}")
 
     import urllib.request as _ur
     body = _json.dumps({
         "model": AI_MODEL,
         "max_tokens": 400,
-        "messages": [{"role": "user", "content": full_prompt}],
+        "system": f"You are a research assistant helping the user understand a PDF they are reading. The user may ask questions about the document. Be concise and reference specific parts of the text when relevant." if context else "",
+        "messages": [{"role": "user", "content": f"Here is the PDF text:\n\n{context}\n\nUser question: {payload.prompt}" if context else payload.prompt}],
     }).encode()
     req = _ur.Request(f"{AI_BASE_URL}/v1/messages", data=body, headers={
         "x-api-key": AI_API_KEY,
@@ -101,8 +129,10 @@ async def ai_chat(payload: AIChatRequest):
         with _ur.urlopen(req, timeout=30) as resp:
             data = _json.loads(resp.read())
         text = "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
+        print(f"[ai_chat] response: {text[:200]}...")
         return {"response": text}
     except Exception as e:
+        print(f"[ai_chat] API error: {e}")
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
 
 
@@ -202,6 +232,13 @@ async def proxy_pdf(source_url: str):
 
         if "application/pdf" not in content_type:
             raise HTTPException(status_code=400, detail=f"final URL is not a PDF: {content_type}")
+
+        # Save a local copy so the AI chat endpoint can extract text from it.
+        # The doc_id the frontend uses is sha256(source_url)[:24] (see getDocIdForUrl in App.jsx).
+        pdf_doc_id = hashlib.sha256(source_url.encode()).hexdigest()[:24]
+        local_path = UPLOADS_DIR / f"{pdf_doc_id}.pdf"
+        if not local_path.exists():
+            local_path.write_bytes(data)
 
         return Response(
             content=data,

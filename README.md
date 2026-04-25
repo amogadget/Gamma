@@ -73,8 +73,17 @@ Three pieces:
 cd backend
 python3 -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn aiosqlite pydantic python-multipart fractional-indexing
+pip install fastapi uvicorn aiosqlite pydantic python-multipart fractional-indexing PyPDF2
 uvicorn app:app --host 127.0.0.1 --port 9001
+```
+
+The AI chat feature requires an API key compatible with the Anthropic Messages API (works with Anthropic and DeepSeek):
+
+```bash
+export ANTHROPIC_AUTH_TOKEN="your-api-key"
+# optionally override the base URL and model:
+export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
 ```
 
 The backend auto-creates `data.db` and `pages.db` on first start, runs all pending migrations (adds `doc_id`, `position`, and `source_url` columns to `pages` as needed), and seeds the `blocks` table from any existing `annotations` rows.
@@ -132,6 +141,7 @@ Generate the bcrypt hash with `caddy hash-password`.
 - **Logseq EDN import**: import Logseq PDF-highlight exports (EDN + MD + PDF) — preserves highlight positions, notes, and block tree structure.
 - **Attach mode**: link orphaned notes to existing PDF highlights — click ⊕ then left-click a highlight. Linked block jumps to the highlight and inherits its color.
 - **Cross-note block references**: type `[[` in any block to search and insert a reference to another block. References render as clickable chips that jump to the target.
+- **AI chat assistant**: sidebar chatbox sends your question + the PDF's extracted text (up to 8000 chars) to an Anthropic-compatible API (DeepSeek by default). Supports uploaded PDFs and URLs. Configured via `ANTHROPIC_AUTH_TOKEN` env var.
 - **Outliner block tree**: highlights and free notes rendered as nested blocks with Logseq-style vertical guide lines. Enter for sibling, Tab for indent, Shift+Tab for outdent, Backspace on empty to delete.
 - **Rich text**: markdown + KaTeX math in view mode, raw markdown in edit mode. One-click to edit; cursor lands near the click point.
 - **Drag-and-drop blocks**: hover over a block's left edge, grab the ⋮⋮ handle. Drop as sibling or as child. Cycle prevention rejects drops that would nest a block into its own subtree. Horizontal line indicator slides to show intended depth.
