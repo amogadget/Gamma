@@ -12,6 +12,7 @@ const SESSION_FIELDS = [
   "notesVisible",
   "sidebarWidth",
   "sidebarHeight",
+  "pdfPageNumber",
 ];
 
 let saveTimer = null;

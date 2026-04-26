@@ -343,7 +343,7 @@ function BlockRow({
   const hasChildren = (block.children?.length || 0) > 0;
 
   return (
-    <div className="blockRowWrap">
+    <div className="blockRowWrap" data-block-id={block.id}>
       <div
         className={`blockRow ${focusedId === block.id ? "focused" : ""}`}
         onMouseDown={(e) => {
@@ -641,6 +641,7 @@ export default function App() {
   const initialUrl = params.get("src") || params.get("url") || "";
   const initialShare = params.get("share") || "";
   const initialBlockId = params.get("block") || params.get("page") || "";
+  const initialCategory = params.get("category") || "";
   const readOnly = Boolean(initialShare);
 
   const [inputUrl, setInputUrl] = useState(initialUrl);
@@ -652,6 +653,12 @@ export default function App() {
   const [summaryEditing, setSummaryEditing] = useState(false);
   const [category, setCategory] = useState("");
   const [categoryEditing, setCategoryEditing] = useState(false);
+  const [categoryInput, setCategoryInput] = useState("");
+  const [categorySuggestionIdx, setCategorySuggestionIdx] = useState(-1);
+  const [categoryFilter, setCategoryFilter] = useState(initialCategory);
+  const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
+  const [theme, setTheme] = useState(() => localStorage.getItem("gamma-theme") || "system");
+  const restoredPdfUrlRef = useRef(null);
   const [blocks, setBlocks] = useState([]);
   const [homeBlocks, setHomeBlocks] = useState([]);
   const [refCache, setRefCache] = useState({}); // { [blockId]: { content, page_title } }
@@ -668,6 +675,7 @@ export default function App() {
   const [pdfHidden, setPdfHidden] = useState(false);
   const [pdfScale, setPdfScale] = useState("page-width");
   const pageTitleSaveTimerRef = useRef(null);
+  const viewerWrapRef = useRef(null);
 
   function fetchHomeBlocks() {
     return apiJson(`${API}/blocks/root/children`)
@@ -730,7 +738,7 @@ export default function App() {
   }, [blocks, readOnly]);
 
   useEffect(() => {
-    if (!pendingBlockScrollRef.current || readOnly) return;
+    if (!pendingBlockScrollRef.current) return;
     const id = pendingBlockScrollRef.current;
     const row = document.querySelector(`[data-block-id="${id}"]`);
     if (row) {
@@ -739,6 +747,7 @@ export default function App() {
       pendingBlockScrollRef.current = null;
     } else if (flattenBlocks(blocks).some((b) => b.id === id)) {
       // Block exists but is inside a collapsed parent — expand and try again
+      if (!readOnly) suppressAutosaveRef.current = true;
       setBlocks((prev) => expandToBlock(prev, id));
     } else {
       // Block not in tree yet — keep ref and wait for next blocks change
@@ -747,7 +756,7 @@ export default function App() {
 
   // Fetch backlinks for the focused block
   useEffect(() => {
-    if (!focusedBlockId || readOnly) { setBacklinks([]); return; }
+    if (!focusedBlockId) { setBacklinks([]); return; }
     let cancelled = false;
     (async () => {
       try {
@@ -797,7 +806,6 @@ export default function App() {
 
   // left-click on a PDF highlight jumps to its block in the sidebar
   useEffect(() => {
-    if (readOnly) return;
     function onPointerDown(e) {
       if (e.button !== 0) return;
       if (e.pointerType !== "mouse") return;
@@ -815,6 +823,8 @@ export default function App() {
             if (block) {
               const row = document.querySelector(`[data-block-id="${block.id}"]`);
               if (row) {
+                row.scrollIntoView({ block: "center", behavior: "smooth" });
+                setFocusedId(block.id);
                 row.scrollIntoView({ block: "center", behavior: "smooth" });
                 setFocusedId(block.id);
               }
@@ -957,6 +967,9 @@ export default function App() {
       })();
     }
     else if (initialUrl) openPdf(initialUrl);
+    else if (initialCategory) {
+      // Stay on home page with category filter — don't restore session
+    }
     else {
       // Bare `/` — try restore last session
       const session = loadSession();
@@ -980,6 +993,20 @@ export default function App() {
     if (session.sidebarHeight != null) setSidebarHeight(session.sidebarHeight);
   }, []);
 
+  // Apply theme and persist. "system" follows prefers-color-scheme.
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    function effective() { return theme === "system" ? (mq.matches ? "dark" : "light") : theme; }
+    document.documentElement.setAttribute("data-theme", effective());
+    if (theme !== "system") localStorage.setItem("gamma-theme", theme);
+    else localStorage.removeItem("gamma-theme");
+    if (theme === "system") {
+      const onChange = () => document.documentElement.setAttribute("data-theme", mq.matches ? "dark" : "light");
+      mq.addEventListener("change", onChange);
+      return () => mq.removeEventListener("change", onChange);
+    }
+  }, [theme]);
+
   // Persist session state on relevant changes (skip initial mount)
   const firstRenderRef = useRef(true);
   useEffect(() => {
@@ -995,8 +1022,9 @@ export default function App() {
       notesVisible,
       sidebarWidth,
       sidebarHeight,
+      pdfPageNumber,
     });
-  }, [focusedBlockId, pdfScale, orientation, pdfHidden, notesVisible, sidebarWidth, sidebarHeight]);
+  }, [focusedBlockId, pdfScale, orientation, pdfHidden, notesVisible, sidebarWidth, sidebarHeight, pdfPageNumber]);
 
   function formatRelativeTime(iso) {
   if (!iso) return "";
@@ -1303,6 +1331,37 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
+  function addCategoryTag(tag) {
+    if (!tag.trim()) return;
+    setCategory(prev => {
+      const tags = prev ? prev.split(",").map(t => t.trim()).filter(Boolean) : [];
+      if (!tags.includes(tag.trim())) tags.push(tag.trim());
+      return tags.join(",");
+    });
+  }
+
+  function removeCategoryTag(index) {
+    setCategory(prev => {
+      const tags = prev ? prev.split(",").map(t => t.trim()).filter(Boolean) : [];
+      if (index < 0) tags.pop();
+      else tags.splice(index, 1);
+      return tags.join(",");
+    });
+  }
+
+  function commitAndCloseCategory() {
+    const finalCategory = (() => {
+      const tags = category ? category.split(",").map(t => t.trim()).filter(Boolean) : [];
+      const input = categoryInput.trim();
+      if (input && !tags.includes(input)) tags.push(input);
+      return tags.join(",");
+    })();
+    setCategory(finalCategory);
+    setCategoryInput("");
+    setCategoryEditing(false);
+    saveCategory(finalCategory);
+  }
+
   async function saveCategory(newValue) {
     if (!focusedBlockId || readOnly) return;
     try {
@@ -1488,6 +1547,78 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }, 100);
   }, [pdfHidden, highlights]);
 
+  // Restore PDF scroll position from session
+  useEffect(() => {
+    if (pdfHidden || highlights.length === 0) return;
+    if (restoredPdfUrlRef.current === pdfUrl) return;
+    const saved = loadSession().pdfPageNumber;
+    if (!saved || saved <= 1) return;
+    restoredPdfUrlRef.current = pdfUrl;
+    const timer = setTimeout(() => {
+      if (scrollToRef.current) {
+        scrollToRef.current({
+          position: {
+            pageNumber: saved,
+            boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: saved },
+            rects: [],
+          },
+        });
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [pdfUrl, pdfHidden, highlights]);
+
+  // Track PDF scroll position — poll via scrollable container
+  useEffect(() => {
+    if (!pdfUrl || pdfHidden) return;
+    let container = null;
+    let ticking = false;
+    function findContainer() {
+      const p = document.querySelector('[data-page-number]');
+      if (!p) return null;
+      let el = p.parentElement;
+      while (el && el !== document.body) {
+        if (el.scrollHeight > el.clientHeight) return el;
+        el = el.parentElement;
+      }
+      return null;
+    }
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        ticking = false;
+        if (!container) return;
+        const pages = container.querySelectorAll('[data-page-number]');
+        if (pages.length === 0) return;
+        const cr = container.getBoundingClientRect();
+        const midY = cr.top + cr.height / 2;
+        for (const el of pages) {
+          const r = el.getBoundingClientRect();
+          if (r.top <= midY && r.bottom >= midY) {
+            const n = parseInt(el.dataset.pageNumber);
+            if (n) setPdfPageNumber(n);
+            break;
+          }
+        }
+      });
+    }
+    // Retry finding container until pages render
+    let tries = 0;
+    const retry = setInterval(() => {
+      container = findContainer();
+      if (container) {
+        clearInterval(retry);
+        container.addEventListener('scroll', onScroll, { passive: true });
+      }
+      if (++tries > 30) clearInterval(retry);
+    }, 300);
+    return () => {
+      clearInterval(retry);
+      if (container) container.removeEventListener('scroll', onScroll);
+    };
+  }, [pdfUrl, pdfHidden]);
+
   return (
     <div
       className={`app layout-${orientation} ${readOnly ? "readOnlyMode" : ""} ${dragOver ? "dragOver" : ""}`}
@@ -1546,6 +1677,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             >
               {notesVisible ? "Hide notes" : "Show notes"}
             </button>
+            <button
+              className="themeToggle"
+              onClick={() => setTheme((t) => t === "dark" ? "light" : t === "light" ? "system" : "dark")}
+              title={theme === "dark" ? "Dark mode" : theme === "light" ? "Light mode" : "Follow system theme"}
+              aria-label="Toggle theme"
+            >
+              {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
+            </button>
             <label
               className="importLogseqBtn"
               title="Import Logseq PDF highlights (.pdf + .edn)"
@@ -1595,6 +1734,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           >
             {notesVisible ? "Hide notes" : "Show notes"}
           </button>
+          <button
+            className="themeToggle"
+            onClick={() => setTheme((t) => t === "dark" ? "light" : t === "light" ? "system" : "dark")}
+            title={theme === "dark" ? "Dark mode" : theme === "light" ? "Light mode" : "Follow system theme"}
+            aria-label="Toggle theme"
+          >
+            {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
+          </button>
         </div>
       )}
 
@@ -1617,7 +1764,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       )}
 
       <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
-        <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
+        <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
           {pdfUrl && !pdfHidden ? (
             <button
               className="pdfCloseBtn"
@@ -1814,33 +1961,86 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </div>
                 <div className="categoryFrontmatter">
                   <span className="summaryFrontmatterLabel">category::</span>
-                  {categoryEditing ? (
-                    <input
-                      className="categoryFrontmatterInput"
-                      value={category}
-                      onChange={(e) => setCategory(e.target.value)}
-                      onBlur={() => {
-                        setCategoryEditing(false);
-                        saveCategory(category);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          setCategoryEditing(false);
-                          saveCategory(category);
-                        } else if (e.key === "Escape") {
-                          e.preventDefault();
-                          setCategoryEditing(false);
-                          saveCategory(category);
-                        }
-                      }}
-                      autoFocus
-                      placeholder="tag1, tag2, ..."
-                    />
-                  ) : (
+                  {categoryEditing ? (() => {
+                    const currentTags = category.split(",").map(t => t.trim()).filter(Boolean);
+                    const q = categoryInput.trim();
+                    const suggestions = q ? [...new Set(homeBlocks.flatMap(b =>
+                      (b.properties?.category || "").split(",").map(t => t.trim()).filter(Boolean)
+                    ))].filter(t =>
+                      t.toLowerCase().includes(q.toLowerCase()) &&
+                      !currentTags.includes(t)
+                    ).sort().slice(0, 8) : [];
+                    return (
+                    <div className="categoryTagInputContainer">
+                      <div className="categoryTagInputWrap">
+                        {category.split(",").map((t, i) => t.trim() ? (
+                          <span key={i} className="categoryTag">
+                            {t.trim()}
+                            <button className="categoryTagRemove" tabIndex={-1} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); removeCategoryTag(i); }}>×</button>
+                          </span>
+                        ) : null)}
+                        <input
+                          className="categoryFrontmatterInput"
+                          value={categoryInput}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setCategorySuggestionIdx(-1);
+                            if (val.includes(",")) {
+                              const parts = val.split(",");
+                              for (let i = 0; i < parts.length - 1; i++) {
+                                const tag = parts[i].trim();
+                                if (tag) addCategoryTag(tag);
+                              }
+                              setCategoryInput(parts[parts.length - 1].trimStart());
+                            } else {
+                              setCategoryInput(val);
+                            }
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "ArrowDown") {
+                              e.preventDefault();
+                              if (suggestions.length > 0) {
+                                setCategorySuggestionIdx(i => Math.min(i + 1, suggestions.length - 1));
+                              }
+                            } else if (e.key === "ArrowUp") {
+                              e.preventDefault();
+                              setCategorySuggestionIdx(i => Math.max(i - 1, -1));
+                            } else if (e.key === "Enter" && categorySuggestionIdx >= 0 && categorySuggestionIdx < suggestions.length) {
+                              e.preventDefault();
+                              addCategoryTag(suggestions[categorySuggestionIdx]);
+                              setCategoryInput("");
+                              setCategorySuggestionIdx(-1);
+                            } else if (e.key === "Enter") {
+                              e.preventDefault();
+                              commitAndCloseCategory();
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              commitAndCloseCategory();
+                            } else if (e.key === "Backspace" && !categoryInput) {
+                              removeCategoryTag(-1);
+                            }
+                          }}
+                          onBlur={commitAndCloseCategory}
+                          autoFocus
+                          placeholder="type to add..."
+                        />
+                      </div>
+                      {suggestions.length > 0 ? (
+                        <div className="categorySuggestions">
+                          {suggestions.map((s, i) => (
+                            <button key={s} className={`categorySuggestionItem${i === categorySuggestionIdx ? " selected" : ""}`}
+                              onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); addCategoryTag(s); setCategoryInput(""); setCategorySuggestionIdx(-1); }}
+                              onMouseEnter={() => setCategorySuggestionIdx(i)}
+                            >{s}</button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                    );
+                  })() : (
                     <span
                       className={`categoryFrontmatterValue ${category ? "" : "empty"}`}
-                      onClick={() => setCategoryEditing(true)}
+                      onClick={() => { setCategoryInput(""); setCategorySuggestionIdx(-1); setCategoryEditing(true); }}
                       title="Click to edit"
                     >
                       {category ? (
@@ -1855,37 +2055,44 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               <div className="backlinksPanel">
                 <div className="backlinksLabel">Backlinks ({backlinks.length})</div>
                 <div className="backlinksList">
-                  {backlinks.map((bl) => (
-                    <button
-                      key={bl.id}
-                      className="backlinkItem"
-                      title={bl.page_title ? `From: ${bl.page_title}` : undefined}
-                      onClick={() => {
-                        const row = document.querySelector(`[data-block-id="${bl.id}"]`);
-                        if (row) {
-                          row.scrollIntoView({ block: "center", behavior: "smooth" });
-                          setFocusedId(bl.id);
-                        } else if (bl.page_root_id && bl.page_root_id !== focusedBlockId) {
-                          pendingBlockScrollRef.current = bl.id;
-                          openBlock(bl.page_root_id);
-                        } else {
-                          pendingBlockScrollRef.current = bl.id;
-                          setBlocks((prev) => expandToBlock(prev, bl.id));
-                        }
-                      }}
-                    >
-                      <div className="backlinkContent">{bl.content || "(empty)"}</div>
-                      {bl.page_title && bl.page_title !== bl.content ? (
-                        <div className="backlinkPage">{bl.page_title}</div>
-                      ) : null}
-                    </button>
-                  ))}
+                  {backlinks.map((bl) => {
+                    const isPrivate = bl.page_root_id && bl.page_root_id !== focusedBlockId;
+                    return isPrivate ? (
+                      <div key={bl.id} className="backlinkItem private">
+                        <div className="backlinkContent private">private block</div>
+                      </div>
+                    ) : (
+                      <button
+                        key={bl.id}
+                        className="backlinkItem"
+                        title={bl.page_title ? `From: ${bl.page_title}` : undefined}
+                        onClick={() => {
+                          const row = document.querySelector(`[data-block-id="${bl.id}"]`);
+                          if (row) {
+                            row.scrollIntoView({ block: "center", behavior: "smooth" });
+                            setFocusedId(bl.id);
+                          } else if (bl.page_root_id && bl.page_root_id !== focusedBlockId) {
+                            pendingBlockScrollRef.current = bl.id;
+                            openBlock(bl.page_root_id);
+                          } else {
+                            pendingBlockScrollRef.current = bl.id;
+                            setBlocks((prev) => expandToBlock(prev, bl.id));
+                          }
+                        }}
+                      >
+                        <div className="backlinkContent">{bl.content || "(empty)"}</div>
+                        {bl.page_title && bl.page_title !== bl.content ? (
+                          <div className="backlinkPage">{bl.page_title}</div>
+                        ) : null}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
             {homeMode ? (() => {
               const sorted = [...homeBlocks].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
-              // Group by category (comma-separated — a page can be in multiple)
+              // Group blocks by category (comma-separated — a page can be in multiple)
               const categories = {};
               const seenInCategory = new Set();
               for (const b of homeBlocks) {
@@ -1900,11 +2107,39 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 }
               }
               const uncategorized = homeBlocks.filter((b) => !seenInCategory.has(b.id));
-              // Sort each category by updated_at
               for (const cat of Object.keys(categories)) {
                 categories[cat].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
               }
-              const sectionList = Object.keys(categories).sort();
+              const catNames = Object.keys(categories).sort();
+
+              if (categoryFilter) {
+                // Filtered view — show pages in this category only
+                const filtered = categories[categoryFilter] || [];
+                return (
+                  <>
+                    <button className="categoryBackBtn" onClick={() => { setCategoryFilter(""); window.history.replaceState(null, "", "/"); }}>
+                      ← All pages
+                    </button>
+                    <div className="categoryFilterHeading">{categoryFilter}</div>
+                    <div className="carouselRow">
+                      <div className="carouselTrackWrap">
+                        <div className="carouselTrack">
+                          {filtered.map((b) => (
+                            <button key={b.id} className="recentCard" onClick={() => openBlock(b.id)} title={b.content}>
+                              <div className="recentCardTitle">{b.content || "Untitled"}</div>
+                              <div className="recentCardMeta">
+                                {b.properties?.summary && <span className="recentCardSummary">{b.properties.summary}</span>}
+                                <span className="recentCardTime">{formatRelativeTime(b.updated_at)}</span>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                );
+              }
+
               return (
                 <>
                   {/* Recent — all pages, scrollable carousel */}
@@ -1926,41 +2161,17 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
                     </div>
                   </div>
-                  {/* Category sections */}
-                  {sectionList.map((cat) => (
-                    <div key={cat} className="carouselRow">
-                      <div className="carouselLabel"># {cat}</div>
-                      <div className="carouselTrackWrap">
-                        <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
-                        <div className="carouselTrack">
-                          {categories[cat].map((b) => (
-                            <button key={b.id} className="recentCard" onClick={() => openBlock(b.id)} title={b.content}>
-                              <div className="recentCardTitle">{b.content || "Untitled"}</div>
-                              <div className="recentCardMeta">
-                                {b.properties?.summary && <span className="recentCardSummary">{b.properties.summary}</span>}
-                                <span className="recentCardTime">{formatRelativeTime(b.updated_at)}</span>
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                        <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
-                      </div>
-                    </div>
-                  ))}
-                  {/* Uncategorized */}
-                  {uncategorized.length > 0 ? (
+                  {/* Categories — one card per category */}
+                  {catNames.length > 0 ? (
                     <div className="carouselRow">
-                      <div className="carouselLabel">All</div>
+                      <div className="carouselLabel">Categories</div>
                       <div className="carouselTrackWrap">
                         <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
                         <div className="carouselTrack">
-                          {uncategorized.map((b) => (
-                            <button key={b.id} className="recentCard" onClick={() => openBlock(b.id)} title={b.content}>
-                              <div className="recentCardTitle">{b.content || "Untitled"}</div>
-                              <div className="recentCardMeta">
-                                {b.properties?.summary && <span className="recentCardSummary">{b.properties.summary}</span>}
-                                <span className="recentCardTime">{formatRelativeTime(b.updated_at)}</span>
-                              </div>
+                          {catNames.map((cat) => (
+                            <button key={cat} className="categoryCard" onClick={() => { setCategoryFilter(cat); window.history.replaceState(null, "", `/?category=${encodeURIComponent(cat)}`); }}>
+                              <div className="categoryCardName">{cat}</div>
+                              <div className="categoryCardCount">{categories[cat].length} {categories[cat].length === 1 ? "paper" : "papers"}</div>
                             </button>
                           ))}
                         </div>
@@ -1971,7 +2182,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </>
               );
             })() : null}
-            {(homeMode ? pageBlocks : visibleBlocks).length === 0 ? (
+            {homeMode && categoryFilter ? null : (
+            (homeMode ? pageBlocks : visibleBlocks).length === 0 ? (
               <div className="empty">{homeMode ? "No pages yet — open a PDF above to get started." : "No blocks yet."}</div>
             ) : (
               (() => {
@@ -1999,14 +2211,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     }
                     if (findBlock(blocks)) {
                       suppressAutosaveRef.current = true;
+                      pendingBlockScrollRef.current = id;
                       setBlocks((prev) => expandToBlock(prev, id));
-                      // Wait for React to render expanded ancestors, then scroll
-                      await new Promise((r) => setTimeout(r, 0));
-                      const row = document.querySelector(`[data-block-id="${id}"]`);
-                      if (row) {
-                        row.scrollIntoView({ block: "center", behavior: "smooth" });
-                      }
-                      setFocusedId(id);
                     } else {
                       pendingBlockScrollRef.current = id;
                       const cached = refCache[id];
@@ -2241,7 +2447,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   </DndContext>
                 );
               })()
-            )}
+            ))}
           </div>
 
         </div>)}
