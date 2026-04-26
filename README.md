@@ -134,6 +134,35 @@ your-domain.com {
 
 Generate the bcrypt hash with `caddy hash-password`.
 
+### Remote VM deployment
+
+1. Clone the repo on your VM.
+2. Follow the Backend and Frontend setup steps above.
+3. Install Caddy and configure it with your domain (see Caddyfile example above).
+4. Build the frontend (`npm run build` in `logseq-v2-frontend/`).
+5. Run the backend as a service (use systemd or tmux):
+   ```bash
+   cd backend
+   source venv/bin/activate
+   uvicorn app:app --host 127.0.0.1 --port 9001
+   ```
+6. Run the frontend preview server:
+   ```bash
+   cd logseq-v2-frontend
+   npx vite preview --host 127.0.0.1 --port 4173
+   ```
+7. Point Caddy to your domain and start it.
+
+### Environment variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `ANTHROPIC_AUTH_TOKEN` | For AI chat | — | API key for Anthropic-compatible chat (DeepSeek, Anthropic) |
+| `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Override the API base URL (e.g. `https://api.deepseek.com/anthropic`) |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | No | `claude-sonnet-4-20250514` | Model name for the AI chat |
+
+The backend auto-creates `data.db` and `pages.db` on first start.
+
 ## Features
 
 - **PDF loading**: open by URL or upload (max 50 MB, content-hashed for dedup).
@@ -142,7 +171,9 @@ Generate the bcrypt hash with `caddy hash-password`.
 - **Attach mode**: link orphaned notes to existing PDF highlights — click ⊕ then left-click a highlight. Linked block jumps to the highlight and inherits its color.
 - **Cross-note block references**: type `[[` in any block to search and insert a reference to another block. References render as clickable chips that jump to the target.
 - **AI chat assistant**: sidebar chatbox sends your question + the PDF's extracted text (up to 8000 chars) to an Anthropic-compatible API (DeepSeek by default). Supports uploaded PDFs and URLs. Configured via `ANTHROPIC_AUTH_TOKEN` env var.
-- **Session persistence**: last-opened page, collapsed states, zoom, orientation, PDF toggle, notes toggle, and splitter position survive page reload (localStorage + block properties).
+- **Category metadata**: tag-style category input with autocomplete from existing categories. Arrow-key navigation, comma to add tags. Home page shows grouped carousels by category.
+- **Light/dark theme toggle**: cycles Dark ☾ / Light ☀ / Follow system ◐ (listens to `prefers-color-scheme`). Persisted in localStorage.
+- **Session persistence**: last-opened page, collapsed states, zoom, orientation, PDF toggle, notes toggle, splitter position, and current PDF page survive page reload (localStorage + block properties).
 - **Outliner block tree**: highlights and free notes rendered as nested blocks with Logseq-style vertical guide lines. Enter for sibling, Tab for indent, Shift+Tab for outdent, Backspace on empty to delete.
 - **Rich text**: markdown + KaTeX math in view mode, raw markdown in edit mode. One-click to edit; cursor lands near the click point.
 - **Drag-and-drop blocks**: hover over a block's left edge, grab the ⋮⋮ handle. Drop as sibling or as child. Cycle prevention rejects drops that would nest a block into its own subtree. Horizontal line indicator slides to show intended depth.
@@ -151,7 +182,7 @@ Generate the bcrypt hash with `caddy hash-password`.
 - **Close-PDF**: X button on the viewer hides the PDF temporarily while keeping it loaded. Clicking a highlight dot re-opens the viewer and jumps to that highlight.
 - **Layout toggles**: side-by-side (default) or stacked. Hide notes to see only the PDF.
 - **Renameable page title**: click the title to rename.
-- **Share links**: read-only URL, public, PDF + highlights + notes all preserved.
+- **Share links**: read-only URL, public, PDF + highlights + notes all preserved. Click PDF highlight → sidebar jumps to its block. Backlinks shown with "private block" for cross-page references.
 - **Password protection**: editor gated by Caddy basic auth; shared links stay public.
 - **Mobile**: dedicated drag handle on the splitter for touch.
 
@@ -170,11 +201,11 @@ Generate the bcrypt hash with `caddy hash-password`.
 - Autosave is debounced at 500 ms. Closing the tab within that window can lose the last keystroke.
 - No conflict handling for simultaneous edits across tabs/devices. Last write wins.
 - Uploaded PDFs are stored content-hashed under `uploads/`. No cleanup for orphans whose pages/blocks have been deleted.
-- Block references inside collapsed parents cannot scroll into view (DOM element not rendered).
 
 ## Future work
 
-- "Recent" carousel at the top of the home view.
+- Multi-user accounts (CLI-based account creation, no public registration).
+- README improvements with systematic deployment instructions.
 - Block backlinks (reverse references — "what links here").
 - Conflict resolution / multi-device sync.
 - Public read-only deployment mode (no auth, share-only).
