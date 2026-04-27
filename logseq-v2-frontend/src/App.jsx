@@ -779,6 +779,7 @@ export default function App() {
     try { const v = localStorage.getItem("gamma-chat-height"); return v ? Number(v) : 200; } catch { return 200; }
   });
   const [chatHidden, setChatHidden] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // Persist allChats to localStorage
   useEffect(() => {
@@ -1892,57 +1893,68 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               value={inputUrl}
               onChange={(e) => setInputUrl(e.target.value)}
               placeholder="Enter PDF URL"
+              onKeyDown={(e) => { if (e.key === "Enter") openPdf(inputUrl); }}
             />
-            <button onClick={() => openPdf(inputUrl)} disabled={loading}>
+            <button onClick={() => openPdf(inputUrl)} disabled={loading} className="openBtn">
               Open
             </button>
-            <button onClick={createShareLink} disabled={!pdfUrl || loading}>
-              Create share link
+            <button
+              className="menuToggleBtn"
+              onClick={() => setMenuOpen((v) => !v)}
+              title="More actions"
+              aria-label="More actions"
+            >
+              {menuOpen ? "✕" : "⋮"}
             </button>
-            {pdfUrl && pdfHidden ? (
+            <div className={`topbarOverflow ${menuOpen ? "open" : ""}`}>
+              <button onClick={createShareLink} disabled={!pdfUrl || loading}>
+                Share link
+              </button>
+              {pdfUrl && pdfHidden ? (
+                <button
+                  className="pdfShowBtn"
+                  onClick={() => { setPdfHidden(false); setMenuOpen(false); }}
+                  title="Show PDF"
+                >Show PDF</button>
+              ) : null}
               <button
-                className="pdfShowBtn"
-                onClick={() => setPdfHidden(false)}
-                title="Show PDF"
-              >Show PDF</button>
-            ) : null}
-            <button
-              className="orientationBtn"
-              onClick={() => setOrientation((o) => (o === "horizontal" ? "vertical" : "horizontal"))}
-              title={orientation === "horizontal" ? "Switch to stacked layout" : "Switch to side-by-side layout"}
-            >
-              {orientation === "horizontal" ? "⬍ Stack" : "⬌ Side-by-side"}
-            </button>
-            <button
-              className="notesBtn"
-              onClick={() => setNotesVisible((v) => !v)}
-              title={notesVisible ? "Hide notes" : "Show notes"}
-            >
-              {notesVisible ? "Hide notes" : "Show notes"}
-            </button>
-            <button
-              className="themeToggle"
-              onClick={() => setTheme((t) => t === "dark" ? "light" : t === "light" ? "system" : "dark")}
-              title={theme === "dark" ? "Dark mode" : theme === "light" ? "Light mode" : "Follow system theme"}
-              aria-label="Toggle theme"
-            >
-              {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
-            </button>
-            <label
-              className="importLogseqBtn"
-              title="Import Logseq PDF highlights (.pdf + .edn)"
-              style={{ cursor: loading ? "not-allowed" : "pointer" }}
-            >
-              Import Logseq
-              <input
-                type="file"
-                multiple
-                accept=".pdf,.edn,.md"
-                style={{ display: "none" }}
-                disabled={loading}
-                onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; }}
-              />
-            </label>
+                className="orientationBtn"
+                onClick={() => { setOrientation((o) => (o === "horizontal" ? "vertical" : "horizontal")); setMenuOpen(false); }}
+                title={orientation === "horizontal" ? "Switch to stacked layout" : "Switch to side-by-side layout"}
+              >
+                {orientation === "horizontal" ? "⬍ Stack" : "⬌ Side-by-side"}
+              </button>
+              <button
+                className="notesBtn"
+                onClick={() => { setNotesVisible((v) => !v); setMenuOpen(false); }}
+                title={notesVisible ? "Hide notes" : "Show notes"}
+              >
+                {notesVisible ? "Hide notes" : "Show notes"}
+              </button>
+              <button
+                className="themeToggle"
+                onClick={() => setTheme((t) => t === "dark" ? "light" : t === "light" ? "system" : "dark")}
+                title={theme === "dark" ? "Dark" : theme === "light" ? "Light" : "Auto"}
+                aria-label="Toggle theme"
+              >
+                {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
+              </button>
+              <label
+                className="importLogseqBtn"
+                title="Import Logseq PDF highlights (.pdf + .edn)"
+                style={{ cursor: loading ? "not-allowed" : "pointer" }}
+              >
+                Import Logseq
+                <input
+                  type="file"
+                  multiple
+                  accept=".pdf,.edn,.md"
+                  style={{ display: "none" }}
+                  disabled={loading}
+                  onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; setMenuOpen(false); }}
+                />
+              </label>
+            </div>
           </div>
           <div className="status">{status}</div>
         </>
@@ -1957,34 +1969,35 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             Γ
           </button>
           <button
-            className="orientationBtn"
-            onClick={() => setOrientation((o) => (o === "horizontal" ? "vertical" : "horizontal"))}
-            title={orientation === "horizontal" ? "Switch to stacked layout" : "Switch to side-by-side layout"}
+            className="menuToggleBtn"
+            onClick={() => setMenuOpen((v) => !v)}
+            title="More actions"
+            aria-label="More actions"
           >
-            {orientation === "horizontal" ? "⬍ Stack" : "⬌ Side-by-side"}
+            {menuOpen ? "✕" : "⋮"}
           </button>
-          {pdfUrl && pdfHidden ? (
+          <div className={`topbarOverflow ${menuOpen ? "open" : ""}`}>
             <button
-              className="pdfShowBtn"
-              onClick={() => setPdfHidden(false)}
-              title="Show PDF"
-            >Show PDF</button>
-          ) : null}
-          <button
-            className="notesBtn"
-            onClick={() => setNotesVisible((v) => !v)}
-            title={notesVisible ? "Hide notes" : "Show notes"}
-          >
-            {notesVisible ? "Hide notes" : "Show notes"}
-          </button>
-          <button
-            className="themeToggle"
-            onClick={() => setTheme((t) => t === "dark" ? "light" : t === "light" ? "system" : "dark")}
-            title={theme === "dark" ? "Dark mode" : theme === "light" ? "Light mode" : "Follow system theme"}
-            aria-label="Toggle theme"
-          >
-            {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
-          </button>
+              className="orientationBtn"
+              onClick={() => { setOrientation((o) => (o === "horizontal" ? "vertical" : "horizontal")); setMenuOpen(false); }}
+            >
+              {orientation === "horizontal" ? "⬍ Stack" : "⬌ Side-by-side"}
+            </button>
+            {pdfUrl && pdfHidden ? (
+              <button className="pdfShowBtn" onClick={() => { setPdfHidden(false); setMenuOpen(false); }}>
+                Show PDF
+              </button>
+            ) : null}
+            <button className="notesBtn" onClick={() => { setNotesVisible((v) => !v); setMenuOpen(false); }}>
+              {notesVisible ? "Hide notes" : "Show notes"}
+            </button>
+            <button className="themeToggle"
+              onClick={() => setTheme((t) => t === "dark" ? "light" : t === "light" ? "system" : "dark")}
+              title={theme === "dark" ? "Dark" : theme === "light" ? "Light" : "Auto"}
+            >
+              {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
+            </button>
+          </div>
         </div>
       )}
 

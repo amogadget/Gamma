@@ -98,6 +98,7 @@ body {
   padding: 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-surface);
+  position: relative;
 }
 
 .topbar input {
@@ -145,6 +146,71 @@ body {
   color: var(--text-tertiary);
   font-size: 14px;
   min-height: 38px;
+}
+
+.menuToggleBtn {
+  display: none !important;
+  font-size: 20px;
+  line-height: 1;
+  padding: 8px 12px !important;
+}
+
+.topbarOverflow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* On narrow screens, collapse secondary buttons into a dropdown */
+@media (max-width: 680px) {
+  .menuToggleBtn {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+  }
+  .topbarOverflow {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 8px;
+    z-index: 100;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  }
+  .topbarOverflow.open {
+    display: flex;
+  }
+  .topbarOverflow button,
+  .topbarOverflow .importLogseqBtn {
+    white-space: nowrap;
+    width: 100%;
+    text-align: left;
+  }
+  .openBtn {
+    display: none !important;  /* Enter key opens instead */
+  }
+  .topbar input {
+    min-width: 80px;
+  }
+  .topbar {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+  .topbar button,
+  .topbar .importLogseqBtn {
+    padding: 7px 10px;
+    font-size: 13px;
+  }
+  .themeToggle {
+    padding: 7px 10px !important;
+    font-size: 16px;
+    min-width: 36px;
+  }
 }
 
 .main {
