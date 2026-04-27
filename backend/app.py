@@ -3,16 +3,128 @@ import json
 import re
 import random
 import string
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
-from urllib.request import Request, urlopen
+import bcrypt
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, Response
+from urllib.request import Request as URLRequest, urlopen
 from urllib.error import URLError, HTTPError
 from pydantic import BaseModel
 import aiosqlite
 from pathlib import Path
 
 app = FastAPI()
-DB_PATH = Path("data.db")
+
+# Per-user data paths
+USERS_DB = Path(__file__).parent / "users.db"
+USERS_DIR = Path(__file__).parent / "users"
+
+def _ensure_users_db():
+    conn = __import__("sqlite3").connect(str(USERS_DB))
+    conn.execute("CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY, password_hash TEXT NOT NULL, is_guest INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, username TEXT NOT NULL REFERENCES users(username), guest_date TEXT, created_at TEXT NOT NULL)")
+    conn.execute("CREATE TABLE IF NOT EXISTS shares (token TEXT PRIMARY KEY, username TEXT NOT NULL, doc_id TEXT NOT NULL, created_at TEXT NOT NULL)")
+    conn.commit()
+    return conn
+
+_ensure_users_db().close()
+
+
+# --- Auth middleware ---
+
+@app.middleware("http")
+async def session_middleware(request: Request, call_next):
+    import sqlite3 as _sqlite3
+    token = request.cookies.get("session")
+    request.state.user = None
+    request.state.is_guest = False
+    if token:
+        with _sqlite3.connect(str(USERS_DB)) as conn:
+            row = conn.execute(
+                "SELECT u.username, u.is_guest, s.guest_date FROM sessions s JOIN users u ON s.username = u.username WHERE s.token = ?",
+                (token,),
+            ).fetchone()
+            if row:
+                username, is_guest, guest_date = row
+                if is_guest:
+                    today = __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d")
+                    if guest_date != today:
+                        # New day — wipe and recreate guest databases
+                        conn.execute("DELETE FROM sessions WHERE username = 'guest'")
+                        conn.commit()
+                        _reset_guest_data()
+                        # Create new session
+                        new_token = secrets.token_urlsafe(32)
+                        conn.execute("INSERT INTO sessions (token, username, guest_date, created_at) VALUES (?, 'guest', ?, ?)",
+                                     (new_token, today, page_now()))
+                        conn.commit()
+                        token = new_token
+                        username = "guest"
+                        is_guest = True
+                        # We'll set the cookie later; for now store on request.state
+                        request.state._new_session_token = new_token
+                request.state.user = username
+                request.state.is_guest = bool(is_guest)
+    response = await call_next(request)
+    if hasattr(request.state, '_new_session_token'):
+        response.set_cookie("session", request.state._new_session_token, httponly=True, samesite="lax", max_age=365*24*3600)
+    return response
+
+
+def _reset_guest_data():
+    """Wipe and recreate guest databases."""
+    import sqlite3 as _sqlite3
+    import shutil
+    guest_dir = USERS_DIR / "guest"
+    if guest_dir.exists():
+        shutil.rmtree(str(guest_dir))
+    guest_dir.mkdir(parents=True, exist_ok=True)
+    nw = page_now()
+    pages_db = _sqlite3.connect(str(guest_dir / "pages.db"))
+    pages_db.execute("CREATE TABLE unified_blocks (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES unified_blocks(id), position TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', properties TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    pages_db.execute("CREATE INDEX idx_ub_parent ON unified_blocks(parent_id, position)")
+    pages_db.execute("INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) VALUES ('root', NULL, 'a0', '', '{}', ?, ?)", (nw, nw))
+    pages_db.commit()
+    pages_db.close()
+    data_db = _sqlite3.connect(str(guest_dir / "data.db"))
+    data_db.execute("CREATE TABLE IF NOT EXISTS annotations (doc_id TEXT PRIMARY KEY, data TEXT NOT NULL)")
+    data_db.execute("CREATE TABLE IF NOT EXISTS shares (token TEXT PRIMARY KEY, doc_id TEXT NOT NULL)")
+    data_db.commit()
+    data_db.close()
+    (guest_dir / "uploads").mkdir(parents=True, exist_ok=True)
+
+
+def _require_user(request: Request) -> str:
+    """Return username or raise 401."""
+    user = request.state.user
+    if not user:
+        raise HTTPException(status_code=401)
+    return user
+
+
+def _user_db(request: Request, db_name: str) -> str:
+    """Return per-user database path or raise 401."""
+    return str(USERS_DIR / _require_user(request) / db_name)
+
+
+def _user_uploads(request: Request) -> Path:
+    """Return per-user uploads directory or raise 401."""
+    return USERS_DIR / _require_user(request) / "uploads"
+
+def _resolve_user(request: Request) -> str:
+    """Return user for DB access. Uses session if logged in, falls back to ?user= param (for shared links)."""
+    user = request.state.user
+    if user:
+        return user
+    user = request.query_params.get("user")
+    if user:
+        return user
+    raise HTTPException(status_code=401)
+
+def _db_for(user: str, db_name: str) -> str:
+    return str(USERS_DIR / user / db_name)
+
+def _uploads_for(user: str) -> Path:
+    return USERS_DIR / user / "uploads"
 
 
 class AnnotationDoc(BaseModel):
@@ -24,27 +136,93 @@ class ShareRequest(BaseModel):
 class ResolvePdfRequest(BaseModel):
     source_url: str
 
-@app.on_event("startup")
-async def startup():
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS annotations (
-                doc_id TEXT PRIMARY KEY,
-                data TEXT NOT NULL
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS shares (
-                token TEXT PRIMARY KEY,
-                doc_id TEXT NOT NULL
-            )
-        """)
-        await db.commit()
-
 
 @app.get("/api/health")
 async def health():
     return {"ok": True}
+
+
+# --- Auth endpoints ---
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/login")
+async def login(payload: LoginRequest, request: Request):
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(str(USERS_DB)) as conn:
+        row = conn.execute(
+            "SELECT username, password_hash, is_guest FROM users WHERE username = ?",
+            (payload.username,),
+        ).fetchone()
+    if not row or row[2]:  # guest accounts have no password
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    if not bcrypt.checkpw(payload.password.encode(), row[1].encode()):
+        raise HTTPException(status_code=401, detail="invalid credentials")
+    token = secrets.token_urlsafe(32)
+    with _sqlite3.connect(str(USERS_DB)) as conn:
+        conn.execute(
+            "INSERT INTO sessions (token, username, created_at) VALUES (?, ?, ?)",
+            (token, row[0], page_now()),
+        )
+        conn.commit()
+    import json as _json_inner
+    body = _json_inner.dumps({"ok": True, "username": row[0]})
+    resp = Response(content=body, media_type="application/json", status_code=200)
+    resp.set_cookie("session", token, httponly=True, samesite="lax", max_age=365*24*3600)
+    return resp
+
+
+@app.post("/api/logout")
+async def logout(request: Request):
+    token = request.cookies.get("session")
+    if token:
+        import sqlite3 as _sqlite3
+        with _sqlite3.connect(str(USERS_DB)) as conn:
+            conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            conn.commit()
+    resp = Response(content='{"ok":true}', media_type="application/json", status_code=200)
+    resp.delete_cookie("session")
+    return resp
+
+
+@app.get("/api/session")
+async def get_session(request: Request):
+    user = request.state.user
+    if not user:
+        return {"user": None}
+    return {"user": user, "is_guest": request.state.is_guest}
+
+
+@app.post("/api/login-guest")
+async def login_guest(request: Request):
+    import sqlite3 as _sqlite3
+    # Ensure guest user exists
+    with _sqlite3.connect(str(USERS_DB)) as conn:
+        guest = conn.execute("SELECT 1 FROM users WHERE username = 'guest'").fetchone()
+        if not guest:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, is_guest, created_at) VALUES ('guest', '', 1, ?)",
+                (page_now(),),
+            )
+            conn.commit()
+        today = __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d")
+        token = secrets.token_urlsafe(32)
+        conn.execute(
+            "INSERT INTO sessions (token, username, guest_date, created_at) VALUES (?, 'guest', ?, ?)",
+            (token, today, page_now()),
+        )
+        conn.commit()
+    # Ensure guest databases exist
+    guest_pages = USERS_DIR / "guest" / "pages.db"
+    if not guest_pages.exists():
+        _reset_guest_data()
+    resp = Response(content='{"ok":true,"username":"guest"}', media_type="application/json", status_code=200)
+    resp.set_cookie("session", token, httponly=True, samesite="lax", max_age=365*24*3600)
+    return resp
+
 
 
 # --- AI chat (uses ANTHROPIC_ env vars for API key + base URL) ---
@@ -57,23 +235,49 @@ AI_MODEL = os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", "deepseek-v4-flash")
 class AIChatRequest(BaseModel):
     prompt: str
     doc_id: str = ""
+    history: list = []  # [{role: "user"|"ai", text: str}, ...]
+
+def _build_messages(payload, context):
+    """Build the messages array with chat history and PDF context.
+    Context is prepended to the first user message. History is included
+    for multi-turn conversations."""
+    msgs = []
+    has_context = bool(context)
+    context_used = False
+    for h in (payload.history or []):
+        role = "user" if h.get("role") != "ai" else "ai"
+        content = h.get("text", "")
+        if role == "user" and has_context and not context_used:
+            content = f"Here is the PDF text:\n\n{context}\n\nUser question: {content}"
+            context_used = True
+        msgs.append({"role": role, "content": content})
+    # Always append the current prompt
+    content = payload.prompt
+    if has_context and not context_used:
+        content = f"Here is the PDF text:\n\n{context}\n\nUser question: {content}"
+    msgs.append({"role": "user", "content": content})
+    return msgs
+
 
 @app.post("/api/ai/chat")
-async def ai_chat(payload: AIChatRequest):
+async def ai_chat(payload: AIChatRequest, request: Request):
     if not AI_API_KEY:
         raise HTTPException(status_code=503, detail="AI not configured (missing ANTHROPIC_AUTH_TOKEN)")
+
+    user = _require_user(request)
+    uploads = _uploads_for(user)
 
     # Build context: extract PDF text if doc_id provided
     context = ""
     extracted = ""
     if payload.doc_id:
-        pdf_path = UPLOADS_DIR / f"{payload.doc_id}.pdf"
+        pdf_path = uploads / f"{payload.doc_id}.pdf"
         if not pdf_path.exists():
             # PDF not saved locally yet — try download from source_url if we have one
             print(f"[ai_chat] PDF NOT FOUND at {pdf_path}, attempting download from source_url")
             try:
                 import sqlite3
-                with sqlite3.connect(PAGES_DB) as conn:
+                with sqlite3.connect(_db_for(user, "pages.db")) as conn:
                     row = conn.execute(
                         "SELECT properties FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?",
                         (payload.doc_id,),
@@ -86,7 +290,7 @@ async def ai_chat(payload: AIChatRequest):
                         dl_req = _Req(src, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/pdf,*/*;q=0.8"})
                         with _urlopen(dl_req, timeout=30) as dl_resp:
                             pdf_data = dl_resp.read()
-                        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+                        uploads.mkdir(parents=True, exist_ok=True)
                         pdf_path.write_bytes(pdf_data)
                         print(f"[ai_chat] downloaded {len(pdf_data)} bytes from {src}")
             except Exception as dl_err:
@@ -118,7 +322,7 @@ async def ai_chat(payload: AIChatRequest):
         "model": AI_MODEL,
         "max_tokens": 4096,
         "system": f"You are a research assistant helping the user understand a PDF they are reading. The user may ask questions about the document. Be concise and reference specific parts of the text when relevant." if context else "",
-        "messages": [{"role": "user", "content": f"Here is the PDF text:\n\n{context}\n\nUser question: {payload.prompt}" if context else payload.prompt}],
+        "messages": _build_messages(payload, context),
     }).encode()
     req = _ur.Request(f"{AI_BASE_URL}/v1/messages", data=body, headers={
         "x-api-key": AI_API_KEY,
@@ -137,8 +341,8 @@ async def ai_chat(payload: AIChatRequest):
 
 
 @app.get("/api/annotations/{doc_id}")
-async def get_annotations(doc_id: str):
-    async with aiosqlite.connect(DB_PATH) as db:
+async def get_annotations(doc_id: str, request: Request):
+    async with aiosqlite.connect(_user_db(request, "data.db")) as db:
         async with db.execute(
             "SELECT data FROM annotations WHERE doc_id = ?",
             (doc_id,)
@@ -152,8 +356,8 @@ async def get_annotations(doc_id: str):
 
 
 @app.put("/api/annotations/{doc_id}")
-async def put_annotations(doc_id: str, payload: AnnotationDoc):
-    async with aiosqlite.connect(DB_PATH) as db:
+async def put_annotations(doc_id: str, payload: AnnotationDoc, request: Request):
+    async with aiosqlite.connect(_user_db(request, "data.db")) as db:
         await db.execute("""
             INSERT INTO annotations (doc_id, data)
             VALUES (?, ?)
@@ -164,36 +368,35 @@ async def put_annotations(doc_id: str, payload: AnnotationDoc):
     return {"ok": True}
 
 @app.post("/api/share/{doc_id}")
-async def create_share(doc_id: str, payload: ShareRequest):
+async def create_share(doc_id: str, request: Request):
+    import sqlite3 as _sqlite3
+    user = _require_user(request)
     token = secrets.token_urlsafe(12)
-
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "INSERT INTO shares (token, doc_id, source_url) VALUES (?, ?, ?)",
-            (token, doc_id, payload.source_url)
+    with _sqlite3.connect(str(USERS_DB)) as conn:
+        conn.execute(
+            "INSERT INTO shares (token, username, doc_id, created_at) VALUES (?, ?, ?, ?)",
+            (token, user, doc_id, page_now()),
         )
-        await db.commit()
-
+        conn.commit()
     return {"token": token}
 
 @app.get("/api/share/{token}")
 async def get_share(token: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT doc_id, source_url FROM shares WHERE token = ?",
-            (token,)
-        ) as cursor:
-            row = await cursor.fetchone()
-
+    import sqlite3 as _sqlite3
+    with _sqlite3.connect(str(USERS_DB)) as conn:
+        row = conn.execute(
+            "SELECT doc_id, username FROM shares WHERE token = ?",
+            (token,),
+        ).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="share not found")
-
-    return {"doc_id": row[0], "source_url": row[1]}
+    return {"doc_id": row[0], "username": row[1]}
 
 @app.post("/api/resolve-pdf")
-async def resolve_pdf(payload: ResolvePdfRequest):
+async def resolve_pdf(payload: ResolvePdfRequest, request: Request):
+    _require_user(request)
     try:
-        req = Request(
+        req = URLRequest(
             payload.source_url,
             headers={
                 "User-Agent": "Mozilla/5.0",
@@ -216,9 +419,11 @@ async def resolve_pdf(payload: ResolvePdfRequest):
         raise HTTPException(status_code=400, detail=f"resolve failed: {str(e)}")
 
 @app.get("/api/pdf")
-async def proxy_pdf(source_url: str):
+async def proxy_pdf(source_url: str, request: Request):
+    user = _require_user(request)
+    uploads = _uploads_for(user)
     try:
-        req = Request(
+        req = URLRequest(
             source_url,
             headers={
                 "User-Agent": "Mozilla/5.0",
@@ -234,9 +439,8 @@ async def proxy_pdf(source_url: str):
             raise HTTPException(status_code=400, detail=f"final URL is not a PDF: {content_type}")
 
         # Save a local copy so the AI chat endpoint can extract text from it.
-        # The doc_id the frontend uses is sha256(source_url)[:24] (see getDocIdForUrl in App.jsx).
         pdf_doc_id = hashlib.sha256(source_url.encode()).hexdigest()[:24]
-        local_path = UPLOADS_DIR / f"{pdf_doc_id}.pdf"
+        local_path = uploads / f"{pdf_doc_id}.pdf"
         if not local_path.exists():
             local_path.write_bytes(data)
 
@@ -261,46 +465,29 @@ import sqlite3
 from fractional_indexing import generate_key_between, generate_n_keys_between
 from datetime import datetime
 
-PAGES_DB = "/home/ubuntu/pdf-share/backend/pages.db"
-
-def ensure_pages_db():
-    with sqlite3.connect(PAGES_DB) as conn:
-        # Legacy tables — kept for migration reads, no longer written to
-        conn.execute("CREATE TABLE IF NOT EXISTS pages (id TEXT PRIMARY KEY, title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL)")
-        conn.execute("CREATE TABLE IF NOT EXISTS blocks (id TEXT PRIMARY KEY, page_id TEXT NOT NULL, parent_id TEXT, position INTEGER NOT NULL, content TEXT NOT NULL DEFAULT '', properties TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
-
-        # Unified block tree — everything is a block
-        conn.execute("CREATE TABLE IF NOT EXISTS unified_blocks (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES unified_blocks(id), position TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', properties TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_ub_parent ON unified_blocks(parent_id, position)")
-        conn.commit()
-
 def page_now():
     # Emit UTC ISO string with Z suffix so clients parse it correctly.
     return datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
-ensure_pages_db()
-
 # --- uploads (PDF file upload with content-hash dedup) ---
 import hashlib
 from fastapi import UploadFile, File
-from fastapi.responses import FileResponse
 
-UPLOADS_DIR = Path("/home/ubuntu/pdf-share/uploads")
-UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 @app.post("/api/uploads")
-async def upload_pdf(file: UploadFile = File(...)):
-    # Read file contents with size guard
+async def upload_pdf(file: UploadFile = File(...), request: Request = None):
+    user = _require_user(request)
+    uploads = _uploads_for(user)
+    uploads.mkdir(parents=True, exist_ok=True)
     contents = await file.read()
     if len(contents) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail=f"file too large (max {MAX_UPLOAD_BYTES // (1024*1024)} MB)")
     if len(contents) < 4 or contents[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="not a valid PDF (missing %PDF header)")
 
-    # Content-addressed: SHA-256 of bytes, take first 24 hex chars to match frontend doc_id format
     digest = hashlib.sha256(contents).hexdigest()[:24]
-    target = UPLOADS_DIR / f"{digest}.pdf"
+    target = uploads / f"{digest}.pdf"
 
     if not target.exists():
         target.write_bytes(contents)
@@ -316,7 +503,10 @@ ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "im
 IMAGE_EXTENSIONS = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp", "image/svg+xml": ".svg"}
 
 @app.post("/api/upload-image")
-async def upload_image(file: UploadFile = File(...)):
+async def upload_image(file: UploadFile = File(...), request: Request = None):
+    user = _require_user(request)
+    uploads = _uploads_for(user)
+    uploads.mkdir(parents=True, exist_ok=True)
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"unsupported image type: {file.content_type}")
     contents = await file.read()
@@ -324,7 +514,7 @@ async def upload_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=413, detail=f"file too large (max {MAX_UPLOAD_BYTES // (1024*1024)} MB)")
     digest = hashlib.sha256(contents).hexdigest()[:24]
     ext = IMAGE_EXTENSIONS[file.content_type]
-    target = UPLOADS_DIR / f"{digest}{ext}"
+    target = uploads / f"{digest}{ext}"
     already_existed = target.exists() and target.stat().st_size == len(contents)
     if not already_existed:
         target.write_bytes(contents)
@@ -336,8 +526,29 @@ async def upload_image(file: UploadFile = File(...)):
 
 IMAGE_MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"}
 
+def _find_upload_file(filename: str, request: Request) -> Path | None:
+    """Search for an uploaded file. Checks session user first, then ?user= param, then all users."""
+    user = request.state.user
+    if user:
+        path = USERS_DIR / user / "uploads" / filename
+        if path.is_file():
+            return path
+    param_user = request.query_params.get("user")
+    if param_user:
+        path = USERS_DIR / param_user / "uploads" / filename
+        if path.is_file():
+            return path
+    # Fallback: search all user directories (for shared links without ?user=)
+    if USERS_DIR.exists():
+        for d in USERS_DIR.iterdir():
+            if d.is_dir():
+                path = d / "uploads" / filename
+                if path.is_file():
+                    return path
+    return None
+
 @app.get("/api/uploads/{filename}")
-async def serve_upload(filename: str):
+async def serve_upload(filename: str, request: Request):
     # Sanitize: only allow [hex].ext pattern, no path traversal
     dot = filename.rfind(".")
     if dot < 0:
@@ -352,8 +563,8 @@ async def serve_upload(filename: str):
         raise HTTPException(status_code=400, detail="unsupported file type")
     if not stem or not all(c in "0123456789abcdef" for c in stem):
         raise HTTPException(status_code=400, detail="invalid filename")
-    path = UPLOADS_DIR / filename
-    if not path.is_file():
+    path = _find_upload_file(filename, request)
+    if not path:
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=3600"})
 
@@ -362,10 +573,9 @@ import json as _json
 
 
 @app.get("/api/block-search")
-async def block_search(q: str = "", ids: str = "", limit: int = 10):
-    ensure_pages_db()
+async def block_search(q: str = "", ids: str = "", limit: int = 10, request: Request = None):
     results = []
-    with sqlite3.connect(PAGES_DB) as conn:
+    with sqlite3.connect(_user_db(request, "pages.db")) as conn:
         if ids:
             id_list = [i.strip() for i in ids.split(",") if i.strip()]
             if not id_list:
@@ -734,15 +944,19 @@ async def import_logseq(
     pdf: UploadFile = File(...),
     edn: UploadFile = File(...),
     md: UploadFile = File(None),
+    request: Request = None,
 ):
     # 1. Validate and store PDF
+    user = _require_user(request)
+    uploads = _uploads_for(user)
+    uploads.mkdir(parents=True, exist_ok=True)
     pdf_bytes = await pdf.read()
     if len(pdf_bytes) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="PDF too large")
     if len(pdf_bytes) < 4 or pdf_bytes[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="not a valid PDF")
     digest = hashlib.sha256(pdf_bytes).hexdigest()[:24]
-    target = UPLOADS_DIR / f"{digest}.pdf"
+    target = uploads / f"{digest}.pdf"
     if not target.exists():
         target.write_bytes(pdf_bytes)
     source_url = f"/api/uploads/{digest}.pdf"
@@ -798,8 +1012,7 @@ async def import_logseq(
     # 4. Get or create unified_block for this doc
     title = (pdf.filename or digest).removesuffix('.pdf')
     now = page_now()
-    ensure_pages_db()
-    with sqlite3.connect(PAGES_DB) as conn:
+    with sqlite3.connect(_db_for(user, "pages.db")) as conn:
         row = conn.execute(
             "SELECT id FROM unified_blocks WHERE json_extract(properties,'$.doc_id') = ?",
             (digest,),
@@ -849,95 +1062,6 @@ async def import_logseq(
 
     return {"ok": True, "block_id": block_id, "doc_id": digest, "source_url": source_url, "imported": inserted}
 
-
-
-def migrate_legacy_blocks_to_unified():
-    """One-time migration: move blocks from legacy `blocks` table into
-    `unified_blocks` if they don't already exist there. Matches legacy
-    pages to unified_block roots via doc_id, then inserts each block
-    as a child of that root with fractional-index positions."""
-    ensure_pages_db()
-    now = page_now()
-    with sqlite3.connect(PAGES_DB) as conn:
-        # Find legacy blocks not yet in unified_blocks
-        rows = conn.execute(
-            """
-            SELECT b.id, b.page_id, b.content, b.properties, b.created_at, p.doc_id
-            FROM blocks b
-            JOIN pages p ON b.page_id = p.id
-            WHERE b.id NOT IN (SELECT id FROM unified_blocks)
-            ORDER BY b.page_id, b.position
-            """
-        ).fetchall()
-
-        if not rows:
-            return
-
-        # Map doc_id → unified_block root id
-        doc_to_root = {}
-        for r in conn.execute(
-            "SELECT json_extract(properties, '$.doc_id'), id "
-            "FROM unified_blocks WHERE parent_id = 'root'"
-        ).fetchall():
-            if r[0]:
-                doc_to_root[r[0]] = r[1]
-
-        # Group blocks by target root for batch position generation
-        root_blocks: dict = {}
-        for row in rows:
-            block_id, page_id, content, props, created, doc_id = row
-            if not doc_id:
-                continue  # pages without a doc_id (non-PDF notes) — skip
-            root_id = doc_to_root.get(doc_id)
-            if not root_id:
-                continue  # no matching unified_block root — skip
-            root_blocks.setdefault(root_id, []).append(row)
-
-        migrated = 0
-        for root_id, block_rows in root_blocks.items():
-            # Skip blocks whose quote already exists under this root (EDN import
-            # may have already created them). Dedup by stripped quote text.
-            existing_quotes = {
-                (r[0] or "").strip() for r in conn.execute(
-                    "SELECT json_extract(properties, '$.quote') "
-                    "FROM unified_blocks WHERE parent_id = ?",
-                    (root_id,),
-                ).fetchall()
-                if r[0]
-            }
-            filtered = []
-            for row in block_rows:
-                props_dict = _json.loads(row[3] or "{}") if isinstance(row[3], str) else (row[3] or {})
-                quote = (props_dict.get("quote") or "").strip()
-                if quote and quote in existing_quotes:
-                    continue
-                filtered.append(row)
-            if not filtered:
-                continue
-
-            last_pos = ub_last_child_position(conn, root_id)
-            pos_keys = generate_n_keys_between(last_pos, None, n=len(filtered))
-            for (block_id, _, content, props, created, _), pos_key in zip(filtered, pos_keys):
-                # Map legacy color names to app rgba colors
-                props_dict = _json.loads(props or "{}") if isinstance(props, str) else (props or {})
-                props_dict["color"] = _map_color(props_dict.get("color", "yellow"))
-                try:
-                    conn.execute(
-                        "INSERT INTO unified_blocks "
-                        "(id, parent_id, position, content, properties, created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        (block_id, root_id, pos_key, content or "",
-                         _json.dumps(props_dict), created or now, now),
-                    )
-                    migrated += 1
-                except sqlite3.IntegrityError:
-                    pass
-
-        if migrated:
-            conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id IN ({})".format(
-                ",".join("?" * len(root_blocks))), (now, *root_blocks.keys()))
-            conn.commit()
-            print(f"[migrate] moved {migrated} legacy blocks into unified_blocks")
 
 
 # ---------------------------------------------------------------------------
@@ -999,16 +1123,16 @@ def ub_delete_subtree(conn, block_id: str):
         (block_id,),
     )
 
-def cleanup_orphan_uploads(conn):
-    """Delete files in UPLOADS_DIR that are no longer referenced by any block."""
-    if not UPLOADS_DIR.exists():
+def cleanup_orphan_uploads(conn, uploads_dir):
+    """Delete files in the given uploads_dir that are no longer referenced by any block in conn."""
+    if not uploads_dir.exists():
         return []
     removed = []
-    for f in UPLOADS_DIR.iterdir():
+    for f in uploads_dir.iterdir():
         if not f.is_file():
             continue
         filename = f.name
-        stem = f.stem  # e.g. "7c2d40cee6c54764d05612c4"
+        stem = f.stem
         ref = conn.execute(
             "SELECT 1 FROM unified_blocks "
             "WHERE json_extract(properties, '$.doc_id') = ? "
@@ -1025,11 +1149,18 @@ def cleanup_orphan_uploads(conn):
                 pass
     return removed
 
-# Clean up orphaned uploads on startup
-with sqlite3.connect(PAGES_DB) as _conn:
-    _startup_removed = cleanup_orphan_uploads(_conn)
-    if _startup_removed:
-        print(f"[startup] removed orphan uploads: {_startup_removed}")
+# Clean up orphaned uploads across all users on startup
+import sqlite3 as _sqlite3
+if USERS_DIR.exists():
+    for _ud in USERS_DIR.iterdir():
+        if _ud.is_dir():
+            _uploads = _ud / "uploads"
+            _pages = _ud / "pages.db"
+            if _uploads.exists() and _pages.exists():
+                with _sqlite3.connect(str(_pages)) as _conn:
+                    _removed = cleanup_orphan_uploads(_conn, _uploads)
+                    if _removed:
+                        print(f"[startup] removed orphan uploads for {_ud.name}: {_removed}")
 
 def ub_last_child_position(conn, parent_id: str) -> str | None:
     row = conn.execute(
@@ -1073,8 +1204,8 @@ class UBByDocCreate(BaseModel):
 # Route order matters: static-prefix routes must come before /{id}
 
 @app.get("/api/blocks/by-doc/{doc_id}")
-async def ub_get_by_doc(doc_id: str):
-    with sqlite3.connect(PAGES_DB) as conn:
+async def ub_get_by_doc(doc_id: str, request: Request):
+    with sqlite3.connect(_db_for(_resolve_user(request), "pages.db")) as conn:
         row = conn.execute(
             "SELECT id, parent_id, position, content, properties, created_at, updated_at "
             "FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?",
@@ -1085,8 +1216,8 @@ async def ub_get_by_doc(doc_id: str):
     return ub_block_to_dict(row)
 
 @app.post("/api/blocks/by-doc/{doc_id}")
-async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate):
-    with sqlite3.connect(PAGES_DB) as conn:
+async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate, request: Request):
+    with sqlite3.connect(_db_for(_resolve_user(request), "pages.db")) as conn:
         row = conn.execute(
             "SELECT id, parent_id, position, content, properties, created_at, updated_at "
             "FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?",
@@ -1127,8 +1258,8 @@ async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate):
     }
 
 @app.get("/api/blocks/{block_id}/children")
-async def ub_get_children(block_id: str):
-    with sqlite3.connect(PAGES_DB) as conn:
+async def ub_get_children(block_id: str, request: Request):
+    with sqlite3.connect(_db_for(_resolve_user(request), "pages.db")) as conn:
         if block_id != "root":
             if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
                 raise HTTPException(status_code=404, detail="block not found")
@@ -1140,8 +1271,8 @@ async def ub_get_children(block_id: str):
     return {"children": [ub_block_to_dict(r) for r in rows]}
 
 @app.get("/api/blocks/{block_id}/subtree")
-async def ub_get_subtree(block_id: str):
-    with sqlite3.connect(PAGES_DB) as conn:
+async def ub_get_subtree(block_id: str, request: Request):
+    with sqlite3.connect(_db_for(_resolve_user(request), "pages.db")) as conn:
         rows = ub_fetch_subtree(conn, block_id)
     if not rows:
         raise HTTPException(status_code=404, detail="block not found")
@@ -1162,8 +1293,8 @@ async def ub_get_subtree(block_id: str):
     return {"block": by_id.get(block_id)}
 
 @app.get("/api/blocks/{block_id}")
-async def ub_get_block(block_id: str):
-    with sqlite3.connect(PAGES_DB) as conn:
+async def ub_get_block(block_id: str, request: Request):
+    with sqlite3.connect(_db_for(_resolve_user(request), "pages.db")) as conn:
         row = conn.execute(
             "SELECT id, parent_id, position, content, properties, created_at, updated_at "
             "FROM unified_blocks WHERE id = ?",
@@ -1174,10 +1305,10 @@ async def ub_get_block(block_id: str):
     return ub_block_to_dict(row)
 
 @app.post("/api/blocks")
-async def ub_create_block(payload: UBCreateRequest):
+async def ub_create_block(payload: UBCreateRequest, request: Request):
     block_id = secrets.token_urlsafe(9)
     now = page_now()
-    with sqlite3.connect(PAGES_DB) as conn:
+    with sqlite3.connect(_user_db(request, "pages.db")) as conn:
         if payload.parent_id != "root":
             if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (payload.parent_id,)).fetchone():
                 raise HTTPException(status_code=404, detail="parent block not found")
@@ -1199,9 +1330,9 @@ async def ub_create_block(payload: UBCreateRequest):
     }
 
 @app.put("/api/blocks/{block_id}")
-async def ub_update_block(block_id: str, payload: UBUpdateRequest):
+async def ub_update_block(block_id: str, payload: UBUpdateRequest, request: Request):
     now = page_now()
-    with sqlite3.connect(PAGES_DB) as conn:
+    with sqlite3.connect(_user_db(request, "pages.db")) as conn:
         row = conn.execute(
             "SELECT properties FROM unified_blocks WHERE id = ?", (block_id,)
         ).fetchone()
@@ -1223,21 +1354,23 @@ async def ub_update_block(block_id: str, payload: UBUpdateRequest):
     return {"ok": True, "updated_at": now}
 
 @app.delete("/api/blocks/{block_id}")
-async def ub_delete_block(block_id: str):
+async def ub_delete_block(block_id: str, request: Request):
     if block_id == "root":
         raise HTTPException(status_code=400, detail="cannot delete root block")
-    with sqlite3.connect(PAGES_DB) as conn:
+    user = _require_user(request)
+    with sqlite3.connect(_db_for(user, "pages.db")) as conn:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="block not found")
         ub_delete_subtree(conn, block_id)
         conn.commit()
-        removed = cleanup_orphan_uploads(conn)
+        removed = cleanup_orphan_uploads(conn, _uploads_for(user))
     return {"ok": True, "id": block_id, "removed_uploads": removed}
 
 @app.post("/api/cleanup-uploads")
-async def manual_cleanup_uploads():
-    with sqlite3.connect(PAGES_DB) as conn:
-        removed = cleanup_orphan_uploads(conn)
+async def manual_cleanup_uploads(request: Request):
+    user = _require_user(request)
+    with sqlite3.connect(_db_for(user, "pages.db")) as conn:
+        removed = cleanup_orphan_uploads(conn, _uploads_for(user))
     return {"ok": True, "removed_uploads": removed}
 
 def ub_flatten_tree(tree, parent_id, result, now):
@@ -1267,12 +1400,13 @@ class UBPutChildrenRequest(BaseModel):
     blocks: list
 
 @app.put("/api/blocks/{block_id}/children")
-async def ub_put_children(block_id: str, payload: UBPutChildrenRequest):
+async def ub_put_children(block_id: str, payload: UBPutChildrenRequest, request: Request):
     """Replace all children of a block with the provided nested tree."""
     now = page_now()
     rows: list = []
     ub_flatten_tree(payload.blocks, block_id, rows, now)
-    with sqlite3.connect(PAGES_DB) as conn:
+    user = _require_user(request)
+    with sqlite3.connect(_db_for(user, "pages.db")) as conn:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="block not found")
         conn.execute(
@@ -1295,14 +1429,14 @@ async def ub_put_children(block_id: str, payload: UBPutChildrenRequest):
             )
         conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, block_id))
         conn.commit()
-        removed = cleanup_orphan_uploads(conn)
+        removed = cleanup_orphan_uploads(conn, _uploads_for(user))
     return {"ok": True, "count": len(rows), "updated_at": now, "removed_uploads": removed}
 
 @app.post("/api/blocks/{block_id}/reorder")
-async def ub_reorder_block(block_id: str, payload: UBReorderRequest):
+async def ub_reorder_block(block_id: str, payload: UBReorderRequest, request: Request):
     if block_id == "root":
         raise HTTPException(status_code=400, detail="cannot reorder root block")
-    with sqlite3.connect(PAGES_DB) as conn:
+    with sqlite3.connect(_user_db(request, "pages.db")) as conn:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="block not found")
         try:
@@ -1321,9 +1455,9 @@ async def ub_reorder_block(block_id: str, payload: UBReorderRequest):
 
 
 @app.get("/api/blocks/{block_id}/backlinks")
-async def ub_get_backlinks(block_id: str):
+async def ub_get_backlinks(block_id: str, request: Request):
     """Return all blocks that reference `block_id` via [[block_id]] syntax."""
-    with sqlite3.connect(PAGES_DB) as conn:
+    with sqlite3.connect(_db_for(_resolve_user(request), "pages.db")) as conn:
         rows = conn.execute(
             "SELECT id, content, parent_id FROM unified_blocks "
             "WHERE id != ? AND content LIKE ? "
@@ -1377,5 +1511,3 @@ async def ub_get_backlinks(block_id: str):
     return {"backlinks": results}
 
 
-# --- run startup migrations ---
-migrate_legacy_blocks_to_unified()

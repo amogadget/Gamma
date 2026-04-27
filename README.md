@@ -9,7 +9,7 @@
 A self-hosted, Logseq-inspired PDF annotation server. Highlight PDFs in your browser, organize your notes as nested outliner blocks, and share read-only annotated copies via link.
 
 **Live example:** <https://annotation.amogadgetlab.com>
-**Shared view example:** <https://annotation.amogadgetlab.com/?share=9BroHYcCcL5X6HuW>
+**Shared view example:** <https://annotation.amogadgetlab.com/?share=vZ3UKgXO0LRGaUVg>
 
 ## What it does
 
@@ -21,7 +21,33 @@ A self-hosted, Logseq-inspired PDF annotation server. Highlight PDFs in your bro
 - Open a page with no PDF attached — just notes, like a Logseq page.
 - Everything auto-saves. Reloading a page restores highlights, notes, structure, and title.
 - Generate a read-only share link for any annotated PDF.
-- Password-protect the editor via Caddy basic auth; shared links remain public.
+- Multi-user accounts with per-user isolated data. Guest account with daily reset.
+
+## Screenshots
+
+### Annotated PDF with block tree
+
+![Annotated PDF with block tree and AI chat](./docs/screenshots/01-annotated-pdf.png)
+
+The core view: PDF with colored highlights on one side, Logseq-style nested block tree on the other, and the AI chat panel anchored at the bottom of the sidebar. Click a highlight dot to jump the PDF to that position; click a PDF highlight to scroll the sidebar to its block. Drag the splitter above the chat to resize it.
+
+### Home page with category carousels
+
+![Home page showing category-grouped page carousels](./docs/screenshots/02-home-carousels.png)
+
+All your pages grouped by category tag. Each row scrolls independently with arrow controls. An "All" section at the top shows recently updated pages.
+
+### Login page
+
+![Login form with guest option](./docs/screenshots/03-login.png)
+
+App-level authentication with username and password. Guest accounts get a fresh workspace each day — no registration needed.
+
+### Shared link (public view)
+
+![Read-only shared view of an annotated PDF](./docs/screenshots/04-shared-view.png)
+
+Generate a read-only link for any annotated PDF. Recipients see the PDF, highlights, and block tree — no login required. The editor stays gated behind authentication.
 
 ## Inspired by Logseq
 
@@ -50,14 +76,18 @@ Shared links (`/?share=<token>`) are a separate public read-only view: PDF + blo
 
 Three pieces:
 
-1. **Backend** (`backend/app.py`) — a FastAPI app over two SQLite databases:
-   - `data.db` — annotations (legacy, kept for backward compat) and shares.
-   - `pages.db` — a `unified_blocks` table with a self-referential `parent_id` (root-level blocks are pages; everything else is nested blocks). Highlights and free notes are both rows, distinguished by whether they carry a `highlight_id` property in JSON. Ordering uses fractional indexing via the `position` column. Legacy `pages` and `blocks` tables remain for backward compatibility.
-2. **Frontend** (`logseq-v2-frontend/`) — React + Vite.
-   - `src/App.jsx` — main component. Routing, PDF loading, block tree render, drag-and-drop, autosave.
+1. **Backend** (`backend/app.py`) — a FastAPI app with per-user SQLite databases:
+   - `users.db` — accounts, sessions (bcrypt passwords), and share tokens.
+   - `users/{username}/pages.db` — a `unified_blocks` table per user with self-referential `parent_id`. Root-level blocks are pages; everything else is nested blocks.
+   - `users/{username}/data.db` — annotations (per-user).
+   - `users/{username}/uploads/` — uploaded PDFs and images, content-hash deduped.
+   - App-level authentication via session cookies. No external auth provider needed.
+2. **CLI** (`backend/manage.py`) — user management. `create-user`, `set-password`, `delete-user`, `list-users`, `reset-guest`.
+3. **Frontend** (`logseq-v2-frontend/`) — React + Vite.
+   - `src/App.jsx` — main component. Routing, PDF loading, block tree render, drag-and-drop, autosave, login page.
    - `src/logseqPdfModel.js` — block tree operations (insert, indent/outdent, flatten, extract, sibling/child insertion, cycle check).
-   - `src/app.css` — dark-theme styling.
-3. **Reverse proxy** — Caddy routes the domain to the frontend and `/api/*` to the backend. Basic auth protects everything except shared links.
+   - `src/app.css` — dark/light themed styling.
+4. **Reverse proxy** — Caddy routes the domain to the frontend and `/api/*` to the backend. No special auth configuration needed — the app handles login itself.
 
 ## Running locally
 
@@ -73,7 +103,9 @@ Three pieces:
 cd backend
 python3 -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn aiosqlite pydantic python-multipart fractional-indexing PyPDF2
+pip install fastapi uvicorn aiosqlite pydantic python-multipart fractional-indexing PyPDF2 bcrypt
+python manage.py create-user admin yourpassword
+python manage.py setup      # creates guest account
 uvicorn app:app --host 127.0.0.1 --port 9001
 ```
 
@@ -102,27 +134,10 @@ npm run build && npm run preview    # production build on :4173
 
 In development, proxy `/api/*` from the frontend to `127.0.0.1:9001` via a Vite proxy config or Caddy. See `vite.config.js` for the current setup.
 
-For production-style hosting with basic auth:
+For production-style hosting:
 
 ```caddyfile
 your-domain.com {
-    @needsAuth {
-        not path /api/*
-        not path /assets/*
-        not path *.js
-        not path *.css
-        not path *.mjs
-        not path *.map
-        not path *.ico
-        not path *.png
-        not path *.jpg
-        not path *.svg
-        not path *.woff*
-        not query share=*
-    }
-    basic_auth @needsAuth {
-        admin <bcrypt-hash>
-    }
     handle /api/* {
         reverse_proxy 127.0.0.1:9001
     }
@@ -132,7 +147,7 @@ your-domain.com {
 }
 ```
 
-Generate the bcrypt hash with `caddy hash-password`.
+Authentication is handled by the app itself — no Caddy basic auth needed.
 
 ### Remote VM deployment
 
@@ -183,7 +198,7 @@ The backend auto-creates `data.db` and `pages.db` on first start.
 - **Layout toggles**: side-by-side (default) or stacked. Hide notes to see only the PDF.
 - **Renameable page title**: click the title to rename.
 - **Share links**: read-only URL, public, PDF + highlights + notes all preserved. Click PDF highlight → sidebar jumps to its block. Backlinks shown with "private block" for cross-page references.
-- **Password protection**: editor gated by Caddy basic auth; shared links stay public.
+- **Multi-user accounts**: per-user isolated databases and uploaded files. Session-based auth with bcrypt passwords. Guest account with daily data reset. Admin-managed via CLI — no public registration.
 - **Mobile**: dedicated drag handle on the splitter for touch.
 
 ## URL routing
@@ -203,12 +218,9 @@ The backend auto-creates `data.db` and `pages.db` on first start.
 
 ## Future work
 
-- Multi-user accounts (CLI-based account creation, no public registration).
-- README improvements with systematic deployment instructions.
-- Block backlinks (reverse references — "what links here").
+- Password change and account deletion via the app UI (currently CLI-only).
 - Conflict resolution / multi-device sync.
-- Public read-only deployment mode (no auth, share-only).
-- Migration of legacy `blocks` table data into `unified_blocks`.
+- Collaboration between users (shared pages, cross-user block references).
 
 ## Directory layout
 
