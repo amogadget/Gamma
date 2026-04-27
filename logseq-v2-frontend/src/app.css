@@ -28,6 +28,7 @@
   --accent-bright: #7ab8f5;
   --accent-bg: rgba(42,79,122,0.3);
   --accent-bg-light: rgba(90,155,213,0.1);
+  --drag-accent: #64b5f6;
   --scrollbar-bg: #1a1a1a;
   --scrollbar-thumb: #3f3f3f;
 }
@@ -59,6 +60,7 @@
   --accent-bright: #2b6bcb;
   --accent-bg: rgba(74,144,226,0.12);
   --accent-bg-light: rgba(74,144,226,0.06);
+  --drag-accent: #1565c0;
   --scrollbar-bg: #f5f5f5;
   --scrollbar-thumb: #cccccc;
 }
@@ -169,7 +171,9 @@ body {
   min-width: 300px !important;
   max-width: 75vw !important;
   height: 100% !important;
-  overflow: auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
   border-left: 1px solid var(--border) !important;
   background: var(--bg-deeper) !important;
   padding: 12px !important;
@@ -224,6 +228,9 @@ body {
 }
 
 .blockList {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
   padding-bottom: 24px;
 }
 
@@ -320,7 +327,7 @@ body {
 }
 
 .blockRowWrap.imageDragOver > .blockRow {
-  outline: 2px dashed var(--accent-bright);
+  outline: 2px dashed var(--drag-accent);
   outline-offset: -2px;
   border-radius: 8px;
 }
@@ -681,7 +688,7 @@ body {
 .splitterGrab:hover,
 .splitterGrab:active {
   opacity: 1;
-  background: var(--bg-hover);
+  background: var(--accent);
 }
 .splitterGrabDot {
   display: block;
@@ -895,13 +902,17 @@ body {
   display: flex;
   align-items: center;
   gap: 4px;
-  background: rgba(30, 30, 30, 0.85);
-  border: 1px solid var(--border-light);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 4px 8px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+[data-theme="light"] .pdfZoomOverlay {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 .viewerWrap:hover .pdfZoomOverlay {
   opacity: 1;
@@ -1412,19 +1423,92 @@ body {
 }
 
 /* -- AI chat panel -- */
-.chatPanel {
+.chatSplitter {
+  flex: 0 0 8px;
+  height: 8px;
+  cursor: row-resize;
+  background: var(--bg-block);
   border-top: 1px solid var(--border);
-  margin-top: 6px;
-  padding-top: 6px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.chatSplitter:hover { background: var(--bg-hover); }
+.chatSplitterDot {
+  display: block;
+  width: 28px;
+  height: 4px;
+  background: var(--text-dim);
+  border-radius: 2px;
+}
+.chatPanel {
   display: flex;
   flex-direction: column;
-  max-height: 260px;
+  border-top: 1px solid var(--border);
+  overflow: hidden;
 }
+.chatPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 2px;
+  flex-shrink: 0;
+}
+.chatPanelTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.chatPanelHeaderBtns {
+  display: flex;
+  gap: 4px;
+}
+.chatClearBtn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+  padding: 1px 6px;
+  font-family: inherit;
+}
+.chatClearBtn:hover { color: var(--text-primary); border-color: var(--border); }
+.chatHideBtn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.chatHideBtn:hover { color: var(--text-primary); }
+.chatHiddenBar {
+  border-top: 1px solid var(--border);
+  padding: 6px 0;
+  text-align: center;
+  flex-shrink: 0;
+}
+.chatShowBtn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 4px 14px;
+  font-family: inherit;
+}
+.chatShowBtn:hover { color: var(--text-primary); border-color: var(--border); }
 .chatMessages {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  padding: 0 2px;
+  padding: 4px 2px 0;
 }
 .chatEmpty {
   font-size: 12px;
@@ -1449,7 +1533,8 @@ body {
 .chatInputRow {
   display: flex;
   gap: 4px;
-  margin-top: 4px;
+  padding: 4px 2px;
+  flex-shrink: 0;
 }
 .chatInput {
   flex: 1;
@@ -1475,3 +1560,108 @@ body {
 }
 .chatSendBtn:disabled { opacity: 0.4; cursor: default; }
 .chatSendBtn:hover:not(:disabled) { background: #3568a0; }
+
+/* --- Login page --- */
+.loginPage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg-page);
+}
+.loginCard {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 40px 36px 32px;
+  width: 100%;
+  max-width: 360px;
+}
+.loginTitle {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--text-primary);
+  text-align: center;
+  margin-bottom: 4px;
+}
+.loginSubtitle {
+  color: var(--text-muted);
+  text-align: center;
+  margin-bottom: 24px;
+  font-size: 14px;
+}
+.loginInput {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.loginInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.loginError {
+  color: #e05555;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+.loginBtn {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  margin-bottom: 8px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+.loginBtn:disabled { opacity: 0.5; cursor: default; }
+.loginBtn:hover:not(:disabled) { filter: brightness(1.1); }
+.loginGuestBtn {
+  display: block;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.loginGuestBtn:hover { background: var(--bg-hover); }
+
+/* --- User badge --- */
+.userBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.logoutBtn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  line-height: 1;
+}
+.logoutBtn:hover { color: var(--text-primary); }
