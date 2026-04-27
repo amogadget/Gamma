@@ -141,7 +141,12 @@ function parseStored(payload) {
 }
 
 async function apiJson(url, options = {}) {
-  const r = await fetch(url, options);
+  const r = await fetch(url, { ...options, credentials: "include" });
+  if (r.status === 401) {
+    // Session expired or invalid — trigger logout
+    window.dispatchEvent(new CustomEvent("gamma-auth-expired"));
+    throw new Error("401 Unauthorized");
+  }
   if (!r.ok) {
     const text = await r.text();
     throw new Error(`${r.status} ${text}`);
@@ -370,7 +375,7 @@ function BlockRow({
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch("/api/upload-image", { method: "POST", body: form });
+      const res = await fetch("/api/upload-image", { method: "POST", body: form, credentials: "include" });
       if (!res.ok) { uploadingRef.current = false; return; }
       const data = await res.json();
       onChangeText(block.id, (block.content || "") + "\n" + `![](${data.url})`);
@@ -685,6 +690,66 @@ export default function App() {
   const initialCategory = params.get("category") || "";
   const readOnly = Boolean(initialShare);
 
+  // Auth state: null=loading, false=logged out, {user, is_guest}=logged in
+  const [authUser, setAuthUser] = useState(readOnly ? {user:"_public"} : null);
+  const [loginUser, setLoginUser] = useState("");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginError, setLoginError] = useState("");
+
+  async function checkSession() {
+    try {
+      const data = await apiJson(`${API}/session`);
+      if (data.user) {
+        setAuthUser({ user: data.user, is_guest: data.is_guest });
+      } else {
+        setAuthUser(false);
+      }
+    } catch {
+      setAuthUser(false);
+    }
+  }
+
+  async function doLogin(e) {
+    e?.preventDefault();
+    setLoginError("");
+    try {
+      const res = await fetch(`${API}/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginUser, password: loginPass }),
+        credentials: "include",
+      });
+      if (!res.ok) { setLoginError("Invalid credentials"); return; }
+      const data = await res.json();
+      setAuthUser({ user: data.username, is_guest: false });
+    } catch { setLoginError("Login failed"); }
+  }
+
+  async function doGuestLogin() {
+    try {
+      const res = await fetch(`${API}/login-guest`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) { setLoginError("Guest login failed"); return; }
+      const data = await res.json();
+      setAuthUser({ user: data.username, is_guest: true });
+    } catch { setLoginError("Guest login failed"); }
+  }
+
+  async function doLogout() {
+    await fetch(`${API}/logout`, { method: "POST", credentials: "include" });
+    setAuthUser(false);
+    clearSession();
+    setBlocks([]);
+    setPdfUrl("");
+    setDocId("");
+  }
+
+  useEffect(() => {
+    if (!readOnly) checkSession();
+  }, [readOnly]);
+
   const [inputUrl, setInputUrl] = useState(initialUrl);
   const [pdfUrl, setPdfUrl] = useState("");
   const [docId, setDocId] = useState("");
@@ -704,9 +769,50 @@ export default function App() {
   const [homeBlocks, setHomeBlocks] = useState([]);
   const [refCache, setRefCache] = useState({}); // { [blockId]: { content, page_title } }
   const [backlinks, setBacklinks] = useState([]);
+  const [allChats, setAllChats] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gamma-chats") || "{}"); } catch { return {}; }
+  });
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatHeight, setChatHeight] = useState(() => {
+    try { const v = localStorage.getItem("gamma-chat-height"); return v ? Number(v) : 200; } catch { return 200; }
+  });
+  const [chatHidden, setChatHidden] = useState(false);
+
+  // Persist allChats to localStorage
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chats", JSON.stringify(allChats)); } catch {}
+  }, [allChats]);
+
+  // Load chatMessages when focusedBlockId changes (per-page chat)
+  useEffect(() => {
+    if (focusedBlockId) {
+      setChatMessages(allChats[focusedBlockId] || []);
+    } else {
+      setChatMessages([]);
+    }
+  }, [focusedBlockId, allChats]);
+
+  // Save chatMessages back to allChats whenever they change
+  useEffect(() => {
+    if (!focusedBlockId) return;
+    setAllChats((prev) => {
+      if (JSON.stringify(prev[focusedBlockId]) === JSON.stringify(chatMessages)) return prev;
+      return { ...prev, [focusedBlockId]: chatMessages };
+    });
+  }, [chatMessages, focusedBlockId]);
+
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-height", String(chatHeight)); } catch {}
+  }, [chatHeight]);
+
+  function clearChat() {
+    setChatMessages([]);
+    if (focusedBlockId) {
+      setAllChats((prev) => { const n = { ...prev }; delete n[focusedBlockId]; return n; });
+    }
+  }
   const [homeEditingId, setHomeEditingId] = useState(null);
   const [status, setStatus] = useState("Ready.");
   const [loading, setLoading] = useState(false);
@@ -726,7 +832,13 @@ export default function App() {
   }
 
   useEffect(() => {
-    fetchHomeBlocks();
+    if (authUser?.user) fetchHomeBlocks();
+  }, [authUser]);
+
+  useEffect(() => {
+    function onExpired() { setAuthUser(false); }
+    window.addEventListener("gamma-auth-expired", onExpired);
+    return () => window.removeEventListener("gamma-auth-expired", onExpired);
   }, []);
   const pendingJumpRef = useRef(null);
   const dndSensors = useSensors(
@@ -988,6 +1100,34 @@ export default function App() {
     target.addEventListener("pointercancel", onUp);
   }
 
+  function startChatResize(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startY = e.clientY;
+    const startH = chatHeight;
+    const target = e.currentTarget;
+    const pointerId = e.pointerId;
+    try { target.setPointerCapture(pointerId); } catch (_) {}
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
+    function onMove(ev) {
+      ev.preventDefault();
+      const next = Math.max(100, Math.min(600, startH + (startY - ev.clientY)));
+      setChatHeight(next);
+    }
+    function onUp() {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      try { target.releasePointerCapture(pointerId); } catch (_) {}
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      target.removeEventListener("pointercancel", onUp);
+    }
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+    target.addEventListener("pointercancel", onUp);
+  }
+
   useEffect(() => {
     if (initialShare) resolveShare(initialShare);
     else if (initialBlockId) {
@@ -1160,7 +1300,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     try {
       const form = new FormData();
       form.append("file", file);
-      const resp = await fetch(`${API}/uploads`, { method: "POST", body: form });
+      const resp = await fetch(`${API}/uploads`, { method: "POST", body: form, credentials: "include" });
       if (!resp.ok) {
         const msg = await resp.text();
         throw new Error(msg || `upload failed (${resp.status})`);
@@ -1277,20 +1417,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     setStatus("Resolving share link...");
     try {
       const data = await apiJson(`${API}/share/${token}`);
-      const src = data.source_url || "";
-      const isLocal = src.startsWith("/api/");
-      const proxiedUrl = isLocal ? src : src ? `${API}/pdf?source_url=${encodeURIComponent(src)}` : "";
+      const userParam = data.username ? `?user=${encodeURIComponent(data.username)}` : "";
 
       let block = null;
-      try { block = await apiJson(`${API}/blocks/by-doc/${data.doc_id}`); } catch {}
+      try { block = await apiJson(`${API}/blocks/by-doc/${data.doc_id}${userParam}`); } catch {}
 
       let childBlocks = [];
       if (block) {
         try {
-          const subtreeData = await apiJson(`${API}/blocks/${block.id}/subtree`);
+          const subtreeData = await apiJson(`${API}/blocks/${block.id}/subtree${userParam}`);
           childBlocks = normalizeBlocks(subtreeData.block?.children || []);
         } catch {}
       }
+
+      const props = block?.properties || {};
+      const src = props.source_url || props.sourceUrl || "";
+      const isLocal = src.startsWith("/api/");
+      const proxiedUrl = isLocal ? src : src ? `${API}/pdf?source_url=${encodeURIComponent(src)}` : "";
 
       suppressAutosaveRef.current = true;
       setFocusedBlockId(block?.id || "");
@@ -1423,8 +1566,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     try {
       const data = await apiJson(`${API}/share/${docId}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source_url: pdfUrl })
+        credentials: "include",
       });
       const link = `${window.location.origin}${window.location.pathname}?share=${data.token}`;
       await navigator.clipboard.writeText(link);
@@ -1489,13 +1631,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     const text = chatInput.trim();
     if (!text || chatLoading) return;
     setChatInput("");
+    const prevMessages = chatMessages;
     setChatMessages((prev) => [...prev, { role: "user", text }]);
     setChatLoading(true);
     try {
       const data = await apiJson(`${API}/ai/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: text, doc_id: docId || "" }),
+        body: JSON.stringify({ prompt: text, doc_id: docId || "", history: prevMessages }),
       });
       setChatMessages((prev) => [...prev, { role: "ai", text: data.response || "(no response)" }]);
     } catch (err) {
@@ -1660,6 +1803,48 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     };
   }, [pdfUrl, pdfHidden]);
 
+  // Login page state
+  if (authUser === null) {
+    return <div className="app"><div className="loginPage"><div className="loginCard"><div className="loginTitle">Gamma</div><p style={{color:"var(--text-muted)",textAlign:"center",marginBottom:24}}>Loading...</p></div></div></div>;
+  }
+
+  if (authUser === false) {
+    return (
+      <div className="app">
+        <div className="loginPage">
+          <div className="loginCard">
+            <div className="loginTitle">Gamma</div>
+            <p className="loginSubtitle">Annotate PDFs, Share Your Thinking</p>
+            <form onSubmit={doLogin}>
+              <input
+                type="text"
+                value={loginUser}
+                onChange={(e) => setLoginUser(e.target.value)}
+                placeholder="Username"
+                className="loginInput"
+                autoFocus
+              />
+              <input
+                type="password"
+                value={loginPass}
+                onChange={(e) => setLoginPass(e.target.value)}
+                placeholder="Password"
+                className="loginInput"
+              />
+              {loginError ? <div className="loginError">{loginError}</div> : null}
+              <button type="submit" className="loginBtn" disabled={!loginUser.trim() || !loginPass.trim()}>
+                Log in
+              </button>
+              <button type="button" className="loginGuestBtn" onClick={doGuestLogin}>
+                Continue as guest
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={appRef}
@@ -1697,6 +1882,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             >
               Γ
             </button>
+            {authUser?.user && (
+              <span className="userBadge" title={authUser.is_guest ? "Guest account — resets daily" : ""}>
+                {authUser.is_guest ? "guest" : authUser.user}
+                <button className="logoutBtn" onClick={doLogout} title="Log out">↪</button>
+              </span>
+            )}
             <input
               value={inputUrl}
               onChange={(e) => setInputUrl(e.target.value)}
@@ -1929,36 +2120,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <div className="pageHeaderMeta">
               <div className="pageHeaderLabel">Source PDF</div>
               <div className="pageHeaderUrl">{inputUrl}</div>
-            </div>
-          ) : null}
-
-          {!homeMode ? (
-            <div className="chatPanel">
-              <div className="chatMessages">
-                {chatMessages.length === 0 ? (
-                  <div className="chatEmpty">Ask AI about this page…</div>
-                ) : (
-                  chatMessages.map((m, i) => (
-                    <div key={i} className={`chatMsg ${m.role}`}>
-                      <div className="chatMsgText">{m.text}</div>
-                    </div>
-                  ))
-                )}
-                {chatLoading ? <div className="chatMsg ai"><div className="chatMsgText">…</div></div> : null}
-              </div>
-              <form
-                className="chatInputRow"
-                onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
-              >
-                <input
-                  className="chatInput"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  placeholder="Ask about this page…"
-                  disabled={chatLoading}
-                />
-                <button className="chatSendBtn" type="submit" disabled={chatLoading || !chatInput.trim()}>Send</button>
-              </form>
             </div>
           ) : null}
 
@@ -2501,6 +2662,56 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               })()
             ))}
           </div>
+
+          {!homeMode && !readOnly ? (
+            <>
+              {!chatHidden ? (
+                <div className="chatSplitter" onPointerDown={startChatResize} aria-label="Drag to resize chat" role="separator">
+                  <span className="chatSplitterDot" />
+                </div>
+              ) : null}
+              {!chatHidden ? (
+                <div className="chatPanel" style={{ height: chatHeight }}>
+                  <div className="chatPanelHeader">
+                    <span className="chatPanelTitle">AI Chat</span>
+                    <div className="chatPanelHeaderBtns">
+                      <button className="chatClearBtn" onClick={clearChat} title="Clear chat">Clear</button>
+                      <button className="chatHideBtn" onClick={() => setChatHidden(true)} title="Hide chat">×</button>
+                    </div>
+                  </div>
+                  <div className="chatMessages">
+                    {chatMessages.length === 0 ? (
+                      <div className="chatEmpty">Ask AI about this page…</div>
+                    ) : (
+                      chatMessages.map((m, i) => (
+                        <div key={i} className={`chatMsg ${m.role}`}>
+                          <div className="chatMsgText">{m.text}</div>
+                        </div>
+                      ))
+                    )}
+                    {chatLoading ? <div className="chatMsg ai"><div className="chatMsgText">…</div></div> : null}
+                  </div>
+                  <form
+                    className="chatInputRow"
+                    onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
+                  >
+                    <input
+                      className="chatInput"
+                      value={chatInput}
+                      onChange={(e) => setChatInput(e.target.value)}
+                      placeholder="Ask about this page…"
+                      disabled={chatLoading}
+                    />
+                    <button className="chatSendBtn" type="submit" disabled={chatLoading || !chatInput.trim()}>Send</button>
+                  </form>
+                </div>
+              ) : (
+                <div className="chatHiddenBar">
+                  <button className="chatShowBtn" onClick={() => setChatHidden(false)}>Show AI Chat</button>
+                </div>
+              )}
+            </>
+          ) : null}
 
         </div>)}
       </div>
