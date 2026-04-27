@@ -23,11 +23,11 @@
   --border-light: #444;
   --border-hover: #555;
   --border-subtle: #3f3f3f;
-  --accent: var(--accent);
-  --accent-dark: var(--accent-dark);
-  --accent-bright: var(--accent-bright);
+  --accent: #5b9bd5;
+  --accent-dark: #3a7bd5;
+  --accent-bright: #7ab8f5;
   --accent-bg: rgba(42,79,122,0.3);
-  --accent-bg-light: var(--accent-bg-light);
+  --accent-bg-light: rgba(90,155,213,0.1);
   --scrollbar-bg: #1a1a1a;
   --scrollbar-thumb: #3f3f3f;
 }
@@ -319,6 +319,12 @@ body {
   padding: 0;
 }
 
+.blockRowWrap.imageDragOver > .blockRow {
+  outline: 2px dashed var(--accent-bright);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+
 .blockRendered {
   color: var(--text-primary);
   font-size: 15px;
@@ -335,6 +341,12 @@ body {
 .blockRendered ol {
   margin: 6px 0 6px 18px;
   padding: 0;
+}
+
+.blockRendered img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
 }
 
 .blockRendered code {
