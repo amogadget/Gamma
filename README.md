@@ -196,11 +196,10 @@ The backend auto-creates `data.db` and `pages.db` on first start.
 
 ## Known limitations
 
-- The `pages.html` legacy page viewer is no longer reachable via the toolbar but is still served. It reads from the `pages.content` markdown field, kept in sync on every save, but isn't the source of truth.
-- Shared links are exempt from auth via URL query parameter. This is a soft boundary — anyone with a valid token can view; invalid token lands on a broken page. For stronger protection, use app-level auth instead of Caddy basic auth.
+
+
 - Autosave is debounced at 500 ms. Closing the tab within that window can lose the last keystroke.
 - No conflict handling for simultaneous edits across tabs/devices. Last write wins.
-- Uploaded PDFs are stored content-hashed under `uploads/`. No cleanup for orphans whose pages/blocks have been deleted.
 
 ## Future work
 
@@ -209,7 +208,6 @@ The backend auto-creates `data.db` and `pages.db` on first start.
 - Block backlinks (reverse references — "what links here").
 - Conflict resolution / multi-device sync.
 - Public read-only deployment mode (no auth, share-only).
-- Cleanup of orphaned uploaded PDFs.
 - Migration of legacy `blocks` table data into `unified_blocks`.
 
 ## Directory layout
@@ -227,7 +225,6 @@ pdf-share/
 │   │   ├── app.css
 │   │   └── main.jsx
 │   ├── public/
-│   │   ├── pages.html            # legacy page viewer (not used from toolbar)
 │   │   └── pdf.worker.min.mjs
 │   ├── package.json
 │   └── vite.config.js

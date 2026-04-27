@@ -22,6 +22,7 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
 import "katex/dist/katex.min.css";
 import {
   blocksToPageMarkdown,
@@ -248,6 +249,8 @@ function BlockRow({
   const [refPopup, setRefPopup] = useState(null); // { query, rect }
   const [refSelectedIdx, setRefSelectedIdx] = useState(0);
   const [searchResults, setSearchResults] = useState([]);
+  const [imageDragOver, setImageDragOver] = useState(false);
+  const uploadingRef = useRef(false);
 
   useEffect(() => {
     if (!refPopup) { setSearchResults([]); return; }
@@ -342,8 +345,44 @@ function BlockRow({
   const isHighlight = !!block.highlightId;
   const hasChildren = (block.children?.length || 0) > 0;
 
+  function handleImageDragOver(e) {
+    if (!e.dataTransfer?.types || !Array.from(e.dataTransfer.types).includes("Files")) return;
+    if (!e.dataTransfer?.items) return;
+    const hasImage = Array.from(e.dataTransfer.items).some((item) => item.type?.startsWith("image/"));
+    if (!hasImage) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    setImageDragOver(true);
+  }
+
+  function handleImageDragLeave(e) {
+    if (!e.currentTarget.contains(e.relatedTarget)) setImageDragOver(false);
+  }
+
+  async function handleImageDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    setImageDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    if (uploadingRef.current) return;
+    uploadingRef.current = true;
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/upload-image", { method: "POST", body: form });
+      if (!res.ok) { uploadingRef.current = false; return; }
+      const data = await res.json();
+      onChangeText(block.id, (block.content || "") + "\n" + `![](${data.url})`);
+    } finally { uploadingRef.current = false; }
+  }
+
   return (
-    <div className="blockRowWrap" data-block-id={block.id}>
+    <div className={`blockRowWrap${imageDragOver ? " imageDragOver" : ""}`} data-block-id={block.id}
+      onDragOver={handleImageDragOver}
+      onDragLeave={handleImageDragLeave}
+      onDrop={handleImageDrop}
+    >
       <div
         className={`blockRow ${focusedId === block.id ? "focused" : ""}`}
         onMouseDown={(e) => {
@@ -478,7 +517,7 @@ function BlockRow({
               {(block.content || "").trim() ? (
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[rehypeKatex]}
+                  rehypePlugins={[rehypeRaw, rehypeKatex]}
                   urlTransform={(url) => url.startsWith("blockref:") ? url : defaultUrlTransform(url)}
                   components={{
                     a: ({ href, children }) => {
@@ -505,7 +544,9 @@ function BlockRow({
                     }
                   }}
                 >
-                  {(block.content || "").replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
+                  {(block.content || "")
+                    .replace(/!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g, '<img src="$2" alt="$1" width="$3" />')
+                    .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
                 </ReactMarkdown>
               ) : (
                 <div className="blockPlaceholder">(empty)</div>
@@ -676,6 +717,7 @@ export default function App() {
   const [pdfScale, setPdfScale] = useState("page-width");
   const pageTitleSaveTimerRef = useRef(null);
   const viewerWrapRef = useRef(null);
+  const appRef = useRef(null);
 
   function fetchHomeBlocks() {
     return apiJson(`${API}/blocks/root/children`)
@@ -698,7 +740,6 @@ export default function App() {
   const [notesVisible, setNotesVisible] = useState(true);
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
-  const [dragOver, setDragOver] = useState(false);
   const [focusedId, setFocusedId] = useState(null);
   const [pdfTitle, setPdfTitle] = useState("");
   const [titleEditing, setTitleEditing] = useState(false);
@@ -1621,17 +1662,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   return (
     <div
-      className={`app layout-${orientation} ${readOnly ? "readOnlyMode" : ""} ${dragOver ? "dragOver" : ""}`}
-      onDragOver={readOnly ? undefined : (e) => { e.preventDefault(); setDragOver(true); }}
+      ref={appRef}
+      className={`app layout-${orientation} ${readOnly ? "readOnlyMode" : ""}`}
+      onDragOver={readOnly ? undefined : (e) => {
+        if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes("Files")) return;
+        e.preventDefault();
+        if (e.target.closest(".blockRowWrap")) {
+          appRef.current?.classList.remove("dragOver");
+        } else {
+          appRef.current?.classList.add("dragOver");
+        }
+      }}
       onDragLeave={readOnly ? undefined : (e) => {
-        // Only clear when leaving the whole app, not child elements
-        if (e.currentTarget === e.target) setDragOver(false);
+        if (e.currentTarget === e.target) appRef.current?.classList.remove("dragOver");
       }}
       onDrop={readOnly ? undefined : (e) => {
-        e.preventDefault();
-        setDragOver(false);
+        appRef.current?.classList.remove("dragOver");
         const file = e.dataTransfer?.files?.[0];
-        if (file) uploadPdf(file);
+        if (!file) return;
+        if (file.type === "application/pdf") {
+          e.preventDefault();
+          uploadPdf(file);
+        }
       }}
     >
       {!readOnly ? (

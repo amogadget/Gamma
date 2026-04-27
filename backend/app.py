@@ -312,18 +312,50 @@ async def upload_pdf(file: UploadFile = File(...)):
         "already_existed": target.exists() and target.stat().st_size == len(contents)
     }
 
+ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
+IMAGE_EXTENSIONS = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp", "image/svg+xml": ".svg"}
+
+@app.post("/api/upload-image")
+async def upload_image(file: UploadFile = File(...)):
+    if file.content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(status_code=400, detail=f"unsupported image type: {file.content_type}")
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"file too large (max {MAX_UPLOAD_BYTES // (1024*1024)} MB)")
+    digest = hashlib.sha256(contents).hexdigest()[:24]
+    ext = IMAGE_EXTENSIONS[file.content_type]
+    target = UPLOADS_DIR / f"{digest}{ext}"
+    already_existed = target.exists() and target.stat().st_size == len(contents)
+    if not already_existed:
+        target.write_bytes(contents)
+    return {
+        "url": f"/api/uploads/{digest}{ext}",
+        "size": len(contents),
+        "already_existed": already_existed
+    }
+
+IMAGE_MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"}
+
 @app.get("/api/uploads/{filename}")
 async def serve_upload(filename: str):
-    # Sanitize: only allow [hex].pdf pattern, no path traversal
-    if not filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="only .pdf files served")
-    stem = filename[:-4]
+    # Sanitize: only allow [hex].ext pattern, no path traversal
+    dot = filename.rfind(".")
+    if dot < 0:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    stem = filename[:dot]
+    ext = filename[dot:].lower()
+    if ext == ".pdf":
+        media_type = "application/pdf"
+    elif ext in IMAGE_MEDIA_TYPES:
+        media_type = IMAGE_MEDIA_TYPES[ext]
+    else:
+        raise HTTPException(status_code=400, detail="unsupported file type")
     if not stem or not all(c in "0123456789abcdef" for c in stem):
         raise HTTPException(status_code=400, detail="invalid filename")
     path = UPLOADS_DIR / filename
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(path, media_type="application/pdf", headers={"Cache-Control": "public, max-age=3600"})
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=3600"})
 
 
 import json as _json
@@ -967,6 +999,38 @@ def ub_delete_subtree(conn, block_id: str):
         (block_id,),
     )
 
+def cleanup_orphan_uploads(conn):
+    """Delete files in UPLOADS_DIR that are no longer referenced by any block."""
+    if not UPLOADS_DIR.exists():
+        return []
+    removed = []
+    for f in UPLOADS_DIR.iterdir():
+        if not f.is_file():
+            continue
+        filename = f.name
+        stem = f.stem  # e.g. "7c2d40cee6c54764d05612c4"
+        ref = conn.execute(
+            "SELECT 1 FROM unified_blocks "
+            "WHERE json_extract(properties, '$.doc_id') = ? "
+            "   OR content LIKE ? "
+            "   OR properties LIKE ? "
+            "LIMIT 1",
+            (stem, f"%/api/uploads/{filename}%", f"%/api/uploads/{filename}%"),
+        ).fetchone()
+        if not ref:
+            try:
+                f.unlink()
+                removed.append(filename)
+            except OSError:
+                pass
+    return removed
+
+# Clean up orphaned uploads on startup
+with sqlite3.connect(PAGES_DB) as _conn:
+    _startup_removed = cleanup_orphan_uploads(_conn)
+    if _startup_removed:
+        print(f"[startup] removed orphan uploads: {_startup_removed}")
+
 def ub_last_child_position(conn, parent_id: str) -> str | None:
     row = conn.execute(
         "SELECT position FROM unified_blocks WHERE parent_id = ? ORDER BY position DESC LIMIT 1",
@@ -1167,7 +1231,14 @@ async def ub_delete_block(block_id: str):
             raise HTTPException(status_code=404, detail="block not found")
         ub_delete_subtree(conn, block_id)
         conn.commit()
-    return {"ok": True, "id": block_id}
+        removed = cleanup_orphan_uploads(conn)
+    return {"ok": True, "id": block_id, "removed_uploads": removed}
+
+@app.post("/api/cleanup-uploads")
+async def manual_cleanup_uploads():
+    with sqlite3.connect(PAGES_DB) as conn:
+        removed = cleanup_orphan_uploads(conn)
+    return {"ok": True, "removed_uploads": removed}
 
 def ub_flatten_tree(tree, parent_id, result, now):
     """Recursively flatten a nested block tree into flat rows with fractional positions."""
@@ -1224,7 +1295,8 @@ async def ub_put_children(block_id: str, payload: UBPutChildrenRequest):
             )
         conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, block_id))
         conn.commit()
-    return {"ok": True, "count": len(rows), "updated_at": now}
+        removed = cleanup_orphan_uploads(conn)
+    return {"ok": True, "count": len(rows), "updated_at": now, "removed_uploads": removed}
 
 @app.post("/api/blocks/{block_id}/reorder")
 async def ub_reorder_block(block_id: str, payload: UBReorderRequest):
