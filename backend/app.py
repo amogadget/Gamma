@@ -371,8 +371,15 @@ async def put_annotations(doc_id: str, payload: AnnotationDoc, request: Request)
 async def create_share(doc_id: str, request: Request):
     import sqlite3 as _sqlite3
     user = _require_user(request)
-    token = secrets.token_urlsafe(12)
     with _sqlite3.connect(str(USERS_DB)) as conn:
+        # Reuse existing share for this doc+user
+        row = conn.execute(
+            "SELECT token FROM shares WHERE username = ? AND doc_id = ?",
+            (user, doc_id),
+        ).fetchone()
+        if row:
+            return {"token": row[0]}
+        token = secrets.token_urlsafe(12)
         conn.execute(
             "INSERT INTO shares (token, username, doc_id, created_at) VALUES (?, ?, ?, ?)",
             (token, user, doc_id, page_now()),
