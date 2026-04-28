@@ -272,6 +272,22 @@ body {
   font-size: 18px;
 }
 
+.pageDeleteBtn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 8px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.pageDeleteBtn:hover {
+  color: #e05555;
+  border-color: #e05555;
+}
+
 .pageHeaderMeta {
   margin-bottom: 14px;
   padding: 10px;

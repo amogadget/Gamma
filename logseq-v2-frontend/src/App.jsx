@@ -13,6 +13,7 @@ import {
   arrayMove
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { restrictToWindowEdges } from "@dnd-kit/modifiers";
 import {
   PdfLoader,
   PdfHighlighter,
@@ -565,10 +566,10 @@ function BlockRow({
             </div>
           ) : null}
         </div>
-        {block._pageId && !block._sourceUrl && !readOnly ? (
+        {!readOnly && block.id !== "root" ? (
           <button
             className="blockDeleteBtn"
-            title="Delete note"
+            title="Delete block"
             onClick={(e) => { e.stopPropagation(); onDelete(block.id); }}
           >×</button>
         ) : null}
@@ -844,7 +845,7 @@ export default function App() {
   const pendingJumpRef = useRef(null);
   const dndSensors = useSensors(
     useSensor(PointerSensor, {
-      activationConstraint: { distance: 4 },
+      activationConstraint: { distance: 8 },
     })
   );
   // Phase B2a: drop indicator state
@@ -2126,6 +2127,20 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 }}
               >{focusedBlockId ? (pdfTitle || (docId ? getPdfPageTitle(docId, inputUrl) : "Untitled")) : "PDF Notes"}</h3>
             )}
+            {!readOnly && focusedBlockId ? (
+              <button
+                className="pageDeleteBtn"
+                title="Delete this page"
+                onClick={async () => {
+                  if (!window.confirm("Delete this page and all its notes?")) return;
+                  try {
+                    await apiJson(`${API}/blocks/${focusedBlockId}`, { method: "DELETE" });
+                  } catch {}
+                  clearSession();
+                  window.location.href = "/";
+                }}
+              >🗑</button>
+            ) : null}
 
           </div>}
 
@@ -2539,6 +2554,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         .catch((err) => setStatus(`Delete failed: ${err}`));
                       return;
                     }
+                    apiJson(`${API}/blocks/${id}`, { method: "DELETE" })
+                      .catch((err) => setStatus(`Delete failed: ${err}`));
                     setBlocks(removeBlockTree(blocks, id));
                   },
                 };
@@ -2547,6 +2564,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 return (
                   <DndContext
                     sensors={dndSensors}
+                    modifiers={[restrictToWindowEdges]}
                     collisionDetection={closestCenter}
                     onDragStart={(e) => {
                       draggingIdRef.current = e.active.id;
