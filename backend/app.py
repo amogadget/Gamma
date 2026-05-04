@@ -465,6 +465,16 @@ async def resolve_pdf(payload: ResolvePdfRequest, request: Request):
 async def proxy_pdf(source_url: str, request: Request):
     user = _resolve_user(request)
     uploads = USERS_DIR / user / "uploads"
+    pdf_doc_id = hashlib.sha256(source_url.encode()).hexdigest()[:24]
+    local_path = uploads / f"{pdf_doc_id}.pdf"
+    want_save = request.query_params.get("save") == "1"
+
+    # If local copy exists, serve it directly (no re-download)
+    if local_path.exists():
+        return FileResponse(local_path, media_type="application/pdf",
+                           headers={"Cache-Control": "public, max-age=3600"})
+
+    # Download from source
     try:
         req = URLRequest(
             source_url,
@@ -481,10 +491,7 @@ async def proxy_pdf(source_url: str, request: Request):
         if "application/pdf" not in content_type:
             raise HTTPException(status_code=400, detail=f"final URL is not a PDF: {content_type}")
 
-        # Save a local copy so the AI chat endpoint can extract text from it.
-        pdf_doc_id = hashlib.sha256(source_url.encode()).hexdigest()[:24]
-        local_path = uploads / f"{pdf_doc_id}.pdf"
-        if not local_path.exists():
+        if want_save:
             local_path.write_bytes(data)
 
         return Response(
