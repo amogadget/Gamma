@@ -906,7 +906,7 @@ body {
   opacity: 0.85;
   transition: opacity 120ms ease, color 120ms ease;
   user-select: none;
-  touch-action: none;
+  -webkit-user-drag: element;
 }
 .sortableBlockWrap:hover > .dragHandle,
 .sortableBlockWrap:focus-within > .dragHandle,
