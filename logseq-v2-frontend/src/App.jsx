@@ -841,6 +841,13 @@ export default function App() {
   const [orientation, setOrientation] = useState("horizontal");
   const [pdfHidden, setPdfHidden] = useState(false);
   const [pdfScale, setPdfScale] = useState("page-width");
+  const [pdfSaveLocal, setPdfSaveLocal] = useState(() => {
+    try { return localStorage.getItem("gamma-pdf-save") !== "0"; } catch { return true; }
+  });
+
+  useEffect(() => {
+    try { localStorage.setItem("gamma-pdf-save", pdfSaveLocal ? "1" : "0"); } catch {}
+  }, [pdfSaveLocal]);
   const pageTitleSaveTimerRef = useRef(null);
   const viewerWrapRef = useRef(null);
   const appRef = useRef(null);
@@ -1410,7 +1417,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       } else {
         finalUrl = await resolvePdfUrl(sourceUrl);
         resolvedDocId = await getDocIdForUrl(finalUrl);
-        proxiedUrl = `${API}/pdf?source_url=${encodeURIComponent(finalUrl)}`;
+        proxiedUrl = `${API}/pdf?source_url=${encodeURIComponent(finalUrl)}${pdfSaveLocal ? "&save=1" : ""}`;
       }
       // Resolve block + load children FIRST, before setPdfUrl, to avoid mid-render highlight race
       const defaultTitle = getPdfPageTitle(resolvedDocId, finalUrl);
@@ -2169,6 +2176,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <div className="pageHeaderMeta">
               <div className="pageHeaderLabel">Source PDF</div>
               <div className="pageHeaderUrl">{inputUrl}</div>
+              {inputUrl && !inputUrl.startsWith("/api/") ? (
+                <label className="pdfSaveToggle" title={readOnly ? (pdfSaveLocal ? "PDF saved on server" : "PDF streamed from source") : undefined}>
+                  <span className={`pdfSaveSwitch${readOnly ? " disabled" : ""}`}>
+                    <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} disabled={readOnly} />
+                    <span className="pdfSaveSlider" />
+                  </span>
+                  {pdfSaveLocal ? "Saved on server" : "Streaming only"}
+                </label>
+              ) : null}
             </div>
           ) : null}
 
