@@ -463,8 +463,8 @@ async def resolve_pdf(payload: ResolvePdfRequest, request: Request):
 
 @app.get("/api/pdf")
 async def proxy_pdf(source_url: str, request: Request):
-    user = _require_user(request)
-    uploads = _uploads_for(user)
+    user = _resolve_user(request)
+    uploads = USERS_DIR / user / "uploads"
     try:
         req = URLRequest(
             source_url,

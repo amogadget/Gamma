@@ -1,19 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  useSensor,
-  useSensors
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  verticalListSortingStrategy,
-  useSortable,
-  arrayMove
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { restrictToWindowEdges } from "@dnd-kit/modifiers";
+
+// Module-level refs for native HTML5 drag-and-drop (shared across components)
+const _dragState = { draggingId: null, dropTarget: null };
+
 import {
   PdfLoader,
   PdfHighlighter,
@@ -144,8 +133,10 @@ function parseStored(payload) {
 async function apiJson(url, options = {}) {
   const r = await fetch(url, { ...options, credentials: "include" });
   if (r.status === 401) {
-    // Session expired or invalid — trigger logout
-    window.dispatchEvent(new CustomEvent("gamma-auth-expired"));
+    const isShareView = new URLSearchParams(window.location.search).get("share");
+    if (!isShareView) {
+      window.dispatchEvent(new CustomEvent("gamma-auth-expired"));
+    }
     throw new Error("401 Unauthorized");
   }
   if (!r.ok) {
@@ -171,9 +162,17 @@ const COLORS = [
   "rgba(230, 180, 255, 0.65)"
 ];
 
-function PlainTip({ onConfirm, onCancel }) {
+function PlainTip({ onConfirm, onCancel, selectedText }) {
   const [text, setText] = useState("");
   const [color, setColor] = useState(COLORS[0]);
+  const [copied, setCopied] = useState(false);
+
+  function handleCopy() {
+    navigator.clipboard.writeText(selectedText || "").then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    }).catch(() => {});
+  }
 
   return (
     <div className="plainTip">
@@ -195,6 +194,7 @@ function PlainTip({ onConfirm, onCancel }) {
         onChange={(e) => setText(e.target.value)}
       />
       <div className="plainTipActions">
+        <button onClick={handleCopy}>{copied ? "Copied" : "Copy"}</button>
         <button onClick={() => onConfirm(text, color)}>Save</button>
         <button onClick={onCancel}>Cancel</button>
       </div>
@@ -249,6 +249,10 @@ function BlockRow({
   onFetchRefs,
   onCacheRef,
   highlightColors,
+  homeMode,
+  onBlockDragOver,
+  onBlockDragLeave,
+  onBlockDrop,
 }) {
   const ref = useRef(null);
   const clickPosRef = useRef(null);
@@ -385,9 +389,25 @@ function BlockRow({
 
   return (
     <div className={`blockRowWrap${imageDragOver ? " imageDragOver" : ""}`} data-block-id={block.id}
-      onDragOver={handleImageDragOver}
-      onDragLeave={handleImageDragLeave}
-      onDrop={handleImageDrop}
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer?.types || []).includes("Files")) {
+          handleImageDragOver(e);
+          return;
+        }
+        onBlockDragOver?.(e, block);
+      }}
+      onDragLeave={(e) => {
+        if (e.currentTarget.contains(e.relatedTarget)) return;
+        handleImageDragLeave(e);
+        onBlockDragLeave?.();
+      }}
+      onDrop={(e) => {
+        if (Array.from(e.dataTransfer?.types || []).includes("Files")) {
+          handleImageDrop(e);
+          return;
+        }
+        onBlockDrop?.(e, block);
+      }}
     >
       <div
         className={`blockRow ${focusedId === block.id ? "focused" : ""}`}
@@ -630,51 +650,49 @@ function BlockRow({
 }
 
 function SortableBlockRow({ block, ...rowProps }) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    setActivatorNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id: block.id });
+  const depth = rowProps.depth || 0;
 
-  const style = {
-    transform: isDragging ? CSS.Transform.toString(transform) : undefined,
-    transition: isDragging ? transition : undefined,
-    opacity: isDragging ? 0.4 : 1,
-  };
+  function onDragStart(e) {
+    e.dataTransfer.setData("text/plain", block.id);
+    e.dataTransfer.effectAllowed = "move";
+    _dragState.draggingId = block.id;
+  }
+
+  function onDragEnd() {
+    _dragState.draggingId = null;
+    _dragState.dropTarget = null;
+    window._gammaSetDropTarget?.(null);
+  }
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes} className="sortableBlockWrap" data-block-id={block.id} data-depth={rowProps.depth || 0}>
-      <button
+    <div className="sortableBlockWrap" data-block-id={block.id} data-depth={depth}>
+      <span
         className="dragHandle"
-        ref={setActivatorNodeRef}
-        {...listeners}
+        draggable="true"
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
         aria-label="Drag to reorder"
         title="Drag to reorder"
-        type="button"
-      >⋮⋮</button>
+      >⋮⋮</span>
       <BlockRow block={block} {...rowProps} />
     </div>
   );
 }
 
-function BlockTree({ blocks, readOnly, rowProps }) {
+function BlockTree({ blocks, readOnly, rowProps, depth = 0 }) {
   if (!blocks || blocks.length === 0) return null;
   return (
     <>
       {blocks.map((rawBlock) => { const block = withLegacyAccessors(rawBlock); return (
         <React.Fragment key={block.id}>
           {!readOnly ? (
-            <SortableBlockRow block={block} depth={0} {...rowProps} />
+            <SortableBlockRow block={block} depth={depth} {...rowProps} />
           ) : (
-            <BlockRow block={block} depth={0} {...rowProps} />
+            <BlockRow block={block} depth={depth} {...rowProps} />
           )}
           {!block.collapsed && block.children && block.children.length > 0 ? (
             <div className="blockChildren">
-              <BlockTree blocks={block.children} readOnly={readOnly} rowProps={rowProps} />
+              <BlockTree blocks={block.children} readOnly={readOnly} rowProps={rowProps} depth={depth + 1} />
             </div>
           ) : null}
         </React.Fragment>
@@ -834,7 +852,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    if (authUser?.user) fetchHomeBlocks();
+    if (authUser?.user && !readOnly) fetchHomeBlocks();
   }, [authUser]);
 
   useEffect(() => {
@@ -843,14 +861,16 @@ export default function App() {
     return () => window.removeEventListener("gamma-auth-expired", onExpired);
   }, []);
   const pendingJumpRef = useRef(null);
-  const dndSensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 8 },
-    })
-  );
   // Phase B2a: drop indicator state
   const [dropTarget, setDropTarget] = useState(null); // { targetId, above, rect }
-  const draggingIdRef = useRef(null);
+
+  useEffect(() => {
+    window._gammaSetDropTarget = setDropTarget;
+    return () => { window._gammaSetDropTarget = null; };
+  }, []);
+
+
+
   const [notesVisible, setNotesVisible] = useState(true);
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
@@ -1435,7 +1455,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       const props = block?.properties || {};
       const src = props.source_url || props.sourceUrl || "";
       const isLocal = src.startsWith("/api/");
-      const proxiedUrl = isLocal ? src : src ? `${API}/pdf?source_url=${encodeURIComponent(src)}` : "";
+      const proxiedUrl = isLocal ? src : src ? `${API}/pdf?source_url=${encodeURIComponent(src)}${userParam ? "&" + userParam.slice(1) : ""}` : "";
 
       suppressAutosaveRef.current = true;
       setFocusedBlockId(block?.id || "");
@@ -2061,6 +2081,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       ? undefined
                       : (position, content, hideTipAndSelection) => (
                           <PlainTip
+                            selectedText={typeof content === "string" ? content : (content?.text || "")}
                             onConfirm={(commentText, color) => {
                               addHighlight({
                                 content,
@@ -2429,6 +2450,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             ) : (
               (() => {
                 const rowProps = {
+                  homeMode,
                   focusedId,
                   setFocusedId,
                   onJump: jumpToHighlightId,
@@ -2558,114 +2580,74 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       .catch((err) => setStatus(`Delete failed: ${err}`));
                     setBlocks(removeBlockTree(blocks, id));
                   },
+                  onBlockDragOver: (e, block) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    const wrap = e.currentTarget.closest(".sortableBlockWrap");
+                    const r = wrap ? wrap.getBoundingClientRect() : e.currentTarget.getBoundingClientRect();
+                    const px = e.clientX;
+                    const py = e.clientY;
+                    const above = (py - r.top) <= 16;
+                    const td = parseInt((wrap || e.currentTarget).getAttribute("data-depth") || "0", 10);
+                    const nested = (px - r.left) > 50;
+                    const dt = { targetId: block.id, above, depth: nested ? td + 1 : td, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom } };
+                    _dragState.dropTarget = dt;
+                    setDropTarget(dt);
+                  },
+                  onBlockDragLeave: () => {
+                    setDropTarget(null);
+                    _dragState.dropTarget = null;
+                  },
+                  onBlockDrop: (e, block) => {
+                    e.preventDefault();
+                    const dt = _dragState.dropTarget;
+                    setDropTarget(null);
+                    _dragState.dropTarget = null;
+                    const sourceId = e.dataTransfer.getData("text/plain");
+                    if (!sourceId || !dt || sourceId === dt.targetId || readOnly) return;
+                    if (homeMode) {
+                      const pages = [...pageBlocks];
+                      const srcIdx = pages.findIndex((b) => b.id === sourceId);
+                      const tgtIdx = pages.findIndex((b) => b.id === dt.targetId);
+                      if (srcIdx < 0 || tgtIdx < 0 || srcIdx === tgtIdx) return;
+                      const remaining = pages.filter((_, i) => i !== srcIdx);
+                      const adjTgt = tgtIdx > srcIdx ? tgtIdx - 1 : tgtIdx;
+                      const dropIdx = dt.above ? adjTgt : adjTgt + 1;
+                      const before = remaining[dropIdx - 1]?._position ?? null;
+                      const after = remaining[dropIdx]?._position ?? null;
+                      const pageId = pages[srcIdx]._pageId;
+                      if (!pageId) return;
+                      apiJson(`${API}/blocks/${pageId}/reorder`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ before, after }),
+                      }).then(() => fetchHomeBlocks()).catch((err) => setStatus(`Reorder failed: ${err}`));
+                      return;
+                    }
+                    if (isDescendant(blocks, sourceId, dt.targetId)) return;
+                    const extracted = extractBlock(blocks, sourceId);
+                    if (!extracted) return;
+                    const { extracted: sourceBlock, remaining } = extracted;
+                    const targetCtx = findBlockContext(remaining, dt.targetId);
+                    if (!targetCtx) return;
+                    const targetDepth = targetCtx.depth;
+                    let next;
+                    if (dt.depth === targetDepth + 1) {
+                      next = insertChild(remaining, dt.targetId, sourceBlock, false);
+                    } else if (dt.depth === targetDepth) {
+                      next = insertSibling(remaining, dt.targetId, sourceBlock, !dt.above);
+                    } else if (dt.depth < targetDepth) {
+                      const ancestorId = targetCtx.ancestors[dt.depth];
+                      if (!ancestorId) return;
+                      next = insertSibling(remaining, ancestorId, sourceBlock, !dt.above);
+                    } else { return; }
+                    if (next) setBlocks(next);
+                    _dragState.draggingId = null;
+                  },
                 };
-                const rootIds = (blocks || []).map((b) => b.id);
-                const allIds = homeMode ? pageBlocks.map((b) => b.id) : flattenBlocks(blocks).map((b) => b.id);
                 return (
-                  <DndContext
-                    sensors={dndSensors}
-                    modifiers={[restrictToWindowEdges]}
-                    collisionDetection={closestCenter}
-                    onDragStart={(e) => {
-                      draggingIdRef.current = e.active.id;
-                    }}
-                    onDragMove={(e) => {
-                      if (!e.active) return;
-                      const activatorRect = e.activatorEvent && typeof e.activatorEvent.clientY === "number"
-                        ? { x: e.activatorEvent.clientX, y: e.activatorEvent.clientY }
-                        : null;
-                      if (!activatorRect) return;
-                      const pointerX = activatorRect.x + (e.delta?.x || 0);
-                      const pointerY = activatorRect.y + (e.delta?.y || 0);
-                      const rows = document.querySelectorAll(".sortableBlockWrap[data-block-id]");
-                      let best = null;
-                      for (const row of rows) {
-                        const id = row.getAttribute("data-block-id");
-                        if (!id || id === draggingIdRef.current) continue;
-                        const r = row.getBoundingClientRect();
-                        if (pointerY >= r.top && pointerY <= r.bottom) {
-                          const above = pointerY < r.top + r.height / 2;
-                          const targetDepth = parseInt(row.getAttribute("data-depth") || "0", 10);
-                          // Valid depth range: 0 to targetDepth + 1 (allow nesting one deeper)
-                          // Snap pointer X to nearest valid depth relative to the row's left edge
-                          const indentStep = 14;
-                          const baseLeft = r.left; // row's left edge in viewport coords
-                          const rawDepth = Math.round((pointerX - baseLeft - 28) / indentStep);
-                          const depth = Math.max(0, Math.min(targetDepth + 1, targetDepth + rawDepth - targetDepth));
-                          // Simpler: clamp rawDepth directly between 0 and targetDepth + 1
-                          const clampedDepth = Math.max(0, Math.min(targetDepth + 1, rawDepth));
-                          best = {
-                            targetId: id,
-                            above,
-                            depth: clampedDepth,
-                            rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom },
-                          };
-                          break;
-                        }
-                      }
-                      setDropTarget(best);
-                    }}
-                    onDragCancel={() => {
-                      setDropTarget(null);
-                      draggingIdRef.current = null;
-                    }}
-                    onDragEnd={(e) => {
-                      const dt = dropTarget;
-                      setDropTarget(null);
-                      draggingIdRef.current = null;
-                      if (readOnly) return;
-                      const { active } = e;
-                      if (!active || !dt) return;
-                      // Home mode: reorder pages via the API, not the local tree
-                      if (homeMode) {
-                        const sourceIdx = pageBlocks.findIndex((b) => b.id === active.id);
-                        const targetIdx = pageBlocks.findIndex((b) => b.id === dt.targetId);
-                        if (sourceIdx < 0 || targetIdx < 0 || sourceIdx === targetIdx) return;
-                        const remaining = pageBlocks.filter((_, i) => i !== sourceIdx);
-                        const adjustedTargetIdx = targetIdx > sourceIdx ? targetIdx - 1 : targetIdx;
-                        const dropIdx = dt.above ? adjustedTargetIdx : adjustedTargetIdx + 1;
-                        const before = remaining[dropIdx - 1]?._position ?? null;
-                        const after = remaining[dropIdx]?._position ?? null;
-                        const sourceBlock = pageBlocks[sourceIdx];
-                        const pageId = sourceBlock._pageId;
-                        if (!pageId) return;
-                        apiJson(`${API}/blocks/${pageId}/reorder`, {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ before, after }),
-                        })
-                          .then(() => fetchHomeBlocks())
-                          .catch((err) => setStatus(`Reorder failed: ${err}`));
-                        return;
-                      }
-                      const sourceId = active.id;
-                      const { targetId, above, depth } = dt;
-                      if (sourceId === targetId) return;
-                      if (isDescendant(blocks, sourceId, targetId)) return;
-                      const extracted = extractBlock(blocks, sourceId);
-                      if (!extracted) return;
-                      const { extracted: sourceBlock, remaining } = extracted;
-                      const targetCtx = findBlockContext(remaining, targetId);
-                      if (!targetCtx) return;
-                      const targetDepth = targetCtx.depth;
-                      let next;
-                      if (depth === targetDepth + 1) {
-                        next = insertChild(remaining, targetId, sourceBlock, false);
-                      } else if (depth === targetDepth) {
-                        next = insertSibling(remaining, targetId, sourceBlock, !above);
-                      } else if (depth < targetDepth) {
-                        const ancestorId = targetCtx.ancestors[depth];
-                        if (!ancestorId) return;
-                        next = insertSibling(remaining, ancestorId, sourceBlock, !above);
-                      } else {
-                        return;
-                      }
-                      if (next) setBlocks(next);
-                    }}
-                  >
-                    <SortableContext items={allIds} strategy={verticalListSortingStrategy}>
-                      <BlockTree blocks={homeMode ? pageBlocks : blocks} readOnly={readOnly} rowProps={rowProps} />
-                    </SortableContext>
+                  <>
+                    <BlockTree blocks={homeMode ? pageBlocks : blocks} readOnly={readOnly} rowProps={rowProps} />
                     {dropTarget && (() => {
                       const indentStep = 14;
                       const baseOffset = 28;
@@ -2688,7 +2670,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         />
                       );
                     })()}
-                  </DndContext>
+                  </>
                 );
               })()
             ))}
