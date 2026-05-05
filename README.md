@@ -137,6 +137,12 @@ In development, proxy `/api/*` from the frontend to `127.0.0.1:9001` via a Vite 
 For production-style hosting:
 
 ```caddyfile
+{
+    servers {
+        protocols h1 h2
+    }
+}
+
 your-domain.com {
     handle /api/* {
         reverse_proxy 127.0.0.1:9001
@@ -148,6 +154,8 @@ your-domain.com {
 ```
 
 Authentication is handled by the app itself — no Caddy basic auth needed.
+
+The global `protocols h1 h2` block disables HTTP/3. We hit a Chrome bug where reopening an incognito window reused a stale QUIC connection with crippled flow control, making 6 MB PDFs take 10+ seconds to download. HTTP/2 is consistent and the small wins HTTP/3 offers don't justify the failure mode here. Safari and curl were unaffected.
 
 ### Remote VM deployment
 

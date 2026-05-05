@@ -174,11 +174,36 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     if (!url) return;
     let cancelled = false; setPdfDoc(null);
     (async () => {
-      // Fetch PDF data in parallel with worker init so downloads overlap
-      const resp = await fetch(url, { credentials: "include" });
-      if (cancelled || !resp.ok) return;
-      const data = await resp.arrayBuffer();
-      if (cancelled) return;
+      // Parallel range requests overlap with worker download.
+      // Each range is its own HTTP/2 stream so flow-control doesn't single-stream-cap us.
+      // Probe size via a 1-byte range request (backend doesn't allow HEAD).
+      const probe = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include" });
+      if (cancelled || !probe.ok) return;
+      await probe.arrayBuffer();
+      const cr = probe.headers.get("content-range") || "";
+      const m = cr.match(/\/(\d+)$/);
+      const total = m ? parseInt(m[1], 10) : 0;
+      let data;
+      if (total > 0) {
+        const N = 6;
+        const chunkSize = Math.ceil(total / N);
+        const parts = await Promise.all(Array.from({ length: N }, (_, i) => {
+          const start = i * chunkSize;
+          const end = Math.min(start + chunkSize - 1, total - 1);
+          return fetch(url, { headers: { Range: `bytes=${start}-${end}` }, credentials: "include" })
+            .then(r => r.arrayBuffer());
+        }));
+        if (cancelled) return;
+        const buf = new Uint8Array(total);
+        let off = 0;
+        for (const p of parts) { buf.set(new Uint8Array(p), off); off += p.byteLength; }
+        data = buf.buffer;
+      } else {
+        const resp = await fetch(url, { credentials: "include" });
+        if (cancelled || !resp.ok) return;
+        data = await resp.arrayBuffer();
+        if (cancelled) return;
+      }
       pdfjsLib.getDocument({ data, disableAutoFetch: true, disableRange: true }).promise.then(doc => {
         if (!cancelled) { setPdfDoc(doc); setNumPages(doc.numPages); }
       }).catch(() => {});
