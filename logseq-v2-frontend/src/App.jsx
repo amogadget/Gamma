@@ -3,11 +3,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 // Module-level refs for native HTML5 drag-and-drop (shared across components)
 const _dragState = { draggingId: null, dropTarget: null };
 
-import {
-  PdfLoader,
-  PdfHighlighter,
-  Highlight
-} from "react-pdf-highlighter";
+import * as pdfjsLib from "pdfjs-dist";
+import "pdfjs-dist/web/pdf_viewer.css";
+pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -161,6 +159,187 @@ const COLORS = [
   "rgba(155, 205, 255, 0.65)",
   "rgba(230, 180, 255, 0.65)"
 ];
+
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onSelectionFinished, onHighlightContext }) {
+  const viewerRef = useRef(null);
+  const [pdfDoc, setPdfDoc] = useState(null);
+  const [numPages, setNumPages] = useState(0);
+  const scale = isNaN(parseFloat(pdfScaleValue)) ? 1 : parseFloat(pdfScaleValue);
+
+  useEffect(() => {
+    if (!url) return;
+    let cancelled = false; setPdfDoc(null);
+    pdfjsLib.getDocument(url).promise.then(doc => {
+      if (!cancelled) { setPdfDoc(doc); setNumPages(doc.numPages); }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [url]);
+
+  // Scroll to exact highlight position
+  useEffect(() => {
+    if (scrollRef) scrollRef.current = ({ position }) => {
+      const pn = position?.pageNumber || position?.boundingRect?.pageNumber;
+      if (!pn || !viewerRef.current) return;
+      const pageEl = viewerRef.current.querySelector(`[data-page="${pn}"]`);
+      if (!pageEl) return;
+      const r = position?.boundingRect;
+      // Use page's offsetTop within viewer (simpler & accurate)
+      const pageTop = pageEl.offsetTop;
+      const storedH = r?.height || 1;
+      const curH = pageEl.offsetHeight || 1;
+      const highlightY = r ? r.y1 * curH / storedH : 0;
+      viewerRef.current.scrollTo({ top: pageTop + highlightY - 80, behavior: "smooth" });
+    };
+  }, [scrollRef]);
+
+  // Text selection for highlight creation
+  const [selPopup, setSelPopup] = useState(null);
+  useEffect(() => {
+    if (!onSelectionFinished) return;
+    function onMouseUp() {
+      setTimeout(() => {
+        const sel = window.getSelection();
+        if (!sel || !sel.toString().trim()) { setSelPopup(null); return; }
+        const range = sel.getRangeAt(0);
+        if (!range) { setSelPopup(null); return; }
+        const node = range.startContainer;
+        const textEl = node?.nodeType === 3 ? node.parentElement?.closest?.(".textLayer") : node?.closest?.(".textLayer");
+        if (!textEl) return;
+        const pageEl = textEl.closest?.("[data-page]");
+        const pageNumber = pageEl ? parseInt(pageEl.dataset.page, 10) : null;
+        const text = sel.toString().trim();
+        if (text && pageNumber) {
+          const r = range.getBoundingClientRect();
+          setSelPopup({ text, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom }, pageNumber });
+        }
+      }, 10);
+    }
+    document.addEventListener("mouseup", onMouseUp);
+    return () => document.removeEventListener("mouseup", onMouseUp);
+  }, [onSelectionFinished]);
+
+  function handleSelConfirm(commentText, color) {
+    if (!selPopup) return;
+    const r = selPopup.rect;
+    const pageEl = document.querySelector(`[data-page="${selPopup.pageNumber}"]`);
+    const pageRect = pageEl?.getBoundingClientRect();
+    const curW = pageEl ? parseFloat(pageEl.style.width) || pageEl.offsetWidth : 1;
+    const curH = pageEl ? parseFloat(pageEl.style.height) || pageEl.offsetHeight : 1;
+    const x1 = pageRect ? r.left - pageRect.left : 0;
+    const y1 = pageRect ? r.top - pageRect.top : 0;
+    const x2 = pageRect ? r.left + r.width - pageRect.left : r.width;
+    const y2 = pageRect ? r.bottom - pageRect.top : r.height;
+    const position = {
+      pageNumber: selPopup.pageNumber,
+      boundingRect: { x1, y1, x2, y2, width: curW, height: curH, pageNumber: selPopup.pageNumber },
+      rects: [{ x1, y1, x2, y2, width: curW, height: curH, pageNumber: selPopup.pageNumber }],
+    };
+    const content = { text: selPopup.text };
+    onSelectionFinished(position, content, () => { window.getSelection()?.removeAllRanges(); setSelPopup(null); });
+  }
+
+  return (
+    <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflow: "auto" }}>
+      {Array.from({ length: numPages }, (_, i) => (
+        <PdfPage key={i + 1} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
+          highlights={highlights} onJump={onJump} onHighlightJump={onHighlightJump} onHighlightContext={onHighlightContext}
+          readOnly={!onSelectionFinished}
+        />
+      ))}
+      {selPopup && onSelectionFinished && (
+        <div style={{ position: "fixed", top: selPopup.rect.bottom + 8, left: selPopup.rect.left, zIndex: 9999 }}>
+          <PlainTip selectedText={selPopup.text} onConfirm={handleSelConfirm}
+            onCancel={() => { window.getSelection()?.removeAllRanges(); setSelPopup(null); }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onHighlightContext, readOnly }) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const textRef = useRef(null);
+  const renderedRef = useRef(false);
+  const lastScaleRef = useRef(scale);
+  const [pageSize, setPageSize] = useState(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) { setVisible(true); obs.disconnect(); }
+    }, { rootMargin: "400px 0px" });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [pageNumber]);
+
+  useEffect(() => {
+    if (lastScaleRef.current !== scale) {
+      lastScaleRef.current = scale;
+      renderedRef.current = false;
+      setPageSize(null);
+    }
+  }, [scale]);
+
+  useEffect(() => {
+    if (!pdfDoc || !visible || renderedRef.current) return;
+    renderedRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        const page = await pdfDoc.getPage(pageNumber);
+        const vp = page.getViewport({ scale });
+        if (cancelled || !wrapRef.current) return;
+        setPageSize({ width: vp.width, height: vp.height });
+        const wrap = wrapRef.current, canvas = canvasRef.current, textL = textRef.current;
+        const pr = window.devicePixelRatio || 1;
+        canvas.width = vp.width * pr; canvas.height = vp.height * pr;
+        canvas.style.width = vp.width + "px"; canvas.style.height = vp.height + "px";
+        const ctx = canvas.getContext("2d"); ctx.scale(pr, pr);
+        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        const tc = await page.getTextContent();
+        pdfjsLib.renderTextLayer({ textContentSource: tc, container: textL, viewport: vp, textDivs: [] });
+      } catch (e) {}
+    })();
+    return () => { cancelled = true; };
+  }, [pdfDoc, pageNumber, scale, visible]);
+
+  const curW = pageSize?.width || 1, curH = pageSize?.height || 1;
+
+  return (
+    <div ref={wrapRef} data-page={pageNumber} className="pdfPageWrap"
+      style={{ margin: "0 auto 8px", position: "relative", background: "#fff", minHeight: pageSize ? undefined : 200, width: curW || undefined, height: curH || undefined }}>
+      <canvas ref={canvasRef} style={{ display: "block" }} />
+      <div ref={textRef} className="textLayer" style={{
+        userSelect: readOnly ? "none" : "text", WebkitUserSelect: readOnly ? "none" : "text",
+      }} />
+      {highlights.filter(h => {
+        const p = h.position?.boundingRect || h.position?.rects?.[0];
+        return p && p.pageNumber === pageNumber;
+      }).map(h => {
+        const rects = h.position?.rects || (h.position?.boundingRect ? [h.position.boundingRect] : []);
+        const storedW = h.position?.boundingRect?.width || rects[0]?.width || 1;
+        const storedH = h.position?.boundingRect?.height || rects[0]?.height || 1;
+        const elements = [];
+        for (const r of rects) {
+          elements.push(<div key={h.id + "-" + r.x1 + "-" + r.y1} style={{
+            position: "absolute", zIndex: 2, cursor: "pointer",
+            left: r.x1 * curW / storedW, top: r.y1 * curH / storedH,
+            width: Math.max(1, (r.x2 - r.x1) * curW / storedW),
+            height: Math.max(1, (r.y2 - r.y1) * curH / storedH),
+            background: h.color || "rgba(255,226,143,0.65)", mixBlendMode: "multiply",
+          }} title={h.comment?.text || ""}
+            onClick={function (e) { e.stopPropagation(); onHighlightJump?.(h.id); }}
+            onContextMenu={function (e) { e.preventDefault(); if (onHighlightContext) onHighlightContext({ id: h.id, x: e.clientX, y: e.clientY }); }}
+          />);
+        }
+        return elements;
+      })}
+    </div>
+  );
+}
 
 function PlainTip({ onConfirm, onCancel, selectedText }) {
   const [text, setText] = useState("");
@@ -2066,63 +2245,19 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             </div>
           ) : null}
           {pdfUrl ? (
-            <PdfLoader
-              url={pdfUrl}
-              workerSrc="/pdf.worker.min.mjs"
-              beforeLoad={<div className="status">Loading PDF...</div>}
-              errorMessage={<div className="status">PDF load failed.</div>}
-              onError={(err) => setStatus(`PDF load failed: ${err.message}`)}
-            >
-              {(pdfDocument) => (
-                <PdfHighlighter
-                  pdfDocument={pdfDocument}
-                  pdfScaleValue={pdfScale}
-                  enableAreaSelection={() => false}
-                  onScrollChange={() => {}}
-                  scrollRef={(scrollTo) => {
-                    scrollToRef.current = scrollTo;
-                  }}
-                  highlights={highlights}
-                  onSelectionFinished={
-                    readOnly
-                      ? undefined
-                      : (position, content, hideTipAndSelection) => (
-                          <PlainTip
-                            selectedText={typeof content === "string" ? content : (content?.text || "")}
-                            onConfirm={(commentText, color) => {
-                              addHighlight({
-                                content,
-                                position,
-                                comment: { text: commentText || "" },
-                                color
-                              });
-                              hideTipAndSelection();
-                            }}
-                            onCancel={hideTipAndSelection}
-                          />
-                        )
-                  }
-                  highlightTransform={(highlight) => (
-                    <div
-                      key={`${highlight.id}-${flashingId === highlight.id ? "flash" : "base"}`}
-                      data-highlight-id={highlight.id}
-                      className={`colorWrap${flashingId === highlight.id ? " flashWrap" : ""}${attachModeBlockId ? " attachModeTarget" : ""}`}
-                      style={{ "--highlight-color": highlight.color || COLORS[0] }}
-                      onClick={attachModeBlockId ? (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        setAttachContextMenu({ x: e.clientX, y: e.clientY, highlight });
-                      } : undefined}
-                    >
-                      <Highlight
-                        isScrolledTo={false}
-                        position={highlight.position}
-                      />
-                    </div>
-                  )}
-                />
-              )}
-            </PdfLoader>
+            <PdfViewer url={pdfUrl} highlights={highlights}
+              pdfScaleValue={pdfScale} scrollRef={scrollToRef}
+              onJump={jumpToHighlightId}
+              onHighlightJump={(hlId) => {
+                const b = flattenBlocks(blocks).find(b => b.properties?.highlight_id === hlId);
+                if (b) { pendingBlockScrollRef.current = b.id; setBlocks(prev => expandToBlock(prev, b.id)); }
+              }}
+              onHighlightContext={setHighlightMenu}
+              onSelectionFinished={readOnly ? undefined : (position, content, hideTip) => {
+                addHighlight({ content: content || { text: "" }, position, comment: { text: "" }, color: COLORS[0] });
+                hideTip?.();
+              }}
+            />
           ) : (
             <div className="status">No PDF open.</div>
           )}
