@@ -469,10 +469,9 @@ async def proxy_pdf(source_url: str, request: Request):
     local_path = uploads / f"{pdf_doc_id}.pdf"
     want_save = request.query_params.get("save") == "1"
 
-    # If local copy exists, serve it directly (no re-download)
+    # If local copy exists, redirect to Caddy direct file serving
     if local_path.exists():
-        return FileResponse(local_path, media_type="application/pdf",
-                           headers={"Cache-Control": "public, max-age=3600"})
+        return RedirectResponse(f"/pdf-files/{pdf_doc_id}.pdf", status_code=302)
 
     # Download from source
     try:
