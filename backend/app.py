@@ -5,7 +5,7 @@ import random
 import string
 import bcrypt
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from urllib.request import Request as URLRequest, urlopen
 from urllib.error import URLError, HTTPError
 from pydantic import BaseModel
@@ -471,7 +471,7 @@ async def proxy_pdf(source_url: str, request: Request):
 
     # If local copy exists, redirect to Caddy direct file serving
     if local_path.exists():
-        return RedirectResponse(f"/pdf-files/{pdf_doc_id}.pdf", status_code=302)
+        return RedirectResponse(f"/api/uploads/{pdf_doc_id}.pdf", status_code=302)
 
     # Download from source
     try:
