@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-// Module-level refs for native HTML5 drag-and-drop (shared across components)
+// Module-level ref for native HTML5 drag-and-drop (shared across components)
 const _dragState = { draggingId: null, dropTarget: null };
 
 import * as pdfjsLib from "pdfjs-dist";
 import "pdfjs-dist/web/pdf_viewer.css";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+// Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches
+pdfjsLib.getDocument({ data: new Uint8Array() }).promise.catch(() => {});
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -164,33 +166,82 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
+  const [forcePages, setForcePages] = useState(new Set());
+  const pageHeightsRef = useRef([]); // viewport heights at scale 1, indexed 0..n-1
   const scale = isNaN(parseFloat(pdfScaleValue)) ? 1 : parseFloat(pdfScaleValue);
 
   useEffect(() => {
     if (!url) return;
     let cancelled = false; setPdfDoc(null);
-    pdfjsLib.getDocument(url).promise.then(doc => {
-      if (!cancelled) { setPdfDoc(doc); setNumPages(doc.numPages); }
-    }).catch(() => {});
+    (async () => {
+      // Fetch PDF data in parallel with worker init so downloads overlap
+      const resp = await fetch(url, { credentials: "include" });
+      if (cancelled || !resp.ok) return;
+      const data = await resp.arrayBuffer();
+      if (cancelled) return;
+      pdfjsLib.getDocument({ data, disableAutoFetch: true, disableRange: true }).promise.then(doc => {
+        if (!cancelled) { setPdfDoc(doc); setNumPages(doc.numPages); }
+      }).catch(() => {});
+    })();
     return () => { cancelled = true; };
   }, [url]);
 
+  // Pre-compute page viewport heights so jump scroll position is always accurate
+  useEffect(() => {
+    if (!pdfDoc) return;
+    let cancelled = false;
+    pageHeightsRef.current = [];
+    // Compute first 5 pages eagerly so visible range is covered
+    (async () => {
+      for (let i = 1; i <= Math.min(5, pdfDoc.numPages); i++) {
+        if (cancelled) break;
+        try {
+          const page = await pdfDoc.getPage(i);
+          pageHeightsRef.current[i - 1] = page.getViewport({ scale: 1 }).height;
+        } catch (e) {
+          pageHeightsRef.current[i - 1] = 800;
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [pdfDoc]);
+
   // Scroll to exact highlight position
   useEffect(() => {
-    if (scrollRef) scrollRef.current = ({ position }) => {
+    if (scrollRef) scrollRef.current = async ({ position }) => {
       const pn = position?.pageNumber || position?.boundingRect?.pageNumber;
-      if (!pn || !viewerRef.current) return;
-      const pageEl = viewerRef.current.querySelector(`[data-page="${pn}"]`);
-      if (!pageEl) return;
+      if (!pn || !viewerRef.current || !pdfDoc) return;
       const r = position?.boundingRect;
-      // Use page's offsetTop within viewer (simpler & accurate)
-      const pageTop = pageEl.offsetTop;
+      const heights = pageHeightsRef.current;
+
+      // Lazy-compute missing page heights up to target page
+      for (let i = heights.length; i < pn; i++) {
+        try {
+          const page = await pdfDoc.getPage(i + 1);
+          heights[i] = page.getViewport({ scale: 1 }).height;
+        } catch (e) {
+          heights[i] = 800;
+        }
+      }
+
+      // Compute page-top from cached heights (accurate even for unrendered pages)
+      let pageTop = 8 * (pn - 1); // 8px margin per page
+      for (let i = 0; i < pn - 1; i++) {
+        pageTop += (heights[i] || 800) * scale;
+      }
+      const curH = (heights[pn - 1] || 800) * scale;
       const storedH = r?.height || 1;
-      const curH = pageEl.offsetHeight || 1;
       const highlightY = r ? r.y1 * curH / storedH : 0;
       viewerRef.current.scrollTo({ top: pageTop + highlightY - 80, behavior: "smooth" });
+
+      // Force-render target page if not yet visible
+      const pageEl = viewerRef.current.querySelector(`[data-page="${pn}"]`);
+      if (!pageEl || !pageEl.style.width) {
+        setForcePages(prev => new Set([...prev, pn]));
+        setTimeout(() => setForcePages(prev => { const s = new Set(prev); s.delete(pn); return s; }), 2000);
+      }
     };
-  }, [scrollRef]);
+  }, [scrollRef, scale, pdfDoc]);
 
   // Text selection for highlight creation
   const [selPopup, setSelPopup] = useState(null);
@@ -243,7 +294,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={i + 1} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={highlights} onJump={onJump} onHighlightJump={onHighlightJump} onHighlightContext={onHighlightContext}
-          readOnly={!onSelectionFinished}
+          readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
         />
       ))}
       {selPopup && onSelectionFinished && (
@@ -256,16 +307,16 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   );
 }
 
-function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onHighlightContext, readOnly }) {
+function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onHighlightContext, readOnly, forceRender }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
-  const renderedRef = useRef(false);
-  const lastScaleRef = useRef(scale);
+  const pageRef = useRef(null);
   const [pageSize, setPageSize] = useState(null);
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
+    if (forceRender) { setVisible(true); return; }
     const el = wrapRef.current;
     if (!el) return;
     const obs = new IntersectionObserver((entries) => {
@@ -273,35 +324,37 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
     }, { rootMargin: "400px 0px" });
     obs.observe(el);
     return () => obs.disconnect();
-  }, [pageNumber]);
+  }, [pageNumber, forceRender]);
 
   useEffect(() => {
-    if (lastScaleRef.current !== scale) {
-      lastScaleRef.current = scale;
-      renderedRef.current = false;
-      setPageSize(null);
-    }
-  }, [scale]);
-
-  useEffect(() => {
-    if (!pdfDoc || !visible || renderedRef.current) return;
-    renderedRef.current = true;
+    if (!pdfDoc || !visible) return;
     let cancelled = false;
     (async () => {
       try {
         const page = await pdfDoc.getPage(pageNumber);
-        const vp = page.getViewport({ scale });
         if (cancelled || !wrapRef.current) return;
+        pageRef.current = page;
+        const vp = page.getViewport({ scale });
         setPageSize({ width: vp.width, height: vp.height });
-        const wrap = wrapRef.current, canvas = canvasRef.current, textL = textRef.current;
+
+        const canvas = canvasRef.current;
         const pr = window.devicePixelRatio || 1;
         canvas.width = vp.width * pr; canvas.height = vp.height * pr;
         canvas.style.width = vp.width + "px"; canvas.style.height = vp.height + "px";
         const ctx = canvas.getContext("2d"); ctx.scale(pr, pr);
         await page.render({ canvasContext: ctx, viewport: vp }).promise;
+
+        const textL = textRef.current;
+        textL.innerHTML = "";
+        const baseVp = page.getViewport({ scale: 1 });
+        textL.style.width = baseVp.width + "px";
+        textL.style.height = baseVp.height + "px";
+        textL.style.transform = `scale(${scale})`;
         const tc = await page.getTextContent();
-        pdfjsLib.renderTextLayer({ textContentSource: tc, container: textL, viewport: vp, textDivs: [] });
-      } catch (e) {}
+        pdfjsLib.renderTextLayer({ textContentSource: tc, container: textL, viewport: vp });
+      } catch (e) {
+        console.error("PdfPage render error:", e);
+      }
     })();
     return () => { cancelled = true; };
   }, [pdfDoc, pageNumber, scale, visible]);
@@ -1589,10 +1642,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       let finalUrl, resolvedDocId, proxiedUrl;
       if (isUpload) {
         finalUrl = sourceUrl;
-        // filename is "<doc_id>.pdf"
-        const m = sourceUrl.match(/\/uploads\/([0-9a-f]+)\.pdf$/);
+        // filename is "<doc_id>.pdf" — serve directly from Caddy, bypassing uvicorn
+        const m = sourceUrl.match(/\/([0-9a-f]+)\.pdf$/);
         resolvedDocId = m ? m[1] : await getDocIdForUrl(sourceUrl);
-        proxiedUrl = sourceUrl;
+        proxiedUrl = `/pdf-files/${resolvedDocId}.pdf`;
       } else {
         finalUrl = await resolvePdfUrl(sourceUrl);
         resolvedDocId = await getDocIdForUrl(finalUrl);
