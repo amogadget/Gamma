@@ -281,7 +281,9 @@ def _build_messages(payload, context):
     has_context = bool(context)
     context_used = False
     for h in (payload.history or []):
-        role = "user" if h.get("role") != "ai" else "ai"
+        # Anthropic Messages API requires "user" / "assistant"; the frontend
+        # tags assistant turns as "ai" in its local chat state.
+        role = "assistant" if h.get("role") == "ai" else "user"
         content = h.get("text", "")
         if role == "user" and has_context and not context_used:
             content = f"Here is the PDF text:\n\n{context}\n\nUser question: {content}"

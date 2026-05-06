@@ -1088,14 +1088,19 @@ export default function App() {
     try { localStorage.setItem("gamma-chats", JSON.stringify(allChats)); } catch {}
   }, [allChats]);
 
-  // Load chatMessages when focusedBlockId changes (per-page chat)
+  // Load chatMessages when focusedBlockId changes (per-page chat).
+  // Intentionally NOT depending on allChats: the save-back effect below writes
+  // to allChats whenever chatMessages changes, and including allChats here
+  // would re-trigger this loader inside the same commit, racing with the saver
+  // and ping-ponging chatMessages between [] and the stored value.
   useEffect(() => {
     if (focusedBlockId) {
       setChatMessages(allChats[focusedBlockId] || []);
     } else {
       setChatMessages([]);
     }
-  }, [focusedBlockId, allChats]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedBlockId]);
 
   // Save chatMessages back to allChats whenever they change
   useEffect(() => {
