@@ -1,5 +1,12 @@
 @import "katex/dist/katex.min.css";
 
+/* Live-preview selection color while picking in PlainTip. PlainTip sets
+   --selection-color on :root; otherwise we fall back to default. */
+.textLayer ::selection,
+.textLayer span::selection {
+  background: var(--selection-color, rgba(180, 200, 255, 0.5));
+}
+
 /* --- Theme variables --- */
 :root {
   --bg-page: #111;

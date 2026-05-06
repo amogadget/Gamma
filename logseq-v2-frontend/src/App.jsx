@@ -286,7 +286,30 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         const text = sel.toString().trim();
         if (text && pageNumber) {
           const r = range.getBoundingClientRect();
-          setSelPopup({ text, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom }, pageNumber });
+          // Per-line rects so multi-line highlights don't render as one big block.
+          // pdf.js text layer has many spans per line — getClientRects() returns one
+          // rect per span, so merge those that share a line into one rect per line.
+          const raw = Array.from(range.getClientRects())
+            .filter(cr => cr.width > 1 && cr.height > 1)
+            .map(cr => ({ top: cr.top, left: cr.left, right: cr.right, bottom: cr.bottom }))
+            .sort((a, b) => a.top - b.top || a.left - b.left);
+          const lineRects = [];
+          for (const cr of raw) {
+            const last = lineRects[lineRects.length - 1];
+            if (last) {
+              const overlap = Math.min(last.bottom, cr.bottom) - Math.max(last.top, cr.top);
+              const minH = Math.min(last.bottom - last.top, cr.bottom - cr.top);
+              if (overlap >= minH * 0.5) {
+                last.left = Math.min(last.left, cr.left);
+                last.right = Math.max(last.right, cr.right);
+                last.top = Math.min(last.top, cr.top);
+                last.bottom = Math.max(last.bottom, cr.bottom);
+                continue;
+              }
+            }
+            lineRects.push({ ...cr });
+          }
+          setSelPopup({ text, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom }, lineRects, pageNumber });
         }
       }, 10);
     }
@@ -301,17 +324,23 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     const pageRect = pageEl?.getBoundingClientRect();
     const curW = pageEl ? parseFloat(pageEl.style.width) || pageEl.offsetWidth : 1;
     const curH = pageEl ? parseFloat(pageEl.style.height) || pageEl.offsetHeight : 1;
-    const x1 = pageRect ? r.left - pageRect.left : 0;
-    const y1 = pageRect ? r.top - pageRect.top : 0;
-    const x2 = pageRect ? r.left + r.width - pageRect.left : r.width;
-    const y2 = pageRect ? r.bottom - pageRect.top : r.height;
+    const px = pageRect?.left || 0, py = pageRect?.top || 0;
+    const x1 = r.left - px, y1 = r.top - py;
+    const x2 = r.left + r.width - px, y2 = r.bottom - py;
+    const lineRects = (selPopup.lineRects && selPopup.lineRects.length)
+      ? selPopup.lineRects.map(lr => ({
+          x1: lr.left - px, y1: lr.top - py,
+          x2: lr.right - px, y2: lr.bottom - py,
+          width: curW, height: curH, pageNumber: selPopup.pageNumber,
+        }))
+      : [{ x1, y1, x2, y2, width: curW, height: curH, pageNumber: selPopup.pageNumber }];
     const position = {
       pageNumber: selPopup.pageNumber,
       boundingRect: { x1, y1, x2, y2, width: curW, height: curH, pageNumber: selPopup.pageNumber },
-      rects: [{ x1, y1, x2, y2, width: curW, height: curH, pageNumber: selPopup.pageNumber }],
+      rects: lineRects,
     };
     const content = { text: selPopup.text };
-    onSelectionFinished(position, content, () => { window.getSelection()?.removeAllRanges(); setSelPopup(null); });
+    onSelectionFinished(position, content, () => { window.getSelection()?.removeAllRanges(); setSelPopup(null); }, { color, commentText });
   }
 
   return (
@@ -324,7 +353,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       ))}
       {selPopup && onSelectionFinished && (
         <div style={{ position: "fixed", top: selPopup.rect.bottom + 8, left: selPopup.rect.left, zIndex: 9999 }}>
-          <PlainTip selectedText={selPopup.text} onConfirm={handleSelConfirm}
+          <PlainTip onConfirm={handleSelConfirm}
             onCancel={() => { window.getSelection()?.removeAllRanges(); setSelPopup(null); }} />
         </div>
       )}
@@ -419,17 +448,15 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
   );
 }
 
-function PlainTip({ onConfirm, onCancel, selectedText }) {
+function PlainTip({ onConfirm, onCancel }) {
   const [text, setText] = useState("");
   const [color, setColor] = useState(COLORS[0]);
-  const [copied, setCopied] = useState(false);
 
-  function handleCopy() {
-    navigator.clipboard.writeText(selectedText || "").then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    }).catch(() => {});
-  }
+  // Live-preview the selection color while picking, before save.
+  useEffect(() => {
+    document.documentElement.style.setProperty("--selection-color", color);
+    return () => document.documentElement.style.removeProperty("--selection-color");
+  }, [color]);
 
   return (
     <div className="plainTip">
@@ -451,7 +478,6 @@ function PlainTip({ onConfirm, onCancel, selectedText }) {
         onChange={(e) => setText(e.target.value)}
       />
       <div className="plainTipActions">
-        <button onClick={handleCopy}>{copied ? "Copied" : "Copy"}</button>
         <button onClick={() => onConfirm(text, color)}>Save</button>
         <button onClick={onCancel}>Cancel</button>
       </div>
@@ -2017,26 +2043,36 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }, 100);
   }, [pdfHidden, highlights]);
 
-  // Restore PDF scroll position from session
+  // Restore PDF scroll position from session.
+  // Polls until the viewer is mounted and the doc is ready (scrollToRef is set
+  // and a page element exists), so it works on PDFs with no highlights and on
+  // slow loads. Doesn't depend on highlights.
   useEffect(() => {
-    if (pdfHidden || highlights.length === 0) return;
+    if (pdfHidden) return;
     if (restoredPdfUrlRef.current === pdfUrl) return;
     const saved = loadSession().pdfPageNumber;
     if (!saved || saved <= 1) return;
-    restoredPdfUrlRef.current = pdfUrl;
-    const timer = setTimeout(() => {
-      if (scrollToRef.current) {
-        scrollToRef.current({
-          position: {
-            pageNumber: saved,
-            boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: saved },
-            rects: [],
-          },
-        });
+    let cancelled = false;
+    let tries = 0;
+    const tryRestore = () => {
+      if (cancelled) return;
+      if (tries++ > 50) return; // give up after ~5s
+      if (!scrollToRef.current || !document.querySelector('[data-page]')) {
+        setTimeout(tryRestore, 100);
+        return;
       }
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [pdfUrl, pdfHidden, highlights]);
+      restoredPdfUrlRef.current = pdfUrl;
+      scrollToRef.current({
+        position: {
+          pageNumber: saved,
+          boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: saved },
+          rects: [],
+        },
+      });
+    };
+    tryRestore();
+    return () => { cancelled = true; };
+  }, [pdfUrl, pdfHidden]);
 
   // Track PDF scroll position — poll via scrollable container
   useEffect(() => {
@@ -2044,7 +2080,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     let container = null;
     let ticking = false;
     function findContainer() {
-      const p = document.querySelector('[data-page-number]');
+      const p = document.querySelector('[data-page]');
       if (!p) return null;
       let el = p.parentElement;
       while (el && el !== document.body) {
@@ -2059,14 +2095,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       requestAnimationFrame(() => {
         ticking = false;
         if (!container) return;
-        const pages = container.querySelectorAll('[data-page-number]');
+        const pages = container.querySelectorAll('[data-page]');
         if (pages.length === 0) return;
         const cr = container.getBoundingClientRect();
         const midY = cr.top + cr.height / 2;
         for (const el of pages) {
           const r = el.getBoundingClientRect();
           if (r.top <= midY && r.bottom >= midY) {
-            const n = parseInt(el.dataset.pageNumber);
+            const n = parseInt(el.dataset.page);
             if (n) setPdfPageNumber(n);
             break;
           }
@@ -2331,8 +2367,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 if (b) { pendingBlockScrollRef.current = b.id; setBlocks(prev => expandToBlock(prev, b.id)); }
               }}
               onHighlightContext={setHighlightMenu}
-              onSelectionFinished={readOnly ? undefined : (position, content, hideTip) => {
-                addHighlight({ content: content || { text: "" }, position, comment: { text: "" }, color: COLORS[0] });
+              onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {
+                addHighlight({
+                  content: content || { text: "" },
+                  position,
+                  comment: { text: extras?.commentText || "" },
+                  color: extras?.color || COLORS[0],
+                });
                 hideTip?.();
               }}
             />
