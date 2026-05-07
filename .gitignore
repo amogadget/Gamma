@@ -4,6 +4,8 @@ HANDOFF.md
 STATUS.md
 node_modules/
 venv/
+.venv/
+uploads-flat/
 __pycache__/
 *.pyc
 *.db
