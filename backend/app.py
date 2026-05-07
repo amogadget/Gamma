@@ -124,6 +124,7 @@ def _reset_guest_data():
     data_db = _sqlite3.connect(str(guest_dir / "data.db"))
     data_db.execute("CREATE TABLE IF NOT EXISTS annotations (doc_id TEXT PRIMARY KEY, data TEXT NOT NULL)")
     data_db.execute("CREATE TABLE IF NOT EXISTS shares (token TEXT PRIMARY KEY, doc_id TEXT NOT NULL)")
+    data_db.execute("CREATE TABLE IF NOT EXISTS chats (block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)")
     data_db.commit()
     data_db.close()
     (guest_dir / "uploads").mkdir(parents=True, exist_ok=True)
@@ -376,6 +377,44 @@ async def ai_chat(payload: AIChatRequest, request: Request):
     except Exception as e:
         print(f"[ai_chat] API error: {e}")
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
+
+
+class ChatSaveRequest(BaseModel):
+    messages: list
+
+
+@app.get("/api/chats/{block_id}")
+async def get_chat(block_id: str, request: Request):
+    user = _require_user(request)
+    async with aiosqlite.connect(_db_for(user, "data.db")) as db:
+        await db.execute("CREATE TABLE IF NOT EXISTS chats (block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        async with db.execute("SELECT messages FROM chats WHERE block_id = ?", (block_id,)) as cur:
+            row = await cur.fetchone()
+    return {"messages": _json.loads(row[0]) if row else []}
+
+
+@app.put("/api/chats/{block_id}")
+async def save_chat(block_id: str, payload: ChatSaveRequest, request: Request):
+    user = _require_user(request)
+    async with aiosqlite.connect(_db_for(user, "data.db")) as db:
+        await db.execute("CREATE TABLE IF NOT EXISTS chats (block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        await db.execute(
+            "INSERT INTO chats (block_id, messages, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(block_id) DO UPDATE SET messages = excluded.messages, updated_at = excluded.updated_at",
+            (block_id, _json.dumps(payload.messages), page_now()),
+        )
+        await db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/chats/{block_id}")
+async def delete_chat(block_id: str, request: Request):
+    user = _require_user(request)
+    async with aiosqlite.connect(_db_for(user, "data.db")) as db:
+        await db.execute("CREATE TABLE IF NOT EXISTS chats (block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        await db.execute("DELETE FROM chats WHERE block_id = ?", (block_id,))
+        await db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/annotations/{doc_id}")
@@ -1212,6 +1251,12 @@ if USERS_DIR.exists():
                     _removed = cleanup_orphan_uploads(_conn, _uploads)
                     if _removed:
                         print(f"[startup] removed orphan uploads for {_ud.name}: {_removed}")
+            # Ensure chats table for AI chat history persistence.
+            _data = _ud / "data.db"
+            if _data.exists():
+                with _sqlite3.connect(str(_data)) as _c:
+                    _c.execute("CREATE TABLE IF NOT EXISTS chats (block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)")
+                    _c.commit()
 
 def ub_last_child_position(conn, parent_id: str) -> str | None:
     row = conn.execute(

@@ -168,7 +168,32 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   const [numPages, setNumPages] = useState(0);
   const [forcePages, setForcePages] = useState(new Set());
   const pageHeightsRef = useRef([]); // viewport heights at scale 1, indexed 0..n-1
-  const scale = isNaN(parseFloat(pdfScaleValue)) ? 1 : parseFloat(pdfScaleValue);
+  // Resolve scale: numeric value as-is, "page-width" computes a scale that
+  // fits the first page to the viewer width. Recomputed on viewer resize so
+  // it adapts to sidebar drags / phone rotation.
+  const [fitWidthScale, setFitWidthScale] = useState(1);
+  const numericScale = parseFloat(pdfScaleValue);
+  const isFitWidth = isNaN(numericScale);
+  const scale = isFitWidth ? fitWidthScale : numericScale;
+  useEffect(() => {
+    if (!isFitWidth || !pdfDoc || !viewerRef.current) return;
+    let cancelled = false;
+    const compute = async () => {
+      try {
+        const page = await pdfDoc.getPage(1);
+        if (cancelled || !viewerRef.current) return;
+        const naturalW = page.getViewport({ scale: 1 }).width;
+        const containerW = viewerRef.current.clientWidth;
+        if (naturalW > 0 && containerW > 0) {
+          setFitWidthScale(Math.max(0.2, containerW / naturalW));
+        }
+      } catch {}
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(viewerRef.current);
+    return () => { cancelled = true; ro.disconnect(); };
+  }, [isFitWidth, pdfDoc]);
 
   useEffect(() => {
     if (!url) return;
@@ -211,20 +236,78 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => { cancelled = true; };
   }, [url]);
 
-  // Pre-compute page viewport heights so jump scroll position is always accurate
+  // Preserve scroll position across zoom changes by anchoring on the page
+  // currently at the top of the viewport (and how far down within it),
+  // then re-placing that exact page+offset after pages re-render at the
+  // new size. Pure-fraction preservation drifts because of the fixed 8px
+  // inter-page margins; page anchoring is exact.
+  const prevScaleRef = useRef(scale);
+  useEffect(() => {
+    const prev = prevScaleRef.current;
+    prevScaleRef.current = scale;
+    if (prev === scale || !viewerRef.current) return;
+    const v = viewerRef.current;
+    const heights = pageHeightsRef.current;
+    if (heights.length === 0) return;
+
+    // Find the page covering the current scrollTop using the OLD scale.
+    let acc = 0, anchorIdx = 0, fracInPage = 0;
+    for (let i = 0; i < heights.length; i++) {
+      const ph = (heights[i] || 800) * prev;
+      if (acc + ph + 8 > v.scrollTop) {
+        anchorIdx = i;
+        fracInPage = (v.scrollTop - acc) / Math.max(1, ph);
+        break;
+      }
+      acc += ph + 8;
+    }
+
+    // After re-render, place the same page+offset at the top.
+    let tries = 0;
+    let lastSH = -1;
+    const restore = () => {
+      if (!viewerRef.current) return;
+      const v2 = viewerRef.current;
+      if (v2.scrollHeight !== lastSH) {
+        lastSH = v2.scrollHeight;
+        let newAcc = 0;
+        for (let i = 0; i < anchorIdx; i++) {
+          newAcc += (heights[i] || 800) * scale + 8;
+        }
+        const targetH = (heights[anchorIdx] || 800) * scale;
+        v2.scrollTop = newAcc + fracInPage * targetH;
+      }
+      if (tries++ < 30) requestAnimationFrame(restore);
+    };
+    requestAnimationFrame(restore);
+  }, [scale]);
+
+  // Pre-compute every page's natural height. The values feed both the jump
+  // math and the per-page placeholder height below — having every page's
+  // wrapper reserve its real size keeps the DOM's scrollHeight in sync with
+  // what the jump math assumes, so scrollTo() doesn't get clamped to a
+  // smaller scrollable range. Computing metadata-only viewports is cheap.
+  const [pageHeights, setPageHeights] = useState([]);
   useEffect(() => {
     if (!pdfDoc) return;
     let cancelled = false;
     pageHeightsRef.current = [];
-    // Compute first 5 pages eagerly so visible range is covered
     (async () => {
-      for (let i = 1; i <= Math.min(5, pdfDoc.numPages); i++) {
+      const acc = [];
+      for (let i = 1; i <= pdfDoc.numPages; i++) {
         if (cancelled) break;
         try {
           const page = await pdfDoc.getPage(i);
-          pageHeightsRef.current[i - 1] = page.getViewport({ scale: 1 }).height;
+          acc.push(page.getViewport({ scale: 1 }).height);
         } catch (e) {
-          pageHeightsRef.current[i - 1] = 800;
+          acc.push(800);
+        }
+        // Publish in batches so the first pages reserve their space ASAP
+        // without forcing one re-render per page.
+        if (acc.length === 5 || acc.length === pdfDoc.numPages || acc.length % 50 === 0) {
+          if (cancelled) break;
+          pageHeightsRef.current = [...acc];
+          setPageHeights([...acc]);
         }
       }
     })();
@@ -344,11 +427,12 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   }
 
   return (
-    <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflow: "auto" }}>
+    <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={i + 1} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={highlights} onJump={onJump} onHighlightJump={onHighlightJump} onHighlightContext={onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
+          reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
         />
       ))}
       {selPopup && onSelectionFinished && (
@@ -361,7 +445,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   );
 }
 
-function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onHighlightContext, readOnly, forceRender }) {
+function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onHighlightContext, readOnly, forceRender, reservedHeight }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -417,7 +501,12 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
 
   return (
     <div ref={wrapRef} data-page={pageNumber} className="pdfPageWrap"
-      style={{ margin: "0 auto 8px", position: "relative", background: "#fff", minHeight: pageSize ? undefined : 200, width: curW || undefined, height: curH || undefined }}>
+      style={{
+        margin: "0 auto 8px", position: "relative", background: "#fff",
+        width: pageSize ? curW : undefined,
+        height: pageSize ? curH : (reservedHeight || undefined),
+        minHeight: pageSize || reservedHeight ? undefined : 200,
+      }}>
       <canvas ref={canvasRef} style={{ display: "block" }} />
       <div ref={textRef} className="textLayer" style={{
         userSelect: readOnly ? "none" : "text", WebkitUserSelect: readOnly ? "none" : "text",
@@ -1071,9 +1160,6 @@ export default function App() {
   const [homeBlocks, setHomeBlocks] = useState([]);
   const [refCache, setRefCache] = useState({}); // { [blockId]: { content, page_title } }
   const [backlinks, setBacklinks] = useState([]);
-  const [allChats, setAllChats] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("gamma-chats") || "{}"); } catch { return {}; }
-  });
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -1082,33 +1168,43 @@ export default function App() {
   });
   const [chatHidden, setChatHidden] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Tracks which block we've finished loading from the server, so the save
+  // effect doesn't fire (and clobber the stored chat) before the load lands.
+  const chatLoadedForRef = useRef("");
 
-  // Persist allChats to localStorage
+  // Load chat from backend on focusedBlockId change.
   useEffect(() => {
-    try { localStorage.setItem("gamma-chats", JSON.stringify(allChats)); } catch {}
-  }, [allChats]);
-
-  // Load chatMessages when focusedBlockId changes (per-page chat).
-  // Intentionally NOT depending on allChats: the save-back effect below writes
-  // to allChats whenever chatMessages changes, and including allChats here
-  // would re-trigger this loader inside the same commit, racing with the saver
-  // and ping-ponging chatMessages between [] and the stored value.
-  useEffect(() => {
-    if (focusedBlockId) {
-      setChatMessages(allChats[focusedBlockId] || []);
-    } else {
+    let cancelled = false;
+    if (!focusedBlockId) {
       setChatMessages([]);
+      chatLoadedForRef.current = "";
+      return;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    chatLoadedForRef.current = "";
+    fetch(`${API}/chats/${encodeURIComponent(focusedBlockId)}`, { credentials: "include" })
+      .then(r => r.ok ? r.json() : { messages: [] })
+      .then(data => {
+        if (cancelled) return;
+        setChatMessages(data.messages || []);
+        chatLoadedForRef.current = focusedBlockId;
+      })
+      .catch(() => { if (!cancelled) chatLoadedForRef.current = focusedBlockId; });
+    return () => { cancelled = true; };
   }, [focusedBlockId]);
 
-  // Save chatMessages back to allChats whenever they change
+  // Save chat to backend (debounced) when chatMessages changes, but only
+  // after the load for the current focusedBlockId completed.
   useEffect(() => {
-    if (!focusedBlockId) return;
-    setAllChats((prev) => {
-      if (JSON.stringify(prev[focusedBlockId]) === JSON.stringify(chatMessages)) return prev;
-      return { ...prev, [focusedBlockId]: chatMessages };
-    });
+    if (!focusedBlockId || chatLoadedForRef.current !== focusedBlockId) return;
+    const timer = setTimeout(() => {
+      fetch(`${API}/chats/${encodeURIComponent(focusedBlockId)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ messages: chatMessages }),
+      }).catch(() => {});
+    }, 500);
+    return () => clearTimeout(timer);
   }, [chatMessages, focusedBlockId]);
 
   useEffect(() => {
@@ -1118,7 +1214,10 @@ export default function App() {
   function clearChat() {
     setChatMessages([]);
     if (focusedBlockId) {
-      setAllChats((prev) => { const n = { ...prev }; delete n[focusedBlockId]; return n; });
+      fetch(`${API}/chats/${encodeURIComponent(focusedBlockId)}`, {
+        method: "DELETE",
+        credentials: "include",
+      }).catch(() => {});
     }
   }
   const [homeEditingId, setHomeEditingId] = useState(null);
@@ -1805,6 +1904,16 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         } else {
           setBlocks(childBlocks);
         }
+      }
+
+      // Scroll notes panel to the most recently updated block, unless a
+      // specific target was already queued (e.g. ?block=... deep link).
+      if (!pendingBlockScrollRef.current && childBlocks.length > 0) {
+        let latest = null;
+        for (const b of flattenBlocks(childBlocks)) {
+          if (!latest || (b.updated_at || "") > (latest.updated_at || "")) latest = b;
+        }
+        if (latest) pendingBlockScrollRef.current = latest.id;
       }
 
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(blockId)}`;

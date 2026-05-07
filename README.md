@@ -79,7 +79,7 @@ Three pieces:
 1. **Backend** (`backend/app.py`) — a FastAPI app with per-user SQLite databases:
    - `users.db` — accounts, sessions (bcrypt passwords), and share tokens.
    - `users/{username}/pages.db` — a `unified_blocks` table per user with self-referential `parent_id`. Root-level blocks are pages; everything else is nested blocks.
-   - `users/{username}/data.db` — annotations (per-user).
+   - `users/{username}/data.db` — annotations and AI chat history (per-user).
    - `users/{username}/uploads/` — uploaded PDFs and images, content-hash deduped.
    - App-level authentication via session cookies. No external auth provider needed.
 2. **CLI** (`backend/manage.py`) — user management. `create-user`, `set-password`, `delete-user`, `list-users`, `reset-guest`.
@@ -103,7 +103,7 @@ Three pieces:
 cd backend
 python3 -m venv venv
 source venv/bin/activate
-pip install fastapi uvicorn aiosqlite pydantic python-multipart fractional-indexing PyPDF2 bcrypt
+pip install -r requirements.txt
 python manage.py create-user admin yourpassword
 python manage.py setup      # creates guest account
 uvicorn app:app --host 127.0.0.1 --port 9001
@@ -182,7 +182,7 @@ The global `protocols h1 h2` block disables HTTP/3. We hit a Chrome bug where re
 |---|---|---|---|
 | `ANTHROPIC_AUTH_TOKEN` | For AI chat | — | API key for Anthropic-compatible chat (DeepSeek, Anthropic) |
 | `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Override the API base URL (e.g. `https://api.deepseek.com/anthropic`) |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | No | `claude-sonnet-4-20250514` | Model name for the AI chat |
+| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | No | `deepseek-v4-flash` | Model name for the AI chat |
 
 The backend auto-creates `data.db` and `pages.db` on first start.
 
@@ -193,7 +193,7 @@ The backend auto-creates `data.db` and `pages.db` on first start.
 - **Logseq EDN import**: import Logseq PDF-highlight exports (EDN + MD + PDF) — preserves highlight positions, notes, and block tree structure.
 - **Attach mode**: link orphaned notes to existing PDF highlights — click ⊕ then left-click a highlight. Linked block jumps to the highlight and inherits its color.
 - **Cross-note block references**: type `[[` in any block to search and insert a reference to another block. References render as clickable chips that jump to the target.
-- **AI chat assistant**: sidebar chatbox sends your question + the PDF's extracted text (up to 8000 chars) to an Anthropic-compatible API (DeepSeek by default). Supports uploaded PDFs and URLs. Configured via `ANTHROPIC_AUTH_TOKEN` env var.
+- **AI chat assistant**: sidebar chatbox sends your question + the PDF's extracted text (up to 8000 chars) to an Anthropic-compatible API (DeepSeek by default). Supports uploaded PDFs and URLs. Per-page conversation history is stored on the backend (`chats` table in `data.db`), so it follows you across devices. Configured via `ANTHROPIC_AUTH_TOKEN` env var.
 - **Category metadata**: tag-style category input with autocomplete from existing categories. Arrow-key navigation, comma to add tags. Home page shows grouped carousels by category.
 - **Light/dark theme toggle**: cycles Dark ☾ / Light ☀ / Follow system ◐ (listens to `prefers-color-scheme`). Persisted in localStorage.
 - **Session persistence**: last-opened page, collapsed states, zoom, orientation, PDF toggle, notes toggle, splitter position, and current PDF page survive page reload (localStorage + block properties).
@@ -207,7 +207,7 @@ The backend auto-creates `data.db` and `pages.db` on first start.
 - **Renameable page title**: click the title to rename.
 - **Share links**: read-only URL, public, PDF + highlights + notes all preserved. Click PDF highlight → sidebar jumps to its block. Backlinks shown with "private block" for cross-page references.
 - **Multi-user accounts**: per-user isolated databases and uploaded files. Session-based auth with bcrypt passwords. Guest account with daily data reset. Admin-managed via CLI — no public registration.
-- **Mobile**: dedicated drag handle on the splitter for touch.
+- **Mobile**: dedicated drag handle on the splitter for touch. PDF viewer fits page width to the viewport (no horizontal panning), and zoom changes anchor on the visible page so you don't get bumped to a different page.
 
 ## URL routing
 
