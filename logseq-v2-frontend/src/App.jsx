@@ -353,6 +353,21 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
 
   // Text selection for highlight creation
   const [selPopup, setSelPopup] = useState(null);
+
+  // Dismiss the color popup when the user mouses down anywhere outside it
+  // (without that, removing the textarea/Cancel leaves no way to back out).
+  useEffect(() => {
+    if (!selPopup) return;
+    function onDown(e) {
+      const popup = document.querySelector(".plainTip");
+      if (popup && popup.contains(e.target)) return;
+      setSelPopup(null);
+      window.getSelection()?.removeAllRanges();
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [selPopup]);
+
   useEffect(() => {
     if (!onSelectionFinished) return;
     function onMouseUp() {
@@ -437,8 +452,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       ))}
       {selPopup && onSelectionFinished && (
         <div style={{ position: "fixed", top: selPopup.rect.bottom + 8, left: selPopup.rect.left, zIndex: 9999 }}>
-          <PlainTip onConfirm={handleSelConfirm}
-            onCancel={() => { window.getSelection()?.removeAllRanges(); setSelPopup(null); }} />
+          <PlainTip onConfirm={handleSelConfirm} />
         </div>
       )}
     </div>
@@ -537,38 +551,20 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
   );
 }
 
-function PlainTip({ onConfirm, onCancel }) {
-  const [text, setText] = useState("");
-  const [color, setColor] = useState(COLORS[0]);
-
-  // Live-preview the selection color while picking, before save.
-  useEffect(() => {
-    document.documentElement.style.setProperty("--selection-color", color);
-    return () => document.documentElement.style.removeProperty("--selection-color");
-  }, [color]);
-
+function PlainTip({ onConfirm }) {
   return (
     <div className="plainTip">
       <div className="colorRow">
         {COLORS.map((c) => (
           <button
             key={c}
-            className={`colorBtn ${color === c ? "selected" : ""}`}
+            className="colorBtn"
             style={{ background: c }}
-            onClick={() => setColor(c)}
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onConfirm("", c); }}
             type="button"
+            title="Highlight in this color"
           />
         ))}
-      </div>
-      <textarea
-        className="plainTipInput"
-        placeholder="Note"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-      />
-      <div className="plainTipActions">
-        <button onClick={() => onConfirm(text, color)}>Save</button>
-        <button onClick={onCancel}>Cancel</button>
       </div>
     </div>
   );
@@ -2005,7 +2001,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   function addHighlight(highlight) {
     if (readOnly) return;
     const withId = { ...highlight, id: highlight.id || makeId() };
-    const nextBlocks = addHighlightAsBlock(blocks, withId);
+    let nextBlocks = addHighlightAsBlock(blocks, withId);
+    // Open the new block immediately so the user can type the note without
+    // an extra click. addHighlightAsBlock appends at the top level.
+    nextBlocks = nextBlocks.map((b) => b.id === withId.id ? { ...b, editMode: true } : b);
+    pendingFocusRef.current = withId.id;
+    pendingBlockScrollRef.current = withId.id;
     setBlocks(nextBlocks);
     // autosave effect will persist
     setStatus("Highlight saved.");
