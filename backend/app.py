@@ -543,6 +543,11 @@ async def proxy_pdf(source_url: str, request: Request):
             },
         )
     except HTTPError as e:
+        if e.code in (401, 403):
+            raise HTTPException(
+                status_code=400,
+                detail="This site blocks server-side fetching. Please download the PDF in your browser and drop it onto the page.",
+            )
         raise HTTPException(status_code=400, detail=f"upstream HTTP error: {e.code}")
     except URLError as e:
         raise HTTPException(status_code=400, detail=f"upstream URL error: {e.reason}")
