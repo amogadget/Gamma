@@ -23,6 +23,32 @@ A self-hosted, Logseq-inspired PDF annotation server. Highlight PDFs in your bro
 - Generate a read-only share link for any annotated PDF.
 - Multi-user accounts with per-user isolated data. Guest account with daily reset.
 
+## Quick start (Docker)
+
+```bash
+docker run -d --name gamma \
+  -p 9001:9001 \
+  -v gamma-data:/data \
+  -e GAMMA_ADMIN_USER=admin \
+  -e GAMMA_ADMIN_PASSWORD=change-me \
+  ghcr.io/tim4431/gamma:latest
+```
+
+Open <http://localhost:9001> and log in. All state (accounts, notes, uploaded PDFs) lives in the `/data` volume.
+
+Or with compose — edit the environment in [docker-compose.yml](./docker-compose.yml) and:
+
+```bash
+docker compose up -d
+```
+
+To manage users inside a running container:
+
+```bash
+docker exec gamma python manage.py create-user alice her-password
+docker exec gamma python manage.py list-users
+```
+
 ## Screenshots
 
 ### Annotated PDF with block tree
@@ -53,12 +79,12 @@ Generate a read-only link for any annotated PDF. Recipients see the PDF, highlig
 
 Logseq is an excellent outliner-based knowledge-management tool. Gamma takes several ideas from it that work well for PDF annotation specifically:
 
-- **Everything is a block.** Highlights and free notes aren't different entities — both are rows in the same `blocks` table, distinguished only by whether they carry a `highlight_id` property. Both can be nested, reordered, styled identically.
+- **Everything is a block.** Highlights and free notes aren't different entities — both are rows in the same `unified_blocks` table, distinguished only by whether they carry a `highlight_id` property. Both can be nested, reordered, styled identically.
 - **Pages are the top-level container.** A PDF corresponds to exactly one page; all its highlights and notes live as blocks inside that page.
 - **Outliner editing.** Enter for sibling, Tab for indent, Shift+Tab for outdent, Backspace on empty to delete. One-click to edit, cursor lands near the click point.
 - **Drop indicator for tree drags.** Like Logseq, Gamma shows a single horizontal blue line during drag; its horizontal position snaps to valid nesting depths (sibling of current, first child of target, or sibling of any ancestor).
 - **Nested guide lines.** The vertical line to the left of nested blocks mimics Logseq's `.block-children` border-left pattern.
-- **Fractional indexing for page order.** Custom ordering of pages persists across reorder without renumbering, using the same `a0`, `a1`, `a0V` key scheme Logseq uses for blocks.
+- **Fractional indexing for block order.** Custom ordering persists across reorder without renumbering, using the same `a0`, `a1`, `a0V` key scheme Logseq uses.
 
 Gamma is narrower than Logseq — no graph view, no daily journal, no queries. The feature set is tuned for "I want to annotate PDFs and keep the notes organized as a tree."
 
@@ -74,28 +100,60 @@ Shared links (`/?share=<token>`) are a separate public read-only view: PDF + blo
 
 ## Architecture
 
-Three pieces:
+A single deployable service: a FastAPI backend that also serves the built React frontend. (In development the two run separately with a Vite proxy.)
 
-1. **Backend** (`backend/app.py`) — a FastAPI app with per-user SQLite databases:
-   - `users.db` — accounts, sessions (bcrypt passwords), and share tokens.
-   - `users/{username}/pages.db` — a `unified_blocks` table per user with self-referential `parent_id`. Root-level blocks are pages; everything else is nested blocks.
-   - `users/{username}/data.db` — annotations and AI chat history (per-user).
-   - `users/{username}/uploads/` — uploaded PDFs and images, content-hash deduped.
-   - App-level authentication via session cookies. No external auth provider needed.
-2. **CLI** (`backend/manage.py`) — user management. `create-user`, `set-password`, `delete-user`, `list-users`, `reset-guest`.
-3. **Frontend** (`logseq-v2-frontend/`) — React + Vite.
-   - `src/App.jsx` — main component. Routing, PDF loading, block tree render, drag-and-drop, autosave, login page.
-   - `src/logseqPdfModel.js` — block tree operations (insert, indent/outdent, flatten, extract, sibling/child insertion, cycle check).
-   - `src/app.css` — dark/light themed styling.
-4. **Reverse proxy** — Caddy routes the domain to the frontend and `/api/*` to the backend. No special auth configuration needed — the app handles login itself.
+### Backend (`backend/`)
 
-## Running locally
+```
+backend/
+├── app.py                # uvicorn entrypoint (thin shim)
+├── manage.py             # user-management CLI
+├── requirements.txt
+└── gamma/
+    ├── app.py            # FastAPI assembly: middleware, routers, startup, SPA serving
+    ├── config.py         # env-driven configuration (GAMMA_DATA_DIR, AI keys, ...)
+    ├── db.py             # SQLite schemas, connections, per-user paths
+    ├── auth.py           # session middleware + require_user/resolve_user
+    ├── seed.py           # per-user DB creation + guest welcome-page seeding
+    ├── blocks_store.py   # unified_blocks tree helpers (subtree CTEs, fractional positions)
+    ├── storage.py        # upload lookup + orphan cleanup
+    ├── logseq_import.py  # EDN/MD parsers for Logseq imports
+    └── routers/          # one module per API area
+        ├── auth.py       # /api/login, /api/logout, /api/session, /api/login-guest
+        ├── blocks.py     # /api/blocks/*, /api/block-search
+        ├── uploads.py    # /api/uploads, /api/upload-image, /api/cleanup-uploads
+        ├── pdf.py        # /api/resolve-pdf, /api/pdf (proxy + cache)
+        ├── shares.py     # /api/share/*
+        ├── ai.py         # /api/ai/chat, /api/chats/*
+        ├── annotations.py# /api/annotations/* (legacy)
+        └── imports.py    # /api/import/logseq
+```
+
+All state is SQLite + files under the data directory (`GAMMA_DATA_DIR`, defaults to `backend/`):
+
+- `users.db` — accounts (bcrypt passwords), session tokens, and share tokens.
+- `users/<name>/pages.db` — the `unified_blocks` table: everything is a block with a self-referential `parent_id` and a fractional-index `position`. Root-level blocks are pages.
+- `users/<name>/data.db` — AI chat history (and a legacy `annotations` table).
+- `users/<name>/uploads/` — uploaded PDFs and images, content-hash deduped.
+
+Authentication is a session cookie resolved by middleware; no external auth provider. Share tokens allow unauthenticated read access to a specific document.
+
+### Frontend (`logseq-v2-frontend/`)
+
+React + Vite.
+
+- `src/App.jsx` — main component: routing, PDF viewer (pdf.js), block tree, drag-and-drop, autosave, login, AI chat.
+- `src/logseqPdfModel.js` — pure block-tree operations (insert, indent/outdent, flatten, extract, cycle check).
+- `src/app.css` — dark/light themed styling.
+
+The frontend always calls same-origin `/api/*`. In production the backend serves the built `dist/`; in development Vite proxies to the backend.
+
+## Running from source (development)
 
 ### Prerequisites
 
 - Python 3.11+
 - Node.js 18+
-- Caddy (optional, only if you want domain routing + auth)
 
 ### Backend
 
@@ -109,82 +167,47 @@ python manage.py setup      # creates guest account
 uvicorn app:app --host 127.0.0.1 --port 9001
 ```
 
-The AI chat feature requires an API key compatible with the Anthropic Messages API (works with Anthropic and DeepSeek):
-
-```bash
-export ANTHROPIC_AUTH_TOKEN="your-api-key"
-# optionally override the base URL and model:
-export ANTHROPIC_BASE_URL="https://api.deepseek.com/anthropic"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="deepseek-v4-flash"
-```
-
-The backend auto-creates `data.db` and `pages.db` on first start, runs all pending migrations (adds `doc_id`, `position`, and `source_url` columns to `pages` as needed), and seeds the `blocks` table from any existing `annotations` rows.
-
 ### Frontend
 
 ```bash
 cd logseq-v2-frontend
 npm install
-npm run dev        # development server on :5173
-# or
-npm run build && npm run preview    # production build on :4173
+npm run dev        # development server on :5173, proxies /api to :9001
 ```
 
-### Putting it together
+### Production without Docker
 
-In development, proxy `/api/*` from the frontend to `127.0.0.1:9001` via a Vite proxy config or Caddy. See `vite.config.js` for the current setup.
+Build the frontend and let the backend serve it:
 
-For production-style hosting:
-
-```caddyfile
-{
-    servers {
-        protocols h1 h2
-    }
-}
-
-your-domain.com {
-    handle /api/* {
-        reverse_proxy 127.0.0.1:9001
-    }
-    handle {
-        reverse_proxy 127.0.0.1:4173
-    }
-}
+```bash
+cd logseq-v2-frontend && npm run build
+cd ../backend
+GAMMA_STATIC_DIR=../logseq-v2-frontend/dist uvicorn app:app --host 127.0.0.1 --port 9001
 ```
 
-Authentication is handled by the app itself — no Caddy basic auth needed.
+Put any TLS-terminating reverse proxy (Caddy, nginx) in front of port 9001 if you want a domain. If you previously used HTTP/3, note we hit a Chrome bug where reopening an incognito window reused a stale QUIC connection with crippled flow control, making 6 MB PDFs take 10+ seconds to download — consider limiting Caddy to `protocols h1 h2`.
 
-The global `protocols h1 h2` block disables HTTP/3. We hit a Chrome bug where reopening an incognito window reused a stale QUIC connection with crippled flow control, making 6 MB PDFs take 10+ seconds to download. HTTP/2 is consistent and the small wins HTTP/3 offers don't justify the failure mode here. Safari and curl were unaffected.
-
-### Remote VM deployment
-
-1. Clone the repo on your VM.
-2. Follow the Backend and Frontend setup steps above.
-3. Install Caddy and configure it with your domain (see Caddyfile example above).
-4. Build the frontend (`npm run build` in `logseq-v2-frontend/`).
-5. Run the backend as a service (use systemd or tmux):
-   ```bash
-   cd backend
-   source venv/bin/activate
-   uvicorn app:app --host 127.0.0.1 --port 9001
-   ```
-6. Run the frontend preview server:
-   ```bash
-   cd logseq-v2-frontend
-   npx vite preview --host 127.0.0.1 --port 4173
-   ```
-7. Point Caddy to your domain and start it.
-
-### Environment variables
+## Environment variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
+| `GAMMA_DATA_DIR` | No | `backend/` (`/data` in Docker) | Where users.db and per-user data live |
+| `GAMMA_STATIC_DIR` | No | unset (`/app/static` in Docker) | Built frontend to serve as SPA; unset = API only |
+| `GAMMA_PORT` | No | `9001` | Listen port (Docker entrypoint only) |
+| `GAMMA_ADMIN_USER` / `GAMMA_ADMIN_PASSWORD` | No | — | Bootstrap admin account on container start |
 | `ANTHROPIC_AUTH_TOKEN` | For AI chat | — | API key for Anthropic-compatible chat (DeepSeek, Anthropic) |
 | `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Override the API base URL (e.g. `https://api.deepseek.com/anthropic`) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | No | `deepseek-v4-flash` | Model name for the AI chat |
 
-The backend auto-creates `data.db` and `pages.db` on first start.
+## Docker image
+
+The image is published to GitHub Container Registry on every push to `main` (`latest`) and on version tags (`v1.2.3` → `1.2.3`, `1.2`), for `linux/amd64` and `linux/arm64`:
+
+```
+ghcr.io/tim4431/gamma
+```
+
+It is a multi-stage build: a Node stage compiles the frontend, and the final Python image runs FastAPI serving both the API and the static SPA on port 9001. See [Dockerfile](./Dockerfile) and [.github/workflows/docker.yml](./.github/workflows/docker.yml).
 
 ## Features
 
@@ -193,7 +216,7 @@ The backend auto-creates `data.db` and `pages.db` on first start.
 - **Logseq EDN import**: import Logseq PDF-highlight exports (EDN + MD + PDF) — preserves highlight positions, notes, and block tree structure.
 - **Attach mode**: link orphaned notes to existing PDF highlights — click ⊕ then left-click a highlight. Linked block jumps to the highlight and inherits its color.
 - **Cross-note block references**: type `[[` in any block to search and insert a reference to another block. References render as clickable chips that jump to the target.
-- **AI chat assistant**: sidebar chatbox sends your question + the PDF's extracted text (up to 8000 chars) to an Anthropic-compatible API (DeepSeek by default). Supports uploaded PDFs and URLs. Per-page conversation history is stored on the backend (`chats` table in `data.db`), so it follows you across devices. Configured via `ANTHROPIC_AUTH_TOKEN` env var.
+- **AI chat assistant**: sidebar chatbox sends your question + the PDF's extracted text (up to 8000 chars) to an Anthropic-compatible API (DeepSeek by default). Supports uploaded PDFs and URLs. Per-page conversation history is stored on the backend, so it follows you across devices. Configured via `ANTHROPIC_AUTH_TOKEN` env var.
 - **Category metadata**: tag-style category input with autocomplete from existing categories. Arrow-key navigation, comma to add tags. Home page shows grouped carousels by category.
 - **Light/dark theme toggle**: cycles Dark ☾ / Light ☀ / Follow system ◐ (listens to `prefers-color-scheme`). Persisted in localStorage.
 - **Session persistence**: last-opened page, collapsed states, zoom, orientation, PDF toggle, notes toggle, splitter position, and current PDF page survive page reload (localStorage + block properties).
@@ -219,50 +242,16 @@ The backend auto-creates `data.db` and `pages.db` on first start.
 
 ## Known limitations
 
-
-
 - Autosave is debounced at 500 ms. Closing the tab within that window can lose the last keystroke.
 - No conflict handling for simultaneous edits across tabs/devices. Last write wins.
+- `src/App.jsx` is still a single large component; splitting it into hooks/components is tracked as future work.
 
 ## Future work
 
 - Password change and account deletion via the app UI (currently CLI-only).
 - Conflict resolution / multi-device sync.
 - Collaboration between users (shared pages, cross-user block references).
-
-## Directory layout
-
-```
-pdf-share/
-├── backend/              # FastAPI + SQLite
-│   ├── app.py            # all endpoints
-│   ├── data.db           # annotations + shares (gitignored)
-│   └── pages.db          # pages + blocks (gitignored)
-├── logseq-v2-frontend/   # React + Vite
-│   ├── src/
-│   │   ├── App.jsx
-│   │   ├── logseqPdfModel.js
-│   │   ├── app.css
-│   │   └── main.jsx
-│   ├── public/
-│   │   └── pdf.worker.min.mjs
-│   ├── package.json
-│   └── vite.config.js
-├── uploads/              # user-uploaded PDFs, content-hashed (gitignored)
-└── archive/              # session backups, tarballed (gitignored)
-```
-
-## History
-
-The codebase went through several layered iterations before landing here. An earlier frontend (`rph-frontend`) accumulated feature layers — share links, colored highlights, resizable sidebar, outliner, page-sync logic, custom flash animations, overlapping CSS — to the point where debugging any one feature meant fighting the others. The current code is `logseq-v2-frontend`, started as a clean rewrite keeping only the share-link flow, with later additions built on a consistent block-based data model.
-
-Notable architectural decisions:
-
-- Pages are the top-level container for a PDF's annotations (Logseq model), not the annotations themselves.
-- Highlights are blocks with a `highlight_id` property; free notes are blocks without. Both persist identically, both can be reordered, both can have children.
-- Block ordering within a page uses a plain integer `position` column, not fractional indexing. Page ordering on the home view uses fractional indexing so reorders only touch the moved page, not every sibling.
-- The `annotations` table in `data.db` is kept for backward compatibility but is no longer the source of truth — `blocks` in `pages.db` is. A one-time startup migration seeds the blocks table from existing annotations.
-- URL routing moved from `?src=<url>` to `?page=<id>` as the canonical form. `?src=...` still works but redirects to `?page=...` after loading the page record.
+- Decompose the frontend God component (`App.jsx`) into hooks and view components.
 
 ## License
 
