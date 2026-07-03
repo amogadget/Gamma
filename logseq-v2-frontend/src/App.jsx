@@ -1758,7 +1758,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       form.append("pdf", pdfFile);
       form.append("edn", ednFile);
       if (mdFile) form.append("md", mdFile);
-      const resp = await fetch(`${API}/import/logseq`, { method: "POST", body: form });
+      const resp = await fetch(`${API}/import/logseq`, { method: "POST", body: form, credentials: "include" });
       if (!resp.ok) throw new Error(await resp.text());
       const data = await resp.json();
       // Block was already created by the import endpoint; just load it.
@@ -1793,10 +1793,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       let finalUrl, resolvedDocId, proxiedUrl;
       if (isUpload) {
         finalUrl = sourceUrl;
-        // filename is "<doc_id>.pdf" — serve directly from Caddy, bypassing uvicorn
+        // filename is "<doc_id>.pdf" — serve straight from the uploads route
         const m = sourceUrl.match(/\/([0-9a-f]+)\.pdf$/);
         resolvedDocId = m ? m[1] : await getDocIdForUrl(sourceUrl);
-        proxiedUrl = `/pdf-files/${resolvedDocId}.pdf`;
+        proxiedUrl = `${API}/uploads/${resolvedDocId}.pdf`;
       } else {
         finalUrl = await resolvePdfUrl(sourceUrl);
         resolvedDocId = await getDocIdForUrl(finalUrl);
