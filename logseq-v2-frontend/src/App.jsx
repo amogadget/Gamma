@@ -1309,6 +1309,7 @@ export default function App() {
   const initialShare = params.get("share") || "";
   const initialBlockId = params.get("block") || params.get("page") || "";
   const initialCategory = params.get("category") || "";
+  const initialFolder = params.get("folder") || "";
   const readOnly = Boolean(initialShare);
 
   // Auth state: null=loading, false=logged out, {user, is_guest}=logged in
@@ -1382,6 +1383,42 @@ export default function App() {
   const [categoryInput, setCategoryInput] = useState("");
   const [categorySuggestionIdx, setCategorySuggestionIdx] = useState(-1);
   const [categoryFilter, setCategoryFilter] = useState(initialCategory);
+  // File-browser home: folders are virtual — each page block stores a single
+  // `properties.folder` string; storage stays flat at root. Empty (manually
+  // created) folders live in localStorage until a paper lands in them.
+  const [folderFilter, setFolderFilter] = useState(initialFolder);
+  const [folderDragOver, setFolderDragOver] = useState(null);
+  const [extraFolders, setExtraFolders] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gamma-extra-folders") || "[]"); } catch { return []; }
+  });
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  useEffect(() => {
+    try { localStorage.setItem("gamma-extra-folders", JSON.stringify(extraFolders)); } catch {}
+  }, [extraFolders]);
+
+  async function setPageFolder(pageId, folderName) {
+    try {
+      await apiJson(`${API}/blocks/${pageId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ properties: { folder: folderName || "" } }),
+      });
+      if (folderName) setExtraFolders((prev) => prev.filter((f) => f !== folderName));
+      await fetchHomeBlocks();
+      setStatus(folderName ? `Moved to “${folderName}”.` : "Moved out of the folder.");
+    } catch (err) {
+      setStatus(`Move failed: ${err.message}`);
+    }
+  }
+
+  function commitNewFolder() {
+    const name = newFolderName.trim();
+    setNewFolderOpen(false);
+    setNewFolderName("");
+    if (!name) return;
+    setExtraFolders((prev) => prev.includes(name) ? prev : [...prev, name]);
+  }
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
   const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
   const [zoomDraft, setZoomDraft] = useState(null);  // while typing a custom zoom %
@@ -1579,9 +1616,11 @@ export default function App() {
   }
   useEffect(() => {
     function onKey(e) {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+      // Ctrl+F (and Ctrl+Shift+F) open the built-in search instead of the
+      // browser find — it covers notes, highlights, AND the PDF text.
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
-        setOpenPopover((p) => (p === "search" ? null : "search"));
+        setOpenPopover((p) => (p === "search" && !e.shiftKey ? null : "search"));
       } else if (e.key === "Escape") {
         setOpenPopover(null);
       }
@@ -2146,8 +2185,8 @@ export default function App() {
       })();
     }
     else if (initialUrl) openPdf(initialUrl);
-    else if (initialCategory) {
-      // Stay on home page with category filter — don't restore session
+    else if (initialCategory || initialFolder) {
+      // Stay on home page with the category/folder filter — don't restore session
     }
     else {
       // Bare `/` — try restore last session
@@ -2533,6 +2572,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     setCategory("");
     setBacklinks([]);
     setPdfHidden(false);
+    setFolderFilter("");
+    setCategoryFilter("");
     fetchHomeBlocks();
     window.history.replaceState({}, "", window.location.pathname);
   }
@@ -3000,11 +3041,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       _pageId: b.id,
       _position: b.position,
       _sourceUrl: b.properties?.source_url,
+      _folder: (b.properties?.folder || "").trim(),
       _isRecent: recentIds.has(b.id),
       _isEmpty: !b.content,
       editMode: homeEditingId === b.id,
     }));
   }, [homeBlocks, recentIds, homeEditingId]);
+  // Folder names: everything referenced by a page, plus manually created empties
+  const folderNames = useMemo(() => {
+    const set = new Set(extraFolders);
+    for (const b of pageBlocks) if (b._folder) set.add(b._folder);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [pageBlocks, extraFolders]);
+  const folderCounts = useMemo(() => {
+    const m = {};
+    for (const b of pageBlocks) if (b._folder) m[b._folder] = (m[b._folder] || 0) + 1;
+    return m;
+  }, [pageBlocks]);
+  // What the home list shows: inside a folder → its papers; at root → unfiled papers
+  const homeVisiblePages = useMemo(() => (
+    folderFilter ? pageBlocks.filter((b) => b._folder === folderFilter)
+                 : pageBlocks.filter((b) => !b._folder)
+  ), [pageBlocks, folderFilter]);
   const highlights = useMemo(() => {
     const flat = flattenBlocks(blocks);
     return blocksToHighlights(blocks).map((h) => {
@@ -3853,9 +3911,85 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </>
               );
             })() : null}
+            {homeMode && !categoryFilter ? (
+              <div className="folderBrowser">
+                {folderFilter ? (
+                  <>
+                    <div
+                      className={`folderRow folderBackRow ${folderDragOver === "__root__" ? "dragOver" : ""}`}
+                      onClick={() => { setFolderFilter(""); window.history.replaceState(null, "", "/"); }}
+                      onDragOver={(e) => { e.preventDefault(); setFolderDragOver("__root__"); }}
+                      onDragLeave={() => setFolderDragOver(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setFolderDragOver(null);
+                        const id = e.dataTransfer.getData("text/plain");
+                        if (id) setPageFolder(id, "");
+                      }}
+                      title="Back — or drop a paper here to move it out of the folder"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
+                      <span className="folderName">All papers</span>
+                      <span className="folderHint">drop here to move out</span>
+                    </div>
+                    <div className="folderCurrent">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>
+                      {folderFilter}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {folderNames.map((f) => (
+                      <div
+                        key={f}
+                        className={`folderRow ${folderDragOver === f ? "dragOver" : ""}`}
+                        onClick={() => { setFolderFilter(f); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(f)}`); }}
+                        onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
+                        onDragLeave={() => setFolderDragOver(null)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setFolderDragOver(null);
+                          const id = e.dataTransfer.getData("text/plain");
+                          if (id) setPageFolder(id, f);
+                        }}
+                        title="Open folder — or drop a paper on it to file it"
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                        <span className="folderName">{f}</span>
+                        <span className="folderCount">{folderCounts[f] || 0}</span>
+                      </div>
+                    ))}
+                    {newFolderOpen ? (
+                      <div className="folderRow folderNewRow">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                        <input
+                          autoFocus
+                          className="folderNewInput"
+                          value={newFolderName}
+                          onChange={(e) => setNewFolderName(e.target.value)}
+                          placeholder="Folder name…"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { e.preventDefault(); commitNewFolder(); }
+                            else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
+                          }}
+                          onBlur={commitNewFolder}
+                        />
+                      </div>
+                    ) : (
+                      <button className="folderRow folderNewBtn" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }}>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                        <span className="folderName">New folder</span>
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : null}
             {homeMode && categoryFilter ? null : (
-            (homeMode ? pageBlocks : visibleBlocks).length === 0 ? (
-              <div className="empty">{homeMode ? "No pages yet — open a PDF above to get started." : "No blocks yet."}</div>
+            (homeMode ? homeVisiblePages : visibleBlocks).length === 0 ? (
+              <div className="empty">{homeMode
+                ? (folderFilter ? "This folder is empty — drag papers onto it from the library." : (pageBlocks.length ? "All papers are filed in folders." : "No pages yet — open a PDF above to get started."))
+                : "No blocks yet."}</div>
             ) : (
               (() => {
                 const rowProps = {
@@ -4061,7 +4195,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 };
                 return (
                   <>
-                    <BlockTree blocks={homeMode ? pageBlocks : blocks} readOnly={readOnly} rowProps={rowProps} />
+                    <BlockTree blocks={homeMode ? homeVisiblePages : blocks} readOnly={readOnly} rowProps={rowProps} />
                     {dropTarget && (() => {
                       const indentStep = 14;
                       const baseOffset = 28;
@@ -4177,7 +4311,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               title="Home"
               aria-label="Home"
             >
-              Γ
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
             </button>
             <div className="tabStrip" role="tablist">
               {openTabs.map((t) => (
@@ -4427,7 +4561,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </>
       ) : (
         <div className="topbar">
-          <button className="homeBtn" disabled title="Home" aria-label="Home">Γ</button>
+          <button className="homeBtn" disabled title="Home" aria-label="Home">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+          </button>
           <span className="readOnlyTitle">{pdfTitle}</span>
           <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
             <button
