@@ -22,3 +22,4 @@ HANDOFF.md.bak
 .env
 /data
 docker-compose.yml
+run-local.bat
