@@ -36,9 +36,10 @@ docker run -d --name gamma \
 
 Open <http://localhost:9001> and log in. All state (accounts, notes, uploaded PDFs) lives in the `/data` volume.
 
-Or with compose — secrets live in a `.env` file next to [docker-compose.yml](./docker-compose.yml):
+Or with compose — copy the templates (both real files are gitignored so your local settings never end up in commits):
 
 ```bash
+cp docker-compose.yml.example docker-compose.yml
 cp .env.example .env   # then edit: admin password, optional AI key
 docker compose up -d
 ```
