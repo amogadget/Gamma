@@ -247,6 +247,7 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
         bibtex = _build_bibtex(meta)
     props["meta"] = meta
     props["bibtex"] = bibtex
+    props.pop("ppt_cite", None)  # metadata changed — cached citation is stale
     _save_props(user, payload.block_id, props)
     return {"meta": meta, "bibtex": bibtex, "source": meta.get("source", ""), "cached": False}
 
@@ -255,14 +256,17 @@ class CiteRequest(BaseModel):
     block_id: str
     prompt: str = ""   # custom PPT-citation prompt (empty = built-in)
     model: str = ""
+    force: bool = False  # regenerate even when a cached citation exists
 
 
 @router.post("/metadata/cite")
 def metadata_cite(payload: CiteRequest, request: Request):
-    if not AI_ENABLED:
-        raise HTTPException(status_code=503, detail="AI not configured (set a provider API key)")
     user = require_user(request)
     _, props = _load_page(user, payload.block_id)
+    if props.get("ppt_cite") and not payload.force:
+        return {"citation": props["ppt_cite"], "cached": True}
+    if not AI_ENABLED:
+        raise HTTPException(status_code=503, detail="AI not configured (set a provider API key)")
     meta = props.get("meta")
     bibtex = props.get("bibtex", "")
     if not meta and not bibtex:
@@ -274,4 +278,7 @@ def metadata_cite(payload: CiteRequest, request: Request):
                         _resolve_model(payload.model), max_tokens=4000, timeout=120)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
-    return {"citation": text.strip()}
+    citation = text.strip()
+    props["ppt_cite"] = citation  # cache alongside the rest of the metadata
+    _save_props(user, payload.block_id, props)
+    return {"citation": citation, "cached": False}
