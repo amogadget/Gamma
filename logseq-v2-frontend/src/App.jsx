@@ -4382,7 +4382,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 aria-label="Back"
               >
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
-                {navStackLen > 1 ? <span className="navBackBadge">{Math.min(navStackLen, 9)}</span> : null}
+                <span className="navBackBadge">{Math.min(navStackLen, 30)}</span>
               </button>
             ) : null}
             <div className="tabStrip" role="tablist">
