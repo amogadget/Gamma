@@ -1270,6 +1270,80 @@ body {
   margin-bottom: 16px;
 }
 
+/* --- file-browser home: folders --- */
+.folderBrowser {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+.folderRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border: 1px dashed transparent;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  width: 100%;
+  user-select: none;
+}
+.folderRow svg { color: var(--accent); flex-shrink: 0; }
+.folderRow:hover { background: var(--bg-block); }
+.folderRow.dragOver {
+  background: var(--accent-bg);
+  border-color: var(--accent-dark);
+}
+.folderName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folderCount {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-raised);
+  border-radius: 999px;
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+.folderHint { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+.folderBackRow svg { color: var(--text-muted); }
+.folderCurrent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 4px 10px 8px;
+}
+.folderCurrent svg { color: var(--accent); }
+.folderNewBtn { color: var(--text-muted); }
+.folderNewBtn svg { color: var(--text-muted); }
+.folderNewBtn:hover { color: var(--text-primary); }
+.folderNewInput {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 8px;
+  outline: none;
+}
+.folderNewInput:focus { border-color: var(--accent-dark); }
+
 /* --- Indicator in main list for recent pages --- */
 .recentIndicator {
   color: #f5c542;
