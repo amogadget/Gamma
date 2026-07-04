@@ -479,6 +479,38 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     if (scrollRef) scrollRef.current = scrollToPositionRef.current;
   }, [scrollRef, scale, pdfDoc]);
 
+  // Jump history for in-PDF link clicks, so the reader can return to where
+  // they were (Acrobat's "previous view"). Entries remember the scale so the
+  // position survives zoom changes.
+  const [jumpStack, setJumpStack] = useState([]);
+  useEffect(() => { setJumpStack([]); }, [url]);
+
+  function pushJumpPoint() {
+    const v = viewerRef.current;
+    if (!v) return;
+    setJumpStack((prev) => [...prev.slice(-19), { top: v.scrollTop, scale }]);
+  }
+
+  function goBackJump() {
+    setJumpStack((prev) => {
+      const next = [...prev];
+      const entry = next.pop();
+      if (entry && viewerRef.current) {
+        viewerRef.current.scrollTo({ top: entry.top * (scale / (entry.scale || scale)), behavior: "auto" });
+      }
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    if (!jumpStack.length) return;
+    const onKey = (e) => {
+      if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goBackJump(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [jumpStack.length, scale]);
+
   // In-PDF link annotations: internal destinations jump within the document.
   async function goToDest(dest) {
     if (!pdfDoc) return;
@@ -487,6 +519,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       if (!d || d[0] == null) return;
       const pageIdx = typeof d[0] === "object" ? await pdfDoc.getPageIndex(d[0]) : Number(d[0]);
       const pn = pageIdx + 1;
+      pushJumpPoint(); // capture where the reader was before following the link
       const page = await pdfDoc.getPage(pn);
       const vp = page.getViewport({ scale: 1 });
       // Destination y is in PDF user space (origin bottom-left); flip to top-down.
@@ -599,6 +632,14 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
 
   return (
     <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
+      {jumpStack.length > 0 ? (
+        <div className="pdfBackWrap">
+          <button className="pdfBackBtn" onClick={goBackJump} title="Return to where you were reading before the link jump (Alt+←)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
+            Back{jumpStack.length > 1 ? ` · ${jumpStack.length}` : ""}
+          </button>
+        </div>
+      ) : null}
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={i + 1} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={highlights} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
