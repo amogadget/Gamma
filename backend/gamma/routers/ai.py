@@ -12,25 +12,41 @@ from pydantic import BaseModel
 
 from ..auth import require_user
 from ..blocks_store import fetch_subtree
-from ..config import AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_MODELS, AI_PROVIDER
+from ..config import AI_DEFAULT_MODEL, AI_ENABLED, AI_MODELS, AI_PROVIDERS
 from ..db import page_now, user_db_path, user_uploads_dir
 
 router = APIRouter(prefix="/api", tags=["ai"])
 
 MAX_ATTACH_PDF_BYTES = 15 * 1024 * 1024  # keep base64 payload well under API request limits
 
+# Reasoning-depth values accepted by both wire protocols (Anthropic
+# output_config.effort / OpenAI reasoning_effort). Only sent when the user
+# picks one — many models reject the parameter outright.
+EFFORT_LEVELS = {"minimal", "low", "medium", "high", "xhigh", "max"}
+
 
 class AIChatRequest(BaseModel):
     prompt: str
     doc_id: str = ""
     history: list = []  # [{role: "user"|"ai", text: str}, ...]
-    model: str = ""       # optional override, must be one of AI_MODELS
+    model: str = ""       # model registry id ("provider:model"), must be in AI_MODELS
     selection: str = ""   # text the user selected in the PDF — focus the answer on it
     attach_pdf: bool = False  # send the PDF itself instead of extracted text
+    effort: str = ""      # reasoning effort; empty = provider default (param omitted)
+    system: str = ""      # custom system prompt; empty = built-in default
 
 
-def _resolve_model(requested: str) -> str:
-    return requested if requested in AI_MODELS else AI_MODEL
+def _resolve_model(requested: str) -> dict:
+    """Registry entry for a requested model id (or bare model name); default otherwise."""
+    for entry in AI_MODELS:
+        if requested == entry["id"] or requested == entry["model"]:
+            return entry
+    return AI_DEFAULT_MODEL
+
+
+def _resolve_effort(requested: str) -> str:
+    requested = (requested or "").strip().lower()
+    return requested if requested in EFFORT_LEVELS else ""
 
 
 def _final_prompt(payload: AIChatRequest) -> str:
@@ -138,7 +154,7 @@ _SYSTEM_PROMPT = ("You are a research assistant helping the user understand a PD
                   "parts of the text when relevant.")
 
 
-def _anthropic_request(messages, system, model, pdf_b64=None, timeout_hint=None):
+def _anthropic_request(conf, messages, system, model, pdf_b64=None, effort=""):
     """Anthropic Messages API: POST /v1/messages, x-api-key auth."""
     if pdf_b64:
         last = messages[-1]
@@ -146,14 +162,16 @@ def _anthropic_request(messages, system, model, pdf_b64=None, timeout_hint=None)
             {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64}},
             {"type": "text", "text": last["content"]},
         ]
-    body = json.dumps({
+    body = {
         "model": model,
         "max_tokens": 4096,
         "system": system,
         "messages": messages,
-    }).encode()
-    return urllib.request.Request(f"{AI_BASE_URL}/v1/messages", data=body, headers={
-        "x-api-key": AI_API_KEY,
+    }
+    if effort:
+        body["output_config"] = {"effort": effort}
+    return urllib.request.Request(f"{conf['base_url']}/v1/messages", data=json.dumps(body).encode(), headers={
+        "x-api-key": conf["api_key"],
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
     })
@@ -163,7 +181,7 @@ def _anthropic_extract(data) -> str:
     return "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
 
 
-def _openai_request(messages, system, model, pdf_b64=None, timeout_hint=None):
+def _openai_request(conf, messages, system, model, pdf_b64=None, effort=""):
     """OpenAI Chat Completions API: POST /v1/chat/completions, Bearer auth."""
     if pdf_b64:
         last = messages[-1]
@@ -174,14 +192,16 @@ def _openai_request(messages, system, model, pdf_b64=None, timeout_hint=None):
         ]
     if system:
         messages = [{"role": "system", "content": system}] + messages
-    body = json.dumps({
+    body = {
         "model": model,
         # not max_tokens: current OpenAI models 400 on it ("use max_completion_tokens")
         "max_completion_tokens": 4096,
         "messages": messages,
-    }).encode()
-    return urllib.request.Request(f"{AI_BASE_URL}/v1/chat/completions", data=body, headers={
-        "Authorization": f"Bearer {AI_API_KEY}",
+    }
+    if effort:
+        body["reasoning_effort"] = effort
+    return urllib.request.Request(f"{conf['base_url']}/v1/chat/completions", data=json.dumps(body).encode(), headers={
+        "Authorization": f"Bearer {conf['api_key']}",
         "Content-Type": "application/json",
     })
 
@@ -191,15 +211,21 @@ def _openai_extract(data) -> str:
     return (choices[0].get("message") or {}).get("content") or ""
 
 
-_PROVIDERS = {
+_WIRE = {
     "anthropic": (_anthropic_request, _anthropic_extract),
     "openai": (_openai_request, _openai_extract),
 }
 
 
-def _call_ai(messages, system, model, pdf_b64=None, timeout=60):
-    build_request, extract_text = _PROVIDERS[AI_PROVIDER]
-    req = build_request(messages, system, model, pdf_b64)
+def _call_ai(messages, system, entry, pdf_b64=None, effort="", timeout=60):
+    """Send a chat to the provider that serves `entry` (a model registry entry)."""
+    conf = AI_PROVIDERS[entry["provider"]]
+    if not conf["api_key"]:
+        raise HTTPException(status_code=503,
+                            detail=f"provider '{entry['provider']}' not configured "
+                                   f"(set GAMMA_AI_{entry['provider'].upper()}_API_KEY)")
+    build_request, extract_text = _WIRE[entry["provider"]]
+    req = build_request(conf, messages, system, entry["model"], pdf_b64, effort)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
@@ -218,13 +244,19 @@ def _call_ai(messages, system, model, pdf_b64=None, timeout=60):
 @router.get("/ai/models")
 async def ai_models(request: Request):
     require_user(request)
-    return {"enabled": bool(AI_API_KEY), "provider": AI_PROVIDER, "models": AI_MODELS, "default": AI_MODEL}
+    return {
+        "enabled": AI_ENABLED,
+        "models": AI_MODELS,                # [{id: "provider:model", provider, model}, ...]
+        "default": AI_DEFAULT_MODEL["id"],
+        "efforts": ["low", "medium", "high"],  # offered in the UI; omitted unless picked
+        "default_prompt": _SYSTEM_PROMPT,   # shown in the prompt editor
+    }
 
 
 @router.post("/ai/chat")
 async def ai_chat(payload: AIChatRequest, request: Request):
-    if not AI_API_KEY:
-        raise HTTPException(status_code=503, detail="AI not configured (set GAMMA_AI_API_KEY)")
+    if not AI_ENABLED:
+        raise HTTPException(status_code=503, detail="AI not configured (set a provider API key)")
 
     user = require_user(request)
 
@@ -235,10 +267,15 @@ async def ai_chat(payload: AIChatRequest, request: Request):
     context = "" if pdf_b64 else (_extract_pdf_context(user, payload.doc_id) if payload.doc_id else "")
 
     messages = _build_messages(payload, context)
-    system = _SYSTEM_PROMPT if (context or pdf_b64) else ""
+    custom_system = (payload.system or "").strip()[:8000]
+    # A custom prompt always applies; the built-in one only when there's a document
+    system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64) else "")
     try:
-        text = _call_ai(messages, system, _resolve_model(payload.model), pdf_b64, timeout=120)
+        text = _call_ai(messages, system, _resolve_model(payload.model), pdf_b64,
+                        effort=_resolve_effort(payload.effort), timeout=120)
         return {"response": text}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[ai_chat] API error: {e}")
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
@@ -250,6 +287,7 @@ class AIReportRequest(BaseModel):
     page_ids: list
     model: str = ""
     instructions: str = ""
+    effort: str = ""
 
 
 _REPORT_SYSTEM = (
@@ -310,8 +348,8 @@ def _page_report_section(conn, user: str, page_id: str, pdf_budget: int) -> str 
 
 @router.post("/ai/report")
 async def ai_report(payload: AIReportRequest, request: Request):
-    if not AI_API_KEY:
-        raise HTTPException(status_code=503, detail="AI not configured (set GAMMA_AI_API_KEY)")
+    if not AI_ENABLED:
+        raise HTTPException(status_code=503, detail="AI not configured (set a provider API key)")
     user = require_user(request)
     page_ids = [str(p) for p in (payload.page_ids or [])][:12]
     if not page_ids:
@@ -334,8 +372,11 @@ async def ai_report(payload: AIReportRequest, request: Request):
 
     try:
         text = _call_ai([{"role": "user", "content": prompt}], _REPORT_SYSTEM,
-                        _resolve_model(payload.model), timeout=180)
+                        _resolve_model(payload.model),
+                        effort=_resolve_effort(payload.effort), timeout=180)
         return {"report": text}
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[ai_report] API error: {e}")
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
