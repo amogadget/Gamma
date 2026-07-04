@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..auth import require_user
-from ..config import AI_API_KEY, AI_BASE_URL, AI_MODEL
+from ..config import AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_PROVIDER
 from ..db import page_now, user_db_path, user_uploads_dir
 
 router = APIRouter(prefix="/api", tags=["ai"])
@@ -91,30 +91,70 @@ def _extract_pdf_context(user: str, doc_id: str) -> str:
         return "(PDF text extraction failed)"
 
 
-@router.post("/ai/chat")
-async def ai_chat(payload: AIChatRequest, request: Request):
-    if not AI_API_KEY:
-        raise HTTPException(status_code=503, detail="AI not configured (missing ANTHROPIC_AUTH_TOKEN)")
+_SYSTEM_PROMPT = ("You are a research assistant helping the user understand a PDF they are reading. "
+                  "The user may ask questions about the document. Be concise and reference specific "
+                  "parts of the text when relevant.")
 
-    user = require_user(request)
-    context = _extract_pdf_context(user, payload.doc_id) if payload.doc_id else ""
 
+def _anthropic_request(messages, system):
+    """Anthropic Messages API: POST /v1/messages, x-api-key auth."""
     body = json.dumps({
         "model": AI_MODEL,
         "max_tokens": 4096,
-        "system": "You are a research assistant helping the user understand a PDF they are reading. The user may ask questions about the document. Be concise and reference specific parts of the text when relevant." if context else "",
-        "messages": _build_messages(payload, context),
+        "system": system,
+        "messages": messages,
     }).encode()
-    req = urllib.request.Request(f"{AI_BASE_URL}/v1/messages", data=body, headers={
+    return urllib.request.Request(f"{AI_BASE_URL}/v1/messages", data=body, headers={
         "x-api-key": AI_API_KEY,
         "anthropic-version": "2023-06-01",
         "Content-Type": "application/json",
     })
+
+
+def _anthropic_extract(data) -> str:
+    return "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
+
+
+def _openai_request(messages, system):
+    """OpenAI Chat Completions API: POST /v1/chat/completions, Bearer auth."""
+    if system:
+        messages = [{"role": "system", "content": system}] + messages
+    body = json.dumps({
+        "model": AI_MODEL,
+        "max_tokens": 4096,
+        "messages": messages,
+    }).encode()
+    return urllib.request.Request(f"{AI_BASE_URL}/v1/chat/completions", data=body, headers={
+        "Authorization": f"Bearer {AI_API_KEY}",
+        "Content-Type": "application/json",
+    })
+
+
+def _openai_extract(data) -> str:
+    choices = data.get("choices") or [{}]
+    return (choices[0].get("message") or {}).get("content") or ""
+
+
+_PROVIDERS = {
+    "anthropic": (_anthropic_request, _anthropic_extract),
+    "openai": (_openai_request, _openai_extract),
+}
+
+
+@router.post("/ai/chat")
+async def ai_chat(payload: AIChatRequest, request: Request):
+    if not AI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured (set GAMMA_AI_API_KEY)")
+
+    user = require_user(request)
+    context = _extract_pdf_context(user, payload.doc_id) if payload.doc_id else ""
+
+    build_request, extract_text = _PROVIDERS[AI_PROVIDER]
+    req = build_request(_build_messages(payload, context), _SYSTEM_PROMPT if context else "")
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
-        text = "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
-        return {"response": text}
+        return {"response": extract_text(data)}
     except Exception as e:
         print(f"[ai_chat] API error: {e}")
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
