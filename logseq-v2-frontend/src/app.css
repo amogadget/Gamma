@@ -337,8 +337,7 @@ body {
 
 .pageTitleRow {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
   gap: 10px;
   margin-bottom: 12px;
 }
@@ -346,22 +345,8 @@ body {
 .pageTitleRow h3 {
   margin: 0;
   font-size: 18px;
-}
-
-.pageDeleteBtn {
-  background: none;
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 4px 8px;
-  line-height: 1;
-  flex-shrink: 0;
-}
-.pageDeleteBtn:hover {
-  color: #e05555;
-  border-color: #e05555;
+  flex: 1;
+  min-width: 0;
 }
 
 .pageHeaderMeta {
@@ -400,8 +385,8 @@ body {
 .blockRow {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 4px 6px;
+  gap: 5px;
+  padding: 4px 4px;
   border-radius: 8px;
 }
 
@@ -415,7 +400,8 @@ body {
 
 .blockDeleteBtn {
   flex: 0 0 auto;
-  align-self: center;
+  align-self: flex-start;
+  margin-top: 2px;
   border: none;
   background: transparent;
   color: var(--text-dim);
@@ -1881,9 +1867,14 @@ body {
   padding: 0 4px;
   line-height: 1;
   flex-shrink: 0;
-  margin-left: 4px;
 }
 .dockCloseBtn:hover { color: var(--text-primary); }
+.dockHeaderSpacer { flex: 1; min-width: 0; }
+.dockWindow.collapsed { flex: 0 0 auto; }
+/* unified compact header controls */
+.dockWindowHeader .chatClearBtn { white-space: nowrap; }
+.dockWindowHeader .chatHeaderSelects { margin: 0; }
+.dockWindowHeader .chatPanelHeaderBtns { flex-shrink: 0; }
 .dockWindowBody {
   flex: 1;
   min-height: 0;
@@ -1936,22 +1927,36 @@ body {
 .pdfZoomInput:hover, .pdfZoomInput:focus { border-bottom-color: var(--accent-dark); }
 
 /* --- sidebar docking --- */
-.aiTitleBtn {
+/* page action column beside the title: AI title, source PDF, delete */
+.pageActionCol {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+.pageActionBtn {
   background: none;
   border: none;
   border-radius: 6px;
-  color: var(--accent-dark);
+  color: var(--text-muted);
   cursor: pointer;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   padding: 0;
 }
-.aiTitleBtn:hover:not(:disabled) { background: var(--bg-hover); }
-.aiTitleBtn:disabled { opacity: 0.6; cursor: default; }
+.pageActionBtn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.pageActionBtn:disabled { opacity: 0.6; cursor: default; }
+.pageActionBtn.aiTitleBtn { color: var(--accent-dark); }
+.pageActionBtn.pageDeleteBtn:hover { color: #d05050; }
+.sourcePopover { min-width: 300px; right: 0; }
+.searchSectionRow { display: flex; align-items: center; justify-content: space-between; }
+.findNav { display: inline-flex; gap: 2px; }
+.searchResult.active { background: color-mix(in srgb, var(--accent-dark) 14%, transparent); }
 
 .sidebarDockGrip {
   flex-shrink: 0;
