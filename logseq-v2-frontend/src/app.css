@@ -1777,6 +1777,42 @@ body {
 }
 .searchResult:hover { background: var(--bg-hover); }
 .searchResultPage { font-size: 11px; color: var(--accent-dark); font-weight: 600; }
+.searchRow { display: flex; gap: 4px; align-items: center; }
+.searchRow .searchInput { flex: 1; min-width: 0; }
+.topbar .searchToggle,
+.searchToggle {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-family: inherit;
+}
+.searchToggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+.searchToggle.on {
+  background: color-mix(in srgb, var(--accent-dark) 18%, transparent);
+  border-color: var(--accent-dark);
+  color: var(--text-primary);
+}
+.searchToggle.spacer { visibility: hidden; }
+.topbar .searchToggle.replaceBtn,
+.searchToggle.replaceBtn { width: auto; padding: 0 8px; white-space: nowrap; }
+.searchSection {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: 6px 4px 2px;
+}
 .searchResultText {
   font-size: 12px;
   color: var(--text-secondary);
@@ -1786,28 +1822,68 @@ body {
   max-width: 100%;
 }
 
-/* --- chat as an independent dockable window --- */
+/* --- dockable windows (notes + chat share the same slot system) --- */
 .workArea { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .mainStack { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 .mainStack .main { flex: 1; min-height: 0; }
-.chatDockSide {
+.dockCol {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  max-width: 75vw;
   background: var(--bg-surface);
 }
-.chatDockSide .chatPanel { flex: 1; min-height: 0; border-top: none; }
-.chatDockBottom { flex-shrink: 0; display: flex; min-height: 0; }
-.chatDockBottom .chatPanel { flex: 1; min-height: 0; border-top: none; }
-.chatPanel.chatWindow { padding: 0 6px 6px; }
+.dockRow {
+  flex-shrink: 0;
+  display: flex;
+  min-height: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.dockCell {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.dockDivider { border-top: 1px solid var(--border); flex-shrink: 0; }
+.dockRowDivider { border-left: 1px solid var(--border); flex-shrink: 0; }
+/* windows fill their cell regardless of the legacy layout-* sizing rules */
+.dockCell .sidebar,
+.dockCell .chatPanel {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  height: auto !important;
+  max-width: none !important;
+  min-height: 0 !important;
+  border-top: none !important;
+}
+.dockCell .sidebar { border-left: none !important; }
+.chatPanel.chatWindow { padding: 0 6px 6px; display: flex; flex-direction: column; overflow: hidden; }
 .chatDockGrip { cursor: grab; touch-action: none; user-select: none; }
 .chatDockGrip:hover { color: var(--text-primary); }
-.chatWidthSash { cursor: col-resize; }
 
 /* --- sidebar docking --- */
-.side-left .main { flex-direction: row-reverse; }
-.layout-vertical.side-left .main { flex-direction: column; } /* stacked ignores side */
+.aiTitleBtn {
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--accent-dark);
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 0;
+}
+.aiTitleBtn:hover:not(:disabled) { background: var(--bg-hover); }
+.aiTitleBtn:disabled { opacity: 0.6; cursor: default; }
+
 .sidebarDockGrip {
   flex-shrink: 0;
   text-align: center;
