@@ -1705,6 +1705,7 @@ export default function App() {
       if (focusedBlockIdRef.current !== block.id) return;
       setPageMeta(data.meta || null);
       setPageBibtex(data.bibtex || "");
+      setPptCite(""); // fresh metadata invalidates the cached slide citation
       setFocusedBlock((prev) => prev && prev.id === block.id
         ? { ...prev, properties: { ...prev.properties, meta: data.meta, bibtex: data.bibtex } }
         : prev);
@@ -1733,6 +1734,7 @@ export default function App() {
     if (b.properties.meta) {
       setPageMeta(b.properties.meta);
       setPageBibtex(b.properties.bibtex || "");
+      setPptCite(b.properties.ppt_cite || "");
       return;
     }
     setPageMeta(null);
@@ -1766,14 +1768,14 @@ export default function App() {
     }
   }
 
-  async function makePptCitation() {
+  async function makePptCitation(force = false) {
     if (!focusedBlockId || pptCiteBusy) return;
     setPptCiteBusy(true);
     try {
       const data = await apiJson(`${API}/metadata/cite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ block_id: focusedBlockId, prompt: citePrompt || "", model: chatModel || "" }),
+        body: JSON.stringify({ block_id: focusedBlockId, prompt: citePrompt || "", model: chatModel || "", force }),
       });
       setPptCite(data.citation || "");
     } catch (err) {
@@ -1782,6 +1784,14 @@ export default function App() {
       setPptCiteBusy(false);
     }
   }
+
+  // Opening the metadata popover generates the slide citation automatically
+  // (cached on the page afterwards, so this is a one-time AI call per paper).
+  useEffect(() => {
+    if (openPopover === "meta" && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
+      makePptCitation();
+    }
+  }, [openPopover, pageMeta]);
 
   async function copyCitation(kind, text) {
     try {
@@ -3583,10 +3593,42 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         ) : (
                           <div className="popoverHint">{metaBusy ? "Fetching metadata…" : "No metadata yet — hit ↻ to fetch."}</div>
                         )}
+                        {(pageMeta || pageBibtex) ? (
+                          <>
+                            <div className="popoverDivider" />
+                            <div className="popoverSection citeSectionRow">
+                              <span>Slide citation</span>
+                              <button
+                                className="searchToggle"
+                                title="Regenerate the citation"
+                                disabled={pptCiteBusy}
+                                onClick={() => makePptCitation(true)}
+                              >{pptCiteBusy ? "…" : "↻"}</button>
+                            </div>
+                            {pptCite ? (
+                              <div className="pptCiteBox">
+                                <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
+                                <button
+                                  className="chatMsgActionBtn"
+                                  onClick={() => copyCitation("ppt", pptCite)}
+                                  title="Copy — pastes with real italics/bold into PowerPoint"
+                                  aria-label="Copy slide citation"
+                                >
+                                  {citeCopied === "ppt"
+                                    ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                                    : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
+                            )}
+                          </>
+                        ) : null}
                         {pageBibtex ? (
                           <div className="reportModalBtns">
-                            <button className="chatClearBtn" onClick={() => copyCitation("bibtex", pageBibtex)}>
-                              {citeCopied === "bibtex" ? "Copied ✓" : "Copy BibTeX"}
+                            <button className="chatClearBtn" onClick={() => copyCitation("bibtex", pageBibtex)} title="Copy the BibTeX entry">
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4, verticalAlign: "-1px" }}><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+                              {citeCopied === "bibtex" ? "Copied ✓" : "BibTeX"}
                             </button>
                           </div>
                         ) : null}
@@ -4285,49 +4327,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     ) : (
                       <div className="popoverHint">Creating link…</div>
                     )}
-                    <div className="popoverDivider" />
-                    <div className="popoverSection citeSectionRow">
-                      <span>Citation</span>
-                      <button
-                        className="searchToggle"
-                        title="Refresh metadata (arXiv → DOI → AI)"
-                        disabled={metaBusy}
-                        onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
-                      >{metaBusy ? "…" : "↻"}</button>
-                    </div>
-                    {pageMeta ? (
-                      <div className="citeMetaLine" title={pageMeta.title}>
-                        {(pageMeta.authors?.[0] || "Unknown")}{(pageMeta.authors?.length || 0) > 1 ? " et al." : ""},{" "}
-                        {pageMeta.venue || "?"} ({pageMeta.year || "?"})
-                        <span className="citeMetaSource"> · via {pageMeta.source === "ai" ? "AI" : pageMeta.source}</span>
-                      </div>
-                    ) : (
-                      <div className="popoverHint">{metaBusy ? "Fetching metadata…" : "No metadata found yet — hit ↻ to retry."}</div>
-                    )}
-                    <div className="shareRow citeBtnRow">
-                      <button
-                        className="chatClearBtn"
-                        disabled={!pageBibtex}
-                        onClick={() => copyCitation("bibtex", pageBibtex)}
-                        title={pageBibtex ? "Copy the BibTeX entry" : "Fetch metadata first"}
-                      >{citeCopied === "bibtex" ? "Copied ✓" : "Copy BibTeX"}</button>
-                      <button
-                        className="chatClearBtn"
-                        disabled={(!pageMeta && !pageBibtex) || pptCiteBusy}
-                        onClick={makePptCitation}
-                        title="AI-generate a minimal citation for slides (prompt editable in the AI prompts editor)"
-                      >{pptCiteBusy ? "Generating…" : "PPT citation"}</button>
-                    </div>
-                    {pptCite ? (
-                      <div className="pptCiteBox">
-                        <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
-                        <button
-                          className="chatClearBtn"
-                          onClick={() => copyCitation("ppt", pptCite)}
-                          title="Copy the markdown source"
-                        >{citeCopied === "ppt" ? "Copied ✓" : "Copy"}</button>
-                      </div>
-                    ) : null}
                   </div>
                 ) : null}
               </span>
