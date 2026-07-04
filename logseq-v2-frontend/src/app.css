@@ -168,8 +168,11 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.08s ease;
 }
-.topbar .tabClose:hover { background: var(--bg-hover); color: var(--text-primary); }
+.topbar .tabClose:hover { background: var(--bg-subtle); color: var(--text-bright); }
+.topbar .tabClose:active { transform: scale(0.82); }
+.topbar .iconBtn { transition: background 0.12s ease, color 0.12s ease; }
 
 .status {
   padding: 8px 12px;
@@ -1682,6 +1685,10 @@ body {
   padding-top: 4px;
 }
 .tabStrip::-webkit-scrollbar { display: none; }
+@keyframes tabIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .tab {
   display: flex;
   align-items: center;
@@ -1698,8 +1705,12 @@ body {
   border: 1px solid transparent;
   border-bottom: none;
   min-height: 30px;
+  transition: background 0.12s ease, color 0.12s ease;
+  animation: tabIn 0.15s ease-out;
+  will-change: transform;
 }
 .tab:hover { background: var(--bg-hover); }
+.tab.dragging { opacity: 0.45; }
 .tab.active {
   background: var(--bg-surface);
   border-color: var(--border);
