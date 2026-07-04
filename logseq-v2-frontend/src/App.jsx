@@ -218,7 +218,7 @@ function ChatMarkdown({ text }) {
 
 const EMPTY_MARKS = [];
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks, onExternalLink }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks, onExternalLink, onBeforeLinkJump }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -479,38 +479,6 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     if (scrollRef) scrollRef.current = scrollToPositionRef.current;
   }, [scrollRef, scale, pdfDoc]);
 
-  // Jump history for in-PDF link clicks, so the reader can return to where
-  // they were (Acrobat's "previous view"). Entries remember the scale so the
-  // position survives zoom changes.
-  const [jumpStack, setJumpStack] = useState([]);
-  useEffect(() => { setJumpStack([]); }, [url]);
-
-  function pushJumpPoint() {
-    const v = viewerRef.current;
-    if (!v) return;
-    setJumpStack((prev) => [...prev.slice(-19), { top: v.scrollTop, scale }]);
-  }
-
-  function goBackJump() {
-    setJumpStack((prev) => {
-      const next = [...prev];
-      const entry = next.pop();
-      if (entry && viewerRef.current) {
-        viewerRef.current.scrollTo({ top: entry.top * (scale / (entry.scale || scale)), behavior: "auto" });
-      }
-      return next;
-    });
-  }
-
-  useEffect(() => {
-    if (!jumpStack.length) return;
-    const onKey = (e) => {
-      if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); goBackJump(); }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [jumpStack.length, scale]);
-
   // In-PDF link annotations: internal destinations jump within the document.
   async function goToDest(dest) {
     if (!pdfDoc) return;
@@ -519,7 +487,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       if (!d || d[0] == null) return;
       const pageIdx = typeof d[0] === "object" ? await pdfDoc.getPageIndex(d[0]) : Number(d[0]);
       const pn = pageIdx + 1;
-      pushJumpPoint(); // capture where the reader was before following the link
+      onBeforeLinkJump?.(); // let the app capture "where I was" for global Back
       const page = await pdfDoc.getPage(pn);
       const vp = page.getViewport({ scale: 1 });
       // Destination y is in PDF user space (origin bottom-left); flip to top-down.
@@ -632,14 +600,6 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
 
   return (
     <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
-      {jumpStack.length > 0 ? (
-        <div className="pdfBackWrap">
-          <button className="pdfBackBtn" onClick={goBackJump} title="Return to where you were reading before the link jump (Alt+←)">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
-            Back{jumpStack.length > 1 ? ` · ${jumpStack.length}` : ""}
-          </button>
-        </div>
-      ) : null}
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={i + 1} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={highlights} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
@@ -1662,6 +1622,9 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
         setOpenPopover((p) => (p === "search" && !e.shiftKey ? null : "search"));
+      } else if (e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        goBackNavRef.current?.();
       } else if (e.key === "Escape") {
         setOpenPopover(null);
       }
@@ -2458,6 +2421,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   async function openPdf(sourceUrl) {
     if (!sourceUrl || readOnly) return;
+    pushNav();
     setLoading(true);
     setStatus("Opening PDF...");
     try {
@@ -2538,8 +2502,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
-  async function openBlock(blockId) {
+  async function openBlock(blockId, opts) {
     if (!blockId || readOnly) return;
+    if (!opts?.skipNav && blockId !== focusedBlockId) pushNav();
     setLoading(true);
     setStatus("Opening...");
     try {
@@ -2599,7 +2564,62 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
-  function goHome() {
+  // --- Global back: one history for every navigation ------------------------
+  // Entries capture the full "view": which page (or home + folder) and, for
+  // PDFs, the exact scroll position (scale-aware). In-PDF link jumps, opening
+  // other papers, search results, and going home all push here.
+  const [navStack, setNavStack] = useState([]);
+  const pdfEffScaleRef = useRef(1);
+  useEffect(() => { pdfEffScaleRef.current = pdfEffScale; }, [pdfEffScale]);
+
+  function pushNav() {
+    const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+    const entry = {
+      blockId: focusedBlockId || null,
+      folder: folderFilter,
+      top: scroller ? scroller.scrollTop : null,
+      scale: pdfEffScale,
+    };
+    setNavStack((prev) => [...prev.slice(-29), entry]);
+  }
+
+  async function goBackNav() {
+    const entry = navStack[navStack.length - 1];
+    if (!entry) return;
+    setNavStack((prev) => prev.slice(0, -1));
+    const restoreScroll = () => {
+      if (entry.top == null) return;
+      let tries = 0;
+      const tryScroll = () => {
+        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+        const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
+        if (scroller && scroller.scrollHeight > targetTop) {
+          scroller.scrollTo({ top: targetTop, behavior: "auto" });
+          return;
+        }
+        if (tries++ < 40) setTimeout(tryScroll, 150);
+      };
+      tryScroll();
+    };
+    if (entry.blockId && entry.blockId === focusedBlockId) {
+      restoreScroll(); // same document — just return to the reading position
+    } else if (entry.blockId) {
+      await openBlock(entry.blockId, { skipNav: true });
+      restoreScroll();
+    } else {
+      goHome({ skipNav: true });
+      if (entry.folder) {
+        setFolderFilter(entry.folder);
+        window.history.replaceState(null, "", `/?folder=${encodeURIComponent(entry.folder)}`);
+      }
+    }
+  }
+  const goBackNavRef = useRef(null);
+  goBackNavRef.current = goBackNav;
+  const navStackLen = navStack.length;
+
+  function goHome(opts) {
+    if (!opts?.skipNav && focusedBlockId) pushNav();
     clearSession();
     suppressAutosaveRef.current = true;
     setFocusedBlockId(null);
@@ -4354,6 +4374,17 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             >
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
             </button>
+            {navStackLen > 0 ? (
+              <button
+                className="iconBtn navBackBtn"
+                onClick={goBackNav}
+                title={`Back to where you were${navStackLen > 1 ? ` (${navStackLen} steps)` : ""} — Alt+←`}
+                aria-label="Back"
+              >
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
+                {navStackLen > 1 ? <span className="navBackBadge">{Math.min(navStackLen, 9)}</span> : null}
+              </button>
+            ) : null}
             <div className="tabStrip" role="tablist">
               {openTabs.map((t) => (
                 <div
@@ -4707,6 +4738,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               searchRef={pdfSearchRef}
               findMarks={findMarksMemo}
               onEffectiveScale={setPdfEffScale}
+              onBeforeLinkJump={pushNav}
               onExternalLink={handleDocLink}
               onLinkHighlight={(h) => {
                 if (h.linkTarget?.pageId) openBlock(h.linkTarget.pageId);
