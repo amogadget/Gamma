@@ -1824,47 +1824,116 @@ body {
 
 /* --- dockable windows (notes + chat share the same slot system) --- */
 .workArea { display: flex; flex: 1; min-height: 0; min-width: 0; }
-.mainStack { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
-.mainStack .main { flex: 1; min-height: 0; }
-.dockCol {
+.workArea > [data-panel-group] { flex: 1; }
+[data-panel] { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+[data-panel] > .main { flex: 1; min-height: 0; }
+
+/* panel resize handles (VSCode-style sashes) */
+.sash {
+  background: var(--border);
   flex-shrink: 0;
+  transition: background 0.15s ease 0.1s;
+}
+.sash-horizontal { width: 5px; cursor: col-resize; }
+.sash-vertical { height: 5px; cursor: row-resize; }
+.sash:hover,
+.sash[data-resize-handle-state="hover"],
+.sash[data-resize-handle-state="drag"] { background: var(--accent-dark); transition: none; }
+
+/* uniform window chrome */
+.dockWindow {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
   min-width: 0;
-  min-height: 0;
-  max-width: 75vw;
   background: var(--bg-surface);
+  border-left: 1px solid var(--border-subtle);
 }
-.dockRow {
-  flex-shrink: 0;
+.dockWindowHeader {
   display: flex;
-  min-height: 0;
-  border-top: 1px solid var(--border);
-  background: var(--bg-surface);
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  min-width: 0;
 }
-.dockCell {
+.dockGrip {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.dockGrip:hover { color: var(--text-primary); }
+.dockCloseBtn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 15px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.dockCloseBtn:hover { color: var(--text-primary); }
+.dockWindowBody {
   flex: 1;
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
-.dockDivider { border-top: 1px solid var(--border); flex-shrink: 0; }
-.dockRowDivider { border-left: 1px solid var(--border); flex-shrink: 0; }
-/* windows fill their cell regardless of the legacy layout-* sizing rules */
-.dockCell .sidebar,
-.dockCell .chatPanel {
+/* windows fill their body regardless of legacy layout-* sizing rules */
+.dockWindowBody .sidebar,
+.dockWindowBody .chatPanel {
   flex: 1 1 auto !important;
   width: auto !important;
   height: auto !important;
   max-width: none !important;
   min-height: 0 !important;
   border-top: none !important;
+  border-left: none !important;
 }
-.dockCell .sidebar { border-left: none !important; }
 .chatPanel.chatWindow { padding: 0 6px 6px; display: flex; flex-direction: column; overflow: hidden; }
-.chatDockGrip { cursor: grab; touch-action: none; user-select: none; }
-.chatDockGrip:hover { color: var(--text-primary); }
+
+/* chat attach picker + zoom input */
+.popover.popUp { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
+.attachPopover { min-width: 300px; max-width: 380px; }
+.attachList { max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.attachItem { font-size: 12px; }
+.attachItem input { flex-shrink: 0; }
+.attachName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.chatAttachToggle.on {
+  color: #8ab4f8;
+  border-color: #8ab4f8;
+  background: color-mix(in srgb, #8ab4f8 12%, transparent);
+}
+.pdfZoomInput {
+  width: 34px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  color: inherit;
+  font: inherit;
+  text-align: right;
+  outline: none;
+  padding: 0;
+}
+.pdfZoomInput:hover, .pdfZoomInput:focus { border-bottom-color: var(--accent-dark); }
 
 /* --- sidebar docking --- */
 .aiTitleBtn {

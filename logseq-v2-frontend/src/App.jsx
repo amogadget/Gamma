@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 // Module-level ref for native HTML5 drag-and-drop (shared across components)
 const _dragState = { draggingId: null, dropTarget: null };
@@ -162,6 +163,28 @@ const COLORS = [
   "rgba(230, 180, 255, 0.65)"
 ];
 
+// Shared chrome for every dockable window: one grip (drag to move/reorder),
+// optional header controls, one close button. Notes and chat both use this so
+// their behavior can't drift apart.
+function DockWindow({ title, onGrip, onClose, headerContent, children }) {
+  return (
+    <div className="dockWindow">
+      <div className="dockWindowHeader">
+        <span
+          className="dockGrip"
+          onPointerDown={onGrip}
+          title="Drag to move this window (left / right / bottom; drop on a half to reorder)"
+        >⠿ {title}</span>
+        {headerContent}
+        {onClose ? (
+          <button className="dockCloseBtn" onClick={onClose} title="Close window (reopen from the ⋮ menu)" aria-label={`Close ${title}`}>×</button>
+        ) : null}
+      </div>
+      <div className="dockWindowBody">{children}</div>
+    </div>
+  );
+}
+
 // Markdown + KaTeX rendering for AI chat messages. Unlike block rendering this
 // deliberately omits rehypeRaw: model output is untrusted, so raw HTML stays inert.
 function ChatMarkdown({ text }) {
@@ -178,7 +201,7 @@ function ChatMarkdown({ text }) {
   );
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onSelectionFinished, onHighlightContext, searchRef }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -213,6 +236,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   const numericScale = parseFloat(pdfScaleValue);
   const isFitWidth = isNaN(numericScale);
   const scale = isFitWidth ? fitWidthScale : numericScale;
+  useEffect(() => { onEffectiveScale?.(scale); }, [scale, onEffectiveScale]);
   useEffect(() => {
     if (!isFitWidth || !pdfDoc || !viewerRef.current) return;
     let cancelled = false;
@@ -1188,6 +1212,8 @@ export default function App() {
   const [categorySuggestionIdx, setCategorySuggestionIdx] = useState(-1);
   const [categoryFilter, setCategoryFilter] = useState(initialCategory);
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
+  const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
+  const [zoomDraft, setZoomDraft] = useState(null);  // while typing a custom zoom %
   const restoredPdfUrlRef = useRef(null);
   const [blocks, setBlocks] = useState([]);
   const [homeBlocks, setHomeBlocks] = useState([]);
@@ -1196,9 +1222,6 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [chatHeight, setChatHeight] = useState(() => {
-    try { const v = localStorage.getItem("gamma-chat-height"); return v ? Number(v) : 200; } catch { return 200; }
-  });
   const [chatHidden, setChatHidden] = useState(false);
 
   // Tracks which block we've finished loading from the server, so the save
@@ -1237,10 +1260,6 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [chatMessages, chatKey]);
 
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-height", String(chatHeight)); } catch {}
-  }, [chatHeight]);
-
   function clearChat() {
     setChatMessages([]);
     fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
@@ -1253,26 +1272,34 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [sidebarHeight, setSidebarHeight] = useState(280);
-  // Where the notes window docks: "left" | "right" | "bottom".
-  const [notesDock, setNotesDock] = useState(() => {
-    try { return localStorage.getItem("gamma-notes-dock") || "right"; } catch { return "right"; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-notes-dock", notesDock); } catch {}
-  }, [notesDock]);
-  // Widths of the two dock columns (each column can hold notes and/or chat stacked).
-  const [leftWidth, setLeftWidth] = useState(() => {
-    try { return Number(localStorage.getItem("gamma-dock-left")) || 380; } catch { return 380; }
-  });
-  const [rightWidth, setRightWidth] = useState(() => {
-    try { return Number(localStorage.getItem("gamma-dock-right")) || 420; } catch { return 420; }
-  });
-  useEffect(() => {
+  // Window layout: ordered window ids per dock slot. Sizes are handled by
+  // react-resizable-panels (persisted via autoSaveId), so this only stores
+  // which window lives where and in what order.
+  const [layout, setLayout] = useState(() => {
     try {
-      localStorage.setItem("gamma-dock-left", String(leftWidth));
-      localStorage.setItem("gamma-dock-right", String(rightWidth));
+      const saved = JSON.parse(localStorage.getItem("gamma-layout") || "null");
+      if (saved && saved.left && saved.right && saved.bottom) return saved;
     } catch {}
-  }, [leftWidth, rightWidth]);
+    return { left: [], right: ["notes", "chat"], bottom: [] };
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-layout", JSON.stringify(layout)); } catch {}
+  }, [layout]);
+
+  // Move a window to a slot at an index (drag-to-dock and drag-to-reorder).
+  function moveWindow(id, side, index) {
+    setLayout((prev) => {
+      const next = {
+        left: prev.left.filter((w) => w !== id),
+        right: prev.right.filter((w) => w !== id),
+        bottom: prev.bottom.filter((w) => w !== id),
+      };
+      const arr = [...next[side]];
+      arr.splice(Math.max(0, Math.min(index, arr.length)), 0, id);
+      next[side] = arr;
+      return next;
+    });
+  }
   // Open tabs (Chrome-style): [{id, title}] persisted per browser.
   const [openTabs, setOpenTabs] = useState(() => {
     try { return JSON.parse(localStorage.getItem("gamma-tabs") || "[]"); } catch { return []; }
@@ -1281,13 +1308,6 @@ export default function App() {
     try { localStorage.setItem("gamma-tabs", JSON.stringify(openTabs)); } catch {}
   }, [openTabs]);
   const [dockPreview, setDockPreview] = useState(null); // "left" | "right" | "bottom" while dragging a window
-  // The AI chat is its own window, dockable independently of the notes pane.
-  const [chatDock, setChatDock] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-dock") || "right"; } catch { return "right"; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-dock", chatDock); } catch {}
-  }, [chatDock]);
   // One popover open at a time; any click outside a [data-popover] container closes it.
   const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
   useEffect(() => {
@@ -1391,16 +1411,15 @@ export default function App() {
   const [chatEffort, setChatEffort] = useState(() => {
     try { return localStorage.getItem("gamma-chat-effort") || ""; } catch { return ""; }
   });
+  // Extra chat context: selected PDF pages + whether to include notes/highlights.
+  const [chatDocs, setChatDocs] = useState([]);
+  const [chatIncludeNotes, setChatIncludeNotes] = useState(false);
   const [chatSystem, setChatSystem] = useState(() => {
     try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
   });
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
   const [pdfSelection, setPdfSelection] = useState("");
-  const [reportOpen, setReportOpen] = useState(false);
-  const [reportChecked, setReportChecked] = useState({});
-  const [reportInstructions, setReportInstructions] = useState("");
-  const [reportBusy, setReportBusy] = useState(false);
   const chatScrollRef = useRef(null);
 
   useEffect(() => {
@@ -1692,72 +1711,6 @@ export default function App() {
     });
   }
 
-  // Shared drag-to-resize: pointer capture + rAF-batched updates (one setState
-  // per frame, not per pointermove) so dragging stays smooth while the whole
-  // app re-renders, and a .dragging class for the active sash highlight.
-  function startSashDrag(e, { cursor, compute, apply }) {
-    e.preventDefault();
-    e.stopPropagation();
-    const target = e.currentTarget;
-    const pointerId = e.pointerId;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    let raf = 0;
-    let pending = null;
-
-    try { target.setPointerCapture(pointerId); } catch (_) {}
-    target.classList.add("dragging");
-    document.body.style.cursor = cursor;
-    document.body.style.userSelect = "none";
-
-    function onMove(ev) {
-      ev.preventDefault();
-      pending = compute(ev.clientX - startX, ev.clientY - startY);
-      if (!raf) {
-        raf = requestAnimationFrame(() => {
-          raf = 0;
-          if (pending !== null) apply(pending);
-        });
-      }
-    }
-
-    function onUp() {
-      if (raf) cancelAnimationFrame(raf);
-      if (pending !== null) apply(pending);
-      target.classList.remove("dragging");
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      try { target.releasePointerCapture(pointerId); } catch (_) {}
-      target.removeEventListener("pointermove", onMove);
-      target.removeEventListener("pointerup", onUp);
-      target.removeEventListener("pointercancel", onUp);
-    }
-
-    target.addEventListener("pointermove", onMove);
-    target.addEventListener("pointerup", onUp);
-    target.addEventListener("pointercancel", onUp);
-  }
-
-  // Resize a dock column. The left column's sash sits to its right (drag right
-  // = grow); the right column's sash sits to its left (drag left = grow).
-  function startColResize(e, side) {
-    const start = side === "left" ? leftWidth : rightWidth;
-    const sign = side === "left" ? 1 : -1;
-    startSashDrag(e, {
-      cursor: "col-resize",
-      compute: (dx) => Math.max(260, Math.min(window.innerWidth * 0.7, start + sign * dx)),
-      apply: side === "left" ? setLeftWidth : setRightWidth,
-    });
-  }
-
-  function startChatResize(e) {
-    const startH = chatHeight;
-    startSashDrag(e, {
-      cursor: "row-resize",
-      compute: (dx, dy) => Math.max(100, Math.min(window.innerHeight * 0.8, startH - dy)),
-      apply: setChatHeight,
-    });
-  }
 
   useEffect(() => {
     if (initialShare) resolveShare(initialShare);
@@ -2178,8 +2131,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   }
 
   // Drag any window by its grip; drop zones dock it left, right, or bottom.
-  // One shared implementation so every window behaves identically.
-  function startWindowDock(e, applyDock) {
+  // Within a slot the drop half decides the order (top/left half = first),
+  // which is how windows swap places. One implementation for every window.
+  function startWindowDock(e, winId) {
     e.preventDefault();
     e.stopPropagation();
     const target = e.currentTarget;
@@ -2190,16 +2144,22 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     try { target.setPointerCapture(pointerId); } catch (_) {}
 
     function zoneFor(ev) {
-      if (ev.clientY > window.innerHeight * 0.65) return "bottom";
-      return ev.clientX < window.innerWidth / 2 ? "left" : "right";
+      if (ev.clientY > window.innerHeight * 0.65) {
+        return { side: "bottom", index: ev.clientX < window.innerWidth / 2 ? 0 : 99 };
+      }
+      const side = ev.clientX < window.innerWidth / 2 ? "left" : "right";
+      return { side, index: ev.clientY < window.innerHeight * 0.35 ? 0 : 99 };
     }
     function onMove(ev) {
       if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 8) return;
       dragging = true;
-      setDockPreview(zoneFor(ev));
+      setDockPreview(zoneFor(ev).side);
     }
     function onUp(ev) {
-      if (dragging) applyDock(zoneFor(ev));
+      if (dragging) {
+        const zone = zoneFor(ev);
+        moveWindow(winId, zone.side, zone.index);
+      }
       setDockPreview(null);
       try { target.releasePointerCapture(pointerId); } catch (_) {}
       target.removeEventListener("pointermove", onMove);
@@ -2400,9 +2360,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           history: prevMessages,
           model: chatModel || "",
           selection,
-          attach_pdf: attachPdf && !!docId,
+          attach_pdf: attachPdf && (chatDocs.length > 0 || !!docId),
           effort: chatEffort || "",
           system: chatSystem || "",
+          pages: chatDocs,
+          include_notes: chatIncludeNotes,
         }),
       });
       setChatMessages((prev) => [...prev, { role: "ai", text: data.response || "(no response)" }]);
@@ -2413,36 +2375,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
-  function openReportModal() {
-    // Pre-select the current page if it's in the home list
-    const checked = {};
-    if (focusedBlockId && homeBlocks.some((b) => b.id === focusedBlockId)) checked[focusedBlockId] = true;
-    setReportChecked(checked);
-    setReportInstructions("");
-    setReportOpen(true);
-    if (!homeBlocks.length) fetchHomeBlocks();
-  }
-
-  async function generateReport() {
-    const pageIds = Object.keys(reportChecked).filter((id) => reportChecked[id]);
-    if (!pageIds.length || reportBusy) return;
-    setReportBusy(true);
-    try {
-      const data = await apiJson(`${API}/ai/report`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ page_ids: pageIds, model: chatModel || "", instructions: reportInstructions, effort: chatEffort || "" }),
-      });
-      setChatMessages((prev) => [...prev, { role: "ai", text: data.report || "(empty report)" }]);
-      setReportOpen(false);
-      setChatHidden(false);
-    } catch (err) {
-      setChatMessages((prev) => [...prev, { role: "ai", text: `Report failed: ${err.message}` }]);
-      setReportOpen(false);
-    } finally {
-      setReportBusy(false);
-    }
-  }
 
   function jumpToHighlightId(highlightId) {
     if (pdfHidden) {
@@ -2651,51 +2583,46 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     );
   }
 
-  // The AI chat window — an independent pane docked left/right/bottom via chatDock.
-  const chatWindow = !readOnly && !chatHidden ? (
-    <div className="chatPanel chatWindow">
-      <div className="chatPanelHeader">
-        <span
-          className="chatPanelTitle chatDockGrip"
-          onPointerDown={(e) => startWindowDock(e, setChatDock)}
-          title="Drag to dock the chat left, right, or bottom"
-        >⠿ AI Chat</span>
-        {aiInfo?.models?.length > 0 ? (() => {
-          const models = aiInfo.models;
-          const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
-          const currentId = models.some((m) => m.id === chatModel) ? chatModel : aiInfo.default;
-          return (
-            <span className="chatHeaderSelects">
-              {models.length > 1 ? (
-                <select className="chatModelSelect" value={currentId}
-                  onChange={(e) => setChatModel(e.target.value)} title="Switch model">
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {multiProvider ? `${m.model} · ${m.provider}` : m.model}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
-              <select className="chatModelSelect" value={chatEffort}
-                onChange={(e) => setChatEffort(e.target.value)}
-                title="Reasoning effort — leave on 'effort: default' unless the model supports it">
-                <option value="">effort: default</option>
-                {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
-                  <option key={ef} value={ef}>effort: {ef}</option>
+  // The AI chat window — placed by the shared layout slot system.
+  const chatHeaderContent = (
+    <>
+      {aiInfo?.models?.length > 0 ? (() => {
+        const models = aiInfo.models;
+        const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
+        const currentId = models.some((m) => m.id === chatModel) ? chatModel : aiInfo.default;
+        return (
+          <span className="chatHeaderSelects">
+            {models.length > 1 ? (
+              <select className="chatModelSelect" value={currentId}
+                onChange={(e) => setChatModel(e.target.value)} title="Switch model">
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {multiProvider ? `${m.model} · ${m.provider}` : m.model}
+                  </option>
                 ))}
               </select>
-            </span>
-          );
-        })() : null}
-        <div className="chatPanelHeaderBtns">
-          <button className="chatClearBtn"
-            onClick={() => { setPromptDraft(chatSystem || aiInfo?.default_prompt || ""); setPromptOpen(true); }}
-            title="View or edit the system prompt sent with every question">Prompt</button>
-          <button className="chatClearBtn" onClick={openReportModal} title="Generate a report from your notes and highlights across pages">Report</button>
-          <button className="chatClearBtn" onClick={clearChat} title="Start a fresh conversation (clears saved history)">New chat</button>
-          <button className="chatHideBtn" onClick={() => setChatHidden(true)} title="Hide chat (re-enable it from the ⋮ menu)">×</button>
-        </div>
+            ) : null}
+            <select className="chatModelSelect" value={chatEffort}
+              onChange={(e) => setChatEffort(e.target.value)}
+              title="Reasoning effort — leave on 'effort: default' unless the model supports it">
+              <option value="">effort: default</option>
+              {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
+                <option key={ef} value={ef}>effort: {ef}</option>
+              ))}
+            </select>
+          </span>
+        );
+      })() : null}
+      <div className="chatPanelHeaderBtns">
+        <button className="chatClearBtn"
+          onClick={() => { setPromptDraft(chatSystem || aiInfo?.default_prompt || ""); setPromptOpen(true); }}
+          title="View or edit the system prompt sent with every question">Prompt</button>
+        <button className="chatClearBtn" onClick={clearChat} title="Start a fresh conversation (clears saved history)">New chat</button>
       </div>
+    </>
+  );
+  const chatWindow = !readOnly && !chatHidden ? (
+    <div className="chatPanel chatWindow">
       <div className="chatMessages" ref={chatScrollRef}>
         {chatMessages.length === 0 ? (
           <div className="chatEmpty">
@@ -2733,17 +2660,59 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         className="chatInputRow"
         onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
       >
-        {docId ? (
-          <label className={`chatAttachToggle ${attachPdf ? "on" : ""}`} title="Send the PDF file itself to the model (better answers about figures/tables) instead of extracted text">
-            <input type="checkbox" checked={attachPdf} onChange={(e) => setAttachPdf(e.target.checked)} />
-            📎 PDF
-          </label>
-        ) : null}
+        <span data-popover="chatdocs" style={{ position: "relative", display: "inline-flex" }}>
+          <button
+            type="button"
+            className={`chatAttachToggle ${(chatDocs.length || chatIncludeNotes) ? "on" : ""}`}
+            onClick={() => setOpenPopover((p) => (p === "chatdocs" ? null : "chatdocs"))}
+            title="Choose which PDFs and notes to include in this chat"
+          >
+            📎{chatDocs.length ? ` ${chatDocs.length}` : (docId ? " PDF" : "")}
+          </button>
+          {openPopover === "chatdocs" ? (
+            <div className="popover popUp attachPopover">
+              <div className="popoverTitle">Chat context</div>
+              <div className="popoverHint">
+                Selected PDFs (and optionally your notes) are sent with every question —
+                select a few papers and just ask for a report.
+              </div>
+              <div className="attachList">
+                {homeBlocks.filter((b) => b.properties?.doc_id).map((b) => (
+                  <label key={b.id} className="popoverItem attachItem">
+                    <input
+                      type="checkbox"
+                      checked={chatDocs.includes(b.id)}
+                      onChange={(e) => setChatDocs((prev) => e.target.checked
+                        ? [...prev, b.id]
+                        : prev.filter((id) => id !== b.id))}
+                    />
+                    <span className="attachName">{b.content || "Untitled"}</span>
+                  </label>
+                ))}
+                {homeBlocks.filter((b) => b.properties?.doc_id).length === 0 ? (
+                  <div className="popoverHint">No PDFs yet — open or upload one first.</div>
+                ) : null}
+              </div>
+              <div className="popoverDivider" />
+              <label className="popoverItem attachItem">
+                <input type="checkbox" checked={chatIncludeNotes} onChange={(e) => setChatIncludeNotes(e.target.checked)} />
+                <span className="attachName">Include my notes &amp; highlights</span>
+              </label>
+              <label className="popoverItem attachItem" title="Send the PDF files themselves (better for figures/tables) instead of extracted text">
+                <input type="checkbox" checked={attachPdf} onChange={(e) => setAttachPdf(e.target.checked)} />
+                <span className="attachName">Attach PDF files natively</span>
+              </label>
+              {!chatDocs.length && docId ? (
+                <div className="popoverHint">Nothing selected — the currently open PDF is used.</div>
+              ) : null}
+            </div>
+          ) : null}
+        </span>
         <input
           className="chatInput"
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
-          placeholder={pdfSelection ? "Ask about the selection…" : (focusedBlockId ? "Ask about this page…" : "Ask AI…")}
+          placeholder={pdfSelection ? "Ask about the selection…" : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : (focusedBlockId ? "Ask about this page…" : "Ask AI…"))}
         />
         <button className="chatSendBtn" type="submit" disabled={chatLoading || !chatInput.trim()}>Send</button>
       </form>
@@ -2753,14 +2722,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // The notes window - docked via notesDock, or filling the center when no PDF is shown.
   const notesWindow = notesVisible ? (
     <div className="sidebar" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-height": `${sidebarHeight}px` }}>
-          {!readOnly && !homeMode && pdfUrl && !pdfHidden ? (
-            <div
-              className="sidebarDockGrip"
-              onPointerDown={(e) => startWindowDock(e, setNotesDock)}
-              title="Drag to dock the notes pane left, right, or bottom"
-              role="separator"
-            >⠿ notes</div>
-          ) : null}
           {!homeMode && <div className="pageTitleRow">
             {titleEditing && !readOnly && focusedBlockId ? (
               <input
@@ -3343,33 +3304,42 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // Slot the windows into dock columns / the bottom row. When no PDF is shown
   // (home, page-only, or PDF closed) the notes window takes the center instead.
   const centerNotes = pdfHidden || homeMode || pageOnly;
-  function dockWins(side) {
-    const wins = [];
-    if (!centerNotes && notesWindow && notesDock === side) wins.push({ key: "notes", el: notesWindow });
-    if (chatWindow && chatDock === side) wins.push({ key: "chat", el: chatWindow });
-    return wins;
+  const winVisible = {
+    notes: Boolean(notesWindow) && !centerNotes,
+    chat: Boolean(chatWindow),
+  };
+  function renderWindow(id) {
+    if (id === "notes") {
+      return (
+        <DockWindow title="Notes" onGrip={(e) => startWindowDock(e, "notes")} onClose={() => setNotesVisible(false)}>
+          {notesWindow}
+        </DockWindow>
+      );
+    }
+    if (id === "chat") {
+      return (
+        <DockWindow title="AI Chat" onGrip={(e) => startWindowDock(e, "chat")} onClose={() => setChatHidden(true)} headerContent={chatHeaderContent}>
+          {chatWindow}
+        </DockWindow>
+      );
+    }
+    return null;
   }
-  function dockColumn(side) {
-    const wins = dockWins(side);
-    if (!wins.length) return null;
-    const col = (
-      <div className="dockCol" style={{ width: side === "left" ? leftWidth : rightWidth }}>
+  // Windows per slot, in stored order, visibility-filtered.
+  const slotWins = (side) => layout[side].filter((w) => winVisible[w]);
+  function renderSlotGroup(side, direction) {
+    const wins = slotWins(side);
+    return (
+      <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`}>
         {wins.map((w, i) => (
-          <React.Fragment key={w.key}>
-            {i > 0 ? <div className="dockDivider" /> : null}
-            <div className="dockCell">{w.el}</div>
+          <React.Fragment key={w}>
+            {i > 0 ? <PanelResizeHandle className={`sash sash-${direction}`} /> : null}
+            <Panel id={w} order={i + 1} minSize={15}>{renderWindow(w)}</Panel>
           </React.Fragment>
         ))}
-      </div>
+      </PanelGroup>
     );
-    const sash = (
-      <div className="splitter splitter-horizontal" key="sash">
-        <div className="splitterGrab" onPointerDown={(e) => startColResize(e, side)} aria-label="Drag to resize" role="separator"><span className="splitterGrabDot" /></div>
-      </div>
-    );
-    return side === "left" ? (<>{col}{sash}</>) : (<>{sash}{col}</>);
   }
-  const bottomWins = dockWins("bottom");
 
   return (
     <div
@@ -3684,8 +3654,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       )}
 
       <div className="workArea">
-      {dockColumn("left")}
-      <div className="mainStack">
+      <PanelGroup direction="horizontal" autoSaveId="gamma-work-h">
+      {slotWins("left").length ? (
+        <>
+          <Panel id="slot-left" order={1} defaultSize={26} minSize={15} className="dockSlot">
+            {renderSlotGroup("left", "vertical")}
+          </Panel>
+          <PanelResizeHandle className="sash sash-horizontal" />
+        </>
+      ) : null}
+      <Panel id="slot-center" order={2} minSize={30} className="dockSlot">
+      <PanelGroup direction="vertical" autoSaveId="gamma-work-v">
+      <Panel id="slot-main" order={1} minSize={20} className="dockSlot">
       <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
         <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
           {pdfUrl && !pdfHidden ? (
@@ -3701,7 +3681,21 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "0.8" : String(Math.max(0.4, +(n - 0.2).toFixed(1))); })} title="Zoom out" aria-label="Zoom out">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /></svg>
               </button>
-              <span className="pdfZoomLevel">{isNaN(parseFloat(pdfScale)) ? "Fit" : `${Math.round(parseFloat(pdfScale) * 100)}%`}</span>
+              <span className="pdfZoomLevel">
+                <input
+                  className="pdfZoomInput"
+                  value={zoomDraft !== null ? zoomDraft : String(Math.round(pdfEffScale * 100))}
+                  onFocus={(e) => { setZoomDraft(String(Math.round(pdfEffScale * 100))); e.target.select(); }}
+                  onChange={(e) => setZoomDraft(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))}
+                  onBlur={() => {
+                    const n = parseInt(zoomDraft, 10);
+                    if (!isNaN(n) && n > 0) setPdfScale(String(Math.max(0.4, Math.min(4, n / 100))));
+                    setZoomDraft(null);
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                  title="Type a zoom percentage"
+                />%
+              </span>
               <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "1.2" : String(Math.min(4, +(n + 0.2).toFixed(1))); })} title="Zoom in" aria-label="Zoom in">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /><path d="M11 8v6" /></svg>
               </button>
@@ -3714,6 +3708,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <PdfViewer url={pdfUrl} highlights={highlights}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
+              onEffectiveScale={setPdfEffScale}
               onJump={jumpToHighlightId}
               onHighlightJump={(hlId) => {
                 const b = flattenBlocks(blocks).find(b => b.properties?.highlight_id === hlId);
@@ -3742,23 +3737,26 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
         {centerNotes ? notesWindow : null}
       </div>
-      {bottomWins.length ? (
+      </Panel>
+      {slotWins("bottom").length ? (
         <>
-          <div className="chatSplitter" onPointerDown={startChatResize} onDoubleClick={() => setChatHeight(220)} aria-label="Drag to resize" role="separator">
-            <span className="chatSplitterDot" />
-          </div>
-          <div className="dockRow" style={{ height: chatHeight }}>
-            {bottomWins.map((w, i) => (
-              <React.Fragment key={w.key}>
-                {i > 0 ? <div className="dockRowDivider" /> : null}
-                <div className="dockCell">{w.el}</div>
-              </React.Fragment>
-            ))}
-          </div>
+          <PanelResizeHandle className="sash sash-vertical" />
+          <Panel id="slot-bottom" order={2} defaultSize={32} minSize={12} className="dockSlot">
+            {renderSlotGroup("bottom", "horizontal")}
+          </Panel>
         </>
       ) : null}
-      </div>
-      {dockColumn("right")}
+      </PanelGroup>
+      </Panel>
+      {slotWins("right").length ? (
+        <>
+          <PanelResizeHandle className="sash sash-horizontal" />
+          <Panel id="slot-right" order={3} defaultSize={28} minSize={15} className="dockSlot">
+            {renderSlotGroup("right", "vertical")}
+          </Panel>
+        </>
+      ) : null}
+      </PanelGroup>
       </div>
       {dockPreview ? (
         <div className={`dockPreview dockPreview-${dockPreview}`} />
@@ -3790,47 +3788,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   setChatSystem(draft === (aiInfo?.default_prompt || "").trim() ? "" : draft);
                   setPromptOpen(false);
                 }}>Save</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {reportOpen ? (
-        <div className="reportOverlay" onClick={() => { if (!reportBusy) setReportOpen(false); }}>
-          <div className="reportModal" onClick={(e) => e.stopPropagation()}>
-            <div className="reportModalTitle">Generate report</div>
-            <div className="reportModalHint">
-              Pick the papers/pages to include. The AI receives each paper's text along with your
-              highlighted passages and notes, and writes a report organized around them.
-            </div>
-            <div className="reportPageList">
-              {homeBlocks.map((b) => (
-                <label key={b.id} className="reportPageItem">
-                  <input
-                    type="checkbox"
-                    checked={!!reportChecked[b.id]}
-                    onChange={(e) => setReportChecked((prev) => ({ ...prev, [b.id]: e.target.checked }))}
-                  />
-                  <span className="reportPageName">{b.content || "Untitled"}</span>
-                </label>
-              ))}
-              {homeBlocks.length === 0 ? <div className="chatEmpty">No pages yet.</div> : null}
-            </div>
-            <input
-              className="chatInput reportInstructions"
-              placeholder="Optional instructions (e.g. compare the methods, focus on results)…"
-              value={reportInstructions}
-              onChange={(e) => setReportInstructions(e.target.value)}
-              disabled={reportBusy}
-            />
-            <div className="reportModalBtns">
-              <button className="chatClearBtn" onClick={() => setReportOpen(false)} disabled={reportBusy}>Cancel</button>
-              <button
-                className="chatSendBtn"
-                onClick={generateReport}
-                disabled={reportBusy || !Object.values(reportChecked).some(Boolean)}
-              >
-                {reportBusy ? "Generating…" : "Generate"}
-              </button>
             </div>
           </div>
         </div>
