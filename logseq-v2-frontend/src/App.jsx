@@ -1178,7 +1178,7 @@ export default function App() {
     try { const v = localStorage.getItem("gamma-chat-height"); return v ? Number(v) : 200; } catch { return 200; }
   });
   const [chatHidden, setChatHidden] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+
   // Tracks which block we've finished loading from the server, so the save
   // effect doesn't fire (and clobber the stored chat) before the load lands.
   const chatLoadedForRef = useRef("");
@@ -1246,7 +1246,59 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-tabs", JSON.stringify(openTabs)); } catch {}
   }, [openTabs]);
-  const [dockPreview, setDockPreview] = useState(null); // "left" | "right" | "bottom" while dragging the sidebar
+  const [dockPreview, setDockPreview] = useState(null); // "left" | "right" | "bottom" while dragging a window
+  // The AI chat is its own window, dockable independently of the notes pane.
+  const [chatDock, setChatDock] = useState(() => {
+    try { return localStorage.getItem("gamma-chat-dock") || "right"; } catch { return "right"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-dock", chatDock); } catch {}
+  }, [chatDock]);
+  const [chatWidth, setChatWidth] = useState(() => {
+    try { return Number(localStorage.getItem("gamma-chat-width")) || 360; } catch { return 360; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-width", String(chatWidth)); } catch {}
+  }, [chatWidth]);
+  // One popover open at a time; any click outside a [data-popover] container closes it.
+  const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
+  useEffect(() => {
+    if (!openPopover) return;
+    function onDown(e) {
+      if (!(e.target.closest && e.target.closest("[data-popover]"))) setOpenPopover(null);
+    }
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [openPopover]);
+  const [shareUrl, setShareUrl] = useState("");
+  const [shareCopied, setShareCopied] = useState(false);
+  // Workspace search (Ctrl+Shift+F)
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchBusy, setSearchBusy] = useState(false);
+  useEffect(() => {
+    if (openPopover !== "search" || !searchQuery.trim()) { setSearchResults([]); return; }
+    const timer = setTimeout(() => {
+      setSearchBusy(true);
+      apiJson(`${API}/block-search?q=${encodeURIComponent(searchQuery.trim())}&limit=20`)
+        .then((d) => setSearchResults(d.blocks || []))
+        .catch(() => setSearchResults([]))
+        .finally(() => setSearchBusy(false));
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [searchQuery, openPopover]);
+  useEffect(() => {
+    function onKey(e) {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setOpenPopover((p) => (p === "search" ? null : "search"));
+      } else if (e.key === "Escape") {
+        setOpenPopover(null);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const [pdfHidden, setPdfHidden] = useState(false);
   const [pdfScale, setPdfScale] = useState("page-width");
   const [pdfSaveLocal, setPdfSaveLocal] = useState(() => {
@@ -2162,18 +2214,26 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
-  async function createShareLink() {
+  async function fetchShareLink() {
     if (!pdfUrl || readOnly) return;
     try {
       const data = await apiJson(`${API}/share/${docId}`, {
         method: "POST",
         credentials: "include",
       });
-      const link = `${window.location.origin}${window.location.pathname}?share=${data.token}`;
-      await navigator.clipboard.writeText(link);
-      setStatus(`Share link copied: ${link}`);
+      setShareUrl(`${window.location.origin}${window.location.pathname}?share=${data.token}`);
+      setShareCopied(false);
     } catch (err) {
       setStatus(`Share failed: ${err.message}`);
+    }
+  }
+
+  async function copyShareLink() {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setShareCopied(true);
+    } catch {
+      setStatus("Copy failed — copy the link manually.");
     }
   }
 
@@ -2504,6 +2564,147 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     );
   }
 
+  function startChatWidthResize(e) {
+    const startW = chatWidth;
+    const sign = chatDock === "left" ? 1 : -1;
+    startSashDrag(e, {
+      cursor: "col-resize",
+      compute: (dx) => Math.max(260, Math.min(window.innerWidth * 0.6, startW + sign * dx)),
+      apply: setChatWidth,
+    });
+  }
+
+  // Drag the chat window by its grip to dock it left, right, or bottom.
+  function startChatDockDrag(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.currentTarget;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const pointerId = e.pointerId;
+    let dragging = false;
+    try { target.setPointerCapture(pointerId); } catch (_) {}
+    function zoneFor(ev) {
+      if (ev.clientY > window.innerHeight * 0.65) return "bottom";
+      return ev.clientX < window.innerWidth / 2 ? "left" : "right";
+    }
+    function onMove(ev) {
+      if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 8) return;
+      dragging = true;
+      setDockPreview(zoneFor(ev));
+    }
+    function onUp(ev) {
+      if (dragging) setChatDock(zoneFor(ev));
+      setDockPreview(null);
+      try { target.releasePointerCapture(pointerId); } catch (_) {}
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      target.removeEventListener("pointercancel", onUp);
+    }
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+    target.addEventListener("pointercancel", onUp);
+  }
+
+  // The AI chat window — an independent pane docked left/right/bottom via chatDock.
+  const chatWindow = !readOnly && !chatHidden ? (
+    <div className="chatPanel chatWindow">
+      <div className="chatPanelHeader">
+        <span
+          className="chatPanelTitle chatDockGrip"
+          onPointerDown={startChatDockDrag}
+          title="Drag to dock the chat left, right, or bottom"
+        >⠿ AI Chat</span>
+        {aiInfo?.models?.length > 0 ? (() => {
+          const models = aiInfo.models;
+          const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
+          const currentId = models.some((m) => m.id === chatModel) ? chatModel : aiInfo.default;
+          return (
+            <span className="chatHeaderSelects">
+              {models.length > 1 ? (
+                <select className="chatModelSelect" value={currentId}
+                  onChange={(e) => setChatModel(e.target.value)} title="Switch model">
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {multiProvider ? `${m.model} · ${m.provider}` : m.model}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <select className="chatModelSelect" value={chatEffort}
+                onChange={(e) => setChatEffort(e.target.value)}
+                title="Reasoning effort — leave on 'effort: default' unless the model supports it">
+                <option value="">effort: default</option>
+                {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
+                  <option key={ef} value={ef}>effort: {ef}</option>
+                ))}
+              </select>
+            </span>
+          );
+        })() : null}
+        <div className="chatPanelHeaderBtns">
+          <button className="chatClearBtn"
+            onClick={() => { setPromptDraft(chatSystem || aiInfo?.default_prompt || ""); setPromptOpen(true); }}
+            title="View or edit the system prompt sent with every question">Prompt</button>
+          <button className="chatClearBtn" onClick={openReportModal} title="Generate a report from your notes and highlights across pages">Report</button>
+          <button className="chatClearBtn" onClick={clearChat} title="Start a fresh conversation (clears saved history)">New chat</button>
+          <button className="chatHideBtn" onClick={() => setChatHidden(true)} title="Hide chat (re-enable it from the ⋮ menu)">×</button>
+        </div>
+      </div>
+      <div className="chatMessages" ref={chatScrollRef}>
+        {chatMessages.length === 0 ? (
+          <div className="chatEmpty">
+            {aiInfo && !aiInfo.enabled
+              ? "AI is not configured — set a provider key in the server .env."
+              : (focusedBlockId ? "Ask AI about this page…" : "Ask AI anything, or generate a report from your pages…")}
+          </div>
+        ) : (
+          chatMessages.map((m, i) => (
+            <div key={i} className={`chatBubbleRow ${m.role === "user" ? "user" : "ai"}`}>
+              <div className={`chatBubble ${m.role === "user" ? "user" : "ai"}`}>
+                {m.role === "user"
+                  ? <div className="chatUserText">{m.text}</div>
+                  : <ChatMarkdown text={m.text} />}
+              </div>
+            </div>
+          ))
+        )}
+        {chatLoading ? (
+          <div className="chatBubbleRow ai">
+            <div className="chatBubble ai">
+              <span className="chatTyping"><span /><span /><span /></span>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      {pdfSelection ? (
+        <div className="chatSelChip" title={pdfSelection}>
+          <span className="chatSelChipLabel">Selection</span>
+          <span className="chatSelChipText">{pdfSelection.slice(0, 140)}{pdfSelection.length > 140 ? "…" : ""}</span>
+          <button type="button" className="chatSelChipClose" onClick={() => setPdfSelection("")} title="Dismiss — answer about the whole document">×</button>
+        </div>
+      ) : null}
+      <form
+        className="chatInputRow"
+        onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
+      >
+        {docId ? (
+          <label className={`chatAttachToggle ${attachPdf ? "on" : ""}`} title="Send the PDF file itself to the model (better answers about figures/tables) instead of extracted text">
+            <input type="checkbox" checked={attachPdf} onChange={(e) => setAttachPdf(e.target.checked)} />
+            📎 PDF
+          </label>
+        ) : null}
+        <input
+          className="chatInput"
+          value={chatInput}
+          onChange={(e) => setChatInput(e.target.value)}
+          placeholder={pdfSelection ? "Ask about the selection…" : (focusedBlockId ? "Ask about this page…" : "Ask AI…")}
+        />
+        <button className="chatSendBtn" type="submit" disabled={chatLoading || !chatInput.trim()}>Send</button>
+      </form>
+    </div>
+  ) : null;
+
   return (
     <div
       ref={appRef}
@@ -2574,58 +2775,148 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </button>
               </div>
             ) : null}
-            {pdfUrl && !homeMode ? (
-              <button className="iconBtn" onClick={createShareLink} disabled={loading} title="Copy a public share link" aria-label="Share link">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+            <span data-popover="search" style={{ position: "relative", display: "inline-flex" }}>
+              <button
+                className={`iconBtn ${openPopover === "search" ? "activeIcon" : ""}`}
+                onClick={() => setOpenPopover((p) => (p === "search" ? null : "search"))}
+                title="Search all notes (Ctrl+Shift+F)"
+                aria-label="Search"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
               </button>
+              {openPopover === "search" ? (
+                <div className="popover searchPopover">
+                  <input
+                    autoFocus
+                    className="searchInput"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search notes and highlights…"
+                  />
+                  <div className="searchResults">
+                    {searchBusy ? <div className="searchHint">Searching…</div> : null}
+                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 ? (
+                      <div className="searchHint">No matches.</div>
+                    ) : null}
+                    {searchResults.map((r) => (
+                      <button
+                        key={r.id}
+                        className="searchResult"
+                        onClick={() => {
+                          setOpenPopover(null);
+                          if (r.page_root_id && r.page_root_id !== r.id) pendingBlockScrollRef.current = r.id;
+                          openBlock(r.page_root_id || r.id);
+                        }}
+                      >
+                        <span className="searchResultPage">{r.page_title || "Untitled"}</span>
+                        <span className="searchResultText">{r.content}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </span>
+            {pdfUrl && !homeMode ? (
+              <span data-popover="share" style={{ position: "relative", display: "inline-flex" }}>
+                <button
+                  className={`iconBtn ${openPopover === "share" ? "activeIcon" : ""}`}
+                  onClick={() => {
+                    const opening = openPopover !== "share";
+                    setOpenPopover(opening ? "share" : null);
+                    if (opening) fetchShareLink();
+                  }}
+                  disabled={loading}
+                  title="Share"
+                  aria-label="Share"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+                </button>
+                {openPopover === "share" ? (
+                  <div className="popover sharePopover">
+                    <div className="popoverTitle">Share this page</div>
+                    <div className="popoverHint">Anyone with the link can view the PDF, highlights, and notes — read-only, no login.</div>
+                    {shareUrl ? (
+                      <div className="shareRow">
+                        <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
+                        <button className="chatSendBtn" onClick={copyShareLink}>{shareCopied ? "Copied ✓" : "Copy"}</button>
+                      </div>
+                    ) : (
+                      <div className="popoverHint">Creating link…</div>
+                    )}
+                  </div>
+                ) : null}
+              </span>
             ) : null}
             {authUser?.user && (
-              <span className="userBadge" title={authUser.is_guest ? "Guest account — resets daily" : `Logged in as ${authUser.user}`}>
-                {authUser.is_guest ? "guest" : authUser.user}
+              <span data-popover="user" style={{ position: "relative", display: "inline-flex" }}>
+                <button
+                  className="userBadge"
+                  onClick={() => setOpenPopover((p) => (p === "user" ? null : "user"))}
+                  title="Account & settings"
+                >
+                  {authUser.is_guest ? "guest" : authUser.user}
+                </button>
+                {openPopover === "user" ? (
+                  <div className="popover userPopover">
+                    <div className="popoverTitle">{authUser.is_guest ? "Guest" : authUser.user}</div>
+                    {authUser.is_guest ? (
+                      <div className="popoverHint">Guest workspace resets daily. Ask the admin for an account to keep your work.</div>
+                    ) : null}
+                    <div className="popoverSection">Settings</div>
+                    <button className="popoverItem" onClick={() => { setPromptDraft(chatSystem || aiInfo?.default_prompt || ""); setPromptOpen(true); setOpenPopover(null); }}>
+                      AI system prompt…
+                    </button>
+                    <div className="popoverHint">AI provider keys and models are configured on the server (.env: GAMMA_AI_*). Model, effort, and prompt choices are saved in this browser.</div>
+                    <div className="popoverDivider" />
+                    <button className="popoverItem" onClick={doLogout}>Log out</button>
+                  </div>
+                ) : null}
               </span>
             )}
-            <button
-              className="iconBtn menuToggleBtn"
-              onClick={() => setMenuOpen((v) => !v)}
-              title="Menu"
-              aria-label="Menu"
-            >
-              {menuOpen ? "✕" : "⋮"}
-            </button>
-            <div className={`topbarOverflow ${menuOpen ? "open" : ""}`}>
-              {pdfUrl && pdfHidden ? (
-                <button
-                  className="pdfShowBtn"
-                  onClick={() => { setPdfHidden(false); setMenuOpen(false); }}
-                  title="Show PDF"
-                >Show PDF</button>
-              ) : null}
-              {!homeMode ? (
-                <button
-                  className="notesBtn"
-                  onClick={() => { setNotesVisible((v) => !v); setMenuOpen(false); }}
-                  title={notesVisible ? "Hide notes" : "Show notes"}
-                >
-                  {notesVisible ? "Hide notes" : "Show notes"}
-                </button>
-              ) : null}
-              <label
-                className="importLogseqBtn"
-                title="Import Logseq PDF highlights (.pdf + .edn)"
-                style={{ cursor: loading ? "not-allowed" : "pointer" }}
+            <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
+              <button
+                className={`iconBtn menuToggleBtn ${openPopover === "menu" ? "activeIcon" : ""}`}
+                onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
+                title="Menu"
+                aria-label="Menu"
               >
-                Import Logseq…
-                <input
-                  type="file"
-                  multiple
-                  accept=".pdf,.edn,.md"
-                  style={{ display: "none" }}
-                  disabled={loading}
-                  onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; setMenuOpen(false); }}
-                />
-              </label>
-              <button className="logoutMenuBtn" onClick={doLogout} title="Log out">Log out</button>
-            </div>
+                ⋮
+              </button>
+              {openPopover === "menu" ? (
+                <div className="popover menuPopover">
+                  <div className="popoverSection">Windows</div>
+                  {!homeMode && pdfUrl ? (
+                    <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
+                      <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
+                    </button>
+                  ) : null}
+                  {!homeMode ? (
+                    <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
+                      <span className="check">{notesVisible ? "✓" : ""}</span> Notes
+                    </button>
+                  ) : null}
+                  <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
+                    <span className="check">{!chatHidden ? "✓" : ""}</span> AI Chat
+                  </button>
+                  <div className="popoverDivider" />
+                  <label
+                    className="popoverItem importLogseqBtn"
+                    title="Import Logseq PDF highlights (.pdf + .edn)"
+                    style={{ cursor: loading ? "not-allowed" : "pointer" }}
+                  >
+                    Import Logseq…
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pdf,.edn,.md"
+                      style={{ display: "none" }}
+                      disabled={loading}
+                      onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; setOpenPopover(null); }}
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </span>
           </div>
           <div className="status">{status}</div>
         </>
@@ -2633,24 +2924,29 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         <div className="topbar">
           <button className="homeBtn" disabled title="Home" aria-label="Home">Γ</button>
           <span className="readOnlyTitle">{pdfTitle}</span>
-          <button
-            className="iconBtn menuToggleBtn"
-            onClick={() => setMenuOpen((v) => !v)}
-            title="Menu"
-            aria-label="Menu"
-          >
-            {menuOpen ? "✕" : "⋮"}
-          </button>
-          <div className={`topbarOverflow ${menuOpen ? "open" : ""}`}>
-            {pdfUrl && pdfHidden ? (
-              <button className="pdfShowBtn" onClick={() => { setPdfHidden(false); setMenuOpen(false); }}>
-                Show PDF
-              </button>
-            ) : null}
-            <button className="notesBtn" onClick={() => { setNotesVisible((v) => !v); setMenuOpen(false); }}>
-              {notesVisible ? "Hide notes" : "Show notes"}
+          <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
+            <button
+              className="iconBtn menuToggleBtn"
+              onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
+              title="Menu"
+              aria-label="Menu"
+            >
+              ⋮
             </button>
-          </div>
+            {openPopover === "menu" ? (
+              <div className="popover menuPopover">
+                <div className="popoverSection">Windows</div>
+                {pdfUrl ? (
+                  <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
+                    <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
+                  </button>
+                ) : null}
+                <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
+                  <span className="check">{notesVisible ? "✓" : ""}</span> Notes
+                </button>
+              </div>
+            ) : null}
+          </span>
         </div>
       )}
 
@@ -2672,6 +2968,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </div>
       )}
 
+      <div className="workArea">
+      {chatWindow && chatDock === "left" ? (
+        <>
+          <div className="chatDockSide" style={{ width: chatWidth }}>{chatWindow}</div>
+          <div className="splitter splitter-horizontal chatWidthSash"><div className="splitterGrab" onPointerDown={startChatWidthResize} aria-label="Drag to resize chat" role="separator"><span className="splitterGrabDot" /></div></div>
+        </>
+      ) : null}
+      <div className="mainStack">
       <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
         <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
           {pdfUrl && !pdfHidden ? (
@@ -2684,10 +2988,16 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           ) : null}
           {pdfUrl && !pdfHidden ? (
             <div className="pdfZoomOverlay">
-              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "0.8" : String(Math.max(0.4, +(n - 0.2).toFixed(1))); })} title="Zoom out">−</button>
-              <span className="pdfZoomLevel">{isNaN(parseFloat(pdfScale)) ? "Width" : `${Math.round(parseFloat(pdfScale) * 100)}%`}</span>
-              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "1.2" : String(Math.min(4, +(n + 0.2).toFixed(1))); })} title="Zoom in">+</button>
-              <button className="pdfFitWidthBtn" onClick={() => setPdfScale("page-width")} title="Fit to width">Width</button>
+              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "0.8" : String(Math.max(0.4, +(n - 0.2).toFixed(1))); })} title="Zoom out" aria-label="Zoom out">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /></svg>
+              </button>
+              <span className="pdfZoomLevel">{isNaN(parseFloat(pdfScale)) ? "Fit" : `${Math.round(parseFloat(pdfScale) * 100)}%`}</span>
+              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "1.2" : String(Math.min(4, +(n + 0.2).toFixed(1))); })} title="Zoom in" aria-label="Zoom in">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /><path d="M11 8v6" /></svg>
+              </button>
+              <button className="pdfFitWidthBtn" onClick={() => setPdfScale("page-width")} title="Fit to width" aria-label="Fit to width">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5v14" /><path d="M21 5v14" /><path d="M7 12h10" /><path d="m9 9-3 3 3 3" /><path d="m15 9 3 3-3 3" /></svg>
+              </button>
             </div>
           ) : null}
           {pdfUrl ? (
@@ -3290,114 +3600,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             ))}
           </div>
 
-          {!readOnly ? (
-            <>
-              {!chatHidden ? (
-                <div className="chatSplitter" onPointerDown={startChatResize} onDoubleClick={() => setChatHeight(200)} aria-label="Drag to resize chat" role="separator">
-                  <span className="chatSplitterDot" />
-                </div>
-              ) : null}
-              {!chatHidden ? (
-                <div className="chatPanel" style={{ height: chatHeight }}>
-                  <div className="chatPanelHeader">
-                    <span className="chatPanelTitle">AI Chat</span>
-                    {aiInfo?.models?.length > 0 ? (() => {
-                      const models = aiInfo.models;
-                      const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
-                      const currentId = models.some((m) => m.id === chatModel) ? chatModel : aiInfo.default;
-                      return (
-                        <span className="chatHeaderSelects">
-                          {models.length > 1 ? (
-                            <select className="chatModelSelect" value={currentId}
-                              onChange={(e) => setChatModel(e.target.value)} title="Switch model">
-                              {models.map((m) => (
-                                <option key={m.id} value={m.id}>
-                                  {multiProvider ? `${m.model} · ${m.provider}` : m.model}
-                                </option>
-                              ))}
-                            </select>
-                          ) : null}
-                          <select className="chatModelSelect" value={chatEffort}
-                            onChange={(e) => setChatEffort(e.target.value)}
-                            title="Reasoning effort — leave on 'effort: default' unless the model supports it">
-                            <option value="">effort: default</option>
-                            {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
-                              <option key={ef} value={ef}>effort: {ef}</option>
-                            ))}
-                          </select>
-                        </span>
-                      );
-                    })() : null}
-                    <div className="chatPanelHeaderBtns">
-                      <button className="chatClearBtn"
-                        onClick={() => { setPromptDraft(chatSystem || aiInfo?.default_prompt || ""); setPromptOpen(true); }}
-                        title="View or edit the system prompt sent with every question">Prompt</button>
-                      <button className="chatClearBtn" onClick={openReportModal} title="Generate a report from your notes and highlights across pages">Report</button>
-                      <button className="chatClearBtn" onClick={clearChat} title="Start a fresh conversation (clears saved history)">New chat</button>
-                      <button className="chatHideBtn" onClick={() => setChatHidden(true)} title="Hide chat">×</button>
-                    </div>
-                  </div>
-                  <div className="chatMessages" ref={chatScrollRef}>
-                    {chatMessages.length === 0 ? (
-                      <div className="chatEmpty">
-                        {aiInfo && !aiInfo.enabled
-                          ? "AI is not configured — set GAMMA_AI_API_KEY on the server."
-                          : "Ask AI about this page…"}
-                      </div>
-                    ) : (
-                      chatMessages.map((m, i) => (
-                        <div key={i} className={`chatBubbleRow ${m.role === "user" ? "user" : "ai"}`}>
-                          <div className={`chatBubble ${m.role === "user" ? "user" : "ai"}`}>
-                            {m.role === "user"
-                              ? <div className="chatUserText">{m.text}</div>
-                              : <ChatMarkdown text={m.text} />}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                    {chatLoading ? (
-                      <div className="chatBubbleRow ai">
-                        <div className="chatBubble ai">
-                          <span className="chatTyping"><span /><span /><span /></span>
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                  {pdfSelection ? (
-                    <div className="chatSelChip" title={pdfSelection}>
-                      <span className="chatSelChipLabel">Selection</span>
-                      <span className="chatSelChipText">{pdfSelection.slice(0, 140)}{pdfSelection.length > 140 ? "…" : ""}</span>
-                      <button type="button" className="chatSelChipClose" onClick={() => setPdfSelection("")} title="Dismiss — answer about the whole document">×</button>
-                    </div>
-                  ) : null}
-                  <form
-                    className="chatInputRow"
-                    onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
-                  >
-                    {docId ? (
-                      <label className={`chatAttachToggle ${attachPdf ? "on" : ""}`} title="Send the PDF file itself to the model (better answers about figures/tables) instead of extracted text">
-                        <input type="checkbox" checked={attachPdf} onChange={(e) => setAttachPdf(e.target.checked)} />
-                        📎 PDF
-                      </label>
-                    ) : null}
-                    <input
-                      className="chatInput"
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      placeholder={pdfSelection ? "Ask about the selection…" : "Ask about this page…"}
-                    />
-                    <button className="chatSendBtn" type="submit" disabled={chatLoading || !chatInput.trim()}>Send</button>
-                  </form>
-                </div>
-              ) : (
-                <div className="chatHiddenBar">
-                  <button className="chatShowBtn" onClick={() => setChatHidden(false)}>Show AI Chat</button>
-                </div>
-              )}
-            </>
-          ) : null}
-
         </div>)}
+      </div>
+      {chatWindow && chatDock === "bottom" ? (
+        <>
+          <div className="chatSplitter" onPointerDown={startChatResize} onDoubleClick={() => setChatHeight(200)} aria-label="Drag to resize chat" role="separator">
+            <span className="chatSplitterDot" />
+          </div>
+          <div className="chatDockBottom" style={{ height: chatHeight }}>{chatWindow}</div>
+        </>
+      ) : null}
+      </div>
+      {chatWindow && chatDock === "right" ? (
+        <>
+          <div className="splitter splitter-horizontal chatWidthSash"><div className="splitterGrab" onPointerDown={startChatWidthResize} aria-label="Drag to resize chat" role="separator"><span className="splitterGrabDot" /></div></div>
+          <div className="chatDockSide" style={{ width: chatWidth }}>{chatWindow}</div>
+        </>
+      ) : null}
       </div>
       {dockPreview ? (
         <div className={`dockPreview dockPreview-${dockPreview}`} />
