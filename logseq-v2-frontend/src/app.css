@@ -2009,10 +2009,11 @@ body {
 .pdfZoomInput:hover, .pdfZoomInput:focus { border-bottom-color: var(--accent-dark); }
 
 /* --- sidebar docking --- */
-/* page action column beside the title: AI title, source PDF, delete */
+/* page action buttons on the title line: AI title, metadata, delete */
 .pageActionCol {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   gap: 2px;
   flex-shrink: 0;
   margin-left: auto;
@@ -2394,6 +2395,13 @@ body {
   outline: none;
 }
 .chatInput:focus { border-color: var(--text-dim); }
+.chatInputArea {
+  resize: none;
+  max-height: 140px;
+  overflow-y: auto !important; /* AutoGrow sets inline height; cap + scroll past 140px */
+  line-height: 1.45;
+  font-family: inherit;
+}
 .chatSendBtn {
   background: var(--accent-dark);
   border: none;
