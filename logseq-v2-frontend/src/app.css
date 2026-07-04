@@ -2704,6 +2704,36 @@ body {
 .chatStopBtn { background: var(--bg-subtle); color: var(--text-primary); }
 .chatStopBtn:hover { background: var(--bg-hover) !important; }
 
+/* --- back-to-previous-view button after in-PDF link jumps --- */
+.pdfBackWrap {
+  position: sticky;
+  top: 10px;
+  height: 0;
+  z-index: 25;
+  display: flex;
+  justify-content: flex-start;
+  padding-left: 14px;
+  pointer-events: none;
+}
+.pdfBackBtn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+.pdfBackBtn:hover { background: var(--bg-hover); border-color: var(--accent-dark); }
+[data-theme="light"] .pdfBackBtn { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15); }
+
 /* --- clickable PDF link annotations --- */
 .pdfLinkBox {
   position: absolute;
