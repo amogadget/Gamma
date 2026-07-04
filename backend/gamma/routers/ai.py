@@ -1,5 +1,6 @@
-"""AI chat (Anthropic-compatible Messages API) and per-block chat history."""
+"""AI chat (Anthropic or OpenAI wire protocol), report generation, and chat history."""
 
+import base64
 import json
 import sqlite3
 import urllib.request
@@ -9,16 +10,38 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ..auth import require_user
-from ..config import AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_PROVIDER
+from ..blocks_store import fetch_subtree
+from ..config import AI_API_KEY, AI_BASE_URL, AI_MODEL, AI_MODELS, AI_PROVIDER
 from ..db import page_now, user_db_path, user_uploads_dir
 
 router = APIRouter(prefix="/api", tags=["ai"])
+
+MAX_ATTACH_PDF_BYTES = 15 * 1024 * 1024  # keep base64 payload well under API request limits
 
 
 class AIChatRequest(BaseModel):
     prompt: str
     doc_id: str = ""
     history: list = []  # [{role: "user"|"ai", text: str}, ...]
+    model: str = ""       # optional override, must be one of AI_MODELS
+    selection: str = ""   # text the user selected in the PDF — focus the answer on it
+    attach_pdf: bool = False  # send the PDF itself instead of extracted text
+
+
+def _resolve_model(requested: str) -> str:
+    return requested if requested in AI_MODELS else AI_MODEL
+
+
+def _final_prompt(payload: AIChatRequest) -> str:
+    prompt = payload.prompt
+    selection = (payload.selection or "").strip()[:4000]
+    if selection:
+        prompt = (
+            f"{prompt}\n\n"
+            f'The user has selected the following passage from the document. '
+            f'Answer specifically about this passage:\n"""\n{selection}\n"""'
+        )
+    return prompt
 
 
 def _build_messages(payload: AIChatRequest, context: str):
@@ -38,7 +61,7 @@ def _build_messages(payload: AIChatRequest, context: str):
             context_used = True
         msgs.append({"role": role, "content": content})
     # Always append the current prompt
-    content = payload.prompt
+    content = _final_prompt(payload)
     if has_context and not context_used:
         content = f"Here is the PDF text:\n\n{context}\n\nUser question: {content}"
     msgs.append({"role": "user", "content": content})
@@ -70,11 +93,17 @@ def _download_pdf_from_source(user: str, doc_id: str, pdf_path):
         print(f"[ai_chat] download failed: {dl_err}")
 
 
-def _extract_pdf_context(user: str, doc_id: str) -> str:
+def _pdf_path(user: str, doc_id: str):
+    """Local path of the doc's PDF, downloading from source_url if needed."""
     pdf_path = user_uploads_dir(user) / f"{doc_id}.pdf"
     if not pdf_path.exists():
         _download_pdf_from_source(user, doc_id, pdf_path)
-    if not pdf_path.exists():
+    return pdf_path if pdf_path.exists() else None
+
+
+def _extract_pdf_context(user: str, doc_id: str, limit: int = 8000) -> str:
+    pdf_path = _pdf_path(user, doc_id)
+    if not pdf_path:
         print("[ai_chat] PDF still not found after download attempt")
         return ""
     try:
@@ -83,12 +112,24 @@ def _extract_pdf_context(user: str, doc_id: str) -> str:
         pages_text = [t for page in reader.pages if (t := page.extract_text())]
         context = "\n\n".join(pages_text)
         print(f"[ai_chat] context={len(pages_text)} pages, {len(context)} chars")
-        if len(context) > 8000:
-            context = context[:8000] + "\n…[truncated]"
+        if len(context) > limit:
+            context = context[:limit] + "\n…[truncated]"
         return context
     except Exception as e:
         print(f"[ai_chat] extraction error: {e}")
         return "(PDF text extraction failed)"
+
+
+def _load_pdf_b64(user: str, doc_id: str) -> str | None:
+    """Base64 of the doc's PDF for native attachment, or None if unavailable/too big."""
+    pdf_path = _pdf_path(user, doc_id)
+    if not pdf_path:
+        return None
+    data = pdf_path.read_bytes()
+    if len(data) > MAX_ATTACH_PDF_BYTES:
+        print(f"[ai_chat] PDF too large to attach ({len(data)} bytes), falling back to text")
+        return None
+    return base64.standard_b64encode(data).decode("ascii")
 
 
 _SYSTEM_PROMPT = ("You are a research assistant helping the user understand a PDF they are reading. "
@@ -96,10 +137,16 @@ _SYSTEM_PROMPT = ("You are a research assistant helping the user understand a PD
                   "parts of the text when relevant.")
 
 
-def _anthropic_request(messages, system):
+def _anthropic_request(messages, system, model, pdf_b64=None, timeout_hint=None):
     """Anthropic Messages API: POST /v1/messages, x-api-key auth."""
+    if pdf_b64:
+        last = messages[-1]
+        last["content"] = [
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64}},
+            {"type": "text", "text": last["content"]},
+        ]
     body = json.dumps({
-        "model": AI_MODEL,
+        "model": model,
         "max_tokens": 4096,
         "system": system,
         "messages": messages,
@@ -115,12 +162,19 @@ def _anthropic_extract(data) -> str:
     return "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
 
 
-def _openai_request(messages, system):
+def _openai_request(messages, system, model, pdf_b64=None, timeout_hint=None):
     """OpenAI Chat Completions API: POST /v1/chat/completions, Bearer auth."""
+    if pdf_b64:
+        last = messages[-1]
+        last["content"] = [
+            {"type": "file", "file": {"filename": "document.pdf",
+                                      "file_data": f"data:application/pdf;base64,{pdf_b64}"}},
+            {"type": "text", "text": last["content"]},
+        ]
     if system:
         messages = [{"role": "system", "content": system}] + messages
     body = json.dumps({
-        "model": AI_MODEL,
+        "model": model,
         "max_tokens": 4096,
         "messages": messages,
     }).encode()
@@ -141,22 +195,137 @@ _PROVIDERS = {
 }
 
 
+def _call_ai(messages, system, model, pdf_b64=None, timeout=60):
+    build_request, extract_text = _PROVIDERS[AI_PROVIDER]
+    req = build_request(messages, system, model, pdf_b64)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = json.loads(resp.read())
+    return extract_text(data)
+
+
+@router.get("/ai/models")
+async def ai_models(request: Request):
+    require_user(request)
+    return {"enabled": bool(AI_API_KEY), "provider": AI_PROVIDER, "models": AI_MODELS, "default": AI_MODEL}
+
+
 @router.post("/ai/chat")
 async def ai_chat(payload: AIChatRequest, request: Request):
     if not AI_API_KEY:
         raise HTTPException(status_code=503, detail="AI not configured (set GAMMA_AI_API_KEY)")
 
     user = require_user(request)
-    context = _extract_pdf_context(user, payload.doc_id) if payload.doc_id else ""
 
-    build_request, extract_text = _PROVIDERS[AI_PROVIDER]
-    req = build_request(_build_messages(payload, context), _SYSTEM_PROMPT if context else "")
+    pdf_b64 = None
+    if payload.attach_pdf and payload.doc_id:
+        pdf_b64 = _load_pdf_b64(user, payload.doc_id)
+    # Extracted text is the fallback when the PDF isn't attached natively
+    context = "" if pdf_b64 else (_extract_pdf_context(user, payload.doc_id) if payload.doc_id else "")
+
+    messages = _build_messages(payload, context)
+    system = _SYSTEM_PROMPT if (context or pdf_b64) else ""
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-        return {"response": extract_text(data)}
+        text = _call_ai(messages, system, _resolve_model(payload.model), pdf_b64, timeout=120)
+        return {"response": text}
     except Exception as e:
         print(f"[ai_chat] API error: {e}")
+        raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
+
+
+# --- Multi-paper report -----------------------------------------------------
+
+class AIReportRequest(BaseModel):
+    page_ids: list
+    model: str = ""
+    instructions: str = ""
+
+
+_REPORT_SYSTEM = (
+    "You are a research assistant. Write a well-structured markdown report about the papers/pages "
+    "provided. The user's highlighted passages and notes show what they care about most — organize "
+    "the report around those. For each paper summarize the key points, then draw connections, "
+    "agreements, and contrasts between papers where relevant. Use headings, keep it substantive."
+)
+
+
+def _page_report_section(conn, user: str, page_id: str, pdf_budget: int) -> str | None:
+    rows = fetch_subtree(conn, page_id)
+    if not rows:
+        return None
+    by_parent: dict = {}
+    root = None
+    for r in rows:
+        if r[0] == page_id:
+            root = r
+        else:
+            by_parent.setdefault(r[1], []).append(r)
+    for v in by_parent.values():
+        v.sort(key=lambda r: r[2])
+
+    props = json.loads(root[4] or "{}")
+    highlights: list[str] = []
+    notes: list[str] = []
+
+    def walk(bid, depth):
+        for r in by_parent.get(bid, []):
+            p = json.loads(r[4] or "{}")
+            quote = (p.get("quote") or "").strip()
+            content = (r[3] or "").strip()
+            if quote:
+                entry = f'- Highlighted: "{quote}"'
+                if content:
+                    entry += f"\n  User note: {content}"
+                highlights.append(entry)
+            elif content:
+                notes.append("  " * depth + f"- {content}")
+            walk(r[0], depth + 1)
+
+    walk(page_id, 0)
+
+    lines = [f"### {root[3] or 'Untitled'}"]
+    if props.get("summary"):
+        lines.append(f"Summary: {props['summary']}")
+    if props.get("doc_id"):
+        excerpt = _extract_pdf_context(user, props["doc_id"], limit=pdf_budget)
+        if excerpt:
+            lines.append(f"Document text (excerpt):\n{excerpt}")
+    if highlights:
+        lines.append("User's highlighted passages:\n" + "\n".join(highlights))
+    if notes:
+        lines.append("User's notes:\n" + "\n".join(notes))
+    return "\n\n".join(lines)
+
+
+@router.post("/ai/report")
+async def ai_report(payload: AIReportRequest, request: Request):
+    if not AI_API_KEY:
+        raise HTTPException(status_code=503, detail="AI not configured (set GAMMA_AI_API_KEY)")
+    user = require_user(request)
+    page_ids = [str(p) for p in (payload.page_ids or [])][:12]
+    if not page_ids:
+        raise HTTPException(status_code=400, detail="no pages selected")
+
+    # Split the context budget across papers so many-paper reports stay within limits
+    pdf_budget = max(2000, 24000 // len(page_ids))
+    sections = []
+    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        for pid in page_ids:
+            section = _page_report_section(conn, user, pid, pdf_budget)
+            if section:
+                sections.append(section)
+    if not sections:
+        raise HTTPException(status_code=404, detail="none of the selected pages were found")
+
+    prompt = "Write the report for these papers/pages:\n\n" + "\n\n---\n\n".join(sections)
+    if payload.instructions.strip():
+        prompt += f"\n\nAdditional instructions from the user: {payload.instructions.strip()}"
+
+    try:
+        text = _call_ai([{"role": "user", "content": prompt}], _REPORT_SYSTEM,
+                        _resolve_model(payload.model), timeout=180)
+        return {"report": text}
+    except Exception as e:
+        print(f"[ai_report] API error: {e}")
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
 
 

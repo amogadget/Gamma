@@ -20,3 +20,5 @@ dist/
 HANDOFF.md.bak
 
 .env
+/data
+docker-compose.yml

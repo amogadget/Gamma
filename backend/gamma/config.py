@@ -36,3 +36,9 @@ AI_BASE_URL = (os.environ.get("GAMMA_AI_BASE_URL", "")
 AI_MODEL = (os.environ.get("GAMMA_AI_MODEL", "")
             or os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", "")
             or _default_model)
+
+# Models offered in the chat panel's model switcher (comma-separated).
+# The default model is always included.
+AI_MODELS = [m.strip() for m in os.environ.get("GAMMA_AI_MODELS", "").split(",") if m.strip()]
+if AI_MODEL not in AI_MODELS:
+    AI_MODELS.insert(0, AI_MODEL)
