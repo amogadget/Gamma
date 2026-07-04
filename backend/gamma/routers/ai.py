@@ -2,6 +2,7 @@
 
 import base64
 import json
+import re
 import sqlite3
 import urllib.error
 import urllib.request
@@ -36,6 +37,21 @@ class AIChatRequest(BaseModel):
     system: str = ""      # custom system prompt; empty = built-in default
     pages: list = []      # page block ids to include as context (multi-PDF chat / reports)
     include_notes: bool = False  # also include the user's highlights + notes for those pages
+    images: list = []     # pasted figures as data URLs ("data:image/png;base64,…")
+
+
+def _parse_images(images: list) -> list[tuple[str, str]]:
+    """Validated (media_type, base64) pairs from data URLs; junk is dropped."""
+    out = []
+    for s in (images or [])[:4]:
+        m = re.match(r"^data:(image/(?:png|jpeg|jpg|gif|webp));base64,([A-Za-z0-9+/=]+)$", str(s))
+        if not m:
+            continue
+        mt, b64 = m.group(1), m.group(2)
+        if len(b64) > 8_000_000:  # ~6 MB image — beyond that providers reject anyway
+            continue
+        out.append(("image/jpeg" if mt == "image/jpg" else mt, b64))
+    return out
 
 
 def _resolve_model(requested: str) -> dict:
@@ -155,14 +171,39 @@ _SYSTEM_PROMPT = ("You are a research assistant helping the user understand a PD
                   "The user may ask questions about the document. Be concise and reference specific "
                   "parts of the text when relevant.")
 
+# Default prompt for AI-based metadata extraction (used when neither an arXiv id
+# nor a DOI identifies the paper). Editable per-user in the frontend prompt editor.
+METADATA_PROMPT = (
+    "You extract bibliographic metadata from the first pages of an academic paper. "
+    "Reply with ONLY a JSON object (no code fences, no commentary) with these keys: "
+    'title (string), authors (list of "First Last" strings, in order), year (string), '
+    "venue (journal or conference name; \"arXiv\" for preprints), volume (string), "
+    "pages (string, e.g. \"173-179\"), doi (string), arxiv_id (string, e.g. \"1810.11086\"). "
+    "Use empty strings/lists for anything not stated in the text. Never invent a DOI or arXiv id."
+)
 
-def _anthropic_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192):
+# Default prompt for the minimal slide-deck citation. Editable in the frontend.
+CITE_PROMPT = (
+    "The user provides a citation in an arbitrary format (BibTeX, CSL JSON, or plain text). "
+    "You return ONLY a minimal, PPT-style citation suitable for a presentation slide, "
+    "labeling italic and bold with markdown syntax correctly. Follow these examples exactly:\n"
+    "Guo _et al._ arXiv **1810.11086** (2018).\n"
+    "Schine _et al._, Nature **565**, 173–179 (2019)\n"
+    "Use the journal name (abbreviated if long), bold volume, page range, and year in parentheses. "
+    "For preprints use the arXiv number in bold. If there is exactly one author, use their surname "
+    "without _et al._; for two authors use \"Surname & Surname\"."
+)
+
+
+def _anthropic_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192, images=None):
     """Anthropic Messages API: POST /v1/messages, x-api-key auth."""
-    if pdf_b64s:
+    if pdf_b64s or images:
         last = messages[-1]
         last["content"] = [
             *[{"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b}}
-              for b in pdf_b64s],
+              for b in (pdf_b64s or [])],
+            *[{"type": "image", "source": {"type": "base64", "media_type": mt, "data": b}}
+              for (mt, b) in (images or [])],
             {"type": "text", "text": last["content"]},
         ]
     body = {
@@ -187,14 +228,16 @@ def _anthropic_extract(data) -> str:
     return text
 
 
-def _openai_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192):
+def _openai_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192, images=None):
     """OpenAI Chat Completions API: POST /v1/chat/completions, Bearer auth."""
-    if pdf_b64s:
+    if pdf_b64s or images:
         last = messages[-1]
         last["content"] = [
             *[{"type": "file", "file": {"filename": f"document-{i + 1}.pdf",
                                         "file_data": f"data:application/pdf;base64,{b}"}}
-              for i, b in enumerate(pdf_b64s)],
+              for i, b in enumerate(pdf_b64s or [])],
+            *[{"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b}"}}
+              for (mt, b) in (images or [])],
             {"type": "text", "text": last["content"]},
         ]
     if system:
@@ -232,7 +275,7 @@ _WIRE = {
 }
 
 
-def _call_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192, timeout=60):
+def _call_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None):
     """Send a chat to the provider that serves `entry` (a model registry entry)."""
     conf = AI_PROVIDERS[entry["provider"]]
     if not conf["api_key"]:
@@ -240,7 +283,7 @@ def _call_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192,
                             detail=f"provider '{entry['provider']}' not configured "
                                    f"(set GAMMA_AI_{entry['provider'].upper()}_API_KEY)")
     build_request, extract_text = _WIRE[entry["provider"]]
-    req = build_request(conf, messages, system, entry["model"], pdf_b64s, effort, max_tokens)
+    req = build_request(conf, messages, system, entry["model"], pdf_b64s, effort, max_tokens, images)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
@@ -265,11 +308,15 @@ async def ai_models(request: Request):
         "default": AI_DEFAULT_MODEL["id"],
         "efforts": ["low", "medium", "high"],  # offered in the UI; omitted unless picked
         "default_prompt": _SYSTEM_PROMPT,   # shown in the prompt editor
+        "metadata_prompt": METADATA_PROMPT,  # AI metadata-extraction fallback
+        "cite_prompt": CITE_PROMPT,          # PPT-style citation generator
     }
 
 
+# Sync endpoint on purpose: the AI call can take minutes; FastAPI's threadpool
+# keeps the event loop free for other requests meanwhile.
 @router.post("/ai/chat")
-async def ai_chat(payload: AIChatRequest, request: Request):
+def ai_chat(payload: AIChatRequest, request: Request):
     if not AI_ENABLED:
         raise HTTPException(status_code=503, detail="AI not configured (set a provider API key)")
 
@@ -327,7 +374,8 @@ async def ai_chat(payload: AIChatRequest, request: Request):
     system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
     try:
         text = _call_ai(messages, system, _resolve_model(payload.model), pdf_b64s,
-                        effort=_resolve_effort(payload.effort), timeout=180)
+                        effort=_resolve_effort(payload.effort), timeout=180,
+                        images=_parse_images(payload.images))
         return {"response": text}
     except HTTPException:
         raise
@@ -402,7 +450,7 @@ def _page_report_section(conn, user: str, page_id: str, pdf_budget: int) -> str 
 
 
 @router.post("/ai/report")
-async def ai_report(payload: AIReportRequest, request: Request):
+def ai_report(payload: AIReportRequest, request: Request):
     if not AI_ENABLED:
         raise HTTPException(status_code=503, detail="AI not configured (set a provider API key)")
     user = require_user(request)
