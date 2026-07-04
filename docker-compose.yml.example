@@ -1,5 +1,6 @@
 services:
   gamma:
+    container_name: gamma
     image: ghcr.io/tim4431/gamma:latest
     build: .
     ports:

@@ -162,6 +162,22 @@ const COLORS = [
   "rgba(230, 180, 255, 0.65)"
 ];
 
+// Markdown + KaTeX rendering for AI chat messages. Unlike block rendering this
+// deliberately omits rehypeRaw: model output is untrusted, so raw HTML stays inert.
+function ChatMarkdown({ text }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeKatex]}
+      components={{
+        a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
+      }}
+    >
+      {text || ""}
+    </ReactMarkdown>
+  );
+}
+
 function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onSelectionFinished, onHighlightContext }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
@@ -1235,6 +1251,60 @@ export default function App() {
   const viewerWrapRef = useRef(null);
   const appRef = useRef(null);
 
+  // --- AI chat: model switcher, PDF attachment, selection focus, report ---
+  const [aiInfo, setAiInfo] = useState(null); // {enabled, provider, models, default}
+  const [chatModel, setChatModel] = useState(() => {
+    try { return localStorage.getItem("gamma-chat-model") || ""; } catch { return ""; }
+  });
+  const [attachPdf, setAttachPdf] = useState(() => {
+    try { return localStorage.getItem("gamma-chat-attach-pdf") === "1"; } catch { return false; }
+  });
+  const [pdfSelection, setPdfSelection] = useState("");
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportChecked, setReportChecked] = useState({});
+  const [reportInstructions, setReportInstructions] = useState("");
+  const [reportBusy, setReportBusy] = useState(false);
+  const chatScrollRef = useRef(null);
+
+  useEffect(() => {
+    if (!authUser?.user || readOnly) return;
+    apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
+  }, [authUser]);
+
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-model", chatModel); } catch {}
+  }, [chatModel]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-attach-pdf", attachPdf ? "1" : "0"); } catch {}
+  }, [attachPdf]);
+
+  // Capture text selected inside the PDF viewer so chat can focus on it.
+  // Kept in state (not read at send time) because clicking the chat input
+  // collapses the DOM selection before the user hits Send.
+  useEffect(() => {
+    function onSelectionChange() {
+      const sel = window.getSelection();
+      const text = sel ? sel.toString().trim() : "";
+      if (!text) return; // keep the last stash; the chip's ✕ dismisses it
+      const node = sel.anchorNode;
+      const el = node?.nodeType === 3 ? node.parentElement : node;
+      if (viewerWrapRef.current && el && viewerWrapRef.current.contains(el)) {
+        setPdfSelection(text.slice(0, 4000));
+      }
+    }
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, []);
+
+  // Selection is page-scoped: drop it when switching documents.
+  useEffect(() => { setPdfSelection(""); }, [focusedBlockId]);
+
+  // Keep the chat scrolled to the newest message.
+  useEffect(() => {
+    const el = chatScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chatMessages, chatLoading]);
+
   function fetchHomeBlocks() {
     return apiJson(`${API}/blocks/root/children`)
       .then((data) => setHomeBlocks(Array.isArray(data.children) ? data.children : []))
@@ -1470,35 +1540,39 @@ export default function App() {
     });
   }
 
-  function startResize(e) {
+  // Shared drag-to-resize: pointer capture + rAF-batched updates (one setState
+  // per frame, not per pointermove) so dragging stays smooth while the whole
+  // app re-renders, and a .dragging class for the active sash highlight.
+  function startSashDrag(e, { cursor, compute, apply }) {
     e.preventDefault();
     e.stopPropagation();
-
-    const isVertical = orientation === "vertical";
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const startWidth = sidebarWidth;
-    const startHeight = sidebarHeight;
     const target = e.currentTarget;
     const pointerId = e.pointerId;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let raf = 0;
+    let pending = null;
 
     try { target.setPointerCapture(pointerId); } catch (_) {}
-
-    document.body.style.cursor = isVertical ? "row-resize" : "col-resize";
+    target.classList.add("dragging");
+    document.body.style.cursor = cursor;
     document.body.style.userSelect = "none";
 
     function onMove(ev) {
       ev.preventDefault();
-      if (isVertical) {
-        const next = Math.max(160, Math.min(window.innerHeight * 0.75, startHeight + (startY - ev.clientY)));
-        setSidebarHeight(next);
-      } else {
-        const next = Math.max(280, Math.min(window.innerWidth * 0.75, startWidth + (startX - ev.clientX)));
-        setSidebarWidth(next);
+      pending = compute(ev.clientX - startX, ev.clientY - startY);
+      if (!raf) {
+        raf = requestAnimationFrame(() => {
+          raf = 0;
+          if (pending !== null) apply(pending);
+        });
       }
     }
 
     function onUp() {
+      if (raf) cancelAnimationFrame(raf);
+      if (pending !== null) apply(pending);
+      target.classList.remove("dragging");
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
       try { target.releasePointerCapture(pointerId); } catch (_) {}
@@ -1512,32 +1586,31 @@ export default function App() {
     target.addEventListener("pointercancel", onUp);
   }
 
+  function startResize(e) {
+    const isVertical = orientation === "vertical";
+    const startWidth = sidebarWidth;
+    const startHeight = sidebarHeight;
+    startSashDrag(e, {
+      cursor: isVertical ? "row-resize" : "col-resize",
+      compute: (dx, dy) => isVertical
+        ? Math.max(160, Math.min(window.innerHeight * 0.75, startHeight - dy))
+        : Math.max(280, Math.min(window.innerWidth * 0.75, startWidth - dx)),
+      apply: isVertical ? setSidebarHeight : setSidebarWidth,
+    });
+  }
+
+  function resetSidebarSize() {
+    if (orientation === "vertical") setSidebarHeight(280);
+    else setSidebarWidth(420);
+  }
+
   function startChatResize(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    const startY = e.clientY;
     const startH = chatHeight;
-    const target = e.currentTarget;
-    const pointerId = e.pointerId;
-    try { target.setPointerCapture(pointerId); } catch (_) {}
-    document.body.style.cursor = "row-resize";
-    document.body.style.userSelect = "none";
-    function onMove(ev) {
-      ev.preventDefault();
-      const next = Math.max(100, Math.min(600, startH + (startY - ev.clientY)));
-      setChatHeight(next);
-    }
-    function onUp() {
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      try { target.releasePointerCapture(pointerId); } catch (_) {}
-      target.removeEventListener("pointermove", onMove);
-      target.removeEventListener("pointerup", onUp);
-      target.removeEventListener("pointercancel", onUp);
-    }
-    target.addEventListener("pointermove", onMove);
-    target.addEventListener("pointerup", onUp);
-    target.addEventListener("pointercancel", onUp);
+    startSashDrag(e, {
+      cursor: "row-resize",
+      compute: (dx, dy) => Math.max(100, Math.min(window.innerHeight * 0.8, startH - dy)),
+      apply: setChatHeight,
+    });
   }
 
   useEffect(() => {
@@ -2058,20 +2131,61 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     const text = chatInput.trim();
     if (!text || chatLoading) return;
     setChatInput("");
+    const selection = pdfSelection;
+    setPdfSelection("");
     const prevMessages = chatMessages;
-    setChatMessages((prev) => [...prev, { role: "user", text }]);
+    const shown = selection ? `${text}\n\n> ${selection.slice(0, 280)}${selection.length > 280 ? "…" : ""}` : text;
+    setChatMessages((prev) => [...prev, { role: "user", text: shown }]);
     setChatLoading(true);
     try {
       const data = await apiJson(`${API}/ai/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: text, doc_id: docId || "", history: prevMessages }),
+        body: JSON.stringify({
+          prompt: text,
+          doc_id: docId || "",
+          history: prevMessages,
+          model: chatModel || "",
+          selection,
+          attach_pdf: attachPdf && !!docId,
+        }),
       });
       setChatMessages((prev) => [...prev, { role: "ai", text: data.response || "(no response)" }]);
     } catch (err) {
       setChatMessages((prev) => [...prev, { role: "ai", text: `Error: ${err.message}` }]);
     } finally {
       setChatLoading(false);
+    }
+  }
+
+  function openReportModal() {
+    // Pre-select the current page if it's in the home list
+    const checked = {};
+    if (focusedBlockId && homeBlocks.some((b) => b.id === focusedBlockId)) checked[focusedBlockId] = true;
+    setReportChecked(checked);
+    setReportInstructions("");
+    setReportOpen(true);
+    if (!homeBlocks.length) fetchHomeBlocks();
+  }
+
+  async function generateReport() {
+    const pageIds = Object.keys(reportChecked).filter((id) => reportChecked[id]);
+    if (!pageIds.length || reportBusy) return;
+    setReportBusy(true);
+    try {
+      const data = await apiJson(`${API}/ai/report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page_ids: pageIds, model: chatModel || "", instructions: reportInstructions }),
+      });
+      setChatMessages((prev) => [...prev, { role: "ai", text: data.report || "(empty report)" }]);
+      setReportOpen(false);
+      setChatHidden(false);
+    } catch (err) {
+      setChatMessages((prev) => [...prev, { role: "ai", text: `Report failed: ${err.message}` }]);
+      setReportOpen(false);
+    } finally {
+      setReportBusy(false);
     }
   }
 
@@ -2497,7 +2611,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           )}
         </div>
 
-        {notesVisible && (<div className={`splitter splitter-${orientation}`}><div className="splitterGrab" onPointerDown={startResize} aria-label="Drag to resize" role="separator"><span className="splitterGrabDot" /></div></div>)}
+        {notesVisible && (<div className={`splitter splitter-${orientation}`}><div className="splitterGrab" onPointerDown={startResize} onDoubleClick={resetSidebarSize} aria-label="Drag to resize" role="separator"><span className="splitterGrabDot" /></div></div>)}
 
         {notesVisible && (<div className="sidebar" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-height": `${sidebarHeight}px` }}>
           {!homeMode && <div className="pageTitleRow">
@@ -3064,7 +3178,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           {!homeMode && !readOnly ? (
             <>
               {!chatHidden ? (
-                <div className="chatSplitter" onPointerDown={startChatResize} aria-label="Drag to resize chat" role="separator">
+                <div className="chatSplitter" onPointerDown={startChatResize} onDoubleClick={() => setChatHeight(200)} aria-label="Drag to resize chat" role="separator">
                   <span className="chatSplitterDot" />
                 </div>
               ) : null}
@@ -3072,33 +3186,70 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <div className="chatPanel" style={{ height: chatHeight }}>
                   <div className="chatPanelHeader">
                     <span className="chatPanelTitle">AI Chat</span>
+                    {aiInfo?.models?.length > 1 ? (
+                      <select
+                        className="chatModelSelect"
+                        value={aiInfo.models.includes(chatModel) ? chatModel : aiInfo.default}
+                        onChange={(e) => setChatModel(e.target.value)}
+                        title="Switch model"
+                      >
+                        {aiInfo.models.map((m) => <option key={m} value={m}>{m}</option>)}
+                      </select>
+                    ) : null}
                     <div className="chatPanelHeaderBtns">
-                      <button className="chatClearBtn" onClick={clearChat} title="Clear chat">Clear</button>
+                      <button className="chatClearBtn" onClick={openReportModal} title="Generate a report from your notes and highlights across pages">Report</button>
+                      <button className="chatClearBtn" onClick={clearChat} title="Start a fresh conversation (clears saved history)">New chat</button>
                       <button className="chatHideBtn" onClick={() => setChatHidden(true)} title="Hide chat">×</button>
                     </div>
                   </div>
-                  <div className="chatMessages">
+                  <div className="chatMessages" ref={chatScrollRef}>
                     {chatMessages.length === 0 ? (
-                      <div className="chatEmpty">Ask AI about this page…</div>
+                      <div className="chatEmpty">
+                        {aiInfo && !aiInfo.enabled
+                          ? "AI is not configured — set GAMMA_AI_API_KEY on the server."
+                          : "Ask AI about this page…"}
+                      </div>
                     ) : (
                       chatMessages.map((m, i) => (
-                        <div key={i} className={`chatMsg ${m.role}`}>
-                          <div className="chatMsgText">{m.text}</div>
+                        <div key={i} className={`chatBubbleRow ${m.role === "user" ? "user" : "ai"}`}>
+                          <div className={`chatBubble ${m.role === "user" ? "user" : "ai"}`}>
+                            {m.role === "user"
+                              ? <div className="chatUserText">{m.text}</div>
+                              : <ChatMarkdown text={m.text} />}
+                          </div>
                         </div>
                       ))
                     )}
-                    {chatLoading ? <div className="chatMsg ai"><div className="chatMsgText">…</div></div> : null}
+                    {chatLoading ? (
+                      <div className="chatBubbleRow ai">
+                        <div className="chatBubble ai">
+                          <span className="chatTyping"><span /><span /><span /></span>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
+                  {pdfSelection ? (
+                    <div className="chatSelChip" title={pdfSelection}>
+                      <span className="chatSelChipLabel">Selection</span>
+                      <span className="chatSelChipText">{pdfSelection.slice(0, 140)}{pdfSelection.length > 140 ? "…" : ""}</span>
+                      <button type="button" className="chatSelChipClose" onClick={() => setPdfSelection("")} title="Dismiss — answer about the whole document">×</button>
+                    </div>
+                  ) : null}
                   <form
                     className="chatInputRow"
                     onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
                   >
+                    {docId ? (
+                      <label className={`chatAttachToggle ${attachPdf ? "on" : ""}`} title="Send the PDF file itself to the model (better answers about figures/tables) instead of extracted text">
+                        <input type="checkbox" checked={attachPdf} onChange={(e) => setAttachPdf(e.target.checked)} />
+                        📎 PDF
+                      </label>
+                    ) : null}
                     <input
                       className="chatInput"
                       value={chatInput}
                       onChange={(e) => setChatInput(e.target.value)}
-                      placeholder="Ask about this page…"
-                      disabled={chatLoading}
+                      placeholder={pdfSelection ? "Ask about the selection…" : "Ask about this page…"}
                     />
                     <button className="chatSendBtn" type="submit" disabled={chatLoading || !chatInput.trim()}>Send</button>
                   </form>
@@ -3113,6 +3264,47 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
         </div>)}
       </div>
+      {reportOpen ? (
+        <div className="reportOverlay" onClick={() => { if (!reportBusy) setReportOpen(false); }}>
+          <div className="reportModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">Generate report</div>
+            <div className="reportModalHint">
+              Pick the papers/pages to include. The AI receives each paper's text along with your
+              highlighted passages and notes, and writes a report organized around them.
+            </div>
+            <div className="reportPageList">
+              {homeBlocks.map((b) => (
+                <label key={b.id} className="reportPageItem">
+                  <input
+                    type="checkbox"
+                    checked={!!reportChecked[b.id]}
+                    onChange={(e) => setReportChecked((prev) => ({ ...prev, [b.id]: e.target.checked }))}
+                  />
+                  <span className="reportPageName">{b.content || "Untitled"}</span>
+                </label>
+              ))}
+              {homeBlocks.length === 0 ? <div className="chatEmpty">No pages yet.</div> : null}
+            </div>
+            <input
+              className="chatInput reportInstructions"
+              placeholder="Optional instructions (e.g. compare the methods, focus on results)…"
+              value={reportInstructions}
+              onChange={(e) => setReportInstructions(e.target.value)}
+              disabled={reportBusy}
+            />
+            <div className="reportModalBtns">
+              <button className="chatClearBtn" onClick={() => setReportOpen(false)} disabled={reportBusy}>Cancel</button>
+              <button
+                className="chatSendBtn"
+                onClick={generateReport}
+                disabled={reportBusy || !Object.values(reportChecked).some(Boolean)}
+              >
+                {reportBusy ? "Generating…" : "Generate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {highlightMenu ? (
         <>
           <div

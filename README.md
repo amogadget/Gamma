@@ -200,6 +200,7 @@ Put any TLS-terminating reverse proxy (Caddy, nginx) in front of port 9001 if yo
 | `GAMMA_AI_API_KEY` | For AI chat | — | API key; unset disables the chat panel |
 | `GAMMA_AI_BASE_URL` | No | per provider | `https://api.anthropic.com` / `https://api.openai.com`; point at any compatible endpoint (e.g. `https://api.deepseek.com/anthropic`) |
 | `GAMMA_AI_MODEL` | No | per provider | `claude-haiku-4-5-20251001` / `gpt-4o-mini` |
+| `GAMMA_AI_MODELS` | No | default model | Comma-separated model list shown in the chat panel's model switcher |
 
 For docker compose, put these in a `.env` file (see [.env.example](./.env.example)); `.env` is gitignored. The legacy names `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and `ANTHROPIC_DEFAULT_HAIKU_MODEL` still work as fallbacks for the `GAMMA_AI_*` equivalents.
 
@@ -220,7 +221,8 @@ It is a multi-stage build: a Node stage compiles the frontend, and the final Pyt
 - **Logseq EDN import**: import Logseq PDF-highlight exports (EDN + MD + PDF) — preserves highlight positions, notes, and block tree structure.
 - **Attach mode**: link orphaned notes to existing PDF highlights — click ⊕ then left-click a highlight. Linked block jumps to the highlight and inherits its color.
 - **Cross-note block references**: type `[[` in any block to search and insert a reference to another block. References render as clickable chips that jump to the target.
-- **AI chat assistant**: sidebar chatbox sends your question + the PDF's extracted text (up to 8000 chars) to an Anthropic- or OpenAI-compatible API. Supports uploaded PDFs and URLs. Per-page conversation history is stored on the backend, so it follows you across devices. Configured via the `GAMMA_AI_*` env vars.
+- **AI chat assistant**: chat bubbles with full markdown + KaTeX rendering, a model switcher (`GAMMA_AI_MODELS`), and per-page conversation history stored on the backend so it follows you across devices. By default your question is sent with the PDF's extracted text (up to 8000 chars); toggle **📎 PDF** to attach the PDF file itself (better answers about figures/tables, needs a provider/model with native PDF support). Select text in the PDF and the next question focuses on that passage. Works with Anthropic- or OpenAI-compatible APIs via the `GAMMA_AI_*` env vars.
+- **AI reports**: the chat panel's **Report** button picks any of your pages and generates a markdown report from each paper's text, your highlighted passages, and your notes — organized around what you marked as important.
 - **Category metadata**: tag-style category input with autocomplete from existing categories. Arrow-key navigation, comma to add tags. Home page shows grouped carousels by category.
 - **Light/dark theme toggle**: cycles Dark ☾ / Light ☀ / Follow system ◐ (listens to `prefers-color-scheme`). Persisted in localStorage.
 - **Session persistence**: last-opened page, collapsed states, zoom, orientation, PDF toggle, notes toggle, splitter position, and current PDF page survive page reload (localStorage + block properties).
