@@ -154,7 +154,7 @@ _SYSTEM_PROMPT = ("You are a research assistant helping the user understand a PD
                   "parts of the text when relevant.")
 
 
-def _anthropic_request(conf, messages, system, model, pdf_b64=None, effort=""):
+def _anthropic_request(conf, messages, system, model, pdf_b64=None, effort="", max_tokens=8192):
     """Anthropic Messages API: POST /v1/messages, x-api-key auth."""
     if pdf_b64:
         last = messages[-1]
@@ -164,7 +164,7 @@ def _anthropic_request(conf, messages, system, model, pdf_b64=None, effort=""):
         ]
     body = {
         "model": model,
-        "max_tokens": 4096,
+        "max_tokens": max_tokens,
         "system": system,
         "messages": messages,
     }
@@ -178,10 +178,13 @@ def _anthropic_request(conf, messages, system, model, pdf_b64=None, effort=""):
 
 
 def _anthropic_extract(data) -> str:
-    return "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
+    text = "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
+    if not text.strip():
+        raise RuntimeError(f"empty response (stop_reason={data.get('stop_reason', 'unknown')})")
+    return text
 
 
-def _openai_request(conf, messages, system, model, pdf_b64=None, effort=""):
+def _openai_request(conf, messages, system, model, pdf_b64=None, effort="", max_tokens=8192):
     """OpenAI Chat Completions API: POST /v1/chat/completions, Bearer auth."""
     if pdf_b64:
         last = messages[-1]
@@ -194,8 +197,10 @@ def _openai_request(conf, messages, system, model, pdf_b64=None, effort=""):
         messages = [{"role": "system", "content": system}] + messages
     body = {
         "model": model,
-        # not max_tokens: current OpenAI models 400 on it ("use max_completion_tokens")
-        "max_completion_tokens": 4096,
+        # not max_tokens: current OpenAI models 400 on it ("use max_completion_tokens").
+        # The cap covers hidden reasoning tokens too, so it must be generous —
+        # reasoning models can burn thousands of tokens before the first visible one.
+        "max_completion_tokens": max_tokens,
         "messages": messages,
     }
     if effort:
@@ -208,7 +213,13 @@ def _openai_request(conf, messages, system, model, pdf_b64=None, effort=""):
 
 def _openai_extract(data) -> str:
     choices = data.get("choices") or [{}]
-    return (choices[0].get("message") or {}).get("content") or ""
+    text = (choices[0].get("message") or {}).get("content") or ""
+    if not text.strip():
+        reason = choices[0].get("finish_reason", "unknown")
+        raise RuntimeError(
+            f"empty response (finish_reason={reason} — a reasoning model may have spent "
+            f"the whole token budget thinking; try effort: low or a shorter request)")
+    return text
 
 
 _WIRE = {
@@ -217,7 +228,7 @@ _WIRE = {
 }
 
 
-def _call_ai(messages, system, entry, pdf_b64=None, effort="", timeout=60):
+def _call_ai(messages, system, entry, pdf_b64=None, effort="", max_tokens=8192, timeout=60):
     """Send a chat to the provider that serves `entry` (a model registry entry)."""
     conf = AI_PROVIDERS[entry["provider"]]
     if not conf["api_key"]:
@@ -225,7 +236,7 @@ def _call_ai(messages, system, entry, pdf_b64=None, effort="", timeout=60):
                             detail=f"provider '{entry['provider']}' not configured "
                                    f"(set GAMMA_AI_{entry['provider'].upper()}_API_KEY)")
     build_request, extract_text = _WIRE[entry["provider"]]
-    req = build_request(conf, messages, system, entry["model"], pdf_b64, effort)
+    req = build_request(conf, messages, system, entry["model"], pdf_b64, effort, max_tokens)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read())
@@ -373,7 +384,7 @@ async def ai_report(payload: AIReportRequest, request: Request):
     try:
         text = _call_ai([{"role": "user", "content": prompt}], _REPORT_SYSTEM,
                         _resolve_model(payload.model),
-                        effort=_resolve_effort(payload.effort), timeout=180)
+                        effort=_resolve_effort(payload.effort), max_tokens=16384, timeout=180)
         return {"report": text}
     except HTTPException:
         raise

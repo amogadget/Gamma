@@ -101,8 +101,9 @@ body {
 
 .topbar {
   display: flex;
-  gap: 8px;
-  padding: 10px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-surface);
   position: relative;
@@ -111,24 +112,25 @@ body {
 .topbar input {
   flex: 1;
   min-width: 0;
-  padding: 10px 12px;
+  padding: 7px 12px;
   background: var(--bg-input);
   color: var(--text-primary);
   border: 1px solid var(--border-light);
   border-radius: 8px;
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .topbar button,
 .topbar .importLogseqBtn,
 .noteBtn {
-  padding: 10px 14px;
+  padding: 7px 12px;
   background: var(--bg-raised);
   color: var(--text-primary);
   border: 1px solid var(--border-hover);
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
   font: inherit;
+  font-size: 13px;
 }
 
 .topbar button:hover,
@@ -137,15 +139,37 @@ body {
   background: var(--bg-hover);
 }
 
-.themeToggle {
-  font-size: 18px;
-  line-height: 1;
-  padding: 10px 12px !important;
-  min-width: 42px;
-  display: flex;
+/* icon-only buttons and tab chrome override the generic topbar button look */
+.topbar .iconBtn {
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.topbar .iconBtn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.topbar .iconBtn:disabled { opacity: 0.4; cursor: default; }
+.topbar .tabClose {
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  font-size: 14px;
+  color: var(--text-dim);
+  display: inline-flex;
   align-items: center;
   justify-content: center;
 }
+.topbar .tabClose:hover { background: var(--bg-hover); color: var(--text-primary); }
 
 .status {
   padding: 8px 12px;
@@ -204,48 +228,45 @@ body {
 }
 
 .menuToggleBtn {
-  display: none !important;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
-  padding: 8px 12px !important;
 }
 
+/* The overflow menu is always a dropdown under the ⋮ button */
 .topbarOverflow {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 8px;
+  z-index: 100;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+  min-width: 180px;
+}
+.topbarOverflow.open {
   display: flex;
-  gap: 8px;
-  align-items: center;
+}
+.topbar .topbarOverflow button,
+.topbar .topbarOverflow .importLogseqBtn {
+  white-space: nowrap;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.topbar .topbarOverflow button:hover,
+.topbar .topbarOverflow .importLogseqBtn:hover {
+  background: var(--bg-hover);
 }
 
-/* On narrow screens, collapse secondary buttons into a dropdown */
 @media (max-width: 680px) {
-  .menuToggleBtn {
-    display: flex !important;
-    align-items: center;
-    justify-content: center;
-  }
-  .topbarOverflow {
-    display: none;
-    position: absolute;
-    top: 100%;
-    right: 8px;
-    z-index: 100;
-    flex-direction: column;
-    gap: 4px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 6px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
-  }
-  .topbarOverflow.open {
-    display: flex;
-  }
-  .topbarOverflow button,
-  .topbarOverflow .importLogseqBtn {
-    white-space: nowrap;
-    width: 100%;
-    text-align: left;
-  }
   .openBtn {
     display: none !important;  /* Enter key opens instead */
   }
@@ -1590,6 +1611,101 @@ body {
 .splitterGrab.dragging,
 .splitterGrab.dragging:hover { background: var(--accent-dark); }
 .splitterGrab.dragging .splitterGrabDot { background: #fff; }
+
+/* --- chrome-style tabs --- */
+.tabStrip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  align-self: stretch;
+  padding-top: 4px;
+}
+.tabStrip::-webkit-scrollbar { display: none; }
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  min-width: 90px;
+  padding: 0 6px 0 12px;
+  height: 100%;
+  border-radius: 8px 8px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid transparent;
+  border-bottom: none;
+  min-height: 30px;
+}
+.tab:hover { background: var(--bg-hover); }
+.tab.active {
+  background: var(--bg-surface);
+  border-color: var(--border);
+  color: var(--text-primary);
+}
+.tabTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.tabClose { flex-shrink: 0; cursor: pointer; line-height: 1; }
+
+/* --- modern topbar bits --- */
+.urlBox {
+  display: flex;
+  gap: 6px;
+  flex: 2;
+  min-width: 200px;
+  max-width: 560px;
+}
+.urlBox input { flex: 1; min-width: 0; }
+.readOnlyTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.logoutMenuBtn { color: var(--text-muted); }
+
+/* --- sidebar docking --- */
+.side-left .main { flex-direction: row-reverse; }
+.layout-vertical.side-left .main { flex-direction: column; } /* stacked ignores side */
+.sidebarDockGrip {
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 2px 0 4px;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.sidebarDockGrip:hover { color: var(--text-primary); background: var(--bg-hover); }
+.dockPreview {
+  position: fixed;
+  z-index: 2000;
+  background: color-mix(in srgb, var(--accent-dark) 25%, transparent);
+  border: 2px solid var(--accent-dark);
+  border-radius: 8px;
+  pointer-events: none;
+}
+.dockPreview-left { inset: 8px 55% 8px 8px; }
+.dockPreview-right { inset: 8px 8px 8px 55%; }
+.dockPreview-bottom { inset: 60% 8px 8px 8px; }
 .chatPanel {
   display: flex;
   flex-direction: column;
