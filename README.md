@@ -36,9 +36,10 @@ docker run -d --name gamma \
 
 Open <http://localhost:9001> and log in. All state (accounts, notes, uploaded PDFs) lives in the `/data` volume.
 
-Or with compose — edit the environment in [docker-compose.yml](./docker-compose.yml) and:
+Or with compose — secrets live in a `.env` file next to [docker-compose.yml](./docker-compose.yml):
 
 ```bash
+cp .env.example .env   # then edit: admin password, optional AI key
 docker compose up -d
 ```
 
@@ -195,9 +196,12 @@ Put any TLS-terminating reverse proxy (Caddy, nginx) in front of port 9001 if yo
 | `GAMMA_STATIC_DIR` | No | unset (`/app/static` in Docker) | Built frontend to serve as SPA; unset = API only |
 | `GAMMA_PORT` | No | `9001` | Listen port (Docker entrypoint only) |
 | `GAMMA_ADMIN_USER` / `GAMMA_ADMIN_PASSWORD` | No | — | Bootstrap admin account on container start |
-| `ANTHROPIC_AUTH_TOKEN` | For AI chat | — | API key for Anthropic-compatible chat (DeepSeek, Anthropic) |
-| `ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Override the API base URL (e.g. `https://api.deepseek.com/anthropic`) |
-| `ANTHROPIC_DEFAULT_HAIKU_MODEL` | No | `deepseek-v4-flash` | Model name for the AI chat |
+| `GAMMA_AI_PROVIDER` | No | `anthropic` | AI chat wire protocol: `anthropic` (Messages API) or `openai` (Chat Completions) |
+| `GAMMA_AI_API_KEY` | For AI chat | — | API key; unset disables the chat panel |
+| `GAMMA_AI_BASE_URL` | No | per provider | `https://api.anthropic.com` / `https://api.openai.com`; point at any compatible endpoint (e.g. `https://api.deepseek.com/anthropic`) |
+| `GAMMA_AI_MODEL` | No | per provider | `claude-haiku-4-5-20251001` / `gpt-4o-mini` |
+
+For docker compose, put these in a `.env` file (see [.env.example](./.env.example)); `.env` is gitignored. The legacy names `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, and `ANTHROPIC_DEFAULT_HAIKU_MODEL` still work as fallbacks for the `GAMMA_AI_*` equivalents.
 
 ## Docker image
 
@@ -216,7 +220,7 @@ It is a multi-stage build: a Node stage compiles the frontend, and the final Pyt
 - **Logseq EDN import**: import Logseq PDF-highlight exports (EDN + MD + PDF) — preserves highlight positions, notes, and block tree structure.
 - **Attach mode**: link orphaned notes to existing PDF highlights — click ⊕ then left-click a highlight. Linked block jumps to the highlight and inherits its color.
 - **Cross-note block references**: type `[[` in any block to search and insert a reference to another block. References render as clickable chips that jump to the target.
-- **AI chat assistant**: sidebar chatbox sends your question + the PDF's extracted text (up to 8000 chars) to an Anthropic-compatible API (DeepSeek by default). Supports uploaded PDFs and URLs. Per-page conversation history is stored on the backend, so it follows you across devices. Configured via `ANTHROPIC_AUTH_TOKEN` env var.
+- **AI chat assistant**: sidebar chatbox sends your question + the PDF's extracted text (up to 8000 chars) to an Anthropic- or OpenAI-compatible API. Supports uploaded PDFs and URLs. Per-page conversation history is stored on the backend, so it follows you across devices. Configured via the `GAMMA_AI_*` env vars.
 - **Category metadata**: tag-style category input with autocomplete from existing categories. Arrow-key navigation, comma to add tags. Home page shows grouped carousels by category.
 - **Light/dark theme toggle**: cycles Dark ☾ / Light ☀ / Follow system ◐ (listens to `prefers-color-scheme`). Persisted in localStorage.
 - **Session persistence**: last-opened page, collapsed states, zoom, orientation, PDF toggle, notes toggle, splitter position, and current PDF page survive page reload (localStorage + block properties).

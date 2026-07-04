@@ -18,3 +18,5 @@ dist/
 *.bak
 *.bak.*
 HANDOFF.md.bak
+
+.env

@@ -6,14 +6,10 @@ services:
       - "9001:9001"
     volumes:
       - gamma-data:/data
-    environment:
-      # Bootstrap admin account (created on first start; password re-applied on restart)
-      GAMMA_ADMIN_USER: admin
-      GAMMA_ADMIN_PASSWORD: change-me
-      # AI chat (optional): any Anthropic-Messages-API-compatible provider
-      # ANTHROPIC_AUTH_TOKEN: your-api-key
-      # ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
-      # ANTHROPIC_DEFAULT_HAIKU_MODEL: deepseek-v4-flash
+    # Secrets and AI settings live in .env (copy .env.example → .env)
+    env_file:
+      - path: .env
+        required: false
     restart: unless-stopped
 
 volumes:

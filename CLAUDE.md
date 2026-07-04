@@ -50,7 +50,7 @@ Two deployable pieces; the Docker image bundles both (FastAPI serves the built f
   - `users/<username>/uploads/` — PDFs and images, filenames are content sha256[:24] (dedup).
 - Auth: `session` cookie → middleware resolves `request.state.user`. Guest account data is wiped and re-seeded daily (checked lazily in the middleware). Share tokens allow unauthenticated read access — endpoints that support shared views resolve the user from `?user=` query param as fallback (`_resolve_user`), write endpoints require the session (`_require_user`). Keep that distinction when touching endpoints.
 - Route order matters for `/api/blocks/*`: static-prefix routes (`by-doc`, `children`, `subtree`) must be registered before `/{block_id}`.
-- AI chat (`/api/ai/chat`) calls an Anthropic-compatible Messages API via `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_BASE_URL` / `ANTHROPIC_DEFAULT_HAIKU_MODEL` env vars; it extracts PDF text with PyPDF2 (first 8000 chars) as context.
+- AI chat (`/api/ai/chat`) speaks either the Anthropic Messages API or the OpenAI Chat Completions API, selected by `GAMMA_AI_PROVIDER` with `GAMMA_AI_API_KEY` / `GAMMA_AI_BASE_URL` / `GAMMA_AI_MODEL` (legacy `ANTHROPIC_*` names still work as fallbacks); it extracts PDF text with PyPDF2 (first 8000 chars) as context.
 - `manage.py` — user CRUD CLI. Shares the guest welcome-page seeding with the app (`gamma/seed.py`).
 - Package layout: `gamma/config.py` (env config), `gamma/db.py` (schemas/paths), `gamma/auth.py` (middleware), `gamma/seed.py` (user DB creation), `gamma/blocks_store.py` (tree CTE helpers), `gamma/storage.py` (uploads), `gamma/logseq_import.py` (EDN/MD parsers), `gamma/routers/*` (one module per API area), `gamma/app.py` (assembly + SPA serving).
 
