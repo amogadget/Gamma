@@ -1259,6 +1259,14 @@ export default function App() {
   const [attachPdf, setAttachPdf] = useState(() => {
     try { return localStorage.getItem("gamma-chat-attach-pdf") === "1"; } catch { return false; }
   });
+  const [chatEffort, setChatEffort] = useState(() => {
+    try { return localStorage.getItem("gamma-chat-effort") || ""; } catch { return ""; }
+  });
+  const [chatSystem, setChatSystem] = useState(() => {
+    try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
+  });
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [promptDraft, setPromptDraft] = useState("");
   const [pdfSelection, setPdfSelection] = useState("");
   const [reportOpen, setReportOpen] = useState(false);
   const [reportChecked, setReportChecked] = useState({});
@@ -1277,6 +1285,12 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-chat-attach-pdf", attachPdf ? "1" : "0"); } catch {}
   }, [attachPdf]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-effort", chatEffort); } catch {}
+  }, [chatEffort]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-system", chatSystem); } catch {}
+  }, [chatSystem]);
 
   // Capture text selected inside the PDF viewer so chat can focus on it.
   // Kept in state (not read at send time) because clicking the chat input
@@ -1285,7 +1299,16 @@ export default function App() {
     function onSelectionChange() {
       const sel = window.getSelection();
       const text = sel ? sel.toString().trim() : "";
-      if (!text) return; // keep the last stash; the chip's ✕ dismisses it
+      if (!text) {
+        // Selection cleared. Focusing the chat panel collapses the DOM
+        // selection too — keep the stash in that one case so the user can
+        // still ask about it; any other deselection dismisses the chip.
+        const active = document.activeElement;
+        if (!(active && active.closest && active.closest(".chatPanel"))) {
+          setPdfSelection("");
+        }
+        return;
+      }
       const node = sel.anchorNode;
       const el = node?.nodeType === 3 ? node.parentElement : node;
       if (viewerWrapRef.current && el && viewerWrapRef.current.contains(el)) {
@@ -2148,6 +2171,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           model: chatModel || "",
           selection,
           attach_pdf: attachPdf && !!docId,
+          effort: chatEffort || "",
+          system: chatSystem || "",
         }),
       });
       setChatMessages((prev) => [...prev, { role: "ai", text: data.response || "(no response)" }]);
@@ -2176,7 +2201,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       const data = await apiJson(`${API}/ai/report`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ page_ids: pageIds, model: chatModel || "", instructions: reportInstructions }),
+        body: JSON.stringify({ page_ids: pageIds, model: chatModel || "", instructions: reportInstructions, effort: chatEffort || "" }),
       });
       setChatMessages((prev) => [...prev, { role: "ai", text: data.report || "(empty report)" }]);
       setReportOpen(false);
@@ -2594,6 +2619,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               onHighlightJump={(hlId) => {
                 const b = flattenBlocks(blocks).find(b => b.properties?.highlight_id === hlId);
                 if (b) { pendingBlockScrollRef.current = b.id; setBlocks(prev => expandToBlock(prev, b.id)); }
+                // Clicking a highlight also makes its quote the chat selection
+                const hl = highlights.find(h => h.id === hlId);
+                const quote = hl?.content?.text?.trim();
+                if (quote) setPdfSelection(quote.slice(0, 4000));
               }}
               onHighlightContext={setHighlightMenu}
               onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {
@@ -3186,17 +3215,37 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <div className="chatPanel" style={{ height: chatHeight }}>
                   <div className="chatPanelHeader">
                     <span className="chatPanelTitle">AI Chat</span>
-                    {aiInfo?.models?.length > 1 ? (
-                      <select
-                        className="chatModelSelect"
-                        value={aiInfo.models.includes(chatModel) ? chatModel : aiInfo.default}
-                        onChange={(e) => setChatModel(e.target.value)}
-                        title="Switch model"
-                      >
-                        {aiInfo.models.map((m) => <option key={m} value={m}>{m}</option>)}
-                      </select>
-                    ) : null}
+                    {aiInfo?.models?.length > 0 ? (() => {
+                      const models = aiInfo.models;
+                      const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
+                      const currentId = models.some((m) => m.id === chatModel) ? chatModel : aiInfo.default;
+                      return (
+                        <span className="chatHeaderSelects">
+                          {models.length > 1 ? (
+                            <select className="chatModelSelect" value={currentId}
+                              onChange={(e) => setChatModel(e.target.value)} title="Switch model">
+                              {models.map((m) => (
+                                <option key={m.id} value={m.id}>
+                                  {multiProvider ? `${m.model} · ${m.provider}` : m.model}
+                                </option>
+                              ))}
+                            </select>
+                          ) : null}
+                          <select className="chatModelSelect" value={chatEffort}
+                            onChange={(e) => setChatEffort(e.target.value)}
+                            title="Reasoning effort — leave on 'effort: default' unless the model supports it">
+                            <option value="">effort: default</option>
+                            {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
+                              <option key={ef} value={ef}>effort: {ef}</option>
+                            ))}
+                          </select>
+                        </span>
+                      );
+                    })() : null}
                     <div className="chatPanelHeaderBtns">
+                      <button className="chatClearBtn"
+                        onClick={() => { setPromptDraft(chatSystem || aiInfo?.default_prompt || ""); setPromptOpen(true); }}
+                        title="View or edit the system prompt sent with every question">Prompt</button>
                       <button className="chatClearBtn" onClick={openReportModal} title="Generate a report from your notes and highlights across pages">Report</button>
                       <button className="chatClearBtn" onClick={clearChat} title="Start a fresh conversation (clears saved history)">New chat</button>
                       <button className="chatHideBtn" onClick={() => setChatHidden(true)} title="Hide chat">×</button>
@@ -3264,6 +3313,37 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
         </div>)}
       </div>
+      {promptOpen ? (
+        <div className="reportOverlay" onClick={() => setPromptOpen(false)}>
+          <div className="reportModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">System prompt</div>
+            <div className="reportModalHint">
+              Sent with every chat question. {chatSystem ? "You are using a custom prompt." : "This is the built-in default (only applied when a document is open)."}
+              {" "}A custom prompt is always applied and is saved in this browser.
+            </div>
+            <textarea
+              className="promptTextarea"
+              value={promptDraft}
+              onChange={(e) => setPromptDraft(e.target.value)}
+              rows={8}
+              placeholder="You are a research assistant…"
+            />
+            <div className="reportModalBtns">
+              <button className="chatClearBtn"
+                onClick={() => setPromptDraft(aiInfo?.default_prompt || "")}
+                title="Restore the built-in prompt text">Reset to default</button>
+              <button className="chatClearBtn" onClick={() => setPromptOpen(false)}>Cancel</button>
+              <button className="chatSendBtn"
+                onClick={() => {
+                  const draft = promptDraft.trim();
+                  // Saving the unmodified default = no custom prompt
+                  setChatSystem(draft === (aiInfo?.default_prompt || "").trim() ? "" : draft);
+                  setPromptOpen(false);
+                }}>Save</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {reportOpen ? (
         <div className="reportOverlay" onClick={() => { if (!reportBusy) setReportOpen(false); }}>
           <div className="reportModal" onClick={(e) => e.stopPropagation()}>
