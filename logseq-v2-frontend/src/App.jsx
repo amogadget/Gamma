@@ -163,24 +163,27 @@ const COLORS = [
   "rgba(230, 180, 255, 0.65)"
 ];
 
-// Shared chrome for every dockable window: one grip (drag to move/reorder),
-// optional header controls, one close button. Notes and chat both use this so
-// their behavior can't drift apart.
-function DockWindow({ title, onGrip, onClose, headerContent, children }) {
+// Shared chrome for every dockable window: one grip (drag to move/reorder,
+// double-click to collapse), the close button right beside it, then the
+// window's own controls. Notes and chat both use this so their behavior
+// can't drift apart.
+function DockWindow({ title, onGrip, onGripDoubleClick, onClose, headerContent, collapsed, children }) {
   return (
-    <div className="dockWindow">
+    <div className={`dockWindow ${collapsed ? "collapsed" : ""}`}>
       <div className="dockWindowHeader">
         <span
           className="dockGrip"
           onPointerDown={onGrip}
-          title="Drag to move this window (left / right / bottom; drop on a half to reorder)"
+          onDoubleClick={onGripDoubleClick}
+          title="Drag to move this window · double-click to collapse/expand"
         >⠿ {title}</span>
-        {headerContent}
         {onClose ? (
           <button className="dockCloseBtn" onClick={onClose} title="Close window (reopen from the ⋮ menu)" aria-label={`Close ${title}`}>×</button>
         ) : null}
+        <span className="dockHeaderSpacer" />
+        {collapsed ? null : headerContent}
       </div>
-      <div className="dockWindowBody">{children}</div>
+      {collapsed ? null : <div className="dockWindowBody">{children}</div>}
     </div>
   );
 }
@@ -201,28 +204,38 @@ function ChatMarkdown({ text }) {
   );
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
   const [forcePages, setForcePages] = useState(new Set());
   const pageHeightsRef = useRef([]); // viewport heights at scale 1, indexed 0..n-1
 
-  // Expose full-text search over the loaded document (used by the search panel).
+  // Expose full-text search over the loaded document (used by the search
+  // panel). Matches carry the text item's rect (at scale 1) so they can be
+  // highlighted on the page and jumped to.
   useEffect(() => {
     if (!searchRef) return;
     searchRef.current = pdfDoc ? async (re) => {
       const out = [];
-      for (let p = 1; p <= pdfDoc.numPages && out.length < 50; p++) {
+      for (let p = 1; p <= pdfDoc.numPages && out.length < 100; p++) {
         const page = await pdfDoc.getPage(p);
+        const vp = page.getViewport({ scale: 1 });
         const tc = await page.getTextContent();
-        const text = tc.items.map((it) => it.str).join(" ");
-        const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
-        let m;
-        while ((m = rx.exec(text)) && out.length < 50) {
-          const s = Math.max(0, m.index - 40);
-          out.push({ page: p, snippet: text.slice(s, m.index + m[0].length + 40).trim() });
-          if (m.index === rx.lastIndex) rx.lastIndex++;
+        for (const it of tc.items) {
+          if (out.length >= 100) break;
+          const str = it.str || "";
+          const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+          if (!rx.test(str)) continue;
+          const tx = pdfjsLib.Util.transform(vp.transform, it.transform);
+          const fh = Math.hypot(tx[2], tx[3]) || 10;
+          out.push({
+            page: p,
+            snippet: str.trim().slice(0, 140),
+            rect: { x1: tx[4], y1: tx[5] - fh, x2: tx[4] + (it.width || fh), y2: tx[5] + fh * 0.25 },
+            pageW: vp.width,
+            pageH: vp.height,
+          });
         }
       }
       return out;
@@ -510,6 +523,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           highlights={highlights} onJump={onJump} onHighlightJump={onHighlightJump} onHighlightContext={onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
           reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
+          findMarks={(findMarks || []).filter((m) => m.page === i + 1)}
         />
       ))}
       {selPopup && onSelectionFinished && (
@@ -521,7 +535,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   );
 }
 
-function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onHighlightContext, readOnly, forceRender, reservedHeight }) {
+function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -587,6 +601,24 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
       <div ref={textRef} className="textLayer" style={{
         userSelect: readOnly ? "none" : "text", WebkitUserSelect: readOnly ? "none" : "text",
       }} />
+      {(findMarks || []).map((m, i) => (
+        <div
+          key={`find-${i}`}
+          style={{
+            position: "absolute",
+            zIndex: 3,
+            pointerEvents: "none",
+            left: m.rect.x1 * scale,
+            top: m.rect.y1 * scale,
+            width: Math.max(2, (m.rect.x2 - m.rect.x1) * scale),
+            height: Math.max(2, (m.rect.y2 - m.rect.y1) * scale),
+            background: m.active ? "rgba(255, 140, 0, 0.45)" : "rgba(255, 220, 0, 0.30)",
+            outline: m.active ? "2px solid rgba(255, 120, 0, 0.9)" : "none",
+            borderRadius: 2,
+            mixBlendMode: "multiply",
+          }}
+        />
+      ))}
       {highlights.filter(h => {
         const p = h.position?.boundingRect || h.position?.rects?.[0];
         return p && p.pageNumber === pageNumber;
@@ -1308,6 +1340,7 @@ export default function App() {
     try { localStorage.setItem("gamma-tabs", JSON.stringify(openTabs)); } catch {}
   }, [openTabs]);
   const [dockPreview, setDockPreview] = useState(null); // "left" | "right" | "bottom" while dragging a window
+  const [collapsedWins, setCollapsedWins] = useState({}); // window id -> collapsed to header bar
   // One popover open at a time; any click outside a [data-popover] container closes it.
   const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
   useEffect(() => {
@@ -1331,8 +1364,26 @@ export default function App() {
   const [searchReplaceOpen, setSearchReplaceOpen] = useState(false);
   const [searchReplace, setSearchReplace] = useState("");
   const [pdfMatches, setPdfMatches] = useState([]);
+  const [findIndex, setFindIndex] = useState(0); // active PDF match for find next/prev
   const [searchNonce, setSearchNonce] = useState(0); // bump to re-run the search
-  const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet}]
+  const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rect, pageW, pageH}]
+  useEffect(() => { setFindIndex(0); }, [pdfMatches]);
+
+  // Jump the viewer to a specific PDF match and mark it active.
+  function gotoFind(i) {
+    if (!pdfMatches.length) return;
+    const idx = ((i % pdfMatches.length) + pdfMatches.length) % pdfMatches.length;
+    setFindIndex(idx);
+    const m = pdfMatches[idx];
+    setPdfHidden(false);
+    scrollToRef.current?.({
+      position: {
+        pageNumber: m.page,
+        boundingRect: { ...m.rect, width: m.pageW, height: m.pageH, pageNumber: m.page },
+        rects: [],
+      },
+    });
+  }
   useEffect(() => {
     if (openPopover !== "search" || !searchQuery.trim()) { setSearchResults([]); setPdfMatches([]); return; }
     const timer = setTimeout(() => {
@@ -2255,6 +2306,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   // Ask the AI for the document's title and fill it into the page name.
   const [aiTitleBusy, setAiTitleBusy] = useState(false);
+  const [sourceDraft, setSourceDraft] = useState(""); // edit buffer for the source-PDF popover
   async function aiFillTitle() {
     if (!docId || readOnly || aiTitleBusy) return;
     setAiTitleBusy(true);
@@ -2698,9 +2750,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <input type="checkbox" checked={chatIncludeNotes} onChange={(e) => setChatIncludeNotes(e.target.checked)} />
                 <span className="attachName">Include my notes &amp; highlights</span>
               </label>
-              <label className="popoverItem attachItem" title="Send the PDF files themselves (better for figures/tables) instead of extracted text">
+              <label className="popoverItem attachItem" title="Upload the PDF file itself so the model can see figures, tables, and layout — uses more tokens than extracted text and needs a model with file support">
                 <input type="checkbox" checked={attachPdf} onChange={(e) => setAttachPdf(e.target.checked)} />
-                <span className="attachName">Attach PDF files natively</span>
+                <span className="attachName">Send full PDF file (model sees figures &amp; tables)</span>
               </label>
               {!chatDocs.length && docId ? (
                 <div className="popoverHint">Nothing selected — the currently open PDF is used.</div>
@@ -2746,53 +2798,96 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 }}
               >{focusedBlockId ? (pdfTitle || (docId ? getPdfPageTitle(docId, inputUrl) : "Untitled")) : "PDF Notes"}</h3>
             )}
-            {!readOnly && focusedBlockId && docId ? (
-              <button
-                className="aiTitleBtn"
-                title="AI: read the PDF and fill in the paper's title"
-                aria-label="Fill in title with AI"
-                onClick={aiFillTitle}
-                disabled={aiTitleBusy}
-              >
-                {aiTitleBusy ? (
-                  <span className="chatTyping"><span /><span /><span /></span>
-                ) : (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
-                )}
-              </button>
-            ) : null}
             {!readOnly && focusedBlockId ? (
-              <button
-                className="pageDeleteBtn"
-                title="Delete this page"
-                onClick={async () => {
-                  if (!window.confirm("Delete this page and all its notes?")) return;
-                  try {
-                    await apiJson(`${API}/blocks/${focusedBlockId}`, { method: "DELETE" });
-                  } catch {}
-                  clearSession();
-                  window.location.href = "/";
-                }}
-              >🗑</button>
+              <div className="pageActionCol">
+                {docId ? (
+                  <button
+                    className="pageActionBtn aiTitleBtn"
+                    title="AI: read the PDF and fill in the paper's title"
+                    aria-label="Fill in title with AI"
+                    onClick={aiFillTitle}
+                    disabled={aiTitleBusy}
+                  >
+                    {aiTitleBusy ? (
+                      <span className="chatTyping"><span /><span /><span /></span>
+                    ) : (
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
+                    )}
+                  </button>
+                ) : null}
+                {inputUrl ? (
+                  <span data-popover="source" style={{ position: "relative", display: "inline-flex" }}>
+                    <button
+                      className="pageActionBtn"
+                      title="Source PDF — view or replace"
+                      aria-label="Source PDF"
+                      onClick={() => {
+                        const opening = openPopover !== "source";
+                        setOpenPopover(opening ? "source" : null);
+                        if (opening) setSourceDraft(inputUrl);
+                      }}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                    </button>
+                    {openPopover === "source" ? (
+                      <div className="popover sourcePopover">
+                        <div className="popoverTitle">Source PDF</div>
+                        <input
+                          className="searchInput"
+                          value={sourceDraft}
+                          onChange={(e) => setSourceDraft(e.target.value)}
+                          placeholder="PDF URL or /api/uploads/…"
+                        />
+                        {sourceDraft && !sourceDraft.startsWith("/api/") ? (
+                          <label className="popoverItem attachItem">
+                            <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
+                            <span className="attachName">Save a copy on the server</span>
+                          </label>
+                        ) : null}
+                        <div className="reportModalBtns">
+                          <button className="chatClearBtn" onClick={() => setOpenPopover(null)}>Cancel</button>
+                          <button
+                            className="chatSendBtn"
+                            disabled={!sourceDraft.trim() || sourceDraft.trim() === inputUrl}
+                            onClick={async () => {
+                              const url = sourceDraft.trim();
+                              setOpenPopover(null);
+                              try {
+                                await apiJson(`${API}/blocks/${focusedBlockId}`, {
+                                  method: "PUT",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ properties: { source_url: url } }),
+                                });
+                                await openBlock(focusedBlockId);
+                                setStatus("Source PDF replaced.");
+                              } catch (err) {
+                                setStatus(`Replace failed: ${err.message}`);
+                              }
+                            }}
+                          >Replace</button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </span>
+                ) : null}
+                <button
+                  className="pageActionBtn pageDeleteBtn"
+                  title="Delete this page"
+                  onClick={async () => {
+                    if (!window.confirm("Delete this page and all its notes?")) return;
+                    try {
+                      await apiJson(`${API}/blocks/${focusedBlockId}`, { method: "DELETE" });
+                    } catch {}
+                    clearSession();
+                    window.location.href = "/";
+                  }}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                </button>
+              </div>
             ) : null}
 
           </div>}
-
-          {inputUrl ? (
-            <div className="pageHeaderMeta">
-              <div className="pageHeaderLabel">Source PDF</div>
-              <div className="pageHeaderUrl">{inputUrl}</div>
-              {inputUrl && !inputUrl.startsWith("/api/") ? (
-                <label className="pdfSaveToggle" title={readOnly ? (pdfSaveLocal ? "PDF saved on server" : "PDF streamed from source") : undefined}>
-                  <span className={`pdfSaveSwitch${readOnly ? " disabled" : ""}`}>
-                    <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} disabled={readOnly} />
-                    <span className="pdfSaveSlider" />
-                  </span>
-                  {pdfSaveLocal ? "Saved on server" : "Streaming only"}
-                </label>
-              ) : null}
-            </div>
-          ) : null}
 
           <div className="blockList">
             {focusedBlockId && !readOnly && !homeMode ? (
@@ -3309,16 +3404,21 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     chat: Boolean(chatWindow),
   };
   function renderWindow(id) {
+    const common = {
+      onGrip: (e) => startWindowDock(e, id),
+      onGripDoubleClick: () => setCollapsedWins((prev) => ({ ...prev, [id]: !prev[id] })),
+      collapsed: !!collapsedWins[id],
+    };
     if (id === "notes") {
       return (
-        <DockWindow title="Notes" onGrip={(e) => startWindowDock(e, "notes")} onClose={() => setNotesVisible(false)}>
+        <DockWindow title="Notes" {...common} onClose={() => setNotesVisible(false)}>
           {notesWindow}
         </DockWindow>
       );
     }
     if (id === "chat") {
       return (
-        <DockWindow title="AI Chat" onGrip={(e) => startWindowDock(e, "chat")} onClose={() => setChatHidden(true)} headerContent={chatHeaderContent}>
+        <DockWindow title="Chat" {...common} onClose={() => setChatHidden(true)} headerContent={chatHeaderContent}>
           {chatWindow}
         </DockWindow>
       );
@@ -3334,7 +3434,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         {wins.map((w, i) => (
           <React.Fragment key={w}>
             {i > 0 ? <PanelResizeHandle className={`sash sash-${direction}`} /> : null}
-            <Panel id={w} order={i + 1} minSize={15}>{renderWindow(w)}</Panel>
+            {collapsedWins[w] ? (
+              <Panel id={`${w}-collapsed`} order={i + 1} minSize={4} maxSize={7}>{renderWindow(w)}</Panel>
+            ) : (
+              <Panel id={w} order={i + 1} minSize={15}>{renderWindow(w)}</Panel>
+            )}
           </React.Fragment>
         ))}
       </PanelGroup>
@@ -3476,22 +3580,20 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <span className="searchResultText">{r.content}</span>
                       </button>
                     ))}
-                    {pdfMatches.length ? <div className="searchSection">This PDF</div> : null}
+                    {pdfMatches.length ? (
+                      <div className="searchSection searchSectionRow">
+                        <span>This PDF · {findIndex + 1}/{pdfMatches.length}</span>
+                        <span className="findNav">
+                          <button className="searchToggle" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">▲</button>
+                          <button className="searchToggle" onClick={() => gotoFind(findIndex + 1)} title="Next match">▼</button>
+                        </span>
+                      </div>
+                    ) : null}
                     {pdfMatches.map((m, i) => (
                       <button
                         key={`pdf-${i}`}
-                        className="searchResult"
-                        onClick={() => {
-                          setOpenPopover(null);
-                          setPdfHidden(false);
-                          scrollToRef.current?.({
-                            position: {
-                              pageNumber: m.page,
-                              boundingRect: { x1: 0, y1: 0, x2: 0, y2: 0, width: 1, height: 1, pageNumber: m.page },
-                              rects: [],
-                            },
-                          });
-                        }}
+                        className={`searchResult ${i === findIndex ? "active" : ""}`}
+                        onClick={() => gotoFind(i)}
                       >
                         <span className="searchResultPage">p. {m.page}</span>
                         <span className="searchResultText">…{m.snippet}…</span>
@@ -3708,6 +3810,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <PdfViewer url={pdfUrl} highlights={highlights}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
+              findMarks={openPopover === "search" && searchQuery.trim()
+                ? pdfMatches.map((m, i) => ({ page: m.page, rect: m.rect, active: i === findIndex }))
+                : []}
               onEffectiveScale={setPdfEffScale}
               onJump={jumpToHighlightId}
               onHighlightJump={(hlId) => {
