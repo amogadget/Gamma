@@ -46,6 +46,13 @@ function makeId() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+function fmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
 async function sha256(text) {
   const data = new TextEncoder().encode(text);
   const hash = await crypto.subtle.digest("SHA-256", data);
@@ -218,7 +225,7 @@ function ChatMarkdown({ text }) {
 
 const EMPTY_MARKS = [];
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks, onExternalLink, onBeforeLinkJump }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks, onExternalLink, onBeforeLinkJump, onLoadState }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -322,39 +329,50 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     if (!url) return;
     let cancelled = false; setPdfDoc(null);
     (async () => {
-      // Parallel range requests overlap with worker download.
-      // Each range is its own HTTP/2 stream so flow-control doesn't single-stream-cap us.
-      // Probe size via a 1-byte range request (backend doesn't allow HEAD).
-      const probe = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include" });
-      if (cancelled || !probe.ok) return;
-      await probe.arrayBuffer();
-      const cr = probe.headers.get("content-range") || "";
-      const m = cr.match(/\/(\d+)$/);
-      const total = m ? parseInt(m[1], 10) : 0;
-      let data;
-      if (total > 0) {
-        const N = 6;
-        const chunkSize = Math.ceil(total / N);
-        const parts = await Promise.all(Array.from({ length: N }, (_, i) => {
-          const start = i * chunkSize;
-          const end = Math.min(start + chunkSize - 1, total - 1);
-          return fetch(url, { headers: { Range: `bytes=${start}-${end}` }, credentials: "include" })
-            .then(r => r.arrayBuffer());
-        }));
+      try {
+        onLoadState?.(url, { phase: "start" });
+        // Parallel range requests overlap with worker download.
+        // Each range is its own HTTP/2 stream so flow-control doesn't single-stream-cap us.
+        // Probe size via a 1-byte range request (backend doesn't allow HEAD).
+        const probe = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include" });
         if (cancelled) return;
-        const buf = new Uint8Array(total);
-        let off = 0;
-        for (const p of parts) { buf.set(new Uint8Array(p), off); off += p.byteLength; }
-        data = buf.buffer;
-      } else {
-        const resp = await fetch(url, { credentials: "include" });
-        if (cancelled || !resp.ok) return;
-        data = await resp.arrayBuffer();
-        if (cancelled) return;
+        if (!probe.ok) { onLoadState?.(url, { phase: "error" }); return; }
+        await probe.arrayBuffer();
+        const cr = probe.headers.get("content-range") || "";
+        const m = cr.match(/\/(\d+)$/);
+        const total = m ? parseInt(m[1], 10) : 0;
+        let data;
+        if (total > 0) {
+          const N = 6;
+          const chunkSize = Math.ceil(total / N);
+          const parts = await Promise.all(Array.from({ length: N }, (_, i) => {
+            const start = i * chunkSize;
+            const end = Math.min(start + chunkSize - 1, total - 1);
+            return fetch(url, { headers: { Range: `bytes=${start}-${end}` }, credentials: "include" })
+              .then(r => r.arrayBuffer());
+          }));
+          if (cancelled) return;
+          const buf = new Uint8Array(total);
+          let off = 0;
+          for (const p of parts) { buf.set(new Uint8Array(p), off); off += p.byteLength; }
+          data = buf.buffer;
+        } else {
+          const resp = await fetch(url, { credentials: "include" });
+          if (cancelled) return;
+          if (!resp.ok) { onLoadState?.(url, { phase: "error" }); return; }
+          data = await resp.arrayBuffer();
+          if (cancelled) return;
+        }
+        const bytes = data.byteLength;
+        pdfjsLib.getDocument({ data, disableAutoFetch: true, disableRange: true }).promise.then(doc => {
+          if (!cancelled) {
+            setPdfDoc(doc); setNumPages(doc.numPages);
+            onLoadState?.(url, { phase: "done", bytes });
+          }
+        }).catch(() => { if (!cancelled) onLoadState?.(url, { phase: "error" }); });
+      } catch {
+        if (!cancelled) onLoadState?.(url, { phase: "error" });
       }
-      pdfjsLib.getDocument({ data, disableAutoFetch: true, disableRange: true }).promise.then(doc => {
-        if (!cancelled) { setPdfDoc(doc); setNumPages(doc.numPages); }
-      }).catch(() => {});
     })();
     return () => { cancelled = true; };
   }, [url]);
@@ -1516,6 +1534,34 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-tabs", JSON.stringify(openTabs)); } catch {}
   }, [openTabs]);
+  const dragTabRef = useRef(null); // tab id being drag-reordered
+
+  // Chrome-style transfer list: PDF downloads and uploads with live status.
+  const [transfers, setTransfers] = useState([]); // [{id, name, kind, status, info}]
+  const transferByUrlRef = useRef({});
+  function addTransfer(t) {
+    const id = makeId();
+    setTransfers((prev) => [{ id, status: "active", ...t }, ...prev].slice(0, 20));
+    return id;
+  }
+  function updateTransfer(id, patch) {
+    setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }
+  // Byte-level download state reported by the PDF viewer (skips local uploads)
+  function handlePdfLoadState(url, st) {
+    if (url.startsWith("/api/uploads/")) return;
+    if (st.phase === "start") {
+      const name = (pdfTitle || decodeURIComponent((url.split("source_url=")[1] || url).split("/").pop() || "PDF")).slice(0, 60);
+      transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…" });
+    } else {
+      const id = transferByUrlRef.current[url];
+      if (!id) return;
+      delete transferByUrlRef.current[url];
+      updateTransfer(id, st.phase === "done"
+        ? { status: "done", info: fmtBytes(st.bytes) }
+        : { status: "error", info: "failed" });
+    }
+  }
   const [dockPreview, setDockPreview] = useState(null); // "left" | "right" | "bottom" while dragging a window
   const [collapsedWins, setCollapsedWins] = useState({}); // window id -> collapsed to header bar
   // One popover open at a time; any click outside a [data-popover] container closes it.
@@ -2343,15 +2389,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
     setLoading(true);
     setStatus(`Uploading ${file.name}...`);
+    const transferId = addTransfer({ name: file.name, kind: "upload", info: fmtBytes(file.size) });
     try {
       const form = new FormData();
       form.append("file", file);
       const resp = await fetch(`${API}/uploads`, { method: "POST", body: form, credentials: "include" });
       if (!resp.ok) {
         const msg = await resp.text();
+        updateTransfer(transferId, { status: "error", info: "failed" });
         throw new Error(msg || `upload failed (${resp.status})`);
       }
       const data = await resp.json();
+      updateTransfer(transferId, { status: "done", info: fmtBytes(file.size) });
       // Open the uploaded PDF directly (bypass openPdf's URL-resolution path)
       const sourceUrl = data.source_url;
       const defaultTitle = getPdfPageTitle(data.doc_id, sourceUrl);
@@ -2644,9 +2693,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     const next = openTabs.filter((t) => t.id !== id);
     setOpenTabs(next);
     if (id === focusedBlockId) {
+      // Tab management isn't a "jump" — keep it out of the Back history
       const neighbor = next[Math.min(idx, next.length - 1)];
-      if (neighbor) openBlock(neighbor.id);
-      else goHome();
+      if (neighbor) openBlock(neighbor.id, { skipNav: true });
+      else goHome({ skipNav: true });
     }
   }
 
@@ -4367,7 +4417,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         <>
           <div className="topbar">
             <button
-              className={`homeBtn ${homeMode ? "active" : ""}`}
+              className={`iconBtn homeBtn ${homeMode ? "activeIcon" : ""}`}
               onClick={goHome}
               title="Home"
               aria-label="Home"
@@ -4378,7 +4428,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               <button
                 className="iconBtn navBackBtn"
                 onClick={goBackNav}
-                title={`Back to where you were${navStackLen > 1 ? ` (${navStackLen} steps)` : ""} — Alt+←`}
+                onContextMenu={(e) => { e.preventDefault(); setNavStack([]); }}
+                title={`Back to where you were${navStackLen > 1 ? ` (${navStackLen} steps)` : ""} — Alt+← · right-click to clear`}
                 aria-label="Back"
               >
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
@@ -4392,7 +4443,29 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   role="tab"
                   className={`tab ${t.id === focusedBlockId ? "active" : ""}`}
                   title={t.title}
-                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id); }}
+                  draggable
+                  onDragStart={(e) => {
+                    dragTabRef.current = t.id;
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragEnd={() => { dragTabRef.current = null; }}
+                  onDragOver={(e) => {
+                    // Chrome-style live reorder: hovering another tab swaps places
+                    const dragged = dragTabRef.current;
+                    if (!dragged || dragged === t.id) return;
+                    e.preventDefault();
+                    setOpenTabs((prev) => {
+                      const from = prev.findIndex((x) => x.id === dragged);
+                      const to = prev.findIndex((x) => x.id === t.id);
+                      if (from < 0 || to < 0 || from === to) return prev;
+                      const next = [...prev];
+                      const [moved] = next.splice(from, 1);
+                      next.splice(to, 0, moved);
+                      return next;
+                    });
+                  }}
+                  onDrop={(e) => e.preventDefault()}
+                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id, { skipNav: true }); }}
                   onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } }}
                 >
                   <span className="tabTitle">{t.title}</span>
@@ -4410,13 +4483,52 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <input
                   value={inputUrl}
                   onChange={(e) => setInputUrl(e.target.value)}
-                  placeholder="Open a PDF by URL…"
-                  onKeyDown={(e) => { if (e.key === "Enter") openPdf(inputUrl); }}
+                  placeholder="Open a PDF by URL — press Enter"
+                  onKeyDown={(e) => { if (e.key === "Enter" && !loading) openPdf(inputUrl); }}
                 />
-                <button onClick={() => openPdf(inputUrl)} disabled={loading} className="openBtn">
-                  Open
-                </button>
               </div>
+            ) : null}
+            {transfers.length ? (
+              <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
+                <button
+                  className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
+                  onClick={() => setOpenPopover((p) => (p === "downloads" ? null : "downloads"))}
+                  title="Downloads & uploads"
+                  aria-label="Downloads and uploads"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>
+                  {transfers.some((t) => t.status === "active") ? <span className="transferSpin" /> : null}
+                </button>
+                {openPopover === "downloads" ? (
+                  <div className="popover downloadsPopover">
+                    <div className="popoverTitle citeSectionRow">
+                      <span>Downloads &amp; uploads</span>
+                      <button
+                        className="searchToggle transferClearBtn"
+                        title="Clear finished"
+                        onClick={() => setTransfers((prev) => prev.filter((t) => t.status === "active"))}
+                      >Clear</button>
+                    </div>
+                    {transfers.map((t) => (
+                      <div key={t.id} className="transferRow">
+                        <span className={`transferStatus ${t.status}`}>
+                          {t.status === "active" ? <span className="transferSpin inline" />
+                            : t.status === "done"
+                              ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                              : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 8v5" /><path d="M12 16.5h.01" /><circle cx="12" cy="12" r="9" /></svg>}
+                        </span>
+                        <span className="transferKind">
+                          {t.kind === "upload"
+                            ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15V3" /><path d="m7 8 5-5 5 5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>
+                            : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>}
+                        </span>
+                        <span className="transferName" title={t.name}>{t.name}</span>
+                        <span className="transferInfo">{t.info || ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </span>
             ) : null}
             <span data-popover="search" style={{ position: "relative", display: "inline-flex" }}>
               <button
@@ -4633,7 +4745,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </>
       ) : (
         <div className="topbar">
-          <button className="homeBtn" disabled title="Home" aria-label="Home">
+          <button className="iconBtn homeBtn" disabled title="Home" aria-label="Home">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
           </button>
           <span className="readOnlyTitle">{pdfTitle}</span>
@@ -4739,6 +4851,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               findMarks={findMarksMemo}
               onEffectiveScale={setPdfEffScale}
               onBeforeLinkJump={pushNav}
+              onLoadState={handlePdfLoadState}
               onExternalLink={handleDocLink}
               onLinkHighlight={(h) => {
                 if (h.linkTarget?.pageId) openBlock(h.linkTarget.pageId);
