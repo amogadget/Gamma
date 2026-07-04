@@ -1467,6 +1467,8 @@ export default function App() {
         if (cancelled) return;
         setChatMessages(data.messages || []);
         chatLoadedForRef.current = chatKey;
+        // Fresh conversation → first question should carry the full PDF
+        if (!(data.messages || []).length) setAttachPdf(true);
       })
       .catch(() => { if (!cancelled) chatLoadedForRef.current = chatKey; });
     return () => { cancelled = true; };
@@ -1489,6 +1491,7 @@ export default function App() {
 
   function clearChat() {
     setChatMessages([]);
+    setAttachPdf(true); // new chat: first question carries the full PDF again
     fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
       method: "DELETE",
       credentials: "include",
@@ -1691,6 +1694,11 @@ export default function App() {
       // browser find — it covers notes, highlights, AND the PDF text.
       if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
+        // Focus in the chat window → find within the conversation instead
+        if (document.activeElement?.closest?.(".chatPanel")) {
+          setChatFindOpen(true);
+          return;
+        }
         setOpenPopover((p) => (p === "search" && !e.shiftKey ? null : "search"));
       } else if (e.altKey && e.key === "ArrowLeft") {
         e.preventDefault();
@@ -1734,7 +1742,7 @@ export default function App() {
     try { return localStorage.getItem("gamma-chat-model") || ""; } catch { return ""; }
   });
   const [attachPdf, setAttachPdf] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-attach-pdf") === "1"; } catch { return false; }
+    try { return localStorage.getItem("gamma-chat-attach-pdf") !== "0"; } catch { return true; }
   });
   const [chatEffort, setChatEffort] = useState(() => {
     try { return localStorage.getItem("gamma-chat-effort") || ""; } catch { return ""; }
@@ -3587,12 +3595,16 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
           PDF
         </button>
-        <input
-          className="chatInput"
+        <AutoGrowTextarea
+          className="chatInput chatInputArea"
+          rows={1}
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
           onPaste={handleChatPaste}
-          placeholder={chatImages.length ? "Ask about the pasted figure…" : (pdfSelection ? "Ask about the selection…" : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : (focusedBlockId ? "Ask about this page…" : "Ask AI… (paste images to attach)")))}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+          }}
+          placeholder={chatImages.length ? "Ask about the pasted figure…" : (pdfSelection ? "Ask about the selection…" : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : (focusedBlockId ? "Ask about this page… (Shift+Enter for a new line)" : "Ask AI… (paste images to attach)")))}
         />
         {chatLoading ? (
           <button className="chatSendBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
@@ -3751,9 +3763,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   <span data-popover="meta" style={{ position: "relative", display: "inline-flex" }}>
                     <button
                       className="pageActionBtn"
-                      title="Paper metadata (authors, venue, DOI…)"
+                      title="Paper metadata (authors, venue, DOI, source file…)"
                       aria-label="Paper metadata"
-                      onClick={() => setOpenPopover((p) => (p === "meta" ? null : "meta"))}
+                      onClick={() => {
+                        const opening = openPopover !== "meta";
+                        setOpenPopover(opening ? "meta" : null);
+                        if (opening) setSourceDraft(inputUrl);
+                      }}
                     >
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 16v-5" /><path d="M12 8h.01" /></svg>
                     </button>
@@ -3824,27 +3840,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             </button>
                           </div>
                         ) : null}
-                      </div>
-                    ) : null}
-                  </span>
-                ) : null}
-                {inputUrl ? (
-                  <span data-popover="source" style={{ position: "relative", display: "inline-flex" }}>
-                    <button
-                      className="pageActionBtn"
-                      title="Source PDF — view or replace"
-                      aria-label="Source PDF"
-                      onClick={() => {
-                        const opening = openPopover !== "source";
-                        setOpenPopover(opening ? "source" : null);
-                        if (opening) setSourceDraft(inputUrl);
-                      }}
-                    >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
-                    </button>
-                    {openPopover === "source" ? (
-                      <div className="popover sourcePopover">
-                        <div className="popoverTitle">Source PDF</div>
+                        <div className="popoverDivider" />
+                        <div className="popoverSection">Source file</div>
                         <input
                           className="searchInput"
                           value={sourceDraft}
@@ -3857,28 +3854,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             <span className="attachName">Save a copy on the server</span>
                           </label>
                         ) : null}
-                        <div className="reportModalBtns">
-                          <button className="chatClearBtn" onClick={() => setOpenPopover(null)}>Cancel</button>
-                          <button
-                            className="chatSendBtn"
-                            disabled={!sourceDraft.trim() || sourceDraft.trim() === inputUrl}
-                            onClick={async () => {
-                              const url = sourceDraft.trim();
-                              setOpenPopover(null);
-                              try {
-                                await apiJson(`${API}/blocks/${focusedBlockId}`, {
-                                  method: "PUT",
-                                  headers: { "Content-Type": "application/json" },
-                                  body: JSON.stringify({ properties: { source_url: url } }),
-                                });
-                                await openBlock(focusedBlockId);
-                                setStatus("Source PDF replaced.");
-                              } catch (err) {
-                                setStatus(`Replace failed: ${err.message}`);
-                              }
-                            }}
-                          >Replace</button>
-                        </div>
+                        {sourceDraft.trim() && sourceDraft.trim() !== inputUrl ? (
+                          <div className="reportModalBtns">
+                            <button
+                              className="chatSendBtn"
+                              onClick={async () => {
+                                const url = sourceDraft.trim();
+                                setOpenPopover(null);
+                                try {
+                                  await apiJson(`${API}/blocks/${focusedBlockId}`, {
+                                    method: "PUT",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ properties: { source_url: url } }),
+                                  });
+                                  await openBlock(focusedBlockId);
+                                  setStatus("Source PDF replaced.");
+                                } catch (err) {
+                                  setStatus(`Replace failed: ${err.message}`);
+                                }
+                              }}
+                            >Replace source</button>
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </span>
