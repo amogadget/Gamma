@@ -1,6 +1,7 @@
 """Unified blocks API (/api/blocks/*) and block search."""
 
 import json
+import re
 import secrets
 import sqlite3
 
@@ -53,8 +54,20 @@ class UBPutChildrenRequest(BaseModel):
     blocks: list
 
 
+def _search_pattern(q: str, case: bool, whole: bool, regex: bool):
+    """Compile the VSCode-style search options into a regex (None = invalid)."""
+    body = q if regex else re.escape(q)
+    if whole:
+        body = rf"\b(?:{body})\b"
+    try:
+        return re.compile(body, 0 if case else re.IGNORECASE)
+    except re.error:
+        return None
+
+
 @router.get("/block-search")
-async def block_search(request: Request, q: str = "", ids: str = "", limit: int = 10):
+async def block_search(request: Request, q: str = "", ids: str = "", limit: int = 10,
+                       case: int = 0, whole: int = 0, regex: int = 0):
     results = []
     with sqlite3.connect(user_db_path(require_user(request), "pages.db")) as conn:
         if ids:
@@ -66,6 +79,15 @@ async def block_search(request: Request, q: str = "", ids: str = "", limit: int 
                 f"SELECT id, content, parent_id FROM unified_blocks WHERE id IN ({placeholders})",
                 id_list,
             ).fetchall()
+        elif case or whole or regex:
+            # Option-aware search: SQLite LIKE can't express these, so scan in Python
+            pattern = _search_pattern(q, bool(case), bool(whole), bool(regex))
+            if pattern is None:
+                return {"blocks": [], "error": "invalid regex"}
+            rows = [r for r in conn.execute(
+                "SELECT id, content, parent_id FROM unified_blocks "
+                "WHERE content != '' ORDER BY updated_at DESC",
+            ) if pattern.search(r[1] or "")][:limit]
         else:
             rows = conn.execute(
                 """
@@ -94,6 +116,44 @@ async def block_search(request: Request, q: str = "", ids: str = "", limit: int 
                 block["page_title"] = content
             results.append(block)
     return {"blocks": results}
+
+
+class BlockReplaceRequest(BaseModel):
+    query: str
+    replacement: str = ""
+    case: bool = False
+    whole: bool = False
+    regex: bool = False
+
+
+@router.post("/blocks-replace")
+async def blocks_replace(payload: BlockReplaceRequest, request: Request):
+    """Search-and-replace across all block contents (VSCode-style options)."""
+    if not payload.query:
+        raise HTTPException(status_code=400, detail="empty query")
+    pattern = _search_pattern(payload.query, payload.case, payload.whole, payload.regex)
+    if pattern is None:
+        raise HTTPException(status_code=400, detail="invalid regex")
+    replacement = payload.replacement if payload.regex else payload.replacement.replace("\\", "\\\\")
+    now = page_now()
+    changed = 0
+    with sqlite3.connect(user_db_path(require_user(request), "pages.db")) as conn:
+        rows = conn.execute(
+            "SELECT id, content FROM unified_blocks WHERE content != '' AND id != 'root'"
+        ).fetchall()
+        for block_id, content in rows:
+            try:
+                new_content = pattern.sub(replacement, content)
+            except re.error:
+                raise HTTPException(status_code=400, detail="invalid replacement pattern")
+            if new_content != content:
+                conn.execute(
+                    "UPDATE unified_blocks SET content = ?, updated_at = ? WHERE id = ?",
+                    (new_content, now, block_id),
+                )
+                changed += 1
+        conn.commit()
+    return {"ok": True, "changed": changed}
 
 
 # Route order matters: static-prefix routes must come before /{block_id}

@@ -178,12 +178,34 @@ function ChatMarkdown({ text }) {
   );
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onSelectionFinished, onHighlightContext }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onSelectionFinished, onHighlightContext, searchRef }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
   const [forcePages, setForcePages] = useState(new Set());
   const pageHeightsRef = useRef([]); // viewport heights at scale 1, indexed 0..n-1
+
+  // Expose full-text search over the loaded document (used by the search panel).
+  useEffect(() => {
+    if (!searchRef) return;
+    searchRef.current = pdfDoc ? async (re) => {
+      const out = [];
+      for (let p = 1; p <= pdfDoc.numPages && out.length < 50; p++) {
+        const page = await pdfDoc.getPage(p);
+        const tc = await page.getTextContent();
+        const text = tc.items.map((it) => it.str).join(" ");
+        const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+        let m;
+        while ((m = rx.exec(text)) && out.length < 50) {
+          const s = Math.max(0, m.index - 40);
+          out.push({ page: p, snippet: text.slice(s, m.index + m[0].length + 40).trim() });
+          if (m.index === rx.lastIndex) rx.lastIndex++;
+        }
+      }
+      return out;
+    } : null;
+    return () => { if (searchRef) searchRef.current = null; };
+  }, [pdfDoc, searchRef]);
   // Resolve scale: numeric value as-is, "page-width" computes a scale that
   // fits the first page to the viewer width. Recomputed on viewer resize so
   // it adapts to sidebar drags / phone rotation.
@@ -1231,14 +1253,26 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [sidebarHeight, setSidebarHeight] = useState(280);
-  const [orientation, setOrientation] = useState("horizontal");
-  // Which side the notes sidebar docks to in side-by-side layout ("right"/"left").
-  const [sidebarSide, setSidebarSide] = useState(() => {
-    try { return localStorage.getItem("gamma-sidebar-side") || "right"; } catch { return "right"; }
+  // Where the notes window docks: "left" | "right" | "bottom".
+  const [notesDock, setNotesDock] = useState(() => {
+    try { return localStorage.getItem("gamma-notes-dock") || "right"; } catch { return "right"; }
   });
   useEffect(() => {
-    try { localStorage.setItem("gamma-sidebar-side", sidebarSide); } catch {}
-  }, [sidebarSide]);
+    try { localStorage.setItem("gamma-notes-dock", notesDock); } catch {}
+  }, [notesDock]);
+  // Widths of the two dock columns (each column can hold notes and/or chat stacked).
+  const [leftWidth, setLeftWidth] = useState(() => {
+    try { return Number(localStorage.getItem("gamma-dock-left")) || 380; } catch { return 380; }
+  });
+  const [rightWidth, setRightWidth] = useState(() => {
+    try { return Number(localStorage.getItem("gamma-dock-right")) || 420; } catch { return 420; }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("gamma-dock-left", String(leftWidth));
+      localStorage.setItem("gamma-dock-right", String(rightWidth));
+    } catch {}
+  }, [leftWidth, rightWidth]);
   // Open tabs (Chrome-style): [{id, title}] persisted per browser.
   const [openTabs, setOpenTabs] = useState(() => {
     try { return JSON.parse(localStorage.getItem("gamma-tabs") || "[]"); } catch { return []; }
@@ -1254,12 +1288,6 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-chat-dock", chatDock); } catch {}
   }, [chatDock]);
-  const [chatWidth, setChatWidth] = useState(() => {
-    try { return Number(localStorage.getItem("gamma-chat-width")) || 360; } catch { return 360; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-width", String(chatWidth)); } catch {}
-  }, [chatWidth]);
   // One popover open at a time; any click outside a [data-popover] container closes it.
   const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
   useEffect(() => {
@@ -1272,21 +1300,61 @@ export default function App() {
   }, [openPopover]);
   const [shareUrl, setShareUrl] = useState("");
   const [shareCopied, setShareCopied] = useState(false);
-  // Workspace search (Ctrl+Shift+F)
+  // Workspace search (Ctrl+Shift+F) with VSCode-style options:
+  // Aa = match case, ab = whole word, .* = regex, plus replace-in-notes.
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchBusy, setSearchBusy] = useState(false);
+  const [searchCase, setSearchCase] = useState(false);
+  const [searchWhole, setSearchWhole] = useState(false);
+  const [searchRegex, setSearchRegex] = useState(false);
+  const [searchReplaceOpen, setSearchReplaceOpen] = useState(false);
+  const [searchReplace, setSearchReplace] = useState("");
+  const [pdfMatches, setPdfMatches] = useState([]);
+  const [searchNonce, setSearchNonce] = useState(0); // bump to re-run the search
+  const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet}]
   useEffect(() => {
-    if (openPopover !== "search" || !searchQuery.trim()) { setSearchResults([]); return; }
+    if (openPopover !== "search" || !searchQuery.trim()) { setSearchResults([]); setPdfMatches([]); return; }
     const timer = setTimeout(() => {
       setSearchBusy(true);
-      apiJson(`${API}/block-search?q=${encodeURIComponent(searchQuery.trim())}&limit=20`)
+      const q = searchQuery.trim();
+      const flags = `&case=${searchCase ? 1 : 0}&whole=${searchWhole ? 1 : 0}&regex=${searchRegex ? 1 : 0}`;
+      const notesReq = apiJson(`${API}/block-search?q=${encodeURIComponent(q)}&limit=20${flags}`)
         .then((d) => setSearchResults(d.blocks || []))
-        .catch(() => setSearchResults([]))
-        .finally(() => setSearchBusy(false));
-    }, 200);
+        .catch(() => setSearchResults([]));
+      let pdfReq = Promise.resolve();
+      if (pdfSearchRef.current) {
+        try {
+          let body = searchRegex ? q : q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          if (searchWhole) body = `\\b(?:${body})\\b`;
+          const re = new RegExp(body, searchCase ? "g" : "gi");
+          pdfReq = pdfSearchRef.current(re).then(setPdfMatches).catch(() => setPdfMatches([]));
+        } catch { setPdfMatches([]); }
+      } else {
+        setPdfMatches([]);
+      }
+      Promise.allSettled([notesReq, pdfReq]).then(() => setSearchBusy(false));
+    }, 250);
     return () => clearTimeout(timer);
-  }, [searchQuery, openPopover]);
+  }, [searchQuery, openPopover, searchCase, searchWhole, searchRegex, searchNonce]);
+
+  async function replaceAllInNotes() {
+    const q = searchQuery.trim();
+    if (!q) return;
+    if (!window.confirm(`Replace all occurrences of "${q}" with "${searchReplace}" across ALL your notes?`)) return;
+    try {
+      const data = await apiJson(`${API}/blocks-replace`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q, replacement: searchReplace, case: searchCase, whole: searchWhole, regex: searchRegex }),
+      });
+      setStatus(`Replaced in ${data.changed} block${data.changed === 1 ? "" : "s"}.`);
+      if (focusedBlockId) await loadBlocksForBlock(focusedBlockId);
+      setSearchNonce((n) => n + 1);
+    } catch (err) {
+      setStatus(`Replace failed: ${err.message}`);
+    }
+  }
   useEffect(() => {
     function onKey(e) {
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
@@ -1670,23 +1738,16 @@ export default function App() {
     target.addEventListener("pointercancel", onUp);
   }
 
-  function startResize(e) {
-    const isVertical = orientation === "vertical";
-    const startWidth = sidebarWidth;
-    const startHeight = sidebarHeight;
-    const sign = sidebarSide === "left" ? 1 : -1; // sidebar on the left grows rightward
+  // Resize a dock column. The left column's sash sits to its right (drag right
+  // = grow); the right column's sash sits to its left (drag left = grow).
+  function startColResize(e, side) {
+    const start = side === "left" ? leftWidth : rightWidth;
+    const sign = side === "left" ? 1 : -1;
     startSashDrag(e, {
-      cursor: isVertical ? "row-resize" : "col-resize",
-      compute: (dx, dy) => isVertical
-        ? Math.max(160, Math.min(window.innerHeight * 0.75, startHeight - dy))
-        : Math.max(280, Math.min(window.innerWidth * 0.75, startWidth + sign * dx)),
-      apply: isVertical ? setSidebarHeight : setSidebarWidth,
+      cursor: "col-resize",
+      compute: (dx) => Math.max(260, Math.min(window.innerWidth * 0.7, start + sign * dx)),
+      apply: side === "left" ? setLeftWidth : setRightWidth,
     });
-  }
-
-  function resetSidebarSize() {
-    if (orientation === "vertical") setSidebarHeight(280);
-    else setSidebarWidth(420);
   }
 
   function startChatResize(e) {
@@ -1737,7 +1798,6 @@ export default function App() {
   useEffect(() => {
     const session = loadSession();
     if (session.pdfScale != null) setPdfScale(session.pdfScale);
-    if (session.orientation) setOrientation(session.orientation);
     if (session.pdfHidden != null) setPdfHidden(session.pdfHidden);
     if (session.notesVisible != null) setNotesVisible(session.notesVisible);
     if (session.sidebarWidth != null) setSidebarWidth(session.sidebarWidth);
@@ -1775,14 +1835,13 @@ export default function App() {
     saveSession({
       focusedBlockId: focusedBlockId || undefined,
       pdfScale,
-      orientation,
       pdfHidden,
       notesVisible,
       sidebarWidth,
       sidebarHeight,
       pdfPageNumber,
     });
-  }, [focusedBlockId, pdfScale, orientation, pdfHidden, notesVisible, sidebarWidth, sidebarHeight, pdfPageNumber]);
+  }, [focusedBlockId, pdfScale, pdfHidden, notesVisible, sidebarWidth, sidebarHeight, pdfPageNumber]);
 
   function formatRelativeTime(iso) {
   if (!iso) return "";
@@ -2118,8 +2177,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
-  // Drag the notes pane by its grip to dock it left, right, or bottom.
-  function startSidebarDock(e) {
+  // Drag any window by its grip; drop zones dock it left, right, or bottom.
+  // One shared implementation so every window behaves identically.
+  function startWindowDock(e, applyDock) {
     e.preventDefault();
     e.stopPropagation();
     const target = e.currentTarget;
@@ -2139,11 +2199,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setDockPreview(zoneFor(ev));
     }
     function onUp(ev) {
-      if (dragging) {
-        const zone = zoneFor(ev);
-        if (zone === "bottom") setOrientation("vertical");
-        else { setOrientation("horizontal"); setSidebarSide(zone); }
-      }
+      if (dragging) applyDock(zoneFor(ev));
       setDockPreview(null);
       try { target.releasePointerCapture(pointerId); } catch (_) {}
       target.removeEventListener("pointermove", onMove);
@@ -2234,6 +2290,37 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setShareCopied(true);
     } catch {
       setStatus("Copy failed — copy the link manually.");
+    }
+  }
+
+  // Ask the AI for the document's title and fill it into the page name.
+  const [aiTitleBusy, setAiTitleBusy] = useState(false);
+  async function aiFillTitle() {
+    if (!docId || readOnly || aiTitleBusy) return;
+    setAiTitleBusy(true);
+    setStatus("Asking AI for the title…");
+    try {
+      const data = await apiJson(`${API}/ai/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: "Extract the exact title of this document. Reply with ONLY the title text — no quotes, no authors, no extra words.",
+          doc_id: docId,
+          history: [],
+          model: chatModel || "",
+        }),
+      });
+      const title = (data.response || "").trim().replace(/^["'\s]+|["'\s]+$/g, "").split("\n")[0].slice(0, 200);
+      if (title) {
+        await renameTitle(title);
+        setStatus("Title filled in by AI.");
+      } else {
+        setStatus("AI returned no title.");
+      }
+    } catch (err) {
+      setStatus(`AI title failed: ${err.message}`);
+    } finally {
+      setAiTitleBusy(false);
     }
   }
 
@@ -2564,55 +2651,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     );
   }
 
-  function startChatWidthResize(e) {
-    const startW = chatWidth;
-    const sign = chatDock === "left" ? 1 : -1;
-    startSashDrag(e, {
-      cursor: "col-resize",
-      compute: (dx) => Math.max(260, Math.min(window.innerWidth * 0.6, startW + sign * dx)),
-      apply: setChatWidth,
-    });
-  }
-
-  // Drag the chat window by its grip to dock it left, right, or bottom.
-  function startChatDockDrag(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    const target = e.currentTarget;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const pointerId = e.pointerId;
-    let dragging = false;
-    try { target.setPointerCapture(pointerId); } catch (_) {}
-    function zoneFor(ev) {
-      if (ev.clientY > window.innerHeight * 0.65) return "bottom";
-      return ev.clientX < window.innerWidth / 2 ? "left" : "right";
-    }
-    function onMove(ev) {
-      if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 8) return;
-      dragging = true;
-      setDockPreview(zoneFor(ev));
-    }
-    function onUp(ev) {
-      if (dragging) setChatDock(zoneFor(ev));
-      setDockPreview(null);
-      try { target.releasePointerCapture(pointerId); } catch (_) {}
-      target.removeEventListener("pointermove", onMove);
-      target.removeEventListener("pointerup", onUp);
-      target.removeEventListener("pointercancel", onUp);
-    }
-    target.addEventListener("pointermove", onMove);
-    target.addEventListener("pointerup", onUp);
-    target.addEventListener("pointercancel", onUp);
-  }
-
   // The AI chat window — an independent pane docked left/right/bottom via chatDock.
   const chatWindow = !readOnly && !chatHidden ? (
     <div className="chatPanel chatWindow">
       <div className="chatPanelHeader">
         <span
           className="chatPanelTitle chatDockGrip"
-          onPointerDown={startChatDockDrag}
+          onPointerDown={(e) => startWindowDock(e, setChatDock)}
           title="Drag to dock the chat left, right, or bottom"
         >⠿ AI Chat</span>
         {aiInfo?.models?.length > 0 ? (() => {
@@ -2705,336 +2750,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     </div>
   ) : null;
 
-  return (
-    <div
-      ref={appRef}
-      className={`app layout-${orientation} side-${sidebarSide} ${readOnly ? "readOnlyMode" : ""}`}
-      onDragOver={readOnly ? undefined : (e) => {
-        if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes("Files")) return;
-        e.preventDefault();
-        if (e.target.closest(".blockRowWrap")) {
-          appRef.current?.classList.remove("dragOver");
-        } else {
-          appRef.current?.classList.add("dragOver");
-        }
-      }}
-      onDragLeave={readOnly ? undefined : (e) => {
-        if (e.currentTarget === e.target) appRef.current?.classList.remove("dragOver");
-      }}
-      onDrop={readOnly ? undefined : (e) => {
-        appRef.current?.classList.remove("dragOver");
-        const file = e.dataTransfer?.files?.[0];
-        if (!file) return;
-        if (file.type === "application/pdf") {
-          e.preventDefault();
-          uploadPdf(file);
-        }
-      }}
-    >
-      {!readOnly ? (
-        <>
-          <div className="topbar">
-            <button
-              className={`homeBtn ${homeMode ? "active" : ""}`}
-              onClick={goHome}
-              title="Home"
-              aria-label="Home"
-            >
-              Γ
-            </button>
-            <div className="tabStrip" role="tablist">
-              {openTabs.map((t) => (
-                <div
-                  key={t.id}
-                  role="tab"
-                  className={`tab ${t.id === focusedBlockId ? "active" : ""}`}
-                  title={t.title}
-                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id); }}
-                  onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } }}
-                >
-                  <span className="tabTitle">{t.title}</span>
-                  <button
-                    className="tabClose"
-                    onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
-                    title="Close tab"
-                    aria-label={`Close ${t.title}`}
-                  >×</button>
-                </div>
-              ))}
-            </div>
-            {homeMode ? (
-              <div className="urlBox">
-                <input
-                  value={inputUrl}
-                  onChange={(e) => setInputUrl(e.target.value)}
-                  placeholder="Open a PDF by URL…"
-                  onKeyDown={(e) => { if (e.key === "Enter") openPdf(inputUrl); }}
-                />
-                <button onClick={() => openPdf(inputUrl)} disabled={loading} className="openBtn">
-                  Open
-                </button>
-              </div>
-            ) : null}
-            <span data-popover="search" style={{ position: "relative", display: "inline-flex" }}>
-              <button
-                className={`iconBtn ${openPopover === "search" ? "activeIcon" : ""}`}
-                onClick={() => setOpenPopover((p) => (p === "search" ? null : "search"))}
-                title="Search all notes (Ctrl+Shift+F)"
-                aria-label="Search"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-              </button>
-              {openPopover === "search" ? (
-                <div className="popover searchPopover">
-                  <input
-                    autoFocus
-                    className="searchInput"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search notes and highlights…"
-                  />
-                  <div className="searchResults">
-                    {searchBusy ? <div className="searchHint">Searching…</div> : null}
-                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 ? (
-                      <div className="searchHint">No matches.</div>
-                    ) : null}
-                    {searchResults.map((r) => (
-                      <button
-                        key={r.id}
-                        className="searchResult"
-                        onClick={() => {
-                          setOpenPopover(null);
-                          if (r.page_root_id && r.page_root_id !== r.id) pendingBlockScrollRef.current = r.id;
-                          openBlock(r.page_root_id || r.id);
-                        }}
-                      >
-                        <span className="searchResultPage">{r.page_title || "Untitled"}</span>
-                        <span className="searchResultText">{r.content}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-            </span>
-            {pdfUrl && !homeMode ? (
-              <span data-popover="share" style={{ position: "relative", display: "inline-flex" }}>
-                <button
-                  className={`iconBtn ${openPopover === "share" ? "activeIcon" : ""}`}
-                  onClick={() => {
-                    const opening = openPopover !== "share";
-                    setOpenPopover(opening ? "share" : null);
-                    if (opening) fetchShareLink();
-                  }}
-                  disabled={loading}
-                  title="Share"
-                  aria-label="Share"
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
-                </button>
-                {openPopover === "share" ? (
-                  <div className="popover sharePopover">
-                    <div className="popoverTitle">Share this page</div>
-                    <div className="popoverHint">Anyone with the link can view the PDF, highlights, and notes — read-only, no login.</div>
-                    {shareUrl ? (
-                      <div className="shareRow">
-                        <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
-                        <button className="chatSendBtn" onClick={copyShareLink}>{shareCopied ? "Copied ✓" : "Copy"}</button>
-                      </div>
-                    ) : (
-                      <div className="popoverHint">Creating link…</div>
-                    )}
-                  </div>
-                ) : null}
-              </span>
-            ) : null}
-            {authUser?.user && (
-              <span data-popover="user" style={{ position: "relative", display: "inline-flex" }}>
-                <button
-                  className="userBadge"
-                  onClick={() => setOpenPopover((p) => (p === "user" ? null : "user"))}
-                  title="Account & settings"
-                >
-                  {authUser.is_guest ? "guest" : authUser.user}
-                </button>
-                {openPopover === "user" ? (
-                  <div className="popover userPopover">
-                    <div className="popoverTitle">{authUser.is_guest ? "Guest" : authUser.user}</div>
-                    {authUser.is_guest ? (
-                      <div className="popoverHint">Guest workspace resets daily. Ask the admin for an account to keep your work.</div>
-                    ) : null}
-                    <div className="popoverSection">Settings</div>
-                    <button className="popoverItem" onClick={() => { setPromptDraft(chatSystem || aiInfo?.default_prompt || ""); setPromptOpen(true); setOpenPopover(null); }}>
-                      AI system prompt…
-                    </button>
-                    <div className="popoverHint">AI provider keys and models are configured on the server (.env: GAMMA_AI_*). Model, effort, and prompt choices are saved in this browser.</div>
-                    <div className="popoverDivider" />
-                    <button className="popoverItem" onClick={doLogout}>Log out</button>
-                  </div>
-                ) : null}
-              </span>
-            )}
-            <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
-              <button
-                className={`iconBtn menuToggleBtn ${openPopover === "menu" ? "activeIcon" : ""}`}
-                onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
-                title="Menu"
-                aria-label="Menu"
-              >
-                ⋮
-              </button>
-              {openPopover === "menu" ? (
-                <div className="popover menuPopover">
-                  <div className="popoverSection">Windows</div>
-                  {!homeMode && pdfUrl ? (
-                    <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
-                      <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
-                    </button>
-                  ) : null}
-                  {!homeMode ? (
-                    <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
-                      <span className="check">{notesVisible ? "✓" : ""}</span> Notes
-                    </button>
-                  ) : null}
-                  <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
-                    <span className="check">{!chatHidden ? "✓" : ""}</span> AI Chat
-                  </button>
-                  <div className="popoverDivider" />
-                  <label
-                    className="popoverItem importLogseqBtn"
-                    title="Import Logseq PDF highlights (.pdf + .edn)"
-                    style={{ cursor: loading ? "not-allowed" : "pointer" }}
-                  >
-                    Import Logseq…
-                    <input
-                      type="file"
-                      multiple
-                      accept=".pdf,.edn,.md"
-                      style={{ display: "none" }}
-                      disabled={loading}
-                      onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; setOpenPopover(null); }}
-                    />
-                  </label>
-                </div>
-              ) : null}
-            </span>
-          </div>
-          <div className="status">{status}</div>
-        </>
-      ) : (
-        <div className="topbar">
-          <button className="homeBtn" disabled title="Home" aria-label="Home">Γ</button>
-          <span className="readOnlyTitle">{pdfTitle}</span>
-          <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
-            <button
-              className="iconBtn menuToggleBtn"
-              onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
-              title="Menu"
-              aria-label="Menu"
-            >
-              ⋮
-            </button>
-            {openPopover === "menu" ? (
-              <div className="popover menuPopover">
-                <div className="popoverSection">Windows</div>
-                {pdfUrl ? (
-                  <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
-                    <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
-                  </button>
-                ) : null}
-                <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
-                  <span className="check">{notesVisible ? "✓" : ""}</span> Notes
-                </button>
-              </div>
-            ) : null}
-          </span>
-        </div>
-      )}
-
-      {attachModeBlockId && (
-        <div className="attachModeBanner">
-          Click a PDF highlight to link it
-          <button onClick={() => { setAttachModeBlockId(null); setAttachContextMenu(null); }}>Cancel</button>
-        </div>
-      )}
-      {attachContextMenu && (
-        <div
-          className="attachContextMenu"
-          style={{ left: attachContextMenu.x, top: attachContextMenu.y }}
-          onMouseLeave={() => setAttachContextMenu(null)}
-        >
-          <button onClick={() => linkHighlightToBlock(attachModeBlockId, attachContextMenu.highlight)}>
-            Link highlight here
-          </button>
-        </div>
-      )}
-
-      <div className="workArea">
-      {chatWindow && chatDock === "left" ? (
-        <>
-          <div className="chatDockSide" style={{ width: chatWidth }}>{chatWindow}</div>
-          <div className="splitter splitter-horizontal chatWidthSash"><div className="splitterGrab" onPointerDown={startChatWidthResize} aria-label="Drag to resize chat" role="separator"><span className="splitterGrabDot" /></div></div>
-        </>
-      ) : null}
-      <div className="mainStack">
-      <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
-        <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
-          {pdfUrl && !pdfHidden ? (
-            <button
-              className="pdfCloseBtn"
-              onClick={() => setPdfHidden(true)}
-              title="Close PDF"
-              aria-label="Close PDF"
-            >×</button>
-          ) : null}
-          {pdfUrl && !pdfHidden ? (
-            <div className="pdfZoomOverlay">
-              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "0.8" : String(Math.max(0.4, +(n - 0.2).toFixed(1))); })} title="Zoom out" aria-label="Zoom out">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /></svg>
-              </button>
-              <span className="pdfZoomLevel">{isNaN(parseFloat(pdfScale)) ? "Fit" : `${Math.round(parseFloat(pdfScale) * 100)}%`}</span>
-              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "1.2" : String(Math.min(4, +(n + 0.2).toFixed(1))); })} title="Zoom in" aria-label="Zoom in">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /><path d="M11 8v6" /></svg>
-              </button>
-              <button className="pdfFitWidthBtn" onClick={() => setPdfScale("page-width")} title="Fit to width" aria-label="Fit to width">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5v14" /><path d="M21 5v14" /><path d="M7 12h10" /><path d="m9 9-3 3 3 3" /><path d="m15 9 3 3-3 3" /></svg>
-              </button>
-            </div>
-          ) : null}
-          {pdfUrl ? (
-            <PdfViewer url={pdfUrl} highlights={highlights}
-              pdfScaleValue={pdfScale} scrollRef={scrollToRef}
-              onJump={jumpToHighlightId}
-              onHighlightJump={(hlId) => {
-                const b = flattenBlocks(blocks).find(b => b.properties?.highlight_id === hlId);
-                if (b) { pendingBlockScrollRef.current = b.id; setBlocks(prev => expandToBlock(prev, b.id)); }
-                // Clicking a highlight also makes its quote the chat selection
-                const hl = highlights.find(h => h.id === hlId);
-                const quote = hl?.content?.text?.trim();
-                if (quote) setPdfSelection(quote.slice(0, 4000));
-              }}
-              onHighlightContext={setHighlightMenu}
-              onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {
-                addHighlight({
-                  content: content || { text: "" },
-                  position,
-                  comment: { text: extras?.commentText || "" },
-                  color: extras?.color || COLORS[0],
-                });
-                hideTip?.();
-              }}
-            />
-          ) : (
-            <div className="status">No PDF open.</div>
-          )}
-        </div>
-
-        {notesVisible && (<div className={`splitter splitter-${orientation}`}><div className="splitterGrab" onPointerDown={startResize} onDoubleClick={resetSidebarSize} aria-label="Drag to resize" role="separator"><span className="splitterGrabDot" /></div></div>)}
-
-        {notesVisible && (<div className="sidebar" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-height": `${sidebarHeight}px` }}>
+  // The notes window - docked via notesDock, or filling the center when no PDF is shown.
+  const notesWindow = notesVisible ? (
+    <div className="sidebar" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-height": `${sidebarHeight}px` }}>
           {!readOnly && !homeMode && pdfUrl && !pdfHidden ? (
             <div
               className="sidebarDockGrip"
-              onPointerDown={startSidebarDock}
+              onPointerDown={(e) => startWindowDock(e, setNotesDock)}
               title="Drag to dock the notes pane left, right, or bottom"
               role="separator"
             >⠿ notes</div>
@@ -3063,6 +2785,21 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 }}
               >{focusedBlockId ? (pdfTitle || (docId ? getPdfPageTitle(docId, inputUrl) : "Untitled")) : "PDF Notes"}</h3>
             )}
+            {!readOnly && focusedBlockId && docId ? (
+              <button
+                className="aiTitleBtn"
+                title="AI: read the PDF and fill in the paper's title"
+                aria-label="Fill in title with AI"
+                onClick={aiFillTitle}
+                disabled={aiTitleBusy}
+              >
+                {aiTitleBusy ? (
+                  <span className="chatTyping"><span /><span /><span /></span>
+                ) : (
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
+                )}
+              </button>
+            ) : null}
             {!readOnly && focusedBlockId ? (
               <button
                 className="pageDeleteBtn"
@@ -3600,23 +3337,428 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             ))}
           </div>
 
-        </div>)}
+        </div>
+  ) : null;
+
+  // Slot the windows into dock columns / the bottom row. When no PDF is shown
+  // (home, page-only, or PDF closed) the notes window takes the center instead.
+  const centerNotes = pdfHidden || homeMode || pageOnly;
+  function dockWins(side) {
+    const wins = [];
+    if (!centerNotes && notesWindow && notesDock === side) wins.push({ key: "notes", el: notesWindow });
+    if (chatWindow && chatDock === side) wins.push({ key: "chat", el: chatWindow });
+    return wins;
+  }
+  function dockColumn(side) {
+    const wins = dockWins(side);
+    if (!wins.length) return null;
+    const col = (
+      <div className="dockCol" style={{ width: side === "left" ? leftWidth : rightWidth }}>
+        {wins.map((w, i) => (
+          <React.Fragment key={w.key}>
+            {i > 0 ? <div className="dockDivider" /> : null}
+            <div className="dockCell">{w.el}</div>
+          </React.Fragment>
+        ))}
       </div>
-      {chatWindow && chatDock === "bottom" ? (
+    );
+    const sash = (
+      <div className="splitter splitter-horizontal" key="sash">
+        <div className="splitterGrab" onPointerDown={(e) => startColResize(e, side)} aria-label="Drag to resize" role="separator"><span className="splitterGrabDot" /></div>
+      </div>
+    );
+    return side === "left" ? (<>{col}{sash}</>) : (<>{sash}{col}</>);
+  }
+  const bottomWins = dockWins("bottom");
+
+  return (
+    <div
+      ref={appRef}
+      className={`app layout-horizontal ${readOnly ? "readOnlyMode" : ""}`}
+      onDragOver={readOnly ? undefined : (e) => {
+        if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes("Files")) return;
+        e.preventDefault();
+        if (e.target.closest(".blockRowWrap")) {
+          appRef.current?.classList.remove("dragOver");
+        } else {
+          appRef.current?.classList.add("dragOver");
+        }
+      }}
+      onDragLeave={readOnly ? undefined : (e) => {
+        if (e.currentTarget === e.target) appRef.current?.classList.remove("dragOver");
+      }}
+      onDrop={readOnly ? undefined : (e) => {
+        appRef.current?.classList.remove("dragOver");
+        const file = e.dataTransfer?.files?.[0];
+        if (!file) return;
+        if (file.type === "application/pdf") {
+          e.preventDefault();
+          uploadPdf(file);
+        }
+      }}
+    >
+      {!readOnly ? (
         <>
-          <div className="chatSplitter" onPointerDown={startChatResize} onDoubleClick={() => setChatHeight(200)} aria-label="Drag to resize chat" role="separator">
+          <div className="topbar">
+            <button
+              className={`homeBtn ${homeMode ? "active" : ""}`}
+              onClick={goHome}
+              title="Home"
+              aria-label="Home"
+            >
+              Γ
+            </button>
+            <div className="tabStrip" role="tablist">
+              {openTabs.map((t) => (
+                <div
+                  key={t.id}
+                  role="tab"
+                  className={`tab ${t.id === focusedBlockId ? "active" : ""}`}
+                  title={t.title}
+                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id); }}
+                  onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } }}
+                >
+                  <span className="tabTitle">{t.title}</span>
+                  <button
+                    className="tabClose"
+                    onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
+                    title="Close tab"
+                    aria-label={`Close ${t.title}`}
+                  >×</button>
+                </div>
+              ))}
+            </div>
+            {homeMode ? (
+              <div className="urlBox">
+                <input
+                  value={inputUrl}
+                  onChange={(e) => setInputUrl(e.target.value)}
+                  placeholder="Open a PDF by URL…"
+                  onKeyDown={(e) => { if (e.key === "Enter") openPdf(inputUrl); }}
+                />
+                <button onClick={() => openPdf(inputUrl)} disabled={loading} className="openBtn">
+                  Open
+                </button>
+              </div>
+            ) : null}
+            <span data-popover="search" style={{ position: "relative", display: "inline-flex" }}>
+              <button
+                className={`iconBtn ${openPopover === "search" ? "activeIcon" : ""}`}
+                onClick={() => setOpenPopover((p) => (p === "search" ? null : "search"))}
+                title="Search all notes (Ctrl+Shift+F)"
+                aria-label="Search"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+              </button>
+              {openPopover === "search" ? (
+                <div className="popover searchPopover">
+                  <div className="searchRow">
+                    <button
+                      className={`searchToggle ${searchReplaceOpen ? "on" : ""}`}
+                      onClick={() => setSearchReplaceOpen((v) => !v)}
+                      title="Toggle replace"
+                    >{searchReplaceOpen ? "⌄" : "›"}</button>
+                    <input
+                      autoFocus
+                      className="searchInput"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search notes, highlights, and this PDF…"
+                    />
+                    <button className={`searchToggle ${searchCase ? "on" : ""}`} onClick={() => setSearchCase((v) => !v)} title="Match case">Aa</button>
+                    <button className={`searchToggle ${searchWhole ? "on" : ""}`} onClick={() => setSearchWhole((v) => !v)} title="Match whole word"><u>ab</u></button>
+                    <button className={`searchToggle ${searchRegex ? "on" : ""}`} onClick={() => setSearchRegex((v) => !v)} title="Use regular expression">.*</button>
+                  </div>
+                  {searchReplaceOpen ? (
+                    <div className="searchRow">
+                      <span className="searchToggle spacer" />
+                      <input
+                        className="searchInput"
+                        value={searchReplace}
+                        onChange={(e) => setSearchReplace(e.target.value)}
+                        placeholder="Replace in notes…"
+                      />
+                      <button
+                        className="searchToggle replaceBtn"
+                        onClick={replaceAllInNotes}
+                        disabled={!searchQuery.trim()}
+                        title="Replace all matches across your notes (PDF text can't be edited)"
+                      >Replace all</button>
+                    </div>
+                  ) : null}
+                  <div className="searchResults">
+                    {searchBusy ? <div className="searchHint">Searching…</div> : null}
+                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 ? (
+                      <div className="searchHint">No matches.</div>
+                    ) : null}
+                    {searchResults.length ? <div className="searchSection">Notes</div> : null}
+                    {searchResults.map((r) => (
+                      <button
+                        key={r.id}
+                        className="searchResult"
+                        onClick={() => {
+                          setOpenPopover(null);
+                          if (r.page_root_id && r.page_root_id !== r.id) pendingBlockScrollRef.current = r.id;
+                          openBlock(r.page_root_id || r.id);
+                        }}
+                      >
+                        <span className="searchResultPage">{r.page_title || "Untitled"}</span>
+                        <span className="searchResultText">{r.content}</span>
+                      </button>
+                    ))}
+                    {pdfMatches.length ? <div className="searchSection">This PDF</div> : null}
+                    {pdfMatches.map((m, i) => (
+                      <button
+                        key={`pdf-${i}`}
+                        className="searchResult"
+                        onClick={() => {
+                          setOpenPopover(null);
+                          setPdfHidden(false);
+                          scrollToRef.current?.({
+                            position: {
+                              pageNumber: m.page,
+                              boundingRect: { x1: 0, y1: 0, x2: 0, y2: 0, width: 1, height: 1, pageNumber: m.page },
+                              rects: [],
+                            },
+                          });
+                        }}
+                      >
+                        <span className="searchResultPage">p. {m.page}</span>
+                        <span className="searchResultText">…{m.snippet}…</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </span>
+            {pdfUrl && !homeMode ? (
+              <span data-popover="share" style={{ position: "relative", display: "inline-flex" }}>
+                <button
+                  className={`iconBtn ${openPopover === "share" ? "activeIcon" : ""}`}
+                  onClick={() => {
+                    const opening = openPopover !== "share";
+                    setOpenPopover(opening ? "share" : null);
+                    if (opening) fetchShareLink();
+                  }}
+                  disabled={loading}
+                  title="Share"
+                  aria-label="Share"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+                </button>
+                {openPopover === "share" ? (
+                  <div className="popover sharePopover">
+                    <div className="popoverTitle">Share this page</div>
+                    <div className="popoverHint">Anyone with the link can view the PDF, highlights, and notes — read-only, no login.</div>
+                    {shareUrl ? (
+                      <div className="shareRow">
+                        <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
+                        <button className="chatSendBtn" onClick={copyShareLink}>{shareCopied ? "Copied ✓" : "Copy"}</button>
+                      </div>
+                    ) : (
+                      <div className="popoverHint">Creating link…</div>
+                    )}
+                  </div>
+                ) : null}
+              </span>
+            ) : null}
+            {authUser?.user && (
+              <span data-popover="user" style={{ position: "relative", display: "inline-flex" }}>
+                <button
+                  className="userBadge"
+                  onClick={() => setOpenPopover((p) => (p === "user" ? null : "user"))}
+                  title="Account & settings"
+                >
+                  {authUser.is_guest ? "guest" : authUser.user}
+                </button>
+                {openPopover === "user" ? (
+                  <div className="popover userPopover">
+                    <div className="popoverTitle">{authUser.is_guest ? "Guest" : authUser.user}</div>
+                    {authUser.is_guest ? (
+                      <div className="popoverHint">Guest workspace resets daily. Ask the admin for an account to keep your work.</div>
+                    ) : null}
+                    <div className="popoverSection">Settings</div>
+                    <button className="popoverItem" onClick={() => { setPromptDraft(chatSystem || aiInfo?.default_prompt || ""); setPromptOpen(true); setOpenPopover(null); }}>
+                      AI system prompt…
+                    </button>
+                    <div className="popoverHint">AI provider keys and models are configured on the server (.env: GAMMA_AI_*). Model, effort, and prompt choices are saved in this browser.</div>
+                    <div className="popoverDivider" />
+                    <button className="popoverItem" onClick={doLogout}>Log out</button>
+                  </div>
+                ) : null}
+              </span>
+            )}
+            <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
+              <button
+                className={`iconBtn menuToggleBtn ${openPopover === "menu" ? "activeIcon" : ""}`}
+                onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
+                title="Menu"
+                aria-label="Menu"
+              >
+                ⋮
+              </button>
+              {openPopover === "menu" ? (
+                <div className="popover menuPopover">
+                  <div className="popoverSection">Windows</div>
+                  {!homeMode && pdfUrl ? (
+                    <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
+                      <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
+                    </button>
+                  ) : null}
+                  {!homeMode ? (
+                    <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
+                      <span className="check">{notesVisible ? "✓" : ""}</span> Notes
+                    </button>
+                  ) : null}
+                  <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
+                    <span className="check">{!chatHidden ? "✓" : ""}</span> AI Chat
+                  </button>
+                  <div className="popoverDivider" />
+                  <label
+                    className="popoverItem importLogseqBtn"
+                    title="Import Logseq PDF highlights (.pdf + .edn)"
+                    style={{ cursor: loading ? "not-allowed" : "pointer" }}
+                  >
+                    Import Logseq…
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pdf,.edn,.md"
+                      style={{ display: "none" }}
+                      disabled={loading}
+                      onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; setOpenPopover(null); }}
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </span>
+          </div>
+          <div className="status">{status}</div>
+        </>
+      ) : (
+        <div className="topbar">
+          <button className="homeBtn" disabled title="Home" aria-label="Home">Γ</button>
+          <span className="readOnlyTitle">{pdfTitle}</span>
+          <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
+            <button
+              className="iconBtn menuToggleBtn"
+              onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
+              title="Menu"
+              aria-label="Menu"
+            >
+              ⋮
+            </button>
+            {openPopover === "menu" ? (
+              <div className="popover menuPopover">
+                <div className="popoverSection">Windows</div>
+                {pdfUrl ? (
+                  <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
+                    <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
+                  </button>
+                ) : null}
+                <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
+                  <span className="check">{notesVisible ? "✓" : ""}</span> Notes
+                </button>
+              </div>
+            ) : null}
+          </span>
+        </div>
+      )}
+
+      {attachModeBlockId && (
+        <div className="attachModeBanner">
+          Click a PDF highlight to link it
+          <button onClick={() => { setAttachModeBlockId(null); setAttachContextMenu(null); }}>Cancel</button>
+        </div>
+      )}
+      {attachContextMenu && (
+        <div
+          className="attachContextMenu"
+          style={{ left: attachContextMenu.x, top: attachContextMenu.y }}
+          onMouseLeave={() => setAttachContextMenu(null)}
+        >
+          <button onClick={() => linkHighlightToBlock(attachModeBlockId, attachContextMenu.highlight)}>
+            Link highlight here
+          </button>
+        </div>
+      )}
+
+      <div className="workArea">
+      {dockColumn("left")}
+      <div className="mainStack">
+      <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
+        <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
+          {pdfUrl && !pdfHidden ? (
+            <button
+              className="pdfCloseBtn"
+              onClick={() => setPdfHidden(true)}
+              title="Close PDF"
+              aria-label="Close PDF"
+            >×</button>
+          ) : null}
+          {pdfUrl && !pdfHidden ? (
+            <div className="pdfZoomOverlay">
+              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "0.8" : String(Math.max(0.4, +(n - 0.2).toFixed(1))); })} title="Zoom out" aria-label="Zoom out">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /></svg>
+              </button>
+              <span className="pdfZoomLevel">{isNaN(parseFloat(pdfScale)) ? "Fit" : `${Math.round(parseFloat(pdfScale) * 100)}%`}</span>
+              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "1.2" : String(Math.min(4, +(n + 0.2).toFixed(1))); })} title="Zoom in" aria-label="Zoom in">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /><path d="M11 8v6" /></svg>
+              </button>
+              <button className="pdfFitWidthBtn" onClick={() => setPdfScale("page-width")} title="Fit to width" aria-label="Fit to width">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5v14" /><path d="M21 5v14" /><path d="M7 12h10" /><path d="m9 9-3 3 3 3" /><path d="m15 9 3 3-3 3" /></svg>
+              </button>
+            </div>
+          ) : null}
+          {pdfUrl ? (
+            <PdfViewer url={pdfUrl} highlights={highlights}
+              pdfScaleValue={pdfScale} scrollRef={scrollToRef}
+              searchRef={pdfSearchRef}
+              onJump={jumpToHighlightId}
+              onHighlightJump={(hlId) => {
+                const b = flattenBlocks(blocks).find(b => b.properties?.highlight_id === hlId);
+                if (b) { pendingBlockScrollRef.current = b.id; setBlocks(prev => expandToBlock(prev, b.id)); }
+                // Clicking a highlight also makes its quote the chat selection
+                const hl = highlights.find(h => h.id === hlId);
+                const quote = hl?.content?.text?.trim();
+                if (quote) setPdfSelection(quote.slice(0, 4000));
+              }}
+              onHighlightContext={setHighlightMenu}
+              onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {
+                addHighlight({
+                  content: content || { text: "" },
+                  position,
+                  comment: { text: extras?.commentText || "" },
+                  color: extras?.color || COLORS[0],
+                });
+                hideTip?.();
+              }}
+            />
+          ) : (
+            <div className="status">No PDF open.</div>
+          )}
+        </div>
+
+
+        {centerNotes ? notesWindow : null}
+      </div>
+      {bottomWins.length ? (
+        <>
+          <div className="chatSplitter" onPointerDown={startChatResize} onDoubleClick={() => setChatHeight(220)} aria-label="Drag to resize" role="separator">
             <span className="chatSplitterDot" />
           </div>
-          <div className="chatDockBottom" style={{ height: chatHeight }}>{chatWindow}</div>
+          <div className="dockRow" style={{ height: chatHeight }}>
+            {bottomWins.map((w, i) => (
+              <React.Fragment key={w.key}>
+                {i > 0 ? <div className="dockRowDivider" /> : null}
+                <div className="dockCell">{w.el}</div>
+              </React.Fragment>
+            ))}
+          </div>
         </>
       ) : null}
       </div>
-      {chatWindow && chatDock === "right" ? (
-        <>
-          <div className="splitter splitter-horizontal chatWidthSash"><div className="splitterGrab" onPointerDown={startChatWidthResize} aria-label="Drag to resize chat" role="separator"><span className="splitterGrabDot" /></div></div>
-          <div className="chatDockSide" style={{ width: chatWidth }}>{chatWindow}</div>
-        </>
-      ) : null}
+      {dockColumn("right")}
       </div>
       {dockPreview ? (
         <div className={`dockPreview dockPreview-${dockPreview}`} />
