@@ -929,11 +929,8 @@ body {
 
 
 
-/* --- home button (identical on editor and read-only) --- */
+/* --- home button (icon-style, identical on editor and read-only) --- */
 .homeBtn {
-  font-family: "Times New Roman", Georgia, serif;
-  font-size: 20px;
-  font-weight: 600;
   flex-shrink: 0;
   user-select: none;
 }
@@ -2703,6 +2700,51 @@ body {
 }
 .chatStopBtn { background: var(--bg-subtle); color: var(--text-primary); }
 .chatStopBtn:hover { background: var(--bg-hover) !important; }
+
+/* --- downloads & uploads (Chrome-style transfer list) --- */
+.topbar .transferBtn { position: relative; }
+.transferSpin {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--accent-dark);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: transferSpin 0.8s linear infinite;
+}
+.transferSpin.inline {
+  position: static;
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+}
+@keyframes transferSpin { to { transform: rotate(360deg); } }
+.downloadsPopover { min-width: 320px; max-width: 420px; }
+.transferRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.transferRow:hover { background: var(--bg-block); }
+.transferStatus { display: inline-flex; width: 14px; justify-content: center; flex-shrink: 0; }
+.transferStatus.done { color: #4caf50; }
+.transferStatus.error { color: #e05c5c; }
+.transferKind { display: inline-flex; color: var(--text-dim); flex-shrink: 0; }
+.transferName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.transferInfo { flex-shrink: 0; font-size: 11px; color: var(--text-muted); }
+.searchToggle.transferClearBtn { width: auto; padding: 0 8px; }
 
 /* --- global Back button (topbar) --- */
 @keyframes navBackIn {
