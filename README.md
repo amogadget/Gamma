@@ -225,7 +225,8 @@ It is a multi-stage build: a Node stage compiles the frontend, and the final Pyt
 - **AI chat assistant**: chat bubbles with full markdown + KaTeX rendering, a model switcher that can mix Anthropic and OpenAI models (`GAMMA_AI_MODELS`), a reasoning-effort selector (maps to Anthropic `output_config.effort` / OpenAI `reasoning_effort`; only sent when you pick one), an editable system prompt (the **Prompt** button), and per-page conversation history stored on the backend so it follows you across devices. By default your question is sent with the PDF's extracted text (up to 8000 chars); toggle **📎 PDF** to attach the PDF file itself (better answers about figures/tables, needs a provider/model with native PDF support). Select text in the PDF — or click an existing highlight — and the next question focuses on that passage.
 - **AI reports**: the chat panel's **Report** button picks any of your pages and generates a markdown report from each paper's text, your highlighted passages, and your notes — organized around what you marked as important.
 - **Category metadata**: tag-style category input with autocomplete from existing categories. Arrow-key navigation, comma to add tags. Home page shows grouped carousels by category.
-- **Light/dark theme toggle**: cycles Dark ☾ / Light ☀ / Follow system ◐ (listens to `prefers-color-scheme`). Persisted in localStorage.
+- **Tabs**: open pages appear as Chrome-style tabs in the topbar — click to switch, middle-click or × to close; the tab set persists per browser.
+- **Automatic theme**: follows the OS light/dark preference (`prefers-color-scheme`), no toggle to manage.
 - **Session persistence**: last-opened page, collapsed states, zoom, orientation, PDF toggle, notes toggle, splitter position, and current PDF page survive page reload (localStorage + block properties).
 - **Outliner block tree**: highlights and free notes rendered as nested blocks with Logseq-style vertical guide lines. Enter for sibling, Tab for indent, Shift+Tab for outdent, Backspace on empty to delete.
 - **Rich text**: markdown + KaTeX math in view mode, raw markdown in edit mode. One-click to edit; cursor lands near the click point.
@@ -233,7 +234,7 @@ It is a multi-stage build: a Node stage compiles the frontend, and the final Pyt
 - **Page home view**: all pages listed as blocks, orderable via drag, click to open.
 - **Pages without PDF**: pages with no source URL open as block-tree-only; useful for free-form notes.
 - **Close-PDF**: X button on the viewer hides the PDF temporarily while keeping it loaded. Clicking a highlight dot re-opens the viewer and jumps to that highlight.
-- **Layout toggles**: side-by-side (default) or stacked. Hide notes to see only the PDF.
+- **Drag-to-dock layout**: grab the notes pane's grip and drop it left, right, or bottom of the PDF; the splitter resizes it. Hide notes (menu) to see only the PDF.
 - **Renameable page title**: click the title to rename.
 - **Share links**: read-only URL, public, PDF + highlights + notes all preserved. Click PDF highlight → sidebar jumps to its block. Backlinks shown with "private block" for cross-page references.
 - **Multi-user accounts**: per-user isolated databases and uploaded files. Session-based auth with bcrypt passwords. Guest account with daily data reset. Admin-managed via CLI — no public registration.

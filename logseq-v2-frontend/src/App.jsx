@@ -1166,7 +1166,6 @@ export default function App() {
   const [categorySuggestionIdx, setCategorySuggestionIdx] = useState(-1);
   const [categoryFilter, setCategoryFilter] = useState(initialCategory);
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
-  const [theme, setTheme] = useState(() => localStorage.getItem("gamma-theme") || "system");
   const restoredPdfUrlRef = useRef(null);
   const [blocks, setBlocks] = useState([]);
   const [homeBlocks, setHomeBlocks] = useState([]);
@@ -1183,33 +1182,30 @@ export default function App() {
   // Tracks which block we've finished loading from the server, so the save
   // effect doesn't fire (and clobber the stored chat) before the load lands.
   const chatLoadedForRef = useRef("");
+  // Chat history is per page; the home view gets its own bucket.
+  const chatKey = focusedBlockId || "home";
 
-  // Load chat from backend on focusedBlockId change.
+  // Load chat from backend whenever the chat bucket changes.
   useEffect(() => {
     let cancelled = false;
-    if (!focusedBlockId) {
-      setChatMessages([]);
-      chatLoadedForRef.current = "";
-      return;
-    }
     chatLoadedForRef.current = "";
-    fetch(`${API}/chats/${encodeURIComponent(focusedBlockId)}`, { credentials: "include" })
+    fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, { credentials: "include" })
       .then(r => r.ok ? r.json() : { messages: [] })
       .then(data => {
         if (cancelled) return;
         setChatMessages(data.messages || []);
-        chatLoadedForRef.current = focusedBlockId;
+        chatLoadedForRef.current = chatKey;
       })
-      .catch(() => { if (!cancelled) chatLoadedForRef.current = focusedBlockId; });
+      .catch(() => { if (!cancelled) chatLoadedForRef.current = chatKey; });
     return () => { cancelled = true; };
-  }, [focusedBlockId]);
+  }, [chatKey]);
 
   // Save chat to backend (debounced) when chatMessages changes, but only
-  // after the load for the current focusedBlockId completed.
+  // after the load for the current chat bucket completed.
   useEffect(() => {
-    if (!focusedBlockId || chatLoadedForRef.current !== focusedBlockId) return;
+    if (chatLoadedForRef.current !== chatKey) return;
     const timer = setTimeout(() => {
-      fetch(`${API}/chats/${encodeURIComponent(focusedBlockId)}`, {
+      fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -1217,7 +1213,7 @@ export default function App() {
       }).catch(() => {});
     }, 500);
     return () => clearTimeout(timer);
-  }, [chatMessages, focusedBlockId]);
+  }, [chatMessages, chatKey]);
 
   useEffect(() => {
     try { localStorage.setItem("gamma-chat-height", String(chatHeight)); } catch {}
@@ -1225,12 +1221,10 @@ export default function App() {
 
   function clearChat() {
     setChatMessages([]);
-    if (focusedBlockId) {
-      fetch(`${API}/chats/${encodeURIComponent(focusedBlockId)}`, {
-        method: "DELETE",
-        credentials: "include",
-      }).catch(() => {});
-    }
+    fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
+      method: "DELETE",
+      credentials: "include",
+    }).catch(() => {});
   }
   const [homeEditingId, setHomeEditingId] = useState(null);
   const [status, setStatus] = useState("Ready.");
@@ -1238,6 +1232,21 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [sidebarHeight, setSidebarHeight] = useState(280);
   const [orientation, setOrientation] = useState("horizontal");
+  // Which side the notes sidebar docks to in side-by-side layout ("right"/"left").
+  const [sidebarSide, setSidebarSide] = useState(() => {
+    try { return localStorage.getItem("gamma-sidebar-side") || "right"; } catch { return "right"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-sidebar-side", sidebarSide); } catch {}
+  }, [sidebarSide]);
+  // Open tabs (Chrome-style): [{id, title}] persisted per browser.
+  const [openTabs, setOpenTabs] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gamma-tabs") || "[]"); } catch { return []; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-tabs", JSON.stringify(openTabs)); } catch {}
+  }, [openTabs]);
+  const [dockPreview, setDockPreview] = useState(null); // "left" | "right" | "bottom" while dragging the sidebar
   const [pdfHidden, setPdfHidden] = useState(false);
   const [pdfScale, setPdfScale] = useState("page-width");
   const [pdfSaveLocal, setPdfSaveLocal] = useState(() => {
@@ -1613,11 +1622,12 @@ export default function App() {
     const isVertical = orientation === "vertical";
     const startWidth = sidebarWidth;
     const startHeight = sidebarHeight;
+    const sign = sidebarSide === "left" ? 1 : -1; // sidebar on the left grows rightward
     startSashDrag(e, {
       cursor: isVertical ? "row-resize" : "col-resize",
       compute: (dx, dy) => isVertical
         ? Math.max(160, Math.min(window.innerHeight * 0.75, startHeight - dy))
-        : Math.max(280, Math.min(window.innerWidth * 0.75, startWidth - dx)),
+        : Math.max(280, Math.min(window.innerWidth * 0.75, startWidth + sign * dx)),
       apply: isVertical ? setSidebarHeight : setSidebarWidth,
     });
   }
@@ -1682,19 +1692,26 @@ export default function App() {
     if (session.sidebarHeight != null) setSidebarHeight(session.sidebarHeight);
   }, []);
 
-  // Apply theme and persist. "system" follows prefers-color-scheme.
+  // Theme follows the OS preference — no in-app toggle.
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    function effective() { return theme === "system" ? (mq.matches ? "dark" : "light") : theme; }
-    document.documentElement.setAttribute("data-theme", effective());
-    if (theme !== "system") localStorage.setItem("gamma-theme", theme);
-    else localStorage.removeItem("gamma-theme");
-    if (theme === "system") {
-      const onChange = () => document.documentElement.setAttribute("data-theme", mq.matches ? "dark" : "light");
-      mq.addEventListener("change", onChange);
-      return () => mq.removeEventListener("change", onChange);
-    }
-  }, [theme]);
+    const apply = () => document.documentElement.setAttribute("data-theme", mq.matches ? "dark" : "light");
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+
+  // Keep the tab strip in sync with the open page.
+  useEffect(() => {
+    if (!focusedBlockId || readOnly) return;
+    const title = (pdfTitle || "Untitled").slice(0, 60);
+    setOpenTabs((prev) => {
+      const existing = prev.find((t) => t.id === focusedBlockId);
+      if (existing && existing.title === title) return prev;
+      if (existing) return prev.map((t) => (t.id === focusedBlockId ? { ...t, title } : t));
+      return [...prev, { id: focusedBlockId, title }];
+    });
+  }, [focusedBlockId, pdfTitle, readOnly]);
 
   // Persist session state on relevant changes (skip initial mount)
   const firstRenderRef = useRef(true);
@@ -2018,6 +2035,72 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     } finally {
       setLoading(false);
     }
+  }
+
+  function goHome() {
+    clearSession();
+    suppressAutosaveRef.current = true;
+    setFocusedBlockId(null);
+    setFocusedBlock(null);
+    setBlocks([]);
+    setPdfUrl("");
+    setDocId("");
+    setInputUrl("");
+    setPdfTitle("");
+    setSummary("");
+    setCategory("");
+    setBacklinks([]);
+    setPdfHidden(false);
+    fetchHomeBlocks();
+    window.history.replaceState({}, "", window.location.pathname);
+  }
+
+  function closeTab(id) {
+    const idx = openTabs.findIndex((t) => t.id === id);
+    const next = openTabs.filter((t) => t.id !== id);
+    setOpenTabs(next);
+    if (id === focusedBlockId) {
+      const neighbor = next[Math.min(idx, next.length - 1)];
+      if (neighbor) openBlock(neighbor.id);
+      else goHome();
+    }
+  }
+
+  // Drag the notes pane by its grip to dock it left, right, or bottom.
+  function startSidebarDock(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.currentTarget;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const pointerId = e.pointerId;
+    let dragging = false;
+    try { target.setPointerCapture(pointerId); } catch (_) {}
+
+    function zoneFor(ev) {
+      if (ev.clientY > window.innerHeight * 0.65) return "bottom";
+      return ev.clientX < window.innerWidth / 2 ? "left" : "right";
+    }
+    function onMove(ev) {
+      if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 8) return;
+      dragging = true;
+      setDockPreview(zoneFor(ev));
+    }
+    function onUp(ev) {
+      if (dragging) {
+        const zone = zoneFor(ev);
+        if (zone === "bottom") setOrientation("vertical");
+        else { setOrientation("horizontal"); setSidebarSide(zone); }
+      }
+      setDockPreview(null);
+      try { target.releasePointerCapture(pointerId); } catch (_) {}
+      target.removeEventListener("pointermove", onMove);
+      target.removeEventListener("pointerup", onUp);
+      target.removeEventListener("pointercancel", onUp);
+    }
+    target.addEventListener("pointermove", onMove);
+    target.addEventListener("pointerup", onUp);
+    target.addEventListener("pointercancel", onUp);
   }
 
   async function saveSummary(newValue) {
@@ -2424,7 +2507,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   return (
     <div
       ref={appRef}
-      className={`app layout-${orientation} ${readOnly ? "readOnlyMode" : ""}`}
+      className={`app layout-${orientation} side-${sidebarSide} ${readOnly ? "readOnlyMode" : ""}`}
       onDragOver={readOnly ? undefined : (e) => {
         if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes("Files")) return;
         e.preventDefault();
@@ -2451,40 +2534,65 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         <>
           <div className="topbar">
             <button
-              className="homeBtn"
-              onClick={() => { clearSession(); window.location.href = "/"; }}
+              className={`homeBtn ${homeMode ? "active" : ""}`}
+              onClick={goHome}
               title="Home"
               aria-label="Home"
             >
               Γ
             </button>
+            <div className="tabStrip" role="tablist">
+              {openTabs.map((t) => (
+                <div
+                  key={t.id}
+                  role="tab"
+                  className={`tab ${t.id === focusedBlockId ? "active" : ""}`}
+                  title={t.title}
+                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id); }}
+                  onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } }}
+                >
+                  <span className="tabTitle">{t.title}</span>
+                  <button
+                    className="tabClose"
+                    onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
+                    title="Close tab"
+                    aria-label={`Close ${t.title}`}
+                  >×</button>
+                </div>
+              ))}
+            </div>
+            {homeMode ? (
+              <div className="urlBox">
+                <input
+                  value={inputUrl}
+                  onChange={(e) => setInputUrl(e.target.value)}
+                  placeholder="Open a PDF by URL…"
+                  onKeyDown={(e) => { if (e.key === "Enter") openPdf(inputUrl); }}
+                />
+                <button onClick={() => openPdf(inputUrl)} disabled={loading} className="openBtn">
+                  Open
+                </button>
+              </div>
+            ) : null}
+            {pdfUrl && !homeMode ? (
+              <button className="iconBtn" onClick={createShareLink} disabled={loading} title="Copy a public share link" aria-label="Share link">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+              </button>
+            ) : null}
             {authUser?.user && (
-              <span className="userBadge" title={authUser.is_guest ? "Guest account — resets daily" : ""}>
+              <span className="userBadge" title={authUser.is_guest ? "Guest account — resets daily" : `Logged in as ${authUser.user}`}>
                 {authUser.is_guest ? "guest" : authUser.user}
-                <button className="logoutBtn" onClick={doLogout} title="Log out">↪</button>
               </span>
             )}
-            <input
-              value={inputUrl}
-              onChange={(e) => setInputUrl(e.target.value)}
-              placeholder="Enter PDF URL"
-              onKeyDown={(e) => { if (e.key === "Enter") openPdf(inputUrl); }}
-            />
-            <button onClick={() => openPdf(inputUrl)} disabled={loading} className="openBtn">
-              Open
-            </button>
             <button
-              className="menuToggleBtn"
+              className="iconBtn menuToggleBtn"
               onClick={() => setMenuOpen((v) => !v)}
-              title="More actions"
-              aria-label="More actions"
+              title="Menu"
+              aria-label="Menu"
             >
               {menuOpen ? "✕" : "⋮"}
             </button>
             <div className={`topbarOverflow ${menuOpen ? "open" : ""}`}>
-              <button onClick={createShareLink} disabled={!pdfUrl || loading}>
-                Share link
-              </button>
               {pdfUrl && pdfHidden ? (
                 <button
                   className="pdfShowBtn"
@@ -2492,34 +2600,21 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   title="Show PDF"
                 >Show PDF</button>
               ) : null}
-              <button
-                className="orientationBtn"
-                onClick={() => { setOrientation((o) => (o === "horizontal" ? "vertical" : "horizontal")); setMenuOpen(false); }}
-                title={orientation === "horizontal" ? "Switch to stacked layout" : "Switch to side-by-side layout"}
-              >
-                {orientation === "horizontal" ? "⬍ Stack" : "⬌ Side-by-side"}
-              </button>
-              <button
-                className="notesBtn"
-                onClick={() => { setNotesVisible((v) => !v); setMenuOpen(false); }}
-                title={notesVisible ? "Hide notes" : "Show notes"}
-              >
-                {notesVisible ? "Hide notes" : "Show notes"}
-              </button>
-              <button
-                className="themeToggle"
-                onClick={() => setTheme((t) => t === "dark" ? "light" : t === "light" ? "system" : "dark")}
-                title={theme === "dark" ? "Dark" : theme === "light" ? "Light" : "Auto"}
-                aria-label="Toggle theme"
-              >
-                {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
-              </button>
+              {!homeMode ? (
+                <button
+                  className="notesBtn"
+                  onClick={() => { setNotesVisible((v) => !v); setMenuOpen(false); }}
+                  title={notesVisible ? "Hide notes" : "Show notes"}
+                >
+                  {notesVisible ? "Hide notes" : "Show notes"}
+                </button>
+              ) : null}
               <label
                 className="importLogseqBtn"
                 title="Import Logseq PDF highlights (.pdf + .edn)"
                 style={{ cursor: loading ? "not-allowed" : "pointer" }}
               >
-                Import Logseq
+                Import Logseq…
                 <input
                   type="file"
                   multiple
@@ -2529,35 +2624,24 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; setMenuOpen(false); }}
                 />
               </label>
+              <button className="logoutMenuBtn" onClick={doLogout} title="Log out">Log out</button>
             </div>
           </div>
           <div className="status">{status}</div>
         </>
       ) : (
         <div className="topbar">
+          <button className="homeBtn" disabled title="Home" aria-label="Home">Γ</button>
+          <span className="readOnlyTitle">{pdfTitle}</span>
           <button
-            className="homeBtn"
-            disabled
-            title="Home"
-            aria-label="Home"
-          >
-            Γ
-          </button>
-          <button
-            className="menuToggleBtn"
+            className="iconBtn menuToggleBtn"
             onClick={() => setMenuOpen((v) => !v)}
-            title="More actions"
-            aria-label="More actions"
+            title="Menu"
+            aria-label="Menu"
           >
             {menuOpen ? "✕" : "⋮"}
           </button>
           <div className={`topbarOverflow ${menuOpen ? "open" : ""}`}>
-            <button
-              className="orientationBtn"
-              onClick={() => { setOrientation((o) => (o === "horizontal" ? "vertical" : "horizontal")); setMenuOpen(false); }}
-            >
-              {orientation === "horizontal" ? "⬍ Stack" : "⬌ Side-by-side"}
-            </button>
             {pdfUrl && pdfHidden ? (
               <button className="pdfShowBtn" onClick={() => { setPdfHidden(false); setMenuOpen(false); }}>
                 Show PDF
@@ -2565,12 +2649,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             ) : null}
             <button className="notesBtn" onClick={() => { setNotesVisible((v) => !v); setMenuOpen(false); }}>
               {notesVisible ? "Hide notes" : "Show notes"}
-            </button>
-            <button className="themeToggle"
-              onClick={() => setTheme((t) => t === "dark" ? "light" : t === "light" ? "system" : "dark")}
-              title={theme === "dark" ? "Dark" : theme === "light" ? "Light" : "Auto"}
-            >
-              {theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}
             </button>
           </div>
         </div>
@@ -2643,6 +2721,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         {notesVisible && (<div className={`splitter splitter-${orientation}`}><div className="splitterGrab" onPointerDown={startResize} onDoubleClick={resetSidebarSize} aria-label="Drag to resize" role="separator"><span className="splitterGrabDot" /></div></div>)}
 
         {notesVisible && (<div className="sidebar" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-height": `${sidebarHeight}px` }}>
+          {!readOnly && !homeMode && pdfUrl && !pdfHidden ? (
+            <div
+              className="sidebarDockGrip"
+              onPointerDown={startSidebarDock}
+              title="Drag to dock the notes pane left, right, or bottom"
+              role="separator"
+            >⠿ notes</div>
+          ) : null}
           {!homeMode && <div className="pageTitleRow">
             {titleEditing && !readOnly && focusedBlockId ? (
               <input
@@ -3204,7 +3290,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             ))}
           </div>
 
-          {!homeMode && !readOnly ? (
+          {!readOnly ? (
             <>
               {!chatHidden ? (
                 <div className="chatSplitter" onPointerDown={startChatResize} onDoubleClick={() => setChatHeight(200)} aria-label="Drag to resize chat" role="separator">
@@ -3313,6 +3399,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
         </div>)}
       </div>
+      {dockPreview ? (
+        <div className={`dockPreview dockPreview-${dockPreview}`} />
+      ) : null}
       {promptOpen ? (
         <div className="reportOverlay" onClick={() => setPromptOpen(false)}>
           <div className="reportModal" onClick={(e) => e.stopPropagation()}>
