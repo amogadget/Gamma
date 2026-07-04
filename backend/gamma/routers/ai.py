@@ -3,6 +3,7 @@
 import base64
 import json
 import sqlite3
+import urllib.error
 import urllib.request
 from urllib.request import Request as URLRequest, urlopen
 
@@ -175,7 +176,8 @@ def _openai_request(messages, system, model, pdf_b64=None, timeout_hint=None):
         messages = [{"role": "system", "content": system}] + messages
     body = json.dumps({
         "model": model,
-        "max_tokens": 4096,
+        # not max_tokens: current OpenAI models 400 on it ("use max_completion_tokens")
+        "max_completion_tokens": 4096,
         "messages": messages,
     }).encode()
     return urllib.request.Request(f"{AI_BASE_URL}/v1/chat/completions", data=body, headers={
@@ -198,8 +200,18 @@ _PROVIDERS = {
 def _call_ai(messages, system, model, pdf_b64=None, timeout=60):
     build_request, extract_text = _PROVIDERS[AI_PROVIDER]
     req = build_request(messages, system, model, pdf_b64)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        # Surface the upstream error body — "400 Bad Request" alone is undebuggable
+        body = ""
+        try:
+            body = e.read().decode("utf-8", "replace")[:500]
+        except Exception:
+            pass
+        print(f"[ai] upstream {e.code}: {body}")
+        raise RuntimeError(f"upstream {e.code}: {body or e.reason}")
     return extract_text(data)
 
 
