@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 // Module-level ref for native HTML5 drag-and-drop (shared across components)
@@ -1535,6 +1535,30 @@ export default function App() {
     try { localStorage.setItem("gamma-tabs", JSON.stringify(openTabs)); } catch {}
   }, [openTabs]);
   const dragTabRef = useRef(null); // tab id being drag-reordered
+  const [draggingTabId, setDraggingTabId] = useState(null);
+  // FLIP animation: when tab order changes, slide each tab from its old
+  // position to the new one (Chrome-style), instead of snapping.
+  const tabElsRef = useRef(new Map());
+  const tabLeftsRef = useRef(new Map());
+  useLayoutEffect(() => {
+    const prev = tabLeftsRef.current;
+    const next = new Map();
+    for (const [id, el] of tabElsRef.current) {
+      if (!el) continue;
+      const left = el.getBoundingClientRect().left;
+      next.set(id, left);
+      const old = prev.get(id);
+      if (old != null && Math.abs(old - left) > 2) {
+        el.style.transition = "none";
+        el.style.transform = `translateX(${old - left}px)`;
+        requestAnimationFrame(() => {
+          el.style.transition = "transform 0.16s ease";
+          el.style.transform = "";
+        });
+      }
+    }
+    tabLeftsRef.current = next;
+  }, [openTabs]);
 
   // Chrome-style transfer list: PDF downloads and uploads with live status.
   const [transfers, setTransfers] = useState([]); // [{id, name, kind, status, info}]
@@ -2470,7 +2494,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   async function openPdf(sourceUrl) {
     if (!sourceUrl || readOnly) return;
-    pushNav();
     setLoading(true);
     setStatus("Opening PDF...");
     try {
@@ -2553,7 +2576,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   async function openBlock(blockId, opts) {
     if (!blockId || readOnly) return;
-    if (!opts?.skipNav && blockId !== focusedBlockId) pushNav();
+    // Back records LINK jumps only — callers opt in via {pushNav: true}.
+    // Plain navigation (library, search, tabs, home) never pushes.
+    if (opts?.pushNav && blockId !== focusedBlockId) pushNav();
     setLoading(true);
     setStatus("Opening...");
     try {
@@ -2653,10 +2678,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     if (entry.blockId && entry.blockId === focusedBlockId) {
       restoreScroll(); // same document — just return to the reading position
     } else if (entry.blockId) {
-      await openBlock(entry.blockId, { skipNav: true });
+      await openBlock(entry.blockId);
       restoreScroll();
     } else {
-      goHome({ skipNav: true });
+      goHome();
       if (entry.folder) {
         setFolderFilter(entry.folder);
         window.history.replaceState(null, "", `/?folder=${encodeURIComponent(entry.folder)}`);
@@ -2667,8 +2692,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   goBackNavRef.current = goBackNav;
   const navStackLen = navStack.length;
 
-  function goHome(opts) {
-    if (!opts?.skipNav && focusedBlockId) pushNav();
+  function goHome() {
     clearSession();
     suppressAutosaveRef.current = true;
     setFocusedBlockId(null);
@@ -2693,10 +2717,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     const next = openTabs.filter((t) => t.id !== id);
     setOpenTabs(next);
     if (id === focusedBlockId) {
-      // Tab management isn't a "jump" — keep it out of the Back history
       const neighbor = next[Math.min(idx, next.length - 1)];
-      if (neighbor) openBlock(neighbor.id, { skipNav: true });
-      else goHome({ skipNav: true });
+      if (neighbor) openBlock(neighbor.id);
+      else goHome();
     }
   }
 
@@ -3013,7 +3036,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     const pid = findPageForUrl(url);
     if (pid) {
       setStatus("Already in your library — opening.");
-      openBlock(pid);
+      openBlock(pid, { pushNav: true });
       return;
     }
     setLinkPrompt(url);
@@ -4112,7 +4135,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   onUnlinkHighlight: readOnly ? null : unlinkHighlightFromBlock,
                   onOpenLinkTarget: (b) => {
                     const p = b.properties || {};
-                    if (p.link_page_id) openBlock(p.link_page_id);
+                    if (p.link_page_id) openBlock(p.link_page_id, { pushNav: true });
                     else if (p.link_url) handleDocLink(p.link_url);
                   },
                   registerRef,
@@ -4136,6 +4159,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       pendingBlockScrollRef.current = id;
                       setBlocks((prev) => expandToBlock(prev, id));
                     } else {
+                      pushNav(); // block-ref click = link jump to another page
                       pendingBlockScrollRef.current = id;
                       const cached = refCache[id];
                       const rootId = cached?.page_root_id;
@@ -4441,14 +4465,19 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <div
                   key={t.id}
                   role="tab"
-                  className={`tab ${t.id === focusedBlockId ? "active" : ""}`}
+                  ref={(el) => {
+                    if (el) tabElsRef.current.set(t.id, el);
+                    else tabElsRef.current.delete(t.id);
+                  }}
+                  className={`tab ${t.id === focusedBlockId ? "active" : ""} ${draggingTabId === t.id ? "dragging" : ""}`}
                   title={t.title}
                   draggable
                   onDragStart={(e) => {
                     dragTabRef.current = t.id;
+                    setDraggingTabId(t.id);
                     e.dataTransfer.effectAllowed = "move";
                   }}
-                  onDragEnd={() => { dragTabRef.current = null; }}
+                  onDragEnd={() => { dragTabRef.current = null; setDraggingTabId(null); }}
                   onDragOver={(e) => {
                     // Chrome-style live reorder: hovering another tab swaps places
                     const dragged = dragTabRef.current;
@@ -4465,7 +4494,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     });
                   }}
                   onDrop={(e) => e.preventDefault()}
-                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id, { skipNav: true }); }}
+                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id); }}
                   onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } }}
                 >
                   <span className="tabTitle">{t.title}</span>
@@ -4680,6 +4709,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     <button className="popoverItem" onClick={() => { openPromptEditor(); setOpenPopover(null); }}>
                       AI prompts…
                     </button>
+                    <button
+                      className="popoverItem"
+                      onClick={() => { setOpenPopover(null); window.location.href = `${API}/export`; }}
+                      title="Download a zip backup: your notes databases + every uploaded PDF. Restore by unpacking into users/<name>/ on the server."
+                    >
+                      Export my data (.zip)
+                    </button>
                     <div className="popoverHint">AI provider keys and models are configured on the server (.env: GAMMA_AI_*). Everything above is saved in this browser.</div>
                     <div className="popoverDivider" />
                     <button className="popoverItem" onClick={doLogout}>Log out</button>
@@ -4854,7 +4890,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               onLoadState={handlePdfLoadState}
               onExternalLink={handleDocLink}
               onLinkHighlight={(h) => {
-                if (h.linkTarget?.pageId) openBlock(h.linkTarget.pageId);
+                if (h.linkTarget?.pageId) openBlock(h.linkTarget.pageId, { pushNav: true });
                 else if (h.linkTarget?.url) handleDocLink(h.linkTarget.url);
               }}
               onJump={jumpToHighlightId}
@@ -4940,7 +4976,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               <button className="chatClearBtn" onClick={() => setLinkPrompt(null)}>Cancel</button>
               <button
                 className="chatClearBtn"
-                onClick={() => { const url = linkPrompt; setLinkPrompt(null); openPdf(url); }}
+                onClick={() => { const url = linkPrompt; setLinkPrompt(null); pushNav(); openPdf(url); }}
                 title="Resolve this link as a PDF and open it as a new paper in Gamma"
               >Fetch into Gamma</button>
               <button
