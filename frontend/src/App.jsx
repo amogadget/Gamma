@@ -617,10 +617,10 @@ export default function App() {
     }
   }
 
-  // Opening the metadata popover generates the slide citation automatically
-  // (cached on the page afterwards, so this is a one-time AI call per paper).
+  // Opening the metadata or share popover generates the slide citation
+  // automatically (cached on the page afterwards — one AI call per paper).
   useEffect(() => {
-    if (openPopover === "meta" && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
+    if ((openPopover === "meta" || openPopover === "share") && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
       makePptCitation();
     }
   }, [openPopover, pageMeta]);
@@ -3066,6 +3066,29 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     ) : (
                       <div className="popoverHint">Creating link…</div>
                     )}
+                    {(pageMeta || pageBibtex) ? (
+                      <>
+                        <div className="popoverDivider" />
+                        <div className="popoverSection">Slide citation</div>
+                        {pptCite ? (
+                          <div className="pptCiteBox">
+                            <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
+                            <button
+                              className="chatMsgActionBtn"
+                              onClick={() => copyCitation("ppt", pptCite)}
+                              title="Copy — pastes with real italics/bold into PowerPoint"
+                              aria-label="Copy slide citation"
+                            >
+                              {citeCopied === "ppt"
+                                ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                                : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
+                        )}
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </span>
