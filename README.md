@@ -148,7 +148,7 @@ All state is SQLite + files under the data directory (`GAMMA_DATA_DIR`, defaults
 
 Authentication is a session cookie resolved by middleware; no external auth provider. Share tokens allow unauthenticated read access to a specific document.
 
-### Frontend (`logseq-v2-frontend/`)
+### Frontend (`frontend/`)
 
 React + Vite.
 
@@ -180,7 +180,7 @@ uvicorn app:app --host 127.0.0.1 --port 9001
 ### Frontend
 
 ```bash
-cd logseq-v2-frontend
+cd frontend
 npm install
 npm run dev        # development server on :5173, proxies /api to :9001
 ```
@@ -200,9 +200,9 @@ In-process API tests against a throwaway data directory — they cover auth, the
 Build the frontend and let the backend serve it:
 
 ```bash
-cd logseq-v2-frontend && npm run build
+cd frontend && npm run build
 cd ../backend
-GAMMA_STATIC_DIR=../logseq-v2-frontend/dist uvicorn app:app --host 127.0.0.1 --port 9001
+GAMMA_STATIC_DIR=../frontend/dist uvicorn app:app --host 127.0.0.1 --port 9001
 ```
 
 Put any TLS-terminating reverse proxy (Caddy, nginx) in front of port 9001 if you want a domain. If you previously used HTTP/3, note we hit a Chrome bug where reopening an incognito window reused a stale QUIC connection with crippled flow control, making 6 MB PDFs take 10+ seconds to download — consider limiting Caddy to `protocols h1 h2`.
