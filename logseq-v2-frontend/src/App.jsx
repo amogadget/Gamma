@@ -789,7 +789,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
             onClick={function (e) {
               e.stopPropagation();
               if (isLink) onLinkHighlight?.(h);
-              else onHighlightJump?.(h.id);
+              else onHighlightJump?.(h.id, e.ctrlKey || e.metaKey);
             }}
             onContextMenu={function (e) { e.preventDefault(); if (onHighlightContext) onHighlightContext({ id: h.id, x: e.clientX, y: e.clientY }); }}
           />);
@@ -1787,9 +1787,16 @@ export default function App() {
   });
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
-  // PDF passages the next chat question focuses on. Ctrl+select accumulates
-  // multiple parts; a plain selection replaces the set.
+  // PDF passages the next chat question focuses on. Ctrl (additive) appends
+  // — whether from text selection or highlight clicks; plain replaces.
   const [pdfSelections, setPdfSelections] = useState([]);
+  function addPdfSelection(text, additive) {
+    const part = (text || "").trim().slice(0, 4000);
+    if (!part) return;
+    setPdfSelections((prev) => additive
+      ? (prev.includes(part) || prev.length >= 6 ? prev : [...prev, part])
+      : [part]);
+  }
   const chatScrollRef = useRef(null);
   const chatAbortRef = useRef(null); // in-flight chat request, so Stop can cancel it
   const [chatImages, setChatImages] = useState([]); // pasted figures (data URLs) pending send
@@ -2029,10 +2036,7 @@ export default function App() {
         const node = sel.anchorNode;
         const el = node?.nodeType === 3 ? node.parentElement : node;
         if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
-        const part = text.slice(0, 4000);
-        setPdfSelections((prev) => additive
-          ? (prev.includes(part) || prev.length >= 6 ? prev : [...prev, part])
-          : [part]);
+        addPdfSelection(text, additive);
       }, 10);
     }
     document.addEventListener("mouseup", onMouseUp);
@@ -4895,13 +4899,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 else if (h.linkTarget?.url) handleDocLink(h.linkTarget.url);
               }}
               onJump={jumpToHighlightId}
-              onHighlightJump={(hlId) => {
+              onHighlightJump={(hlId, additive) => {
                 const b = flattenBlocks(blocks).find(b => b.properties?.highlight_id === hlId);
                 if (b) { pendingBlockScrollRef.current = b.id; setBlocks(prev => expandToBlock(prev, b.id)); }
                 // Clicking a highlight also makes its quote the chat selection
-                const hl = highlights.find(h => h.id === hlId);
-                const quote = hl?.content?.text?.trim();
-                if (quote) setPdfSelections([quote.slice(0, 4000)]);
+                // (Ctrl+click appends, like text selections)
+                addPdfSelection(highlights.find(h => h.id === hlId)?.content?.text, additive);
               }}
               onHighlightContext={setHighlightMenu}
               onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {
