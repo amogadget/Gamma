@@ -1780,7 +1780,9 @@ export default function App() {
   });
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
-  const [pdfSelection, setPdfSelection] = useState("");
+  // PDF passages the next chat question focuses on. Ctrl+select accumulates
+  // multiple parts; a plain selection replaces the set.
+  const [pdfSelections, setPdfSelections] = useState([]);
   const chatScrollRef = useRef(null);
   const chatAbortRef = useRef(null); // in-flight chat request, so Stop can cancel it
   const [chatImages, setChatImages] = useState([]); // pasted figures (data URLs) pending send
@@ -2001,34 +2003,35 @@ export default function App() {
   }, [chatSystem]);
 
   // Capture text selected inside the PDF viewer so chat can focus on it.
-  // Kept in state (not read at send time) because clicking the chat input
-  // collapses the DOM selection before the user hits Send.
+  // Committed on mouseup (not selectionchange) so the modifier key is known:
+  // Ctrl+select APPENDS another passage, plain select replaces the set, and
+  // a plain click in the PDF clears it. Clicking into the chat keeps it.
   useEffect(() => {
-    function onSelectionChange() {
-      const sel = window.getSelection();
-      const text = sel ? sel.toString().trim() : "";
-      if (!text) {
-        // Selection cleared. Focusing the chat panel collapses the DOM
-        // selection too — keep the stash in that one case so the user can
-        // still ask about it; any other deselection dismisses the chip.
-        const active = document.activeElement;
-        if (!(active && active.closest && active.closest(".chatPanel"))) {
-          setPdfSelection("");
+    function onMouseUp(e) {
+      if (!viewerWrapRef.current?.contains(e.target)) return;
+      const additive = e.ctrlKey || e.metaKey;
+      setTimeout(() => {
+        const sel = window.getSelection();
+        const text = sel ? sel.toString().trim() : "";
+        if (!text) {
+          if (!additive) setPdfSelections([]);
+          return;
         }
-        return;
-      }
-      const node = sel.anchorNode;
-      const el = node?.nodeType === 3 ? node.parentElement : node;
-      if (viewerWrapRef.current && el && viewerWrapRef.current.contains(el)) {
-        setPdfSelection(text.slice(0, 4000));
-      }
+        const node = sel.anchorNode;
+        const el = node?.nodeType === 3 ? node.parentElement : node;
+        if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
+        const part = text.slice(0, 4000);
+        setPdfSelections((prev) => additive
+          ? (prev.includes(part) || prev.length >= 6 ? prev : [...prev, part])
+          : [part]);
+      }, 10);
     }
-    document.addEventListener("selectionchange", onSelectionChange);
-    return () => document.removeEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => document.removeEventListener("mouseup", onMouseUp);
   }, []);
 
   // Selection is page-scoped: drop it when switching documents.
-  useEffect(() => { setPdfSelection(""); }, [focusedBlockId]);
+  useEffect(() => { setPdfSelections([]); }, [focusedBlockId]);
 
   // Keep the chat scrolled to the newest message.
   useEffect(() => {
@@ -2960,8 +2963,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   async function sendChat(rawText, { baseMessages } = {}) {
     const text = (rawText || "").trim();
     if (!text || chatLoading) return;
-    const selection = pdfSelection;
-    setPdfSelection("");
+    const selection = pdfSelections.join("\n\n---\n\n");
+    setPdfSelections([]);
     const images = chatImages;
     setChatImages([]);
     const prevMessages = baseMessages ?? chatMessages;
@@ -3541,11 +3544,22 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           </div>
         ) : null}
       </div>
-      {pdfSelection ? (
-        <div className="chatSelChip" title={pdfSelection}>
-          <span className="chatSelChipLabel">Selection</span>
-          <span className="chatSelChipText">{pdfSelection.slice(0, 140)}{pdfSelection.length > 140 ? "…" : ""}</span>
-          <button type="button" className="chatSelChipClose" onClick={() => setPdfSelection("")} title="Dismiss — answer about the whole document">×</button>
+      {pdfSelections.length ? (
+        <div className="chatSelChips">
+          {pdfSelections.map((s, i) => (
+            <div key={i} className="chatSelChip" title={s}>
+              <span className="chatSelChipLabel" title="Hold Ctrl while selecting in the PDF to add more passages">
+                {pdfSelections.length > 1 ? `Sel ${i + 1}` : "Selection"}
+              </span>
+              <span className="chatSelChipText">{s.slice(0, 140)}{s.length > 140 ? "…" : ""}</span>
+              <button
+                type="button"
+                className="chatSelChipClose"
+                onClick={() => setPdfSelections((prev) => prev.filter((_, j) => j !== i))}
+                title="Remove this passage"
+              >×</button>
+            </div>
+          ))}
         </div>
       ) : null}
       {chatImages.length ? (
@@ -3629,7 +3643,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
           }}
-          placeholder={chatImages.length ? "Ask about the pasted figure…" : (pdfSelection ? "Ask about the selection…" : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : (focusedBlockId ? "Ask about this page… (Shift+Enter for a new line)" : "Ask AI… (paste images to attach)")))}
+          placeholder={chatImages.length ? "Ask about the pasted figure…" : (pdfSelections.length ? (pdfSelections.length > 1 ? `Ask about the ${pdfSelections.length} selected passages…` : "Ask about the selection… (Ctrl+select adds more)") : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : (focusedBlockId ? "Ask about this page… (Shift+Enter for a new line)" : "Ask AI… (paste images to attach)")))}
         />
         {chatLoading ? (
           <button className="chatSendBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
@@ -4934,7 +4948,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 // Clicking a highlight also makes its quote the chat selection
                 const hl = highlights.find(h => h.id === hlId);
                 const quote = hl?.content?.text?.trim();
-                if (quote) setPdfSelection(quote.slice(0, 4000));
+                if (quote) setPdfSelections([quote.slice(0, 4000)]);
               }}
               onHighlightContext={setHighlightMenu}
               onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {

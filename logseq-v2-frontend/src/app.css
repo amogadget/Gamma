@@ -2267,7 +2267,8 @@ body {
   outline: none;
 }
 .promptTextarea:focus { border-color: var(--text-dim); }
-/* selection chip */
+/* selection chips (multiple via Ctrl+select) */
+.chatSelChips { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
 .chatSelChip {
   display: flex;
   align-items: center;
