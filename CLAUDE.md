@@ -22,7 +22,7 @@ uvicorn app:app --host 127.0.0.1 --port 9001 --reload
 ### Frontend (React + Vite)
 
 ```bash
-cd logseq-v2-frontend
+cd frontend
 npm install
 npm run dev      # dev server on :5173, proxies /api → 127.0.0.1:9001 (vite.config.js)
 npm run build    # outputs to dist/
@@ -66,7 +66,7 @@ Two deployable pieces; the Docker image bundles both (FastAPI serves the built f
 - `manage.py` — user CRUD CLI. Shares the guest welcome-page seeding with the app (`gamma/seed.py`).
 - Package layout: `gamma/config.py` (env config), `gamma/db.py` (schemas/paths), `gamma/auth.py` (middleware), `gamma/seed.py` (user DB creation), `gamma/blocks_store.py` (tree CTE helpers), `gamma/storage.py` (uploads), `gamma/logseq_import.py` (EDN/MD parsers), `gamma/routers/*` (one module per API area), `gamma/app.py` (assembly + SPA serving).
 
-### Frontend (`logseq-v2-frontend/`)
+### Frontend (`frontend/`)
 
 - `src/App.jsx` — still the main component (decomposition in progress): routing (URL query params, no router lib), block tree editor, dockable windows (react-resizable-panels v2 — v4 has an incompatible API), autosave (500 ms debounce), login, ChatGPT-style AI chat (copy/edit/find/stop, pasted images, per-message PDF attach), search, background-tasks popover.
 - `src/pdfViewer.jsx` — the custom pdf.js viewer (`PdfViewer`/`PdfPage`/`PlainTip`, exports `COLORS`): lazy memoized pages, capped DPR, cancelable render tasks, highlight/link overlays, text search with keyword rects.
