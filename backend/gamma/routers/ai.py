@@ -385,22 +385,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
 
 
-# --- Multi-paper report -----------------------------------------------------
-
-class AIReportRequest(BaseModel):
-    page_ids: list
-    model: str = ""
-    instructions: str = ""
-    effort: str = ""
-
-
-_REPORT_SYSTEM = (
-    "You are a research assistant. Write a well-structured markdown report about the papers/pages "
-    "provided. The user's highlighted passages and notes show what they care about most — organize "
-    "the report around those. For each paper summarize the key points, then draw connections, "
-    "agreements, and contrasts between papers where relevant. Use headings, keep it substantive."
-)
-
+# --- Per-page notes/highlights context (used by multi-paper chat) ------------
 
 def _page_report_section(conn, user: str, page_id: str, pdf_budget: int) -> str | None:
     rows = fetch_subtree(conn, page_id)
@@ -448,42 +433,6 @@ def _page_report_section(conn, user: str, page_id: str, pdf_budget: int) -> str 
     if notes:
         lines.append("User's notes:\n" + "\n".join(notes))
     return "\n\n".join(lines)
-
-
-@router.post("/ai/report")
-def ai_report(payload: AIReportRequest, request: Request):
-    if not AI_ENABLED:
-        raise HTTPException(status_code=503, detail="AI not configured (set a provider API key)")
-    user = require_user(request)
-    page_ids = [str(p) for p in (payload.page_ids or [])][:12]
-    if not page_ids:
-        raise HTTPException(status_code=400, detail="no pages selected")
-
-    # Split the context budget across papers so many-paper reports stay within limits
-    pdf_budget = max(2000, 24000 // len(page_ids))
-    sections = []
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        for pid in page_ids:
-            section = _page_report_section(conn, user, pid, pdf_budget)
-            if section:
-                sections.append(section)
-    if not sections:
-        raise HTTPException(status_code=404, detail="none of the selected pages were found")
-
-    prompt = "Write the report for these papers/pages:\n\n" + "\n\n---\n\n".join(sections)
-    if payload.instructions.strip():
-        prompt += f"\n\nAdditional instructions from the user: {payload.instructions.strip()}"
-
-    try:
-        text = _call_ai([{"role": "user", "content": prompt}], _REPORT_SYSTEM,
-                        _resolve_model(payload.model),
-                        effort=_resolve_effort(payload.effort), max_tokens=16384, timeout=180)
-        return {"report": text}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[ai_report] API error: {e}")
-        raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
 
 
 class ChatSaveRequest(BaseModel):

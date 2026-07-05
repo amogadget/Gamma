@@ -60,7 +60,8 @@ Two deployable pieces; the Docker image bundles both (FastAPI serves the built f
 
 ### Frontend (`logseq-v2-frontend/`)
 
-- `src/App.jsx` — nearly the whole app: routing (URL query params, no router lib), custom pdf.js viewer (`PdfViewer`/`PdfPage` — memoized pages, capped DPR, cancelable render tasks), block tree editor, dockable windows (react-resizable-panels v2 — v4 has an incompatible API), autosave (500 ms debounce), login, ChatGPT-style AI chat (copy/edit/find/stop, pasted images, per-message PDF attach).
+- `src/App.jsx` — still the main component (decomposition in progress): routing (URL query params, no router lib), block tree editor, dockable windows (react-resizable-panels v2 — v4 has an incompatible API), autosave (500 ms debounce), login, ChatGPT-style AI chat (copy/edit/find/stop, pasted images, per-message PDF attach), search, background-tasks popover.
+- `src/pdfViewer.jsx` — the custom pdf.js viewer (`PdfViewer`/`PdfPage`/`PlainTip`, exports `COLORS`): lazy memoized pages, capped DPR, cancelable render tasks, highlight/link overlays, text search with keyword rects.
 - `src/logseqPdfModel.js` — pure block-tree operations (insert/indent/outdent/flatten/cycle-check).
 - View modes are derived from the URL: `/` home, `/?page=<id>` page (with PDF if it has `source_url`), `/?share=<token>` public read-only, `/?block=<id>` jump-to-block.
 - Reference links: a highlight block with `properties.link_url` / `link_page_id` is a clickable link region on the PDF (blue underline). Document links (native PDF annotations and manual ones) resolve against the library by DOI/arXiv id before offering fetch-vs-browser.
