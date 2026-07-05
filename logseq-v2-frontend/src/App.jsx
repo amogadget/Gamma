@@ -4643,8 +4643,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 />
               </div>
             ) : null}
-            {(transfers.length || indexTask?.active || indexTask?.total > 0 || libIndexing || openPopover === "downloads") ? (
-              <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
+            <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
                 <button
                   className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
                   onClick={() => setOpenPopover((p) => (p === "downloads" ? null : "downloads"))}
@@ -4664,6 +4663,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         onClick={() => setTransfers((prev) => prev.filter((t) => t.status === "active"))}
                       >Clear</button>
                     </div>
+                    {!transfers.length && !(indexTask && (indexTask.active || indexTask.total > 0)) ? (
+                      <div className="popoverHint">No background tasks — downloads, uploads, and library indexing show up here.</div>
+                    ) : null}
                     {indexTask && (indexTask.active || indexTask.total > 0) ? (
                       <div className="transferRow">
                         <span className={`transferStatus ${indexTask.active ? "active" : "done"}`}>
@@ -4698,7 +4700,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   </div>
                 ) : null}
               </span>
-            ) : null}
             <span data-popover="search" style={{ position: "relative", display: "inline-flex" }}>
               <button
                 className={`iconBtn ${openPopover === "search" ? "activeIcon" : ""}`}
