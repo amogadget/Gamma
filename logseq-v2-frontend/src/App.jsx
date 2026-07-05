@@ -1690,18 +1690,20 @@ export default function App() {
   const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rect, pageW, pageH}]
   useEffect(() => { setFindIndex(0); }, [pdfMatches]);
 
-  // Poll server-side task progress while the popover is open or indexing runs.
+  // Poll server-side task progress: slow heartbeat while logged in (so the
+  // button appears even if the work was kicked off elsewhere), fast while
+  // the popover is open or indexing is known to run.
   useEffect(() => {
     if (!authUser?.user || readOnly) return;
-    if (openPopover !== "downloads" && !libIndexing) return;
     let cancelled = false;
     const refresh = () => apiJson(`${API}/tasks`)
       .then((d) => { if (!cancelled) setIndexTask(d.indexing || null); })
       .catch(() => {});
     refresh();
-    const t = setInterval(refresh, 2000);
+    const fast = openPopover === "downloads" || libIndexing > 0 || indexTask?.active;
+    const t = setInterval(refresh, fast ? 2000 : 8000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [openPopover, libIndexing, authUser?.user]);
+  }, [openPopover, libIndexing, authUser?.user, readOnly, indexTask?.active]);
 
   const findMarksMemo = useMemo(() => (
     openPopover === "search" && searchQuery.trim()
@@ -4641,7 +4643,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 />
               </div>
             ) : null}
-            {(transfers.length || indexTask?.active || libIndexing) ? (
+            {(transfers.length || indexTask?.active || indexTask?.total > 0 || libIndexing || openPopover === "downloads") ? (
               <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
                 <button
                   className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
