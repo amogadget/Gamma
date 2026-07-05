@@ -46,9 +46,10 @@ PAGES_SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_ub_parent ON unified_blocks(parent_id, position)",
 ]
 
+# data.db = derived / regenerable data (chats, the pdf_fts search index which
+# is created lazily by routers/search.py). Old installs may still carry the
+# legacy `annotations` and per-user `shares` tables — harmless leftovers.
 DATA_SCHEMA = [
-    "CREATE TABLE IF NOT EXISTS annotations (doc_id TEXT PRIMARY KEY, data TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS shares (token TEXT PRIMARY KEY, doc_id TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS chats (block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)",
 ]
 

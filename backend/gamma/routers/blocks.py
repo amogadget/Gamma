@@ -336,6 +336,27 @@ async def ub_update_block(block_id: str, payload: UBUpdateRequest, request: Requ
     return {"ok": True, "updated_at": now}
 
 
+def _purge_derived_data(user: str, conn, deleted_ids: list):
+    """Chats and search-index rows tied to deleted pages don't clean themselves —
+    sweep them so data.db doesn't accumulate orphans."""
+    try:
+        from .search import _ensure_schema  # local import: search imports ai, keep module load acyclic
+        live_docs = {r[0] for r in conn.execute(
+            "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks "
+            "WHERE json_extract(properties, '$.doc_id') IS NOT NULL").fetchall()}
+        with sqlite3.connect(user_db_path(user, "data.db")) as ddb:
+            _ensure_schema(ddb)
+            ddb.execute("CREATE TABLE IF NOT EXISTS chats (block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)")
+            ddb.executemany("DELETE FROM chats WHERE block_id = ?", [(i,) for i in deleted_ids])
+            stale = [r[0] for r in ddb.execute("SELECT doc_id FROM pdf_fts_docs").fetchall() if r[0] not in live_docs]
+            for d in stale:
+                ddb.execute("DELETE FROM pdf_fts WHERE doc_id = ?", (d,))
+                ddb.execute("DELETE FROM pdf_fts_docs WHERE doc_id = ?", (d,))
+            ddb.commit()
+    except Exception as e:
+        print(f"[blocks] derived-data cleanup failed: {e}")
+
+
 @router.delete("/blocks/{block_id}")
 async def ub_delete_block(block_id: str, request: Request):
     if block_id == "root":
@@ -344,9 +365,11 @@ async def ub_delete_block(block_id: str, request: Request):
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="block not found")
+        deleted_ids = [r[0] for r in fetch_subtree(conn, block_id)]
         delete_subtree(conn, block_id)
         conn.commit()
         removed = cleanup_orphan_uploads(conn, user_uploads_dir(user))
+        _purge_derived_data(user, conn, deleted_ids)
     return {"ok": True, "id": block_id, "removed_uploads": removed}
 
 

@@ -13,6 +13,6 @@ backend/gamma/__pycache__
 **/*.pyc
 **/*.db
 **/*.log
-logseq-v2-frontend/node_modules
-logseq-v2-frontend/dist
-logseq-v2-frontend/.vite
+frontend/node_modules
+frontend/dist
+frontend/.vite
