@@ -1958,6 +1958,8 @@ body {
 .slotStack-vertical { flex-direction: column; }
 .slotStack-horizontal { flex-direction: row; }
 .collapsedBar { flex: 0 0 auto; display: flex; min-width: 0; }
+/* in vertical columns a collapsed bar spans the full column width */
+.slotStack-vertical .collapsedBar .dockWindow { flex: 1 1 auto; min-width: 0; }
 .slotStack-horizontal .collapsedBar .dockWindow { border-right: 1px solid var(--border-subtle); }
 .slotStackGroup { flex: 1; min-width: 0; min-height: 0; display: flex; }
 .slotStackGroup > [data-panel-group] { flex: 1; }
@@ -2070,10 +2072,8 @@ body {
   border: 2px solid var(--accent-dark);
   border-radius: 8px;
   pointer-events: none;
+  transition: left 0.1s ease, top 0.1s ease, width 0.1s ease, height 0.1s ease;
 }
-.dockPreview-left { inset: 8px 55% 8px 8px; }
-.dockPreview-right { inset: 8px 8px 8px 55%; }
-.dockPreview-bottom { inset: 60% 8px 8px 8px; }
 .chatPanel {
   display: flex;
   flex-direction: column;
