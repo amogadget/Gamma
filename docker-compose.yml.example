@@ -6,6 +6,9 @@ services:
     ports:
       - "9001:9001"
     volumes:
+      # Named volume: Docker manages the storage location. To keep the data in
+      # a real folder next to this file instead, use a bind mount:
+      #   - ./data:/data
       - gamma-data:/data
     # Secrets and AI settings live in .env (copy .env.example → .env)
     env_file:

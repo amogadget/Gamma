@@ -28,7 +28,15 @@ npm run dev      # dev server on :5173, proxies /api → 127.0.0.1:9001 (vite.co
 npm run build    # outputs to dist/
 ```
 
-There is no test suite and no linter configured. Verify changes by running the app.
+### Tests (backend)
+
+```bash
+cd backend
+pip install -r requirements-dev.txt   # pytest + httpx
+python -m pytest tests -q
+```
+
+In-process API tests (FastAPI TestClient) against a throwaway data directory — no server, no network. Frontend has no test suite or linter; verify UI changes by running the app.
 
 ### Docker
 
