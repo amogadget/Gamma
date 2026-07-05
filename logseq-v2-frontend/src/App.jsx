@@ -1481,6 +1481,11 @@ export default function App() {
   const chatLoadedForRef = useRef("");
   // Chat history is per page; the home view gets its own bucket.
   const chatKey = focusedBlockId || "home";
+  const chatKeyRef = useRef(chatKey);
+  chatKeyRef.current = chatKey;
+  // Which conversation the in-flight request belongs to (typing indicator
+  // shows there, and a reply landing after a page switch is saved there).
+  const [chatLoadingKey, setChatLoadingKey] = useState("");
 
   // Load chat from backend whenever the chat bucket changes.
   useEffect(() => {
@@ -2933,13 +2938,30 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           ? chatDocs.map((id) => homeBlocks.find((b) => b.id === id)?.content || "PDF")
           : [pdfTitle || "current PDF"])
       : [];
-    setChatMessages([...prevMessages, {
+    const userMsg = {
       role: "user",
       text: shown,
       ...(images.length ? { images } : {}),
       ...(pdfNames.length ? { pdfs: pdfNames } : {}),
-    }]);
+    };
+    const sendKey = chatKey; // reply belongs to THIS conversation, even if the user navigates away
+    const appendReply = (aiMsg) => {
+      if (chatKeyRef.current === sendKey) {
+        setChatMessages((prev) => [...prev, aiMsg]);
+      } else {
+        // The user switched pages mid-request — save straight to the
+        // original conversation instead of the one on screen.
+        fetch(`${API}/chats/${encodeURIComponent(sendKey)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ messages: [...prevMessages, userMsg, aiMsg] }),
+        }).catch(() => {});
+      }
+    };
+    setChatMessages([...prevMessages, userMsg]);
     setChatLoading(true);
+    setChatLoadingKey(sendKey);
     // One-shot semantics: the PDF went with this message; don't silently
     // re-upload (and re-bill) it on every follow-up.
     if (sendingPdf) setAttachPdf(false);
@@ -2964,15 +2986,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           images,
         }),
       });
-      setChatMessages((prev) => [...prev, { role: "ai", text: data.response || "(no response)" }]);
+      appendReply({ role: "ai", text: data.response || "(no response)" });
     } catch (err) {
-      if (err?.name === "AbortError") {
-        setChatMessages((prev) => [...prev, { role: "ai", text: "*(stopped)*" }]);
-      } else {
-        setChatMessages((prev) => [...prev, { role: "ai", text: `Error: ${err.message}` }]);
-      }
+      appendReply({ role: "ai", text: err?.name === "AbortError" ? "*(stopped)*" : `Error: ${err.message}` });
     } finally {
       setChatLoading(false);
+      setChatLoadingKey("");
       chatAbortRef.current = null;
     }
   }
@@ -3493,7 +3512,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             );
           })
         )}
-        {chatLoading ? (
+        {chatLoading && chatLoadingKey === chatKey ? (
           <div className="chatBubbleRow ai">
             <div className="chatBubble ai">
               <span className="chatTyping"><span /><span /><span /></span>
