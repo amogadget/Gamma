@@ -259,18 +259,24 @@ export default function App() {
   function updateTransfer(id, patch) {
     setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }
-  // Byte-level download state reported by the PDF viewer (skips local uploads)
+  // Byte-level download state reported by the PDF viewer (skips local uploads).
+  // One row per URL: a re-download (LRU eviction, retry) reactivates the
+  // existing entry instead of stacking duplicates.
   function handlePdfLoadState(url, st) {
     if (url.startsWith("/api/uploads/")) return;
     if (st.phase === "start") {
-      if (transferByUrlRef.current[url]) return; // restart after remount — keep the existing entry
+      const prevId = transferByUrlRef.current[url];
+      if (prevId) {
+        updateTransfer(prevId, { status: "active", info: "downloading…" });
+        return;
+      }
       const name = (pdfTitle || decodeURIComponent((url.split("source_url=")[1] || url).split("/").pop() || "PDF")).slice(0, 60);
       transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…" });
     } else {
       const id = transferByUrlRef.current[url];
       if (!id) return;
-      delete transferByUrlRef.current[url];
       if (st.phase === "cancelled") {
+        delete transferByUrlRef.current[url];
         setTransfers((prev) => prev.filter((t) => t.id !== id)); // aborted navigation — drop the entry
       } else {
         updateTransfer(id, st.phase === "done"
@@ -528,12 +534,14 @@ export default function App() {
     if (!block?.id) return;
     setMetaBusy(true);
     if (force) setStatus("Refreshing paper metadata…");
+    const taskId = addTransfer({ name: `Metadata — ${(block.content || "paper").slice(0, 48)}`, kind: "ai", info: "fetching…" });
     try {
       const data = await apiJson(`${API}/metadata/fetch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ block_id: block.id, prompt: metaPrompt || "", model: chatModel || "", force: !!force }),
       });
+      updateTransfer(taskId, { status: "done", info: data.cached ? "cached" : data.source === "ai" ? "AI-extracted" : data.source || "" });
       if (focusedBlockIdRef.current !== block.id) return;
       setPageMeta(data.meta || null);
       setPageBibtex(data.bibtex || "");
@@ -541,15 +549,18 @@ export default function App() {
       setFocusedBlock((prev) => prev && prev.id === block.id
         ? { ...prev, properties: { ...prev.properties, meta: data.meta, bibtex: data.bibtex } }
         : prev);
-      // Auto-fill the page title from metadata when it's still the default filename title
+      // Auto-fill the page title from metadata when it's still the default filename
+      // title — awaited so the library refetch below can't win the race and
+      // resurrect the stale name in the link dialog / home list.
       if (data.meta?.title && /^PDF Notes - /.test(block.content || "") && focusedBlockIdRef.current === block.id) {
-        renameTitle(data.meta.title);
+        await renameTitle(data.meta.title);
       }
       if (!data.cached) {
         setStatus(`Paper metadata found (${data.source === "ai" ? "AI-extracted" : data.source}).`);
         fetchHomeBlocks(); // keep the library's meta fresh for DOI-link matching
       }
     } catch (err) {
+      updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       if (focusedBlockIdRef.current === block.id) setStatus(`Metadata: ${err.message}`);
     } finally {
       setMetaBusy(false);
@@ -580,11 +591,16 @@ export default function App() {
   // Import annotations embedded in the PDF file itself (SumatraPDF, Acrobat…).
   // Idempotent server-side, so calling it on every upload is safe.
   async function importEmbeddedAnnots(blockId, targetDocId, silent) {
+    const taskId = addTransfer({ name: "Importing embedded PDF annotations", kind: "import", info: "scanning…" });
     try {
       const res = await apiJson(`${API}/import/pdf-annotations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ block_id: blockId, doc_id: targetDocId }),
+      });
+      updateTransfer(taskId, {
+        status: "done",
+        info: res.imported > 0 ? `${res.imported} imported` : res.found > 0 ? "already imported" : "none found",
       });
       if (res.imported > 0) {
         if (focusedBlockIdRef.current === blockId) await loadBlocksForBlock(blockId);
@@ -596,6 +612,7 @@ export default function App() {
       }
       return res;
     } catch (err) {
+      updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       if (!silent) setStatus(`Annotation import failed: ${err.message}`);
     }
   }
@@ -603,14 +620,17 @@ export default function App() {
   async function makePptCitation(force = false) {
     if (!focusedBlockId || pptCiteBusy) return;
     setPptCiteBusy(true);
+    const taskId = addTransfer({ name: `Slide citation — ${(pdfTitle || "paper").slice(0, 48)}`, kind: "ai", info: "generating…" });
     try {
       const data = await apiJson(`${API}/metadata/cite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ block_id: focusedBlockId, prompt: citePrompt || "", model: chatModel || "", force }),
       });
+      updateTransfer(taskId, { status: "done", info: "" });
       setPptCite(data.citation || "");
     } catch (err) {
+      updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       setStatus(`Citation failed: ${err.message}`);
     } finally {
       setPptCiteBusy(false);
@@ -1503,6 +1523,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     if (!docId || readOnly || aiTitleBusy) return;
     setAiTitleBusy(true);
     setStatus("Asking AI for the title…");
+    const taskId = addTransfer({ name: `AI title — ${(pdfTitle || "paper").slice(0, 48)}`, kind: "ai", info: "asking…" });
     try {
       const data = await apiJson(`${API}/ai/chat`, {
         method: "POST",
@@ -1515,6 +1536,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         }),
       });
       const title = (data.response || "").trim().replace(/^["'\s]+|["'\s]+$/g, "").split("\n")[0].slice(0, 200);
+      updateTransfer(taskId, { status: title ? "done" : "error", info: title ? "" : "no title" });
       if (title) {
         await renameTitle(title);
         setStatus("Title filled in by AI.");
@@ -1522,6 +1544,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         setStatus("AI returned no title.");
       }
     } catch (err) {
+      updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       setStatus(`AI title failed: ${err.message}`);
     } finally {
       setAiTitleBusy(false);
@@ -2866,7 +2889,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <button
                   className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
                   onClick={() => setOpenPopover((p) => (p === "downloads" ? null : "downloads"))}
-                  title="Background tasks — downloads, uploads, indexing"
+                  title="Background tasks — downloads, uploads, indexing, metadata/AI jobs"
                   aria-label="Background tasks"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" /></svg>
@@ -2879,11 +2902,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <button
                         className="searchToggle transferClearBtn"
                         title="Clear finished"
-                        onClick={() => setTransfers((prev) => prev.filter((t) => t.status === "active"))}
+                        onClick={() => setTransfers((prev) => {
+                          const kept = prev.filter((t) => t.status === "active");
+                          const ids = new Set(kept.map((t) => t.id));
+                          for (const [u, id] of Object.entries(transferByUrlRef.current)) {
+                            if (!ids.has(id)) delete transferByUrlRef.current[u]; // cleared rows can be re-created later
+                          }
+                          return kept;
+                        })}
                       >Clear</button>
                     </div>
                     {!transfers.length && !(indexTask && (indexTask.active || indexTask.total > 0)) ? (
-                      <div className="popoverHint">No background tasks — downloads, uploads, and library indexing show up here.</div>
+                      <div className="popoverHint">No background tasks — downloads, uploads, indexing, metadata and AI jobs show up here.</div>
                     ) : null}
                     {indexTask && (indexTask.active || indexTask.total > 0) ? (
                       <div className="transferRow">
@@ -2910,7 +2940,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <span className="transferKind">
                           {t.kind === "upload"
                             ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15V3" /><path d="m7 8 5-5 5 5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>
-                            : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>}
+                            : t.kind === "ai"
+                              ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
+                              : t.kind === "import"
+                                ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                                : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>}
                         </span>
                         <span className="transferName" title={t.name}>{t.name}</span>
                         <span className="transferInfo">{t.info || ""}</span>

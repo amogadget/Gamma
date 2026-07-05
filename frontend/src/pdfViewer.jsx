@@ -18,6 +18,17 @@ const COLORS = [
 
 const EMPTY_MARKS = [];
 
+// Recently downloaded PDFs, so reopening a paper (tab switch, back button)
+// doesn't re-download a multi-MB file. pdf.js detaches the buffer it's
+// handed, so entries are cloned on use.
+const PDF_CACHE = new Map(); // url -> ArrayBuffer, insertion order = LRU
+const PDF_CACHE_MAX = 4;
+function cachePdf(url, buf) {
+  PDF_CACHE.delete(url);
+  PDF_CACHE.set(url, buf);
+  while (PDF_CACHE.size > PDF_CACHE_MAX) PDF_CACHE.delete(PDF_CACHE.keys().next().value);
+}
+
 function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks, onExternalLink, onBeforeLinkJump, onLoadState }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
@@ -123,6 +134,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     let cancelled = false; setPdfDoc(null);
     (async () => {
       try {
+        let data = PDF_CACHE.get(url);
+        if (!data) {
         onLoadState?.(url, { phase: "start" });
         // Parallel range requests overlap with worker download.
         // Each range is its own HTTP/2 stream so flow-control doesn't single-stream-cap us.
@@ -134,7 +147,6 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         const cr = probe.headers.get("content-range") || "";
         const m = cr.match(/\/(\d+)$/);
         const total = m ? parseInt(m[1], 10) : 0;
-        let data;
         if (total > 0) {
           const N = 6;
           const chunkSize = Math.ceil(total / N);
@@ -156,11 +168,12 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           data = await resp.arrayBuffer();
           if (cancelled) return;
         }
-        const bytes = data.byteLength;
-        pdfjsLib.getDocument({ data, disableAutoFetch: true, disableRange: true }).promise.then(doc => {
+        onLoadState?.(url, { phase: "done", bytes: data.byteLength });
+        }
+        cachePdf(url, data); // insert or bump LRU position
+        pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise.then(doc => {
           if (!cancelled) {
             setPdfDoc(doc); setNumPages(doc.numPages);
-            onLoadState?.(url, { phase: "done", bytes });
           }
         }).catch(() => { if (!cancelled) onLoadState?.(url, { phase: "error" }); });
       } catch {
