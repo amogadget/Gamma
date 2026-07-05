@@ -1626,7 +1626,7 @@ export default function App() {
         : { status: "error", info: "failed" });
     }
   }
-  const [dockPreview, setDockPreview] = useState(null); // "left" | "right" | "bottom" while dragging a window
+  const [dockPreview, setDockPreview] = useState(null); // {left, top, width, height} of the drop target while dragging a window
   const [collapsedWins, setCollapsedWins] = useState({}); // window id -> collapsed to header bar
   // One popover open at a time; any click outside a [data-popover] container closes it.
   const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
@@ -2741,10 +2741,38 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       const side = ev.clientX < window.innerWidth / 2 ? "left" : "right";
       return { side, index: ev.clientY < window.innerHeight * 0.35 ? 0 : 99 };
     }
+    // Preview shows the REAL landing geometry: the existing slot's rect (or
+    // the default size a new slot would open with), halved to the drop
+    // position when other windows already live there.
+    function previewRect(zone) {
+      const wa = document.querySelector(".workArea")?.getBoundingClientRect();
+      if (!wa) return null;
+      const slotEl = document.querySelector(`[data-panel-id="slot-${zone.side}"]`);
+      let r;
+      if (slotEl) {
+        const b = slotEl.getBoundingClientRect();
+        r = { left: b.left, top: b.top, width: b.width, height: b.height };
+      } else if (zone.side === "bottom") {
+        r = { left: wa.left, top: wa.top + wa.height * 0.68, width: wa.width, height: wa.height * 0.32 };
+      } else if (zone.side === "left") {
+        r = { left: wa.left, top: wa.top, width: wa.width * 0.26, height: wa.height };
+      } else {
+        r = { left: wa.left + wa.width * 0.72, top: wa.top, width: wa.width * 0.28, height: wa.height };
+      }
+      const others = layout[zone.side].filter((w) => w !== winId && winVisible[w]).length;
+      if (others > 0) {
+        if (zone.side === "bottom") {
+          r = { ...r, width: r.width / 2, left: zone.index === 0 ? r.left : r.left + r.width / 2 };
+        } else {
+          r = { ...r, height: r.height / 2, top: zone.index === 0 ? r.top : r.top + r.height / 2 };
+        }
+      }
+      return r;
+    }
     function onMove(ev) {
       if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 8) return;
       dragging = true;
-      setDockPreview(zoneFor(ev).side);
+      setDockPreview(previewRect(zoneFor(ev)));
     }
     function onUp(ev) {
       if (dragging) {
@@ -4975,7 +5003,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       </PanelGroup>
       </div>
       {dockPreview ? (
-        <div className={`dockPreview dockPreview-${dockPreview}`} />
+        <div className="dockPreview" style={dockPreview} />
       ) : null}
       {confirmBox ? (
         // data-popover keeps an open popover (e.g. search) alive while the dialog is up
