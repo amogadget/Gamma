@@ -1600,8 +1600,10 @@ export default function App() {
     tabLeftsRef.current = next;
   }, [openTabs]);
 
-  // Chrome-style transfer list: PDF downloads and uploads with live status.
+  // Background tasks: client-side transfers (downloads/uploads) plus
+  // server-side work (library indexing), shown in one popover.
   const [transfers, setTransfers] = useState([]); // [{id, name, kind, status, info}]
+  const [indexTask, setIndexTask] = useState(null); // {total, done, active} from /api/tasks
   const transferByUrlRef = useRef({});
   function addTransfer(t) {
     const id = makeId();
@@ -1677,6 +1679,19 @@ export default function App() {
   const [searchNonce, setSearchNonce] = useState(0); // bump to re-run the search
   const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rect, pageW, pageH}]
   useEffect(() => { setFindIndex(0); }, [pdfMatches]);
+
+  // Poll server-side task progress while the popover is open or indexing runs.
+  useEffect(() => {
+    if (!authUser?.user || readOnly) return;
+    if (openPopover !== "downloads" && !libIndexing) return;
+    let cancelled = false;
+    const refresh = () => apiJson(`${API}/tasks`)
+      .then((d) => { if (!cancelled) setIndexTask(d.indexing || null); })
+      .catch(() => {});
+    refresh();
+    const t = setInterval(refresh, 2000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [openPopover, libIndexing, authUser?.user]);
 
   const findMarksMemo = useMemo(() => (
     openPopover === "search" && searchQuery.trim()
@@ -4326,9 +4341,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   onDelete: (id) => {
                     if (readOnly) return;
                     if (homeMode) {
-                      apiJson(`${API}/blocks/${id}`, { method: "DELETE" })
-                        .then(() => fetchHomeBlocks())
-                        .catch((err) => setStatus(`Delete failed: ${err}`));
+                      // Deleting a page also removes its stored PDF (if no
+                      // other page references it) — always confirm.
+                      const pg = homeBlocks.find((b) => b.id === id);
+                      setConfirmBox({
+                        title: "Delete page",
+                        message: `Delete "${(pg?.content || "this page").slice(0, 80)}" with all its notes${pg?.properties?.doc_id ? " and its stored PDF file" : ""}? This can't be undone.`,
+                        confirmLabel: "Delete",
+                        danger: true,
+                        onConfirm: () => {
+                          apiJson(`${API}/blocks/${id}`, { method: "DELETE" })
+                            .then(() => {
+                              updateTabs((prev) => prev.filter((t) => t.id !== id));
+                              fetchHomeBlocks();
+                            })
+                            .catch((err) => setStatus(`Delete failed: ${err.message}`));
+                        },
+                      });
                       return;
                     }
                     apiJson(`${API}/blocks/${id}`, { method: "DELETE" })
@@ -4602,27 +4631,41 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 />
               </div>
             ) : null}
-            {transfers.length ? (
+            {(transfers.length || indexTask?.active || libIndexing) ? (
               <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
                 <button
                   className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
                   onClick={() => setOpenPopover((p) => (p === "downloads" ? null : "downloads"))}
-                  title="Downloads & uploads"
-                  aria-label="Downloads and uploads"
+                  title="Background tasks — downloads, uploads, indexing"
+                  aria-label="Background tasks"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>
-                  {transfers.some((t) => t.status === "active") ? <span className="transferSpin" /> : null}
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" /></svg>
+                  {(transfers.some((t) => t.status === "active") || indexTask?.active) ? <span className="transferSpin" /> : null}
                 </button>
                 {openPopover === "downloads" ? (
                   <div className="popover downloadsPopover">
                     <div className="popoverTitle citeSectionRow">
-                      <span>Downloads &amp; uploads</span>
+                      <span>Background tasks</span>
                       <button
                         className="searchToggle transferClearBtn"
                         title="Clear finished"
                         onClick={() => setTransfers((prev) => prev.filter((t) => t.status === "active"))}
                       >Clear</button>
                     </div>
+                    {indexTask && (indexTask.active || indexTask.total > 0) ? (
+                      <div className="transferRow">
+                        <span className={`transferStatus ${indexTask.active ? "active" : "done"}`}>
+                          {indexTask.active
+                            ? <span className="transferSpin inline" />
+                            : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>}
+                        </span>
+                        <span className="transferKind">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+                        </span>
+                        <span className="transferName">Indexing PDF library for search</span>
+                        <span className="transferInfo">{indexTask.done}/{indexTask.total}</span>
+                      </div>
+                    ) : null}
                     {transfers.map((t) => (
                       <div key={t.id} className="transferRow">
                         <span className={`transferStatus ${t.status}`}>
