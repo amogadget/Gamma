@@ -1407,14 +1407,32 @@ export default function App() {
   // created) folders live in localStorage until a paper lands in them.
   const [folderFilter, setFolderFilter] = useState(initialFolder);
   const [folderDragOver, setFolderDragOver] = useState(null);
-  const [extraFolders, setExtraFolders] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("gamma-extra-folders") || "[]"); } catch { return []; }
-  });
+  const [extraFolders, setExtraFolders] = useState([]);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  function updateExtraFolders(updater) {
+    setExtraFolders((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      const u = prefsUserRef.current;
+      if (u) { try { localStorage.setItem(`gamma-extra-folders:${u}`, JSON.stringify(next)); } catch {} }
+      return next;
+    });
+  }
+
+  // Load per-user browser prefs (tabs, manually created folders) on login /
+  // account switch.
   useEffect(() => {
-    try { localStorage.setItem("gamma-extra-folders", JSON.stringify(extraFolders)); } catch {}
-  }, [extraFolders]);
+    const u = authUser?.user;
+    if (!u || readOnly) {
+      prefsUserRef.current = "";
+      setOpenTabs([]);
+      setExtraFolders([]);
+      return;
+    }
+    prefsUserRef.current = u;
+    try { setOpenTabs(JSON.parse(localStorage.getItem(`gamma-tabs:${u}`) || "[]")); } catch { setOpenTabs([]); }
+    try { setExtraFolders(JSON.parse(localStorage.getItem(`gamma-extra-folders:${u}`) || "[]")); } catch { setExtraFolders([]); }
+  }, [authUser?.user, readOnly]);
 
   async function setPageFolder(pageId, folderName) {
     try {
@@ -1423,7 +1441,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ properties: { folder: folderName || "" } }),
       });
-      if (folderName) setExtraFolders((prev) => prev.filter((f) => f !== folderName));
+      if (folderName) updateExtraFolders((prev) => prev.filter((f) => f !== folderName));
       await fetchHomeBlocks();
       setStatus(folderName ? `Moved to “${folderName}”.` : "Moved out of the folder.");
     } catch (err) {
@@ -1436,7 +1454,7 @@ export default function App() {
     setNewFolderOpen(false);
     setNewFolderName("");
     if (!name) return;
-    setExtraFolders((prev) => prev.includes(name) ? prev : [...prev, name]);
+    updateExtraFolders((prev) => prev.includes(name) ? prev : [...prev, name]);
   }
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
   const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
@@ -1530,13 +1548,20 @@ export default function App() {
       return next;
     });
   }
-  // Open tabs (Chrome-style): [{id, title}] persisted per browser.
-  const [openTabs, setOpenTabs] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("gamma-tabs") || "[]"); } catch { return []; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-tabs", JSON.stringify(openTabs)); } catch {}
-  }, [openTabs]);
+  // Open tabs (Chrome-style): [{id, title}], stored PER USER (and per browser)
+  // so switching accounts in the same browser never surfaces someone else's
+  // tabs. Persistence happens inside the updater (not an effect) so a user
+  // switch can't race an in-flight save into the wrong key.
+  const [openTabs, setOpenTabs] = useState([]);
+  const prefsUserRef = useRef(""); // whose tabs/folders are currently loaded
+  function updateTabs(updater) {
+    setOpenTabs((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      const u = prefsUserRef.current;
+      if (u) { try { localStorage.setItem(`gamma-tabs:${u}`, JSON.stringify(next)); } catch {} }
+      return next;
+    });
+  }
   const dragTabRef = useRef(null); // tab id being drag-reordered
   const [draggingTabId, setDraggingTabId] = useState(null);
   // FLIP animation: when tab order changes, slide each tab from its old
@@ -2303,9 +2328,9 @@ export default function App() {
 
   // Keep the tab strip in sync with the open page.
   useEffect(() => {
-    if (!focusedBlockId || readOnly) return;
+    if (!focusedBlockId || readOnly || !prefsUserRef.current) return;
     const title = (pdfTitle || "Untitled").slice(0, 60);
-    setOpenTabs((prev) => {
+    updateTabs((prev) => {
       const existing = prev.find((t) => t.id === focusedBlockId);
       if (existing && existing.title === title) return prev;
       if (existing) return prev.map((t) => (t.id === focusedBlockId ? { ...t, title } : t));
@@ -2723,7 +2748,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   function closeTab(id) {
     const idx = openTabs.findIndex((t) => t.id === id);
     const next = openTabs.filter((t) => t.id !== id);
-    setOpenTabs(next);
+    updateTabs(next);
     if (id === focusedBlockId) {
       const neighbor = next[Math.min(idx, next.length - 1)];
       if (neighbor) openBlock(neighbor.id);
@@ -3895,8 +3920,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       // Close the page's tab too (write straight to storage —
                       // we reload right after, so state updates wouldn't stick).
                       try {
-                        localStorage.setItem("gamma-tabs",
-                          JSON.stringify(openTabs.filter((t) => t.id !== focusedBlockId)));
+                        if (prefsUserRef.current) {
+                          localStorage.setItem(`gamma-tabs:${prefsUserRef.current}`,
+                            JSON.stringify(openTabs.filter((t) => t.id !== focusedBlockId)));
+                        }
                       } catch {}
                       clearSession();
                       window.location.href = "/";
@@ -4392,19 +4419,29 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const slotWins = (side) => layout[side].filter((w) => winVisible[w]);
   function renderSlotGroup(side, direction) {
     const wins = slotWins(side);
+    // Collapsed windows live OUTSIDE the panel group as fixed header bars —
+    // panel sizes are percentage-based, so a collapsed panel could never
+    // shrink to exactly one header height.
+    const collapsed = wins.filter((w) => collapsedWins[w]);
+    const expanded = wins.filter((w) => !collapsedWins[w]);
     return (
-      <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`}>
-        {wins.map((w, i) => (
-          <React.Fragment key={w}>
-            {i > 0 ? <PanelResizeHandle className={`sash sash-${direction}`} /> : null}
-            {collapsedWins[w] ? (
-              <Panel id={`${w}-collapsed`} order={i + 1} minSize={4} maxSize={7}>{renderWindow(w)}</Panel>
-            ) : (
-              <Panel id={w} order={i + 1} minSize={15}>{renderWindow(w)}</Panel>
-            )}
-          </React.Fragment>
+      <div className={`slotStack slotStack-${direction}`}>
+        {collapsed.map((w) => (
+          <div key={w} className="collapsedBar">{renderWindow(w)}</div>
         ))}
-      </PanelGroup>
+        {expanded.length ? (
+          <div className="slotStackGroup">
+            <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`}>
+              {expanded.map((w, i) => (
+                <React.Fragment key={w}>
+                  {i > 0 ? <PanelResizeHandle className={`sash sash-${direction}`} /> : null}
+                  <Panel id={w} order={i + 1} minSize={15}>{renderWindow(w)}</Panel>
+                </React.Fragment>
+              ))}
+            </PanelGroup>
+          </div>
+        ) : null}
+      </div>
     );
   }
 
@@ -4480,7 +4517,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     const dragged = dragTabRef.current;
                     if (!dragged || dragged === t.id) return;
                     e.preventDefault();
-                    setOpenTabs((prev) => {
+                    updateTabs((prev) => {
                       const from = prev.findIndex((x) => x.id === dragged);
                       const to = prev.findIndex((x) => x.id === t.id);
                       if (from < 0 || to < 0 || from === to) return prev;
