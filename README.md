@@ -135,7 +135,7 @@ backend/
         ├── shares.py     # /api/share/*
         ├── ai.py         # /api/ai/chat, /api/ai/models, /api/chats/*
         ├── metadata.py   # /api/metadata/fetch (arXiv→DOI→AI), /api/metadata/cite (BibTeX → slide citation)
-        ├── annotations.py# /api/annotations/* (legacy)
+        ├── search.py     # /api/pdf-search (FTS5 full-text over the library), /api/tasks
         └── imports.py    # /api/import/logseq, /api/import/pdf-annotations
 ```
 
@@ -184,6 +184,16 @@ cd logseq-v2-frontend
 npm install
 npm run dev        # development server on :5173, proxies /api to :9001
 ```
+
+### Tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+python -m pytest tests -q
+```
+
+In-process API tests against a throwaway data directory — they cover auth, the block tree (CRUD, fractional ordering, search/replace, delete-time cleanup), the metadata/BibTeX helpers, embedded-PDF-annotation extraction, library full-text search, and the zip export.
 
 ### Production without Docker
 
