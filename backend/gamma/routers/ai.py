@@ -69,12 +69,13 @@ def _resolve_effort(requested: str) -> str:
 
 def _final_prompt(payload: AIChatRequest) -> str:
     prompt = payload.prompt
-    selection = (payload.selection or "").strip()[:4000]
+    selection = (payload.selection or "").strip()[:24000]
     if selection:
         prompt = (
             f"{prompt}\n\n"
-            f'The user has selected the following passage from the document. '
-            f'Answer specifically about this passage:\n"""\n{selection}\n"""'
+            f'The user has selected the following passage(s) from the document '
+            f'(multiple passages are separated by "---"). '
+            f'Answer specifically about them:\n"""\n{selection}\n"""'
         )
     return prompt
 
