@@ -374,7 +374,12 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         if (!cancelled) onLoadState?.(url, { phase: "error" });
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // No-op if the download already finished; otherwise clears the
+      // now-orphaned "downloading…" task entry.
+      onLoadState?.(url, { phase: "cancelled" });
+    };
   }, [url]);
 
   // Preserve scroll position across zoom changes by anchoring on the page
@@ -1617,15 +1622,20 @@ export default function App() {
   function handlePdfLoadState(url, st) {
     if (url.startsWith("/api/uploads/")) return;
     if (st.phase === "start") {
+      if (transferByUrlRef.current[url]) return; // restart after remount — keep the existing entry
       const name = (pdfTitle || decodeURIComponent((url.split("source_url=")[1] || url).split("/").pop() || "PDF")).slice(0, 60);
       transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…" });
     } else {
       const id = transferByUrlRef.current[url];
       if (!id) return;
       delete transferByUrlRef.current[url];
-      updateTransfer(id, st.phase === "done"
-        ? { status: "done", info: fmtBytes(st.bytes) }
-        : { status: "error", info: "failed" });
+      if (st.phase === "cancelled") {
+        setTransfers((prev) => prev.filter((t) => t.id !== id)); // aborted navigation — drop the entry
+      } else {
+        updateTransfer(id, st.phase === "done"
+          ? { status: "done", info: fmtBytes(st.bytes) }
+          : { status: "error", info: "failed" });
+      }
     }
   }
   const [dockPreview, setDockPreview] = useState(null); // {left, top, width, height} of the drop target while dragging a window

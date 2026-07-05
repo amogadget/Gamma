@@ -1728,9 +1728,9 @@ body {
 .urlBox {
   display: flex;
   gap: 6px;
-  flex: 2;
-  min-width: 200px;
-  max-width: 560px;
+  flex: 1 1 auto;
+  min-width: 160px;
+  max-width: 320px;
 }
 .urlBox input { flex: 1; min-width: 0; }
 .readOnlyTitle {
