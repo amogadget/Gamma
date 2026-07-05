@@ -1559,7 +1559,6 @@ body {
   cursor: pointer;
 }
 .attachModeTarget { cursor: pointer; }
-[data-highlight-id] { cursor: pointer; }
 .attachContextMenu {
   position: fixed;
   z-index: 2000;
