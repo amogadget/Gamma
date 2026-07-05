@@ -1045,6 +1045,13 @@ function BlockRow({
           // Clicking anywhere on a highlight's card jumps the PDF to it —
           // not just the little colored dot.
           if (block.highlightId) onJump?.(block.highlightId);
+          // Home page cards work the same way: click anywhere opens the page
+          // (rename from inside the page instead).
+          if (homeMode && block._pageId && typeof onPageOpen === "function" && !block.editMode) {
+            e.preventDefault();
+            onPageOpen(block);
+            return;
+          }
           if (!readOnly && !block.editMode) {
             clickPosRef.current = { x: e.clientX, y: e.clientY };
             e.preventDefault();
