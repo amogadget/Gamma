@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 
 // Module-level ref for native HTML5 drag-and-drop (shared across components)
 const _dragState = { draggingId: null, dropTarget: null };
@@ -43,6 +44,13 @@ const API = "/api";
 
 function makeId() {
   return Math.random().toString(36).slice(2, 10);
+}
+
+function fmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
 }
 
 async function sha256(text) {
@@ -141,18 +149,25 @@ async function apiJson(url, options = {}) {
   }
   if (!r.ok) {
     const text = await r.text();
-    throw new Error(`${r.status} ${text}`);
+    // FastAPI errors come as {"detail": "..."} — show the human message, not raw JSON
+    let msg = text;
+    try {
+      const j = JSON.parse(text);
+      if (j && typeof j.detail === "string") msg = j.detail;
+    } catch {}
+    throw new Error(msg || `HTTP ${r.status}`);
   }
   return r.json();
 }
 
-async function resolvePdfUrl(rawUrl) {
-  const data = await apiJson(`${API}/resolve-pdf`, {
+async function resolvePdfUrl(rawUrl, allowOa = true) {
+  // {source_url, note} — note explains e.g. that an open-access preprint was
+  // substituted because the published PDF is paywalled.
+  return apiJson(`${API}/resolve-pdf`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source_url: rawUrl })
+    body: JSON.stringify({ source_url: rawUrl, allow_oa: allowOa })
   });
-  return data.source_url;
 }
 
 const COLORS = [
@@ -162,9 +177,39 @@ const COLORS = [
   "rgba(230, 180, 255, 0.65)"
 ];
 
+// Shared chrome for every dockable window: one grip (drag to move/reorder,
+// double-click to collapse), the close button right beside it, then the
+// window's own controls. Notes and chat both use this so their behavior
+// can't drift apart.
+function DockWindow({ title, onGrip, onGripDoubleClick, onClose, headerContent, collapsed, children }) {
+  return (
+    <div className={`dockWindow ${collapsed ? "collapsed" : ""}`}>
+      <div className="dockWindowHeader">
+        <span
+          className="dockGrip"
+          onPointerDown={onGrip}
+          onDoubleClick={onGripDoubleClick}
+          title="Drag to move this window · double-click to collapse/expand"
+        >⠿ {title}</span>
+        {onClose ? (
+          <button className="dockCloseBtn" onClick={onClose} title="Close window (reopen from the ⋮ menu)" aria-label={`Close ${title}`}>×</button>
+        ) : null}
+        <span className="dockHeaderSpacer" />
+        {collapsed ? null : headerContent}
+      </div>
+      {collapsed ? null : <div className="dockWindowBody">{children}</div>}
+    </div>
+  );
+}
+
 // Markdown + KaTeX rendering for AI chat messages. Unlike block rendering this
 // deliberately omits rehypeRaw: model output is untrusted, so raw HTML stays inert.
+// Models often emit \( \) / \[ \] LaTeX delimiters, which remark-math doesn't
+// recognize — normalize them to $ / $$ so math always renders.
 function ChatMarkdown({ text }) {
+  const normalized = useMemo(() => (text || "")
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `\n$$\n${m}\n$$\n`)
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`), [text]);
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
@@ -173,33 +218,79 @@ function ChatMarkdown({ text }) {
         a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
       }}
     >
-      {text || ""}
+      {normalized}
     </ReactMarkdown>
   );
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onSelectionFinished, onHighlightContext, searchRef }) {
+const EMPTY_MARKS = [];
+
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks, onExternalLink, onBeforeLinkJump, onLoadState }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
   const [forcePages, setForcePages] = useState(new Set());
   const pageHeightsRef = useRef([]); // viewport heights at scale 1, indexed 0..n-1
 
-  // Expose full-text search over the loaded document (used by the search panel).
+  // Stable callback identities so memoized pages don't re-render every time a
+  // parent state change recreates the handler closures. The wrappers always
+  // dispatch to the latest handlers via the ref.
+  const cbRef = useRef({});
+  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink };
+  const stableCbs = useMemo(() => ({
+    onJump: (...a) => cbRef.current.onJump?.(...a),
+    onHighlightJump: (...a) => cbRef.current.onHighlightJump?.(...a),
+    onLinkHighlight: (...a) => cbRef.current.onLinkHighlight?.(...a),
+    onHighlightContext: (...a) => cbRef.current.onHighlightContext?.(...a),
+    onExternalLink: (...a) => cbRef.current.onExternalLink?.(...a),
+  }), []);
+
+  // Group find marks per page once, sharing one frozen empty array so pages
+  // without marks keep referentially-equal props (memo stays effective).
+  const marksByPage = useMemo(() => {
+    const map = new Map();
+    for (const m of findMarks || []) {
+      if (!map.has(m.page)) map.set(m.page, []);
+      map.get(m.page).push(m);
+    }
+    return map;
+  }, [findMarks]);
+
+  // Expose full-text search over the loaded document (used by the search
+  // panel). Matches carry the text item's rect (at scale 1) so they can be
+  // highlighted on the page and jumped to.
   useEffect(() => {
     if (!searchRef) return;
     searchRef.current = pdfDoc ? async (re) => {
       const out = [];
-      for (let p = 1; p <= pdfDoc.numPages && out.length < 50; p++) {
+      for (let p = 1; p <= pdfDoc.numPages && out.length < 200; p++) {
         const page = await pdfDoc.getPage(p);
+        const vp = page.getViewport({ scale: 1 });
         const tc = await page.getTextContent();
-        const text = tc.items.map((it) => it.str).join(" ");
-        const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
-        let m;
-        while ((m = rx.exec(text)) && out.length < 50) {
-          const s = Math.max(0, m.index - 40);
-          out.push({ page: p, snippet: text.slice(s, m.index + m[0].length + 40).trim() });
-          if (m.index === rx.lastIndex) rx.lastIndex++;
+        for (const it of tc.items) {
+          if (out.length >= 200) break;
+          const str = it.str || "";
+          if (!str) continue;
+          const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+          let m;
+          while ((m = rx.exec(str)) && out.length < 200) {
+            if (!m[0]) { rx.lastIndex++; continue; }
+            const tx = pdfjsLib.Util.transform(vp.transform, it.transform);
+            const fh = Math.hypot(tx[2], tx[3]) || 10;
+            // Highlight only the matched keyword: slice the run's rect
+            // proportionally by character position (runs are single-line).
+            const w = it.width || fh;
+            const x1 = tx[4] + w * (m.index / str.length);
+            const x2 = tx[4] + w * ((m.index + m[0].length) / str.length);
+            const ctxStart = Math.max(0, m.index - 40);
+            out.push({
+              page: p,
+              snippet: str.slice(ctxStart, m.index + m[0].length + 60).trim().slice(0, 140),
+              rect: { x1, y1: tx[5] - fh, x2: Math.max(x1 + 2, x2), y2: tx[5] + fh * 0.25 },
+              pageW: vp.width,
+              pageH: vp.height,
+            });
+          }
         }
       }
       return out;
@@ -213,6 +304,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   const numericScale = parseFloat(pdfScaleValue);
   const isFitWidth = isNaN(numericScale);
   const scale = isFitWidth ? fitWidthScale : numericScale;
+  useEffect(() => { onEffectiveScale?.(scale); }, [scale, onEffectiveScale]);
   useEffect(() => {
     if (!isFitWidth || !pdfDoc || !viewerRef.current) return;
     let cancelled = false;
@@ -237,39 +329,50 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     if (!url) return;
     let cancelled = false; setPdfDoc(null);
     (async () => {
-      // Parallel range requests overlap with worker download.
-      // Each range is its own HTTP/2 stream so flow-control doesn't single-stream-cap us.
-      // Probe size via a 1-byte range request (backend doesn't allow HEAD).
-      const probe = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include" });
-      if (cancelled || !probe.ok) return;
-      await probe.arrayBuffer();
-      const cr = probe.headers.get("content-range") || "";
-      const m = cr.match(/\/(\d+)$/);
-      const total = m ? parseInt(m[1], 10) : 0;
-      let data;
-      if (total > 0) {
-        const N = 6;
-        const chunkSize = Math.ceil(total / N);
-        const parts = await Promise.all(Array.from({ length: N }, (_, i) => {
-          const start = i * chunkSize;
-          const end = Math.min(start + chunkSize - 1, total - 1);
-          return fetch(url, { headers: { Range: `bytes=${start}-${end}` }, credentials: "include" })
-            .then(r => r.arrayBuffer());
-        }));
+      try {
+        onLoadState?.(url, { phase: "start" });
+        // Parallel range requests overlap with worker download.
+        // Each range is its own HTTP/2 stream so flow-control doesn't single-stream-cap us.
+        // Probe size via a 1-byte range request (backend doesn't allow HEAD).
+        const probe = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include" });
         if (cancelled) return;
-        const buf = new Uint8Array(total);
-        let off = 0;
-        for (const p of parts) { buf.set(new Uint8Array(p), off); off += p.byteLength; }
-        data = buf.buffer;
-      } else {
-        const resp = await fetch(url, { credentials: "include" });
-        if (cancelled || !resp.ok) return;
-        data = await resp.arrayBuffer();
-        if (cancelled) return;
+        if (!probe.ok) { onLoadState?.(url, { phase: "error" }); return; }
+        await probe.arrayBuffer();
+        const cr = probe.headers.get("content-range") || "";
+        const m = cr.match(/\/(\d+)$/);
+        const total = m ? parseInt(m[1], 10) : 0;
+        let data;
+        if (total > 0) {
+          const N = 6;
+          const chunkSize = Math.ceil(total / N);
+          const parts = await Promise.all(Array.from({ length: N }, (_, i) => {
+            const start = i * chunkSize;
+            const end = Math.min(start + chunkSize - 1, total - 1);
+            return fetch(url, { headers: { Range: `bytes=${start}-${end}` }, credentials: "include" })
+              .then(r => r.arrayBuffer());
+          }));
+          if (cancelled) return;
+          const buf = new Uint8Array(total);
+          let off = 0;
+          for (const p of parts) { buf.set(new Uint8Array(p), off); off += p.byteLength; }
+          data = buf.buffer;
+        } else {
+          const resp = await fetch(url, { credentials: "include" });
+          if (cancelled) return;
+          if (!resp.ok) { onLoadState?.(url, { phase: "error" }); return; }
+          data = await resp.arrayBuffer();
+          if (cancelled) return;
+        }
+        const bytes = data.byteLength;
+        pdfjsLib.getDocument({ data, disableAutoFetch: true, disableRange: true }).promise.then(doc => {
+          if (!cancelled) {
+            setPdfDoc(doc); setNumPages(doc.numPages);
+            onLoadState?.(url, { phase: "done", bytes });
+          }
+        }).catch(() => { if (!cancelled) onLoadState?.(url, { phase: "error" }); });
+      } catch {
+        if (!cancelled) onLoadState?.(url, { phase: "error" });
       }
-      pdfjsLib.getDocument({ data, disableAutoFetch: true, disableRange: true }).promise.then(doc => {
-        if (!cancelled) { setPdfDoc(doc); setNumPages(doc.numPages); }
-      }).catch(() => {});
     })();
     return () => { cancelled = true; };
   }, [url]);
@@ -352,9 +455,11 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => { cancelled = true; };
   }, [pdfDoc]);
 
-  // Scroll to exact highlight position
+  // Scroll to exact highlight position. Long jumps snap instantly — smooth
+  // scrolling across many pages is what made find-next feel sluggish.
+  const scrollToPositionRef = useRef(null);
   useEffect(() => {
-    if (scrollRef) scrollRef.current = async ({ position }) => {
+    scrollToPositionRef.current = async ({ position, behavior }) => {
       const pn = position?.pageNumber || position?.boundingRect?.pageNumber;
       if (!pn || !viewerRef.current || !pdfDoc) return;
       const r = position?.boundingRect;
@@ -378,7 +483,9 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       const curH = (heights[pn - 1] || 800) * scale;
       const storedH = r?.height || 1;
       const highlightY = r ? r.y1 * curH / storedH : 0;
-      viewerRef.current.scrollTo({ top: pageTop + highlightY - 80, behavior: "smooth" });
+      const targetTop = pageTop + highlightY - 80;
+      const dist = Math.abs(targetTop - viewerRef.current.scrollTop);
+      viewerRef.current.scrollTo({ top: targetTop, behavior: behavior || (dist > 1500 ? "auto" : "smooth") });
 
       // Force-render target page if not yet visible
       const pageEl = viewerRef.current.querySelector(`[data-page="${pn}"]`);
@@ -387,7 +494,37 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         setTimeout(() => setForcePages(prev => { const s = new Set(prev); s.delete(pn); return s; }), 2000);
       }
     };
+    if (scrollRef) scrollRef.current = scrollToPositionRef.current;
   }, [scrollRef, scale, pdfDoc]);
+
+  // In-PDF link annotations: internal destinations jump within the document.
+  async function goToDest(dest) {
+    if (!pdfDoc) return;
+    try {
+      const d = typeof dest === "string" ? await pdfDoc.getDestination(dest) : dest;
+      if (!d || d[0] == null) return;
+      const pageIdx = typeof d[0] === "object" ? await pdfDoc.getPageIndex(d[0]) : Number(d[0]);
+      const pn = pageIdx + 1;
+      onBeforeLinkJump?.(); // let the app capture "where I was" for global Back
+      const page = await pdfDoc.getPage(pn);
+      const vp = page.getViewport({ scale: 1 });
+      // Destination y is in PDF user space (origin bottom-left); flip to top-down.
+      let destY = 0;
+      const kind = d[1]?.name;
+      const rawY = kind === "XYZ" ? d[3] : (kind === "FitH" || kind === "FitBH") ? d[2] : null;
+      if (typeof rawY === "number") destY = Math.max(0, vp.height - rawY);
+      scrollToPositionRef.current?.({
+        position: {
+          pageNumber: pn,
+          boundingRect: { x1: 0, y1: destY, x2: 0, y2: destY, width: vp.width, height: vp.height, pageNumber: pn },
+          rects: [],
+        },
+      });
+    } catch {}
+  }
+  const goToDestRef = useRef(null);
+  goToDestRef.current = goToDest;
+  const goToDestStable = useMemo(() => (d) => goToDestRef.current?.(d), []);
 
   // Text selection for highlight creation
   const [selPopup, setSelPopup] = useState(null);
@@ -453,7 +590,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => document.removeEventListener("mouseup", onMouseUp);
   }, [onSelectionFinished]);
 
-  function handleSelConfirm(commentText, color) {
+  function handleSelConfirm(commentText, color, extra) {
     if (!selPopup) return;
     const r = selPopup.rect;
     const pageEl = document.querySelector(`[data-page="${selPopup.pageNumber}"]`);
@@ -476,34 +613,40 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       rects: lineRects,
     };
     const content = { text: selPopup.text };
-    onSelectionFinished(position, content, () => { window.getSelection()?.removeAllRanges(); setSelPopup(null); }, { color, commentText });
+    onSelectionFinished(position, content, () => { window.getSelection()?.removeAllRanges(); setSelPopup(null); }, { color, commentText, ...(extra || {}) });
   }
 
   return (
     <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={i + 1} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
-          highlights={highlights} onJump={onJump} onHighlightJump={onHighlightJump} onHighlightContext={onHighlightContext}
+          highlights={highlights} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
+          onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
           reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
+          findMarks={marksByPage.get(i + 1) || EMPTY_MARKS}
+          onInternalLink={goToDestStable}
+          onExternalLink={stableCbs.onExternalLink}
         />
       ))}
       {selPopup && onSelectionFinished && (
         <div style={{ position: "fixed", top: selPopup.rect.bottom + 8, left: selPopup.rect.left, zIndex: 9999 }}>
-          <PlainTip onConfirm={handleSelConfirm} />
+          <PlainTip onConfirm={handleSelConfirm} onLink={() => handleSelConfirm("", null, { link: true })} />
         </div>
       )}
     </div>
   );
 }
 
-function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onHighlightContext, readOnly, forceRender, reservedHeight }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
   const pageRef = useRef(null);
+  const renderTaskRef = useRef(null);
   const [pageSize, setPageSize] = useState(null);
   const [visible, setVisible] = useState(false);
+  const [links, setLinks] = useState([]); // link annotations, rects at scale 1
 
   useEffect(() => {
     if (forceRender) { setVisible(true); return; }
@@ -511,7 +654,7 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
     if (!el) return;
     const obs = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting) { setVisible(true); obs.disconnect(); }
-    }, { rootMargin: "400px 0px" });
+    }, { rootMargin: "900px 0px" }); // generous look-ahead so scrolling rarely hits a blank page
     obs.observe(el);
     return () => obs.disconnect();
   }, [pageNumber, forceRender]);
@@ -528,11 +671,22 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
         setPageSize({ width: vp.width, height: vp.height });
 
         const canvas = canvasRef.current;
-        const pr = window.devicePixelRatio || 1;
+        // Cap the backing resolution: 3-4× DPR screens quadruple the pixel
+        // work for no visible gain at reading sizes.
+        const pr = Math.min(2, window.devicePixelRatio || 1);
         canvas.width = vp.width * pr; canvas.height = vp.height * pr;
         canvas.style.width = vp.width + "px"; canvas.style.height = vp.height + "px";
         const ctx = canvas.getContext("2d"); ctx.scale(pr, pr);
-        await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        // Cancel any in-flight render (rapid zoom changes) instead of stacking them
+        try { renderTaskRef.current?.cancel(); } catch {}
+        const task = page.render({ canvasContext: ctx, viewport: vp });
+        renderTaskRef.current = task;
+        try {
+          await task.promise;
+        } catch (err) {
+          if (err?.name === "RenderingCancelledException") return;
+          throw err;
+        }
 
         const textL = textRef.current;
         textL.innerHTML = "";
@@ -542,6 +696,21 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
         textL.style.transform = `scale(${scale})`;
         const tc = await page.getTextContent();
         pdfjsLib.renderTextLayer({ textContentSource: tc, container: textL, viewport: vp });
+
+        // Link annotations (in-PDF references + external URLs), stored at scale 1.
+        const annots = await page.getAnnotations();
+        if (cancelled) return;
+        const vp1 = page.getViewport({ scale: 1 });
+        setLinks(annots
+          .filter((a) => a.subtype === "Link" && (a.url || a.dest))
+          .map((a) => {
+            const r = vp1.convertToViewportRectangle(a.rect);
+            return {
+              left: Math.min(r[0], r[2]), top: Math.min(r[1], r[3]),
+              w: Math.abs(r[2] - r[0]), h: Math.abs(r[3] - r[1]),
+              url: a.url || null, dest: a.dest || null,
+            };
+          }));
       } catch (e) {
         console.error("PdfPage render error:", e);
       }
@@ -563,6 +732,42 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
       <div ref={textRef} className="textLayer" style={{
         userSelect: readOnly ? "none" : "text", WebkitUserSelect: readOnly ? "none" : "text",
       }} />
+      {links.map((l, i) => (
+        <div
+          key={`lnk-${i}`}
+          className="pdfLinkBox"
+          title={l.url || "Jump to reference"}
+          style={{
+            left: l.left * scale,
+            top: l.top * scale,
+            width: Math.max(4, l.w * scale),
+            height: Math.max(4, l.h * scale),
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (l.url) onExternalLink?.(l.url);
+            else onInternalLink?.(l.dest);
+          }}
+        />
+      ))}
+      {(findMarks || []).map((m, i) => (
+        <div
+          key={`find-${i}`}
+          style={{
+            position: "absolute",
+            zIndex: 3,
+            pointerEvents: "none",
+            left: m.rect.x1 * scale,
+            top: m.rect.y1 * scale,
+            width: Math.max(2, (m.rect.x2 - m.rect.x1) * scale),
+            height: Math.max(2, (m.rect.y2 - m.rect.y1) * scale),
+            background: m.active ? "rgba(255, 140, 0, 0.45)" : "rgba(255, 220, 0, 0.30)",
+            outline: m.active ? "2px solid rgba(255, 120, 0, 0.9)" : "none",
+            borderRadius: 2,
+            mixBlendMode: "multiply",
+          }}
+        />
+      ))}
       {highlights.filter(h => {
         const p = h.position?.boundingRect || h.position?.rects?.[0];
         return p && p.pageNumber === pageNumber;
@@ -570,6 +775,7 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
         const rects = h.position?.rects || (h.position?.boundingRect ? [h.position.boundingRect] : []);
         const storedW = h.position?.boundingRect?.width || rects[0]?.width || 1;
         const storedH = h.position?.boundingRect?.height || rects[0]?.height || 1;
+        const isLink = !!h.linkTarget;
         const elements = [];
         for (const r of rects) {
           elements.push(<div key={h.id + "-" + r.x1 + "-" + r.y1} style={{
@@ -578,8 +784,13 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
             width: Math.max(1, (r.x2 - r.x1) * curW / storedW),
             height: Math.max(1, (r.y2 - r.y1) * curH / storedH),
             background: h.color || "rgba(255,226,143,0.65)", mixBlendMode: "multiply",
-          }} title={h.comment?.text || ""}
-            onClick={function (e) { e.stopPropagation(); onHighlightJump?.(h.id); }}
+            ...(isLink ? { borderBottom: "2px solid rgba(70, 130, 255, 0.9)", borderRadius: 1 } : {}),
+          }} title={isLink ? (h.linkTarget.pageId ? "Open linked paper" : h.linkTarget.url) : (h.comment?.text || "")}
+            onClick={function (e) {
+              e.stopPropagation();
+              if (isLink) onLinkHighlight?.(h);
+              else onHighlightJump?.(h.id);
+            }}
             onContextMenu={function (e) { e.preventDefault(); if (onHighlightContext) onHighlightContext({ id: h.id, x: e.clientX, y: e.clientY }); }}
           />);
         }
@@ -587,9 +798,9 @@ function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJum
       })}
     </div>
   );
-}
+});
 
-function PlainTip({ onConfirm }) {
+function PlainTip({ onConfirm, onLink }) {
   return (
     <div className="plainTip">
       <div className="colorRow">
@@ -603,6 +814,16 @@ function PlainTip({ onConfirm }) {
             title="Highlight in this color"
           />
         ))}
+        {onLink ? (
+          <button
+            className="colorBtn linkTipBtn"
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onLink(); }}
+            type="button"
+            title="Link this reference to a paper (DOI / arXiv / existing PDF)"
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+          </button>
+        ) : null}
       </div>
     </div>
   );
@@ -638,6 +859,7 @@ function BlockRow({
   onJump,
   onEnterAttachMode,
   onUnlinkHighlight,
+  onOpenLinkTarget,
   onPageOpen,
   onChangeText,
   onEnterSibling,
@@ -820,6 +1042,9 @@ function BlockRow({
         onMouseDown={(e) => {
           if (e.target.closest("button, textarea, input, a")) return;
           setFocusedId(block.id);
+          // Clicking anywhere on a highlight's card jumps the PDF to it —
+          // not just the little colored dot.
+          if (block.highlightId) onJump?.(block.highlightId);
           if (!readOnly && !block.editMode) {
             clickPosRef.current = { x: e.clientX, y: e.clientY };
             e.preventDefault();
@@ -991,6 +1216,19 @@ function BlockRow({
               {block.quote}
             </div>
           ) : null}
+          {(block.properties?.link_url || block.properties?.link_page_id) ? (
+            <button
+              type="button"
+              className="blockLinkChip"
+              title={block.properties.link_url || "Open linked paper"}
+              onClick={(e) => { e.stopPropagation(); onOpenLinkTarget?.(block); }}
+            >
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+              {block.properties.link_page_id
+                ? "linked paper"
+                : (block.properties.link_url || "").replace(/^https?:\/\//i, "").slice(0, 48)}
+            </button>
+          ) : null}
         </div>
         {!readOnly && block.id !== "root" ? (
           <button
@@ -1003,49 +1241,26 @@ function BlockRow({
       {refPopup && searchResults.length > 0 && (
         <div
           className="refPopup"
-          style={{
-            position: "fixed",
-            top: refPopup.rect.bottom + 4,
-            left: refPopup.rect.left,
-            zIndex: 2000,
-            background: "#1e1e1e",
-            border: "1px solid #444",
-            borderRadius: 6,
-            minWidth: 280,
-            maxHeight: 320,
-            overflowY: "auto",
-            boxShadow: "0 4px 16px rgba(0,0,0,0.5)",
-          }}
+          style={{ top: refPopup.rect.bottom + 4, left: refPopup.rect.left }}
         >
           {searchResults.map((b, i) => (
-            <div key={b.id} style={{ borderBottom: i < searchResults.length - 1 ? "1px solid #333" : "none" }}>
+            <div key={b.id} className="refPopupEntry">
               {b.ancestors && b.ancestors.length > 0 && (
-                <div style={{ padding: "3px 12px 0", fontSize: 11, color: "#777", lineHeight: 1.4 }}>
+                <div className="refPopupPath">
                   {b.ancestors.map((a, j) => (
                     <span key={a.id}>
-                      {j > 0 && <span style={{ color: "#555", margin: "0 3px" }}>&rsaquo;</span>}
+                      {j > 0 && <span className="refPopupSep">&rsaquo;</span>}
                       <span>{a.content || "(untitled)"}</span>
                     </span>
                   ))}
                 </div>
               )}
               <button
+                className={`refPopupItem${i === refSelectedIdx ? " selected" : ""}`}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => insertRef(b)}
-                style={{
-                  display: "block",
-                  width: "100%",
-                  padding: "6px 12px",
-                  background: i === refSelectedIdx ? "#2a3a4a" : "transparent",
-                  color: "#ddd",
-                  border: "none",
-                  textAlign: "left",
-                  cursor: "pointer",
-                }}
               >
-                <div style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {b.content || "(empty)"}
-                </div>
+                <div className="refPopupText">{b.content || "(empty)"}</div>
               </button>
             </div>
           ))}
@@ -1113,6 +1328,7 @@ export default function App() {
   const initialShare = params.get("share") || "";
   const initialBlockId = params.get("block") || params.get("page") || "";
   const initialCategory = params.get("category") || "";
+  const initialFolder = params.get("folder") || "";
   const readOnly = Boolean(initialShare);
 
   // Auth state: null=loading, false=logged out, {user, is_guest}=logged in
@@ -1181,13 +1397,50 @@ export default function App() {
   const [focusedBlockId, setFocusedBlockId] = useState("");
   const [focusedBlock, setFocusedBlock] = useState(null);
   const [summary, setSummary] = useState("");
-  const [summaryEditing, setSummaryEditing] = useState(false);
   const [category, setCategory] = useState("");
   const [categoryEditing, setCategoryEditing] = useState(false);
   const [categoryInput, setCategoryInput] = useState("");
   const [categorySuggestionIdx, setCategorySuggestionIdx] = useState(-1);
   const [categoryFilter, setCategoryFilter] = useState(initialCategory);
+  // File-browser home: folders are virtual — each page block stores a single
+  // `properties.folder` string; storage stays flat at root. Empty (manually
+  // created) folders live in localStorage until a paper lands in them.
+  const [folderFilter, setFolderFilter] = useState(initialFolder);
+  const [folderDragOver, setFolderDragOver] = useState(null);
+  const [extraFolders, setExtraFolders] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gamma-extra-folders") || "[]"); } catch { return []; }
+  });
+  const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  useEffect(() => {
+    try { localStorage.setItem("gamma-extra-folders", JSON.stringify(extraFolders)); } catch {}
+  }, [extraFolders]);
+
+  async function setPageFolder(pageId, folderName) {
+    try {
+      await apiJson(`${API}/blocks/${pageId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ properties: { folder: folderName || "" } }),
+      });
+      if (folderName) setExtraFolders((prev) => prev.filter((f) => f !== folderName));
+      await fetchHomeBlocks();
+      setStatus(folderName ? `Moved to “${folderName}”.` : "Moved out of the folder.");
+    } catch (err) {
+      setStatus(`Move failed: ${err.message}`);
+    }
+  }
+
+  function commitNewFolder() {
+    const name = newFolderName.trim();
+    setNewFolderOpen(false);
+    setNewFolderName("");
+    if (!name) return;
+    setExtraFolders((prev) => prev.includes(name) ? prev : [...prev, name]);
+  }
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
+  const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
+  const [zoomDraft, setZoomDraft] = useState(null);  // while typing a custom zoom %
   const restoredPdfUrlRef = useRef(null);
   const [blocks, setBlocks] = useState([]);
   const [homeBlocks, setHomeBlocks] = useState([]);
@@ -1196,9 +1449,6 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
-  const [chatHeight, setChatHeight] = useState(() => {
-    try { const v = localStorage.getItem("gamma-chat-height"); return v ? Number(v) : 200; } catch { return 200; }
-  });
   const [chatHidden, setChatHidden] = useState(false);
 
   // Tracks which block we've finished loading from the server, so the save
@@ -1217,6 +1467,8 @@ export default function App() {
         if (cancelled) return;
         setChatMessages(data.messages || []);
         chatLoadedForRef.current = chatKey;
+        // Fresh conversation → first question should carry the full PDF
+        if (!(data.messages || []).length) setAttachPdf(true);
       })
       .catch(() => { if (!cancelled) chatLoadedForRef.current = chatKey; });
     return () => { cancelled = true; };
@@ -1237,12 +1489,9 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [chatMessages, chatKey]);
 
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-height", String(chatHeight)); } catch {}
-  }, [chatHeight]);
-
   function clearChat() {
     setChatMessages([]);
+    setAttachPdf(true); // new chat: first question carries the full PDF again
     fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
       method: "DELETE",
       credentials: "include",
@@ -1253,26 +1502,34 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [sidebarHeight, setSidebarHeight] = useState(280);
-  // Where the notes window docks: "left" | "right" | "bottom".
-  const [notesDock, setNotesDock] = useState(() => {
-    try { return localStorage.getItem("gamma-notes-dock") || "right"; } catch { return "right"; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-notes-dock", notesDock); } catch {}
-  }, [notesDock]);
-  // Widths of the two dock columns (each column can hold notes and/or chat stacked).
-  const [leftWidth, setLeftWidth] = useState(() => {
-    try { return Number(localStorage.getItem("gamma-dock-left")) || 380; } catch { return 380; }
-  });
-  const [rightWidth, setRightWidth] = useState(() => {
-    try { return Number(localStorage.getItem("gamma-dock-right")) || 420; } catch { return 420; }
-  });
-  useEffect(() => {
+  // Window layout: ordered window ids per dock slot. Sizes are handled by
+  // react-resizable-panels (persisted via autoSaveId), so this only stores
+  // which window lives where and in what order.
+  const [layout, setLayout] = useState(() => {
     try {
-      localStorage.setItem("gamma-dock-left", String(leftWidth));
-      localStorage.setItem("gamma-dock-right", String(rightWidth));
+      const saved = JSON.parse(localStorage.getItem("gamma-layout") || "null");
+      if (saved && saved.left && saved.right && saved.bottom) return saved;
     } catch {}
-  }, [leftWidth, rightWidth]);
+    return { left: [], right: ["notes", "chat"], bottom: [] };
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-layout", JSON.stringify(layout)); } catch {}
+  }, [layout]);
+
+  // Move a window to a slot at an index (drag-to-dock and drag-to-reorder).
+  function moveWindow(id, side, index) {
+    setLayout((prev) => {
+      const next = {
+        left: prev.left.filter((w) => w !== id),
+        right: prev.right.filter((w) => w !== id),
+        bottom: prev.bottom.filter((w) => w !== id),
+      };
+      const arr = [...next[side]];
+      arr.splice(Math.max(0, Math.min(index, arr.length)), 0, id);
+      next[side] = arr;
+      return next;
+    });
+  }
   // Open tabs (Chrome-style): [{id, title}] persisted per browser.
   const [openTabs, setOpenTabs] = useState(() => {
     try { return JSON.parse(localStorage.getItem("gamma-tabs") || "[]"); } catch { return []; }
@@ -1280,14 +1537,60 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-tabs", JSON.stringify(openTabs)); } catch {}
   }, [openTabs]);
+  const dragTabRef = useRef(null); // tab id being drag-reordered
+  const [draggingTabId, setDraggingTabId] = useState(null);
+  // FLIP animation: when tab order changes, slide each tab from its old
+  // position to the new one (Chrome-style), instead of snapping.
+  const tabElsRef = useRef(new Map());
+  const tabLeftsRef = useRef(new Map());
+  useLayoutEffect(() => {
+    const prev = tabLeftsRef.current;
+    const next = new Map();
+    for (const [id, el] of tabElsRef.current) {
+      if (!el) continue;
+      const left = el.getBoundingClientRect().left;
+      next.set(id, left);
+      const old = prev.get(id);
+      if (old != null && Math.abs(old - left) > 2) {
+        el.style.transition = "none";
+        el.style.transform = `translateX(${old - left}px)`;
+        requestAnimationFrame(() => {
+          el.style.transition = "transform 0.16s ease";
+          el.style.transform = "";
+        });
+      }
+    }
+    tabLeftsRef.current = next;
+  }, [openTabs]);
+
+  // Chrome-style transfer list: PDF downloads and uploads with live status.
+  const [transfers, setTransfers] = useState([]); // [{id, name, kind, status, info}]
+  const transferByUrlRef = useRef({});
+  function addTransfer(t) {
+    const id = makeId();
+    setTransfers((prev) => [{ id, status: "active", ...t }, ...prev].slice(0, 20));
+    return id;
+  }
+  function updateTransfer(id, patch) {
+    setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }
+  // Byte-level download state reported by the PDF viewer (skips local uploads)
+  function handlePdfLoadState(url, st) {
+    if (url.startsWith("/api/uploads/")) return;
+    if (st.phase === "start") {
+      const name = (pdfTitle || decodeURIComponent((url.split("source_url=")[1] || url).split("/").pop() || "PDF")).slice(0, 60);
+      transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…" });
+    } else {
+      const id = transferByUrlRef.current[url];
+      if (!id) return;
+      delete transferByUrlRef.current[url];
+      updateTransfer(id, st.phase === "done"
+        ? { status: "done", info: fmtBytes(st.bytes) }
+        : { status: "error", info: "failed" });
+    }
+  }
   const [dockPreview, setDockPreview] = useState(null); // "left" | "right" | "bottom" while dragging a window
-  // The AI chat is its own window, dockable independently of the notes pane.
-  const [chatDock, setChatDock] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-dock") || "right"; } catch { return "right"; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-dock", chatDock); } catch {}
-  }, [chatDock]);
+  const [collapsedWins, setCollapsedWins] = useState({}); // window id -> collapsed to header bar
   // One popover open at a time; any click outside a [data-popover] container closes it.
   const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
   useEffect(() => {
@@ -1311,8 +1614,32 @@ export default function App() {
   const [searchReplaceOpen, setSearchReplaceOpen] = useState(false);
   const [searchReplace, setSearchReplace] = useState("");
   const [pdfMatches, setPdfMatches] = useState([]);
+  const [findIndex, setFindIndex] = useState(0); // active PDF match for find next/prev
   const [searchNonce, setSearchNonce] = useState(0); // bump to re-run the search
-  const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet}]
+  const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rect, pageW, pageH}]
+  useEffect(() => { setFindIndex(0); }, [pdfMatches]);
+
+  const findMarksMemo = useMemo(() => (
+    openPopover === "search" && searchQuery.trim()
+      ? pdfMatches.map((m, i) => ({ page: m.page, rect: m.rect, active: i === findIndex }))
+      : []
+  ), [pdfMatches, findIndex, openPopover, searchQuery]);
+
+  // Jump the viewer to a specific PDF match and mark it active.
+  function gotoFind(i) {
+    if (!pdfMatches.length) return;
+    const idx = ((i % pdfMatches.length) + pdfMatches.length) % pdfMatches.length;
+    setFindIndex(idx);
+    const m = pdfMatches[idx];
+    setPdfHidden(false);
+    scrollToRef.current?.({
+      position: {
+        pageNumber: m.page,
+        boundingRect: { ...m.rect, width: m.pageW, height: m.pageH, pageNumber: m.page },
+        rects: [],
+      },
+    });
+  }
   useEffect(() => {
     if (openPopover !== "search" || !searchQuery.trim()) { setSearchResults([]); setPdfMatches([]); return; }
     const timer = setTimeout(() => {
@@ -1338,28 +1665,44 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [searchQuery, openPopover, searchCase, searchWhole, searchRegex, searchNonce]);
 
-  async function replaceAllInNotes() {
+  function replaceAllInNotes() {
     const q = searchQuery.trim();
     if (!q) return;
-    if (!window.confirm(`Replace all occurrences of "${q}" with "${searchReplace}" across ALL your notes?`)) return;
-    try {
-      const data = await apiJson(`${API}/blocks-replace`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: q, replacement: searchReplace, case: searchCase, whole: searchWhole, regex: searchRegex }),
-      });
-      setStatus(`Replaced in ${data.changed} block${data.changed === 1 ? "" : "s"}.`);
-      if (focusedBlockId) await loadBlocksForBlock(focusedBlockId);
-      setSearchNonce((n) => n + 1);
-    } catch (err) {
-      setStatus(`Replace failed: ${err.message}`);
-    }
+    setConfirmBox({
+      title: "Replace all",
+      message: `Replace all occurrences of "${q}" with "${searchReplace}" across ALL your notes?`,
+      confirmLabel: "Replace all",
+      onConfirm: async () => {
+        try {
+          const data = await apiJson(`${API}/blocks-replace`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ query: q, replacement: searchReplace, case: searchCase, whole: searchWhole, regex: searchRegex }),
+          });
+          setStatus(`Replaced in ${data.changed} block${data.changed === 1 ? "" : "s"}.`);
+          if (focusedBlockId) await loadBlocksForBlock(focusedBlockId);
+          setSearchNonce((n) => n + 1);
+        } catch (err) {
+          setStatus(`Replace failed: ${err.message}`);
+        }
+      },
+    });
   }
   useEffect(() => {
     function onKey(e) {
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === "f") {
+      // Ctrl+F (and Ctrl+Shift+F) open the built-in search instead of the
+      // browser find — it covers notes, highlights, AND the PDF text.
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f") {
         e.preventDefault();
-        setOpenPopover((p) => (p === "search" ? null : "search"));
+        // Focus in the chat window → find within the conversation instead
+        if (document.activeElement?.closest?.(".chatPanel")) {
+          setChatFindOpen(true);
+          return;
+        }
+        setOpenPopover((p) => (p === "search" && !e.shiftKey ? null : "search"));
+      } else if (e.altKey && e.key === "ArrowLeft") {
+        e.preventDefault();
+        goBackNavRef.current?.();
       } else if (e.key === "Escape") {
         setOpenPopover(null);
       }
@@ -1372,10 +1715,23 @@ export default function App() {
   const [pdfSaveLocal, setPdfSaveLocal] = useState(() => {
     try { return localStorage.getItem("gamma-pdf-save") !== "0"; } catch { return true; }
   });
+  // User preferences (Settings in the account popover)
+  const [oaFallback, setOaFallback] = useState(() => {
+    try { return localStorage.getItem("gamma-oa-fallback") !== "0"; } catch { return true; }
+  });
+  const [metaAutoFetch, setMetaAutoFetch] = useState(() => {
+    try { return localStorage.getItem("gamma-meta-auto") !== "0"; } catch { return true; }
+  });
 
   useEffect(() => {
     try { localStorage.setItem("gamma-pdf-save", pdfSaveLocal ? "1" : "0"); } catch {}
   }, [pdfSaveLocal]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-oa-fallback", oaFallback ? "1" : "0"); } catch {}
+  }, [oaFallback]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-meta-auto", metaAutoFetch ? "1" : "0"); } catch {}
+  }, [metaAutoFetch]);
   const pageTitleSaveTimerRef = useRef(null);
   const viewerWrapRef = useRef(null);
   const appRef = useRef(null);
@@ -1386,22 +1742,220 @@ export default function App() {
     try { return localStorage.getItem("gamma-chat-model") || ""; } catch { return ""; }
   });
   const [attachPdf, setAttachPdf] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-attach-pdf") === "1"; } catch { return false; }
+    try { return localStorage.getItem("gamma-chat-attach-pdf") !== "0"; } catch { return true; }
   });
   const [chatEffort, setChatEffort] = useState(() => {
     try { return localStorage.getItem("gamma-chat-effort") || ""; } catch { return ""; }
   });
+  // Extra chat context: selected PDF pages + whether to include notes/highlights.
+  const [chatDocs, setChatDocs] = useState([]);
+  const [chatIncludeNotes, setChatIncludeNotes] = useState(false);
   const [chatSystem, setChatSystem] = useState(() => {
     try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
   });
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
   const [pdfSelection, setPdfSelection] = useState("");
-  const [reportOpen, setReportOpen] = useState(false);
-  const [reportChecked, setReportChecked] = useState({});
-  const [reportInstructions, setReportInstructions] = useState("");
-  const [reportBusy, setReportBusy] = useState(false);
   const chatScrollRef = useRef(null);
+  const chatAbortRef = useRef(null); // in-flight chat request, so Stop can cancel it
+  const [chatImages, setChatImages] = useState([]); // pasted figures (data URLs) pending send
+
+  // Paste a figure (screenshot/image) into the chat input → attach it.
+  function handleChatPaste(e) {
+    const files = Array.from(e.clipboardData?.items || [])
+      .filter((it) => it.type?.startsWith("image/"))
+      .map((it) => it.getAsFile())
+      .filter(Boolean);
+    if (!files.length) return;
+    e.preventDefault();
+    for (const f of files) {
+      if (f.size > 6 * 1024 * 1024) { setStatus("Image too large to attach (max 6 MB)."); continue; }
+      const reader = new FileReader();
+      reader.onload = () => setChatImages((prev) => prev.length >= 4 ? prev : [...prev, reader.result]);
+      reader.readAsDataURL(f);
+    }
+  }
+  const [editingMsg, setEditingMsg] = useState(null); // {idx, text} — editing a sent user message
+  const [copiedMsgIdx, setCopiedMsgIdx] = useState(null);
+  const [chatFindOpen, setChatFindOpen] = useState(false);
+  const [chatFind, setChatFind] = useState("");
+  const [chatFindIdx, setChatFindIdx] = useState(0);
+  // Styled in-app dialogs replacing window.confirm / link decisions.
+  const [confirmBox, setConfirmBox] = useState(null); // {title, message, confirmLabel, danger, onConfirm}
+  const [linkPrompt, setLinkPrompt] = useState(null); // external URL clicked inside the PDF
+  const [linkDialog, setLinkDialog] = useState(null); // {position, content} — creating a manual reference link
+  const [linkDialogInput, setLinkDialogInput] = useState("");
+
+  // --- Paper metadata (arXiv / DOI / AI) and citation export -----------------
+  const [pageMeta, setPageMeta] = useState(null);   // properties.meta of the open page
+  const [pageBibtex, setPageBibtex] = useState("");
+  const [metaBusy, setMetaBusy] = useState(false);
+  const [pptCite, setPptCite] = useState("");
+  const [pptCiteBusy, setPptCiteBusy] = useState(false);
+  const [citeCopied, setCiteCopied] = useState(""); // "bibtex" | "ppt"
+  // Editable prompts for metadata extraction and PPT citations (empty = server default)
+  const [metaPrompt, setMetaPrompt] = useState(() => {
+    try { return localStorage.getItem("gamma-meta-prompt") || ""; } catch { return ""; }
+  });
+  const [citePrompt, setCitePrompt] = useState(() => {
+    try { return localStorage.getItem("gamma-cite-prompt") || ""; } catch { return ""; }
+  });
+  const [metaPromptDraft, setMetaPromptDraft] = useState("");
+  const [citePromptDraft, setCitePromptDraft] = useState("");
+  useEffect(() => {
+    try { localStorage.setItem("gamma-meta-prompt", metaPrompt); } catch {}
+  }, [metaPrompt]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-cite-prompt", citePrompt); } catch {}
+  }, [citePrompt]);
+
+  const focusedBlockIdRef = useRef("");
+  useEffect(() => { focusedBlockIdRef.current = focusedBlockId || ""; }, [focusedBlockId]);
+  const attemptedMetaRef = useRef(new Set()); // pages we already tried this session
+
+  async function fetchMetadata(block, force) {
+    if (!block?.id) return;
+    setMetaBusy(true);
+    if (force) setStatus("Refreshing paper metadata…");
+    try {
+      const data = await apiJson(`${API}/metadata/fetch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ block_id: block.id, prompt: metaPrompt || "", model: chatModel || "", force: !!force }),
+      });
+      if (focusedBlockIdRef.current !== block.id) return;
+      setPageMeta(data.meta || null);
+      setPageBibtex(data.bibtex || "");
+      setPptCite(""); // fresh metadata invalidates the cached slide citation
+      setFocusedBlock((prev) => prev && prev.id === block.id
+        ? { ...prev, properties: { ...prev.properties, meta: data.meta, bibtex: data.bibtex } }
+        : prev);
+      // Auto-fill the page title from metadata when it's still the default filename title
+      if (data.meta?.title && /^PDF Notes - /.test(block.content || "") && focusedBlockIdRef.current === block.id) {
+        renameTitle(data.meta.title);
+      }
+      if (!data.cached) {
+        setStatus(`Paper metadata found (${data.source === "ai" ? "AI-extracted" : data.source}).`);
+        fetchHomeBlocks(); // keep the library's meta fresh for DOI-link matching
+      }
+    } catch (err) {
+      if (focusedBlockIdRef.current === block.id) setStatus(`Metadata: ${err.message}`);
+    } finally {
+      setMetaBusy(false);
+    }
+  }
+
+  // When a paper is opened/uploaded, fetch its metadata in the background
+  // (arXiv → DOI → AI on the server). Cached in the page's properties.
+  useEffect(() => {
+    setPptCite("");
+    setCiteCopied("");
+    const b = focusedBlock;
+    if (readOnly || !b?.id || !b.properties?.doc_id) { setPageMeta(null); setPageBibtex(""); return; }
+    if (b.properties.meta) {
+      setPageMeta(b.properties.meta);
+      setPageBibtex(b.properties.bibtex || "");
+      setPptCite(b.properties.ppt_cite || "");
+      return;
+    }
+    setPageMeta(null);
+    setPageBibtex("");
+    if (!metaAutoFetch) return; // manual via ↻ only
+    if (attemptedMetaRef.current.has(b.id)) return;
+    attemptedMetaRef.current.add(b.id);
+    fetchMetadata(b, false);
+  }, [focusedBlock?.id]);
+
+  // Import annotations embedded in the PDF file itself (SumatraPDF, Acrobat…).
+  // Idempotent server-side, so calling it on every upload is safe.
+  async function importEmbeddedAnnots(blockId, targetDocId, silent) {
+    try {
+      const res = await apiJson(`${API}/import/pdf-annotations`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ block_id: blockId, doc_id: targetDocId }),
+      });
+      if (res.imported > 0) {
+        if (focusedBlockIdRef.current === blockId) await loadBlocksForBlock(blockId);
+        setStatus(`Imported ${res.imported} annotation${res.imported === 1 ? "" : "s"} embedded in the PDF.`);
+      } else if (!silent) {
+        setStatus(res.found > 0
+          ? "All embedded annotations were already imported."
+          : "No annotations embedded in this PDF.");
+      }
+      return res;
+    } catch (err) {
+      if (!silent) setStatus(`Annotation import failed: ${err.message}`);
+    }
+  }
+
+  async function makePptCitation(force = false) {
+    if (!focusedBlockId || pptCiteBusy) return;
+    setPptCiteBusy(true);
+    try {
+      const data = await apiJson(`${API}/metadata/cite`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ block_id: focusedBlockId, prompt: citePrompt || "", model: chatModel || "", force }),
+      });
+      setPptCite(data.citation || "");
+    } catch (err) {
+      setStatus(`Citation failed: ${err.message}`);
+    } finally {
+      setPptCiteBusy(false);
+    }
+  }
+
+  // Opening the metadata popover generates the slide citation automatically
+  // (cached on the page afterwards, so this is a one-time AI call per paper).
+  useEffect(() => {
+    if (openPopover === "meta" && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
+      makePptCitation();
+    }
+  }, [openPopover, pageMeta]);
+
+  async function copyCitation(kind, text) {
+    try {
+      if (kind === "ppt" && navigator.clipboard?.write && window.ClipboardItem) {
+        // Rich copy: PowerPoint/Word get real italics & bold, plain-text
+        // targets get the clean string without markdown markers.
+        const esc = (text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const html = esc
+          .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+          .replace(/_([^_]+)_/g, "<i>$1</i>")
+          .replace(/\*([^*]+)\*/g, "<i>$1</i>");
+        const plain = (text || "")
+          .replace(/\*\*([^*]+)\*\*/g, "$1")
+          .replace(/_([^_]+)_/g, "$1")
+          .replace(/\*([^*]+)\*/g, "$1");
+        await navigator.clipboard.write([new ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+        })]);
+      } else {
+        await navigator.clipboard.writeText(text || "");
+      }
+      setCiteCopied(kind);
+      setTimeout(() => setCiteCopied(""), 1500);
+    } catch {
+      setStatus("Copy failed — copy manually.");
+    }
+  }
+
+  const chatFindMatches = useMemo(() => {
+    const q = chatFind.trim().toLowerCase();
+    if (!q) return [];
+    return chatMessages.map((m, i) => ((m.text || "").toLowerCase().includes(q) ? i : -1)).filter((i) => i >= 0);
+  }, [chatFind, chatMessages]);
+  useEffect(() => { setChatFindIdx(0); }, [chatFind]);
+
+  function gotoChatFind(n) {
+    if (!chatFindMatches.length) return;
+    const idx = ((n % chatFindMatches.length) + chatFindMatches.length) % chatFindMatches.length;
+    setChatFindIdx(idx);
+    const el = chatScrollRef.current?.querySelector(`[data-msg-idx="${chatFindMatches[idx]}"]`);
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 
   useEffect(() => {
     if (!authUser?.user || readOnly) return;
@@ -1692,72 +2246,6 @@ export default function App() {
     });
   }
 
-  // Shared drag-to-resize: pointer capture + rAF-batched updates (one setState
-  // per frame, not per pointermove) so dragging stays smooth while the whole
-  // app re-renders, and a .dragging class for the active sash highlight.
-  function startSashDrag(e, { cursor, compute, apply }) {
-    e.preventDefault();
-    e.stopPropagation();
-    const target = e.currentTarget;
-    const pointerId = e.pointerId;
-    const startX = e.clientX;
-    const startY = e.clientY;
-    let raf = 0;
-    let pending = null;
-
-    try { target.setPointerCapture(pointerId); } catch (_) {}
-    target.classList.add("dragging");
-    document.body.style.cursor = cursor;
-    document.body.style.userSelect = "none";
-
-    function onMove(ev) {
-      ev.preventDefault();
-      pending = compute(ev.clientX - startX, ev.clientY - startY);
-      if (!raf) {
-        raf = requestAnimationFrame(() => {
-          raf = 0;
-          if (pending !== null) apply(pending);
-        });
-      }
-    }
-
-    function onUp() {
-      if (raf) cancelAnimationFrame(raf);
-      if (pending !== null) apply(pending);
-      target.classList.remove("dragging");
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      try { target.releasePointerCapture(pointerId); } catch (_) {}
-      target.removeEventListener("pointermove", onMove);
-      target.removeEventListener("pointerup", onUp);
-      target.removeEventListener("pointercancel", onUp);
-    }
-
-    target.addEventListener("pointermove", onMove);
-    target.addEventListener("pointerup", onUp);
-    target.addEventListener("pointercancel", onUp);
-  }
-
-  // Resize a dock column. The left column's sash sits to its right (drag right
-  // = grow); the right column's sash sits to its left (drag left = grow).
-  function startColResize(e, side) {
-    const start = side === "left" ? leftWidth : rightWidth;
-    const sign = side === "left" ? 1 : -1;
-    startSashDrag(e, {
-      cursor: "col-resize",
-      compute: (dx) => Math.max(260, Math.min(window.innerWidth * 0.7, start + sign * dx)),
-      apply: side === "left" ? setLeftWidth : setRightWidth,
-    });
-  }
-
-  function startChatResize(e) {
-    const startH = chatHeight;
-    startSashDrag(e, {
-      cursor: "row-resize",
-      compute: (dx, dy) => Math.max(100, Math.min(window.innerHeight * 0.8, startH - dy)),
-      apply: setChatHeight,
-    });
-  }
 
   useEffect(() => {
     if (initialShare) resolveShare(initialShare);
@@ -1779,8 +2267,8 @@ export default function App() {
       })();
     }
     else if (initialUrl) openPdf(initialUrl);
-    else if (initialCategory) {
-      // Stay on home page with category filter — don't restore session
+    else if (initialCategory || initialFolder) {
+      // Stay on home page with the category/folder filter — don't restore session
     }
     else {
       // Bare `/` — try restore last session
@@ -1933,15 +2421,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
     setLoading(true);
     setStatus(`Uploading ${file.name}...`);
+    const transferId = addTransfer({ name: file.name, kind: "upload", info: fmtBytes(file.size) });
     try {
       const form = new FormData();
       form.append("file", file);
       const resp = await fetch(`${API}/uploads`, { method: "POST", body: form, credentials: "include" });
       if (!resp.ok) {
         const msg = await resp.text();
+        updateTransfer(transferId, { status: "error", info: "failed" });
         throw new Error(msg || `upload failed (${resp.status})`);
       }
       const data = await resp.json();
+      updateTransfer(transferId, { status: "done", info: fmtBytes(file.size) });
       // Open the uploaded PDF directly (bypass openPdf's URL-resolution path)
       const sourceUrl = data.source_url;
       const defaultTitle = getPdfPageTitle(data.doc_id, sourceUrl);
@@ -1958,6 +2449,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(block.id)}`;
       window.history.replaceState({}, "", newUrl);
       setStatus(`Uploaded ${file.name} (${data.doc_id})`);
+      // If the file carries embedded annotations (SumatraPDF etc.), pull them in
+      importEmbeddedAnnots(block.id, data.doc_id, true);
     } catch (err) {
       setStatus(`Upload failed: ${err.message}`);
     } finally {
@@ -2014,7 +2507,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     try {
       // Uploaded PDFs are already hosted locally — skip external resolve and proxy.
       const isUpload = sourceUrl.startsWith("/api/uploads/") || sourceUrl.startsWith(`${API}/uploads/`);
-      let finalUrl, resolvedDocId, proxiedUrl;
+      let finalUrl, resolvedDocId, proxiedUrl, pdfNote = "";
       if (isUpload) {
         finalUrl = sourceUrl;
         // filename is "<doc_id>.pdf" — serve straight from the uploads route
@@ -2022,7 +2515,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         resolvedDocId = m ? m[1] : await getDocIdForUrl(sourceUrl);
         proxiedUrl = `${API}/uploads/${resolvedDocId}.pdf`;
       } else {
-        finalUrl = await resolvePdfUrl(sourceUrl);
+        const resolved = await resolvePdfUrl(sourceUrl, oaFallback);
+        finalUrl = resolved.source_url;
+        pdfNote = resolved.note || "";
         resolvedDocId = await getDocIdForUrl(finalUrl);
         proxiedUrl = `${API}/pdf?source_url=${encodeURIComponent(finalUrl)}${pdfSaveLocal ? "&save=1" : ""}`;
       }
@@ -2040,7 +2535,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setPdfUrl(proxiedUrl);
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(block.id)}`;
       window.history.replaceState({}, "", newUrl);
-      setStatus(`Loaded ${resolvedDocId}`);
+      setStatus(pdfNote || `Loaded ${resolvedDocId}`);
     } catch (err) {
       setStatus(`Open failed: ${err.message}`);
     } finally {
@@ -2087,8 +2582,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
-  async function openBlock(blockId) {
+  async function openBlock(blockId, opts) {
     if (!blockId || readOnly) return;
+    // Back records LINK jumps only — callers opt in via {pushNav: true}.
+    // Plain navigation (library, search, tabs, home) never pushes.
+    if (opts?.pushNav && blockId !== focusedBlockId) pushNav();
     setLoading(true);
     setStatus("Opening...");
     try {
@@ -2148,6 +2646,60 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
+  // --- Global back: one history for every navigation ------------------------
+  // Entries capture the full "view": which page (or home + folder) and, for
+  // PDFs, the exact scroll position (scale-aware). In-PDF link jumps, opening
+  // other papers, search results, and going home all push here.
+  const [navStack, setNavStack] = useState([]);
+  const pdfEffScaleRef = useRef(1);
+  useEffect(() => { pdfEffScaleRef.current = pdfEffScale; }, [pdfEffScale]);
+
+  function pushNav() {
+    const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+    const entry = {
+      blockId: focusedBlockId || null,
+      folder: folderFilter,
+      top: scroller ? scroller.scrollTop : null,
+      scale: pdfEffScale,
+    };
+    setNavStack((prev) => [...prev.slice(-29), entry]);
+  }
+
+  async function goBackNav() {
+    const entry = navStack[navStack.length - 1];
+    if (!entry) return;
+    setNavStack((prev) => prev.slice(0, -1));
+    const restoreScroll = () => {
+      if (entry.top == null) return;
+      let tries = 0;
+      const tryScroll = () => {
+        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+        const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
+        if (scroller && scroller.scrollHeight > targetTop) {
+          scroller.scrollTo({ top: targetTop, behavior: "auto" });
+          return;
+        }
+        if (tries++ < 40) setTimeout(tryScroll, 150);
+      };
+      tryScroll();
+    };
+    if (entry.blockId && entry.blockId === focusedBlockId) {
+      restoreScroll(); // same document — just return to the reading position
+    } else if (entry.blockId) {
+      await openBlock(entry.blockId);
+      restoreScroll();
+    } else {
+      goHome();
+      if (entry.folder) {
+        setFolderFilter(entry.folder);
+        window.history.replaceState(null, "", `/?folder=${encodeURIComponent(entry.folder)}`);
+      }
+    }
+  }
+  const goBackNavRef = useRef(null);
+  goBackNavRef.current = goBackNav;
+  const navStackLen = navStack.length;
+
   function goHome() {
     clearSession();
     suppressAutosaveRef.current = true;
@@ -2162,6 +2714,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     setCategory("");
     setBacklinks([]);
     setPdfHidden(false);
+    setFolderFilter("");
+    setCategoryFilter("");
     fetchHomeBlocks();
     window.history.replaceState({}, "", window.location.pathname);
   }
@@ -2178,8 +2732,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   }
 
   // Drag any window by its grip; drop zones dock it left, right, or bottom.
-  // One shared implementation so every window behaves identically.
-  function startWindowDock(e, applyDock) {
+  // Within a slot the drop half decides the order (top/left half = first),
+  // which is how windows swap places. One implementation for every window.
+  function startWindowDock(e, winId) {
     e.preventDefault();
     e.stopPropagation();
     const target = e.currentTarget;
@@ -2190,16 +2745,22 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     try { target.setPointerCapture(pointerId); } catch (_) {}
 
     function zoneFor(ev) {
-      if (ev.clientY > window.innerHeight * 0.65) return "bottom";
-      return ev.clientX < window.innerWidth / 2 ? "left" : "right";
+      if (ev.clientY > window.innerHeight * 0.65) {
+        return { side: "bottom", index: ev.clientX < window.innerWidth / 2 ? 0 : 99 };
+      }
+      const side = ev.clientX < window.innerWidth / 2 ? "left" : "right";
+      return { side, index: ev.clientY < window.innerHeight * 0.35 ? 0 : 99 };
     }
     function onMove(ev) {
       if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 8) return;
       dragging = true;
-      setDockPreview(zoneFor(ev));
+      setDockPreview(zoneFor(ev).side);
     }
     function onUp(ev) {
-      if (dragging) applyDock(zoneFor(ev));
+      if (dragging) {
+        const zone = zoneFor(ev);
+        moveWindow(winId, zone.side, zone.index);
+      }
       setDockPreview(null);
       try { target.releasePointerCapture(pointerId); } catch (_) {}
       target.removeEventListener("pointermove", onMove);
@@ -2209,19 +2770,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     target.addEventListener("pointermove", onMove);
     target.addEventListener("pointerup", onUp);
     target.addEventListener("pointercancel", onUp);
-  }
-
-  async function saveSummary(newValue) {
-    if (!focusedBlockId || readOnly) return;
-    try {
-      await apiJson(`${API}/blocks/${focusedBlockId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ properties: { summary: newValue || "" } }),
-      });
-    } catch (err) {
-      setStatus(`Summary save failed: ${err.message}`);
-    }
   }
 
   function addCategoryTag(tag) {
@@ -2295,6 +2843,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   // Ask the AI for the document's title and fill it into the page name.
   const [aiTitleBusy, setAiTitleBusy] = useState(false);
+  const [sourceDraft, setSourceDraft] = useState(""); // edit buffer for the source-PDF popover
   async function aiFillTitle() {
     if (!docId || readOnly || aiTitleBusy) return;
     setAiTitleBusy(true);
@@ -2380,68 +2929,199 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     await loadBlocksForBlock(focusedBlockId);
   }
 
-  async function sendChatMessage() {
-    const text = chatInput.trim();
+  // Core chat send. baseMessages overrides the history (used when re-sending
+  // an edited message: everything after the edited message is discarded,
+  // ChatGPT-style).
+  async function sendChat(rawText, { baseMessages } = {}) {
+    const text = (rawText || "").trim();
     if (!text || chatLoading) return;
-    setChatInput("");
     const selection = pdfSelection;
     setPdfSelection("");
-    const prevMessages = chatMessages;
+    const images = chatImages;
+    setChatImages([]);
+    const prevMessages = baseMessages ?? chatMessages;
     const shown = selection ? `${text}\n\n> ${selection.slice(0, 280)}${selection.length > 280 ? "…" : ""}` : text;
-    setChatMessages((prev) => [...prev, { role: "user", text: shown }]);
+    // Names of PDFs that ride along with THIS message (displayed in the bubble)
+    const sendingPdf = attachPdf && (chatDocs.length > 0 || !!docId);
+    const pdfNames = sendingPdf
+      ? (chatDocs.length
+          ? chatDocs.map((id) => homeBlocks.find((b) => b.id === id)?.content || "PDF")
+          : [pdfTitle || "current PDF"])
+      : [];
+    setChatMessages([...prevMessages, {
+      role: "user",
+      text: shown,
+      ...(images.length ? { images } : {}),
+      ...(pdfNames.length ? { pdfs: pdfNames } : {}),
+    }]);
     setChatLoading(true);
+    // One-shot semantics: the PDF went with this message; don't silently
+    // re-upload (and re-bill) it on every follow-up.
+    if (sendingPdf) setAttachPdf(false);
+    const ctrl = new AbortController();
+    chatAbortRef.current = ctrl;
     try {
       const data = await apiJson(`${API}/ai/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: ctrl.signal,
         body: JSON.stringify({
           prompt: text,
           doc_id: docId || "",
           history: prevMessages,
           model: chatModel || "",
           selection,
-          attach_pdf: attachPdf && !!docId,
+          attach_pdf: sendingPdf,
           effort: chatEffort || "",
           system: chatSystem || "",
+          pages: chatDocs,
+          include_notes: chatIncludeNotes,
+          images,
         }),
       });
       setChatMessages((prev) => [...prev, { role: "ai", text: data.response || "(no response)" }]);
     } catch (err) {
-      setChatMessages((prev) => [...prev, { role: "ai", text: `Error: ${err.message}` }]);
+      if (err?.name === "AbortError") {
+        setChatMessages((prev) => [...prev, { role: "ai", text: "*(stopped)*" }]);
+      } else {
+        setChatMessages((prev) => [...prev, { role: "ai", text: `Error: ${err.message}` }]);
+      }
     } finally {
       setChatLoading(false);
+      chatAbortRef.current = null;
     }
   }
 
-  function openReportModal() {
-    // Pre-select the current page if it's in the home list
-    const checked = {};
-    if (focusedBlockId && homeBlocks.some((b) => b.id === focusedBlockId)) checked[focusedBlockId] = true;
-    setReportChecked(checked);
-    setReportInstructions("");
-    setReportOpen(true);
-    if (!homeBlocks.length) fetchHomeBlocks();
+  function sendChatMessage() {
+    const text = chatInput;
+    if (!text.trim() || chatLoading) return;
+    setChatInput("");
+    sendChat(text);
   }
 
-  async function generateReport() {
-    const pageIds = Object.keys(reportChecked).filter((id) => reportChecked[id]);
-    if (!pageIds.length || reportBusy) return;
-    setReportBusy(true);
+  function stopChat() {
+    chatAbortRef.current?.abort();
+  }
+
+  function openPromptEditor() {
+    setPromptDraft(chatSystem || aiInfo?.default_prompt || "");
+    setMetaPromptDraft(metaPrompt || aiInfo?.metadata_prompt || "");
+    setCitePromptDraft(citePrompt || aiInfo?.cite_prompt || "");
+    setPromptOpen(true);
+  }
+
+  async function copyChatMessage(idx, text) {
     try {
-      const data = await apiJson(`${API}/ai/report`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ page_ids: pageIds, model: chatModel || "", instructions: reportInstructions, effort: chatEffort || "" }),
-      });
-      setChatMessages((prev) => [...prev, { role: "ai", text: data.report || "(empty report)" }]);
-      setReportOpen(false);
-      setChatHidden(false);
-    } catch (err) {
-      setChatMessages((prev) => [...prev, { role: "ai", text: `Report failed: ${err.message}` }]);
-      setReportOpen(false);
-    } finally {
-      setReportBusy(false);
+      await navigator.clipboard.writeText(text || "");
+      setCopiedMsgIdx(idx);
+      setTimeout(() => setCopiedMsgIdx((cur) => (cur === idx ? null : cur)), 1200);
+    } catch {}
+  }
+
+
+  // --- reference links: PDF text regions manually linked to papers ----------
+
+  // Match a URL against the library: DOI or arXiv id already known → that page.
+  function findPageForUrl(url) {
+    const doiM = (url || "").match(/10\.\d{4,9}\/[^\s?#]+/);
+    const doi = doiM ? decodeURIComponent(doiM[0]).replace(/[.,;)\]]+$/, "").toLowerCase() : "";
+    const arxM = (url || "").match(/arxiv(?:\.org\/(?:abs|pdf)\/|[:.])(\d{4}\.\d{4,5})/i);
+    const arx = arxM ? arxM[1] : "";
+    if (!doi && !arx) return null;
+    for (const b of homeBlocks) {
+      const p = b.properties || {};
+      const m = p.meta || {};
+      if (doi && (m.doi || "").toLowerCase() === doi) return b.id;
+      if (arx && (m.arxiv_id === arx || (p.source_url || "").includes(arx))) return b.id;
+      if (doi && (p.source_url || "").toLowerCase().includes(doi)) return b.id;
     }
+    return null;
+  }
+
+  // Any document link (PDF annotation or manual reference link): if the target
+  // paper is already in the library, open it; otherwise ask fetch-vs-browser.
+  function handleDocLink(url) {
+    const pid = findPageForUrl(url);
+    if (pid) {
+      setStatus("Already in your library — opening.");
+      openBlock(pid, { pushNav: true });
+      return;
+    }
+    setLinkPrompt(url);
+  }
+
+  // Rank a library paper against the selected reference text: author surnames
+  // and identifiers weigh most, then title words, year, volume, venue.
+  function scorePaperMatch(text, b) {
+    const t = (text || "").toLowerCase();
+    if (!t) return 0;
+    const words = new Set(t.split(/[^a-z0-9]+/).filter((w) => w.length > 3));
+    const p = b.properties || {};
+    const m = p.meta || {};
+    let score = 0;
+    if (m.doi && t.includes(String(m.doi).toLowerCase())) score += 20;
+    if (m.arxiv_id && t.includes(m.arxiv_id)) score += 20;
+    for (const a of (m.authors || [])) {
+      const last = String(a).trim().split(/\s+/).pop().toLowerCase();
+      if (last.length > 2 && t.includes(last)) score += 4;
+    }
+    for (const w of String(m.title || b.content || "").toLowerCase().split(/[^a-z0-9]+/)) {
+      if (w.length > 3 && words.has(w)) score += 2;
+    }
+    if (m.year && t.includes(String(m.year))) score += 2;
+    if (m.volume && new RegExp(`\\b${m.volume}\\b`).test(t)) score += 2;
+    for (const w of String(m.venue || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)) {
+      if (w.length > 2 && t.includes(w)) score += 1;
+    }
+    return score;
+  }
+
+  // Bare DOIs / arXiv ids typed into the link dialog become proper URLs.
+  function normalizeLinkInput(s) {
+    s = (s || "").trim();
+    if (!s) return "";
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^arxiv:/i.test(s)) return `https://arxiv.org/abs/${s.slice(6).trim()}`;
+    if (/^\d{4}\.\d{4,5}(v\d+)?$/.test(s)) return `https://arxiv.org/abs/${s}`;
+    return `https://doi.org/${s.replace(/^doi:\s*/i, "")}`;
+  }
+
+  function createLinkHighlight(target) {
+    const ld = linkDialog;
+    if (!ld) return;
+    setLinkDialog(null);
+    setLinkDialogInput("");
+    if (ld.editBlockId) {
+      // Re-pointing (or clearing) the link on an existing highlight block
+      setBlocks(updateBlockTree(blocks, ld.editBlockId, (b) => ({
+        ...b,
+        properties: { ...b.properties, link_url: target.url || "", link_page_id: target.pageId || "" },
+      })));
+      setStatus(target.url || target.pageId ? "Link updated." : "Link removed.");
+      return;
+    }
+    const id = makeId();
+    let next = addHighlightAsBlock(blocks, {
+      id,
+      content: ld.content || { text: "" },
+      position: ld.position,
+      comment: { text: "" },
+      color: "rgba(140, 180, 255, 0.35)",
+    });
+    next = updateBlockTree(next, id, (b) => ({
+      ...b,
+      properties: { ...b.properties, link_url: target.url || "", link_page_id: target.pageId || "" },
+    }));
+    setBlocks(next); // autosave persists
+    setStatus("Reference linked.");
+  }
+
+  // Zoom in/out steps to the next multiple of 20%, anchored on the current
+  // effective scale (so it also works from fit-width, e.g. 87% → 100%).
+  function zoomStep(dir) {
+    const cur = Math.round(pdfEffScale * 100);
+    const next = dir > 0 ? (Math.floor(cur / 20) + 1) * 20 : (Math.ceil(cur / 20) - 1) * 20;
+    setPdfScale(String(Math.max(0.2, Math.min(4, next / 100))));
   }
 
   function jumpToHighlightId(highlightId) {
@@ -2503,12 +3183,37 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       _pageId: b.id,
       _position: b.position,
       _sourceUrl: b.properties?.source_url,
+      _folder: (b.properties?.folder || "").trim(),
       _isRecent: recentIds.has(b.id),
       _isEmpty: !b.content,
       editMode: homeEditingId === b.id,
     }));
   }, [homeBlocks, recentIds, homeEditingId]);
-  const highlights = useMemo(() => blocksToHighlights(blocks), [blocks]);
+  // Folder names: everything referenced by a page, plus manually created empties
+  const folderNames = useMemo(() => {
+    const set = new Set(extraFolders);
+    for (const b of pageBlocks) if (b._folder) set.add(b._folder);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [pageBlocks, extraFolders]);
+  const folderCounts = useMemo(() => {
+    const m = {};
+    for (const b of pageBlocks) if (b._folder) m[b._folder] = (m[b._folder] || 0) + 1;
+    return m;
+  }, [pageBlocks]);
+  // What the home list shows: inside a folder → its papers; at root → unfiled papers
+  const homeVisiblePages = useMemo(() => (
+    folderFilter ? pageBlocks.filter((b) => b._folder === folderFilter)
+                 : pageBlocks.filter((b) => !b._folder)
+  ), [pageBlocks, folderFilter]);
+  const highlights = useMemo(() => {
+    const flat = flattenBlocks(blocks);
+    return blocksToHighlights(blocks).map((h) => {
+      const b = flat.find((x) => x.properties?.highlight_id === h.id);
+      const url = b?.properties?.link_url || "";
+      const pageId = b?.properties?.link_page_id || "";
+      return (url || pageId) ? { ...h, linkTarget: { url, pageId } } : h;
+    });
+  }, [blocks]);
   useEffect(() => {
     if (pdfHidden) return;
     const id = pendingJumpRef.current;
@@ -2651,51 +3356,68 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     );
   }
 
-  // The AI chat window — an independent pane docked left/right/bottom via chatDock.
-  const chatWindow = !readOnly && !chatHidden ? (
-    <div className="chatPanel chatWindow">
-      <div className="chatPanelHeader">
-        <span
-          className="chatPanelTitle chatDockGrip"
-          onPointerDown={(e) => startWindowDock(e, setChatDock)}
-          title="Drag to dock the chat left, right, or bottom"
-        >⠿ AI Chat</span>
-        {aiInfo?.models?.length > 0 ? (() => {
-          const models = aiInfo.models;
-          const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
-          const currentId = models.some((m) => m.id === chatModel) ? chatModel : aiInfo.default;
-          return (
-            <span className="chatHeaderSelects">
-              {models.length > 1 ? (
-                <select className="chatModelSelect" value={currentId}
-                  onChange={(e) => setChatModel(e.target.value)} title="Switch model">
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {multiProvider ? `${m.model} · ${m.provider}` : m.model}
-                    </option>
-                  ))}
-                </select>
-              ) : null}
-              <select className="chatModelSelect" value={chatEffort}
-                onChange={(e) => setChatEffort(e.target.value)}
-                title="Reasoning effort — leave on 'effort: default' unless the model supports it">
-                <option value="">effort: default</option>
-                {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
-                  <option key={ef} value={ef}>effort: {ef}</option>
+  // The AI chat window — placed by the shared layout slot system.
+  const chatHeaderContent = (
+    <>
+      {aiInfo?.models?.length > 0 ? (() => {
+        const models = aiInfo.models;
+        const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
+        const currentId = models.some((m) => m.id === chatModel) ? chatModel : aiInfo.default;
+        return (
+          <span className="chatHeaderSelects">
+            {models.length > 1 ? (
+              <select className="chatModelSelect" value={currentId}
+                onChange={(e) => setChatModel(e.target.value)} title="Switch model">
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {multiProvider ? `${m.model} · ${m.provider}` : m.model}
+                  </option>
                 ))}
               </select>
-            </span>
-          );
-        })() : null}
-        <div className="chatPanelHeaderBtns">
-          <button className="chatClearBtn"
-            onClick={() => { setPromptDraft(chatSystem || aiInfo?.default_prompt || ""); setPromptOpen(true); }}
-            title="View or edit the system prompt sent with every question">Prompt</button>
-          <button className="chatClearBtn" onClick={openReportModal} title="Generate a report from your notes and highlights across pages">Report</button>
-          <button className="chatClearBtn" onClick={clearChat} title="Start a fresh conversation (clears saved history)">New chat</button>
-          <button className="chatHideBtn" onClick={() => setChatHidden(true)} title="Hide chat (re-enable it from the ⋮ menu)">×</button>
-        </div>
+            ) : null}
+            <select className="chatModelSelect" value={chatEffort}
+              onChange={(e) => setChatEffort(e.target.value)}
+              title="Reasoning effort — leave on 'effort: default' unless the model supports it">
+              <option value="">effort: default</option>
+              {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
+                <option key={ef} value={ef}>effort: {ef}</option>
+              ))}
+            </select>
+          </span>
+        );
+      })() : null}
+      <div className="chatPanelHeaderBtns">
+        <button className={`chatClearBtn ${chatFindOpen ? "on" : ""}`}
+          onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}
+          title="Find in this conversation">Find</button>
+        <button className="chatClearBtn"
+          onClick={openPromptEditor}
+          title="View or edit the AI prompts (chat, metadata, citations)">Prompt</button>
+        <button className="chatClearBtn" onClick={clearChat} title="Start a fresh conversation (clears saved history)">New chat</button>
       </div>
+    </>
+  );
+  const chatWindow = !readOnly && !chatHidden ? (
+    <div className="chatPanel chatWindow">
+      {chatFindOpen ? (
+        <div className="chatFindRow">
+          <input
+            autoFocus
+            className="searchInput"
+            value={chatFind}
+            onChange={(e) => setChatFind(e.target.value)}
+            placeholder="Find in chat…"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); gotoChatFind(e.shiftKey ? chatFindIdx - 1 : chatFindIdx + 1); }
+              else if (e.key === "Escape") { e.preventDefault(); setChatFindOpen(false); setChatFind(""); }
+            }}
+          />
+          <span className="chatFindCount">{chatFind.trim() ? `${chatFindMatches.length ? chatFindIdx + 1 : 0}/${chatFindMatches.length}` : ""}</span>
+          <button className="searchToggle" onClick={() => gotoChatFind(chatFindIdx - 1)} disabled={!chatFindMatches.length} title="Previous match">▲</button>
+          <button className="searchToggle" onClick={() => gotoChatFind(chatFindIdx + 1)} disabled={!chatFindMatches.length} title="Next match">▼</button>
+          <button className="searchToggle" onClick={() => { setChatFindOpen(false); setChatFind(""); }} title="Close find">×</button>
+        </div>
+      ) : null}
       <div className="chatMessages" ref={chatScrollRef}>
         {chatMessages.length === 0 ? (
           <div className="chatEmpty">
@@ -2704,15 +3426,87 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               : (focusedBlockId ? "Ask AI about this page…" : "Ask AI anything, or generate a report from your pages…")}
           </div>
         ) : (
-          chatMessages.map((m, i) => (
-            <div key={i} className={`chatBubbleRow ${m.role === "user" ? "user" : "ai"}`}>
-              <div className={`chatBubble ${m.role === "user" ? "user" : "ai"}`}>
-                {m.role === "user"
-                  ? <div className="chatUserText">{m.text}</div>
-                  : <ChatMarkdown text={m.text} />}
+          chatMessages.map((m, i) => {
+            const isUser = m.role === "user";
+            const isFindHit = chatFindOpen && chatFind.trim() && chatFindMatches[chatFindIdx] === i;
+            if (editingMsg?.idx === i) {
+              return (
+                <div key={i} className="chatBubbleRow user" data-msg-idx={i}>
+                  <div className="chatMsgCol">
+                    <div className="chatBubble user chatEditBubble">
+                      <AutoGrowTextarea
+                        autoFocus
+                        className="chatEditTextarea"
+                        value={editingMsg.text}
+                        onChange={(e) => setEditingMsg({ idx: i, text: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            const base = chatMessages.slice(0, i);
+                            const text = editingMsg.text;
+                            setEditingMsg(null);
+                            sendChat(text, { baseMessages: base });
+                          } else if (e.key === "Escape") { e.preventDefault(); setEditingMsg(null); }
+                        }}
+                      />
+                      <div className="chatEditBtns">
+                        <button type="button" className="chatClearBtn" onClick={() => setEditingMsg(null)}>Cancel</button>
+                        <button type="button" className="chatClearBtn chatEditSend"
+                          disabled={!editingMsg.text.trim() || chatLoading}
+                          onClick={() => {
+                            const base = chatMessages.slice(0, i);
+                            const text = editingMsg.text;
+                            setEditingMsg(null);
+                            sendChat(text, { baseMessages: base });
+                          }}
+                          title="Re-send — replaces this message and everything after it">Send</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div key={i} className={`chatBubbleRow ${isUser ? "user" : "ai"}${isFindHit ? " findHit" : ""}`} data-msg-idx={i}>
+                <div className="chatMsgCol">
+                  <div className={`chatBubble ${isUser ? "user" : "ai"}`}>
+                    {m.images?.length ? (
+                      <div className="chatMsgImages">
+                        {m.images.map((src, j) => <img key={j} src={src} className="chatMsgImage" alt="pasted figure" />)}
+                      </div>
+                    ) : null}
+                    {m.pdfs?.length ? (
+                      <div className="chatMsgPdfs">
+                        {m.pdfs.map((n, j) => (
+                          <span key={j} className="chatPdfChip" title={n}>
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                            {n.slice(0, 40)}{n.length > 40 ? "…" : ""}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {isUser
+                      ? <div className="chatUserText">{m.text}</div>
+                      : <ChatMarkdown text={m.text} />}
+                  </div>
+                  <div className="chatMsgActions">
+                    <button type="button" className="chatMsgActionBtn" title="Copy message"
+                      onClick={() => copyChatMessage(i, m.text)}>
+                      {copiedMsgIdx === i
+                        ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                        : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+                    </button>
+                    {isUser && !chatLoading ? (
+                      <button type="button" className="chatMsgActionBtn" title="Edit and re-send (removes later messages)"
+                        onClick={() => setEditingMsg({ idx: i, text: m.text })}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
         {chatLoading ? (
           <div className="chatBubbleRow ai">
@@ -2729,23 +3523,98 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           <button type="button" className="chatSelChipClose" onClick={() => setPdfSelection("")} title="Dismiss — answer about the whole document">×</button>
         </div>
       ) : null}
+      {chatImages.length ? (
+        <div className="chatImgPreviewRow">
+          {chatImages.map((src, i) => (
+            <span key={i} className="chatImgPreview">
+              <img src={src} alt="pasted figure" />
+              <button type="button" className="chatImgRemove" title="Remove image"
+                onClick={() => setChatImages((prev) => prev.filter((_, j) => j !== i))}>×</button>
+            </span>
+          ))}
+        </div>
+      ) : null}
       <form
         className="chatInputRow"
         onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
       >
-        {docId ? (
-          <label className={`chatAttachToggle ${attachPdf ? "on" : ""}`} title="Send the PDF file itself to the model (better answers about figures/tables) instead of extracted text">
-            <input type="checkbox" checked={attachPdf} onChange={(e) => setAttachPdf(e.target.checked)} />
-            📎 PDF
-          </label>
-        ) : null}
-        <input
-          className="chatInput"
+        <span data-popover="chatdocs" style={{ position: "relative", display: "inline-flex" }}>
+          <button
+            type="button"
+            className={`chatAttachToggle chatPlusBtn ${(chatDocs.length || chatIncludeNotes) ? "on" : ""}`}
+            onClick={() => setOpenPopover((p) => (p === "chatdocs" ? null : "chatdocs"))}
+            title="Add context: choose PDFs and notes to include in this chat"
+            aria-label="Add chat context"
+          >
+            +{chatDocs.length ? <span className="chatPlusCount">{chatDocs.length}</span> : null}
+          </button>
+          {openPopover === "chatdocs" ? (
+            <div className="popover popUp attachPopover">
+              <div className="popoverTitle">Chat context</div>
+              <div className="popoverHint">
+                Selected PDFs (and optionally your notes) are sent with every question —
+                select a few papers and just ask for a report.
+              </div>
+              <div className="attachList">
+                {homeBlocks.filter((b) => b.properties?.doc_id).map((b) => (
+                  <label key={b.id} className="popoverItem attachItem">
+                    <input
+                      type="checkbox"
+                      checked={chatDocs.includes(b.id)}
+                      onChange={(e) => setChatDocs((prev) => e.target.checked
+                        ? [...prev, b.id]
+                        : prev.filter((id) => id !== b.id))}
+                    />
+                    <span className="attachName">{b.content || "Untitled"}</span>
+                  </label>
+                ))}
+                {homeBlocks.filter((b) => b.properties?.doc_id).length === 0 ? (
+                  <div className="popoverHint">No PDFs yet — open or upload one first.</div>
+                ) : null}
+              </div>
+              <div className="popoverDivider" />
+              <label className="popoverItem attachItem">
+                <input type="checkbox" checked={chatIncludeNotes} onChange={(e) => setChatIncludeNotes(e.target.checked)} />
+                <span className="attachName">Include my notes &amp; highlights</span>
+              </label>
+              {!chatDocs.length && docId ? (
+                <div className="popoverHint">Nothing selected — the currently open PDF is used.</div>
+              ) : null}
+            </div>
+          ) : null}
+        </span>
+        <button
+          type="button"
+          className={`chatAttachToggle chatPdfToggle ${attachPdf ? "on" : ""}`}
+          disabled={!docId && !chatDocs.length}
+          onClick={() => setAttachPdf((v) => !v)}
+          title={attachPdf
+            ? "Full PDF file is sent with each message (model sees figures & tables). Click to switch to extracted text only."
+            : "Send the full PDF file with your messages so the model sees figures & tables (uses more tokens). Click to enable."}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+          PDF
+        </button>
+        <AutoGrowTextarea
+          className="chatInput chatInputArea"
+          rows={1}
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
-          placeholder={pdfSelection ? "Ask about the selection…" : (focusedBlockId ? "Ask about this page…" : "Ask AI…")}
+          onPaste={handleChatPaste}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+          }}
+          placeholder={chatImages.length ? "Ask about the pasted figure…" : (pdfSelection ? "Ask about the selection…" : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : (focusedBlockId ? "Ask about this page… (Shift+Enter for a new line)" : "Ask AI… (paste images to attach)")))}
         />
-        <button className="chatSendBtn" type="submit" disabled={chatLoading || !chatInput.trim()}>Send</button>
+        {chatLoading ? (
+          <button className="chatSendBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+          </button>
+        ) : (
+          <button className="chatSendBtn chatCircleBtn" type="submit" disabled={!chatInput.trim()} title="Send" aria-label="Send">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
+          </button>
+        )}
       </form>
     </div>
   ) : null;
@@ -2753,15 +3622,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // The notes window - docked via notesDock, or filling the center when no PDF is shown.
   const notesWindow = notesVisible ? (
     <div className="sidebar" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-height": `${sidebarHeight}px` }}>
-          {!readOnly && !homeMode && pdfUrl && !pdfHidden ? (
-            <div
-              className="sidebarDockGrip"
-              onPointerDown={(e) => startWindowDock(e, setNotesDock)}
-              title="Drag to dock the notes pane left, right, or bottom"
-              role="separator"
-            >⠿ notes</div>
-          ) : null}
           {!homeMode && <div className="pageTitleRow">
+            <div className="pageTitleMain">
             {titleEditing && !readOnly && focusedBlockId ? (
               <input
                 className="titleEdit"
@@ -2785,106 +3647,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 }}
               >{focusedBlockId ? (pdfTitle || (docId ? getPdfPageTitle(docId, inputUrl) : "Untitled")) : "PDF Notes"}</h3>
             )}
-            {!readOnly && focusedBlockId && docId ? (
-              <button
-                className="aiTitleBtn"
-                title="AI: read the PDF and fill in the paper's title"
-                aria-label="Fill in title with AI"
-                onClick={aiFillTitle}
-                disabled={aiTitleBusy}
-              >
-                {aiTitleBusy ? (
-                  <span className="chatTyping"><span /><span /><span /></span>
-                ) : (
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
-                )}
-              </button>
-            ) : null}
-            {!readOnly && focusedBlockId ? (
-              <button
-                className="pageDeleteBtn"
-                title="Delete this page"
-                onClick={async () => {
-                  if (!window.confirm("Delete this page and all its notes?")) return;
-                  try {
-                    await apiJson(`${API}/blocks/${focusedBlockId}`, { method: "DELETE" });
-                  } catch {}
-                  clearSession();
-                  window.location.href = "/";
-                }}
-              >🗑</button>
-            ) : null}
-
-          </div>}
-
-          {inputUrl ? (
-            <div className="pageHeaderMeta">
-              <div className="pageHeaderLabel">Source PDF</div>
-              <div className="pageHeaderUrl">{inputUrl}</div>
-              {inputUrl && !inputUrl.startsWith("/api/") ? (
-                <label className="pdfSaveToggle" title={readOnly ? (pdfSaveLocal ? "PDF saved on server" : "PDF streamed from source") : undefined}>
-                  <span className={`pdfSaveSwitch${readOnly ? " disabled" : ""}`}>
-                    <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} disabled={readOnly} />
-                    <span className="pdfSaveSlider" />
-                  </span>
-                  {pdfSaveLocal ? "Saved on server" : "Streaming only"}
-                </label>
-              ) : null}
-            </div>
-          ) : null}
-
-          <div className="blockList">
-            {focusedBlockId && !readOnly && !homeMode ? (
-              <>
-                <div className="summaryFrontmatter">
-                  <span className="summaryFrontmatterLabel">summary::</span>
-                  {summaryEditing ? (
-                    <textarea
-                      className="summaryFrontmatterInput"
-                      value={summary}
-                      onChange={(e) => {
-                        setSummary(e.target.value);
-                        e.target.style.height = "auto";
-                        e.target.style.height = e.target.scrollHeight + "px";
-                      }}
-                      onBlur={() => {
-                        setSummaryEditing(false);
-                        saveSummary(summary);
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          setSummaryEditing(false);
-                          saveSummary(summary);
-                        } else if (e.key === "Escape") {
-                          e.preventDefault();
-                          setSummaryEditing(false);
-                          saveSummary(summary);
-                        }
-                      }}
-                      ref={(el) => {
-                        if (el) {
-                          el.style.height = "auto";
-                          el.style.height = el.scrollHeight + "px";
-                        }
-                      }}
-                      autoFocus
-                      rows={1}
-                      placeholder="Add a summary..."
-                    />
-                  ) : (
-                    <span
-                      className={`summaryFrontmatterValue ${summary ? "" : "empty"}`}
-                      onClick={() => setSummaryEditing(true)}
-                      title="Click to edit"
-                    >
-                      {summary || "Add a summary..."}
-                    </span>
-                  )}
-                </div>
-                <div className="categoryFrontmatter">
-                  <span className="summaryFrontmatterLabel">category::</span>
-                  {categoryEditing ? (() => {
+            {focusedBlockId && !readOnly ? (
+              <div className="categoryFrontmatter">
+                <span className="categoryIcon" title="Categories">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>
+                </span>
+                {categoryEditing ? (() => {
                     const currentTags = category.split(",").map(t => t.trim()).filter(Boolean);
                     const q = categoryInput.trim();
                     const suggestions = q ? [...new Set(homeBlocks.flatMap(b =>
@@ -2971,9 +3739,178 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       ) : "Add categories..."}
                     </span>
                   )}
-                </div>
-              </>
+              </div>
             ) : null}
+            </div>
+            {!readOnly && focusedBlockId ? (
+              <div className="pageActionCol">
+                {docId ? (
+                  <button
+                    className="pageActionBtn aiTitleBtn"
+                    title="AI: read the PDF and fill in the paper's title"
+                    aria-label="Fill in title with AI"
+                    onClick={aiFillTitle}
+                    disabled={aiTitleBusy}
+                  >
+                    {aiTitleBusy ? (
+                      <span className="chatTyping"><span /><span /><span /></span>
+                    ) : (
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
+                    )}
+                  </button>
+                ) : null}
+                {docId ? (
+                  <span data-popover="meta" style={{ position: "relative", display: "inline-flex" }}>
+                    <button
+                      className="pageActionBtn"
+                      title="Paper metadata (authors, venue, DOI, source file…)"
+                      aria-label="Paper metadata"
+                      onClick={() => {
+                        const opening = openPopover !== "meta";
+                        setOpenPopover(opening ? "meta" : null);
+                        if (opening) setSourceDraft(inputUrl);
+                      }}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 16v-5" /><path d="M12 8h.01" /></svg>
+                    </button>
+                    {openPopover === "meta" ? (
+                      <div className="popover sourcePopover metaPopover">
+                        <div className="popoverTitle citeSectionRow">
+                          <span>Paper metadata</span>
+                          <button
+                            className="searchToggle"
+                            title="Refresh metadata (arXiv → DOI → AI)"
+                            disabled={metaBusy}
+                            onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
+                          >{metaBusy ? "…" : "↻"}</button>
+                        </div>
+                        {pageMeta ? (
+                          <div className="metaTable">
+                            <div className="metaRow"><span className="metaKey">Title</span><span className="metaVal">{pageMeta.title}</span></div>
+                            <div className="metaRow"><span className="metaKey">Authors</span><span className="metaVal">{(pageMeta.authors || []).join(", ") || "—"}</span></div>
+                            <div className="metaRow"><span className="metaKey">Venue</span><span className="metaVal">{pageMeta.venue || "—"}</span></div>
+                            <div className="metaRow"><span className="metaKey">Year</span><span className="metaVal">{pageMeta.year || "—"}{pageMeta.volume ? ` · vol. ${pageMeta.volume}` : ""}{pageMeta.pages ? `, pp. ${pageMeta.pages}` : ""}</span></div>
+                            {pageMeta.doi ? (
+                              <div className="metaRow"><span className="metaKey">DOI</span><span className="metaVal"><a href={`https://doi.org/${pageMeta.doi}`} target="_blank" rel="noreferrer">{pageMeta.doi}</a></span></div>
+                            ) : null}
+                            {pageMeta.arxiv_id ? (
+                              <div className="metaRow"><span className="metaKey">arXiv</span><span className="metaVal"><a href={`https://arxiv.org/abs/${pageMeta.arxiv_id}`} target="_blank" rel="noreferrer">{pageMeta.arxiv_id}</a></span></div>
+                            ) : null}
+                            <div className="metaRow"><span className="metaKey">Source</span><span className="metaVal">{pageMeta.source === "ai" ? "AI-extracted" : pageMeta.source}</span></div>
+                          </div>
+                        ) : (
+                          <div className="popoverHint">{metaBusy ? "Fetching metadata…" : "No metadata yet — hit ↻ to fetch."}</div>
+                        )}
+                        {(pageMeta || pageBibtex) ? (
+                          <>
+                            <div className="popoverDivider" />
+                            <div className="popoverSection citeSectionRow">
+                              <span>Slide citation</span>
+                              <button
+                                className="searchToggle"
+                                title="Regenerate the citation"
+                                disabled={pptCiteBusy}
+                                onClick={() => makePptCitation(true)}
+                              >{pptCiteBusy ? "…" : "↻"}</button>
+                            </div>
+                            {pptCite ? (
+                              <div className="pptCiteBox">
+                                <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
+                                <button
+                                  className="chatMsgActionBtn"
+                                  onClick={() => copyCitation("ppt", pptCite)}
+                                  title="Copy — pastes with real italics/bold into PowerPoint"
+                                  aria-label="Copy slide citation"
+                                >
+                                  {citeCopied === "ppt"
+                                    ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                                    : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
+                            )}
+                          </>
+                        ) : null}
+                        {pageBibtex ? (
+                          <div className="reportModalBtns">
+                            <button className="chatClearBtn" onClick={() => copyCitation("bibtex", pageBibtex)} title="Copy the BibTeX entry">
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4, verticalAlign: "-1px" }}><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+                              {citeCopied === "bibtex" ? "Copied ✓" : "BibTeX"}
+                            </button>
+                          </div>
+                        ) : null}
+                        <div className="popoverDivider" />
+                        <div className="popoverSection">Source file</div>
+                        <input
+                          className="searchInput"
+                          value={sourceDraft}
+                          onChange={(e) => setSourceDraft(e.target.value)}
+                          placeholder="PDF URL or /api/uploads/…"
+                        />
+                        {sourceDraft && !sourceDraft.startsWith("/api/") ? (
+                          <label className="popoverItem attachItem">
+                            <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
+                            <span className="attachName">Save a copy on the server</span>
+                          </label>
+                        ) : null}
+                        {sourceDraft.trim() && sourceDraft.trim() !== inputUrl ? (
+                          <div className="reportModalBtns">
+                            <button
+                              className="chatSendBtn"
+                              onClick={async () => {
+                                const url = sourceDraft.trim();
+                                setOpenPopover(null);
+                                try {
+                                  await apiJson(`${API}/blocks/${focusedBlockId}`, {
+                                    method: "PUT",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ properties: { source_url: url } }),
+                                  });
+                                  await openBlock(focusedBlockId);
+                                  setStatus("Source PDF replaced.");
+                                } catch (err) {
+                                  setStatus(`Replace failed: ${err.message}`);
+                                }
+                              }}
+                            >Replace source</button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </span>
+                ) : null}
+                <button
+                  className="pageActionBtn pageDeleteBtn"
+                  title="Delete this page"
+                  onClick={() => setConfirmBox({
+                    title: "Delete page",
+                    message: `Delete "${pdfTitle || "this page"}" and all its notes? This can't be undone.`,
+                    confirmLabel: "Delete",
+                    danger: true,
+                    onConfirm: async () => {
+                      try {
+                        await apiJson(`${API}/blocks/${focusedBlockId}`, { method: "DELETE" });
+                      } catch {}
+                      // Close the page's tab too (write straight to storage —
+                      // we reload right after, so state updates wouldn't stick).
+                      try {
+                        localStorage.setItem("gamma-tabs",
+                          JSON.stringify(openTabs.filter((t) => t.id !== focusedBlockId)));
+                      } catch {}
+                      clearSession();
+                      window.location.href = "/";
+                    },
+                  })}
+                >
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                </button>
+              </div>
+            ) : null}
+
+          </div>}
+
+          <div className="blockList">
             {!homeMode && backlinks.length > 0 ? (
               <div className="backlinksPanel">
                 <div className="backlinksLabel">Backlinks ({backlinks.length})</div>
@@ -3105,9 +4042,85 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </>
               );
             })() : null}
+            {homeMode && !categoryFilter ? (
+              <div className="folderBrowser">
+                {folderFilter ? (
+                  <>
+                    <div
+                      className={`folderRow folderBackRow ${folderDragOver === "__root__" ? "dragOver" : ""}`}
+                      onClick={() => { setFolderFilter(""); window.history.replaceState(null, "", "/"); }}
+                      onDragOver={(e) => { e.preventDefault(); setFolderDragOver("__root__"); }}
+                      onDragLeave={() => setFolderDragOver(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        setFolderDragOver(null);
+                        const id = e.dataTransfer.getData("text/plain");
+                        if (id) setPageFolder(id, "");
+                      }}
+                      title="Back — or drop a paper here to move it out of the folder"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
+                      <span className="folderName">All papers</span>
+                      <span className="folderHint">drop here to move out</span>
+                    </div>
+                    <div className="folderCurrent">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>
+                      {folderFilter}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {folderNames.map((f) => (
+                      <div
+                        key={f}
+                        className={`folderRow ${folderDragOver === f ? "dragOver" : ""}`}
+                        onClick={() => { setFolderFilter(f); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(f)}`); }}
+                        onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
+                        onDragLeave={() => setFolderDragOver(null)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setFolderDragOver(null);
+                          const id = e.dataTransfer.getData("text/plain");
+                          if (id) setPageFolder(id, f);
+                        }}
+                        title="Open folder — or drop a paper on it to file it"
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                        <span className="folderName">{f}</span>
+                        <span className="folderCount">{folderCounts[f] || 0}</span>
+                      </div>
+                    ))}
+                    {newFolderOpen ? (
+                      <div className="folderRow folderNewRow">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                        <input
+                          autoFocus
+                          className="folderNewInput"
+                          value={newFolderName}
+                          onChange={(e) => setNewFolderName(e.target.value)}
+                          placeholder="Folder name…"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { e.preventDefault(); commitNewFolder(); }
+                            else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
+                          }}
+                          onBlur={commitNewFolder}
+                        />
+                      </div>
+                    ) : (
+                      <button className="folderRow folderNewBtn" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }}>
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                        <span className="folderName">New folder</span>
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : null}
             {homeMode && categoryFilter ? null : (
-            (homeMode ? pageBlocks : visibleBlocks).length === 0 ? (
-              <div className="empty">{homeMode ? "No pages yet — open a PDF above to get started." : "No blocks yet."}</div>
+            (homeMode ? homeVisiblePages : visibleBlocks).length === 0 ? (
+              <div className="empty">{homeMode
+                ? (folderFilter ? "This folder is empty — drag papers onto it from the library." : (pageBlocks.length ? "All papers are filed in folders." : "No pages yet — open a PDF above to get started."))
+                : "No blocks yet."}</div>
             ) : (
               (() => {
                 const rowProps = {
@@ -3117,6 +4130,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   onJump: jumpToHighlightId,
                   onEnterAttachMode: readOnly ? null : setAttachModeBlockId,
                   onUnlinkHighlight: readOnly ? null : unlinkHighlightFromBlock,
+                  onOpenLinkTarget: (b) => {
+                    const p = b.properties || {};
+                    if (p.link_page_id) openBlock(p.link_page_id, { pushNav: true });
+                    else if (p.link_url) handleDocLink(p.link_url);
+                  },
                   registerRef,
                   readOnly,
                   allBlocks: flattenBlocks(blocks),
@@ -3138,6 +4156,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       pendingBlockScrollRef.current = id;
                       setBlocks((prev) => expandToBlock(prev, id));
                     } else {
+                      pushNav(); // block-ref click = link jump to another page
                       pendingBlockScrollRef.current = id;
                       const cached = refCache[id];
                       const rootId = cached?.page_root_id;
@@ -3308,7 +4327,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 };
                 return (
                   <>
-                    <BlockTree blocks={homeMode ? pageBlocks : blocks} readOnly={readOnly} rowProps={rowProps} />
+                    <BlockTree blocks={homeMode ? homeVisiblePages : blocks} readOnly={readOnly} rowProps={rowProps} />
                     {dropTarget && (() => {
                       const indentStep = 14;
                       const baseOffset = 28;
@@ -3343,33 +4362,51 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // Slot the windows into dock columns / the bottom row. When no PDF is shown
   // (home, page-only, or PDF closed) the notes window takes the center instead.
   const centerNotes = pdfHidden || homeMode || pageOnly;
-  function dockWins(side) {
-    const wins = [];
-    if (!centerNotes && notesWindow && notesDock === side) wins.push({ key: "notes", el: notesWindow });
-    if (chatWindow && chatDock === side) wins.push({ key: "chat", el: chatWindow });
-    return wins;
+  const winVisible = {
+    notes: Boolean(notesWindow) && !centerNotes,
+    chat: Boolean(chatWindow),
+  };
+  function renderWindow(id) {
+    const common = {
+      onGrip: (e) => startWindowDock(e, id),
+      onGripDoubleClick: () => setCollapsedWins((prev) => ({ ...prev, [id]: !prev[id] })),
+      collapsed: !!collapsedWins[id],
+    };
+    if (id === "notes") {
+      return (
+        <DockWindow title="Notes" {...common} onClose={() => setNotesVisible(false)}>
+          {notesWindow}
+        </DockWindow>
+      );
+    }
+    if (id === "chat") {
+      return (
+        <DockWindow title="Chat" {...common} onClose={() => setChatHidden(true)} headerContent={chatHeaderContent}>
+          {chatWindow}
+        </DockWindow>
+      );
+    }
+    return null;
   }
-  function dockColumn(side) {
-    const wins = dockWins(side);
-    if (!wins.length) return null;
-    const col = (
-      <div className="dockCol" style={{ width: side === "left" ? leftWidth : rightWidth }}>
+  // Windows per slot, in stored order, visibility-filtered.
+  const slotWins = (side) => layout[side].filter((w) => winVisible[w]);
+  function renderSlotGroup(side, direction) {
+    const wins = slotWins(side);
+    return (
+      <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`}>
         {wins.map((w, i) => (
-          <React.Fragment key={w.key}>
-            {i > 0 ? <div className="dockDivider" /> : null}
-            <div className="dockCell">{w.el}</div>
+          <React.Fragment key={w}>
+            {i > 0 ? <PanelResizeHandle className={`sash sash-${direction}`} /> : null}
+            {collapsedWins[w] ? (
+              <Panel id={`${w}-collapsed`} order={i + 1} minSize={4} maxSize={7}>{renderWindow(w)}</Panel>
+            ) : (
+              <Panel id={w} order={i + 1} minSize={15}>{renderWindow(w)}</Panel>
+            )}
           </React.Fragment>
         ))}
-      </div>
+      </PanelGroup>
     );
-    const sash = (
-      <div className="splitter splitter-horizontal" key="sash">
-        <div className="splitterGrab" onPointerDown={(e) => startColResize(e, side)} aria-label="Drag to resize" role="separator"><span className="splitterGrabDot" /></div>
-      </div>
-    );
-    return side === "left" ? (<>{col}{sash}</>) : (<>{sash}{col}</>);
   }
-  const bottomWins = dockWins("bottom");
 
   return (
     <div
@@ -3401,20 +4438,59 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         <>
           <div className="topbar">
             <button
-              className={`homeBtn ${homeMode ? "active" : ""}`}
+              className={`iconBtn homeBtn ${homeMode ? "activeIcon" : ""}`}
               onClick={goHome}
               title="Home"
               aria-label="Home"
             >
-              Γ
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
             </button>
+            {navStackLen > 0 ? (
+              <button
+                className="iconBtn navBackBtn"
+                onClick={goBackNav}
+                onContextMenu={(e) => { e.preventDefault(); setNavStack([]); }}
+                title={`Back to where you were${navStackLen > 1 ? ` (${navStackLen} steps)` : ""} — Alt+← · right-click to clear`}
+                aria-label="Back"
+              >
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
+                <span className="navBackBadge">{Math.min(navStackLen, 30)}</span>
+              </button>
+            ) : null}
             <div className="tabStrip" role="tablist">
               {openTabs.map((t) => (
                 <div
                   key={t.id}
                   role="tab"
-                  className={`tab ${t.id === focusedBlockId ? "active" : ""}`}
+                  ref={(el) => {
+                    if (el) tabElsRef.current.set(t.id, el);
+                    else tabElsRef.current.delete(t.id);
+                  }}
+                  className={`tab ${t.id === focusedBlockId ? "active" : ""} ${draggingTabId === t.id ? "dragging" : ""}`}
                   title={t.title}
+                  draggable
+                  onDragStart={(e) => {
+                    dragTabRef.current = t.id;
+                    setDraggingTabId(t.id);
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragEnd={() => { dragTabRef.current = null; setDraggingTabId(null); }}
+                  onDragOver={(e) => {
+                    // Chrome-style live reorder: hovering another tab swaps places
+                    const dragged = dragTabRef.current;
+                    if (!dragged || dragged === t.id) return;
+                    e.preventDefault();
+                    setOpenTabs((prev) => {
+                      const from = prev.findIndex((x) => x.id === dragged);
+                      const to = prev.findIndex((x) => x.id === t.id);
+                      if (from < 0 || to < 0 || from === to) return prev;
+                      const next = [...prev];
+                      const [moved] = next.splice(from, 1);
+                      next.splice(to, 0, moved);
+                      return next;
+                    });
+                  }}
+                  onDrop={(e) => e.preventDefault()}
                   onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id); }}
                   onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } }}
                 >
@@ -3433,13 +4509,52 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <input
                   value={inputUrl}
                   onChange={(e) => setInputUrl(e.target.value)}
-                  placeholder="Open a PDF by URL…"
-                  onKeyDown={(e) => { if (e.key === "Enter") openPdf(inputUrl); }}
+                  placeholder="Open a PDF by URL — press Enter"
+                  onKeyDown={(e) => { if (e.key === "Enter" && !loading) openPdf(inputUrl); }}
                 />
-                <button onClick={() => openPdf(inputUrl)} disabled={loading} className="openBtn">
-                  Open
-                </button>
               </div>
+            ) : null}
+            {transfers.length ? (
+              <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
+                <button
+                  className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
+                  onClick={() => setOpenPopover((p) => (p === "downloads" ? null : "downloads"))}
+                  title="Downloads & uploads"
+                  aria-label="Downloads and uploads"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>
+                  {transfers.some((t) => t.status === "active") ? <span className="transferSpin" /> : null}
+                </button>
+                {openPopover === "downloads" ? (
+                  <div className="popover downloadsPopover">
+                    <div className="popoverTitle citeSectionRow">
+                      <span>Downloads &amp; uploads</span>
+                      <button
+                        className="searchToggle transferClearBtn"
+                        title="Clear finished"
+                        onClick={() => setTransfers((prev) => prev.filter((t) => t.status === "active"))}
+                      >Clear</button>
+                    </div>
+                    {transfers.map((t) => (
+                      <div key={t.id} className="transferRow">
+                        <span className={`transferStatus ${t.status}`}>
+                          {t.status === "active" ? <span className="transferSpin inline" />
+                            : t.status === "done"
+                              ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                              : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 8v5" /><path d="M12 16.5h.01" /><circle cx="12" cy="12" r="9" /></svg>}
+                        </span>
+                        <span className="transferKind">
+                          {t.kind === "upload"
+                            ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15V3" /><path d="m7 8 5-5 5 5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>
+                            : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>}
+                        </span>
+                        <span className="transferName" title={t.name}>{t.name}</span>
+                        <span className="transferInfo">{t.info || ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </span>
             ) : null}
             <span data-popover="search" style={{ position: "relative", display: "inline-flex" }}>
               <button
@@ -3506,22 +4621,20 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <span className="searchResultText">{r.content}</span>
                       </button>
                     ))}
-                    {pdfMatches.length ? <div className="searchSection">This PDF</div> : null}
+                    {pdfMatches.length ? (
+                      <div className="searchSection searchSectionRow">
+                        <span>This PDF · {findIndex + 1}/{pdfMatches.length}</span>
+                        <span className="findNav">
+                          <button className="searchToggle" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">▲</button>
+                          <button className="searchToggle" onClick={() => gotoFind(findIndex + 1)} title="Next match">▼</button>
+                        </span>
+                      </div>
+                    ) : null}
                     {pdfMatches.map((m, i) => (
                       <button
                         key={`pdf-${i}`}
-                        className="searchResult"
-                        onClick={() => {
-                          setOpenPopover(null);
-                          setPdfHidden(false);
-                          scrollToRef.current?.({
-                            position: {
-                              pageNumber: m.page,
-                              boundingRect: { x1: 0, y1: 0, x2: 0, y2: 0, width: 1, height: 1, pageNumber: m.page },
-                              rects: [],
-                            },
-                          });
-                        }}
+                        className={`searchResult ${i === findIndex ? "active" : ""}`}
+                        onClick={() => gotoFind(i)}
                       >
                         <span className="searchResultPage">p. {m.page}</span>
                         <span className="searchResultText">…{m.snippet}…</span>
@@ -3578,10 +4691,29 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <div className="popoverHint">Guest workspace resets daily. Ask the admin for an account to keep your work.</div>
                     ) : null}
                     <div className="popoverSection">Settings</div>
-                    <button className="popoverItem" onClick={() => { setPromptDraft(chatSystem || aiInfo?.default_prompt || ""); setPromptOpen(true); setOpenPopover(null); }}>
-                      AI system prompt…
+                    <label className="popoverItem attachItem" title="When a publisher PDF is paywalled or blocks server fetching, load a legal open-access copy (often the arXiv version) instead">
+                      <input type="checkbox" checked={oaFallback} onChange={(e) => setOaFallback(e.target.checked)} />
+                      <span className="attachName">Fall back to open-access / arXiv copies</span>
+                    </label>
+                    <label className="popoverItem attachItem" title="Look up title, authors, venue, and BibTeX (arXiv → DOI → AI) automatically when a paper is opened">
+                      <input type="checkbox" checked={metaAutoFetch} onChange={(e) => setMetaAutoFetch(e.target.checked)} />
+                      <span className="attachName">Auto-fetch paper metadata</span>
+                    </label>
+                    <label className="popoverItem attachItem" title="Keep a copy of PDFs opened by URL on the server, so they load fast and survive dead links">
+                      <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
+                      <span className="attachName">Save external PDFs on the server</span>
+                    </label>
+                    <button className="popoverItem" onClick={() => { openPromptEditor(); setOpenPopover(null); }}>
+                      AI prompts…
                     </button>
-                    <div className="popoverHint">AI provider keys and models are configured on the server (.env: GAMMA_AI_*). Model, effort, and prompt choices are saved in this browser.</div>
+                    <button
+                      className="popoverItem"
+                      onClick={() => { setOpenPopover(null); window.location.href = `${API}/export`; }}
+                      title="Download a zip backup: your notes databases + every uploaded PDF. Restore by unpacking into users/<name>/ on the server."
+                    >
+                      Export my data (.zip)
+                    </button>
+                    <div className="popoverHint">AI provider keys and models are configured on the server (.env: GAMMA_AI_*). Everything above is saved in this browser.</div>
                     <div className="popoverDivider" />
                     <button className="popoverItem" onClick={doLogout}>Log out</button>
                   </div>
@@ -3614,6 +4746,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     <span className="check">{!chatHidden ? "✓" : ""}</span> AI Chat
                   </button>
                   <div className="popoverDivider" />
+                  {docId && focusedBlockId ? (
+                    <button
+                      className="popoverItem"
+                      title="Import highlights/notes saved inside the PDF file (SumatraPDF, Acrobat…)"
+                      onClick={() => { importEmbeddedAnnots(focusedBlockId, docId, false); setOpenPopover(null); }}
+                    >
+                      Import PDF annotations
+                    </button>
+                  ) : null}
                   <label
                     className="popoverItem importLogseqBtn"
                     title="Import Logseq PDF highlights (.pdf + .edn)"
@@ -3637,7 +4778,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </>
       ) : (
         <div className="topbar">
-          <button className="homeBtn" disabled title="Home" aria-label="Home">Γ</button>
+          <button className="iconBtn homeBtn" disabled title="Home" aria-label="Home">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+          </button>
           <span className="readOnlyTitle">{pdfTitle}</span>
           <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
             <button
@@ -3684,8 +4827,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       )}
 
       <div className="workArea">
-      {dockColumn("left")}
-      <div className="mainStack">
+      <PanelGroup direction="horizontal" autoSaveId="gamma-work-h">
+      {slotWins("left").length ? (
+        <>
+          <Panel id="slot-left" order={1} defaultSize={26} minSize={15} className="dockSlot">
+            {renderSlotGroup("left", "vertical")}
+          </Panel>
+          <PanelResizeHandle className="sash sash-horizontal" />
+        </>
+      ) : null}
+      <Panel id="slot-center" order={2} minSize={30} className="dockSlot">
+      <PanelGroup direction="vertical" autoSaveId="gamma-work-v">
+      <Panel id="slot-main" order={1} minSize={20} className="dockSlot">
       <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
         <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
           {pdfUrl && !pdfHidden ? (
@@ -3698,11 +4851,25 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           ) : null}
           {pdfUrl && !pdfHidden ? (
             <div className="pdfZoomOverlay">
-              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "0.8" : String(Math.max(0.4, +(n - 0.2).toFixed(1))); })} title="Zoom out" aria-label="Zoom out">
+              <button onClick={() => zoomStep(-1)} title="Zoom out" aria-label="Zoom out">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /></svg>
               </button>
-              <span className="pdfZoomLevel">{isNaN(parseFloat(pdfScale)) ? "Fit" : `${Math.round(parseFloat(pdfScale) * 100)}%`}</span>
-              <button onClick={() => setPdfScale((s) => { const n = parseFloat(s); return isNaN(n) ? "1.2" : String(Math.min(4, +(n + 0.2).toFixed(1))); })} title="Zoom in" aria-label="Zoom in">
+              <span className="pdfZoomLevel">
+                <input
+                  className="pdfZoomInput"
+                  value={zoomDraft !== null ? zoomDraft : String(Math.round(pdfEffScale * 100))}
+                  onFocus={(e) => { setZoomDraft(String(Math.round(pdfEffScale * 100))); e.target.select(); }}
+                  onChange={(e) => setZoomDraft(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))}
+                  onBlur={() => {
+                    const n = parseInt(zoomDraft, 10);
+                    if (!isNaN(n) && n > 0) setPdfScale(String(Math.max(0.4, Math.min(4, n / 100))));
+                    setZoomDraft(null);
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                  title="Type a zoom percentage"
+                />%
+              </span>
+              <button onClick={() => zoomStep(1)} title="Zoom in" aria-label="Zoom in">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /><path d="M11 8v6" /></svg>
               </button>
               <button className="pdfFitWidthBtn" onClick={() => setPdfScale("page-width")} title="Fit to width" aria-label="Fit to width">
@@ -3714,6 +4881,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <PdfViewer url={pdfUrl} highlights={highlights}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
+              findMarks={findMarksMemo}
+              onEffectiveScale={setPdfEffScale}
+              onBeforeLinkJump={pushNav}
+              onLoadState={handlePdfLoadState}
+              onExternalLink={handleDocLink}
+              onLinkHighlight={(h) => {
+                if (h.linkTarget?.pageId) openBlock(h.linkTarget.pageId, { pushNav: true });
+                else if (h.linkTarget?.url) handleDocLink(h.linkTarget.url);
+              }}
               onJump={jumpToHighlightId}
               onHighlightJump={(hlId) => {
                 const b = flattenBlocks(blocks).find(b => b.properties?.highlight_id === hlId);
@@ -3725,6 +4901,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               }}
               onHighlightContext={setHighlightMenu}
               onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {
+                if (extras?.link) {
+                  setLinkDialog({ position, content });
+                  setLinkDialogInput("");
+                  hideTip?.();
+                  return;
+                }
                 addHighlight({
                   content: content || { text: "" },
                   position,
@@ -3742,95 +4924,173 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
         {centerNotes ? notesWindow : null}
       </div>
-      {bottomWins.length ? (
+      </Panel>
+      {slotWins("bottom").length ? (
         <>
-          <div className="chatSplitter" onPointerDown={startChatResize} onDoubleClick={() => setChatHeight(220)} aria-label="Drag to resize" role="separator">
-            <span className="chatSplitterDot" />
-          </div>
-          <div className="dockRow" style={{ height: chatHeight }}>
-            {bottomWins.map((w, i) => (
-              <React.Fragment key={w.key}>
-                {i > 0 ? <div className="dockRowDivider" /> : null}
-                <div className="dockCell">{w.el}</div>
-              </React.Fragment>
-            ))}
-          </div>
+          <PanelResizeHandle className="sash sash-vertical" />
+          <Panel id="slot-bottom" order={2} defaultSize={32} minSize={12} className="dockSlot">
+            {renderSlotGroup("bottom", "horizontal")}
+          </Panel>
         </>
       ) : null}
-      </div>
-      {dockColumn("right")}
+      </PanelGroup>
+      </Panel>
+      {slotWins("right").length ? (
+        <>
+          <PanelResizeHandle className="sash sash-horizontal" />
+          <Panel id="slot-right" order={3} defaultSize={28} minSize={15} className="dockSlot">
+            {renderSlotGroup("right", "vertical")}
+          </Panel>
+        </>
+      ) : null}
+      </PanelGroup>
       </div>
       {dockPreview ? (
         <div className={`dockPreview dockPreview-${dockPreview}`} />
       ) : null}
+      {confirmBox ? (
+        // data-popover keeps an open popover (e.g. search) alive while the dialog is up
+        <div className="reportOverlay" data-popover="confirm" onClick={() => setConfirmBox(null)}>
+          <div className="reportModal confirmModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">{confirmBox.title}</div>
+            <div className="reportModalHint confirmMessage">{confirmBox.message}</div>
+            <div className="reportModalBtns">
+              <button className="chatClearBtn" onClick={() => setConfirmBox(null)} autoFocus>Cancel</button>
+              <button
+                className={`chatSendBtn ${confirmBox.danger ? "dangerBtn" : ""}`}
+                onClick={() => { const fn = confirmBox.onConfirm; setConfirmBox(null); fn?.(); }}
+              >{confirmBox.confirmLabel || "OK"}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {linkPrompt ? (
+        <div className="reportOverlay" onClick={() => setLinkPrompt(null)}>
+          <div className="reportModal confirmModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">External link</div>
+            <div className="reportModalHint confirmMessage linkPromptUrl">{linkPrompt}</div>
+            <div className="reportModalBtns">
+              <button className="chatClearBtn" onClick={() => setLinkPrompt(null)}>Cancel</button>
+              <button
+                className="chatClearBtn"
+                onClick={() => { const url = linkPrompt; setLinkPrompt(null); pushNav(); openPdf(url); }}
+                title="Resolve this link as a PDF and open it as a new paper in Gamma"
+              >Fetch into Gamma</button>
+              <button
+                className="chatSendBtn"
+                onClick={() => { window.open(linkPrompt, "_blank", "noopener"); setLinkPrompt(null); }}
+              >Open in browser</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {linkDialog ? (
+        <div className="reportOverlay" onClick={() => setLinkDialog(null)}>
+          <div className="reportModal confirmModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">{linkDialog.editBlockId ? "Change reference link" : "Link reference to a paper"}</div>
+            {linkDialog.content?.text ? (
+              <div className="reportModalHint linkRefQuote">“{linkDialog.content.text.slice(0, 160)}{linkDialog.content.text.length > 160 ? "…" : ""}”</div>
+            ) : null}
+            <div className="reportModalHint">Paste a DOI, arXiv id, or URL — or pick one of your papers. The selection becomes a clickable link on the PDF.</div>
+            <div className="shareRow">
+              <input
+                autoFocus
+                placeholder="10.1103/…  ·  1810.11086  ·  https://…"
+                value={linkDialogInput}
+                onChange={(e) => setLinkDialogInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && linkDialogInput.trim()) {
+                    e.preventDefault();
+                    createLinkHighlight({ url: normalizeLinkInput(linkDialogInput) });
+                  } else if (e.key === "Escape") { setLinkDialog(null); }
+                }}
+              />
+              <button
+                className="chatSendBtn"
+                disabled={!linkDialogInput.trim()}
+                onClick={() => createLinkHighlight({ url: normalizeLinkInput(linkDialogInput) })}
+              >Link</button>
+            </div>
+            <div className="popoverSection">Your papers (best match first)</div>
+            <div className="reportPageList">
+              {(() => {
+                const cands = homeBlocks
+                  .filter((b) => b.properties?.doc_id && b.id !== focusedBlockId)
+                  .map((b) => ({ b, score: scorePaperMatch(linkDialog.content?.text || "", b) }))
+                  .sort((x, y) => y.score - x.score
+                    || (y.b.updated_at || "").localeCompare(x.b.updated_at || ""));
+                if (!cands.length) return <div className="popoverHint">No other PDFs in your library yet.</div>;
+                return cands.map(({ b, score }) => (
+                  <button key={b.id} className="reportPageItem linkPageItem" onClick={() => createLinkHighlight({ pageId: b.id })}>
+                    <span className="reportPageName">{b.content || "Untitled"}</span>
+                    {score >= 6 ? <span className="linkLikelyBadge">likely</span> : null}
+                  </button>
+                ));
+              })()}
+            </div>
+            <div className="reportModalBtns">
+              {linkDialog.editBlockId ? (
+                <button className="chatClearBtn" onClick={() => createLinkHighlight({})} title="Turn this back into a plain highlight">Remove link</button>
+              ) : null}
+              <button className="chatClearBtn" onClick={() => setLinkDialog(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {promptOpen ? (
         <div className="reportOverlay" onClick={() => setPromptOpen(false)}>
-          <div className="reportModal" onClick={(e) => e.stopPropagation()}>
-            <div className="reportModalTitle">System prompt</div>
+          <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">AI prompts</div>
             <div className="reportModalHint">
-              Sent with every chat question. {chatSystem ? "You are using a custom prompt." : "This is the built-in default (only applied when a document is open)."}
-              {" "}A custom prompt is always applied and is saved in this browser.
+              Custom prompts are saved in this browser. Saving a prompt unchanged from its default keeps the built-in behavior.
+            </div>
+            <div className="promptSectionHead">
+              <span>Chat system prompt{chatSystem ? " · custom" : ""}</span>
+              <button className="chatClearBtn" onClick={() => setPromptDraft(aiInfo?.default_prompt || "")}>Reset</button>
             </div>
             <textarea
               className="promptTextarea"
               value={promptDraft}
               onChange={(e) => setPromptDraft(e.target.value)}
-              rows={8}
+              rows={5}
               placeholder="You are a research assistant…"
             />
+            <div className="promptSectionHead">
+              <span>Metadata extraction{metaPrompt ? " · custom" : ""}</span>
+              <button className="chatClearBtn" onClick={() => setMetaPromptDraft(aiInfo?.metadata_prompt || "")}>Reset</button>
+            </div>
+            <div className="reportModalHint">Used when a paper has no arXiv id or DOI and the AI reads the first pages instead.</div>
+            <textarea
+              className="promptTextarea"
+              value={metaPromptDraft}
+              onChange={(e) => setMetaPromptDraft(e.target.value)}
+              rows={4}
+            />
+            <div className="promptSectionHead">
+              <span>PPT citation{citePrompt ? " · custom" : ""}</span>
+              <button className="chatClearBtn" onClick={() => setCitePromptDraft(aiInfo?.cite_prompt || "")}>Reset</button>
+            </div>
+            <div className="reportModalHint">Turns the paper's BibTeX into a minimal slide-ready citation (Share → PPT citation).</div>
+            <textarea
+              className="promptTextarea"
+              value={citePromptDraft}
+              onChange={(e) => setCitePromptDraft(e.target.value)}
+              rows={4}
+            />
             <div className="reportModalBtns">
-              <button className="chatClearBtn"
-                onClick={() => setPromptDraft(aiInfo?.default_prompt || "")}
-                title="Restore the built-in prompt text">Reset to default</button>
               <button className="chatClearBtn" onClick={() => setPromptOpen(false)}>Cancel</button>
               <button className="chatSendBtn"
                 onClick={() => {
-                  const draft = promptDraft.trim();
                   // Saving the unmodified default = no custom prompt
-                  setChatSystem(draft === (aiInfo?.default_prompt || "").trim() ? "" : draft);
+                  const norm = (draft, def) => {
+                    const d = (draft || "").trim();
+                    return d === (def || "").trim() ? "" : d;
+                  };
+                  setChatSystem(norm(promptDraft, aiInfo?.default_prompt));
+                  setMetaPrompt(norm(metaPromptDraft, aiInfo?.metadata_prompt));
+                  setCitePrompt(norm(citePromptDraft, aiInfo?.cite_prompt));
                   setPromptOpen(false);
                 }}>Save</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {reportOpen ? (
-        <div className="reportOverlay" onClick={() => { if (!reportBusy) setReportOpen(false); }}>
-          <div className="reportModal" onClick={(e) => e.stopPropagation()}>
-            <div className="reportModalTitle">Generate report</div>
-            <div className="reportModalHint">
-              Pick the papers/pages to include. The AI receives each paper's text along with your
-              highlighted passages and notes, and writes a report organized around them.
-            </div>
-            <div className="reportPageList">
-              {homeBlocks.map((b) => (
-                <label key={b.id} className="reportPageItem">
-                  <input
-                    type="checkbox"
-                    checked={!!reportChecked[b.id]}
-                    onChange={(e) => setReportChecked((prev) => ({ ...prev, [b.id]: e.target.checked }))}
-                  />
-                  <span className="reportPageName">{b.content || "Untitled"}</span>
-                </label>
-              ))}
-              {homeBlocks.length === 0 ? <div className="chatEmpty">No pages yet.</div> : null}
-            </div>
-            <input
-              className="chatInput reportInstructions"
-              placeholder="Optional instructions (e.g. compare the methods, focus on results)…"
-              value={reportInstructions}
-              onChange={(e) => setReportInstructions(e.target.value)}
-              disabled={reportBusy}
-            />
-            <div className="reportModalBtns">
-              <button className="chatClearBtn" onClick={() => setReportOpen(false)} disabled={reportBusy}>Cancel</button>
-              <button
-                className="chatSendBtn"
-                onClick={generateReport}
-                disabled={reportBusy || !Object.values(reportChecked).some(Boolean)}
-              >
-                {reportBusy ? "Generating…" : "Generate"}
-              </button>
             </div>
           </div>
         </div>
@@ -3838,61 +5098,47 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       {highlightMenu ? (
         <>
           <div
-            style={{ position: "fixed", inset: 0, zIndex: 999 }}
+            className="ctxMenuBackdrop"
             onClick={() => setHighlightMenu(null)}
             onContextMenu={(e) => { e.preventDefault(); setHighlightMenu(null); }}
           />
-          <div
-            style={{
-              position: "fixed",
-              left: highlightMenu.x,
-              top: highlightMenu.y,
-              zIndex: 1000,
-              background: "#222",
-              border: "1px solid #444",
-              borderRadius: 6,
-              padding: "4px 0",
-              minWidth: 120,
-              boxShadow: "0 4px 12px rgba(0,0,0,0.5)"
-            }}
-          >
-            <div style={{ padding: "6px 10px 4px", borderBottom: "1px solid #444", display: "flex", gap: 6 }}>
+          <div className="ctxMenu" style={{ left: highlightMenu.x, top: highlightMenu.y }}>
+            <div className="colorRow ctxMenuColors">
               {COLORS.map((c) => (
                 <button
                   key={c}
+                  type="button"
+                  className="colorBtn"
+                  style={{ background: c }}
                   onClick={() => {
                     changeHighlightColor(highlightMenu.id, c);
                     setHighlightMenu(null);
                   }}
                   title="Change color"
-                  style={{
-                    width: 20,
-                    height: 20,
-                    borderRadius: "50%",
-                    background: c,
-                    border: "2px solid #555",
-                    cursor: "pointer",
-                    padding: 0,
-                    flexShrink: 0
-                  }}
                 />
               ))}
             </div>
             <button
+              className="ctxMenuItem"
+              onClick={() => {
+                const blk = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === highlightMenu.id);
+                const h = highlights.find((x) => x.id === highlightMenu.id);
+                setLinkDialog({
+                  position: null,
+                  content: { text: h?.content?.text || "" },
+                  editBlockId: blk?.id || highlightMenu.id,
+                });
+                setLinkDialogInput(h?.linkTarget?.url || "");
+                setHighlightMenu(null);
+              }}
+            >
+              {highlights.find((x) => x.id === highlightMenu.id)?.linkTarget ? "Change link…" : "Link to paper…"}
+            </button>
+            <button
+              className="ctxMenuItem"
               onClick={() => {
                 deleteHighlight(highlightMenu.id);
                 setHighlightMenu(null);
-              }}
-              style={{
-                display: "block",
-                width: "100%",
-                padding: "8px 14px",
-                background: "transparent",
-                color: "#eee",
-                border: "none",
-                textAlign: "left",
-                cursor: "pointer",
-                fontSize: 14
               }}
             >
               Delete

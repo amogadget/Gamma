@@ -15,6 +15,10 @@ STATIC_DIR = os.environ.get("GAMMA_STATIC_DIR", "")
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
+# Contact email sent to polite-pool APIs (Unpaywall open-access lookup).
+# Set your real address — it's only used to identify this instance to those services.
+CONTACT_EMAIL = os.environ.get("GAMMA_CONTACT_EMAIL", "gamma-pdf-annotator@example.com")
+
 # --- AI chat -----------------------------------------------------------------
 # Two wire protocols, each independently configurable so both can be offered at
 # once in the chat panel's model switcher:
