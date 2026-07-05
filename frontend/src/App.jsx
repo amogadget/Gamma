@@ -562,7 +562,7 @@ export default function App() {
     setPptCite("");
     setCiteCopied("");
     const b = focusedBlock;
-    if (readOnly || !b?.id || !b.properties?.doc_id) { setPageMeta(null); setPageBibtex(""); return; }
+    if (!b?.id || !b.properties?.doc_id) { setPageMeta(null); setPageBibtex(""); return; }
     if (b.properties.meta) {
       setPageMeta(b.properties.meta);
       setPageBibtex(b.properties.bibtex || "");
@@ -571,7 +571,7 @@ export default function App() {
     }
     setPageMeta(null);
     setPageBibtex("");
-    if (!metaAutoFetch) return; // manual via ↻ only
+    if (readOnly || !metaAutoFetch) return; // shared views show cache only; manual via ↻
     if (attemptedMetaRef.current.has(b.id)) return;
     attemptedMetaRef.current.add(b.id);
     fetchMetadata(b, false);
@@ -620,7 +620,7 @@ export default function App() {
   // Opening the metadata popover generates the slide citation automatically
   // (cached on the page afterwards, so this is a one-time AI call per paper).
   useEffect(() => {
-    if (openPopover === "meta" && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
+    if (!readOnly && openPopover === "meta" && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
       makePptCitation();
     }
   }, [openPopover, pageMeta]);
@@ -784,7 +784,7 @@ export default function App() {
 
   // Fetch backlinks for the focused block
   useEffect(() => {
-    if (!focusedBlockId) { setBacklinks([]); return; }
+    if (!focusedBlockId || readOnly) { setBacklinks([]); return; }
     let cancelled = false;
     (async () => {
       try {
@@ -2052,9 +2052,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               </div>
             ) : null}
             </div>
-            {!readOnly && focusedBlockId ? (
+            {focusedBlockId ? (
               <div className="pageActionCol">
-                {docId ? (
+                {docId && !readOnly ? (
                   <button
                     className="pageActionBtn aiTitleBtn"
                     title="AI: read the PDF and fill in the paper's title"
@@ -2087,12 +2087,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <div className="popover sourcePopover metaPopover">
                         <div className="popoverTitle citeSectionRow">
                           <span>Paper metadata</span>
-                          <button
-                            className="searchToggle"
-                            title="Refresh metadata (arXiv → DOI → AI)"
-                            disabled={metaBusy}
-                            onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
-                          >{metaBusy ? "…" : "↻"}</button>
+                          {!readOnly ? (
+                            <button
+                              className="searchToggle"
+                              title="Refresh metadata (arXiv → DOI → AI)"
+                              disabled={metaBusy}
+                              onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
+                            >{metaBusy ? "…" : "↻"}</button>
+                          ) : null}
                         </div>
                         {pageMeta ? (
                           <div className="metaTable">
@@ -2109,19 +2111,21 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             <div className="metaRow"><span className="metaKey">Source</span><span className="metaVal">{pageMeta.source === "ai" ? "AI-extracted" : pageMeta.source}</span></div>
                           </div>
                         ) : (
-                          <div className="popoverHint">{metaBusy ? "Fetching metadata…" : "No metadata yet — hit ↻ to fetch."}</div>
+                          <div className="popoverHint">{metaBusy ? "Fetching metadata…" : readOnly ? "No metadata available." : "No metadata yet — hit ↻ to fetch."}</div>
                         )}
                         {(pageMeta || pageBibtex) ? (
                           <>
                             <div className="popoverDivider" />
                             <div className="popoverSection citeSectionRow">
                               <span>Slide citation</span>
-                              <button
-                                className="searchToggle"
-                                title="Regenerate the citation"
-                                disabled={pptCiteBusy}
-                                onClick={() => makePptCitation(true)}
-                              >{pptCiteBusy ? "…" : "↻"}</button>
+                              {!readOnly ? (
+                                <button
+                                  className="searchToggle"
+                                  title="Regenerate the citation"
+                                  disabled={pptCiteBusy}
+                                  onClick={() => makePptCitation(true)}
+                                >{pptCiteBusy ? "…" : "↻"}</button>
+                              ) : null}
                             </div>
                             {pptCite ? (
                               <div className="pptCiteBox">
@@ -2138,7 +2142,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                                 </button>
                               </div>
                             ) : (
-                              <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
+                              <div className="popoverHint">{pptCiteBusy ? "Generating…" : readOnly ? "The owner hasn't generated a citation yet." : "Citation will generate when metadata is ready."}</div>
                             )}
                           </>
                         ) : null}
@@ -2150,6 +2154,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             </button>
                           </div>
                         ) : null}
+                        {!readOnly ? (<>
                         <div className="popoverDivider" />
                         <div className="popoverSection">Source file</div>
                         <input
@@ -2186,10 +2191,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             >Replace source</button>
                           </div>
                         ) : null}
+                        </>) : null}
                       </div>
                     ) : null}
                   </span>
                 ) : null}
+                {!readOnly ? (
                 <button
                   className="pageActionBtn pageDeleteBtn"
                   title="Delete this page"
@@ -2217,6 +2224,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 >
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
                 </button>
+                ) : null}
               </div>
             ) : null}
 
