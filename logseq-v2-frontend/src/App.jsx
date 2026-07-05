@@ -1651,7 +1651,29 @@ export default function App() {
   const [searchReplaceOpen, setSearchReplaceOpen] = useState(false);
   const [searchReplace, setSearchReplace] = useState("");
   const [pdfMatches, setPdfMatches] = useState([]);
+  const [libMatches, setLibMatches] = useState([]); // FTS hits across ALL papers' PDF text
+  const [libIndexing, setLibIndexing] = useState(0); // papers still being indexed server-side
   const [findIndex, setFindIndex] = useState(0); // active PDF match for find next/prev
+
+  // Open a library search hit: load the paper, then scroll to the hit's page.
+  function openLibMatch(r) {
+    setOpenPopover(null);
+    openBlock(r.block_id).then(() => {
+      let tries = 0;
+      const go = () => {
+        if (scrollToRef.current && document.querySelector("[data-page]")) {
+          scrollToRef.current({
+            position: {
+              pageNumber: r.page,
+              boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: r.page },
+              rects: [],
+            },
+          });
+        } else if (tries++ < 40) setTimeout(go, 200);
+      };
+      setTimeout(go, 600); // let the session-restore scroll settle first
+    });
+  }
   const [searchNonce, setSearchNonce] = useState(0); // bump to re-run the search
   const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rect, pageW, pageH}]
   useEffect(() => { setFindIndex(0); }, [pdfMatches]);
@@ -1678,7 +1700,10 @@ export default function App() {
     });
   }
   useEffect(() => {
-    if (openPopover !== "search" || !searchQuery.trim()) { setSearchResults([]); setPdfMatches([]); return; }
+    if (openPopover !== "search" || !searchQuery.trim()) {
+      setSearchResults([]); setPdfMatches([]); setLibMatches([]); setLibIndexing(0);
+      return;
+    }
     const timer = setTimeout(() => {
       setSearchBusy(true);
       const q = searchQuery.trim();
@@ -1686,6 +1711,11 @@ export default function App() {
       const notesReq = apiJson(`${API}/block-search?q=${encodeURIComponent(q)}&limit=20${flags}`)
         .then((d) => setSearchResults(d.blocks || []))
         .catch(() => setSearchResults([]));
+      // Full-text over every paper's PDF (server-side FTS index; the toggles
+      // don't apply here — it's plain word matching)
+      const libReq = apiJson(`${API}/pdf-search?q=${encodeURIComponent(q)}&limit=15`)
+        .then((d) => { setLibMatches(d.results || []); setLibIndexing(d.indexing || 0); })
+        .catch(() => { setLibMatches([]); setLibIndexing(0); });
       let pdfReq = Promise.resolve();
       if (pdfSearchRef.current) {
         try {
@@ -1697,7 +1727,7 @@ export default function App() {
       } else {
         setPdfMatches([]);
       }
-      Promise.allSettled([notesReq, pdfReq]).then(() => setSearchBusy(false));
+      Promise.allSettled([notesReq, pdfReq, libReq]).then(() => setSearchBusy(false));
     }, 250);
     return () => clearTimeout(timer);
   }, [searchQuery, openPopover, searchCase, searchWhole, searchRegex, searchNonce]);
@@ -4661,7 +4691,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   ) : null}
                   <div className="searchResults">
                     {searchBusy ? <div className="searchHint">Searching…</div> : null}
-                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 ? (
+                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 && libMatches.length === 0 ? (
                       <div className="searchHint">No matches.</div>
                     ) : null}
                     {searchResults.length ? <div className="searchSection">Notes</div> : null}
@@ -4696,6 +4726,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       >
                         <span className="searchResultPage">p. {m.page}</span>
                         <span className="searchResultText">…{m.snippet}…</span>
+                      </button>
+                    ))}
+                    {libMatches.length || libIndexing ? (
+                      <div className="searchSection">Library PDFs</div>
+                    ) : null}
+                    {libIndexing ? (
+                      <div className="searchHint">Indexing {libIndexing} paper{libIndexing === 1 ? "" : "s"} in the background — results will fill in shortly.</div>
+                    ) : null}
+                    {libMatches.map((r, i) => (
+                      <button
+                        key={`lib-${i}`}
+                        className="searchResult"
+                        onClick={() => openLibMatch(r)}
+                        title={`Open "${r.title}" at page ${r.page}`}
+                      >
+                        <span className="searchResultPage">{r.title.slice(0, 60)} · p. {r.page}</span>
+                        <span className="searchResultText">…{r.snippet}…</span>
                       </button>
                     ))}
                   </div>
