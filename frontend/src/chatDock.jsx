@@ -166,10 +166,10 @@ export default function ChatDock({
       ...(pdfNames.length ? { pdfs: pdfNames } : {}),
     };
     const sendKey = chatKey; // reply belongs to THIS conversation, even if the user navigates away
-    const appendReply = (aiMsg) => {
+    const showReply = (aiMsg, final) => {
       if (chatKeyRef.current === sendKey) {
-        setChatMessages((prev) => [...prev, aiMsg]);
-      } else {
+        setChatMessages([...prevMessages, userMsg, aiMsg]);
+      } else if (final) {
         // The user switched pages mid-request — save straight to the
         // original conversation instead of the one on screen.
         fetch(`${API}/chats/${encodeURIComponent(sendKey)}`, {
@@ -188,10 +188,12 @@ export default function ChatDock({
     if (sendingPdf) setAttachPdf(false);
     const ctrl = new AbortController();
     chatAbortRef.current = ctrl;
+    let acc = ""; // streamed reply so far — kept on Stop
     try {
-      const data = await apiJson(`${API}/ai/chat`, {
+      const res = await fetch(`${API}/ai/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         signal: ctrl.signal,
         body: JSON.stringify({
           prompt: text,
@@ -205,11 +207,41 @@ export default function ChatDock({
           pages: chatDocs,
           include_notes: chatIncludeNotes,
           images,
+          stream: true,
         }),
       });
-      appendReply({ role: "ai", text: data.response || "(no response)" });
+      if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try { detail = (await res.json()).detail || detail; } catch {}
+        throw new Error(detail);
+      }
+      // NDJSON stream: {"delta": "…"} per chunk, {"error": "…"} on failure.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop(); // keep the trailing partial line
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const ev = JSON.parse(line);
+          if (ev.error) throw new Error(ev.error);
+          acc += ev.delta || "";
+        }
+        if (acc) showReply({ role: "ai", text: acc, partial: true });
+      }
+      showReply({ role: "ai", text: acc || "(no response)" }, true);
     } catch (err) {
-      appendReply({ role: "ai", text: err?.name === "AbortError" ? "*(stopped)*" : `Error: ${err.message}` });
+      const stopped = err?.name === "AbortError";
+      showReply({
+        role: "ai",
+        text: stopped
+          ? (acc ? `${acc}\n\n*(stopped)*` : "*(stopped)*")
+          : (acc ? `${acc}\n\n**Error:** ${err.message}` : `Error: ${err.message}`),
+      }, true);
     } finally {
       setChatLoading(false);
       setChatLoadingKey("");
@@ -390,7 +422,7 @@ export default function ChatDock({
             );
           })
         )}
-        {chatLoading && chatLoadingKey === chatKey ? (
+        {chatLoading && chatLoadingKey === chatKey && !chatMessages[chatMessages.length - 1]?.partial ? (
           <div className="chatBubbleRow ai">
             <div className="chatBubble ai">
               <span className="chatTyping"><span /><span /><span /></span>
