@@ -1,9 +1,9 @@
 # --- Stage 1: build the frontend ---
 FROM node:22-alpine AS frontend
 WORKDIR /build
-COPY logseq-v2-frontend/package.json logseq-v2-frontend/package-lock.json ./
+COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
-COPY logseq-v2-frontend/ ./
+COPY frontend/ ./
 RUN npm run build
 
 # --- Stage 2: runtime ---

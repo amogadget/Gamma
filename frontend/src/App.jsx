@@ -1,20 +1,12 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import PdfViewer, { COLORS } from "./pdfViewer";
+import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl } from "./utils";
+import { DockWindow, ChatMarkdown } from "./widgets";
+import { BlockTree, _dragState } from "./blockTree";
+import ChatDock from "./chatDock";
 
-// Module-level ref for native HTML5 drag-and-drop (shared across components)
-const _dragState = { draggingId: null, dropTarget: null };
 
-import * as pdfjsLib from "pdfjs-dist";
-import "pdfjs-dist/web/pdf_viewer.css";
-pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-// Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches
-pdfjsLib.getDocument({ data: new Uint8Array() }).promise.catch(() => {});
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import rehypeKatex from "rehype-katex";
-import rehypeRaw from "rehype-raw";
-import "katex/dist/katex.min.css";
 import {
   blocksToPageMarkdown,
   setBlockText,
@@ -39,1288 +31,6 @@ import {
   normalizeBlocks
 } from "./logseqPdfModel";
 import { loadSession, saveSession, clearSession } from "./sessionState";
-
-const API = "/api";
-
-function makeId() {
-  return Math.random().toString(36).slice(2, 10);
-}
-
-function fmtBytes(n) {
-  if (n == null) return "";
-  if (n < 1024) return `${n} B`;
-  if (n < 1048576) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / 1048576).toFixed(1)} MB`;
-}
-
-async function sha256(text) {
-  const data = new TextEncoder().encode(text);
-  const hash = await crypto.subtle.digest("SHA-256", data);
-  return Array.from(new Uint8Array(hash))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function getDocIdForUrl(sourceUrl) {
-  return (await sha256(sourceUrl)).slice(0, 24);
-}
-
-function oldRectToNewRect(r, pageNumber) {
-  const x1 = r.leftPct;
-  const y1 = r.topPct;
-  const width = r.widthPct;
-  const height = r.heightPct;
-  return {
-    x1,
-    y1,
-    x2: x1 + width,
-    y2: y1 + height,
-    width,
-    height,
-    pageNumber
-  };
-}
-
-function convertOldAnnotation(a) {
-  if (a && a.position && a.position.pageNumber) return a;
-
-  const pageNumber = a.pageNumber;
-  const rects = Array.isArray(a.rects) ? a.rects.map((r) => oldRectToNewRect(r, pageNumber)) : [];
-
-  if (!pageNumber || rects.length === 0) {
-    return {
-      id: a.id || makeId(),
-      content: { text: a.quote || "" },
-      position: {
-        pageNumber: 1,
-        boundingRect: { x1: 0, y1: 0, x2: 0, y2: 0, width: 0, height: 0, pageNumber: 1 },
-        rects: []
-      },
-      comment: { text: a.note || "", emoji: "🟡" },
-      color: a.color || "rgba(255, 226, 143, 0.65)"
-    };
-  }
-
-  const boundingRect = {
-    x1: Math.min(...rects.map((r) => r.x1)),
-    y1: Math.min(...rects.map((r) => r.y1)),
-    x2: Math.max(...rects.map((r) => r.x2)),
-    y2: Math.max(...rects.map((r) => r.y2)),
-    pageNumber
-  };
-  boundingRect.width = boundingRect.x2 - boundingRect.x1;
-  boundingRect.height = boundingRect.y2 - boundingRect.y1;
-
-  return {
-    id: a.id || makeId(),
-    content: { text: a.quote || "" },
-    position: {
-      pageNumber,
-      boundingRect,
-      rects
-    },
-    comment: { text: a.note || "", emoji: "🟡" },
-    color: a.color || "rgba(255, 226, 143, 0.65)"
-  };
-}
-
-function parseStored(payload) {
-  if (!payload || !payload.data) return { version: 1, annotations: [] };
-  try {
-    const obj = JSON.parse(payload.data);
-    const raw = Array.isArray(obj.annotations) ? obj.annotations : [];
-    return {
-      version: 1,
-      annotations: raw.map(convertOldAnnotation)
-    };
-  } catch {
-    return { version: 1, annotations: [] };
-  }
-}
-
-async function apiJson(url, options = {}) {
-  const r = await fetch(url, { ...options, credentials: "include" });
-  if (r.status === 401) {
-    const isShareView = new URLSearchParams(window.location.search).get("share");
-    if (!isShareView) {
-      window.dispatchEvent(new CustomEvent("gamma-auth-expired"));
-    }
-    throw new Error("401 Unauthorized");
-  }
-  if (!r.ok) {
-    const text = await r.text();
-    // FastAPI errors come as {"detail": "..."} — show the human message, not raw JSON
-    let msg = text;
-    try {
-      const j = JSON.parse(text);
-      if (j && typeof j.detail === "string") msg = j.detail;
-    } catch {}
-    throw new Error(msg || `HTTP ${r.status}`);
-  }
-  return r.json();
-}
-
-async function resolvePdfUrl(rawUrl, allowOa = true) {
-  // {source_url, note} — note explains e.g. that an open-access preprint was
-  // substituted because the published PDF is paywalled.
-  return apiJson(`${API}/resolve-pdf`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source_url: rawUrl, allow_oa: allowOa })
-  });
-}
-
-const COLORS = [
-  "rgba(255, 226, 143, 0.65)",
-  "rgba(170, 235, 170, 0.65)",
-  "rgba(155, 205, 255, 0.65)",
-  "rgba(230, 180, 255, 0.65)"
-];
-
-// Shared chrome for every dockable window: one grip (drag to move/reorder,
-// double-click to collapse), the close button right beside it, then the
-// window's own controls. Notes and chat both use this so their behavior
-// can't drift apart.
-function DockWindow({ title, onGrip, onGripDoubleClick, onClose, headerContent, collapsed, children }) {
-  return (
-    <div className={`dockWindow ${collapsed ? "collapsed" : ""}`}>
-      <div className="dockWindowHeader">
-        <span
-          className="dockGrip"
-          onPointerDown={onGrip}
-          onDoubleClick={onGripDoubleClick}
-          title="Drag to move this window · double-click to collapse/expand"
-        >⠿ {title}</span>
-        {onClose ? (
-          <button className="dockCloseBtn" onClick={onClose} title="Close window (reopen from the ⋮ menu)" aria-label={`Close ${title}`}>×</button>
-        ) : null}
-        <span className="dockHeaderSpacer" />
-        {collapsed ? null : headerContent}
-      </div>
-      {collapsed ? null : <div className="dockWindowBody">{children}</div>}
-    </div>
-  );
-}
-
-// Markdown + KaTeX rendering for AI chat messages. Unlike block rendering this
-// deliberately omits rehypeRaw: model output is untrusted, so raw HTML stays inert.
-// Models often emit \( \) / \[ \] LaTeX delimiters, which remark-math doesn't
-// recognize — normalize them to $ / $$ so math always renders.
-function ChatMarkdown({ text }) {
-  const normalized = useMemo(() => (text || "")
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `\n$$\n${m}\n$$\n`)
-    .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`), [text]);
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeKatex]}
-      components={{
-        a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
-      }}
-    >
-      {normalized}
-    </ReactMarkdown>
-  );
-}
-
-const EMPTY_MARKS = [];
-
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks, onExternalLink, onBeforeLinkJump, onLoadState }) {
-  const viewerRef = useRef(null);
-  const [pdfDoc, setPdfDoc] = useState(null);
-  const [numPages, setNumPages] = useState(0);
-  const [forcePages, setForcePages] = useState(new Set());
-  const pageHeightsRef = useRef([]); // viewport heights at scale 1, indexed 0..n-1
-
-  // Stable callback identities so memoized pages don't re-render every time a
-  // parent state change recreates the handler closures. The wrappers always
-  // dispatch to the latest handlers via the ref.
-  const cbRef = useRef({});
-  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink };
-  const stableCbs = useMemo(() => ({
-    onJump: (...a) => cbRef.current.onJump?.(...a),
-    onHighlightJump: (...a) => cbRef.current.onHighlightJump?.(...a),
-    onLinkHighlight: (...a) => cbRef.current.onLinkHighlight?.(...a),
-    onHighlightContext: (...a) => cbRef.current.onHighlightContext?.(...a),
-    onExternalLink: (...a) => cbRef.current.onExternalLink?.(...a),
-  }), []);
-
-  // Group find marks per page once, sharing one frozen empty array so pages
-  // without marks keep referentially-equal props (memo stays effective).
-  const marksByPage = useMemo(() => {
-    const map = new Map();
-    for (const m of findMarks || []) {
-      if (!map.has(m.page)) map.set(m.page, []);
-      map.get(m.page).push(m);
-    }
-    return map;
-  }, [findMarks]);
-
-  // Expose full-text search over the loaded document (used by the search
-  // panel). Matches carry the text item's rect (at scale 1) so they can be
-  // highlighted on the page and jumped to.
-  useEffect(() => {
-    if (!searchRef) return;
-    searchRef.current = pdfDoc ? async (re) => {
-      const out = [];
-      for (let p = 1; p <= pdfDoc.numPages && out.length < 200; p++) {
-        const page = await pdfDoc.getPage(p);
-        const vp = page.getViewport({ scale: 1 });
-        const tc = await page.getTextContent();
-        for (const it of tc.items) {
-          if (out.length >= 200) break;
-          const str = it.str || "";
-          if (!str) continue;
-          const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
-          let m;
-          while ((m = rx.exec(str)) && out.length < 200) {
-            if (!m[0]) { rx.lastIndex++; continue; }
-            const tx = pdfjsLib.Util.transform(vp.transform, it.transform);
-            const fh = Math.hypot(tx[2], tx[3]) || 10;
-            // Highlight only the matched keyword: slice the run's rect
-            // proportionally by character position (runs are single-line).
-            const w = it.width || fh;
-            const x1 = tx[4] + w * (m.index / str.length);
-            const x2 = tx[4] + w * ((m.index + m[0].length) / str.length);
-            const ctxStart = Math.max(0, m.index - 40);
-            out.push({
-              page: p,
-              snippet: str.slice(ctxStart, m.index + m[0].length + 60).trim().slice(0, 140),
-              rect: { x1, y1: tx[5] - fh, x2: Math.max(x1 + 2, x2), y2: tx[5] + fh * 0.25 },
-              pageW: vp.width,
-              pageH: vp.height,
-            });
-          }
-        }
-      }
-      return out;
-    } : null;
-    return () => { if (searchRef) searchRef.current = null; };
-  }, [pdfDoc, searchRef]);
-  // Resolve scale: numeric value as-is, "page-width" computes a scale that
-  // fits the first page to the viewer width. Recomputed on viewer resize so
-  // it adapts to sidebar drags / phone rotation.
-  const [fitWidthScale, setFitWidthScale] = useState(1);
-  const numericScale = parseFloat(pdfScaleValue);
-  const isFitWidth = isNaN(numericScale);
-  const scale = isFitWidth ? fitWidthScale : numericScale;
-  useEffect(() => { onEffectiveScale?.(scale); }, [scale, onEffectiveScale]);
-  useEffect(() => {
-    if (!isFitWidth || !pdfDoc || !viewerRef.current) return;
-    let cancelled = false;
-    const compute = async () => {
-      try {
-        const page = await pdfDoc.getPage(1);
-        if (cancelled || !viewerRef.current) return;
-        const naturalW = page.getViewport({ scale: 1 }).width;
-        const containerW = viewerRef.current.clientWidth;
-        if (naturalW > 0 && containerW > 0) {
-          setFitWidthScale(Math.max(0.2, containerW / naturalW));
-        }
-      } catch {}
-    };
-    compute();
-    const ro = new ResizeObserver(compute);
-    ro.observe(viewerRef.current);
-    return () => { cancelled = true; ro.disconnect(); };
-  }, [isFitWidth, pdfDoc]);
-
-  useEffect(() => {
-    if (!url) return;
-    let cancelled = false; setPdfDoc(null);
-    (async () => {
-      try {
-        onLoadState?.(url, { phase: "start" });
-        // Parallel range requests overlap with worker download.
-        // Each range is its own HTTP/2 stream so flow-control doesn't single-stream-cap us.
-        // Probe size via a 1-byte range request (backend doesn't allow HEAD).
-        const probe = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include" });
-        if (cancelled) return;
-        if (!probe.ok) { onLoadState?.(url, { phase: "error" }); return; }
-        await probe.arrayBuffer();
-        const cr = probe.headers.get("content-range") || "";
-        const m = cr.match(/\/(\d+)$/);
-        const total = m ? parseInt(m[1], 10) : 0;
-        let data;
-        if (total > 0) {
-          const N = 6;
-          const chunkSize = Math.ceil(total / N);
-          const parts = await Promise.all(Array.from({ length: N }, (_, i) => {
-            const start = i * chunkSize;
-            const end = Math.min(start + chunkSize - 1, total - 1);
-            return fetch(url, { headers: { Range: `bytes=${start}-${end}` }, credentials: "include" })
-              .then(r => r.arrayBuffer());
-          }));
-          if (cancelled) return;
-          const buf = new Uint8Array(total);
-          let off = 0;
-          for (const p of parts) { buf.set(new Uint8Array(p), off); off += p.byteLength; }
-          data = buf.buffer;
-        } else {
-          const resp = await fetch(url, { credentials: "include" });
-          if (cancelled) return;
-          if (!resp.ok) { onLoadState?.(url, { phase: "error" }); return; }
-          data = await resp.arrayBuffer();
-          if (cancelled) return;
-        }
-        const bytes = data.byteLength;
-        pdfjsLib.getDocument({ data, disableAutoFetch: true, disableRange: true }).promise.then(doc => {
-          if (!cancelled) {
-            setPdfDoc(doc); setNumPages(doc.numPages);
-            onLoadState?.(url, { phase: "done", bytes });
-          }
-        }).catch(() => { if (!cancelled) onLoadState?.(url, { phase: "error" }); });
-      } catch {
-        if (!cancelled) onLoadState?.(url, { phase: "error" });
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [url]);
-
-  // Preserve scroll position across zoom changes by anchoring on the page
-  // currently at the top of the viewport (and how far down within it),
-  // then re-placing that exact page+offset after pages re-render at the
-  // new size. Pure-fraction preservation drifts because of the fixed 8px
-  // inter-page margins; page anchoring is exact.
-  const prevScaleRef = useRef(scale);
-  useEffect(() => {
-    const prev = prevScaleRef.current;
-    prevScaleRef.current = scale;
-    if (prev === scale || !viewerRef.current) return;
-    const v = viewerRef.current;
-    const heights = pageHeightsRef.current;
-    if (heights.length === 0) return;
-
-    // Find the page covering the current scrollTop using the OLD scale.
-    let acc = 0, anchorIdx = 0, fracInPage = 0;
-    for (let i = 0; i < heights.length; i++) {
-      const ph = (heights[i] || 800) * prev;
-      if (acc + ph + 8 > v.scrollTop) {
-        anchorIdx = i;
-        fracInPage = (v.scrollTop - acc) / Math.max(1, ph);
-        break;
-      }
-      acc += ph + 8;
-    }
-
-    // After re-render, place the same page+offset at the top.
-    let tries = 0;
-    let lastSH = -1;
-    const restore = () => {
-      if (!viewerRef.current) return;
-      const v2 = viewerRef.current;
-      if (v2.scrollHeight !== lastSH) {
-        lastSH = v2.scrollHeight;
-        let newAcc = 0;
-        for (let i = 0; i < anchorIdx; i++) {
-          newAcc += (heights[i] || 800) * scale + 8;
-        }
-        const targetH = (heights[anchorIdx] || 800) * scale;
-        v2.scrollTop = newAcc + fracInPage * targetH;
-      }
-      if (tries++ < 30) requestAnimationFrame(restore);
-    };
-    requestAnimationFrame(restore);
-  }, [scale]);
-
-  // Pre-compute every page's natural height. The values feed both the jump
-  // math and the per-page placeholder height below — having every page's
-  // wrapper reserve its real size keeps the DOM's scrollHeight in sync with
-  // what the jump math assumes, so scrollTo() doesn't get clamped to a
-  // smaller scrollable range. Computing metadata-only viewports is cheap.
-  const [pageHeights, setPageHeights] = useState([]);
-  useEffect(() => {
-    if (!pdfDoc) return;
-    let cancelled = false;
-    pageHeightsRef.current = [];
-    (async () => {
-      const acc = [];
-      for (let i = 1; i <= pdfDoc.numPages; i++) {
-        if (cancelled) break;
-        try {
-          const page = await pdfDoc.getPage(i);
-          acc.push(page.getViewport({ scale: 1 }).height);
-        } catch (e) {
-          acc.push(800);
-        }
-        // Publish in batches so the first pages reserve their space ASAP
-        // without forcing one re-render per page.
-        if (acc.length === 5 || acc.length === pdfDoc.numPages || acc.length % 50 === 0) {
-          if (cancelled) break;
-          pageHeightsRef.current = [...acc];
-          setPageHeights([...acc]);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [pdfDoc]);
-
-  // Scroll to exact highlight position. Long jumps snap instantly — smooth
-  // scrolling across many pages is what made find-next feel sluggish.
-  const scrollToPositionRef = useRef(null);
-  useEffect(() => {
-    scrollToPositionRef.current = async ({ position, behavior }) => {
-      const pn = position?.pageNumber || position?.boundingRect?.pageNumber;
-      if (!pn || !viewerRef.current || !pdfDoc) return;
-      const r = position?.boundingRect;
-      const heights = pageHeightsRef.current;
-
-      // Lazy-compute missing page heights up to target page
-      for (let i = heights.length; i < pn; i++) {
-        try {
-          const page = await pdfDoc.getPage(i + 1);
-          heights[i] = page.getViewport({ scale: 1 }).height;
-        } catch (e) {
-          heights[i] = 800;
-        }
-      }
-
-      // Compute page-top from cached heights (accurate even for unrendered pages)
-      let pageTop = 8 * (pn - 1); // 8px margin per page
-      for (let i = 0; i < pn - 1; i++) {
-        pageTop += (heights[i] || 800) * scale;
-      }
-      const curH = (heights[pn - 1] || 800) * scale;
-      const storedH = r?.height || 1;
-      const highlightY = r ? r.y1 * curH / storedH : 0;
-      const targetTop = pageTop + highlightY - 80;
-      const dist = Math.abs(targetTop - viewerRef.current.scrollTop);
-      viewerRef.current.scrollTo({ top: targetTop, behavior: behavior || (dist > 1500 ? "auto" : "smooth") });
-
-      // Force-render target page if not yet visible
-      const pageEl = viewerRef.current.querySelector(`[data-page="${pn}"]`);
-      if (!pageEl || !pageEl.style.width) {
-        setForcePages(prev => new Set([...prev, pn]));
-        setTimeout(() => setForcePages(prev => { const s = new Set(prev); s.delete(pn); return s; }), 2000);
-      }
-    };
-    if (scrollRef) scrollRef.current = scrollToPositionRef.current;
-  }, [scrollRef, scale, pdfDoc]);
-
-  // In-PDF link annotations: internal destinations jump within the document.
-  async function goToDest(dest) {
-    if (!pdfDoc) return;
-    try {
-      const d = typeof dest === "string" ? await pdfDoc.getDestination(dest) : dest;
-      if (!d || d[0] == null) return;
-      const pageIdx = typeof d[0] === "object" ? await pdfDoc.getPageIndex(d[0]) : Number(d[0]);
-      const pn = pageIdx + 1;
-      onBeforeLinkJump?.(); // let the app capture "where I was" for global Back
-      const page = await pdfDoc.getPage(pn);
-      const vp = page.getViewport({ scale: 1 });
-      // Destination y is in PDF user space (origin bottom-left); flip to top-down.
-      let destY = 0;
-      const kind = d[1]?.name;
-      const rawY = kind === "XYZ" ? d[3] : (kind === "FitH" || kind === "FitBH") ? d[2] : null;
-      if (typeof rawY === "number") destY = Math.max(0, vp.height - rawY);
-      scrollToPositionRef.current?.({
-        position: {
-          pageNumber: pn,
-          boundingRect: { x1: 0, y1: destY, x2: 0, y2: destY, width: vp.width, height: vp.height, pageNumber: pn },
-          rects: [],
-        },
-      });
-    } catch {}
-  }
-  const goToDestRef = useRef(null);
-  goToDestRef.current = goToDest;
-  const goToDestStable = useMemo(() => (d) => goToDestRef.current?.(d), []);
-
-  // Text selection for highlight creation
-  const [selPopup, setSelPopup] = useState(null);
-
-  // Dismiss the color popup when the user mouses down anywhere outside it
-  // (without that, removing the textarea/Cancel leaves no way to back out).
-  useEffect(() => {
-    if (!selPopup) return;
-    function onDown(e) {
-      const popup = document.querySelector(".plainTip");
-      if (popup && popup.contains(e.target)) return;
-      setSelPopup(null);
-      window.getSelection()?.removeAllRanges();
-    }
-    document.addEventListener("mousedown", onDown);
-    return () => document.removeEventListener("mousedown", onDown);
-  }, [selPopup]);
-
-  useEffect(() => {
-    if (!onSelectionFinished) return;
-    function onMouseUp() {
-      setTimeout(() => {
-        const sel = window.getSelection();
-        if (!sel || !sel.toString().trim()) { setSelPopup(null); return; }
-        const range = sel.getRangeAt(0);
-        if (!range) { setSelPopup(null); return; }
-        const node = range.startContainer;
-        const textEl = node?.nodeType === 3 ? node.parentElement?.closest?.(".textLayer") : node?.closest?.(".textLayer");
-        if (!textEl) return;
-        const pageEl = textEl.closest?.("[data-page]");
-        const pageNumber = pageEl ? parseInt(pageEl.dataset.page, 10) : null;
-        const text = sel.toString().trim();
-        if (text && pageNumber) {
-          const r = range.getBoundingClientRect();
-          // Per-line rects so multi-line highlights don't render as one big block.
-          // pdf.js text layer has many spans per line — getClientRects() returns one
-          // rect per span, so merge those that share a line into one rect per line.
-          const raw = Array.from(range.getClientRects())
-            .filter(cr => cr.width > 1 && cr.height > 1)
-            .map(cr => ({ top: cr.top, left: cr.left, right: cr.right, bottom: cr.bottom }))
-            .sort((a, b) => a.top - b.top || a.left - b.left);
-          const lineRects = [];
-          for (const cr of raw) {
-            const last = lineRects[lineRects.length - 1];
-            if (last) {
-              const overlap = Math.min(last.bottom, cr.bottom) - Math.max(last.top, cr.top);
-              const minH = Math.min(last.bottom - last.top, cr.bottom - cr.top);
-              if (overlap >= minH * 0.5) {
-                last.left = Math.min(last.left, cr.left);
-                last.right = Math.max(last.right, cr.right);
-                last.top = Math.min(last.top, cr.top);
-                last.bottom = Math.max(last.bottom, cr.bottom);
-                continue;
-              }
-            }
-            lineRects.push({ ...cr });
-          }
-          setSelPopup({ text, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom }, lineRects, pageNumber });
-        }
-      }, 10);
-    }
-    document.addEventListener("mouseup", onMouseUp);
-    return () => document.removeEventListener("mouseup", onMouseUp);
-  }, [onSelectionFinished]);
-
-  function handleSelConfirm(commentText, color, extra) {
-    if (!selPopup) return;
-    const r = selPopup.rect;
-    const pageEl = document.querySelector(`[data-page="${selPopup.pageNumber}"]`);
-    const pageRect = pageEl?.getBoundingClientRect();
-    const curW = pageEl ? parseFloat(pageEl.style.width) || pageEl.offsetWidth : 1;
-    const curH = pageEl ? parseFloat(pageEl.style.height) || pageEl.offsetHeight : 1;
-    const px = pageRect?.left || 0, py = pageRect?.top || 0;
-    const x1 = r.left - px, y1 = r.top - py;
-    const x2 = r.left + r.width - px, y2 = r.bottom - py;
-    const lineRects = (selPopup.lineRects && selPopup.lineRects.length)
-      ? selPopup.lineRects.map(lr => ({
-          x1: lr.left - px, y1: lr.top - py,
-          x2: lr.right - px, y2: lr.bottom - py,
-          width: curW, height: curH, pageNumber: selPopup.pageNumber,
-        }))
-      : [{ x1, y1, x2, y2, width: curW, height: curH, pageNumber: selPopup.pageNumber }];
-    const position = {
-      pageNumber: selPopup.pageNumber,
-      boundingRect: { x1, y1, x2, y2, width: curW, height: curH, pageNumber: selPopup.pageNumber },
-      rects: lineRects,
-    };
-    const content = { text: selPopup.text };
-    onSelectionFinished(position, content, () => { window.getSelection()?.removeAllRanges(); setSelPopup(null); }, { color, commentText, ...(extra || {}) });
-  }
-
-  return (
-    <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
-      {Array.from({ length: numPages }, (_, i) => (
-        <PdfPage key={i + 1} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
-          highlights={highlights} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
-          onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
-          readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
-          reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
-          findMarks={marksByPage.get(i + 1) || EMPTY_MARKS}
-          onInternalLink={goToDestStable}
-          onExternalLink={stableCbs.onExternalLink}
-        />
-      ))}
-      {selPopup && onSelectionFinished && (
-        <div style={{ position: "fixed", top: selPopup.rect.bottom + 8, left: selPopup.rect.left, zIndex: 9999 }}>
-          <PlainTip onConfirm={handleSelConfirm} onLink={() => handleSelConfirm("", null, { link: true })} />
-        </div>
-      )}
-    </div>
-  );
-}
-
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink }) {
-  const wrapRef = useRef(null);
-  const canvasRef = useRef(null);
-  const textRef = useRef(null);
-  const pageRef = useRef(null);
-  const renderTaskRef = useRef(null);
-  const [pageSize, setPageSize] = useState(null);
-  const [visible, setVisible] = useState(false);
-  const [links, setLinks] = useState([]); // link annotations, rects at scale 1
-
-  useEffect(() => {
-    if (forceRender) { setVisible(true); return; }
-    const el = wrapRef.current;
-    if (!el) return;
-    const obs = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting) { setVisible(true); obs.disconnect(); }
-    }, { rootMargin: "900px 0px" }); // generous look-ahead so scrolling rarely hits a blank page
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [pageNumber, forceRender]);
-
-  useEffect(() => {
-    if (!pdfDoc || !visible) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const page = await pdfDoc.getPage(pageNumber);
-        if (cancelled || !wrapRef.current) return;
-        pageRef.current = page;
-        const vp = page.getViewport({ scale });
-        setPageSize({ width: vp.width, height: vp.height });
-
-        const canvas = canvasRef.current;
-        // Cap the backing resolution: 3-4× DPR screens quadruple the pixel
-        // work for no visible gain at reading sizes.
-        const pr = Math.min(2, window.devicePixelRatio || 1);
-        canvas.width = vp.width * pr; canvas.height = vp.height * pr;
-        canvas.style.width = vp.width + "px"; canvas.style.height = vp.height + "px";
-        const ctx = canvas.getContext("2d"); ctx.scale(pr, pr);
-        // Cancel any in-flight render (rapid zoom changes) instead of stacking them
-        try { renderTaskRef.current?.cancel(); } catch {}
-        const task = page.render({ canvasContext: ctx, viewport: vp });
-        renderTaskRef.current = task;
-        try {
-          await task.promise;
-        } catch (err) {
-          if (err?.name === "RenderingCancelledException") return;
-          throw err;
-        }
-
-        const textL = textRef.current;
-        textL.innerHTML = "";
-        const baseVp = page.getViewport({ scale: 1 });
-        textL.style.width = baseVp.width + "px";
-        textL.style.height = baseVp.height + "px";
-        textL.style.transform = `scale(${scale})`;
-        const tc = await page.getTextContent();
-        pdfjsLib.renderTextLayer({ textContentSource: tc, container: textL, viewport: vp });
-
-        // Link annotations (in-PDF references + external URLs), stored at scale 1.
-        const annots = await page.getAnnotations();
-        if (cancelled) return;
-        const vp1 = page.getViewport({ scale: 1 });
-        setLinks(annots
-          .filter((a) => a.subtype === "Link" && (a.url || a.dest))
-          .map((a) => {
-            const r = vp1.convertToViewportRectangle(a.rect);
-            return {
-              left: Math.min(r[0], r[2]), top: Math.min(r[1], r[3]),
-              w: Math.abs(r[2] - r[0]), h: Math.abs(r[3] - r[1]),
-              url: a.url || null, dest: a.dest || null,
-            };
-          }));
-      } catch (e) {
-        console.error("PdfPage render error:", e);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [pdfDoc, pageNumber, scale, visible]);
-
-  const curW = pageSize?.width || 1, curH = pageSize?.height || 1;
-
-  return (
-    <div ref={wrapRef} data-page={pageNumber} className="pdfPageWrap"
-      style={{
-        margin: "0 auto 8px", position: "relative", background: "#fff",
-        width: pageSize ? curW : undefined,
-        height: pageSize ? curH : (reservedHeight || undefined),
-        minHeight: pageSize || reservedHeight ? undefined : 200,
-      }}>
-      <canvas ref={canvasRef} style={{ display: "block" }} />
-      <div ref={textRef} className="textLayer" style={{
-        userSelect: readOnly ? "none" : "text", WebkitUserSelect: readOnly ? "none" : "text",
-      }} />
-      {links.map((l, i) => (
-        <div
-          key={`lnk-${i}`}
-          className="pdfLinkBox"
-          title={l.url || "Jump to reference"}
-          style={{
-            left: l.left * scale,
-            top: l.top * scale,
-            width: Math.max(4, l.w * scale),
-            height: Math.max(4, l.h * scale),
-          }}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (l.url) onExternalLink?.(l.url);
-            else onInternalLink?.(l.dest);
-          }}
-        />
-      ))}
-      {(findMarks || []).map((m, i) => (
-        <div
-          key={`find-${i}`}
-          style={{
-            position: "absolute",
-            zIndex: 3,
-            pointerEvents: "none",
-            left: m.rect.x1 * scale,
-            top: m.rect.y1 * scale,
-            width: Math.max(2, (m.rect.x2 - m.rect.x1) * scale),
-            height: Math.max(2, (m.rect.y2 - m.rect.y1) * scale),
-            background: m.active ? "rgba(255, 140, 0, 0.45)" : "rgba(255, 220, 0, 0.30)",
-            outline: m.active ? "2px solid rgba(255, 120, 0, 0.9)" : "none",
-            borderRadius: 2,
-            mixBlendMode: "multiply",
-          }}
-        />
-      ))}
-      {highlights.filter(h => {
-        const p = h.position?.boundingRect || h.position?.rects?.[0];
-        return p && p.pageNumber === pageNumber;
-      }).map(h => {
-        const rects = h.position?.rects || (h.position?.boundingRect ? [h.position.boundingRect] : []);
-        const storedW = h.position?.boundingRect?.width || rects[0]?.width || 1;
-        const storedH = h.position?.boundingRect?.height || rects[0]?.height || 1;
-        const isLink = !!h.linkTarget;
-        const elements = [];
-        for (const r of rects) {
-          elements.push(<div key={h.id + "-" + r.x1 + "-" + r.y1} style={{
-            position: "absolute", zIndex: 2, cursor: "pointer",
-            left: r.x1 * curW / storedW, top: r.y1 * curH / storedH,
-            width: Math.max(1, (r.x2 - r.x1) * curW / storedW),
-            height: Math.max(1, (r.y2 - r.y1) * curH / storedH),
-            background: h.color || "rgba(255,226,143,0.65)", mixBlendMode: "multiply",
-            ...(isLink ? { borderBottom: "2px solid rgba(70, 130, 255, 0.9)", borderRadius: 1 } : {}),
-          }} title={isLink ? (h.linkTarget.pageId ? "Open linked paper" : h.linkTarget.url) : (h.comment?.text || "")}
-            onClick={function (e) {
-              e.stopPropagation();
-              if (isLink) onLinkHighlight?.(h);
-              else onHighlightJump?.(h.id);
-            }}
-            onContextMenu={function (e) { e.preventDefault(); if (onHighlightContext) onHighlightContext({ id: h.id, x: e.clientX, y: e.clientY }); }}
-          />);
-        }
-        return elements;
-      })}
-    </div>
-  );
-});
-
-function PlainTip({ onConfirm, onLink }) {
-  return (
-    <div className="plainTip">
-      <div className="colorRow">
-        {COLORS.map((c) => (
-          <button
-            key={c}
-            className="colorBtn"
-            style={{ background: c }}
-            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onConfirm("", c); }}
-            type="button"
-            title="Highlight in this color"
-          />
-        ))}
-        {onLink ? (
-          <button
-            className="colorBtn linkTipBtn"
-            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); onLink(); }}
-            type="button"
-            title="Link this reference to a paper (DOI / arXiv / existing PDF)"
-          >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-const AutoGrowTextarea = React.forwardRef(function AutoGrowTextarea(props, forwardedRef) {
-  const innerRef = useRef(null);
-
-  useEffect(() => {
-    const el = innerRef.current;
-    if (!el) return;
-    el.style.height = "0px";
-    el.style.height = `${el.scrollHeight}px`;
-  }, [props.value]);
-
-  return (
-    <textarea
-      {...props}
-      ref={(el) => {
-        innerRef.current = el;
-        if (typeof forwardedRef === "function") forwardedRef(el);
-        else if (forwardedRef) forwardedRef.current = el;
-      }}
-    />
-  );
-});
-
-function BlockRow({
-  block,
-  depth,
-  focusedId,
-  setFocusedId,
-  onJump,
-  onEnterAttachMode,
-  onUnlinkHighlight,
-  onOpenLinkTarget,
-  onPageOpen,
-  onChangeText,
-  onEnterSibling,
-  onAddChild,
-  onIndent,
-  onOutdent,
-  onToggle,
-  onDelete,
-  onStartEdit,
-  registerRef,
-  readOnly,
-  allBlocks,
-  onBlockRefClick,
-  refCache,
-  onFetchRefs,
-  onCacheRef,
-  highlightColors,
-  homeMode,
-  onBlockDragOver,
-  onBlockDragLeave,
-  onBlockDrop,
-}) {
-  const ref = useRef(null);
-  const clickPosRef = useRef(null);
-  const [refPopup, setRefPopup] = useState(null); // { query, rect }
-  const [refSelectedIdx, setRefSelectedIdx] = useState(0);
-  const [searchResults, setSearchResults] = useState([]);
-  const [imageDragOver, setImageDragOver] = useState(false);
-  const uploadingRef = useRef(false);
-
-  useEffect(() => {
-    if (!refPopup) { setSearchResults([]); return; }
-    const q = refPopup.query;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetch(`/api/block-search?q=${encodeURIComponent(q)}&limit=8`);
-        const data = await res.json();
-        setSearchResults((data.blocks || []).filter((b) => b.id !== block.id));
-      } catch (_) { setSearchResults([]); }
-    }, 120);
-    return () => clearTimeout(timer);
-  }, [refPopup?.query, block.id]);
-
-  // Resolve cross-note refs found in content
-  useEffect(() => {
-    if (!block.content || !onFetchRefs) return;
-    const ids = [...block.content.matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)].map((m) => m[1]);
-    const unknown = ids.filter((id) => !allBlocks?.find((b) => b.id === id) && !refCache?.[id]);
-    if (unknown.length > 0) onFetchRefs(unknown);
-  }, [block.content]);
-
-  function insertRef(b) {
-    const ta = ref.current;
-    if (!ta) return;
-    const val = ta.value;
-    const cursor = ta.selectionStart;
-    const before = val.slice(0, cursor);
-    const match = before.match(/\[\[([^\]\n]*)$/);
-    if (!match) return;
-    const triggerStart = cursor - match[0].length;
-    const newVal = val.slice(0, triggerStart) + `[[${b.id}]]` + val.slice(cursor);
-    onChangeText(block.id, newVal);
-    if (b.content && onCacheRef) onCacheRef(b.id, b);
-    setRefPopup(null);
-    requestAnimationFrame(() => {
-      const newCursor = triggerStart + `[[${b.id}]]`.length;
-      ta.setSelectionRange(newCursor, newCursor);
-      ta.focus();
-    });
-  }
-
-  useEffect(() => {
-    registerRef(block.id, ref);
-  }, [block.id, registerRef]);
-
-  useEffect(() => {
-    if (!block.editMode) return;
-    const el = ref.current;
-    if (!el) return;
-    const pos = clickPosRef.current;
-    clickPosRef.current = null;
-    if (!pos) {
-      // No click coords (e.g., entered edit via Enter/Tab) — default cursor to end
-      return;
-    }
-    // Ask the browser which character offset in the textarea corresponds to (x, y).
-    // Different browsers: caretPositionFromPoint (Firefox), caretRangeFromPoint (WebKit/Chromium).
-    let offset = null;
-    try {
-      if (document.caretPositionFromPoint) {
-        const cp = document.caretPositionFromPoint(pos.x, pos.y);
-        if (cp && cp.offsetNode === el) offset = cp.offset;
-      } else if (document.caretRangeFromPoint) {
-        const range = document.caretRangeFromPoint(pos.x, pos.y);
-        if (range && range.startContainer === el) offset = range.startOffset;
-      }
-    } catch (_) {
-      // ignore
-    }
-    if (offset == null) {
-      // Fallback: estimate from vertical line + horizontal fraction using the textarea's metrics
-      const rect = el.getBoundingClientRect();
-      const relY = Math.max(0, pos.y - rect.top - parseFloat(getComputedStyle(el).paddingTop || "0"));
-      const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 20;
-      const lineIndex = Math.floor(relY / lineHeight);
-      const lines = (el.value || "").split("\n");
-      const targetLine = Math.min(lines.length - 1, Math.max(0, lineIndex));
-      const lineStart = lines.slice(0, targetLine).reduce((n, l) => n + l.length + 1, 0);
-      const relX = Math.max(0, pos.x - rect.left - parseFloat(getComputedStyle(el).paddingLeft || "0"));
-      // Approximate char width from font size
-      const fontSize = parseFloat(getComputedStyle(el).fontSize) || 14;
-      const charW = fontSize * 0.55;
-      const col = Math.min(lines[targetLine]?.length || 0, Math.round(relX / charW));
-      offset = lineStart + col;
-    }
-    try {
-      el.setSelectionRange(offset, offset);
-    } catch (_) {}
-  }, [block.editMode]);
-
-  const isHighlight = !!block.highlightId;
-  const hasChildren = (block.children?.length || 0) > 0;
-
-  function handleImageDragOver(e) {
-    if (!e.dataTransfer?.types || !Array.from(e.dataTransfer.types).includes("Files")) return;
-    if (!e.dataTransfer?.items) return;
-    const hasImage = Array.from(e.dataTransfer.items).some((item) => item.type?.startsWith("image/"));
-    if (!hasImage) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "copy";
-    setImageDragOver(true);
-  }
-
-  function handleImageDragLeave(e) {
-    if (!e.currentTarget.contains(e.relatedTarget)) setImageDragOver(false);
-  }
-
-  async function handleImageDrop(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    setImageDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (!file || !file.type.startsWith("image/")) return;
-    if (uploadingRef.current) return;
-    uploadingRef.current = true;
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      const res = await fetch("/api/upload-image", { method: "POST", body: form, credentials: "include" });
-      if (!res.ok) { uploadingRef.current = false; return; }
-      const data = await res.json();
-      onChangeText(block.id, (block.content || "") + "\n" + `![](${data.url})`);
-    } finally { uploadingRef.current = false; }
-  }
-
-  return (
-    <div className={`blockRowWrap${imageDragOver ? " imageDragOver" : ""}`} data-block-id={block.id}
-      onDragOver={(e) => {
-        if (Array.from(e.dataTransfer?.types || []).includes("Files")) {
-          handleImageDragOver(e);
-          return;
-        }
-        onBlockDragOver?.(e, block);
-      }}
-      onDragLeave={(e) => {
-        if (e.currentTarget.contains(e.relatedTarget)) return;
-        handleImageDragLeave(e);
-        onBlockDragLeave?.();
-      }}
-      onDrop={(e) => {
-        if (Array.from(e.dataTransfer?.types || []).includes("Files")) {
-          handleImageDrop(e);
-          return;
-        }
-        onBlockDrop?.(e, block);
-      }}
-    >
-      <div
-        className={`blockRow ${focusedId === block.id ? "focused" : ""}`}
-        onMouseDown={(e) => {
-          if (e.target.closest("button, textarea, input, a")) return;
-          setFocusedId(block.id);
-          // Clicking anywhere on a highlight's card jumps the PDF to it —
-          // not just the little colored dot.
-          if (block.highlightId) onJump?.(block.highlightId);
-          if (!readOnly && !block.editMode) {
-            clickPosRef.current = { x: e.clientX, y: e.clientY };
-            e.preventDefault();
-            onStartEdit(block.id, true);
-          }
-        }}
-      >
-        {hasChildren ? (
-          <button
-            className="collapseBtn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggle(block.id);
-            }}
-          >
-            {block.collapsed ? "▸" : "▾"}
-          </button>
-        ) : (
-          <span className="collapseSpacer" />
-        )}
-        {isHighlight && !block.editMode ? (
-          <>
-            <button
-              className="collapseBtn highlightDotBtn dotSlot"
-              onClick={(e) => { e.stopPropagation(); onJump(block.highlightId); }}
-              title={
-                block.position
-                  ? "Jump to highlight"
-                  : block.properties?.linked_highlight_id
-                    ? "Jump to linked highlight"
-                    : "Jump to page (no exact position)"
-              }
-            >
-              <span className="highlightDot" style={{
-                background: block.position
-                  ? (block.color || COLORS[0])
-                  : block.properties?.linked_highlight_id
-                    ? (highlightColors?.[block.properties.linked_highlight_id] || COLORS[0])
-                    : 'rgba(140,140,140,0.5)'
-              }} />
-            </button>
-            {!block.position && block.properties?.linked_highlight_id && onUnlinkHighlight ? (
-              <button
-                className="collapseBtn attachModeBtn"
-                title="Unlink highlight"
-                onClick={(e) => { e.stopPropagation(); onUnlinkHighlight(block.id); }}
-              >⊘</button>
-            ) : null}
-            {!block.position && !block.properties?.linked_highlight_id && onEnterAttachMode ? (
-              <button
-                className="collapseBtn attachModeBtn"
-                title="Attach to a PDF highlight"
-                onClick={(e) => { e.stopPropagation(); onEnterAttachMode(block.id); }}
-              >⊕</button>
-            ) : null}
-          </>
-        ) : block._pageId && typeof onPageOpen === "function" ? (
-          <button
-            className="collapseBtn dotSlot pageBulletBtn"
-            onClick={(e) => { e.stopPropagation(); onPageOpen(block); }}
-            title="Open page"
-          ><span className="pageBulletDot" /></button>
-        ) : (
-          <span className="dotSlot dotSlotEmpty" />
-        )}
-
-        <div className="blockBody">
-          {block._isRecent ? <span className="recentIndicator" title="In recent">★</span> : null}
-          <div className="blockMeta">
-            {block._pageId ? (block._sourceUrl ? "PDF annotation" : "regular note") : block.page ? `p.${block.page}` : "note"}
-          </div>
-
-          {!readOnly && block.editMode ? (
-            <AutoGrowTextarea
-              ref={ref}
-              autoFocus
-              className="blockEditor"
-              data-block-id={block.id}
-              value={block.content || ""}
-              onChange={(e) => {
-                onChangeText(block.id, e.target.value);
-                const cursor = e.target.selectionStart;
-                const before = e.target.value.slice(0, cursor);
-                const match = before.match(/\[\[([^\]\n]*)$/);
-                if (match) {
-                  setRefPopup({ query: match[1], rect: e.target.getBoundingClientRect() });
-                  setRefSelectedIdx(0);
-                } else {
-                  setRefPopup(null);
-                }
-              }}
-              onBlur={() => {
-                onStartEdit(block.id, false);
-                setTimeout(() => setRefPopup(null), 120);
-              }}
-              onKeyDown={(e) => {
-                if (refPopup && searchResults.length > 0) {
-                  if (e.key === "ArrowDown") { e.preventDefault(); setRefSelectedIdx((i) => Math.min(i + 1, searchResults.length - 1)); return; }
-                  if (e.key === "ArrowUp") { e.preventDefault(); setRefSelectedIdx((i) => Math.max(i - 1, 0)); return; }
-                  if (e.key === "Enter") { e.preventDefault(); insertRef(searchResults[refSelectedIdx]); return; }
-                  if (e.key === "Escape") { e.preventDefault(); setRefPopup(null); return; }
-                }
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  onEnterSibling(block.id);
-                } else if (e.key === "Tab" && !e.shiftKey) {
-                  e.preventDefault();
-                  onIndent(block.id);
-                } else if (e.key === "Tab" && e.shiftKey) {
-                  e.preventDefault();
-                  onOutdent(block.id);
-                } else if (e.key === "ArrowRight" && (block.children?.length || 0) > 0 && block.collapsed) {
-                  e.preventDefault();
-                  onToggle(block.id);
-                } else if (e.key === "ArrowLeft" && (block.children?.length || 0) > 0 && !block.collapsed) {
-                  e.preventDefault();
-                  onToggle(block.id);
-                } else if (e.key === "Backspace" && (block._isEmpty || !(block.content || "").trim()) && !(block.quote || "").trim()) {
-                  e.preventDefault();
-                  onDelete(block.id);
-                }
-              }}
-              placeholder="Type..."
-            />
-          ) : (
-            <div className="blockRendered">
-              {(block.content || "").trim() ? (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[rehypeRaw, rehypeKatex]}
-                  urlTransform={(url) => url.startsWith("blockref:") ? url : defaultUrlTransform(url)}
-                  components={{
-                    a: ({ href, children }) => {
-                      if (href?.startsWith("blockref:")) {
-                        const refId = href.slice(9);
-                        const refBlock = allBlocks?.find((b) => b.id === refId) || refCache?.[refId];
-                        return (
-                          <a
-                            href={`?block=${refId}`}
-                            className="blockRefChip"
-                            title={refBlock?.page_title ? `From: ${refBlock.page_title}` : undefined}
-                            onClick={(e) => {
-                              if (e.metaKey || e.ctrlKey) return;
-                              e.preventDefault();
-                              e.stopPropagation();
-                              onBlockRefClick?.(refId);
-                            }}
-                          >
-                            {refBlock?.content || String(children)}
-                          </a>
-                        );
-                      }
-                      return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
-                    }
-                  }}
-                >
-                  {(block.content || "")
-                    .replace(/!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g, '<img src="$2" alt="$1" width="$3" />')
-                    .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
-                </ReactMarkdown>
-              ) : (
-                <div className="blockPlaceholder">(empty)</div>
-              )}
-            </div>
-          )}
-
-          {block.quote?.trim() ? (
-            <div className="blockQuote">
-              {block.quote}
-            </div>
-          ) : null}
-          {(block.properties?.link_url || block.properties?.link_page_id) ? (
-            <button
-              type="button"
-              className="blockLinkChip"
-              title={block.properties.link_url || "Open linked paper"}
-              onClick={(e) => { e.stopPropagation(); onOpenLinkTarget?.(block); }}
-            >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
-              {block.properties.link_page_id
-                ? "linked paper"
-                : (block.properties.link_url || "").replace(/^https?:\/\//i, "").slice(0, 48)}
-            </button>
-          ) : null}
-        </div>
-        {!readOnly && block.id !== "root" ? (
-          <button
-            className="blockDeleteBtn"
-            title="Delete block"
-            onClick={(e) => { e.stopPropagation(); onDelete(block.id); }}
-          >×</button>
-        ) : null}
-      </div>
-      {refPopup && searchResults.length > 0 && (
-        <div
-          className="refPopup"
-          style={{ top: refPopup.rect.bottom + 4, left: refPopup.rect.left }}
-        >
-          {searchResults.map((b, i) => (
-            <div key={b.id} className="refPopupEntry">
-              {b.ancestors && b.ancestors.length > 0 && (
-                <div className="refPopupPath">
-                  {b.ancestors.map((a, j) => (
-                    <span key={a.id}>
-                      {j > 0 && <span className="refPopupSep">&rsaquo;</span>}
-                      <span>{a.content || "(untitled)"}</span>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <button
-                className={`refPopupItem${i === refSelectedIdx ? " selected" : ""}`}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => insertRef(b)}
-              >
-                <div className="refPopupText">{b.content || "(empty)"}</div>
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SortableBlockRow({ block, ...rowProps }) {
-  const depth = rowProps.depth || 0;
-
-  function onDragStart(e) {
-    e.dataTransfer.setData("text/plain", block.id);
-    e.dataTransfer.effectAllowed = "move";
-    _dragState.draggingId = block.id;
-  }
-
-  function onDragEnd() {
-    _dragState.draggingId = null;
-    _dragState.dropTarget = null;
-    window._gammaSetDropTarget?.(null);
-  }
-
-  return (
-    <div className="sortableBlockWrap" data-block-id={block.id} data-depth={depth}>
-      <span
-        className="dragHandle"
-        draggable="true"
-        onDragStart={onDragStart}
-        onDragEnd={onDragEnd}
-        aria-label="Drag to reorder"
-        title="Drag to reorder"
-      >⋮⋮</span>
-      <BlockRow block={block} {...rowProps} />
-    </div>
-  );
-}
-
-function BlockTree({ blocks, readOnly, rowProps, depth = 0 }) {
-  if (!blocks || blocks.length === 0) return null;
-  return (
-    <>
-      {blocks.map((rawBlock) => { const block = withLegacyAccessors(rawBlock); return (
-        <React.Fragment key={block.id}>
-          {!readOnly ? (
-            <SortableBlockRow block={block} depth={depth} {...rowProps} />
-          ) : (
-            <BlockRow block={block} depth={depth} {...rowProps} />
-          )}
-          {!block.collapsed && block.children && block.children.length > 0 ? (
-            <div className="blockChildren">
-              <BlockTree blocks={block.children} readOnly={readOnly} rowProps={rowProps} depth={depth + 1} />
-            </div>
-          ) : null}
-        </React.Fragment>
-      );})}
-    </>
-  );
-}
 
 export default function App() {
   const params = new URLSearchParams(window.location.search);
@@ -1407,14 +117,32 @@ export default function App() {
   // created) folders live in localStorage until a paper lands in them.
   const [folderFilter, setFolderFilter] = useState(initialFolder);
   const [folderDragOver, setFolderDragOver] = useState(null);
-  const [extraFolders, setExtraFolders] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("gamma-extra-folders") || "[]"); } catch { return []; }
-  });
+  const [extraFolders, setExtraFolders] = useState([]);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  function updateExtraFolders(updater) {
+    setExtraFolders((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      const u = prefsUserRef.current;
+      if (u) { try { localStorage.setItem(`gamma-extra-folders:${u}`, JSON.stringify(next)); } catch {} }
+      return next;
+    });
+  }
+
+  // Load per-user browser prefs (tabs, manually created folders) on login /
+  // account switch.
   useEffect(() => {
-    try { localStorage.setItem("gamma-extra-folders", JSON.stringify(extraFolders)); } catch {}
-  }, [extraFolders]);
+    const u = authUser?.user;
+    if (!u || readOnly) {
+      prefsUserRef.current = "";
+      setOpenTabs([]);
+      setExtraFolders([]);
+      return;
+    }
+    prefsUserRef.current = u;
+    try { setOpenTabs(JSON.parse(localStorage.getItem(`gamma-tabs:${u}`) || "[]")); } catch { setOpenTabs([]); }
+    try { setExtraFolders(JSON.parse(localStorage.getItem(`gamma-extra-folders:${u}`) || "[]")); } catch { setExtraFolders([]); }
+  }, [authUser?.user, readOnly]);
 
   async function setPageFolder(pageId, folderName) {
     try {
@@ -1423,7 +151,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ properties: { folder: folderName || "" } }),
       });
-      if (folderName) setExtraFolders((prev) => prev.filter((f) => f !== folderName));
+      if (folderName) updateExtraFolders((prev) => prev.filter((f) => f !== folderName));
       await fetchHomeBlocks();
       setStatus(folderName ? `Moved to “${folderName}”.` : "Moved out of the folder.");
     } catch (err) {
@@ -1436,7 +164,7 @@ export default function App() {
     setNewFolderOpen(false);
     setNewFolderName("");
     if (!name) return;
-    setExtraFolders((prev) => prev.includes(name) ? prev : [...prev, name]);
+    updateExtraFolders((prev) => prev.includes(name) ? prev : [...prev, name]);
   }
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
   const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
@@ -1446,62 +174,10 @@ export default function App() {
   const [homeBlocks, setHomeBlocks] = useState([]);
   const [refCache, setRefCache] = useState({}); // { [blockId]: { content, page_title } }
   const [backlinks, setBacklinks] = useState([]);
-  const [chatMessages, setChatMessages] = useState([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
   const [chatHidden, setChatHidden] = useState(false);
-
-  // Tracks which block we've finished loading from the server, so the save
-  // effect doesn't fire (and clobber the stored chat) before the load lands.
-  const chatLoadedForRef = useRef("");
-  // Chat history is per page; the home view gets its own bucket.
-  const chatKey = focusedBlockId || "home";
-
-  // Load chat from backend whenever the chat bucket changes.
-  useEffect(() => {
-    let cancelled = false;
-    chatLoadedForRef.current = "";
-    fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : { messages: [] })
-      .then(data => {
-        if (cancelled) return;
-        setChatMessages(data.messages || []);
-        chatLoadedForRef.current = chatKey;
-        // Fresh conversation → first question should carry the full PDF
-        if (!(data.messages || []).length) setAttachPdf(true);
-      })
-      .catch(() => { if (!cancelled) chatLoadedForRef.current = chatKey; });
-    return () => { cancelled = true; };
-  }, [chatKey]);
-
-  // Save chat to backend (debounced) when chatMessages changes, but only
-  // after the load for the current chat bucket completed.
-  useEffect(() => {
-    if (chatLoadedForRef.current !== chatKey) return;
-    const timer = setTimeout(() => {
-      fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ messages: chatMessages }),
-      }).catch(() => {});
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [chatMessages, chatKey]);
-
-  function clearChat() {
-    setChatMessages([]);
-    setAttachPdf(true); // new chat: first question carries the full PDF again
-    fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
-      method: "DELETE",
-      credentials: "include",
-    }).catch(() => {});
-  }
   const [homeEditingId, setHomeEditingId] = useState(null);
   const [status, setStatus] = useState("Ready.");
   const [loading, setLoading] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(420);
-  const [sidebarHeight, setSidebarHeight] = useState(280);
   // Window layout: ordered window ids per dock slot. Sizes are handled by
   // react-resizable-panels (persisted via autoSaveId), so this only stores
   // which window lives where and in what order.
@@ -1530,13 +206,20 @@ export default function App() {
       return next;
     });
   }
-  // Open tabs (Chrome-style): [{id, title}] persisted per browser.
-  const [openTabs, setOpenTabs] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("gamma-tabs") || "[]"); } catch { return []; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-tabs", JSON.stringify(openTabs)); } catch {}
-  }, [openTabs]);
+  // Open tabs (Chrome-style): [{id, title}], stored PER USER (and per browser)
+  // so switching accounts in the same browser never surfaces someone else's
+  // tabs. Persistence happens inside the updater (not an effect) so a user
+  // switch can't race an in-flight save into the wrong key.
+  const [openTabs, setOpenTabs] = useState([]);
+  const prefsUserRef = useRef(""); // whose tabs/folders are currently loaded
+  function updateTabs(updater) {
+    setOpenTabs((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      const u = prefsUserRef.current;
+      if (u) { try { localStorage.setItem(`gamma-tabs:${u}`, JSON.stringify(next)); } catch {} }
+      return next;
+    });
+  }
   const dragTabRef = useRef(null); // tab id being drag-reordered
   const [draggingTabId, setDraggingTabId] = useState(null);
   // FLIP animation: when tab order changes, slide each tab from its old
@@ -1563,8 +246,10 @@ export default function App() {
     tabLeftsRef.current = next;
   }, [openTabs]);
 
-  // Chrome-style transfer list: PDF downloads and uploads with live status.
+  // Background tasks: client-side transfers (downloads/uploads) plus
+  // server-side work (library indexing), shown in one popover.
   const [transfers, setTransfers] = useState([]); // [{id, name, kind, status, info}]
+  const [indexTask, setIndexTask] = useState(null); // {total, done, active} from /api/tasks
   const transferByUrlRef = useRef({});
   function addTransfer(t) {
     const id = makeId();
@@ -1578,18 +263,23 @@ export default function App() {
   function handlePdfLoadState(url, st) {
     if (url.startsWith("/api/uploads/")) return;
     if (st.phase === "start") {
+      if (transferByUrlRef.current[url]) return; // restart after remount — keep the existing entry
       const name = (pdfTitle || decodeURIComponent((url.split("source_url=")[1] || url).split("/").pop() || "PDF")).slice(0, 60);
       transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…" });
     } else {
       const id = transferByUrlRef.current[url];
       if (!id) return;
       delete transferByUrlRef.current[url];
-      updateTransfer(id, st.phase === "done"
-        ? { status: "done", info: fmtBytes(st.bytes) }
-        : { status: "error", info: "failed" });
+      if (st.phase === "cancelled") {
+        setTransfers((prev) => prev.filter((t) => t.id !== id)); // aborted navigation — drop the entry
+      } else {
+        updateTransfer(id, st.phase === "done"
+          ? { status: "done", info: fmtBytes(st.bytes) }
+          : { status: "error", info: "failed" });
+      }
     }
   }
-  const [dockPreview, setDockPreview] = useState(null); // "left" | "right" | "bottom" while dragging a window
+  const [dockPreview, setDockPreview] = useState(null); // {left, top, width, height} of the drop target while dragging a window
   const [collapsedWins, setCollapsedWins] = useState({}); // window id -> collapsed to header bar
   // One popover open at a time; any click outside a [data-popover] container closes it.
   const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
@@ -1614,10 +304,47 @@ export default function App() {
   const [searchReplaceOpen, setSearchReplaceOpen] = useState(false);
   const [searchReplace, setSearchReplace] = useState("");
   const [pdfMatches, setPdfMatches] = useState([]);
+  const [libMatches, setLibMatches] = useState([]); // FTS hits across ALL papers' PDF text
+  const [libIndexing, setLibIndexing] = useState(0); // papers still being indexed server-side
   const [findIndex, setFindIndex] = useState(0); // active PDF match for find next/prev
+
+  // Open a library search hit: load the paper, then scroll to the hit's page.
+  function openLibMatch(r) {
+    setOpenPopover(null);
+    openBlock(r.block_id).then(() => {
+      let tries = 0;
+      const go = () => {
+        if (scrollToRef.current && document.querySelector("[data-page]")) {
+          scrollToRef.current({
+            position: {
+              pageNumber: r.page,
+              boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: r.page },
+              rects: [],
+            },
+          });
+        } else if (tries++ < 40) setTimeout(go, 200);
+      };
+      setTimeout(go, 600); // let the session-restore scroll settle first
+    });
+  }
   const [searchNonce, setSearchNonce] = useState(0); // bump to re-run the search
   const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rect, pageW, pageH}]
   useEffect(() => { setFindIndex(0); }, [pdfMatches]);
+
+  // Poll server-side task progress: slow heartbeat while logged in (so the
+  // button appears even if the work was kicked off elsewhere), fast while
+  // the popover is open or indexing is known to run.
+  useEffect(() => {
+    if (!authUser?.user || readOnly) return;
+    let cancelled = false;
+    const refresh = () => apiJson(`${API}/tasks`)
+      .then((d) => { if (!cancelled) setIndexTask(d.indexing || null); })
+      .catch(() => {});
+    refresh();
+    const fast = openPopover === "downloads" || libIndexing > 0 || indexTask?.active;
+    const t = setInterval(refresh, fast ? 2000 : 8000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [openPopover, libIndexing, authUser?.user, readOnly, indexTask?.active]);
 
   const findMarksMemo = useMemo(() => (
     openPopover === "search" && searchQuery.trim()
@@ -1641,7 +368,10 @@ export default function App() {
     });
   }
   useEffect(() => {
-    if (openPopover !== "search" || !searchQuery.trim()) { setSearchResults([]); setPdfMatches([]); return; }
+    if (openPopover !== "search" || !searchQuery.trim()) {
+      setSearchResults([]); setPdfMatches([]); setLibMatches([]); setLibIndexing(0);
+      return;
+    }
     const timer = setTimeout(() => {
       setSearchBusy(true);
       const q = searchQuery.trim();
@@ -1649,6 +379,11 @@ export default function App() {
       const notesReq = apiJson(`${API}/block-search?q=${encodeURIComponent(q)}&limit=20${flags}`)
         .then((d) => setSearchResults(d.blocks || []))
         .catch(() => setSearchResults([]));
+      // Full-text over every paper's PDF (server-side FTS index; the toggles
+      // don't apply here — it's plain word matching)
+      const libReq = apiJson(`${API}/pdf-search?q=${encodeURIComponent(q)}&limit=15`)
+        .then((d) => { setLibMatches(d.results || []); setLibIndexing(d.indexing || 0); })
+        .catch(() => { setLibMatches([]); setLibIndexing(0); });
       let pdfReq = Promise.resolve();
       if (pdfSearchRef.current) {
         try {
@@ -1660,7 +395,7 @@ export default function App() {
       } else {
         setPdfMatches([]);
       }
-      Promise.allSettled([notesReq, pdfReq]).then(() => setSearchBusy(false));
+      Promise.allSettled([notesReq, pdfReq, libReq]).then(() => setSearchBusy(false));
     }, 250);
     return () => clearTimeout(timer);
   }, [searchQuery, openPopover, searchCase, searchWhole, searchRegex, searchNonce]);
@@ -1693,12 +428,9 @@ export default function App() {
       // Ctrl+F (and Ctrl+Shift+F) open the built-in search instead of the
       // browser find — it covers notes, highlights, AND the PDF text.
       if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f") {
+        // Focus in the chat window → ChatDock's own listener opens find-in-chat
+        if (document.activeElement?.closest?.(".chatPanel")) return;
         e.preventDefault();
-        // Focus in the chat window → find within the conversation instead
-        if (document.activeElement?.closest?.(".chatPanel")) {
-          setChatFindOpen(true);
-          return;
-        }
         setOpenPopover((p) => (p === "search" && !e.shiftKey ? null : "search"));
       } else if (e.altKey && e.key === "ArrowLeft") {
         e.preventDefault();
@@ -1741,45 +473,24 @@ export default function App() {
   const [chatModel, setChatModel] = useState(() => {
     try { return localStorage.getItem("gamma-chat-model") || ""; } catch { return ""; }
   });
-  const [attachPdf, setAttachPdf] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-attach-pdf") !== "0"; } catch { return true; }
-  });
   const [chatEffort, setChatEffort] = useState(() => {
     try { return localStorage.getItem("gamma-chat-effort") || ""; } catch { return ""; }
   });
-  // Extra chat context: selected PDF pages + whether to include notes/highlights.
-  const [chatDocs, setChatDocs] = useState([]);
-  const [chatIncludeNotes, setChatIncludeNotes] = useState(false);
   const [chatSystem, setChatSystem] = useState(() => {
     try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
   });
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
-  const [pdfSelection, setPdfSelection] = useState("");
-  const chatScrollRef = useRef(null);
-  const chatAbortRef = useRef(null); // in-flight chat request, so Stop can cancel it
-  const [chatImages, setChatImages] = useState([]); // pasted figures (data URLs) pending send
-
-  // Paste a figure (screenshot/image) into the chat input → attach it.
-  function handleChatPaste(e) {
-    const files = Array.from(e.clipboardData?.items || [])
-      .filter((it) => it.type?.startsWith("image/"))
-      .map((it) => it.getAsFile())
-      .filter(Boolean);
-    if (!files.length) return;
-    e.preventDefault();
-    for (const f of files) {
-      if (f.size > 6 * 1024 * 1024) { setStatus("Image too large to attach (max 6 MB)."); continue; }
-      const reader = new FileReader();
-      reader.onload = () => setChatImages((prev) => prev.length >= 4 ? prev : [...prev, reader.result]);
-      reader.readAsDataURL(f);
-    }
+  // PDF passages the next chat question focuses on. Ctrl (additive) appends
+  // — whether from text selection or highlight clicks; plain replaces.
+  const [pdfSelections, setPdfSelections] = useState([]);
+  function addPdfSelection(text, additive) {
+    const part = (text || "").trim().slice(0, 4000);
+    if (!part) return;
+    setPdfSelections((prev) => additive
+      ? (prev.includes(part) || prev.length >= 6 ? prev : [...prev, part])
+      : [part]);
   }
-  const [editingMsg, setEditingMsg] = useState(null); // {idx, text} — editing a sent user message
-  const [copiedMsgIdx, setCopiedMsgIdx] = useState(null);
-  const [chatFindOpen, setChatFindOpen] = useState(false);
-  const [chatFind, setChatFind] = useState("");
-  const [chatFindIdx, setChatFindIdx] = useState(0);
   // Styled in-app dialogs replacing window.confirm / link decisions.
   const [confirmBox, setConfirmBox] = useState(null); // {title, message, confirmLabel, danger, onConfirm}
   const [linkPrompt, setLinkPrompt] = useState(null); // external URL clicked inside the PDF
@@ -1942,21 +653,6 @@ export default function App() {
     }
   }
 
-  const chatFindMatches = useMemo(() => {
-    const q = chatFind.trim().toLowerCase();
-    if (!q) return [];
-    return chatMessages.map((m, i) => ((m.text || "").toLowerCase().includes(q) ? i : -1)).filter((i) => i >= 0);
-  }, [chatFind, chatMessages]);
-  useEffect(() => { setChatFindIdx(0); }, [chatFind]);
-
-  function gotoChatFind(n) {
-    if (!chatFindMatches.length) return;
-    const idx = ((n % chatFindMatches.length) + chatFindMatches.length) % chatFindMatches.length;
-    setChatFindIdx(idx);
-    const el = chatScrollRef.current?.querySelector(`[data-msg-idx="${chatFindMatches[idx]}"]`);
-    el?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }
-
   useEffect(() => {
     if (!authUser?.user || readOnly) return;
     apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
@@ -1966,9 +662,6 @@ export default function App() {
     try { localStorage.setItem("gamma-chat-model", chatModel); } catch {}
   }, [chatModel]);
   useEffect(() => {
-    try { localStorage.setItem("gamma-chat-attach-pdf", attachPdf ? "1" : "0"); } catch {}
-  }, [attachPdf]);
-  useEffect(() => {
     try { localStorage.setItem("gamma-chat-effort", chatEffort); } catch {}
   }, [chatEffort]);
   useEffect(() => {
@@ -1976,40 +669,34 @@ export default function App() {
   }, [chatSystem]);
 
   // Capture text selected inside the PDF viewer so chat can focus on it.
-  // Kept in state (not read at send time) because clicking the chat input
-  // collapses the DOM selection before the user hits Send.
+  // Committed on mouseup (not selectionchange) so the modifier key is known:
+  // Ctrl+select APPENDS another passage, plain select replaces the set, and
+  // a plain click in the PDF clears it. Clicking into the chat keeps it.
   useEffect(() => {
-    function onSelectionChange() {
-      const sel = window.getSelection();
-      const text = sel ? sel.toString().trim() : "";
-      if (!text) {
-        // Selection cleared. Focusing the chat panel collapses the DOM
-        // selection too — keep the stash in that one case so the user can
-        // still ask about it; any other deselection dismisses the chip.
-        const active = document.activeElement;
-        if (!(active && active.closest && active.closest(".chatPanel"))) {
-          setPdfSelection("");
+    function onMouseUp(e) {
+      if (!viewerWrapRef.current?.contains(e.target)) return;
+      const additive = e.ctrlKey || e.metaKey;
+      setTimeout(() => {
+        const sel = window.getSelection();
+        const text = sel ? sel.toString().trim() : "";
+        if (!text) {
+          // Highlight clicks set the quote as the selection (in their own
+          // click handler) — don't clear it from here.
+          if (!additive && !e.target.closest?.("[data-hl-id]")) setPdfSelections([]);
+          return;
         }
-        return;
-      }
-      const node = sel.anchorNode;
-      const el = node?.nodeType === 3 ? node.parentElement : node;
-      if (viewerWrapRef.current && el && viewerWrapRef.current.contains(el)) {
-        setPdfSelection(text.slice(0, 4000));
-      }
+        const node = sel.anchorNode;
+        const el = node?.nodeType === 3 ? node.parentElement : node;
+        if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
+        addPdfSelection(text, additive);
+      }, 10);
     }
-    document.addEventListener("selectionchange", onSelectionChange);
-    return () => document.removeEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => document.removeEventListener("mouseup", onMouseUp);
   }, []);
 
   // Selection is page-scoped: drop it when switching documents.
-  useEffect(() => { setPdfSelection(""); }, [focusedBlockId]);
-
-  // Keep the chat scrolled to the newest message.
-  useEffect(() => {
-    const el = chatScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [chatMessages, chatLoading]);
+  useEffect(() => { setPdfSelections([]); }, [focusedBlockId]);
 
   function fetchHomeBlocks() {
     return apiJson(`${API}/blocks/root/children`)
@@ -2123,62 +810,6 @@ export default function App() {
     };
   }, [blocks, readOnly]);
 
-  useEffect(() => {
-    if (readOnly) return;
-    function onContext(e) {
-      // PDF.js's textLayer sits above highlights, so e.target is usually the textLayer.
-      // Use elementsFromPoint to get everything stacked at the click coordinate.
-      const stack = document.elementsFromPoint(e.clientX, e.clientY);
-      for (const el of stack) {
-        let cur = el;
-        while (cur && cur !== document.body) {
-          if (cur.dataset && cur.dataset.highlightId) {
-            e.preventDefault();
-            setHighlightMenu({ id: cur.dataset.highlightId, x: e.clientX, y: e.clientY });
-            return;
-          }
-          cur = cur.parentElement;
-        }
-      }
-    }
-    document.addEventListener("contextmenu", onContext, true); // capture phase
-    return () => document.removeEventListener("contextmenu", onContext, true);
-  }, [readOnly]);
-
-  // left-click on a PDF highlight jumps to its block in the sidebar
-  useEffect(() => {
-    function onPointerDown(e) {
-      if (e.button !== 0) return;
-      if (e.pointerType !== "mouse") return;
-      if (attachModeBlockIdRef.current) return;
-      const stack = document.elementsFromPoint(e.clientX, e.clientY);
-      for (const el of stack) {
-        let cur = el;
-        while (cur && cur !== document.body) {
-          if (cur.dataset && cur.dataset.highlightId) {
-            e.stopPropagation();
-            const hlId = cur.dataset.highlightId;
-            const block = flattenBlocks(blocksRef.current).find(
-              (b) => b.properties?.highlight_id === hlId,
-            );
-            if (block) {
-              const row = document.querySelector(`[data-block-id="${block.id}"]`);
-              if (row) {
-                row.scrollIntoView({ block: "center", behavior: "smooth" });
-                setFocusedId(block.id);
-                row.scrollIntoView({ block: "center", behavior: "smooth" });
-                setFocusedId(block.id);
-              }
-            }
-            return;
-          }
-          cur = cur.parentElement;
-        }
-      }
-    }
-    document.addEventListener("pointerdown", onPointerDown, true);
-    return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [readOnly]);
 
   function deleteHighlight(highlightId) {
     if (readOnly) return;
@@ -2288,8 +919,6 @@ export default function App() {
     if (session.pdfScale != null) setPdfScale(session.pdfScale);
     if (session.pdfHidden != null) setPdfHidden(session.pdfHidden);
     if (session.notesVisible != null) setNotesVisible(session.notesVisible);
-    if (session.sidebarWidth != null) setSidebarWidth(session.sidebarWidth);
-    if (session.sidebarHeight != null) setSidebarHeight(session.sidebarHeight);
   }, []);
 
   // Theme follows the OS preference — no in-app toggle.
@@ -2303,9 +932,9 @@ export default function App() {
 
   // Keep the tab strip in sync with the open page.
   useEffect(() => {
-    if (!focusedBlockId || readOnly) return;
+    if (!focusedBlockId || readOnly || !prefsUserRef.current) return;
     const title = (pdfTitle || "Untitled").slice(0, 60);
-    setOpenTabs((prev) => {
+    updateTabs((prev) => {
       const existing = prev.find((t) => t.id === focusedBlockId);
       if (existing && existing.title === title) return prev;
       if (existing) return prev.map((t) => (t.id === focusedBlockId ? { ...t, title } : t));
@@ -2325,11 +954,9 @@ export default function App() {
       pdfScale,
       pdfHidden,
       notesVisible,
-      sidebarWidth,
-      sidebarHeight,
       pdfPageNumber,
     });
-  }, [focusedBlockId, pdfScale, pdfHidden, notesVisible, sidebarWidth, sidebarHeight, pdfPageNumber]);
+  }, [focusedBlockId, pdfScale, pdfHidden, notesVisible, pdfPageNumber]);
 
   function formatRelativeTime(iso) {
   if (!iso) return "";
@@ -2723,7 +1350,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   function closeTab(id) {
     const idx = openTabs.findIndex((t) => t.id === id);
     const next = openTabs.filter((t) => t.id !== id);
-    setOpenTabs(next);
+    updateTabs(next);
     if (id === focusedBlockId) {
       const neighbor = next[Math.min(idx, next.length - 1)];
       if (neighbor) openBlock(neighbor.id);
@@ -2751,10 +1378,38 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       const side = ev.clientX < window.innerWidth / 2 ? "left" : "right";
       return { side, index: ev.clientY < window.innerHeight * 0.35 ? 0 : 99 };
     }
+    // Preview shows the REAL landing geometry: the existing slot's rect (or
+    // the default size a new slot would open with), halved to the drop
+    // position when other windows already live there.
+    function previewRect(zone) {
+      const wa = document.querySelector(".workArea")?.getBoundingClientRect();
+      if (!wa) return null;
+      const slotEl = document.querySelector(`[data-panel-id="slot-${zone.side}"]`);
+      let r;
+      if (slotEl) {
+        const b = slotEl.getBoundingClientRect();
+        r = { left: b.left, top: b.top, width: b.width, height: b.height };
+      } else if (zone.side === "bottom") {
+        r = { left: wa.left, top: wa.top + wa.height * 0.68, width: wa.width, height: wa.height * 0.32 };
+      } else if (zone.side === "left") {
+        r = { left: wa.left, top: wa.top, width: wa.width * 0.26, height: wa.height };
+      } else {
+        r = { left: wa.left + wa.width * 0.72, top: wa.top, width: wa.width * 0.28, height: wa.height };
+      }
+      const others = layout[zone.side].filter((w) => w !== winId && winVisible[w]).length;
+      if (others > 0) {
+        if (zone.side === "bottom") {
+          r = { ...r, width: r.width / 2, left: zone.index === 0 ? r.left : r.left + r.width / 2 };
+        } else {
+          r = { ...r, height: r.height / 2, top: zone.index === 0 ? r.top : r.top + r.height / 2 };
+        }
+      }
+      return r;
+    }
     function onMove(ev) {
       if (!dragging && Math.hypot(ev.clientX - startX, ev.clientY - startY) < 8) return;
       dragging = true;
-      setDockPreview(zoneFor(ev).side);
+      setDockPreview(previewRect(zoneFor(ev)));
     }
     function onUp(ev) {
       if (dragging) {
@@ -2929,93 +1584,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     await loadBlocksForBlock(focusedBlockId);
   }
 
-  // Core chat send. baseMessages overrides the history (used when re-sending
-  // an edited message: everything after the edited message is discarded,
-  // ChatGPT-style).
-  async function sendChat(rawText, { baseMessages } = {}) {
-    const text = (rawText || "").trim();
-    if (!text || chatLoading) return;
-    const selection = pdfSelection;
-    setPdfSelection("");
-    const images = chatImages;
-    setChatImages([]);
-    const prevMessages = baseMessages ?? chatMessages;
-    const shown = selection ? `${text}\n\n> ${selection.slice(0, 280)}${selection.length > 280 ? "…" : ""}` : text;
-    // Names of PDFs that ride along with THIS message (displayed in the bubble)
-    const sendingPdf = attachPdf && (chatDocs.length > 0 || !!docId);
-    const pdfNames = sendingPdf
-      ? (chatDocs.length
-          ? chatDocs.map((id) => homeBlocks.find((b) => b.id === id)?.content || "PDF")
-          : [pdfTitle || "current PDF"])
-      : [];
-    setChatMessages([...prevMessages, {
-      role: "user",
-      text: shown,
-      ...(images.length ? { images } : {}),
-      ...(pdfNames.length ? { pdfs: pdfNames } : {}),
-    }]);
-    setChatLoading(true);
-    // One-shot semantics: the PDF went with this message; don't silently
-    // re-upload (and re-bill) it on every follow-up.
-    if (sendingPdf) setAttachPdf(false);
-    const ctrl = new AbortController();
-    chatAbortRef.current = ctrl;
-    try {
-      const data = await apiJson(`${API}/ai/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: ctrl.signal,
-        body: JSON.stringify({
-          prompt: text,
-          doc_id: docId || "",
-          history: prevMessages,
-          model: chatModel || "",
-          selection,
-          attach_pdf: sendingPdf,
-          effort: chatEffort || "",
-          system: chatSystem || "",
-          pages: chatDocs,
-          include_notes: chatIncludeNotes,
-          images,
-        }),
-      });
-      setChatMessages((prev) => [...prev, { role: "ai", text: data.response || "(no response)" }]);
-    } catch (err) {
-      if (err?.name === "AbortError") {
-        setChatMessages((prev) => [...prev, { role: "ai", text: "*(stopped)*" }]);
-      } else {
-        setChatMessages((prev) => [...prev, { role: "ai", text: `Error: ${err.message}` }]);
-      }
-    } finally {
-      setChatLoading(false);
-      chatAbortRef.current = null;
-    }
-  }
-
-  function sendChatMessage() {
-    const text = chatInput;
-    if (!text.trim() || chatLoading) return;
-    setChatInput("");
-    sendChat(text);
-  }
-
-  function stopChat() {
-    chatAbortRef.current?.abort();
-  }
-
   function openPromptEditor() {
     setPromptDraft(chatSystem || aiInfo?.default_prompt || "");
     setMetaPromptDraft(metaPrompt || aiInfo?.metadata_prompt || "");
     setCitePromptDraft(citePrompt || aiInfo?.cite_prompt || "");
     setPromptOpen(true);
-  }
-
-  async function copyChatMessage(idx, text) {
-    try {
-      await navigator.clipboard.writeText(text || "");
-      setCopiedMsgIdx(idx);
-      setTimeout(() => setCopiedMsgIdx((cur) => (cur === idx ? null : cur)), 1200);
-    } catch {}
   }
 
 
@@ -3356,272 +1929,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     );
   }
 
-  // The AI chat window — placed by the shared layout slot system.
-  const chatHeaderContent = (
-    <>
-      {aiInfo?.models?.length > 0 ? (() => {
-        const models = aiInfo.models;
-        const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
-        const currentId = models.some((m) => m.id === chatModel) ? chatModel : aiInfo.default;
-        return (
-          <span className="chatHeaderSelects">
-            {models.length > 1 ? (
-              <select className="chatModelSelect" value={currentId}
-                onChange={(e) => setChatModel(e.target.value)} title="Switch model">
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {multiProvider ? `${m.model} · ${m.provider}` : m.model}
-                  </option>
-                ))}
-              </select>
-            ) : null}
-            <select className="chatModelSelect" value={chatEffort}
-              onChange={(e) => setChatEffort(e.target.value)}
-              title="Reasoning effort — leave on 'effort: default' unless the model supports it">
-              <option value="">effort: default</option>
-              {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
-                <option key={ef} value={ef}>effort: {ef}</option>
-              ))}
-            </select>
-          </span>
-        );
-      })() : null}
-      <div className="chatPanelHeaderBtns">
-        <button className={`chatClearBtn ${chatFindOpen ? "on" : ""}`}
-          onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}
-          title="Find in this conversation">Find</button>
-        <button className="chatClearBtn"
-          onClick={openPromptEditor}
-          title="View or edit the AI prompts (chat, metadata, citations)">Prompt</button>
-        <button className="chatClearBtn" onClick={clearChat} title="Start a fresh conversation (clears saved history)">New chat</button>
-      </div>
-    </>
-  );
-  const chatWindow = !readOnly && !chatHidden ? (
-    <div className="chatPanel chatWindow">
-      {chatFindOpen ? (
-        <div className="chatFindRow">
-          <input
-            autoFocus
-            className="searchInput"
-            value={chatFind}
-            onChange={(e) => setChatFind(e.target.value)}
-            placeholder="Find in chat…"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") { e.preventDefault(); gotoChatFind(e.shiftKey ? chatFindIdx - 1 : chatFindIdx + 1); }
-              else if (e.key === "Escape") { e.preventDefault(); setChatFindOpen(false); setChatFind(""); }
-            }}
-          />
-          <span className="chatFindCount">{chatFind.trim() ? `${chatFindMatches.length ? chatFindIdx + 1 : 0}/${chatFindMatches.length}` : ""}</span>
-          <button className="searchToggle" onClick={() => gotoChatFind(chatFindIdx - 1)} disabled={!chatFindMatches.length} title="Previous match">▲</button>
-          <button className="searchToggle" onClick={() => gotoChatFind(chatFindIdx + 1)} disabled={!chatFindMatches.length} title="Next match">▼</button>
-          <button className="searchToggle" onClick={() => { setChatFindOpen(false); setChatFind(""); }} title="Close find">×</button>
-        </div>
-      ) : null}
-      <div className="chatMessages" ref={chatScrollRef}>
-        {chatMessages.length === 0 ? (
-          <div className="chatEmpty">
-            {aiInfo && !aiInfo.enabled
-              ? "AI is not configured — set a provider key in the server .env."
-              : (focusedBlockId ? "Ask AI about this page…" : "Ask AI anything, or generate a report from your pages…")}
-          </div>
-        ) : (
-          chatMessages.map((m, i) => {
-            const isUser = m.role === "user";
-            const isFindHit = chatFindOpen && chatFind.trim() && chatFindMatches[chatFindIdx] === i;
-            if (editingMsg?.idx === i) {
-              return (
-                <div key={i} className="chatBubbleRow user" data-msg-idx={i}>
-                  <div className="chatMsgCol">
-                    <div className="chatBubble user chatEditBubble">
-                      <AutoGrowTextarea
-                        autoFocus
-                        className="chatEditTextarea"
-                        value={editingMsg.text}
-                        onChange={(e) => setEditingMsg({ idx: i, text: e.target.value })}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            const base = chatMessages.slice(0, i);
-                            const text = editingMsg.text;
-                            setEditingMsg(null);
-                            sendChat(text, { baseMessages: base });
-                          } else if (e.key === "Escape") { e.preventDefault(); setEditingMsg(null); }
-                        }}
-                      />
-                      <div className="chatEditBtns">
-                        <button type="button" className="chatClearBtn" onClick={() => setEditingMsg(null)}>Cancel</button>
-                        <button type="button" className="chatClearBtn chatEditSend"
-                          disabled={!editingMsg.text.trim() || chatLoading}
-                          onClick={() => {
-                            const base = chatMessages.slice(0, i);
-                            const text = editingMsg.text;
-                            setEditingMsg(null);
-                            sendChat(text, { baseMessages: base });
-                          }}
-                          title="Re-send — replaces this message and everything after it">Send</button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-            return (
-              <div key={i} className={`chatBubbleRow ${isUser ? "user" : "ai"}${isFindHit ? " findHit" : ""}`} data-msg-idx={i}>
-                <div className="chatMsgCol">
-                  <div className={`chatBubble ${isUser ? "user" : "ai"}`}>
-                    {m.images?.length ? (
-                      <div className="chatMsgImages">
-                        {m.images.map((src, j) => <img key={j} src={src} className="chatMsgImage" alt="pasted figure" />)}
-                      </div>
-                    ) : null}
-                    {m.pdfs?.length ? (
-                      <div className="chatMsgPdfs">
-                        {m.pdfs.map((n, j) => (
-                          <span key={j} className="chatPdfChip" title={n}>
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
-                            {n.slice(0, 40)}{n.length > 40 ? "…" : ""}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                    {isUser
-                      ? <div className="chatUserText">{m.text}</div>
-                      : <ChatMarkdown text={m.text} />}
-                  </div>
-                  <div className="chatMsgActions">
-                    <button type="button" className="chatMsgActionBtn" title="Copy message"
-                      onClick={() => copyChatMessage(i, m.text)}>
-                      {copiedMsgIdx === i
-                        ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                        : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
-                    </button>
-                    {isUser && !chatLoading ? (
-                      <button type="button" className="chatMsgActionBtn" title="Edit and re-send (removes later messages)"
-                        onClick={() => setEditingMsg({ idx: i, text: m.text })}>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            );
-          })
-        )}
-        {chatLoading ? (
-          <div className="chatBubbleRow ai">
-            <div className="chatBubble ai">
-              <span className="chatTyping"><span /><span /><span /></span>
-            </div>
-          </div>
-        ) : null}
-      </div>
-      {pdfSelection ? (
-        <div className="chatSelChip" title={pdfSelection}>
-          <span className="chatSelChipLabel">Selection</span>
-          <span className="chatSelChipText">{pdfSelection.slice(0, 140)}{pdfSelection.length > 140 ? "…" : ""}</span>
-          <button type="button" className="chatSelChipClose" onClick={() => setPdfSelection("")} title="Dismiss — answer about the whole document">×</button>
-        </div>
-      ) : null}
-      {chatImages.length ? (
-        <div className="chatImgPreviewRow">
-          {chatImages.map((src, i) => (
-            <span key={i} className="chatImgPreview">
-              <img src={src} alt="pasted figure" />
-              <button type="button" className="chatImgRemove" title="Remove image"
-                onClick={() => setChatImages((prev) => prev.filter((_, j) => j !== i))}>×</button>
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <form
-        className="chatInputRow"
-        onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
-      >
-        <span data-popover="chatdocs" style={{ position: "relative", display: "inline-flex" }}>
-          <button
-            type="button"
-            className={`chatAttachToggle chatPlusBtn ${(chatDocs.length || chatIncludeNotes) ? "on" : ""}`}
-            onClick={() => setOpenPopover((p) => (p === "chatdocs" ? null : "chatdocs"))}
-            title="Add context: choose PDFs and notes to include in this chat"
-            aria-label="Add chat context"
-          >
-            +{chatDocs.length ? <span className="chatPlusCount">{chatDocs.length}</span> : null}
-          </button>
-          {openPopover === "chatdocs" ? (
-            <div className="popover popUp attachPopover">
-              <div className="popoverTitle">Chat context</div>
-              <div className="popoverHint">
-                Selected PDFs (and optionally your notes) are sent with every question —
-                select a few papers and just ask for a report.
-              </div>
-              <div className="attachList">
-                {homeBlocks.filter((b) => b.properties?.doc_id).map((b) => (
-                  <label key={b.id} className="popoverItem attachItem">
-                    <input
-                      type="checkbox"
-                      checked={chatDocs.includes(b.id)}
-                      onChange={(e) => setChatDocs((prev) => e.target.checked
-                        ? [...prev, b.id]
-                        : prev.filter((id) => id !== b.id))}
-                    />
-                    <span className="attachName">{b.content || "Untitled"}</span>
-                  </label>
-                ))}
-                {homeBlocks.filter((b) => b.properties?.doc_id).length === 0 ? (
-                  <div className="popoverHint">No PDFs yet — open or upload one first.</div>
-                ) : null}
-              </div>
-              <div className="popoverDivider" />
-              <label className="popoverItem attachItem">
-                <input type="checkbox" checked={chatIncludeNotes} onChange={(e) => setChatIncludeNotes(e.target.checked)} />
-                <span className="attachName">Include my notes &amp; highlights</span>
-              </label>
-              {!chatDocs.length && docId ? (
-                <div className="popoverHint">Nothing selected — the currently open PDF is used.</div>
-              ) : null}
-            </div>
-          ) : null}
-        </span>
-        <button
-          type="button"
-          className={`chatAttachToggle chatPdfToggle ${attachPdf ? "on" : ""}`}
-          disabled={!docId && !chatDocs.length}
-          onClick={() => setAttachPdf((v) => !v)}
-          title={attachPdf
-            ? "Full PDF file is sent with each message (model sees figures & tables). Click to switch to extracted text only."
-            : "Send the full PDF file with your messages so the model sees figures & tables (uses more tokens). Click to enable."}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
-          PDF
-        </button>
-        <AutoGrowTextarea
-          className="chatInput chatInputArea"
-          rows={1}
-          value={chatInput}
-          onChange={(e) => setChatInput(e.target.value)}
-          onPaste={handleChatPaste}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
-          }}
-          placeholder={chatImages.length ? "Ask about the pasted figure…" : (pdfSelection ? "Ask about the selection…" : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : (focusedBlockId ? "Ask about this page… (Shift+Enter for a new line)" : "Ask AI… (paste images to attach)")))}
-        />
-        {chatLoading ? (
-          <button className="chatSendBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
-          </button>
-        ) : (
-          <button className="chatSendBtn chatCircleBtn" type="submit" disabled={!chatInput.trim()} title="Send" aria-label="Send">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
-          </button>
-        )}
-      </form>
-    </div>
-  ) : null;
-
   // The notes window - docked via notesDock, or filling the center when no PDF is shown.
   const notesWindow = notesVisible ? (
-    <div className="sidebar" style={{ "--sidebar-width": `${sidebarWidth}px`, "--sidebar-height": `${sidebarHeight}px` }}>
+    <div className="sidebar">
           {!homeMode && <div className="pageTitleRow">
             <div className="pageTitleMain">
             {titleEditing && !readOnly && focusedBlockId ? (
@@ -3895,8 +2205,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       // Close the page's tab too (write straight to storage —
                       // we reload right after, so state updates wouldn't stick).
                       try {
-                        localStorage.setItem("gamma-tabs",
-                          JSON.stringify(openTabs.filter((t) => t.id !== focusedBlockId)));
+                        if (prefsUserRef.current) {
+                          localStorage.setItem(`gamma-tabs:${prefsUserRef.current}`,
+                            JSON.stringify(openTabs.filter((t) => t.id !== focusedBlockId)));
+                        }
                       } catch {}
                       clearSession();
                       window.location.href = "/";
@@ -4251,9 +2563,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   onDelete: (id) => {
                     if (readOnly) return;
                     if (homeMode) {
-                      apiJson(`${API}/blocks/${id}`, { method: "DELETE" })
-                        .then(() => fetchHomeBlocks())
-                        .catch((err) => setStatus(`Delete failed: ${err}`));
+                      // Deleting a page also removes its stored PDF (if no
+                      // other page references it) — always confirm.
+                      const pg = homeBlocks.find((b) => b.id === id);
+                      setConfirmBox({
+                        title: "Delete page",
+                        message: `Delete "${(pg?.content || "this page").slice(0, 80)}" with all its notes${pg?.properties?.doc_id ? " and its stored PDF file" : ""}? This can't be undone.`,
+                        confirmLabel: "Delete",
+                        danger: true,
+                        onConfirm: () => {
+                          apiJson(`${API}/blocks/${id}`, { method: "DELETE" })
+                            .then(() => {
+                              updateTabs((prev) => prev.filter((t) => t.id !== id));
+                              fetchHomeBlocks();
+                            })
+                            .catch((err) => setStatus(`Delete failed: ${err.message}`));
+                        },
+                      });
                       return;
                     }
                     apiJson(`${API}/blocks/${id}`, { method: "DELETE" })
@@ -4364,7 +2690,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const centerNotes = pdfHidden || homeMode || pageOnly;
   const winVisible = {
     notes: Boolean(notesWindow) && !centerNotes,
-    chat: Boolean(chatWindow),
+    chat: !readOnly && !chatHidden,
   };
   function renderWindow(id) {
     const common = {
@@ -4381,9 +2707,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
     if (id === "chat") {
       return (
-        <DockWindow title="Chat" {...common} onClose={() => setChatHidden(true)} headerContent={chatHeaderContent}>
-          {chatWindow}
-        </DockWindow>
+        <ChatDock
+          {...common}
+          onClose={() => setChatHidden(true)}
+          docId={docId} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pdfTitle={pdfTitle}
+          pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
+          chatModel={chatModel} setChatModel={setChatModel}
+          chatEffort={chatEffort} setChatEffort={setChatEffort}
+          chatSystem={chatSystem} aiInfo={aiInfo}
+          openPromptEditor={openPromptEditor}
+          openPopover={openPopover} setOpenPopover={setOpenPopover}
+          setStatus={setStatus}
+        />
       );
     }
     return null;
@@ -4392,19 +2727,32 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const slotWins = (side) => layout[side].filter((w) => winVisible[w]);
   function renderSlotGroup(side, direction) {
     const wins = slotWins(side);
+    // Collapsed windows live OUTSIDE the panel group as fixed header bars —
+    // panel sizes are percentage-based, so a collapsed panel could never
+    // shrink to exactly one header height. Bars keep their side of the
+    // expanded group so collapsing doesn't reorder the column.
+    const expanded = wins.filter((w) => !collapsedWins[w]);
+    const firstExpanded = wins.findIndex((w) => !collapsedWins[w]);
+    const bar = (w) => <div key={w} className="collapsedBar">{renderWindow(w)}</div>;
+    const before = wins.filter((w, i) => collapsedWins[w] && (firstExpanded === -1 || i < firstExpanded));
+    const after = wins.filter((w, i) => collapsedWins[w] && firstExpanded !== -1 && i > firstExpanded);
     return (
-      <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`}>
-        {wins.map((w, i) => (
-          <React.Fragment key={w}>
-            {i > 0 ? <PanelResizeHandle className={`sash sash-${direction}`} /> : null}
-            {collapsedWins[w] ? (
-              <Panel id={`${w}-collapsed`} order={i + 1} minSize={4} maxSize={7}>{renderWindow(w)}</Panel>
-            ) : (
-              <Panel id={w} order={i + 1} minSize={15}>{renderWindow(w)}</Panel>
-            )}
-          </React.Fragment>
-        ))}
-      </PanelGroup>
+      <div className={`slotStack slotStack-${direction}`}>
+        {before.map(bar)}
+        {expanded.length ? (
+          <div className="slotStackGroup">
+            <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`}>
+              {expanded.map((w, i) => (
+                <React.Fragment key={w}>
+                  {i > 0 ? <PanelResizeHandle className={`sash sash-${direction}`} /> : null}
+                  <Panel id={w} order={i + 1} minSize={15}>{renderWindow(w)}</Panel>
+                </React.Fragment>
+              ))}
+            </PanelGroup>
+          </div>
+        ) : null}
+        {after.map(bar)}
+      </div>
     );
   }
 
@@ -4480,7 +2828,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     const dragged = dragTabRef.current;
                     if (!dragged || dragged === t.id) return;
                     e.preventDefault();
-                    setOpenTabs((prev) => {
+                    updateTabs((prev) => {
                       const from = prev.findIndex((x) => x.id === dragged);
                       const to = prev.findIndex((x) => x.id === t.id);
                       if (from < 0 || to < 0 || from === to) return prev;
@@ -4514,27 +2862,43 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 />
               </div>
             ) : null}
-            {transfers.length ? (
-              <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
+            <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
                 <button
                   className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
                   onClick={() => setOpenPopover((p) => (p === "downloads" ? null : "downloads"))}
-                  title="Downloads & uploads"
-                  aria-label="Downloads and uploads"
+                  title="Background tasks — downloads, uploads, indexing"
+                  aria-label="Background tasks"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>
-                  {transfers.some((t) => t.status === "active") ? <span className="transferSpin" /> : null}
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" /></svg>
+                  {(transfers.some((t) => t.status === "active") || indexTask?.active) ? <span className="transferSpin" /> : null}
                 </button>
                 {openPopover === "downloads" ? (
                   <div className="popover downloadsPopover">
                     <div className="popoverTitle citeSectionRow">
-                      <span>Downloads &amp; uploads</span>
+                      <span>Background tasks</span>
                       <button
                         className="searchToggle transferClearBtn"
                         title="Clear finished"
                         onClick={() => setTransfers((prev) => prev.filter((t) => t.status === "active"))}
                       >Clear</button>
                     </div>
+                    {!transfers.length && !(indexTask && (indexTask.active || indexTask.total > 0)) ? (
+                      <div className="popoverHint">No background tasks — downloads, uploads, and library indexing show up here.</div>
+                    ) : null}
+                    {indexTask && (indexTask.active || indexTask.total > 0) ? (
+                      <div className="transferRow">
+                        <span className={`transferStatus ${indexTask.active ? "active" : "done"}`}>
+                          {indexTask.active
+                            ? <span className="transferSpin inline" />
+                            : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>}
+                        </span>
+                        <span className="transferKind">
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+                        </span>
+                        <span className="transferName">Indexing PDF library for search</span>
+                        <span className="transferInfo">{indexTask.done}/{indexTask.total}</span>
+                      </div>
+                    ) : null}
                     {transfers.map((t) => (
                       <div key={t.id} className="transferRow">
                         <span className={`transferStatus ${t.status}`}>
@@ -4555,7 +2919,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   </div>
                 ) : null}
               </span>
-            ) : null}
             <span data-popover="search" style={{ position: "relative", display: "inline-flex" }}>
               <button
                 className={`iconBtn ${openPopover === "search" ? "activeIcon" : ""}`}
@@ -4603,43 +2966,75 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   ) : null}
                   <div className="searchResults">
                     {searchBusy ? <div className="searchHint">Searching…</div> : null}
-                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 ? (
+                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 && libMatches.length === 0 ? (
                       <div className="searchHint">No matches.</div>
                     ) : null}
-                    {searchResults.length ? <div className="searchSection">Notes</div> : null}
-                    {searchResults.map((r) => (
-                      <button
-                        key={r.id}
-                        className="searchResult"
-                        onClick={() => {
-                          setOpenPopover(null);
-                          if (r.page_root_id && r.page_root_id !== r.id) pendingBlockScrollRef.current = r.id;
-                          openBlock(r.page_root_id || r.id);
-                        }}
-                      >
-                        <span className="searchResultPage">{r.page_title || "Untitled"}</span>
-                        <span className="searchResultText">{r.content}</span>
-                      </button>
-                    ))}
-                    {pdfMatches.length ? (
-                      <div className="searchSection searchSectionRow">
-                        <span>This PDF · {findIndex + 1}/{pdfMatches.length}</span>
-                        <span className="findNav">
-                          <button className="searchToggle" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">▲</button>
-                          <button className="searchToggle" onClick={() => gotoFind(findIndex + 1)} title="Next match">▼</button>
-                        </span>
-                      </div>
-                    ) : null}
-                    {pdfMatches.map((m, i) => (
-                      <button
-                        key={`pdf-${i}`}
-                        className={`searchResult ${i === findIndex ? "active" : ""}`}
-                        onClick={() => gotoFind(i)}
-                      >
-                        <span className="searchResultPage">p. {m.page}</span>
-                        <span className="searchResultText">…{m.snippet}…</span>
-                      </button>
-                    ))}
+                    {(() => {
+                      // Priority: this paper's notes → this PDF's text → the
+                      // rest of the workspace (other notes, other papers).
+                      const inPage = (r) => focusedBlockId && (r.page_root_id === focusedBlockId || r.id === focusedBlockId);
+                      const notesHere = searchResults.filter(inPage);
+                      const notesElsewhere = searchResults.filter((r) => !inPage(r));
+                      const libElsewhere = libMatches.filter((r) => r.block_id !== focusedBlockId);
+                      const noteRow = (r) => (
+                        <button
+                          key={r.id}
+                          className="searchResult"
+                          onClick={() => {
+                            setOpenPopover(null);
+                            if (r.page_root_id && r.page_root_id !== r.id) pendingBlockScrollRef.current = r.id;
+                            openBlock(r.page_root_id || r.id);
+                          }}
+                        >
+                          <span className="searchResultPage">{r.page_title || "Untitled"}</span>
+                          <span className="searchResultText">{r.content}</span>
+                        </button>
+                      );
+                      return (
+                        <>
+                          {notesHere.length ? <div className="searchSection">Notes in this paper</div> : null}
+                          {notesHere.map(noteRow)}
+                          {pdfMatches.length ? (
+                            <div className="searchSection searchSectionRow">
+                              <span>This PDF · {findIndex + 1}/{pdfMatches.length}</span>
+                              <span className="findNav">
+                                <button className="searchToggle" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">▲</button>
+                                <button className="searchToggle" onClick={() => gotoFind(findIndex + 1)} title="Next match">▼</button>
+                              </span>
+                            </div>
+                          ) : null}
+                          {pdfMatches.map((m, i) => (
+                            <button
+                              key={`pdf-${i}`}
+                              className={`searchResult ${i === findIndex ? "active" : ""}`}
+                              onClick={() => gotoFind(i)}
+                            >
+                              <span className="searchResultPage">p. {m.page}</span>
+                              <span className="searchResultText">…{m.snippet}…</span>
+                            </button>
+                          ))}
+                          {notesElsewhere.length ? <div className="searchSection">{focusedBlockId ? "Other notes" : "Notes"}</div> : null}
+                          {notesElsewhere.map(noteRow)}
+                          {libElsewhere.length || libIndexing ? (
+                            <div className="searchSection">{focusedBlockId ? "Other papers" : "Library PDFs"}</div>
+                          ) : null}
+                          {libIndexing ? (
+                            <div className="searchHint">Indexing {libIndexing} paper{libIndexing === 1 ? "" : "s"} in the background — results will fill in shortly.</div>
+                          ) : null}
+                          {libElsewhere.map((r, i) => (
+                            <button
+                              key={`lib-${i}`}
+                              className="searchResult"
+                              onClick={() => openLibMatch(r)}
+                              title={`Open "${r.title}" at page ${r.page}`}
+                            >
+                              <span className="searchResultPage">{r.title.slice(0, 60)} · p. {r.page}</span>
+                              <span className="searchResultText">…{r.snippet}…</span>
+                            </button>
+                          ))}
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
               ) : null}
@@ -4891,13 +3286,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 else if (h.linkTarget?.url) handleDocLink(h.linkTarget.url);
               }}
               onJump={jumpToHighlightId}
-              onHighlightJump={(hlId) => {
+              onHighlightJump={(hlId, additive) => {
                 const b = flattenBlocks(blocks).find(b => b.properties?.highlight_id === hlId);
                 if (b) { pendingBlockScrollRef.current = b.id; setBlocks(prev => expandToBlock(prev, b.id)); }
                 // Clicking a highlight also makes its quote the chat selection
-                const hl = highlights.find(h => h.id === hlId);
-                const quote = hl?.content?.text?.trim();
-                if (quote) setPdfSelection(quote.slice(0, 4000));
+                // (Ctrl+click appends, like text selections)
+                addPdfSelection(highlights.find(h => h.id === hlId)?.content?.text, additive);
               }}
               onHighlightContext={setHighlightMenu}
               onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {
@@ -4946,7 +3340,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       </PanelGroup>
       </div>
       {dockPreview ? (
-        <div className={`dockPreview dockPreview-${dockPreview}`} />
+        <div className="dockPreview" style={dockPreview} />
       ) : null}
       {confirmBox ? (
         // data-popover keeps an open popover (e.g. search) alive while the dialog is up

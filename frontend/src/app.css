@@ -1559,7 +1559,6 @@ body {
   cursor: pointer;
 }
 .attachModeTarget { cursor: pointer; }
-[data-highlight-id] { cursor: pointer; }
 .attachContextMenu {
   position: fixed;
   z-index: 2000;
@@ -1729,9 +1728,9 @@ body {
 .urlBox {
   display: flex;
   gap: 6px;
-  flex: 2;
-  min-width: 200px;
-  max-width: 560px;
+  flex: 1 1 auto;
+  min-width: 160px;
+  max-width: 320px;
 }
 .urlBox input { flex: 1; min-width: 0; }
 .readOnlyTitle {
@@ -1953,6 +1952,17 @@ body {
 .dockCloseBtn:hover { color: var(--text-primary); }
 .dockHeaderSpacer { flex: 1; min-width: 0; }
 .dockWindow.collapsed { flex: 0 0 auto; }
+/* slot layout: collapsed windows are fixed header bars above/beside the
+   resizable group of expanded windows */
+.slotStack { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.slotStack-vertical { flex-direction: column; }
+.slotStack-horizontal { flex-direction: row; }
+.collapsedBar { flex: 0 0 auto; display: flex; min-width: 0; }
+/* in vertical columns a collapsed bar spans the full column width */
+.slotStack-vertical .collapsedBar .dockWindow { flex: 1 1 auto; min-width: 0; }
+.slotStack-horizontal .collapsedBar .dockWindow { border-right: 1px solid var(--border-subtle); }
+.slotStackGroup { flex: 1; min-width: 0; min-height: 0; display: flex; }
+.slotStackGroup > [data-panel-group] { flex: 1; }
 /* unified compact header controls */
 .dockWindowHeader .chatClearBtn { white-space: nowrap; }
 .dockWindowHeader .chatHeaderSelects { margin: 0; }
@@ -2062,10 +2072,8 @@ body {
   border: 2px solid var(--accent-dark);
   border-radius: 8px;
   pointer-events: none;
+  transition: left 0.1s ease, top 0.1s ease, width 0.1s ease, height 0.1s ease;
 }
-.dockPreview-left { inset: 8px 55% 8px 8px; }
-.dockPreview-right { inset: 8px 8px 8px 55%; }
-.dockPreview-bottom { inset: 60% 8px 8px 8px; }
 .chatPanel {
   display: flex;
   flex-direction: column;
@@ -2258,7 +2266,8 @@ body {
   outline: none;
 }
 .promptTextarea:focus { border-color: var(--text-dim); }
-/* selection chip */
+/* selection chips (multiple via Ctrl+select) */
+.chatSelChips { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
 .chatSelChip {
   display: flex;
   align-items: center;

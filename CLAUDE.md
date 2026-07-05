@@ -22,13 +22,21 @@ uvicorn app:app --host 127.0.0.1 --port 9001 --reload
 ### Frontend (React + Vite)
 
 ```bash
-cd logseq-v2-frontend
+cd frontend
 npm install
 npm run dev      # dev server on :5173, proxies /api → 127.0.0.1:9001 (vite.config.js)
 npm run build    # outputs to dist/
 ```
 
-There is no test suite and no linter configured. Verify changes by running the app.
+### Tests (backend)
+
+```bash
+cd backend
+pip install -r requirements-dev.txt   # pytest + httpx
+python -m pytest tests -q
+```
+
+In-process API tests (FastAPI TestClient) against a throwaway data directory — no server, no network. Frontend has no test suite or linter; verify UI changes by running the app.
 
 ### Docker
 
@@ -58,9 +66,10 @@ Two deployable pieces; the Docker image bundles both (FastAPI serves the built f
 - `manage.py` — user CRUD CLI. Shares the guest welcome-page seeding with the app (`gamma/seed.py`).
 - Package layout: `gamma/config.py` (env config), `gamma/db.py` (schemas/paths), `gamma/auth.py` (middleware), `gamma/seed.py` (user DB creation), `gamma/blocks_store.py` (tree CTE helpers), `gamma/storage.py` (uploads), `gamma/logseq_import.py` (EDN/MD parsers), `gamma/routers/*` (one module per API area), `gamma/app.py` (assembly + SPA serving).
 
-### Frontend (`logseq-v2-frontend/`)
+### Frontend (`frontend/`)
 
-- `src/App.jsx` — nearly the whole app: routing (URL query params, no router lib), custom pdf.js viewer (`PdfViewer`/`PdfPage` — memoized pages, capped DPR, cancelable render tasks), block tree editor, dockable windows (react-resizable-panels v2 — v4 has an incompatible API), autosave (500 ms debounce), login, ChatGPT-style AI chat (copy/edit/find/stop, pasted images, per-message PDF attach).
+- `src/App.jsx` — still the main component (decomposition in progress): routing (URL query params, no router lib), block tree editor, dockable windows (react-resizable-panels v2 — v4 has an incompatible API), autosave (500 ms debounce), login, ChatGPT-style AI chat (copy/edit/find/stop, pasted images, per-message PDF attach), search, background-tasks popover.
+- `src/pdfViewer.jsx` — the custom pdf.js viewer (`PdfViewer`/`PdfPage`/`PlainTip`, exports `COLORS`): lazy memoized pages, capped DPR, cancelable render tasks, highlight/link overlays, text search with keyword rects.
 - `src/logseqPdfModel.js` — pure block-tree operations (insert/indent/outdent/flatten/cycle-check).
 - View modes are derived from the URL: `/` home, `/?page=<id>` page (with PDF if it has `source_url`), `/?share=<token>` public read-only, `/?block=<id>` jump-to-block.
 - Reference links: a highlight block with `properties.link_url` / `link_page_id` is a clickable link region on the PDF (blue underline). Document links (native PDF annotations and manual ones) resolve against the library by DOI/arXiv id before offering fetch-vs-browser.
