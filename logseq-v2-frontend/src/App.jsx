@@ -4411,14 +4411,16 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     const wins = slotWins(side);
     // Collapsed windows live OUTSIDE the panel group as fixed header bars —
     // panel sizes are percentage-based, so a collapsed panel could never
-    // shrink to exactly one header height.
-    const collapsed = wins.filter((w) => collapsedWins[w]);
+    // shrink to exactly one header height. Bars keep their side of the
+    // expanded group so collapsing doesn't reorder the column.
     const expanded = wins.filter((w) => !collapsedWins[w]);
+    const firstExpanded = wins.findIndex((w) => !collapsedWins[w]);
+    const bar = (w) => <div key={w} className="collapsedBar">{renderWindow(w)}</div>;
+    const before = wins.filter((w, i) => collapsedWins[w] && (firstExpanded === -1 || i < firstExpanded));
+    const after = wins.filter((w, i) => collapsedWins[w] && firstExpanded !== -1 && i > firstExpanded);
     return (
       <div className={`slotStack slotStack-${direction}`}>
-        {collapsed.map((w) => (
-          <div key={w} className="collapsedBar">{renderWindow(w)}</div>
-        ))}
+        {before.map(bar)}
         {expanded.length ? (
           <div className="slotStackGroup">
             <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`}>
@@ -4431,6 +4433,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             </PanelGroup>
           </div>
         ) : null}
+        {after.map(bar)}
       </div>
     );
   }
