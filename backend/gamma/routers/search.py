@@ -28,6 +28,7 @@ _MAX_PAGES = 400          # per document
 _MAX_PAGE_CHARS = 20000   # per page
 
 _index_threads: dict[str, threading.Thread] = {}
+_index_progress: dict[str, dict] = {}  # user -> {"total": n, "done": m}
 _index_lock = threading.Lock()
 
 
@@ -68,14 +69,31 @@ def _index_doc(user: str, doc_id: str):
 
 
 def _index_missing_async(user: str, doc_ids: list[str]):
-    """One background indexer per user at a time."""
+    """One background indexer per user at a time, with visible progress."""
     with _index_lock:
         t = _index_threads.get(user)
         if t and t.is_alive():
             return
-        t = threading.Thread(target=lambda: [_index_doc(user, d) for d in doc_ids], daemon=True)
+
+        def run():
+            prog = _index_progress[user] = {"total": len(doc_ids), "done": 0}
+            for d in doc_ids:
+                _index_doc(user, d)
+                prog["done"] += 1
+
+        t = threading.Thread(target=run, daemon=True)
         _index_threads[user] = t
         t.start()
+
+
+@router.get("/tasks")
+def background_tasks(request: Request):
+    """Server-side background work for the tasks popover (extensible)."""
+    user = require_user(request)
+    with _index_lock:
+        t = _index_threads.get(user)
+        prog = _index_progress.get(user) or {"total": 0, "done": 0}
+        return {"indexing": {**prog, "active": bool(t and t.is_alive())}}
 
 
 def _fts_query(q: str) -> str:
