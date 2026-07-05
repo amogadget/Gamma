@@ -778,7 +778,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         const isLink = !!h.linkTarget;
         const elements = [];
         for (const r of rects) {
-          elements.push(<div key={h.id + "-" + r.x1 + "-" + r.y1} style={{
+          elements.push(<div key={h.id + "-" + r.x1 + "-" + r.y1} data-hl-id={h.id} style={{
             position: "absolute", zIndex: 2, cursor: "pointer",
             left: r.x1 * curW / storedW, top: r.y1 * curH / storedH,
             width: Math.max(1, (r.x2 - r.x1) * curW / storedW),
@@ -2021,7 +2021,9 @@ export default function App() {
         const sel = window.getSelection();
         const text = sel ? sel.toString().trim() : "";
         if (!text) {
-          if (!additive) setPdfSelections([]);
+          // Highlight clicks set the quote as the selection (in their own
+          // click handler) — don't clear it from here.
+          if (!additive && !e.target.closest?.("[data-hl-id]")) setPdfSelections([]);
           return;
         }
         const node = sel.anchorNode;
@@ -2158,62 +2160,6 @@ export default function App() {
     };
   }, [blocks, readOnly]);
 
-  useEffect(() => {
-    if (readOnly) return;
-    function onContext(e) {
-      // PDF.js's textLayer sits above highlights, so e.target is usually the textLayer.
-      // Use elementsFromPoint to get everything stacked at the click coordinate.
-      const stack = document.elementsFromPoint(e.clientX, e.clientY);
-      for (const el of stack) {
-        let cur = el;
-        while (cur && cur !== document.body) {
-          if (cur.dataset && cur.dataset.highlightId) {
-            e.preventDefault();
-            setHighlightMenu({ id: cur.dataset.highlightId, x: e.clientX, y: e.clientY });
-            return;
-          }
-          cur = cur.parentElement;
-        }
-      }
-    }
-    document.addEventListener("contextmenu", onContext, true); // capture phase
-    return () => document.removeEventListener("contextmenu", onContext, true);
-  }, [readOnly]);
-
-  // left-click on a PDF highlight jumps to its block in the sidebar
-  useEffect(() => {
-    function onPointerDown(e) {
-      if (e.button !== 0) return;
-      if (e.pointerType !== "mouse") return;
-      if (attachModeBlockIdRef.current) return;
-      const stack = document.elementsFromPoint(e.clientX, e.clientY);
-      for (const el of stack) {
-        let cur = el;
-        while (cur && cur !== document.body) {
-          if (cur.dataset && cur.dataset.highlightId) {
-            e.stopPropagation();
-            const hlId = cur.dataset.highlightId;
-            const block = flattenBlocks(blocksRef.current).find(
-              (b) => b.properties?.highlight_id === hlId,
-            );
-            if (block) {
-              const row = document.querySelector(`[data-block-id="${block.id}"]`);
-              if (row) {
-                row.scrollIntoView({ block: "center", behavior: "smooth" });
-                setFocusedId(block.id);
-                row.scrollIntoView({ block: "center", behavior: "smooth" });
-                setFocusedId(block.id);
-              }
-            }
-            return;
-          }
-          cur = cur.parentElement;
-        }
-      }
-    }
-    document.addEventListener("pointerdown", onPointerDown, true);
-    return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [readOnly]);
 
   function deleteHighlight(highlightId) {
     if (readOnly) return;
