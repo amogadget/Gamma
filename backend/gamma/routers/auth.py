@@ -1,18 +1,74 @@
-"""Login, logout, session inspection, guest login."""
+"""Login, logout, session inspection, guest login, and data export."""
 
+import json
+import os
 import secrets
+import sqlite3
+import tempfile
+import zipfile
+from pathlib import Path
 
 import bcrypt
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
-from ..auth import set_session_cookie
+from ..auth import require_user, set_session_cookie
 from ..config import USERS_DIR
 from ..db import connect_users_db, page_now
 from ..seed import ensure_guest_user, reset_guest_data
 
 router = APIRouter(prefix="/api", tags=["auth"])
+
+
+# Sync endpoint on purpose: zipping a large library runs in the threadpool.
+@router.get("/export")
+def export_data(request: Request):
+    """Full backup of the requesting user's data as a zip: consistent SQLite
+    snapshots (via the sqlite backup API, safe while the app is running) plus
+    every uploaded file. Restoring = unpacking into users/<name>/."""
+    user = require_user(request)
+    user_dir = Path(USERS_DIR) / user
+    if not user_dir.exists():
+        raise HTTPException(status_code=404, detail="no data for this user yet")
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+    tmp.close()
+    try:
+        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as z:
+            for dbname in ("pages.db", "data.db"):
+                src = user_dir / dbname
+                if not src.exists():
+                    continue
+                snap = Path(tmp.name + "." + dbname)
+                # sqlite3's context manager commits but does NOT close — on
+                # Windows the open handle would block unlink, so close explicitly.
+                src_conn = sqlite3.connect(str(src))
+                dst_conn = sqlite3.connect(str(snap))
+                try:
+                    src_conn.backup(dst_conn)
+                finally:
+                    src_conn.close()
+                    dst_conn.close()
+                z.write(snap, dbname)
+                snap.unlink()
+            uploads = user_dir / "uploads"
+            if uploads.exists():
+                for f in sorted(uploads.iterdir()):
+                    if f.is_file():
+                        z.write(f, f"uploads/{f.name}")
+            z.writestr("manifest.json", json.dumps({
+                "format": "gamma-backup-1",
+                "user": user,
+                "exported_at": page_now(),
+            }, indent=2))
+    except Exception:
+        os.unlink(tmp.name)
+        raise
+    filename = f"gamma-export-{user}-{page_now()[:10]}.zip"
+    return FileResponse(tmp.name, media_type="application/zip", filename=filename,
+                        background=BackgroundTask(os.unlink, tmp.name))
 
 
 class LoginRequest(BaseModel):
