@@ -8,9 +8,6 @@
 
 A self-hosted, Logseq-inspired PDF annotation server. Highlight PDFs in your browser, organize your notes as nested outliner blocks, and share read-only annotated copies via link.
 
-**Live example:** <https://annotation.amogadgetlab.com>
-**Shared view example:** <https://annotation.amogadgetlab.com/?share=vZ3UKgXO0LRGaUVg>
-
 ## What it does
 
 - Open any PDF by URL (arXiv links, DOI links, and publisher article pages all resolve to the PDF automatically) or upload it directly (drag-and-drop). Annotations already saved inside the file (SumatraPDF, Acrobat) are imported as notes.
