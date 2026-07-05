@@ -134,10 +134,14 @@ export default function ChatDock({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Keep the chat scrolled to the newest message.
+  // Follow the newest message only while the user is at the bottom — scrolling
+  // up to read earlier content pauses the auto-follow until they return
+  // (ChatGPT-style), so a streaming reply doesn't yank the scrollbar down.
+  const chatStickRef = useRef(true);
+  useEffect(() => { chatStickRef.current = true; }, [chatKey]);
   useEffect(() => {
     const el = chatScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && chatStickRef.current) el.scrollTop = el.scrollHeight;
   }, [chatMessages, chatLoading]);
 
   // Core chat send. baseMessages overrides the history (used when re-sending
@@ -180,6 +184,7 @@ export default function ChatDock({
         }).catch(() => {});
       }
     };
+    chatStickRef.current = true; // sending always snaps back to the bottom
     setChatMessages([...prevMessages, userMsg]);
     setChatLoading(true);
     setChatLoadingKey(sendKey);
@@ -332,7 +337,19 @@ export default function ChatDock({
           <button className="searchToggle" onClick={() => { setChatFindOpen(false); setChatFind(""); }} title="Close find">×</button>
         </div>
       ) : null}
-      <div className="chatMessages" ref={chatScrollRef}>
+      <div
+        className="chatMessages"
+        ref={chatScrollRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          chatStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+        }}
+        onWheel={(e) => {
+          // Upward intent unsticks immediately — before any scroll event —
+          // so an arriving delta can't yank the view back down first.
+          if (e.deltaY < 0) chatStickRef.current = false;
+        }}
+      >
         {chatMessages.length === 0 ? (
           <div className="chatEmpty">
             {aiInfo && !aiInfo.enabled
