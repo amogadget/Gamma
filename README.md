@@ -23,7 +23,22 @@ A self-hosted, Logseq-inspired PDF annotation server. Highlight PDFs in your bro
 - Everything auto-saves. Share any annotated PDF via a read-only public link.
 - Multi-user accounts with per-user isolated data, a daily-reset guest account, and one-click zip export of all your data.
 
-## Quick start (Docker)
+## Quick start (Docker Compose — recommended)
+
+Copy the templates (both real files are gitignored, so your local settings never end up in commits), set your admin password and optional AI keys, and start:
+
+```bash
+cp docker-compose.yml.example docker-compose.yml
+cp .env.example .env   # then edit: admin password, AI keys, contact email
+docker compose up -d
+```
+
+Open <http://localhost:9001> and log in.
+
+**Where your data lives:** everything — accounts (`users.db`), each user's notes databases, and every uploaded PDF/image — is stored under the container's `/data` directory (`GAMMA_DATA_DIR=/data`, declared as a volume). The compose file maps it to a named volume, so your library survives container upgrades; back it up by copying that volume (or use the in-app "Export my data" zip).
+
+<details>
+<summary>Plain <code>docker run</code> (alternative)</summary>
 
 ```bash
 docker run -d --name gamma \
@@ -34,15 +49,7 @@ docker run -d --name gamma \
   ghcr.io/tim4431/gamma:latest
 ```
 
-Open <http://localhost:9001> and log in. All state (accounts, notes, uploaded PDFs) lives in the `/data` volume.
-
-Or with compose — copy the templates (both real files are gitignored so your local settings never end up in commits):
-
-```bash
-cp docker-compose.yml.example docker-compose.yml
-cp .env.example .env   # then edit: admin password, optional AI key
-docker compose up -d
-```
+</details>
 
 To manage users inside a running container:
 
