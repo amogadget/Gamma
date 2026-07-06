@@ -1001,6 +1001,7 @@ export default function App() {
           const rootId = block?.page_root_id;
           if (rootId && rootId !== initialBlockId) {
             pendingBlockScrollRef.current = initialBlockId;
+            pendingJumpRef.current = initialBlockId; // highlight blocks also jump the PDF
             openBlock(rootId);
           } else {
             openBlock(initialBlockId);
@@ -2042,9 +2043,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       }
       let scrollTarget = (highlights || []).find((x) => x.id === id);
       if (!scrollTarget) {
-        const b = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === id);
-        const linkedId = b?.properties?.linked_highlight_id;
-        if (linkedId) scrollTarget = (highlights || []).find((x) => x.id === linkedId);
+        // Accept a block id too (reference-point deep links use them)
+        const b = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === id || b.id === id);
+        const hlId = b?.properties?.linked_highlight_id || b?.properties?.highlight_id;
+        if (hlId) scrollTarget = (highlights || []).find((x) => x.id === hlId);
       }
       if (scrollTarget && scrollToRef.current) {
         scrollToRef.current({ position: scrollTarget.position });
@@ -3853,14 +3855,20 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               className="ctxMenuItem"
               onClick={() => {
                 const h = highlights.find((x) => x.id === highlightMenu.id);
+                const blk = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === highlightMenu.id);
                 setRefPoint({
                   pageId: focusedBlockId,
                   pageTitle: pdfTitle || "Untitled",
                   highlightId: highlightMenu.id,
                   quote: (h?.content?.text || "").slice(0, 200),
                 });
+                // Also a paste-able deep link: opening it jumps straight to
+                // this highlight (in the browser, chat notes, anywhere).
+                if (blk) {
+                  navigator.clipboard?.writeText(`${window.location.origin}/?block=${encodeURIComponent(blk.id)}`).catch(() => {});
+                }
                 setHighlightMenu(null);
-                setStatus("Reference point copied — pick it in another paper's link dialog.");
+                setStatus("Reference point copied — paste the link, or pick it in another paper's link dialog.");
               }}
             >
               Copy as reference point
