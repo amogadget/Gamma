@@ -1234,6 +1234,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     // Back records LINK jumps only — callers opt in via {pushNav: true}.
     // Plain navigation (library, search, tabs, home) never pushes.
     if (opts?.pushNav && blockId !== focusedBlockId) pushNav();
+    captureScrollPos(); // remember the reading position of the page we're leaving
     setLoading(true);
     setStatus("Opening...");
     try {
@@ -1283,6 +1284,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(blockId)}`;
       window.history.replaceState({}, "", newUrl);
+      if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId]);
       setStatus("Ready.");
     } catch (err) {
       setStatus(`Open failed: ${err.message}`);
@@ -1301,6 +1303,37 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const pdfEffScaleRef = useRef(1);
   useEffect(() => { pdfEffScaleRef.current = pdfEffScale; }, [pdfEffScale]);
 
+  // Exact per-page reading positions so switching tabs returns to where you
+  // were, not just to the same page. blockId -> {top, scale}.
+  const tabScrollRef = useRef({});
+  function captureScrollPos() {
+    const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+    if (focusedBlockId && scroller) {
+      tabScrollRef.current[focusedBlockId] = { top: scroller.scrollTop, scale: pdfEffScale };
+    }
+  }
+  // Scroll the viewer back to an exact position (scale-aware, so it survives
+  // zoom changes) once the document's layout has settled: pages get their real
+  // heights asynchronously, so scrolling on the first tall-enough frame lands
+  // in the wrong spot — wait for two consecutive ticks with the same height.
+  function restorePdfScroll(entry) {
+    if (entry?.top == null) return;
+    let tries = 0;
+    let lastH = -1;
+    const tryScroll = () => {
+      const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+      const h = scroller ? scroller.scrollHeight : 0;
+      const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
+      if (scroller && h > targetTop && h === lastH) {
+        scroller.scrollTo({ top: targetTop, behavior: "auto" });
+        return;
+      }
+      lastH = h;
+      if (tries++ < 50) setTimeout(tryScroll, 120);
+    };
+    tryScroll();
+  }
+
   function pushNav() {
     const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
     const entry = {
@@ -1316,25 +1349,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     const entry = navStack[navStack.length - 1];
     if (!entry) return;
     setNavStack((prev) => prev.slice(0, -1));
-    const restoreScroll = () => {
-      if (entry.top == null) return;
-      let tries = 0;
-      const tryScroll = () => {
-        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
-        const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
-        if (scroller && scroller.scrollHeight > targetTop) {
-          scroller.scrollTo({ top: targetTop, behavior: "auto" });
-          return;
-        }
-        if (tries++ < 40) setTimeout(tryScroll, 150);
-      };
-      tryScroll();
-    };
     if (entry.blockId && entry.blockId === focusedBlockId) {
-      restoreScroll(); // same document — just return to the reading position
+      restorePdfScroll(entry); // same document — just return to the reading position
     } else if (entry.blockId) {
       await openBlock(entry.blockId);
-      restoreScroll();
+      restorePdfScroll(entry);
     } else {
       goHome();
       if (entry.folder) {
@@ -1348,6 +1367,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const navStackLen = navStack.length;
 
   function goHome() {
+    captureScrollPos(); // tabbing back later returns to this position
     clearSession();
     suppressAutosaveRef.current = true;
     setFocusedBlockId(null);
@@ -1835,6 +1855,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   useEffect(() => {
     if (pdfHidden) return;
     if (restoredPdfUrlRef.current === pdfUrl) return;
+    // Tab switches restore an exact per-page position (tabScrollRef) — the
+    // coarse session page number is only for reopening the app.
+    if (tabScrollRef.current[focusedBlockIdRef.current]) return;
     const saved = loadSession().pdfPageNumber;
     if (!saved || saved <= 1) return;
     let cancelled = false;
@@ -2862,7 +2885,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     });
                   }}
                   onDrop={(e) => e.preventDefault()}
-                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id); }}
+                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id, { restoreScroll: true }); }}
                   onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } }}
                 >
                   <span className="tabTitle">{t.title}</span>
