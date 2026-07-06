@@ -264,6 +264,11 @@ export default function App() {
   // existing entry instead of stacking duplicates.
   function handlePdfLoadState(url, st) {
     if (url.startsWith("/api/uploads/")) return;
+    if (st.phase === "cached") {
+      const id = transferByUrlRef.current[url];
+      if (id) updateTransfer(id, { status: "done", info: "cached" });
+      return;
+    }
     if (st.phase === "start") {
       const prevId = transferByUrlRef.current[url];
       if (prevId) {
@@ -1151,6 +1156,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     if (!sourceUrl || readOnly) return;
     setLoading(true);
     setStatus("Opening PDF...");
+    // Visible from the moment Enter is pressed — resolve can take seconds.
+    const taskId = addTransfer({ name: sourceUrl.slice(0, 60), kind: "download", info: "resolving…" });
     try {
       // Uploaded PDFs are already hosted locally — skip external resolve and proxy.
       const isUpload = sourceUrl.startsWith("/api/uploads/") || sourceUrl.startsWith(`${API}/uploads/`);
@@ -1167,10 +1174,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         pdfNote = resolved.note || "";
         resolvedDocId = await getDocIdForUrl(finalUrl);
         proxiedUrl = `${API}/pdf?source_url=${encodeURIComponent(finalUrl)}${pdfSaveLocal ? "&save=1" : ""}`;
+        transferByUrlRef.current[proxiedUrl] = taskId; // viewer's byte-level reporting takes over this row
       }
       // Resolve block + load children FIRST, before setPdfUrl, to avoid mid-render highlight race
       const defaultTitle = getPdfPageTitle(resolvedDocId, finalUrl);
       const block = await getOrCreateBlockForDoc(resolvedDocId, defaultTitle, finalUrl);
+      updateTransfer(taskId, {
+        name: (block.content || defaultTitle).slice(0, 60),
+        ...(isUpload ? { status: "done", info: "local file" } : { info: "downloading…" }),
+      });
       const nextBlocks = await loadBlocksForBlock(block.id);
       setDocId(resolvedDocId);
       setInputUrl(finalUrl);
@@ -1184,6 +1196,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       window.history.replaceState({}, "", newUrl);
       setStatus(pdfNote || `Loaded ${resolvedDocId}`);
     } catch (err) {
+      updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       setStatus(`Open failed: ${err.message}`);
     } finally {
       setLoading(false);
