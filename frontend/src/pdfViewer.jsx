@@ -169,6 +169,10 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           if (cancelled) return;
         }
         onLoadState?.(url, { phase: "done", bytes: data.byteLength });
+        } else {
+          // Settles a task row registered before the load (URL-box opens);
+          // ordinary cache hits have no row and ignore this.
+          onLoadState?.(url, { phase: "cached" });
         }
         cachePdf(url, data); // insert or bump LRU position
         pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise.then(doc => {
