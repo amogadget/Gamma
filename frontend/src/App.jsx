@@ -1242,7 +1242,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   async function openPdf(sourceUrl) {
     if (!sourceUrl || readOnly) return;
-    flushPendingSave();
+    leaveCurrentPage();
     setLoading(true);
     setStatus("Opening PDF...");
     // Visible from the moment Enter is pressed — resolve can take seconds.
@@ -1336,9 +1336,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     // Back records LINK jumps only — callers opt in via {pushNav: true}.
     // Plain navigation (library, search, tabs, home) never pushes.
     if (opts?.pushNav && blockId !== focusedBlockId) pushNav();
-    flushPendingSave(); // queued edits belong to the page we're leaving
-    captureScrollPos(); // remember the reading position of the page we're leaving
-    cancelPdfRestore(); // a stale restore loop must not scroll the next document
+    leaveCurrentPage();
     setLoading(true);
     setStatus("Opening...");
     try {
@@ -1484,6 +1482,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     restoringForRef.current = null;
     pendingRestoreRef.current = null;
   }
+  // Everything owed to the page being navigated away from: persist queued
+  // edits, remember its scroll position + window layout, and kill any
+  // in-flight scroll restore so it can't touch the next document.
+  function leaveCurrentPage() {
+    flushPendingSave();
+    captureScrollPos();
+    cancelPdfRestore();
+  }
   // Scroll the viewer back to an exact position. Two gates, both required:
   // the TARGET document must be the one rendered (the old document stays in
   // the DOM until the new one loads — scrolling it is what made restores land
@@ -1554,9 +1560,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const navStackLen = navStack.length;
 
   function goHome() {
-    flushPendingSave();
-    captureScrollPos(); // tabbing back later returns to this position
-    cancelPdfRestore();
+    leaveCurrentPage();
     clearSession();
     suppressAutosaveRef.current = true;
     setFocusedBlockId(null);
@@ -2011,13 +2015,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                  : pageBlocks.filter((b) => !b._folder)
   ), [pageBlocks, folderFilter]);
   const highlights = useMemo(() => {
-    const flat = flattenBlocks(blocks);
+    const byHlId = new Map();
+    for (const b of flattenBlocks(blocks)) {
+      if (b.properties?.highlight_id) byHlId.set(b.properties.highlight_id, b);
+    }
     return blocksToHighlights(blocks).map((h) => {
-      const b = flat.find((x) => x.properties?.highlight_id === h.id);
-      const url = b?.properties?.link_url || "";
-      const pageId = b?.properties?.link_page_id || "";
-      const highlightId = b?.properties?.link_highlight_id || "";
-      return (url || pageId) ? { ...h, linkTarget: { url, pageId, highlightId } } : h;
+      const p = byHlId.get(h.id)?.properties || {};
+      const url = p.link_url || "";
+      const pageId = p.link_page_id || "";
+      return (url || pageId) ? { ...h, linkTarget: { url, pageId, highlightId: p.link_highlight_id || "" } } : h;
     });
   }, [blocks]);
   useEffect(() => {
