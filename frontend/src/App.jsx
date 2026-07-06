@@ -1347,6 +1347,25 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         setPdfHidden(!!savedUi.pdfHidden);
         setChatHidden(!!savedUi.chatHidden);
         if (savedUi.notesVisible != null) setNotesVisible(savedUi.notesVisible);
+        // Panel ratios apply once the restored window structure has
+        // committed (a group's panel count must match its saved sizes).
+        if (savedUi.sizes) {
+          let tries = 0;
+          const applySizes = () => {
+            let pending = false;
+            for (const [k, arr] of Object.entries(savedUi.sizes)) {
+              const h = panelGroupRefs.current[k];
+              if (!h || !Array.isArray(arr) || !arr.length) continue;
+              try {
+                const cur = h.getLayout();
+                if (cur.length !== arr.length) { pending = true; continue; }
+                if (cur.some((v, i) => Math.abs(v - arr[i]) > 0.5)) h.setLayout(arr);
+              } catch { pending = true; }
+            }
+            if (pending && tries++ < 20) setTimeout(applySizes, 60);
+          };
+          requestAnimationFrame(applySizes);
+        }
       }
       if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
       setStatus("Ready.");
@@ -1371,9 +1390,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // Exact per-page reading positions so switching tabs returns to where you
   // were, not just to the same page. blockId -> {top, scale}.
   const tabScrollRef = useRef({});
-  // Per-page window layout (dock slots, collapsed bars, hidden windows) —
-  // captured when leaving a page, restored when it's opened again.
+  // Per-page window layout (dock slots, collapsed bars, hidden windows, and
+  // panel size ratios) — captured when leaving a page, restored on reopen.
   const pageLayoutsRef = useRef({});
+  const panelGroupRefs = useRef({}); // group key -> react-resizable-panels imperative handle
   useEffect(() => {
     if (!authUser?.user || readOnly) return;
     try { pageLayoutsRef.current = JSON.parse(localStorage.getItem(`gamma-page-layouts:${authUser.user}`) || "{}"); }
@@ -1384,9 +1404,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const pdfRenderedUrlRef = useRef(""); // url of the document whose pages are in the DOM
   const pendingRestoreRef = useRef(null); // {url, entry, blockId, token} applied pre-paint on "rendered"
   function captureScrollPos() {
-    // The page's window layout travels with it.
+    // The page's window layout travels with it — including panel size ratios.
     if (focusedBlockId && !readOnly && prefsUserRef.current) {
-      pageLayoutsRef.current[focusedBlockId] = { layout, collapsed: collapsedWins, pdfHidden, chatHidden, notesVisible };
+      const sizes = {};
+      for (const [k, h] of Object.entries(panelGroupRefs.current)) {
+        try { if (h) sizes[k] = h.getLayout(); } catch {}
+      }
+      pageLayoutsRef.current[focusedBlockId] = { layout, collapsed: collapsedWins, pdfHidden, chatHidden, notesVisible, sizes };
       try {
         const keys = Object.keys(pageLayoutsRef.current);
         while (keys.length > 80) delete pageLayoutsRef.current[keys.shift()];
@@ -2914,7 +2938,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         {before.map(bar)}
         {expanded.length ? (
           <div className="slotStackGroup">
-            <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`}>
+            <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`} ref={(h) => { panelGroupRefs.current[`slot-${side}`] = h; }}>
               {expanded.map((w, i) => (
                 <React.Fragment key={w}>
                   {i > 0 ? <PanelResizeHandle className={`sash sash-${direction}`} /> : null}
@@ -3446,7 +3470,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       )}
 
       <div className="workArea">
-      <PanelGroup direction="horizontal" autoSaveId="gamma-work-h">
+      <PanelGroup direction="horizontal" autoSaveId="gamma-work-h" ref={(h) => { panelGroupRefs.current["work-h"] = h; }}>
       {slotWins("left").length ? (
         <>
           <Panel id="slot-left" order={1} defaultSize={26} minSize={15} className="dockSlot">
@@ -3456,7 +3480,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </>
       ) : null}
       <Panel id="slot-center" order={2} minSize={30} className="dockSlot">
-      <PanelGroup direction="vertical" autoSaveId="gamma-work-v">
+      <PanelGroup direction="vertical" autoSaveId="gamma-work-v" ref={(h) => { panelGroupRefs.current["work-v"] = h; }}>
       <Panel id="slot-main" order={1} minSize={20} className="dockSlot">
       <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
         <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
