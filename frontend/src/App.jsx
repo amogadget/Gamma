@@ -396,14 +396,28 @@ export default function App() {
       },
     });
   }
+  // ":label" tokens in the search box filter pages by their labels (the
+  // colored badges under each paper title); the remaining text searches
+  // notes/PDFs as usual. ":quantum :review" requires both labels.
+  const searchLabelTokens = useMemo(() => (
+    (searchQuery.match(/(^|\s):([\w-]+):?/g) || []).map((t) => t.replace(/[:\s]/g, "").toLowerCase()).filter(Boolean)
+  ), [searchQuery]);
+  const searchTextQuery = useMemo(() => searchQuery.replace(/(^|\s):[\w-]+:?/g, " ").trim(), [searchQuery]);
+  const labelMatches = useMemo(() => {
+    if (!searchLabelTokens.length) return [];
+    return homeBlocks.filter((b) => {
+      const labels = (b.properties?.category || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
+      return searchLabelTokens.every((t) => labels.some((l) => l.includes(t)));
+    });
+  }, [searchLabelTokens, homeBlocks]);
   useEffect(() => {
-    if (openPopover !== "search" || !searchQuery.trim()) {
+    if (openPopover !== "search" || !searchTextQuery) {
       setSearchResults([]); setPdfMatches([]); setLibMatches([]); setLibIndexing(0);
       return;
     }
     const timer = setTimeout(() => {
       setSearchBusy(true);
-      const q = searchQuery.trim();
+      const q = searchTextQuery;
       const flags = `&case=${searchCase ? 1 : 0}&whole=${searchWhole ? 1 : 0}&regex=${searchRegex ? 1 : 0}`;
       const notesReq = apiJson(`${API}/block-search?q=${encodeURIComponent(q)}&limit=20${flags}`)
         .then((d) => setSearchResults(d.blocks || []))
@@ -427,10 +441,10 @@ export default function App() {
       Promise.allSettled([notesReq, pdfReq, libReq]).then(() => setSearchBusy(false));
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchQuery, openPopover, searchCase, searchWhole, searchRegex, searchNonce]);
+  }, [searchTextQuery, openPopover, searchCase, searchWhole, searchRegex, searchNonce]);
 
   function replaceAllInNotes() {
-    const q = searchQuery.trim();
+    const q = searchTextQuery;
     if (!q) return;
     setConfirmBox({
       title: "Replace all",
@@ -525,6 +539,9 @@ export default function App() {
   const [linkPrompt, setLinkPrompt] = useState(null); // external URL clicked inside the PDF
   const [linkDialog, setLinkDialog] = useState(null); // {position, content} — creating a manual reference link
   const [linkDialogInput, setLinkDialogInput] = useState("");
+  // A highlight copied via "Copy as reference point" — link dialogs in other
+  // papers offer it as a target, so links can point at an exact passage.
+  const [refPoint, setRefPoint] = useState(null); // {pageId, pageTitle, highlightId, quote}
 
   // --- Paper metadata (arXiv / DOI / AI) and citation export -----------------
   const [pageMeta, setPageMeta] = useState(null);   // properties.meta of the open page
@@ -582,6 +599,9 @@ export default function App() {
         setStatus(`Paper metadata found (${data.source === "ai" ? "AI-extracted" : data.source}).`);
         fetchHomeBlocks(); // keep the library's meta fresh for DOI-link matching
       }
+      // The slide citation rides along with metadata — by the time the
+      // popover is opened it's already cached on the page.
+      if (data.meta || data.bibtex) makePptCitation(false, block);
     } catch (err) {
       updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       if (focusedBlockIdRef.current === block.id) setStatus(`Metadata: ${err.message}`);
@@ -640,18 +660,19 @@ export default function App() {
     }
   }
 
-  async function makePptCitation(force = false) {
-    if (!focusedBlockId || pptCiteBusy) return;
+  async function makePptCitation(force = false, blockArg = null) {
+    const targetId = blockArg?.id || focusedBlockId;
+    if (!targetId || pptCiteBusy) return;
     setPptCiteBusy(true);
-    const taskId = addTransfer({ name: `Slide citation — ${(pdfTitle || "paper").slice(0, 48)}`, kind: "ai", info: "generating…" });
+    const taskId = addTransfer({ name: `Slide citation — ${(blockArg?.content || pdfTitle || "paper").slice(0, 48)}`, kind: "ai", info: "generating…" });
     try {
       const data = await apiJson(`${API}/metadata/cite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ block_id: focusedBlockId, prompt: citePrompt || "", model: chatModel || "", force }),
+        body: JSON.stringify({ block_id: targetId, prompt: citePrompt || "", model: chatModel || "", force }),
       });
       updateTransfer(taskId, { status: "done", info: "" });
-      setPptCite(data.citation || "");
+      if (focusedBlockIdRef.current === targetId) setPptCite(data.citation || "");
     } catch (err) {
       updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       setStatus(`Citation failed: ${err.message}`);
@@ -1317,6 +1338,16 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(blockId)}`;
       window.history.replaceState({}, "", newUrl);
+      // Pages remember their own window arrangement; pages without one
+      // inherit whatever layout is currently on screen.
+      const savedUi = pageLayoutsRef.current[blockId];
+      if (savedUi?.layout) {
+        setLayout(savedUi.layout);
+        setCollapsedWins(savedUi.collapsed || {});
+        setPdfHidden(!!savedUi.pdfHidden);
+        setChatHidden(!!savedUi.chatHidden);
+        if (savedUi.notesVisible != null) setNotesVisible(savedUi.notesVisible);
+      }
       if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
       setStatus("Ready.");
       return openedPdfUrl;
@@ -1340,11 +1371,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // Exact per-page reading positions so switching tabs returns to where you
   // were, not just to the same page. blockId -> {top, scale}.
   const tabScrollRef = useRef({});
+  // Per-page window layout (dock slots, collapsed bars, hidden windows) —
+  // captured when leaving a page, restored when it's opened again.
+  const pageLayoutsRef = useRef({});
+  useEffect(() => {
+    if (!authUser?.user || readOnly) return;
+    try { pageLayoutsRef.current = JSON.parse(localStorage.getItem(`gamma-page-layouts:${authUser.user}`) || "{}"); }
+    catch { pageLayoutsRef.current = {}; }
+  }, [authUser?.user, readOnly]);
   const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
   const restoringForRef = useRef(null); // block whose restore hasn't landed yet
   const pdfRenderedUrlRef = useRef(""); // url of the document whose pages are in the DOM
   const pendingRestoreRef = useRef(null); // {url, entry, blockId, token} applied pre-paint on "rendered"
   function captureScrollPos() {
+    // The page's window layout travels with it.
+    if (focusedBlockId && !readOnly && prefsUserRef.current) {
+      pageLayoutsRef.current[focusedBlockId] = { layout, collapsed: collapsedWins, pdfHidden, chatHidden, notesVisible };
+      try {
+        const keys = Object.keys(pageLayoutsRef.current);
+        while (keys.length > 80) delete pageLayoutsRef.current[keys.shift()];
+        localStorage.setItem(`gamma-page-layouts:${prefsUserRef.current}`, JSON.stringify(pageLayoutsRef.current));
+      } catch {}
+    }
     // Only record a position when the viewer is actually showing THIS page's
     // document: mid-load the scroller still holds the previous document (or a
     // clamped 0), and a pending restore means the real position hasn't been
@@ -1776,7 +1824,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       // Re-pointing (or clearing) the link on an existing highlight block
       setBlocks(updateBlockTree(blocks, ld.editBlockId, (b) => ({
         ...b,
-        properties: { ...b.properties, link_url: target.url || "", link_page_id: target.pageId || "" },
+        properties: { ...b.properties, link_url: target.url || "", link_page_id: target.pageId || "", link_highlight_id: target.highlightId || "" },
       })));
       setStatus(target.url || target.pageId ? "Link updated." : "Link removed.");
       return;
@@ -1791,7 +1839,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     });
     next = updateBlockTree(next, id, (b) => ({
       ...b,
-      properties: { ...b.properties, link_url: target.url || "", link_page_id: target.pageId || "" },
+      properties: { ...b.properties, link_url: target.url || "", link_page_id: target.pageId || "", link_highlight_id: target.highlightId || "" },
     }));
     setBlocks(next); // autosave persists
     setStatus("Reference linked.");
@@ -1892,14 +1940,24 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       const b = flat.find((x) => x.properties?.highlight_id === h.id);
       const url = b?.properties?.link_url || "";
       const pageId = b?.properties?.link_page_id || "";
-      return (url || pageId) ? { ...h, linkTarget: { url, pageId } } : h;
+      const highlightId = b?.properties?.link_highlight_id || "";
+      return (url || pageId) ? { ...h, linkTarget: { url, pageId, highlightId } } : h;
     });
   }, [blocks]);
   useEffect(() => {
     if (pdfHidden) return;
     const id = pendingJumpRef.current;
     if (!id) return;
-    setTimeout(() => {
+    let tries = 0;
+    const attempt = () => {
+      if (pendingJumpRef.current !== id) return; // superseded
+      // Cross-paper jumps: the target page's blocks (and thus highlights)
+      // load before its document swaps in — wait for the right document so
+      // the jump isn't applied to the outgoing one.
+      if (pdfUrl && pdfRenderedUrlRef.current !== pdfUrl && tries++ < 80) {
+        setTimeout(attempt, 100);
+        return;
+      }
       let scrollTarget = (highlights || []).find((x) => x.id === id);
       if (!scrollTarget) {
         const b = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === id);
@@ -1908,9 +1966,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       }
       if (scrollTarget && scrollToRef.current) {
         scrollToRef.current({ position: scrollTarget.position });
+        triggerFlash(scrollTarget.id);
       }
       pendingJumpRef.current = null;
-    }, 100);
+    };
+    setTimeout(attempt, 100);
   }, [pdfHidden, highlights]);
 
   // Restore PDF scroll position from session.
@@ -2070,7 +2130,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             )}
             {focusedBlockId && !readOnly ? (
               <div className="categoryFrontmatter">
-                <span className="categoryIcon" title="Categories">
+                <span className="categoryIcon" title="Labels">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>
                 </span>
                 {categoryEditing ? (() => {
@@ -2157,7 +2217,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     >
                       {category ? (
                         category.split(",").map((t, i) => t.trim() ? <span key={i} className="categoryBadge">{t.trim()}</span> : null)
-                      ) : "Add categories..."}
+                      ) : "Add labels..."}
                     </span>
                   )}
               </div>
@@ -2444,10 +2504,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
                     </div>
                   </div>
-                  {/* Categories — one card per category */}
+                  {/* Labels — one card per label */}
                   {catNames.length > 0 ? (
                     <div className="carouselRow">
-                      <div className="carouselLabel">Categories</div>
+                      <div className="carouselLabel">Labels</div>
                       <div className="carouselTrackWrap">
                         <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
                         <div className="carouselTrack">
@@ -2555,8 +2615,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   onUnlinkHighlight: readOnly ? null : unlinkHighlightFromBlock,
                   onOpenLinkTarget: (b) => {
                     const p = b.properties || {};
-                    if (p.link_page_id) openBlock(p.link_page_id, { pushNav: true });
-                    else if (p.link_url) handleDocLink(p.link_url);
+                    if (p.link_page_id) {
+                      if (p.link_highlight_id) pendingJumpRef.current = p.link_highlight_id;
+                      openBlock(p.link_page_id, { pushNav: true });
+                    } else if (p.link_url) handleDocLink(p.link_url);
                   },
                   registerRef,
                   readOnly,
@@ -3063,7 +3125,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       className="searchInput"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Search notes, highlights, and this PDF…"
+                      placeholder="Search notes, highlights, and PDFs — :label filters by label"
                     />
                     <button className={`searchToggle ${searchCase ? "on" : ""}`} onClick={() => setSearchCase((v) => !v)} title="Match case">Aa</button>
                     <button className={`searchToggle ${searchWhole ? "on" : ""}`} onClick={() => setSearchWhole((v) => !v)} title="Match whole word"><u>ab</u></button>
@@ -3088,8 +3150,25 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   ) : null}
                   <div className="searchResults">
                     {searchBusy ? <div className="searchHint">Searching…</div> : null}
-                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 && libMatches.length === 0 ? (
+                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 && libMatches.length === 0 && labelMatches.length === 0 ? (
                       <div className="searchHint">No matches.</div>
+                    ) : null}
+                    {searchLabelTokens.length ? (
+                      <>
+                        <div className="searchSection">Labels: {searchLabelTokens.map((t) => `:${t}`).join(" ")}</div>
+                        {labelMatches.length === 0 ? (
+                          <div className="searchHint">No pages carry {searchLabelTokens.length === 1 ? "this label" : "all these labels"}.</div>
+                        ) : labelMatches.map((b) => (
+                          <button
+                            key={`lbl-${b.id}`}
+                            className="searchResult"
+                            onClick={() => { setOpenPopover(null); openBlock(b.id, { restoreScroll: true }); }}
+                          >
+                            <span className="searchResultPage">{b.content || "Untitled"}</span>
+                            <span className="searchResultText">{b.properties?.category || ""}</span>
+                          </button>
+                        ))}
+                      </>
                     ) : null}
                     {(() => {
                       // Priority: this paper's notes → this PDF's text → the
@@ -3427,8 +3506,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               onLoadState={handlePdfLoadState}
               onExternalLink={handleDocLink}
               onLinkHighlight={(h) => {
-                if (h.linkTarget?.pageId) openBlock(h.linkTarget.pageId, { pushNav: true });
-                else if (h.linkTarget?.url) handleDocLink(h.linkTarget.url);
+                if (h.linkTarget?.pageId) {
+                  if (h.linkTarget.highlightId) pendingJumpRef.current = h.linkTarget.highlightId;
+                  openBlock(h.linkTarget.pageId, { pushNav: true });
+                } else if (h.linkTarget?.url) handleDocLink(h.linkTarget.url);
               }}
               onJump={jumpToHighlightId}
               onHighlightJump={(hlId, additive) => {
@@ -3550,6 +3631,19 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 onClick={() => createLinkHighlight({ url: normalizeLinkInput(linkDialogInput) })}
               >Link</button>
             </div>
+            {refPoint && refPoint.pageId !== focusedBlockId ? (
+              <>
+                <div className="popoverSection">Copied reference point</div>
+                <button
+                  className="reportPageItem linkPageItem"
+                  onClick={() => createLinkHighlight({ pageId: refPoint.pageId, highlightId: refPoint.highlightId })}
+                  title="Link to this exact highlight — clicking the link opens the paper and jumps to it"
+                >
+                  <span className="reportPageName">{refPoint.pageTitle} — “{refPoint.quote.slice(0, 60)}{refPoint.quote.length > 60 ? "…" : ""}”</span>
+                  <span className="linkLikelyBadge">highlight</span>
+                </button>
+              </>
+            ) : null}
             <div className="popoverSection">Your papers (best match first)</div>
             <div className="reportPageList">
               {(() => {
@@ -3672,6 +3766,22 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               }}
             >
               {highlights.find((x) => x.id === highlightMenu.id)?.linkTarget ? "Change link…" : "Link to paper…"}
+            </button>
+            <button
+              className="ctxMenuItem"
+              onClick={() => {
+                const h = highlights.find((x) => x.id === highlightMenu.id);
+                setRefPoint({
+                  pageId: focusedBlockId,
+                  pageTitle: pdfTitle || "Untitled",
+                  highlightId: highlightMenu.id,
+                  quote: (h?.content?.text || "").slice(0, 200),
+                });
+                setHighlightMenu(null);
+                setStatus("Reference point copied — pick it in another paper's link dialog.");
+              }}
+            >
+              Copy as reference point
             </button>
             <button
               className="ctxMenuItem"

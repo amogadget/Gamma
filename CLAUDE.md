@@ -72,7 +72,7 @@ Two deployable pieces; the Docker image bundles both (FastAPI serves the built f
 - `src/pdfViewer.jsx` — the custom pdf.js viewer (`PdfViewer`/`PdfPage`/`PlainTip`, exports `COLORS`): lazy memoized pages, capped DPR, cancelable render tasks, highlight/link overlays, text search with keyword rects.
 - `src/logseqPdfModel.js` — pure block-tree operations (insert/indent/outdent/flatten/cycle-check).
 - View modes are derived from the URL: `/` home, `/?page=<id>` page (with PDF if it has `source_url`), `/?share=<token>` public read-only, `/?block=<id>` jump-to-block.
-- Reference links: a highlight block with `properties.link_url` / `link_page_id` is a clickable link region on the PDF (blue underline). Document links (native PDF annotations and manual ones) resolve against the library by DOI/arXiv id before offering fetch-vs-browser.
+- Reference links: a highlight block with `properties.link_url` / `link_page_id` is a clickable link region on the PDF (blue underline); `link_highlight_id` additionally targets an exact highlight in that paper (created via a highlight's "Copy as reference point" context-menu item, then offered in link dialogs). Document links (native PDF annotations and manual ones) resolve against the library by DOI/arXiv id before offering fetch-vs-browser.
 - User preferences (OA fallback, auto-metadata, save-external-PDFs, prompts, model/effort) live in `localStorage`; provider keys/models are server-side env.
 - Frontend always talks same-origin `/api/*`; in dev Vite proxies to :9001.
 
