@@ -2849,6 +2849,16 @@ body {
 }
 .pptCitePreview { flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary); }
 .pptCitePreview p { margin: 0; }
+/* Beat the generic ".topbar button" pill when the box renders inside the
+   topbar (share popover) — keep the flat icon look it has elsewhere. */
+.pptCiteBox .chatMsgActionBtn {
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
 
 /* --- paper metadata popover --- */
 .metaPopover { min-width: 340px; max-width: 420px; }
