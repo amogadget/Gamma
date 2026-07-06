@@ -859,6 +859,37 @@ export default function App() {
     return () => { cancelled = true; };
   }, [focusedBlockId, readOnly]);
 
+  // Queued autosave. The debounce timer used to be silently cancelled when
+  // navigation replaced the block tree — a highlight made within 500 ms of
+  // switching tabs was lost. Edits are now queued in pendingSaveRef (with the
+  // page id they belong to) and flushed on navigation; failures retry so a
+  // briefly unreachable server doesn't eat them either.
+  const pendingSaveRef = useRef(null); // {pageId, blocks, attempts}
+  function savePending() {
+    const p = pendingSaveRef.current;
+    if (!p) return;
+    pendingSaveRef.current = null;
+    apiJson(`${API}/blocks/${p.pageId}/children`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blocks: p.blocks }),
+    }).catch((err) => {
+      const attempts = (p.attempts || 0) + 1;
+      if (pendingSaveRef.current) return; // a newer edit supersedes this one
+      if (attempts < 6) {
+        setStatus(`Save failed: ${err.message} — retrying…`);
+        pendingSaveRef.current = { ...p, attempts };
+        setTimeout(savePending, 3000);
+      } else {
+        setStatus(`Save failed: ${err.message}`);
+      }
+    });
+  }
+  // Persist queued edits NOW — called before anything replaces the block tree.
+  function flushPendingSave() {
+    if (autosaveTimerRef.current) { clearTimeout(autosaveTimerRef.current); autosaveTimerRef.current = null; }
+    savePending();
+  }
   useEffect(() => {
     if (readOnly || !focusedBlockId) return;
     if (suppressAutosaveRef.current) {
@@ -866,13 +897,31 @@ export default function App() {
       return;
     }
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-    autosaveTimerRef.current = setTimeout(() => {
-      persistBlocks(blocks).catch((err) => setStatus(`Save failed: ${err.message}`));
-    }, 500);
+    pendingSaveRef.current = { pageId: focusedBlockId, blocks };
+    autosaveTimerRef.current = setTimeout(savePending, 500);
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
     };
   }, [blocks, readOnly]);
+  // Closing/reloading the tab: best-effort keepalive save of queued edits.
+  useEffect(() => {
+    const flush = () => {
+      const p = pendingSaveRef.current;
+      if (!p) return;
+      pendingSaveRef.current = null;
+      try {
+        fetch(`${API}/blocks/${p.pageId}/children`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ blocks: p.blocks }),
+          keepalive: true,
+          credentials: "include",
+        }).catch(() => {});
+      } catch {}
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
 
 
   function deleteHighlight(highlightId) {
@@ -1193,6 +1242,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   async function openPdf(sourceUrl) {
     if (!sourceUrl || readOnly) return;
+    flushPendingSave();
     setLoading(true);
     setStatus("Opening PDF...");
     // Visible from the moment Enter is pressed — resolve can take seconds.
@@ -1286,6 +1336,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     // Back records LINK jumps only — callers opt in via {pushNav: true}.
     // Plain navigation (library, search, tabs, home) never pushes.
     if (opts?.pushNav && blockId !== focusedBlockId) pushNav();
+    flushPendingSave(); // queued edits belong to the page we're leaving
     captureScrollPos(); // remember the reading position of the page we're leaving
     cancelPdfRestore(); // a stale restore loop must not scroll the next document
     setLoading(true);
@@ -1503,6 +1554,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const navStackLen = navStack.length;
 
   function goHome() {
+    flushPendingSave();
     captureScrollPos(); // tabbing back later returns to this position
     cancelPdfRestore();
     clearSession();
