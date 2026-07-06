@@ -36,17 +36,14 @@ export default function ChatDock({
   const [chatFindOpen, setChatFindOpen] = useState(false);
   const [chatFind, setChatFind] = useState("");
   const [chatFindIdx, setChatFindIdx] = useState(0);
-  const [attachPdf, setAttachPdf] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-attach-pdf") !== "0"; } catch { return true; }
-  });
+  // On by default for a conversation that hasn't seen this document yet;
+  // derived from the loaded history below, so a refresh can't re-enable it
+  // after the PDF was already sent (re-sending re-bills the whole file).
+  const [attachPdf, setAttachPdf] = useState(false);
   // Extra chat context: selected PDF pages + whether to include notes/highlights.
   const [chatDocs, setChatDocs] = useState([]);
   const [chatIncludeNotes, setChatIncludeNotes] = useState(false);
   const chatScrollRef = useRef(null);
-
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-attach-pdf", attachPdf ? "1" : "0"); } catch {}
-  }, [attachPdf]);
 
   // Load chat from backend whenever the chat bucket changes.
   useEffect(() => {
@@ -56,14 +53,21 @@ export default function ChatDock({
       .then(r => r.ok ? r.json() : { messages: [] })
       .then(data => {
         if (cancelled) return;
-        setChatMessages(data.messages || []);
+        const msgs = data.messages || [];
+        setChatMessages(msgs);
         chatLoadedForRef.current = chatKey;
-        // Fresh conversation → first question should carry the full PDF
-        if (!(data.messages || []).length) setAttachPdf(true);
+        // PDF button: on until this document has been sent in THIS
+        // conversation, then off. Messages record the doc ids they carried
+        // (pdfDocs); older saves only have display names — treat any sent
+        // PDF as covering the current one.
+        const sent = msgs.some((m) => m.pdfDocs
+          ? (docId && m.pdfDocs.includes(docId)) || m.pdfDocs.some((d) => chatDocs.includes(d))
+          : m.pdfs?.length);
+        setAttachPdf(!sent);
       })
       .catch(() => { if (!cancelled) chatLoadedForRef.current = chatKey; });
     return () => { cancelled = true; };
-  }, [chatKey]);
+  }, [chatKey, docId]);
 
   // Save chat to backend (debounced) when chatMessages changes, but only
   // after the load for the current chat bucket completed.
@@ -167,7 +171,9 @@ export default function ChatDock({
       role: "user",
       text: shown,
       ...(images.length ? { images } : {}),
-      ...(pdfNames.length ? { pdfs: pdfNames } : {}),
+      // pdfDocs records WHICH documents rode along, so reloading the page
+      // can tell whether this document was already sent in the conversation.
+      ...(pdfNames.length ? { pdfs: pdfNames, pdfDocs: chatDocs.length ? [...chatDocs] : [docId] } : {}),
     };
     const sendKey = chatKey; // reply belongs to THIS conversation, even if the user navigates away
     const showReply = (aiMsg, final) => {
