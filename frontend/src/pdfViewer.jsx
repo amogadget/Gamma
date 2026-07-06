@@ -1,7 +1,7 @@
 // The pdf.js-based viewer: lazy page rendering, highlights, link
 // annotations, text search, and the selection popup. Extracted from
 // App.jsx to keep the God component shrinking.
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import "pdfjs-dist/web/pdf_viewer.css";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
@@ -33,6 +33,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
+  const [docSeq, setDocSeq] = useState(0); // bumped per document — keys the page tree so swaps are atomic
   const [forcePages, setForcePages] = useState(new Set());
   const pageHeightsRef = useRef([]); // viewport heights at scale 1, indexed 0..n-1
 
@@ -129,16 +130,23 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => { cancelled = true; ro.disconnect(); };
   }, [isFitWidth, pdfDoc]);
 
-  // Tell the host which document's pages are actually in the DOM — scroll
-  // restores must not fire while the previous document is still displayed.
-  useEffect(() => {
+  // Tell the host which document's pages are in the DOM. Layout effect on
+  // purpose: it fires after the swap commit but BEFORE paint, so the host can
+  // apply a restored scroll position and the user never sees the document at
+  // the wrong offset.
+  useLayoutEffect(() => {
     if (pdfDoc) onLoadState?.(url, { phase: "rendered" });
   }, [pdfDoc]);
 
+  // The document currently on screen. Kept visible while the next one loads —
+  // swapping only when the new doc is fully measured is what prevents the
+  // blank flash and the scrollbar resizing repeatedly during a tab switch.
+  const displayedDocRef = useRef(null);
+  useEffect(() => () => { displayedDocRef.current?.destroy().catch(() => {}); }, []);
+
   useEffect(() => {
     if (!url) return;
-    let cancelled = false; setPdfDoc(null);
-    let myDoc = null; // destroyed on url change/unmount — pdf.js workers don't GC
+    let cancelled = false;
     (async () => {
       try {
         let data = PDF_CACHE.get(url);
@@ -182,18 +190,46 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           onLoadState?.(url, { phase: "cached" });
         }
         cachePdf(url, data); // insert or bump LRU position
-        pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise.then(doc => {
+        const doc = await pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise;
+        if (cancelled) { doc.destroy().catch(() => {}); return; }
+        // Measure pages BEFORE showing the document: exact viewports for the
+        // first pages, page-1-sized estimates beyond (refined below). The
+        // swap then lands in ONE commit — heights, page tree, and document
+        // together — so the scrollbar changes exactly once.
+        const n = doc.numPages;
+        const EXACT = 40;
+        const heights = [];
+        for (let i = 1; i <= Math.min(n, EXACT); i++) {
+          try { heights.push((await doc.getPage(i)).getViewport({ scale: 1 }).height); }
+          catch { heights.push(heights[0] || 800); }
           if (cancelled) { doc.destroy().catch(() => {}); return; }
-          myDoc = doc;
-          setPdfDoc(doc); setNumPages(doc.numPages);
-        }).catch(() => { if (!cancelled) onLoadState?.(url, { phase: "error" }); });
+        }
+        for (let i = heights.length; i < n; i++) heights.push(heights[0] || 800);
+        const prev = displayedDocRef.current;
+        displayedDocRef.current = doc;
+        pageHeightsRef.current = heights;
+        setPageHeights(heights);
+        setNumPages(n);
+        setDocSeq((s) => s + 1);
+        setPdfDoc(doc);
+        // Old doc torn down after the swap commit — destroying it while its
+        // pages are still mounted spams transport-destroyed rejections.
+        if (prev && prev !== doc) setTimeout(() => prev.destroy().catch(() => {}), 1000);
+        // Refine the estimated heights in the background (long docs only).
+        for (let i = EXACT; i < n; i++) {
+          if (cancelled) return;
+          try { heights[i] = (await doc.getPage(i + 1)).getViewport({ scale: 1 }).height; } catch {}
+          if ((i + 1) % 50 === 0 || i === n - 1) {
+            pageHeightsRef.current = [...heights];
+            setPageHeights([...heights]);
+          }
+        }
       } catch {
         if (!cancelled) onLoadState?.(url, { phase: "error" });
       }
     })();
     return () => {
       cancelled = true;
-      myDoc?.destroy().catch(() => {});
       // No-op if the download already finished; otherwise clears the
       // now-orphaned "downloading…" task entry.
       onLoadState?.(url, { phase: "cancelled" });
@@ -251,32 +287,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // wrapper reserve its real size keeps the DOM's scrollHeight in sync with
   // what the jump math assumes, so scrollTo() doesn't get clamped to a
   // smaller scrollable range. Computing metadata-only viewports is cheap.
+  // Populated by the load flow above, before the document is shown.
   const [pageHeights, setPageHeights] = useState([]);
-  useEffect(() => {
-    if (!pdfDoc) return;
-    let cancelled = false;
-    pageHeightsRef.current = [];
-    (async () => {
-      const acc = [];
-      for (let i = 1; i <= pdfDoc.numPages; i++) {
-        if (cancelled) break;
-        try {
-          const page = await pdfDoc.getPage(i);
-          acc.push(page.getViewport({ scale: 1 }).height);
-        } catch (e) {
-          acc.push(800);
-        }
-        // Publish in batches so the first pages reserve their space ASAP
-        // without forcing one re-render per page.
-        if (acc.length === 5 || acc.length === pdfDoc.numPages || acc.length % 50 === 0) {
-          if (cancelled) break;
-          pageHeightsRef.current = [...acc];
-          setPageHeights([...acc]);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [pdfDoc]);
 
   // Scroll to exact highlight position. Long jumps snap instantly — smooth
   // scrolling across many pages is what made find-next feel sluggish.
@@ -442,7 +454,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   return (
     <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
       {Array.from({ length: numPages }, (_, i) => (
-        <PdfPage key={i + 1} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
+        <PdfPage key={`${docSeq}-${i + 1}`} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={highlights} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
           onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}

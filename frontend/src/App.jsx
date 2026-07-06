@@ -265,6 +265,20 @@ export default function App() {
   function handlePdfLoadState(url, st) {
     if (st.phase === "rendered") {
       pdfRenderedUrlRef.current = url; // this document's pages are now in the DOM
+      // Called from the viewer's layout effect — before paint. Applying a
+      // pending restore HERE means the document appears already scrolled to
+      // its position: no flash of the top, no visible jump.
+      const p = pendingRestoreRef.current;
+      if (p && p.url === url && restoreTokenRef.current === p.token) {
+        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+        const targetTop = p.entry.top * ((pdfEffScaleRef.current || p.entry.scale || 1) / (p.entry.scale || 1));
+        if (scroller && scroller.scrollHeight > targetTop) {
+          scroller.scrollTo({ top: targetTop, behavior: "instant" });
+          pendingRestoreRef.current = null;
+          restoreTokenRef.current++; // the fallback loop is no longer needed
+          if (restoringForRef.current === p.blockId) restoringForRef.current = null;
+        }
+      }
       return;
     }
     if (url.startsWith("/api/uploads/")) return;
@@ -1329,6 +1343,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
   const restoringForRef = useRef(null); // block whose restore hasn't landed yet
   const pdfRenderedUrlRef = useRef(""); // url of the document whose pages are in the DOM
+  const pendingRestoreRef = useRef(null); // {url, entry, blockId, token} applied pre-paint on "rendered"
   function captureScrollPos() {
     // Only record a position when the viewer is actually showing THIS page's
     // document: mid-load the scroller still holds the previous document (or a
@@ -1344,6 +1359,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   function cancelPdfRestore() {
     restoreTokenRef.current++;
     restoringForRef.current = null;
+    pendingRestoreRef.current = null;
   }
   // Scroll the viewer back to an exact position. Two gates, both required:
   // the TARGET document must be the one rendered (the old document stays in
@@ -1355,6 +1371,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     if (entry?.top == null || !targetUrl) return;
     const token = ++restoreTokenRef.current;
     restoringForRef.current = blockId || null;
+    // Preferred path: the "rendered" callback applies this pre-paint the
+    // moment the target document mounts. The polling loop below is the
+    // fallback (already-rendered documents, layout not tall enough yet).
+    pendingRestoreRef.current = { url: targetUrl, entry, blockId, token };
     let tries = 0;
     let lastH = -1;
     const finish = () => { if (restoringForRef.current === blockId) restoringForRef.current = null; };
@@ -1366,6 +1386,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
         if (scroller && h > targetTop && h === lastH) {
           scroller.scrollTo({ top: targetTop, behavior: "instant" });
+          pendingRestoreRef.current = null;
           finish();
           return;
         }
