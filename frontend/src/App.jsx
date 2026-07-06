@@ -1235,6 +1235,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     // Plain navigation (library, search, tabs, home) never pushes.
     if (opts?.pushNav && blockId !== focusedBlockId) pushNav();
     captureScrollPos(); // remember the reading position of the page we're leaving
+    cancelPdfRestore(); // a stale restore loop must not scroll the next document
     setLoading(true);
     setStatus("Opening...");
     try {
@@ -1284,7 +1285,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(blockId)}`;
       window.history.replaceState({}, "", newUrl);
-      if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId]);
+      if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId);
       setStatus("Ready.");
     } catch (err) {
       setStatus(`Open failed: ${err.message}`);
@@ -1306,30 +1307,45 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // Exact per-page reading positions so switching tabs returns to where you
   // were, not just to the same page. blockId -> {top, scale}.
   const tabScrollRef = useRef({});
+  const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
+  const restoringForRef = useRef(null); // block whose restore hasn't landed yet
   function captureScrollPos() {
+    // Leaving again before the pending restore landed: the current scrollTop
+    // is mid-load garbage — keep the previously saved position instead.
+    if (restoringForRef.current && restoringForRef.current === focusedBlockId) return;
     const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
     if (focusedBlockId && scroller) {
       tabScrollRef.current[focusedBlockId] = { top: scroller.scrollTop, scale: pdfEffScale };
     }
   }
+  function cancelPdfRestore() {
+    restoreTokenRef.current++;
+    restoringForRef.current = null;
+  }
   // Scroll the viewer back to an exact position (scale-aware, so it survives
   // zoom changes) once the document's layout has settled: pages get their real
   // heights asynchronously, so scrolling on the first tall-enough frame lands
   // in the wrong spot — wait for two consecutive ticks with the same height.
-  function restorePdfScroll(entry) {
+  function restorePdfScroll(entry, blockId) {
     if (entry?.top == null) return;
+    const token = ++restoreTokenRef.current;
+    restoringForRef.current = blockId || null;
     let tries = 0;
     let lastH = -1;
+    const finish = () => { if (restoringForRef.current === blockId) restoringForRef.current = null; };
     const tryScroll = () => {
+      if (restoreTokenRef.current !== token) return; // superseded by a newer navigation
       const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
       const h = scroller ? scroller.scrollHeight : 0;
       const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
       if (scroller && h > targetTop && h === lastH) {
         scroller.scrollTo({ top: targetTop, behavior: "auto" });
+        finish();
         return;
       }
       lastH = h;
       if (tries++ < 50) setTimeout(tryScroll, 120);
+      else finish();
     };
     tryScroll();
   }
@@ -1350,10 +1366,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     if (!entry) return;
     setNavStack((prev) => prev.slice(0, -1));
     if (entry.blockId && entry.blockId === focusedBlockId) {
-      restorePdfScroll(entry); // same document — just return to the reading position
+      restorePdfScroll(entry, entry.blockId); // same document — just return to the reading position
     } else if (entry.blockId) {
       await openBlock(entry.blockId);
-      restorePdfScroll(entry);
+      restorePdfScroll(entry, entry.blockId);
     } else {
       goHome();
       if (entry.folder) {
@@ -1368,6 +1384,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   function goHome() {
     captureScrollPos(); // tabbing back later returns to this position
+    cancelPdfRestore();
     clearSession();
     suppressAutosaveRef.current = true;
     setFocusedBlockId(null);
