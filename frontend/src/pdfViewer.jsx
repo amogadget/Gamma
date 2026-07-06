@@ -129,9 +129,16 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => { cancelled = true; ro.disconnect(); };
   }, [isFitWidth, pdfDoc]);
 
+  // Tell the host which document's pages are actually in the DOM — scroll
+  // restores must not fire while the previous document is still displayed.
+  useEffect(() => {
+    if (pdfDoc) onLoadState?.(url, { phase: "rendered" });
+  }, [pdfDoc]);
+
   useEffect(() => {
     if (!url) return;
     let cancelled = false; setPdfDoc(null);
+    let myDoc = null; // destroyed on url change/unmount — pdf.js workers don't GC
     (async () => {
       try {
         let data = PDF_CACHE.get(url);
@@ -176,9 +183,9 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         }
         cachePdf(url, data); // insert or bump LRU position
         pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise.then(doc => {
-          if (!cancelled) {
-            setPdfDoc(doc); setNumPages(doc.numPages);
-          }
+          if (cancelled) { doc.destroy().catch(() => {}); return; }
+          myDoc = doc;
+          setPdfDoc(doc); setNumPages(doc.numPages);
         }).catch(() => { if (!cancelled) onLoadState?.(url, { phase: "error" }); });
       } catch {
         if (!cancelled) onLoadState?.(url, { phase: "error" });
@@ -186,6 +193,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     })();
     return () => {
       cancelled = true;
+      myDoc?.destroy().catch(() => {});
       // No-op if the download already finished; otherwise clears the
       // now-orphaned "downloading…" task entry.
       onLoadState?.(url, { phase: "cancelled" });
@@ -499,7 +507,8 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         try {
           await task.promise;
         } catch (err) {
-          if (err?.name === "RenderingCancelledException") return;
+          // instanceof, not err.name — minification renames the class
+          if (err instanceof pdfjsLib.RenderingCancelledException) return;
           throw err;
         }
 
@@ -527,7 +536,9 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
             };
           }));
       } catch (e) {
-        console.error("PdfPage render error:", e);
+        // A cancelled run rejects mid-await (doc swapped, transport
+        // destroyed) — that's teardown, not an error worth logging.
+        if (!cancelled) console.error("PdfPage render error:", e);
       }
     })();
     return () => { cancelled = true; };

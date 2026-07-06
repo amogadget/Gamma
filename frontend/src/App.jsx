@@ -263,6 +263,10 @@ export default function App() {
   // One row per URL: a re-download (LRU eviction, retry) reactivates the
   // existing entry instead of stacking duplicates.
   function handlePdfLoadState(url, st) {
+    if (st.phase === "rendered") {
+      pdfRenderedUrlRef.current = url; // this document's pages are now in the DOM
+      return;
+    }
     if (url.startsWith("/api/uploads/")) return;
     if (st.phase === "cached") {
       const id = transferByUrlRef.current[url];
@@ -1266,12 +1270,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setCategory(props.category || "");
       setDocId(props.doc_id || "");
 
+      let openedPdfUrl = "";
       if (props.source_url) {
         const src = props.source_url;
         const isLocal = src.startsWith("/api/");
-        const proxiedUrl = isLocal ? src : `${API}/pdf?source_url=${encodeURIComponent(src)}`;
+        openedPdfUrl = isLocal ? src : `${API}/pdf?source_url=${encodeURIComponent(src)}`;
         setInputUrl(src);
-        setPdfUrl(proxiedUrl);
+        setPdfUrl(openedPdfUrl);
         setBlocks(childBlocks);
       } else {
         setInputUrl("");
@@ -1298,8 +1303,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(blockId)}`;
       window.history.replaceState({}, "", newUrl);
-      if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId);
+      if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
       setStatus("Ready.");
+      return openedPdfUrl;
     } catch (err) {
       setStatus(`Open failed: ${err.message}`);
       // If this was a session restore attempt that failed, clear it
@@ -1322,10 +1328,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const tabScrollRef = useRef({});
   const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
   const restoringForRef = useRef(null); // block whose restore hasn't landed yet
+  const pdfRenderedUrlRef = useRef(""); // url of the document whose pages are in the DOM
   function captureScrollPos() {
-    // Leaving again before the pending restore landed: the current scrollTop
-    // is mid-load garbage — keep the previously saved position instead.
+    // Only record a position when the viewer is actually showing THIS page's
+    // document: mid-load the scroller still holds the previous document (or a
+    // clamped 0), and a pending restore means the real position hasn't been
+    // applied yet — in both cases keep the previously saved value.
     if (restoringForRef.current && restoringForRef.current === focusedBlockId) return;
+    if (!pdfUrl || pdfRenderedUrlRef.current !== pdfUrl) return;
     const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
     if (focusedBlockId && scroller) {
       tabScrollRef.current[focusedBlockId] = { top: scroller.scrollTop, scale: pdfEffScale };
@@ -1335,12 +1345,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     restoreTokenRef.current++;
     restoringForRef.current = null;
   }
-  // Scroll the viewer back to an exact position (scale-aware, so it survives
-  // zoom changes) once the document's layout has settled: pages get their real
-  // heights asynchronously, so scrolling on the first tall-enough frame lands
-  // in the wrong spot — wait for two consecutive ticks with the same height.
-  function restorePdfScroll(entry, blockId) {
-    if (entry?.top == null) return;
+  // Scroll the viewer back to an exact position. Two gates, both required:
+  // the TARGET document must be the one rendered (the old document stays in
+  // the DOM until the new one loads — scrolling it is what made restores land
+  // wrong and visibly slide before the switch), and its layout height must be
+  // stable for two ticks (pages get real heights asynchronously). The jump
+  // itself is instant, after the new document is visible.
+  function restorePdfScroll(entry, blockId, targetUrl) {
+    if (entry?.top == null || !targetUrl) return;
     const token = ++restoreTokenRef.current;
     restoringForRef.current = blockId || null;
     let tries = 0;
@@ -1348,16 +1360,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     const finish = () => { if (restoringForRef.current === blockId) restoringForRef.current = null; };
     const tryScroll = () => {
       if (restoreTokenRef.current !== token) return; // superseded by a newer navigation
-      const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
-      const h = scroller ? scroller.scrollHeight : 0;
-      const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
-      if (scroller && h > targetTop && h === lastH) {
-        scroller.scrollTo({ top: targetTop, behavior: "auto" });
-        finish();
-        return;
+      if (pdfRenderedUrlRef.current === targetUrl) {
+        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+        const h = scroller ? scroller.scrollHeight : 0;
+        const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
+        if (scroller && h > targetTop && h === lastH) {
+          scroller.scrollTo({ top: targetTop, behavior: "instant" });
+          finish();
+          return;
+        }
+        lastH = h;
       }
-      lastH = h;
-      if (tries++ < 50) setTimeout(tryScroll, 120);
+      if (tries++ < 80) setTimeout(tryScroll, 120);
       else finish();
     };
     tryScroll();
@@ -1379,10 +1393,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     if (!entry) return;
     setNavStack((prev) => prev.slice(0, -1));
     if (entry.blockId && entry.blockId === focusedBlockId) {
-      restorePdfScroll(entry, entry.blockId); // same document — just return to the reading position
+      restorePdfScroll(entry, entry.blockId, pdfUrl); // same document — just return to the reading position
     } else if (entry.blockId) {
-      await openBlock(entry.blockId);
-      restorePdfScroll(entry, entry.blockId);
+      const openedUrl = await openBlock(entry.blockId);
+      restorePdfScroll(entry, entry.blockId, openedUrl);
     } else {
       goHome();
       if (entry.folder) {
@@ -1423,7 +1437,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     updateTabs(next);
     if (id === focusedBlockId) {
       const neighbor = next[Math.min(idx, next.length - 1)];
-      if (neighbor) openBlock(neighbor.id);
+      if (neighbor) openBlock(neighbor.id, { restoreScroll: true });
       else goHome();
     }
   }
