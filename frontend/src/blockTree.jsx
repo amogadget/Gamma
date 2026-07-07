@@ -417,7 +417,7 @@ function BlockRow({
         </div>
         {!readOnly && block.id !== "root" ? (
           <button
-            className="blockDeleteBtn"
+            className="uiClose uiCloseSm uiCloseDanger blockDeleteBtn"
             title="Delete block"
             onClick={(e) => { e.stopPropagation(); onDelete(block.id); }}
           >×</button>
