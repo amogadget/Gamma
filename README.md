@@ -1,188 +1,120 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./logos/gamma-logo-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="./logos/gamma-logo-light.svg">
-  <img alt="Logo" src="./logos/gamma-logo-light.svg">
+  <img alt="Gamma" src="./logos/gamma-logo-light.svg" width="240">
 </picture>
 
 # Gamma PDF Annotator
 
-A self-hosted, Logseq-inspired PDF annotation server. Highlight PDFs in your browser, organize your notes as nested outliner blocks, and share read-only annotated copies via link.
+**Highlight PDFs in your browser, keep the notes as a nested outliner, share the result with a link.** Self-hosted, multi-user, Logseq-inspired.
 
-## What it does
+![Annotated PDF with block tree and AI chat](./docs/screenshots/01-annotated-pdf.png)
 
-- Open any PDF by URL (arXiv links, DOI links, and publisher article pages all resolve to the PDF automatically) or upload it directly (drag-and-drop). Annotations already saved inside the file (SumatraPDF, Acrobat) are imported as notes.
-- Select text to create a highlight with optional comment and color — or link the selection to another paper (DOI / arXiv / your library).
-- Highlights appear as blocks in a Logseq-style outliner; add free notes, nest, and drag-reorder.
-- Paper metadata (title, authors, venue, DOI, BibTeX) is fetched automatically via arXiv → Crossref → AI, with one-click BibTeX and a slide-ready formatted citation that pastes into PowerPoint with real italics/bold.
-- In-PDF links are clickable: internal references jump (with a global Back button to return), external links open in your library if you already have the paper.
-- AI chat about the open paper (or several at once): both Anthropic and OpenAI models, pasted figures, native PDF attachment, editable prompts, per-page history.
-- File-browser home: organize papers into folders by drag-and-drop (storage stays flat), plus category tags and full-text search across notes, highlights, and the PDF itself (Ctrl+F).
-- Everything auto-saves. Share any annotated PDF via a read-only public link.
-- Multi-user accounts with per-user isolated data, a daily-reset guest account, and one-click zip export of all your data.
-
-## Quick start (Docker Compose — recommended)
-
-Copy the templates (both real files are gitignored, so your local settings never end up in commits), set your admin password and optional AI keys, and start:
+<!-- Demo GIF slot ➜ record: highlight text on the PDF, watch the note appear in the tree, click it to jump back. Save as docs/demo-annotate.gif and swap the image above for it. -->
 
 ```bash
-cp docker-compose.yml.example docker-compose.yml
-cp .env.example .env   # then edit: admin password, AI keys, contact email
-docker compose up -d
-```
-
-Open <http://localhost:9001> and log in.
-
-**Where your data lives:** everything — accounts (`users.db`), each user's notes databases, and every uploaded PDF/image — is stored under the container's `/data` directory (`GAMMA_DATA_DIR=/data`, declared as a volume). The compose file maps it to a named volume, so your library survives container upgrades; back it up by copying that volume (or use the in-app "Export my data" zip).
-
-<details>
-<summary>Plain <code>docker run</code> (alternative)</summary>
-
-```bash
-docker run -d --name gamma \
-  -p 9001:9001 \
-  -v gamma-data:/data \
-  -e GAMMA_ADMIN_USER=admin \
-  -e GAMMA_ADMIN_PASSWORD=change-me \
+docker run -d -p 9001:9001 -v gamma-data:/data \
+  -e GAMMA_ADMIN_USER=admin -e GAMMA_ADMIN_PASSWORD=change-me \
   ghcr.io/tim4431/gamma:latest
 ```
 
-</details>
+Open <http://localhost:9001> and log in. (Full setup with AI keys → [Install](#install).)
 
-To manage users inside a running container:
+---
+
+## Take the tour
+
+### 📄 Read & annotate
+
+![PDF with highlights, note tree, and AI chat](./docs/screenshots/01-annotated-pdf.png)
+
+Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma finds the PDF) or drag the file in. Then:
+
+- **Highlight** — select text, pick a color, add a comment. Each highlight becomes a block.
+- **Outliner notes** — highlights and free notes are the same kind of block: nest them, drag-reorder, `[[link]]` between them, write markdown + math. Click a note to jump the PDF to it (and back).
+- **Reference links** — link a citation in the PDF to another paper in your library; blue underlined regions are clickable, and a global **← Back** unwinds jumps across documents.
+- **Ask the AI** — chat about the open paper (or several at once) with Anthropic or OpenAI models, paste figures, or attach the whole PDF so the model sees tables and plots.
+- **Dockable panels** — drag any window's grip to the left, right, or bottom; double-click to collapse.
+
+<!-- Demo GIF slot ➜ record: the AI chat answering a question about the open paper. Save as docs/demo-chat.gif -->
+
+### 🗂 Organize your library
+
+![Home page with folders, recent carousel, and labels](./docs/screenshots/02-home-carousels.png)
+
+A file-browser home: drag papers into folders (storage stays flat — folders are just metadata), tag them with labels, and search **everything at once** with `Ctrl+F` — notes, highlights, and the PDF's own text, with match-case / whole-word / regex and replace-across-notes.
+
+<!-- Demo GIF slot ➜ record: dragging a paper into a folder, then a Ctrl+F search lighting up matches. Save as docs/demo-library.gif -->
+
+### 🔗 Share read-only
+
+![Read-only shared view of an annotated PDF](./docs/screenshots/04-shared-view.png)
+
+Mint a public link for any annotated paper. Recipients see the PDF, highlights, and notes — no login, no editing.
+
+### 🔑 Accounts & guest
+
+![Login page with guest option](./docs/screenshots/03-login.png)
+
+App-level username/password auth with per-user isolated data. Guest accounts get a fresh workspace that resets daily — no signup.
+
+---
+
+### A few more things
+
+- **Metadata & citations** — on open, each paper is resolved (arXiv → DOI → AI) so the title, authors, and venue auto-fill. One click copies BibTeX or a slide-ready citation that pastes into PowerPoint with real italics.
+- **Import existing annotations** — highlights already saved in the file by SumatraPDF, Acrobat, or Preview are imported as blocks. Logseq PDF exports import too.
+- **Open access fallback** — a paywalled DOI falls back to a legal open-access copy (via Unpaywall) when one exists.
+- **Export** — download a zip of all your data (SQLite snapshots + every upload) from the account menu.
+
+---
+
+## Install
+
+### Docker Compose (recommended)
+
+Copy the templates (the real files are gitignored, so your settings never land in commits), set your password and optional AI keys, and start:
+
+```bash
+cp docker-compose.yml.example docker-compose.yml
+cp .env.example .env   # edit: admin password, AI keys, contact email
+docker compose up -d
+```
+
+Open <http://localhost:9001>. Everything — accounts, notes, and uploaded PDFs — lives under the container's `/data` volume, so your library survives upgrades. Back it up by copying that volume or using the in-app **Export my data** zip.
+
+Manage users in a running container:
 
 ```bash
 docker exec gamma python manage.py create-user alice her-password
 docker exec gamma python manage.py list-users
 ```
 
-## Screenshots
+<details>
+<summary><b>Run from source (development)</b></summary>
 
-### Annotated PDF with notes and AI chat
+Requires Python 3.11+ and Node 18+.
 
-![Annotated PDF with block tree and AI chat](./docs/screenshots/01-annotated-pdf.png)
-
-The core view: PDF with colored highlights and clickable reference links, the Logseq-style note tree docked beside it, and the AI chat window — all dockable/resizable panels (drag a window's grip to move it left/right/bottom, double-click to collapse). Click a highlight's note card to jump the PDF; follow in-PDF links and use the global ← Back button to return.
-
-### File-browser home
-
-![Home page with folders, recent carousel, and categories](./docs/screenshots/02-home-carousels.png)
-
-Your library as a file browser: drag papers into folders (storage stays flat — folders are just metadata), with a Recent carousel and category tags above.
-
-### Login page
-
-![Login form with guest option](./docs/screenshots/03-login.png)
-
-App-level authentication with username and password. Guest accounts get a fresh workspace each day — no registration needed.
-
-### Shared link (public view)
-
-![Read-only shared view of an annotated PDF](./docs/screenshots/04-shared-view.png)
-
-Generate a read-only link for any annotated PDF. Recipients see the PDF, highlights, and block tree — no login required. The editor stays gated behind authentication.
-
-## Inspired by Logseq
-
-Logseq is an excellent outliner-based knowledge-management tool. Gamma takes several ideas from it that work well for PDF annotation specifically:
-
-- **Everything is a block.** Highlights and free notes aren't different entities — both are rows in the same `unified_blocks` table, distinguished only by whether they carry a `highlight_id` property. Both can be nested, reordered, styled identically.
-- **Pages are the top-level container.** A PDF corresponds to exactly one page; all its highlights and notes live as blocks inside that page.
-- **Outliner editing.** Enter for sibling, Tab for indent, Shift+Tab for outdent, Backspace on empty to delete. One-click to edit, cursor lands near the click point.
-- **Drop indicator for tree drags.** Like Logseq, Gamma shows a single horizontal blue line during drag; its horizontal position snaps to valid nesting depths (sibling of current, first child of target, or sibling of any ancestor).
-- **Nested guide lines.** The vertical line to the left of nested blocks mimics Logseq's `.block-children` border-left pattern.
-- **Fractional indexing for block order.** Custom ordering persists across reorder without renumbering, using the same `a0`, `a1`, `a0V` key scheme Logseq uses.
-
-Gamma is narrower than Logseq — no graph view, no daily journal, no queries. The feature set is tuned for "I want to annotate PDFs and keep the notes organized as a tree."
-
-## View modes
-
-The app has three coexisting modes, each derived from what's in the URL:
-
-- **Home** (`/`) — when no PDF is loaded, shows a list of all your pages as blocks. Each entry shows the page title and a preview of its first block. Click a page to open it. Pages are drag-reorderable.
-- **PDF + notes** (`/?page=<id>`, page has a source URL) — side-by-side (or stacked) PDF viewer and block tree. The default working view. Close-PDF (X button) temporarily hides the viewer, letting the block tree fill the width; clicking a highlight dot re-opens the PDF and jumps to that highlight.
-- **Page only** (`/?page=<id>`, page has no source URL) — just the block tree, full-width. Create notes without a PDF attached, or use the home-page-style to collect thoughts.
-
-Shared links (`/?share=<token>`) are a separate public read-only view: PDF + block tree, but editing and navigation are locked.
-
-## Architecture
-
-A single deployable service: a FastAPI backend that also serves the built React frontend. (In development the two run separately with a Vite proxy.)
-
-### Backend (`backend/`)
-
-```
-backend/
-├── app.py                # uvicorn entrypoint (thin shim)
-├── manage.py             # user-management CLI
-├── requirements.txt
-└── gamma/
-    ├── app.py            # FastAPI assembly: middleware, routers, startup, SPA serving
-    ├── config.py         # env-driven configuration (GAMMA_DATA_DIR, AI keys, ...)
-    ├── db.py             # SQLite schemas, connections, per-user paths
-    ├── auth.py           # session middleware + require_user/resolve_user
-    ├── seed.py           # per-user DB creation + guest welcome-page seeding
-    ├── blocks_store.py   # unified_blocks tree helpers (subtree CTEs, fractional positions)
-    ├── storage.py        # upload lookup + orphan cleanup
-    ├── logseq_import.py  # EDN/MD parsers for Logseq imports
-    └── routers/          # one module per API area
-        ├── auth.py       # /api/login, /api/logout, /api/session, /api/login-guest, /api/export
-        ├── blocks.py     # /api/blocks/*, /api/block-search, /api/blocks-replace
-        ├── uploads.py    # /api/uploads, /api/upload-image, /api/cleanup-uploads
-        ├── pdf.py        # /api/resolve-pdf (arXiv/citation_pdf_url/Unpaywall), /api/pdf (proxy + cache)
-        ├── shares.py     # /api/share/*
-        ├── ai.py         # /api/ai/chat, /api/ai/models, /api/chats/*
-        ├── metadata.py   # /api/metadata/fetch (arXiv→DOI→AI), /api/metadata/cite (BibTeX → slide citation)
-        ├── search.py     # /api/pdf-search (FTS5 full-text over the library), /api/tasks
-        └── imports.py    # /api/import/logseq, /api/import/pdf-annotations
-```
-
-All state is SQLite + files under the data directory (`GAMMA_DATA_DIR`, defaults to `backend/`):
-
-- `users.db` — accounts (bcrypt passwords), session tokens, and share tokens.
-- `users/<name>/pages.db` — the `unified_blocks` table: everything is a block with a self-referential `parent_id` and a fractional-index `position`. Root-level blocks are pages.
-- `users/<name>/data.db` — AI chat history (and a legacy `annotations` table).
-- `users/<name>/uploads/` — uploaded PDFs and images, content-hash deduped.
-
-Authentication is a session cookie resolved by middleware; no external auth provider. Share tokens allow unauthenticated read access to a specific document.
-
-### Frontend (`frontend/`)
-
-React + Vite.
-
-- `src/App.jsx` — main component: routing, PDF viewer (pdf.js), block tree, drag-and-drop, autosave, login, AI chat.
-- `src/logseqPdfModel.js` — pure block-tree operations (insert, indent/outdent, flatten, extract, cycle check).
-- `src/app.css` — dark/light themed styling.
-
-The frontend always calls same-origin `/api/*`. In production the backend serves the built `dist/`; in development Vite proxies to the backend.
-
-## Running from source (development)
-
-### Prerequisites
-
-- Python 3.11+
-- Node.js 18+
-
-### Backend
+**Backend**
 
 ```bash
 cd backend
-python3 -m venv venv
-source venv/bin/activate
+python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 python manage.py create-user admin yourpassword
-python manage.py setup      # creates guest account
+python manage.py setup                              # seeds the guest account
 uvicorn app:app --host 127.0.0.1 --port 9001
 ```
 
-### Frontend
+**Frontend**
 
 ```bash
 cd frontend
 npm install
-npm run dev        # development server on :5173, proxies /api to :9001
+npm run dev        # :5173, proxies /api → :9001
 ```
 
-### Tests
+**Tests**
 
 ```bash
 cd backend
@@ -190,11 +122,9 @@ pip install -r requirements-dev.txt
 python -m pytest tests -q
 ```
 
-In-process API tests against a throwaway data directory — they cover auth, the block tree (CRUD, fractional ordering, search/replace, delete-time cleanup), the metadata/BibTeX helpers, embedded-PDF-annotation extraction, library full-text search, and the zip export.
+In-process API tests against a throwaway data dir — auth, the block tree, metadata/BibTeX, PDF-annotation import, full-text search, and export.
 
-### Production without Docker
-
-Build the frontend and let the backend serve it:
+**Production without Docker** — build the frontend and let the backend serve it:
 
 ```bash
 cd frontend && npm run build
@@ -202,9 +132,12 @@ cd ../backend
 GAMMA_STATIC_DIR=../frontend/dist uvicorn app:app --host 127.0.0.1 --port 9001
 ```
 
-Put any TLS-terminating reverse proxy (Caddy, nginx) in front of port 9001 if you want a domain. If you previously used HTTP/3, note we hit a Chrome bug where reopening an incognito window reused a stale QUIC connection with crippled flow control, making 6 MB PDFs take 10+ seconds to download — consider limiting Caddy to `protocols h1 h2`.
+Put a TLS-terminating reverse proxy (Caddy, nginx) in front of 9001 for a domain. If you use HTTP/3, consider limiting Caddy to `protocols h1 h2` — a Chrome QUIC bug can make large PDFs crawl.
 
-## Environment variables
+</details>
+
+<details>
+<summary><b>Environment variables</b></summary>
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -216,95 +149,49 @@ Put any TLS-terminating reverse proxy (Caddy, nginx) in front of port 9001 if yo
 | `GAMMA_AI_ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | e.g. `https://api.deepseek.com/anthropic` |
 | `GAMMA_AI_OPENAI_API_KEY` | For AI chat* | — | OpenAI Chat Completions API key (or compatible server) |
 | `GAMMA_AI_OPENAI_BASE_URL` | No | `https://api.openai.com` | Any OpenAI-compatible endpoint |
-| `GAMMA_AI_MODELS` | No | configured providers' defaults | The model switcher list: comma-separated `provider:model` entries (e.g. `anthropic:claude-sonnet-5,openai:gpt-5.5`); the first entry is the default |
-| `GAMMA_CONTACT_EMAIL` | Recommended | — | Real contact email for the Unpaywall open-access lookup (paywalled DOI → arXiv fallback); `example.com` addresses are rejected by the API |
+| `GAMMA_AI_MODELS` | No | providers' defaults | Model switcher list: comma-separated `provider:model` (e.g. `anthropic:claude-sonnet-5,openai:gpt-5.5`); first is the default |
+| `GAMMA_CONTACT_EMAIL` | Recommended | — | Real email for the Unpaywall open-access lookup; `example.com` addresses are rejected |
 
-\* Set at least one provider key to enable the chat panel; set both to offer models from both in the switcher. For docker compose, put these in a `.env` file (see [.env.example](./.env.example)); `.env` is gitignored. Legacy single-provider names (`GAMMA_AI_PROVIDER`, `GAMMA_AI_API_KEY`, `GAMMA_AI_BASE_URL`, `GAMMA_AI_MODEL`, and the `ANTHROPIC_*` aliases) still work — they fill the `GAMMA_AI_PROVIDER` slot.
+\* Set at least one provider key to enable chat; set both to offer models from each. For docker compose, put these in `.env` (see [.env.example](./.env.example)). Legacy single-provider names (`GAMMA_AI_PROVIDER`, `GAMMA_AI_API_KEY`, …) still work.
 
-## Docker image
+</details>
 
-The image is published to GitHub Container Registry on every push to `main` (`latest`) and on version tags (`v1.2.3` → `1.2.3`, `1.2`), for `linux/amd64` and `linux/arm64`:
+<details>
+<summary><b>Docker image</b></summary>
+
+Published to GitHub Container Registry on every push to `main` (`latest`) and on version tags (`v1.2.3` → `1.2.3`, `1.2`), for `linux/amd64` and `linux/arm64`:
 
 ```
 ghcr.io/tim4431/gamma
 ```
 
-It is a multi-stage build: a Node stage compiles the frontend, and the final Python image runs FastAPI serving both the API and the static SPA on port 9001. See [Dockerfile](./Dockerfile) and [.github/workflows/docker.yml](./.github/workflows/docker.yml).
+Multi-stage build: a Node stage compiles the frontend, the final Python image runs FastAPI serving both the API and the SPA on port 9001. See [Dockerfile](./Dockerfile) and [.github/workflows/docker.yml](./.github/workflows/docker.yml).
 
-## Features
+</details>
 
-### Getting papers in
+---
 
-- **Open by URL**: paste any link and press Enter. arXiv abstract pages rewrite to the PDF; publisher article pages (Nature, APS, …) are resolved via their `citation_pdf_url` meta tag; DOI links that hit a paywall fall back to a legal open-access copy via Unpaywall (published > accepted > preprint, with an explicit note when a preprint is substituted — opt-out in Settings).
-- **Upload / drag-and-drop** (max 50 MB, content-hashed for dedup). Annotations embedded in the file (SumatraPDF "save annotations", Acrobat, Preview) are imported as highlight blocks automatically — positions, colors, and comments preserved (also available later via ⋮ → Import PDF annotations).
-- **Logseq EDN import**: Logseq PDF-highlight exports (EDN + MD + PDF) preserve positions, notes, and tree structure.
-- **Transfer list**: a Chrome-style downloads/uploads button in the topbar shows live progress and final sizes.
+## How it works
 
-### Paper metadata & citations
+A single service: a **FastAPI** backend that also serves the built **React** frontend. In dev the two run separately with a Vite proxy. Per-folder notes live in [`backend/`](./backend/README.md) and [`frontend/`](./frontend/README.md) READMEs.
 
-- **Automatic metadata**: on open, each paper is resolved via the arXiv API → DOI content negotiation (Crossref/DataCite) → AI extraction from the first pages. Title auto-fills, and the ⓘ popover shows authors, venue, year, DOI/arXiv links, and how the data was obtained.
-- **BibTeX + slide citations**: one-click BibTeX copy, and an auto-generated minimal citation for slides (e.g. *Guo et al., Phys. Rev. Lett.* **122**, 193601 (2019)) that copies as rich text — pastes into PowerPoint with real italics and bold. Cached per paper; the generation prompt is editable.
-- **Reference links**: select a citation in the PDF and link it to a paper (paste a DOI/arXiv id, or pick from your library — ranked by likelihood against the selected text). Links render as blue underlined regions; right-click to change or remove. Native PDF link annotations are clickable too: internal jumps within the document, and external links open directly in your library when the DOI/arXiv id matches a paper you already have.
-- **Global Back**: following any link records where you were; the ← button beside Home (or Alt+←) unwinds jumps — across documents, restoring the exact scroll position. Right-click it to clear.
+- **Everything is a block.** Highlights and free notes are rows in one `unified_blocks` table (self-referential `parent_id`, fractional-index `position`). Root-level blocks are pages; a page with a PDF is a paper.
+- **Per-user isolation.** `users.db` holds accounts and tokens; each user gets their own `pages.db` and `uploads/` folder under `GAMMA_DATA_DIR`.
+- **View modes come from the URL** (no router lib): `/` home · `/?page=<id>` a page · `/?block=<id>` jump to a block · `/?share=<token>` public read-only.
 
-### Notes
+<details>
+<summary><b>Inspired by Logseq</b></summary>
 
-- **Outliner block tree**: highlights and free notes are the same kind of block — nested, Logseq-style guide lines, Enter/Tab/Shift+Tab editing, Backspace-on-empty deletes.
-- **Rich text**: markdown + KaTeX in view mode; one-click to edit with the cursor landing where you clicked.
-- **Cross-note block references**: type `[[` to search and insert a reference chip that jumps to the target; backlinks are listed per page.
-- **Drag-and-drop blocks** with a depth-snapping drop indicator and cycle prevention.
-- **Click a highlight's card** to jump the PDF to it (and vice versa: click a PDF highlight to scroll to its note).
-- **Attach mode**: link an orphaned note to an existing PDF highlight (⊕, then click the highlight).
+Gamma borrows the ideas from Logseq that fit PDF annotation: everything is a block, pages are the top-level container, outliner editing (Enter/Tab/Shift+Tab), a depth-snapping drop indicator, nested guide lines, and fractional indexing for order. It's narrower — no graph view, journal, or queries — tuned for "annotate PDFs and keep the notes as a tree."
 
-### AI chat
-
-- **ChatGPT-style panel**: multi-line input (Shift+Enter), copy any message, edit-and-resend your messages, find-in-chat (Ctrl+F while focused), and a stop button while the model responds.
-- **Models**: mix Anthropic and OpenAI models in one switcher (`GAMMA_AI_MODELS`), with a reasoning-effort selector and three editable prompts (chat system, metadata extraction, slide citation).
-- **Context**: by default the open paper's extracted text rides along; the **PDF** button sends the file itself (model sees figures & tables — on by default for a fresh chat, auto-off after sending so follow-ups stay cheap, with chips in the bubble showing which PDFs went). The **+** picker selects multiple papers and optionally your notes/highlights — ask for a cross-paper report right in the chat. Paste screenshots/figures directly into the input. Select text in the PDF (or click a highlight) to focus the next question on it.
-- **Per-page history** stored on the backend, following you across devices.
-
-### Library & search
-
-- **File-browser home**: drag papers into folders (a paper's folder is just a property — storage stays flat, links and shares are unaffected); folders show counts, papers can be dragged back out; plus a Recent carousel and category tags with autocomplete.
-- **Search everything** (Ctrl+F): notes, highlights, and the PDF's own text, with VSCode-style match-case / whole-word / regex toggles and replace-across-notes. PDF matches are highlighted on the page (keyword-only) with ▲▼ next/previous navigation.
-- **Tabs**: Chrome-style — click to switch, middle-click to close, drag to reorder (animated), persisted per browser.
-
-### Workspace
-
-- **Dockable windows**: notes and chat live in a shared docking system — drag a window's grip to the left/right/bottom, resize with sashes, double-click the grip to collapse to a header bar.
-- **PDF viewer**: fit-width or 20%-stepped zoom with an editable percentage, lazy page rendering, fast find-jumps, and scroll position preserved across zoom changes.
-- **Automatic theme** following the OS light/dark preference; session persistence for the open page, layout, zoom, and scroll position.
-- **Mobile**: touch-friendly drag handles; the viewer fits page width to the viewport.
-
-### Sharing & accounts
-
-- **Share links**: read-only public URL preserving PDF, highlights, links, and notes.
-- **Multi-user**: per-user isolated databases and uploads, bcrypt session auth, daily-reset guest account, admin-managed via CLI.
-- **Export**: account menu → "Export my data" downloads a zip with consistent SQLite snapshots plus all uploads; restore by unpacking into `users/<name>/`.
-- **Settings** (account menu): open-access fallback, auto-metadata, save-external-PDFs-on-server, AI prompts.
-
-## URL routing
-
-- `/` → home view (pages list).
-- `/?page=<page_id>` → open a page (with or without PDF).
-- `/?block=<block_id>` → open the page containing this block, then scroll to it.
-- `/?share=<token>` → public read-only view of a shared page.
-- `/?src=<url>` → legacy, redirects to `?page=<id>` after loading.
+</details>
 
 ## Known limitations
 
-- Autosave is debounced at 500 ms. Closing the tab within that window can lose the last keystroke.
-- No conflict handling for simultaneous edits across tabs/devices. Last write wins.
-- `src/App.jsx` is still a single large component; splitting it into hooks/components is tracked as future work.
-- Paywalled papers can't be fetched server-side (publishers block it); Gamma substitutes an open-access copy when one exists, otherwise download in your browser and drop the file in.
-
-## Future work
-
-- Import/restore of the exported zip via the UI (export exists; restore is currently manual unpacking).
-- Password change and account deletion via the app UI (currently CLI-only).
-- Conflict resolution / multi-device sync.
-- Collaboration between users (shared pages, cross-user block references).
-- Decompose the frontend God component (`App.jsx`) into hooks and view components.
+- Autosave is debounced at 500 ms; closing the tab within that window can lose the last keystroke.
+- No conflict handling for simultaneous edits across tabs/devices — last write wins.
+- Paywalled papers can't be fetched server-side; Gamma substitutes an open-access copy when one exists, otherwise download in your browser and drop the file in.
+- `src/App.jsx` is still one large component; decomposition is in progress.
 
 ## License
 

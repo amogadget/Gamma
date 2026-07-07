@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 from . import config
 from .auth import session_middleware
 from .db import DATA_SCHEMA, connect_users_db
-from .routers import ai, auth as auth_router, blocks, imports, metadata, pdf, search, shares, uploads
+from .routers import ai, auth as auth_router, blocks, export, imports, metadata, pdf, search, shares, uploads
 from .storage import cleanup_orphan_uploads
 
 
@@ -55,6 +55,7 @@ def create_app() -> FastAPI:
     app.include_router(uploads.router)
     app.include_router(blocks.router)
     app.include_router(imports.router)
+    app.include_router(export.router)
 
     # Serve the built frontend (SPA) when GAMMA_STATIC_DIR is set.
     # Registered last so all /api routes take precedence.

@@ -1,7 +1,7 @@
 // The pdf.js-based viewer: lazy page rendering, highlights, link
 // annotations, text search, and the selection popup. Extracted from
 // App.jsx to keep the God component shrinking.
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as pdfjsLib from "pdfjs-dist";
 import "pdfjs-dist/web/pdf_viewer.css";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
@@ -18,10 +18,70 @@ const COLORS = [
 
 const EMPTY_MARKS = [];
 
+// Recently downloaded PDFs, so reopening a paper (tab switch, back button)
+// doesn't re-download a multi-MB file. pdf.js detaches the buffer it's
+// handed, so entries are cloned on use.
+const PDF_CACHE = new Map(); // url -> ArrayBuffer, insertion order = LRU
+const PDF_CACHE_MAX = 4;
+function cachePdf(url, buf) {
+  PDF_CACHE.delete(url);
+  PDF_CACHE.set(url, buf);
+  while (PDF_CACHE.size > PDF_CACHE_MAX) PDF_CACHE.delete(PDF_CACHE.keys().next().value);
+}
+
+// Download a PDF (cache-first) and report progress phases to the host.
+// Returns the ArrayBuffer, or null when the load failed or was cancelled
+// (both already reported via onLoadState).
+async function fetchPdfData(url, onLoadState, isCancelled) {
+  const cached = PDF_CACHE.get(url);
+  if (cached) {
+    // Settles a task row registered before the load (URL-box opens);
+    // ordinary cache hits have no row and ignore this.
+    onLoadState?.(url, { phase: "cached" });
+    return cached;
+  }
+  onLoadState?.(url, { phase: "start" });
+  // Parallel range requests overlap with worker download. Each range is its
+  // own HTTP/2 stream so flow-control doesn't single-stream-cap us. Probe
+  // the size via a 1-byte range request (backend doesn't allow HEAD).
+  const probe = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include" });
+  if (isCancelled()) return null;
+  if (!probe.ok) { onLoadState?.(url, { phase: "error" }); return null; }
+  await probe.arrayBuffer();
+  const m = (probe.headers.get("content-range") || "").match(/\/(\d+)$/);
+  const total = m ? parseInt(m[1], 10) : 0;
+  let data;
+  if (total > 0) {
+    const N = 6;
+    const chunkSize = Math.ceil(total / N);
+    const parts = await Promise.all(Array.from({ length: N }, (_, i) => {
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize - 1, total - 1);
+      return fetch(url, { headers: { Range: `bytes=${start}-${end}` }, credentials: "include" })
+        .then((r) => r.arrayBuffer());
+    }));
+    if (isCancelled()) return null;
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (const p of parts) { buf.set(new Uint8Array(p), off); off += p.byteLength; }
+    data = buf.buffer;
+  } else {
+    const resp = await fetch(url, { credentials: "include" });
+    if (isCancelled()) return null;
+    if (!resp.ok) { onLoadState?.(url, { phase: "error" }); return null; }
+    data = await resp.arrayBuffer();
+    if (isCancelled()) return null;
+  }
+  onLoadState?.(url, { phase: "done", bytes: data.byteLength });
+  return data;
+}
+
 function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks, onExternalLink, onBeforeLinkJump, onLoadState }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
+  const [docSeq, setDocSeq] = useState(0); // bumped per document — keys the page tree so swaps are atomic
+  const [displayedUrl, setDisplayedUrl] = useState(""); // url of the document on screen (lags `url` during a load)
   const [forcePages, setForcePages] = useState(new Set());
   const pageHeightsRef = useRef([]); // viewport heights at scale 1, indexed 0..n-1
 
@@ -48,6 +108,22 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     }
     return map;
   }, [findMarks]);
+
+  // Highlights grouped per page — and only for the document actually on
+  // screen: during a tab switch the incoming page's highlights arrive before
+  // its document does, and must not paint onto the outgoing one. Per-page
+  // slices also mean editing a note re-renders just that highlight's page.
+  const hlsByPage = useMemo(() => {
+    const map = new Map();
+    if (displayedUrl !== url) return map;
+    for (const h of highlights || []) {
+      const p = h.position?.boundingRect?.pageNumber ?? h.position?.rects?.[0]?.pageNumber;
+      if (!p) continue;
+      if (!map.has(p)) map.set(p, []);
+      map.get(p).push(h);
+    }
+    return map;
+  }, [highlights, displayedUrl, url]);
 
   // Expose full-text search over the loaded document (used by the search
   // panel). Matches carry the text item's rect (at scale 1) so they can be
@@ -118,51 +194,63 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => { cancelled = true; ro.disconnect(); };
   }, [isFitWidth, pdfDoc]);
 
+  // Tell the host which document's pages are in the DOM. Layout effect on
+  // purpose: it fires after the swap commit but BEFORE paint, so the host can
+  // apply a restored scroll position and the user never sees the document at
+  // the wrong offset.
+  useLayoutEffect(() => {
+    if (pdfDoc) onLoadState?.(url, { phase: "rendered" });
+  }, [pdfDoc]);
+
+  // The document currently on screen. Kept visible while the next one loads —
+  // swapping only when the new doc is fully measured is what prevents the
+  // blank flash and the scrollbar resizing repeatedly during a tab switch.
+  const displayedDocRef = useRef(null);
+  useEffect(() => () => { displayedDocRef.current?.destroy().catch(() => {}); }, []);
+
   useEffect(() => {
     if (!url) return;
-    let cancelled = false; setPdfDoc(null);
+    let cancelled = false;
     (async () => {
       try {
-        onLoadState?.(url, { phase: "start" });
-        // Parallel range requests overlap with worker download.
-        // Each range is its own HTTP/2 stream so flow-control doesn't single-stream-cap us.
-        // Probe size via a 1-byte range request (backend doesn't allow HEAD).
-        const probe = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include" });
-        if (cancelled) return;
-        if (!probe.ok) { onLoadState?.(url, { phase: "error" }); return; }
-        await probe.arrayBuffer();
-        const cr = probe.headers.get("content-range") || "";
-        const m = cr.match(/\/(\d+)$/);
-        const total = m ? parseInt(m[1], 10) : 0;
-        let data;
-        if (total > 0) {
-          const N = 6;
-          const chunkSize = Math.ceil(total / N);
-          const parts = await Promise.all(Array.from({ length: N }, (_, i) => {
-            const start = i * chunkSize;
-            const end = Math.min(start + chunkSize - 1, total - 1);
-            return fetch(url, { headers: { Range: `bytes=${start}-${end}` }, credentials: "include" })
-              .then(r => r.arrayBuffer());
-          }));
-          if (cancelled) return;
-          const buf = new Uint8Array(total);
-          let off = 0;
-          for (const p of parts) { buf.set(new Uint8Array(p), off); off += p.byteLength; }
-          data = buf.buffer;
-        } else {
-          const resp = await fetch(url, { credentials: "include" });
-          if (cancelled) return;
-          if (!resp.ok) { onLoadState?.(url, { phase: "error" }); return; }
-          data = await resp.arrayBuffer();
-          if (cancelled) return;
+        const data = await fetchPdfData(url, onLoadState, () => cancelled);
+        if (!data || cancelled) return;
+        cachePdf(url, data); // insert or bump LRU position
+        const doc = await pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise;
+        if (cancelled) { doc.destroy().catch(() => {}); return; }
+        // Measure pages BEFORE showing the document: exact viewports for the
+        // first pages, page-1-sized estimates beyond (refined below). The
+        // swap then lands in ONE commit — heights, page tree, and document
+        // together — so the scrollbar changes exactly once.
+        const n = doc.numPages;
+        const EXACT = 40;
+        const heights = [];
+        for (let i = 1; i <= Math.min(n, EXACT); i++) {
+          try { heights.push((await doc.getPage(i)).getViewport({ scale: 1 }).height); }
+          catch { heights.push(heights[0] || 800); }
+          if (cancelled) { doc.destroy().catch(() => {}); return; }
         }
-        const bytes = data.byteLength;
-        pdfjsLib.getDocument({ data, disableAutoFetch: true, disableRange: true }).promise.then(doc => {
-          if (!cancelled) {
-            setPdfDoc(doc); setNumPages(doc.numPages);
-            onLoadState?.(url, { phase: "done", bytes });
+        for (let i = heights.length; i < n; i++) heights.push(heights[0] || 800);
+        const prev = displayedDocRef.current;
+        displayedDocRef.current = doc;
+        pageHeightsRef.current = heights;
+        setPageHeights(heights);
+        setNumPages(n);
+        setDocSeq((s) => s + 1);
+        setDisplayedUrl(url);
+        setPdfDoc(doc);
+        // Old doc torn down after the swap commit — destroying it while its
+        // pages are still mounted spams transport-destroyed rejections.
+        if (prev && prev !== doc) setTimeout(() => prev.destroy().catch(() => {}), 1000);
+        // Refine the estimated heights in the background (long docs only).
+        for (let i = EXACT; i < n; i++) {
+          if (cancelled) return;
+          try { heights[i] = (await doc.getPage(i + 1)).getViewport({ scale: 1 }).height; } catch {}
+          if ((i + 1) % 50 === 0 || i === n - 1) {
+            pageHeightsRef.current = [...heights];
+            setPageHeights([...heights]);
           }
-        }).catch(() => { if (!cancelled) onLoadState?.(url, { phase: "error" }); });
+        }
       } catch {
         if (!cancelled) onLoadState?.(url, { phase: "error" });
       }
@@ -226,32 +314,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // wrapper reserve its real size keeps the DOM's scrollHeight in sync with
   // what the jump math assumes, so scrollTo() doesn't get clamped to a
   // smaller scrollable range. Computing metadata-only viewports is cheap.
+  // Populated by the load flow above, before the document is shown.
   const [pageHeights, setPageHeights] = useState([]);
-  useEffect(() => {
-    if (!pdfDoc) return;
-    let cancelled = false;
-    pageHeightsRef.current = [];
-    (async () => {
-      const acc = [];
-      for (let i = 1; i <= pdfDoc.numPages; i++) {
-        if (cancelled) break;
-        try {
-          const page = await pdfDoc.getPage(i);
-          acc.push(page.getViewport({ scale: 1 }).height);
-        } catch (e) {
-          acc.push(800);
-        }
-        // Publish in batches so the first pages reserve their space ASAP
-        // without forcing one re-render per page.
-        if (acc.length === 5 || acc.length === pdfDoc.numPages || acc.length % 50 === 0) {
-          if (cancelled) break;
-          pageHeightsRef.current = [...acc];
-          setPageHeights([...acc]);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [pdfDoc]);
 
   // Scroll to exact highlight position. Long jumps snap instantly — smooth
   // scrolling across many pages is what made find-next feel sluggish.
@@ -417,8 +481,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   return (
     <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
       {Array.from({ length: numPages }, (_, i) => (
-        <PdfPage key={i + 1} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
-          highlights={highlights} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
+        <PdfPage key={`${docSeq}-${i + 1}`} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
+          highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
           onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
           reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
@@ -482,7 +546,8 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         try {
           await task.promise;
         } catch (err) {
-          if (err?.name === "RenderingCancelledException") return;
+          // instanceof, not err.name — minification renames the class
+          if (err instanceof pdfjsLib.RenderingCancelledException) return;
           throw err;
         }
 
@@ -510,7 +575,9 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
             };
           }));
       } catch (e) {
-        console.error("PdfPage render error:", e);
+        // A cancelled run rejects mid-await (doc swapped, transport
+        // destroyed) — that's teardown, not an error worth logging.
+        if (!cancelled) console.error("PdfPage render error:", e);
       }
     })();
     return () => { cancelled = true; };
@@ -566,10 +633,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
           }}
         />
       ))}
-      {highlights.filter(h => {
-        const p = h.position?.boundingRect || h.position?.rects?.[0];
-        return p && p.pageNumber === pageNumber;
-      }).map(h => {
+      {highlights.map(h => {
         const rects = h.position?.rects || (h.position?.boundingRect ? [h.position.boundingRect] : []);
         const storedW = h.position?.boundingRect?.width || rects[0]?.width || 1;
         const storedH = h.position?.boundingRect?.height || rects[0]?.height || 1;

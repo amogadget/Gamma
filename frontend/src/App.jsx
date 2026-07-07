@@ -101,7 +101,8 @@ export default function App() {
     if (!readOnly) checkSession();
   }, [readOnly]);
 
-  const [inputUrl, setInputUrl] = useState(initialUrl);
+  const [inputUrl, setInputUrl] = useState(initialUrl); // current page's source URL (shown in page properties)
+  const [addUrl, setAddUrl] = useState(""); // "+" popover: URL to open
   const [pdfUrl, setPdfUrl] = useState("");
   const [docId, setDocId] = useState("");
   const [focusedBlockId, setFocusedBlockId] = useState("");
@@ -112,14 +113,29 @@ export default function App() {
   const [categoryInput, setCategoryInput] = useState("");
   const [categorySuggestionIdx, setCategorySuggestionIdx] = useState(-1);
   const [categoryFilter, setCategoryFilter] = useState(initialCategory);
-  // File-browser home: folders are virtual — each page block stores a single
-  // `properties.folder` string; storage stays flat at root. Empty (manually
-  // created) folders live in localStorage until a paper lands in them.
+  // File-browser home: folders are "folder labels" — `properties.folder` is a
+  // comma-separated list of paths ("readout/nondestructive, benchmarks"), so a
+  // page can live in several folders at once (soft links) and `/` nests.
+  // Folders themselves are derived from the paths in use; storage stays flat
+  // at root. Empty (manually created) folders live in localStorage until a
+  // paper lands in them. No folder tags → the page sits at the library root.
   const [folderFilter, setFolderFilter] = useState(initialFolder);
   const [folderDragOver, setFolderDragOver] = useState(null);
   const [extraFolders, setExtraFolders] = useState([]);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  // Home feed: sort criterion + how many rows are rendered (grows on scroll).
+  const [homeSort, setHomeSort] = useState(() => {
+    try { return localStorage.getItem("gamma-home-sort") || "updated"; } catch { return "updated"; }
+  });
+  function changeHomeSort(v) {
+    setHomeSort(v);
+    try { localStorage.setItem("gamma-home-sort", v); } catch {}
+  }
+  const HOME_PAGE_CHUNK = 30;
+  const [homeShowCount, setHomeShowCount] = useState(HOME_PAGE_CHUNK);
+  useEffect(() => { setHomeShowCount(HOME_PAGE_CHUNK); }, [folderFilter, homeSort]);
+  const loadMoreRef = useRef(null);
   function updateExtraFolders(updater) {
     setExtraFolders((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
@@ -144,27 +160,218 @@ export default function App() {
     try { setExtraFolders(JSON.parse(localStorage.getItem(`gamma-extra-folders:${u}`) || "[]")); } catch { setExtraFolders([]); }
   }, [authUser?.user, readOnly]);
 
-  async function setPageFolder(pageId, folderName) {
-    try {
-      await apiJson(`${API}/blocks/${pageId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ properties: { folder: folderName || "" } }),
-      });
-      if (folderName) updateExtraFolders((prev) => prev.filter((f) => f !== folderName));
-      await fetchHomeBlocks();
-      setStatus(folderName ? `Moved to “${folderName}”.` : "Moved out of the folder.");
-    } catch (err) {
-      setStatus(`Move failed: ${err.message}`);
-    }
+  // Folder-tag helpers: parse/serialize the comma-separated path list.
+  const parseFolderTags = (raw) => (raw || "").split(",").map((s) => s.trim()).filter(Boolean);
+  // "/" nests and "," separates tags, so neither may appear in a segment name.
+  const cleanFolderSegment = (name) => (name || "").replace(/[,/]/g, " ").replace(/\s+/g, " ").trim();
+  async function writePageFolders(pageId, tags) {
+    await apiJson(`${API}/blocks/${pageId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ properties: { folder: tags.join(", ") } }),
+    });
   }
 
   function commitNewFolder() {
-    const name = newFolderName.trim();
+    const name = cleanFolderSegment(newFolderName);
     setNewFolderOpen(false);
     setNewFolderName("");
     if (!name) return;
-    updateExtraFolders((prev) => prev.includes(name) ? prev : [...prev, name]);
+    const path = folderFilter ? `${folderFilter}/${name}` : name;
+    updateExtraFolders((prev) => prev.includes(path) ? prev : [...prev, path]);
+  }
+
+  // --- Home file-manager: multi-select + copy/move/delete, folder rename ---
+  const [selectedPages, setSelectedPages] = useState(() => new Set());
+  const lastPageClickRef = useRef(null); // anchor for shift-range selection
+  const [homeMenu, setHomeMenu] = useState(null); // {kind:"page"|"folder", id?, name, x, y}
+  const [folderRenaming, setFolderRenaming] = useState(null); // {name, draft}
+  const [movePicker, setMovePicker] = useState(false);
+
+  function clearSelection() { setSelectedPages(new Set()); setMovePicker(false); }
+
+  // Plain click opens; Ctrl/Cmd toggles selection; Shift selects the range
+  // from the last clicked card (standard file-manager semantics).
+  function handlePageClick(pageBlock, e) {
+    const id = pageBlock._pageId;
+    if (!id) return;
+    if (e && (e.ctrlKey || e.metaKey)) {
+      setSelectedPages((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+      lastPageClickRef.current = id;
+      return;
+    }
+    if (e && e.shiftKey && lastPageClickRef.current) {
+      const order = homeVisiblePages.map((b) => b._pageId);
+      const a = order.indexOf(lastPageClickRef.current);
+      const b = order.indexOf(id);
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelectedPages((prev) => {
+          const next = new Set(prev);
+          for (let i = lo; i <= hi; i++) next.add(order[i]);
+          return next;
+        });
+        return;
+      }
+    }
+    lastPageClickRef.current = id;
+    clearSelection();
+    openBlock(id, { restoreScroll: true });
+  }
+
+  // Deep-copy a page: new root block + a subtree clone with fresh block ids
+  // (highlight ids regenerated and same-page references remapped).
+  async function duplicatePage(pageId) {
+    const data = await apiJson(`${API}/blocks/${pageId}/subtree`);
+    const src = data.block || {};
+    const created = await apiJson(`${API}/blocks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parent_id: "root", content: `${src.content || "Untitled"} (copy)`, properties: src.properties || {} }),
+    });
+    const hlMap = new Map();
+    const clone = (list) => (list || []).map((b) => {
+      const props = { ...(b.properties || {}) };
+      if (props.highlight_id) {
+        const nid = makeId();
+        hlMap.set(props.highlight_id, nid);
+        props.highlight_id = nid;
+      }
+      return { ...b, id: makeId(), properties: props, children: clone(b.children) };
+    });
+    const remap = (list) => {
+      for (const b of list || []) {
+        const p = b.properties;
+        if (p.linked_highlight_id && hlMap.has(p.linked_highlight_id)) p.linked_highlight_id = hlMap.get(p.linked_highlight_id);
+        remap(b.children);
+      }
+    };
+    const cloned = clone(normalizeBlocks(src.children || []));
+    remap(cloned);
+    await apiJson(`${API}/blocks/${created.id}/children`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blocks: cloned }),
+    });
+    return created.id;
+  }
+  async function duplicatePages(ids) {
+    setStatus(`Copying ${ids.length} page${ids.length === 1 ? "" : "s"}…`);
+    try {
+      for (const id of ids) await duplicatePage(id);
+      clearSelection();
+      await fetchHomeBlocks();
+      setStatus(`Copied ${ids.length} page${ids.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      setStatus(`Copy failed: ${err.message}`);
+    }
+  }
+
+  function deletePages(ids) {
+    setConfirmBox({
+      title: ids.length === 1 ? "Delete page" : `Delete ${ids.length} pages`,
+      message: `Delete ${ids.length === 1 ? "this page" : `these ${ids.length} pages`} and all their notes? This can't be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: async () => {
+        for (const id of ids) {
+          try { await apiJson(`${API}/blocks/${id}`, { method: "DELETE" }); } catch {}
+        }
+        updateTabs((prev) => prev.filter((t) => !ids.includes(t.id)));
+        clearSelection();
+        await fetchHomeBlocks();
+        setStatus(`Deleted ${ids.length} page${ids.length === 1 ? "" : "s"}.`);
+      },
+    });
+  }
+
+  // Add pages to a folder (soft link — other folder tags are kept). The only
+  // tag removed is an ancestor of the target: dragging a "readout" paper into
+  // readout/nondestructive refines it, it shouldn't stay in both levels.
+  async function addPagesToFolder(ids, path) {
+    let changed = 0;
+    for (const id of ids) {
+      const b = homeBlocks.find((x) => x.id === id);
+      if (!b) continue;
+      const tags = parseFolderTags(b.properties?.folder);
+      if (tags.includes(path)) continue;
+      const next = tags.filter((t) => !path.startsWith(t + "/"));
+      next.push(path);
+      try { await writePageFolders(id, next); changed++; } catch {}
+    }
+    updateExtraFolders((prev) => prev.filter((f) => f !== path));
+    clearSelection();
+    await fetchHomeBlocks();
+    setStatus(changed ? `Added ${changed} page${changed === 1 ? "" : "s"} to “${path}”.` : `Already in “${path}”.`);
+  }
+
+  // Remove one folder tag (exact path). With path = "" strips ALL folder tags.
+  async function removePagesFromFolder(ids, path) {
+    for (const id of ids) {
+      const b = homeBlocks.find((x) => x.id === id);
+      if (!b) continue;
+      const tags = parseFolderTags(b.properties?.folder);
+      const next = path ? tags.filter((t) => t !== path) : [];
+      if (next.length === tags.length) continue;
+      try { await writePageFolders(id, next); } catch {}
+    }
+    clearSelection();
+    await fetchHomeBlocks();
+    setStatus(path ? `Removed ${ids.length} page${ids.length === 1 ? "" : "s"} from “${path}”.` : "Cleared folder tags.");
+  }
+
+  // Rename one path segment: rewrites the prefix on every page's folder tags,
+  // so renaming a parent folder carries all its subfolders along.
+  async function renameFolder(oldPath, newNameRaw) {
+    const newName = cleanFolderSegment(newNameRaw);
+    setFolderRenaming(null);
+    const parent = oldPath.includes("/") ? oldPath.slice(0, oldPath.lastIndexOf("/")) : "";
+    const newPath = parent ? `${parent}/${newName}` : newName;
+    if (!newName || newPath === oldPath) return;
+    const mapTag = (t) => (t === oldPath ? newPath : t.startsWith(oldPath + "/") ? newPath + t.slice(oldPath.length) : t);
+    for (const b of homeBlocks) {
+      const tags = parseFolderTags(b.properties?.folder);
+      const next = [...new Set(tags.map(mapTag))];
+      if (next.join(",") === tags.join(",")) continue;
+      try { await writePageFolders(b.id, next); } catch {}
+    }
+    updateExtraFolders((prev) => [...new Set(prev.map(mapTag))]);
+    if (folderFilter === oldPath || folderFilter.startsWith(oldPath + "/")) {
+      const next = mapTag(folderFilter);
+      setFolderFilter(next);
+      window.history.replaceState(null, "", `/?folder=${encodeURIComponent(next)}`);
+    }
+    await fetchHomeBlocks();
+    setStatus(`Folder renamed to “${newPath}”.`);
+  }
+
+  function deleteFolderByName(path) {
+    const inPath = (t) => t === path || t.startsWith(path + "/");
+    const members = homeBlocks.filter((b) => parseFolderTags(b.properties?.folder).some(inPath));
+    setConfirmBox({
+      title: "Delete folder",
+      message: members.length
+        ? `Delete “${path}”? The folder tag is removed from its ${members.length} paper${members.length === 1 ? "" : "s"} — no papers are deleted.`
+        : `Delete the empty folder “${path}”?`,
+      confirmLabel: "Delete folder",
+      onConfirm: async () => {
+        for (const b of members) {
+          try { await writePageFolders(b.id, parseFolderTags(b.properties?.folder).filter((t) => !inPath(t))); } catch {}
+        }
+        updateExtraFolders((prev) => prev.filter((f) => !inPath(f)));
+        if (folderFilter === path || folderFilter.startsWith(path + "/")) {
+          const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+          setFolderFilter(parent);
+          window.history.replaceState(null, "", parent ? `/?folder=${encodeURIComponent(parent)}` : "/");
+        }
+        await fetchHomeBlocks();
+        setStatus(`Folder “${path}” deleted.`);
+      },
+    });
   }
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
   const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
@@ -259,18 +466,47 @@ export default function App() {
   function updateTransfer(id, patch) {
     setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }
-  // Byte-level download state reported by the PDF viewer (skips local uploads)
+  // Byte-level download state reported by the PDF viewer (skips local uploads).
+  // One row per URL: a re-download (LRU eviction, retry) reactivates the
+  // existing entry instead of stacking duplicates.
   function handlePdfLoadState(url, st) {
+    if (st.phase === "rendered") {
+      pdfRenderedUrlRef.current = url; // this document's pages are now in the DOM
+      // Called from the viewer's layout effect — before paint. Applying a
+      // pending restore HERE means the document appears already scrolled to
+      // its position: no flash of the top, no visible jump.
+      const p = pendingRestoreRef.current;
+      if (p && p.url === url && restoreTokenRef.current === p.token) {
+        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+        const targetTop = p.entry.top * ((pdfEffScaleRef.current || p.entry.scale || 1) / (p.entry.scale || 1));
+        if (scroller && scroller.scrollHeight > targetTop) {
+          scroller.scrollTo({ top: targetTop, behavior: "instant" });
+          pendingRestoreRef.current = null;
+          restoreTokenRef.current++; // the fallback loop is no longer needed
+          if (restoringForRef.current === p.blockId) restoringForRef.current = null;
+        }
+      }
+      return;
+    }
     if (url.startsWith("/api/uploads/")) return;
+    if (st.phase === "cached") {
+      const id = transferByUrlRef.current[url];
+      if (id) updateTransfer(id, { status: "done", info: "cached" });
+      return;
+    }
     if (st.phase === "start") {
-      if (transferByUrlRef.current[url]) return; // restart after remount — keep the existing entry
+      const prevId = transferByUrlRef.current[url];
+      if (prevId) {
+        updateTransfer(prevId, { status: "active", info: "downloading…" });
+        return;
+      }
       const name = (pdfTitle || decodeURIComponent((url.split("source_url=")[1] || url).split("/").pop() || "PDF")).slice(0, 60);
       transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…" });
     } else {
       const id = transferByUrlRef.current[url];
       if (!id) return;
-      delete transferByUrlRef.current[url];
       if (st.phase === "cancelled") {
+        delete transferByUrlRef.current[url];
         setTransfers((prev) => prev.filter((t) => t.id !== id)); // aborted navigation — drop the entry
       } else {
         updateTransfer(id, st.phase === "done"
@@ -296,6 +532,8 @@ export default function App() {
   // Workspace search (Ctrl+Shift+F) with VSCode-style options:
   // Aa = match case, ab = whole word, .* = regex, plus replace-in-notes.
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchLabels, setSearchLabels] = useState([]); // confirmed label filters (chips)
+  const [labelSugIdx, setLabelSugIdx] = useState(0);
   const [searchResults, setSearchResults] = useState([]);
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchCase, setSearchCase] = useState(false);
@@ -367,14 +605,75 @@ export default function App() {
       },
     });
   }
+  // Every folder path in use (from page tags + manually created empties),
+  // plus all ancestor prefixes — "readout" exists once "readout/destructive"
+  // does, so it can be browsed, targeted, and searched by prefix.
+  const allFolderPaths = useMemo(() => {
+    const set = new Set();
+    const addWithPrefixes = (path) => {
+      const segs = path.split("/");
+      for (let i = 1; i <= segs.length; i++) set.add(segs.slice(0, i).join("/"));
+    };
+    for (const f of extraFolders) addWithPrefixes(f);
+    for (const b of homeBlocks) {
+      for (const t of (b.properties?.folder || "").split(",").map((s) => s.trim()).filter(Boolean)) addWithPrefixes(t);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [homeBlocks, extraFolders]);
+  // Filter chips come in two kinds — standard labels (properties.category,
+  // exact match) and folder labels (properties.folder paths, prefix match so
+  // "readout" covers readout/destructive too). Typing autosuggests both;
+  // Tab/Enter confirms one into a chip. Typed text searches notes/PDFs —
+  // restricted to the matching pages when chips are present (all chips AND).
+  const allChipOptions = useMemo(() => {
+    const seen = new Map(); // kind:lowercase → option
+    for (const b of homeBlocks) {
+      for (const t of (b.properties?.category || "").split(",").map((s) => s.trim()).filter(Boolean)) {
+        if (!seen.has(`l:${t.toLowerCase()}`)) seen.set(`l:${t.toLowerCase()}`, { name: t, kind: "label" });
+      }
+    }
+    for (const f of allFolderPaths) {
+      if (!seen.has(`f:${f.toLowerCase()}`)) seen.set(`f:${f.toLowerCase()}`, { name: f, kind: "folder" });
+    }
+    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [homeBlocks, allFolderPaths]);
+  const labelSuggestions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    const picked = new Set(searchLabels.map((l) => `${l.kind}:${l.name.toLowerCase()}`));
+    return allChipOptions.filter((o) => !picked.has(`${o.kind}:${o.name.toLowerCase()}`) && o.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [searchQuery, allChipOptions, searchLabels]);
+  useEffect(() => { setLabelSugIdx(0); }, [searchQuery]);
+  function confirmSearchLabel(opt) {
+    setSearchLabels((prev) => (prev.some((l) => l.kind === opt.kind && l.name.toLowerCase() === opt.name.toLowerCase()) ? prev : [...prev, opt]));
+    setSearchQuery("");
+  }
+  const searchTextQuery = useMemo(() => searchQuery.trim(), [searchQuery]);
+  const labelMatches = useMemo(() => {
+    if (!searchLabels.length) return [];
+    return homeBlocks.filter((b) => {
+      const labels = (b.properties?.category || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
+      const folders = (b.properties?.folder || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
+      return searchLabels.every((c) => {
+        const n = c.name.toLowerCase();
+        return c.kind === "folder"
+          ? folders.some((t) => t === n || t.startsWith(n + "/"))
+          : labels.includes(n);
+      });
+    });
+  }, [searchLabels, homeBlocks]);
+  // With chips active, text results only count inside the matching pages.
+  const labelPageIds = useMemo(() => (
+    searchLabels.length ? new Set(labelMatches.map((b) => b.id)) : null
+  ), [searchLabels.length, labelMatches]);
   useEffect(() => {
-    if (openPopover !== "search" || !searchQuery.trim()) {
+    if (openPopover !== "search" || !searchTextQuery) {
       setSearchResults([]); setPdfMatches([]); setLibMatches([]); setLibIndexing(0);
       return;
     }
     const timer = setTimeout(() => {
       setSearchBusy(true);
-      const q = searchQuery.trim();
+      const q = searchTextQuery;
       const flags = `&case=${searchCase ? 1 : 0}&whole=${searchWhole ? 1 : 0}&regex=${searchRegex ? 1 : 0}`;
       const notesReq = apiJson(`${API}/block-search?q=${encodeURIComponent(q)}&limit=20${flags}`)
         .then((d) => setSearchResults(d.blocks || []))
@@ -398,10 +697,10 @@ export default function App() {
       Promise.allSettled([notesReq, pdfReq, libReq]).then(() => setSearchBusy(false));
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchQuery, openPopover, searchCase, searchWhole, searchRegex, searchNonce]);
+  }, [searchTextQuery, openPopover, searchCase, searchWhole, searchRegex, searchNonce]);
 
   function replaceAllInNotes() {
-    const q = searchQuery.trim();
+    const q = searchTextQuery;
     if (!q) return;
     setConfirmBox({
       title: "Replace all",
@@ -437,6 +736,8 @@ export default function App() {
         goBackNavRef.current?.();
       } else if (e.key === "Escape") {
         setOpenPopover(null);
+        setHomeMenu(null);
+        setSelectedPages((prev) => (prev.size ? new Set() : prev));
       }
     }
     window.addEventListener("keydown", onKey);
@@ -454,7 +755,6 @@ export default function App() {
   const [metaAutoFetch, setMetaAutoFetch] = useState(() => {
     try { return localStorage.getItem("gamma-meta-auto") !== "0"; } catch { return true; }
   });
-
   useEffect(() => {
     try { localStorage.setItem("gamma-pdf-save", pdfSaveLocal ? "1" : "0"); } catch {}
   }, [pdfSaveLocal]);
@@ -496,6 +796,9 @@ export default function App() {
   const [linkPrompt, setLinkPrompt] = useState(null); // external URL clicked inside the PDF
   const [linkDialog, setLinkDialog] = useState(null); // {position, content} — creating a manual reference link
   const [linkDialogInput, setLinkDialogInput] = useState("");
+  // A highlight copied via "Copy as reference point" — link dialogs in other
+  // papers offer it as a target, so links can point at an exact passage.
+  const [refPoint, setRefPoint] = useState(null); // {pageId, pageTitle, highlightId, quote}
 
   // --- Paper metadata (arXiv / DOI / AI) and citation export -----------------
   const [pageMeta, setPageMeta] = useState(null);   // properties.meta of the open page
@@ -503,6 +806,7 @@ export default function App() {
   const [metaBusy, setMetaBusy] = useState(false);
   const [pptCite, setPptCite] = useState("");
   const [pptCiteBusy, setPptCiteBusy] = useState(false);
+  const [metaPopPos, setMetaPopPos] = useState({ top: 0, right: 0 }); // fixed-position anchor for the metadata popover
   const [citeCopied, setCiteCopied] = useState(""); // "bibtex" | "ppt"
   // Editable prompts for metadata extraction and PPT citations (empty = server default)
   const [metaPrompt, setMetaPrompt] = useState(() => {
@@ -528,12 +832,14 @@ export default function App() {
     if (!block?.id) return;
     setMetaBusy(true);
     if (force) setStatus("Refreshing paper metadata…");
+    const taskId = addTransfer({ name: `Metadata — ${(block.content || "paper").slice(0, 48)}`, kind: "ai", info: "fetching…" });
     try {
       const data = await apiJson(`${API}/metadata/fetch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ block_id: block.id, prompt: metaPrompt || "", model: chatModel || "", force: !!force }),
       });
+      updateTransfer(taskId, { status: "done", info: data.cached ? "cached" : data.source === "ai" ? "AI-extracted" : data.source || "" });
       if (focusedBlockIdRef.current !== block.id) return;
       setPageMeta(data.meta || null);
       setPageBibtex(data.bibtex || "");
@@ -541,15 +847,21 @@ export default function App() {
       setFocusedBlock((prev) => prev && prev.id === block.id
         ? { ...prev, properties: { ...prev.properties, meta: data.meta, bibtex: data.bibtex } }
         : prev);
-      // Auto-fill the page title from metadata when it's still the default filename title
+      // Auto-fill the page title from metadata when it's still the default filename
+      // title — awaited so the library refetch below can't win the race and
+      // resurrect the stale name in the link dialog / home list.
       if (data.meta?.title && /^PDF Notes - /.test(block.content || "") && focusedBlockIdRef.current === block.id) {
-        renameTitle(data.meta.title);
+        await renameTitle(data.meta.title);
       }
       if (!data.cached) {
         setStatus(`Paper metadata found (${data.source === "ai" ? "AI-extracted" : data.source}).`);
         fetchHomeBlocks(); // keep the library's meta fresh for DOI-link matching
       }
+      // The slide citation rides along with metadata — by the time the
+      // popover is opened it's already cached on the page.
+      if (data.meta || data.bibtex) makePptCitation(false, block);
     } catch (err) {
+      updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       if (focusedBlockIdRef.current === block.id) setStatus(`Metadata: ${err.message}`);
     } finally {
       setMetaBusy(false);
@@ -580,11 +892,16 @@ export default function App() {
   // Import annotations embedded in the PDF file itself (SumatraPDF, Acrobat…).
   // Idempotent server-side, so calling it on every upload is safe.
   async function importEmbeddedAnnots(blockId, targetDocId, silent) {
+    const taskId = addTransfer({ name: "Importing embedded PDF annotations", kind: "import", info: "scanning…" });
     try {
       const res = await apiJson(`${API}/import/pdf-annotations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ block_id: blockId, doc_id: targetDocId }),
+      });
+      updateTransfer(taskId, {
+        status: "done",
+        info: res.imported > 0 ? `${res.imported} imported` : res.found > 0 ? "already imported" : "none found",
       });
       if (res.imported > 0) {
         if (focusedBlockIdRef.current === blockId) await loadBlocksForBlock(blockId);
@@ -596,31 +913,36 @@ export default function App() {
       }
       return res;
     } catch (err) {
+      updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       if (!silent) setStatus(`Annotation import failed: ${err.message}`);
     }
   }
 
-  async function makePptCitation(force = false) {
-    if (!focusedBlockId || pptCiteBusy) return;
+  async function makePptCitation(force = false, blockArg = null) {
+    const targetId = blockArg?.id || focusedBlockId;
+    if (!targetId || pptCiteBusy) return;
     setPptCiteBusy(true);
+    const taskId = addTransfer({ name: `Slide citation — ${(blockArg?.content || pdfTitle || "paper").slice(0, 48)}`, kind: "ai", info: "generating…" });
     try {
       const data = await apiJson(`${API}/metadata/cite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ block_id: focusedBlockId, prompt: citePrompt || "", model: chatModel || "", force }),
+        body: JSON.stringify({ block_id: targetId, prompt: citePrompt || "", model: chatModel || "", force }),
       });
-      setPptCite(data.citation || "");
+      updateTransfer(taskId, { status: "done", info: "" });
+      if (focusedBlockIdRef.current === targetId) setPptCite(data.citation || "");
     } catch (err) {
+      updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       setStatus(`Citation failed: ${err.message}`);
     } finally {
       setPptCiteBusy(false);
     }
   }
 
-  // Opening the metadata popover generates the slide citation automatically
-  // (cached on the page afterwards, so this is a one-time AI call per paper).
+  // Opening the metadata or share popover generates the slide citation
+  // automatically (cached on the page afterwards — one AI call per paper).
   useEffect(() => {
-    if (openPopover === "meta" && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
+    if ((openPopover === "meta" || openPopover === "share") && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
       makePptCitation();
     }
   }, [openPopover, pageMeta]);
@@ -795,6 +1117,37 @@ export default function App() {
     return () => { cancelled = true; };
   }, [focusedBlockId, readOnly]);
 
+  // Queued autosave. The debounce timer used to be silently cancelled when
+  // navigation replaced the block tree — a highlight made within 500 ms of
+  // switching tabs was lost. Edits are now queued in pendingSaveRef (with the
+  // page id they belong to) and flushed on navigation; failures retry so a
+  // briefly unreachable server doesn't eat them either.
+  const pendingSaveRef = useRef(null); // {pageId, blocks, attempts}
+  function savePending() {
+    const p = pendingSaveRef.current;
+    if (!p) return;
+    pendingSaveRef.current = null;
+    apiJson(`${API}/blocks/${p.pageId}/children`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blocks: p.blocks }),
+    }).catch((err) => {
+      const attempts = (p.attempts || 0) + 1;
+      if (pendingSaveRef.current) return; // a newer edit supersedes this one
+      if (attempts < 6) {
+        setStatus(`Save failed: ${err.message} — retrying…`);
+        pendingSaveRef.current = { ...p, attempts };
+        setTimeout(savePending, 3000);
+      } else {
+        setStatus(`Save failed: ${err.message}`);
+      }
+    });
+  }
+  // Persist queued edits NOW — called before anything replaces the block tree.
+  function flushPendingSave() {
+    if (autosaveTimerRef.current) { clearTimeout(autosaveTimerRef.current); autosaveTimerRef.current = null; }
+    savePending();
+  }
   useEffect(() => {
     if (readOnly || !focusedBlockId) return;
     if (suppressAutosaveRef.current) {
@@ -802,13 +1155,31 @@ export default function App() {
       return;
     }
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-    autosaveTimerRef.current = setTimeout(() => {
-      persistBlocks(blocks).catch((err) => setStatus(`Save failed: ${err.message}`));
-    }, 500);
+    pendingSaveRef.current = { pageId: focusedBlockId, blocks };
+    autosaveTimerRef.current = setTimeout(savePending, 500);
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
     };
   }, [blocks, readOnly]);
+  // Closing/reloading the tab: best-effort keepalive save of queued edits.
+  useEffect(() => {
+    const flush = () => {
+      const p = pendingSaveRef.current;
+      if (!p) return;
+      pendingSaveRef.current = null;
+      try {
+        fetch(`${API}/blocks/${p.pageId}/children`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ blocks: p.blocks }),
+          keepalive: true,
+          credentials: "include",
+        }).catch(() => {});
+      } catch {}
+    };
+    window.addEventListener("pagehide", flush);
+    return () => window.removeEventListener("pagehide", flush);
+  }, []);
 
 
   function deleteHighlight(highlightId) {
@@ -888,6 +1259,7 @@ export default function App() {
           const rootId = block?.page_root_id;
           if (rootId && rootId !== initialBlockId) {
             pendingBlockScrollRef.current = initialBlockId;
+            pendingJumpRef.current = initialBlockId; // highlight blocks also jump the PDF
             openBlock(rootId);
           } else {
             openBlock(initialBlockId);
@@ -1129,8 +1501,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   async function openPdf(sourceUrl) {
     if (!sourceUrl || readOnly) return;
+    leaveCurrentPage();
     setLoading(true);
     setStatus("Opening PDF...");
+    // Visible from the moment Enter is pressed — resolve can take seconds.
+    const taskId = addTransfer({ name: sourceUrl.slice(0, 60), kind: "download", info: "resolving…" });
     try {
       // Uploaded PDFs are already hosted locally — skip external resolve and proxy.
       const isUpload = sourceUrl.startsWith("/api/uploads/") || sourceUrl.startsWith(`${API}/uploads/`);
@@ -1147,10 +1522,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         pdfNote = resolved.note || "";
         resolvedDocId = await getDocIdForUrl(finalUrl);
         proxiedUrl = `${API}/pdf?source_url=${encodeURIComponent(finalUrl)}${pdfSaveLocal ? "&save=1" : ""}`;
+        transferByUrlRef.current[proxiedUrl] = taskId; // viewer's byte-level reporting takes over this row
       }
       // Resolve block + load children FIRST, before setPdfUrl, to avoid mid-render highlight race
       const defaultTitle = getPdfPageTitle(resolvedDocId, finalUrl);
       const block = await getOrCreateBlockForDoc(resolvedDocId, defaultTitle, finalUrl);
+      updateTransfer(taskId, {
+        name: (block.content || defaultTitle).slice(0, 60),
+        ...(isUpload ? { status: "done", info: "local file" } : { info: "downloading…" }),
+      });
       const nextBlocks = await loadBlocksForBlock(block.id);
       setDocId(resolvedDocId);
       setInputUrl(finalUrl);
@@ -1164,9 +1544,27 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       window.history.replaceState({}, "", newUrl);
       setStatus(pdfNote || `Loaded ${resolvedDocId}`);
     } catch (err) {
+      updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       setStatus(`Open failed: ${err.message}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  // "+" popover: a blank note page (no PDF) — created in the open folder, if any.
+  async function createNotePage() {
+    if (readOnly) return;
+    setOpenPopover(null);
+    try {
+      const created = await apiJson(`${API}/blocks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parent_id: "root", content: "New note", ...(folderFilter ? { properties: { folder: folderFilter } } : {}) }),
+      });
+      await fetchHomeBlocks();
+      await openBlock(created.id, { pushNav: true });
+    } catch (err) {
+      setStatus(`Create failed: ${err.message || err}`);
     }
   }
 
@@ -1214,6 +1612,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     // Back records LINK jumps only — callers opt in via {pushNav: true}.
     // Plain navigation (library, search, tabs, home) never pushes.
     if (opts?.pushNav && blockId !== focusedBlockId) pushNav();
+    leaveCurrentPage();
     setLoading(true);
     setStatus("Opening...");
     try {
@@ -1231,12 +1630,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setCategory(props.category || "");
       setDocId(props.doc_id || "");
 
+      let openedPdfUrl = "";
       if (props.source_url) {
         const src = props.source_url;
         const isLocal = src.startsWith("/api/");
-        const proxiedUrl = isLocal ? src : `${API}/pdf?source_url=${encodeURIComponent(src)}`;
+        openedPdfUrl = isLocal ? src : `${API}/pdf?source_url=${encodeURIComponent(src)}`;
         setInputUrl(src);
-        setPdfUrl(proxiedUrl);
+        setPdfUrl(openedPdfUrl);
         setBlocks(childBlocks);
       } else {
         setInputUrl("");
@@ -1263,7 +1663,38 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
       const newUrl = `${window.location.pathname}?block=${encodeURIComponent(blockId)}`;
       window.history.replaceState({}, "", newUrl);
+      // Pages remember their own window arrangement; pages without one
+      // inherit whatever layout is currently on screen.
+      const savedUi = pageLayoutsRef.current[blockId];
+      if (savedUi?.layout) {
+        setLayout(savedUi.layout);
+        setCollapsedWins(savedUi.collapsed || {});
+        setPdfHidden(!!savedUi.pdfHidden);
+        setChatHidden(!!savedUi.chatHidden);
+        if (savedUi.notesVisible != null) setNotesVisible(savedUi.notesVisible);
+        // Panel ratios apply once the restored window structure has
+        // committed (a group's panel count must match its saved sizes).
+        if (savedUi.sizes) {
+          let tries = 0;
+          const applySizes = () => {
+            let pending = false;
+            for (const [k, arr] of Object.entries(savedUi.sizes)) {
+              const h = panelGroupRefs.current[k];
+              if (!h || !Array.isArray(arr) || !arr.length) continue;
+              try {
+                const cur = h.getLayout();
+                if (cur.length !== arr.length) { pending = true; continue; }
+                if (cur.some((v, i) => Math.abs(v - arr[i]) > 0.5)) h.setLayout(arr);
+              } catch { pending = true; }
+            }
+            if (pending && tries++ < 20) setTimeout(applySizes, 60);
+          };
+          requestAnimationFrame(applySizes);
+        }
+      }
+      if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
       setStatus("Ready.");
+      return openedPdfUrl;
     } catch (err) {
       setStatus(`Open failed: ${err.message}`);
       // If this was a session restore attempt that failed, clear it
@@ -1281,6 +1712,97 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const pdfEffScaleRef = useRef(1);
   useEffect(() => { pdfEffScaleRef.current = pdfEffScale; }, [pdfEffScale]);
 
+  // Exact per-page reading positions so switching tabs returns to where you
+  // were, not just to the same page. blockId -> {top, scale}.
+  const tabScrollRef = useRef({});
+  // Per-page window layout (dock slots, collapsed bars, hidden windows, and
+  // panel size ratios) — captured when leaving a page, restored on reopen.
+  const pageLayoutsRef = useRef({});
+  const panelGroupRefs = useRef({}); // group key -> react-resizable-panels imperative handle
+  useEffect(() => {
+    if (!authUser?.user || readOnly) return;
+    try { pageLayoutsRef.current = JSON.parse(localStorage.getItem(`gamma-page-layouts:${authUser.user}`) || "{}"); }
+    catch { pageLayoutsRef.current = {}; }
+  }, [authUser?.user, readOnly]);
+  const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
+  const restoringForRef = useRef(null); // block whose restore hasn't landed yet
+  const pdfRenderedUrlRef = useRef(""); // url of the document whose pages are in the DOM
+  const pendingRestoreRef = useRef(null); // {url, entry, blockId, token} applied pre-paint on "rendered"
+  function captureScrollPos() {
+    // The page's window layout travels with it — including panel size ratios.
+    if (focusedBlockId && !readOnly && prefsUserRef.current) {
+      const sizes = {};
+      for (const [k, h] of Object.entries(panelGroupRefs.current)) {
+        try { if (h) sizes[k] = h.getLayout(); } catch {}
+      }
+      pageLayoutsRef.current[focusedBlockId] = { layout, collapsed: collapsedWins, pdfHidden, chatHidden, notesVisible, sizes };
+      try {
+        const keys = Object.keys(pageLayoutsRef.current);
+        while (keys.length > 80) delete pageLayoutsRef.current[keys.shift()];
+        localStorage.setItem(`gamma-page-layouts:${prefsUserRef.current}`, JSON.stringify(pageLayoutsRef.current));
+      } catch {}
+    }
+    // Only record a position when the viewer is actually showing THIS page's
+    // document: mid-load the scroller still holds the previous document (or a
+    // clamped 0), and a pending restore means the real position hasn't been
+    // applied yet — in both cases keep the previously saved value.
+    if (restoringForRef.current && restoringForRef.current === focusedBlockId) return;
+    if (!pdfUrl || pdfRenderedUrlRef.current !== pdfUrl) return;
+    const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+    if (focusedBlockId && scroller) {
+      tabScrollRef.current[focusedBlockId] = { top: scroller.scrollTop, scale: pdfEffScale };
+    }
+  }
+  function cancelPdfRestore() {
+    restoreTokenRef.current++;
+    restoringForRef.current = null;
+    pendingRestoreRef.current = null;
+  }
+  // Everything owed to the page being navigated away from: persist queued
+  // edits, remember its scroll position + window layout, and kill any
+  // in-flight scroll restore so it can't touch the next document.
+  function leaveCurrentPage() {
+    flushPendingSave();
+    captureScrollPos();
+    cancelPdfRestore();
+  }
+  // Scroll the viewer back to an exact position. Two gates, both required:
+  // the TARGET document must be the one rendered (the old document stays in
+  // the DOM until the new one loads — scrolling it is what made restores land
+  // wrong and visibly slide before the switch), and its layout height must be
+  // stable for two ticks (pages get real heights asynchronously). The jump
+  // itself is instant, after the new document is visible.
+  function restorePdfScroll(entry, blockId, targetUrl) {
+    if (entry?.top == null || !targetUrl) return;
+    const token = ++restoreTokenRef.current;
+    restoringForRef.current = blockId || null;
+    // Preferred path: the "rendered" callback applies this pre-paint the
+    // moment the target document mounts. The polling loop below is the
+    // fallback (already-rendered documents, layout not tall enough yet).
+    pendingRestoreRef.current = { url: targetUrl, entry, blockId, token };
+    let tries = 0;
+    let lastH = -1;
+    const finish = () => { if (restoringForRef.current === blockId) restoringForRef.current = null; };
+    const tryScroll = () => {
+      if (restoreTokenRef.current !== token) return; // superseded by a newer navigation
+      if (pdfRenderedUrlRef.current === targetUrl) {
+        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+        const h = scroller ? scroller.scrollHeight : 0;
+        const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
+        if (scroller && h > targetTop && h === lastH) {
+          scroller.scrollTo({ top: targetTop, behavior: "instant" });
+          pendingRestoreRef.current = null;
+          finish();
+          return;
+        }
+        lastH = h;
+      }
+      if (tries++ < 80) setTimeout(tryScroll, 120);
+      else finish();
+    };
+    tryScroll();
+  }
+
   function pushNav() {
     const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
     const entry = {
@@ -1296,25 +1818,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     const entry = navStack[navStack.length - 1];
     if (!entry) return;
     setNavStack((prev) => prev.slice(0, -1));
-    const restoreScroll = () => {
-      if (entry.top == null) return;
-      let tries = 0;
-      const tryScroll = () => {
-        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
-        const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
-        if (scroller && scroller.scrollHeight > targetTop) {
-          scroller.scrollTo({ top: targetTop, behavior: "auto" });
-          return;
-        }
-        if (tries++ < 40) setTimeout(tryScroll, 150);
-      };
-      tryScroll();
-    };
     if (entry.blockId && entry.blockId === focusedBlockId) {
-      restoreScroll(); // same document — just return to the reading position
+      restorePdfScroll(entry, entry.blockId, pdfUrl); // same document — just return to the reading position
     } else if (entry.blockId) {
-      await openBlock(entry.blockId);
-      restoreScroll();
+      const openedUrl = await openBlock(entry.blockId);
+      restorePdfScroll(entry, entry.blockId, openedUrl);
     } else {
       goHome();
       if (entry.folder) {
@@ -1328,6 +1836,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const navStackLen = navStack.length;
 
   function goHome() {
+    leaveCurrentPage();
     clearSession();
     suppressAutosaveRef.current = true;
     setFocusedBlockId(null);
@@ -1353,7 +1862,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     updateTabs(next);
     if (id === focusedBlockId) {
       const neighbor = next[Math.min(idx, next.length - 1)];
-      if (neighbor) openBlock(neighbor.id);
+      if (neighbor) openBlock(neighbor.id, { restoreScroll: true });
       else goHome();
     }
   }
@@ -1496,6 +2005,43 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     }
   }
 
+  // Download the current page as Markdown. The server returns a bare .md, or a
+  // .zip (page + assets/) when the page references uploaded files — we save
+  // whichever comes back, taking the filename from Content-Disposition. Using
+  // fetch+blob (not a plain navigation) so a 404/401 surfaces as a message
+  // instead of silently swapping the SPA for an error page.
+  async function exportPage(mode = "readable") {
+    const id = focusedBlock?.id;
+    if (!id) { setStatus("Open a page first to export it."); return; }
+    setOpenPopover(null);
+    setStatus("Exporting page…");
+    try {
+      const res = await fetch(`${API}/pages/${id}/export?mode=${mode}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const ctype = res.headers.get("Content-Type") || "";
+      // If the SPA fallback served index.html, the export route isn't live yet.
+      if (ctype.includes("text/html")) throw new Error("export route not found — restart the backend");
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition") || "";
+      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      const plain = /filename="?([^";]+)"?/i.exec(cd);
+      const filename = star ? decodeURIComponent(star[1])
+        : plain ? plain[1]
+        : `page.${blob.type.includes("zip") ? "zip" : "md"}`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      setStatus(`Exported ${filename}`);
+    } catch (err) {
+      setStatus(`Export failed: ${err.message}`);
+    }
+  }
+
   // Ask the AI for the document's title and fill it into the page name.
   const [aiTitleBusy, setAiTitleBusy] = useState(false);
   const [sourceDraft, setSourceDraft] = useState(""); // edit buffer for the source-PDF popover
@@ -1503,6 +2049,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     if (!docId || readOnly || aiTitleBusy) return;
     setAiTitleBusy(true);
     setStatus("Asking AI for the title…");
+    const taskId = addTransfer({ name: `AI title — ${(pdfTitle || "paper").slice(0, 48)}`, kind: "ai", info: "asking…" });
     try {
       const data = await apiJson(`${API}/ai/chat`, {
         method: "POST",
@@ -1515,6 +2062,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         }),
       });
       const title = (data.response || "").trim().replace(/^["'\s]+|["'\s]+$/g, "").split("\n")[0].slice(0, 200);
+      updateTransfer(taskId, { status: title ? "done" : "error", info: title ? "" : "no title" });
       if (title) {
         await renameTitle(title);
         setStatus("Title filled in by AI.");
@@ -1522,6 +2070,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         setStatus("AI returned no title.");
       }
     } catch (err) {
+      updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       setStatus(`AI title failed: ${err.message}`);
     } finally {
       setAiTitleBusy(false);
@@ -1668,7 +2217,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       // Re-pointing (or clearing) the link on an existing highlight block
       setBlocks(updateBlockTree(blocks, ld.editBlockId, (b) => ({
         ...b,
-        properties: { ...b.properties, link_url: target.url || "", link_page_id: target.pageId || "" },
+        properties: { ...b.properties, link_url: target.url || "", link_page_id: target.pageId || "", link_highlight_id: target.highlightId || "" },
       })));
       setStatus(target.url || target.pageId ? "Link updated." : "Link removed.");
       return;
@@ -1683,7 +2232,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     });
     next = updateBlockTree(next, id, (b) => ({
       ...b,
-      properties: { ...b.properties, link_url: target.url || "", link_page_id: target.pageId || "" },
+      properties: { ...b.properties, link_url: target.url || "", link_page_id: target.pageId || "", link_highlight_id: target.highlightId || "" },
     }));
     setBlocks(next); // autosave persists
     setStatus("Reference linked.");
@@ -1739,13 +2288,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
   const homeMode = !pdfUrl && !focusedBlockId && !readOnly;
+  // Leaving home or changing folders drops the file-manager selection.
+  useEffect(() => { setSelectedPages(new Set()); setMovePicker(false); setHomeMenu(null); }, [folderFilter, homeMode]);
   const pageOnly = !pdfUrl && !!focusedBlockId && !readOnly;
-  const recentPages = useMemo(() => {
-    return [...homeBlocks]
-      .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""))
-      .slice(0, 4);
-  }, [homeBlocks]);
-  const recentIds = useMemo(() => new Set(recentPages.map((b) => b.id)), [recentPages]);
   const pageBlocks = useMemo(() => {
     return homeBlocks.map((b) => ({
       id: b.id,
@@ -1756,53 +2301,95 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       _pageId: b.id,
       _position: b.position,
       _sourceUrl: b.properties?.source_url,
-      _folder: (b.properties?.folder || "").trim(),
-      _isRecent: recentIds.has(b.id),
+      _folders: parseFolderTags(b.properties?.folder),
+      _createdAt: b.created_at || "",
+      _updatedAt: b.updated_at || "",
       _isEmpty: !b.content,
       editMode: homeEditingId === b.id,
     }));
-  }, [homeBlocks, recentIds, homeEditingId]);
-  // Folder names: everything referenced by a page, plus manually created empties
-  const folderNames = useMemo(() => {
-    const set = new Set(extraFolders);
-    for (const b of pageBlocks) if (b._folder) set.add(b._folder);
+  }, [homeBlocks, homeEditingId]);
+  // Folders shown at the current level: the next path segment of every known
+  // path under folderFilter ("" = root → top-level segments).
+  const childFolders = useMemo(() => {
+    const set = new Set();
+    for (const fp of allFolderPaths) {
+      if (folderFilter) {
+        if (!fp.startsWith(folderFilter + "/")) continue;
+        set.add(`${folderFilter}/${fp.slice(folderFilter.length + 1).split("/")[0]}`);
+      } else {
+        set.add(fp.split("/")[0]);
+      }
+    }
     return [...set].sort((a, b) => a.localeCompare(b));
-  }, [pageBlocks, extraFolders]);
+  }, [allFolderPaths, folderFilter]);
   const folderCounts = useMemo(() => {
     const m = {};
-    for (const b of pageBlocks) if (b._folder) m[b._folder] = (m[b._folder] || 0) + 1;
+    for (const f of childFolders) {
+      m[f] = pageBlocks.filter((b) => b._folders.some((t) => t === f || t.startsWith(f + "/"))).length;
+    }
     return m;
-  }, [pageBlocks]);
-  // What the home list shows: inside a folder → its papers; at root → unfiled papers
-  const homeVisiblePages = useMemo(() => (
-    folderFilter ? pageBlocks.filter((b) => b._folder === folderFilter)
-                 : pageBlocks.filter((b) => !b._folder)
-  ), [pageBlocks, folderFilter]);
+  }, [childFolders, pageBlocks]);
+  // What the home list shows: inside a folder → pages tagged exactly that
+  // path (deeper ones live in the subfolder rows); at root → EVERY page as a
+  // sortable recents feed, loaded incrementally.
+  const homeSortedPages = useMemo(() => {
+    const arr = folderFilter ? pageBlocks.filter((b) => b._folders.includes(folderFilter)) : [...pageBlocks];
+    const cmp = homeSort === "title" ? (a, b) => a.content.localeCompare(b.content)
+      : homeSort === "created" ? (a, b) => (b._createdAt || "").localeCompare(a._createdAt || "")
+      : (a, b) => (b._updatedAt || "").localeCompare(a._updatedAt || "");
+    return arr.sort(cmp);
+  }, [pageBlocks, folderFilter, homeSort]);
+  const homeVisiblePages = useMemo(() => homeSortedPages.slice(0, homeShowCount), [homeSortedPages, homeShowCount]);
+  // Scrolling the "load more" sentinel into view grows the feed.
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) setHomeShowCount((c) => c + HOME_PAGE_CHUNK);
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [homeVisiblePages.length, homeSortedPages.length, homeMode]);
   const highlights = useMemo(() => {
-    const flat = flattenBlocks(blocks);
+    const byHlId = new Map();
+    for (const b of flattenBlocks(blocks)) {
+      if (b.properties?.highlight_id) byHlId.set(b.properties.highlight_id, b);
+    }
     return blocksToHighlights(blocks).map((h) => {
-      const b = flat.find((x) => x.properties?.highlight_id === h.id);
-      const url = b?.properties?.link_url || "";
-      const pageId = b?.properties?.link_page_id || "";
-      return (url || pageId) ? { ...h, linkTarget: { url, pageId } } : h;
+      const p = byHlId.get(h.id)?.properties || {};
+      const url = p.link_url || "";
+      const pageId = p.link_page_id || "";
+      return (url || pageId) ? { ...h, linkTarget: { url, pageId, highlightId: p.link_highlight_id || "" } } : h;
     });
   }, [blocks]);
   useEffect(() => {
     if (pdfHidden) return;
     const id = pendingJumpRef.current;
     if (!id) return;
-    setTimeout(() => {
+    let tries = 0;
+    const attempt = () => {
+      if (pendingJumpRef.current !== id) return; // superseded
+      // Cross-paper jumps: the target page's blocks (and thus highlights)
+      // load before its document swaps in — wait for the right document so
+      // the jump isn't applied to the outgoing one.
+      if (pdfUrl && pdfRenderedUrlRef.current !== pdfUrl && tries++ < 80) {
+        setTimeout(attempt, 100);
+        return;
+      }
       let scrollTarget = (highlights || []).find((x) => x.id === id);
       if (!scrollTarget) {
-        const b = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === id);
-        const linkedId = b?.properties?.linked_highlight_id;
-        if (linkedId) scrollTarget = (highlights || []).find((x) => x.id === linkedId);
+        // Accept a block id too (reference-point deep links use them)
+        const b = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === id || b.id === id);
+        const hlId = b?.properties?.linked_highlight_id || b?.properties?.highlight_id;
+        if (hlId) scrollTarget = (highlights || []).find((x) => x.id === hlId);
       }
       if (scrollTarget && scrollToRef.current) {
         scrollToRef.current({ position: scrollTarget.position });
+        triggerFlash(scrollTarget.id);
       }
       pendingJumpRef.current = null;
-    }, 100);
+    };
+    setTimeout(attempt, 100);
   }, [pdfHidden, highlights]);
 
   // Restore PDF scroll position from session.
@@ -1812,6 +2399,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   useEffect(() => {
     if (pdfHidden) return;
     if (restoredPdfUrlRef.current === pdfUrl) return;
+    // Tab switches restore an exact per-page position (tabScrollRef) — the
+    // coarse session page number is only for reopening the app.
+    if (tabScrollRef.current[focusedBlockIdRef.current]) return;
     const saved = loadSession().pdfPageNumber;
     if (!saved || saved <= 1) return;
     let cancelled = false;
@@ -1959,7 +2549,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             )}
             {focusedBlockId && !readOnly ? (
               <div className="categoryFrontmatter">
-                <span className="categoryIcon" title="Categories">
+                <span className="categoryIcon" title="Labels">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>
                 </span>
                 {categoryEditing ? (() => {
@@ -2046,7 +2636,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     >
                       {category ? (
                         category.split(",").map((t, i) => t.trim() ? <span key={i} className="categoryBadge">{t.trim()}</span> : null)
-                      ) : "Add categories..."}
+                      ) : "Add labels..."}
                     </span>
                   )}
               </div>
@@ -2075,16 +2665,34 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       className="pageActionBtn"
                       title="Paper metadata (authors, venue, DOI, source file…)"
                       aria-label="Paper metadata"
-                      onClick={() => {
+                      onClick={(e) => {
                         const opening = openPopover !== "meta";
+                        if (opening) {
+                          // Fixed positioning so the popover floats above the
+                          // window stack instead of being clipped by the
+                          // notes window / drawn under the chat below it.
+                          const r = e.currentTarget.getBoundingClientRect();
+                          setMetaPopPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+                          setSourceDraft(inputUrl);
+                        }
                         setOpenPopover(opening ? "meta" : null);
-                        if (opening) setSourceDraft(inputUrl);
                       }}
                     >
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 16v-5" /><path d="M12 8h.01" /></svg>
                     </button>
                     {openPopover === "meta" ? (
-                      <div className="popover sourcePopover metaPopover">
+                      <div
+                        className="popover sourcePopover metaPopover"
+                        style={{
+                          position: "fixed",
+                          top: metaPopPos.top,
+                          right: metaPopPos.right,
+                          left: "auto",
+                          zIndex: 1400,
+                          maxHeight: `calc(100vh - ${metaPopPos.top + 12}px)`,
+                          overflowY: "auto",
+                        }}
+                      >
                         <div className="popoverTitle citeSectionRow">
                           <span>Paper metadata</span>
                           <button
@@ -2263,7 +2871,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               </div>
             ) : null}
             {homeMode ? (() => {
-              const sorted = [...homeBlocks].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
               // Group blocks by category (comma-separated — a page can be in multiple)
               const categories = {};
               const seenInCategory = new Set();
@@ -2314,29 +2921,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
               return (
                 <>
-                  {/* Recent — all pages, scrollable carousel */}
-                  <div className="carouselRow">
-                    <div className="carouselLabel">Recent</div>
-                    <div className="carouselTrackWrap">
-                      <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
-                      <div className="carouselTrack" ref={(el) => { if (el) { el._scroll = el; } }}>
-                        {sorted.map((b) => (
-                          <button key={b.id} className="recentCard" onClick={() => openBlock(b.id)} title={b.content}>
-                            <div className="recentCardTitle">{b.content || "Untitled"}</div>
-                            <div className="recentCardMeta">
-                              {b.properties?.summary && <span className="recentCardSummary">{b.properties.summary}</span>}
-                              <span className="recentCardTime">{formatRelativeTime(b.updated_at)}</span>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                      <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
-                    </div>
-                  </div>
-                  {/* Categories — one card per category */}
+                  {/* Labels — one card per label */}
                   {catNames.length > 0 ? (
                     <div className="carouselRow">
-                      <div className="carouselLabel">Categories</div>
+                      <div className="carouselLabel">Labels</div>
                       <div className="carouselTrackWrap">
                         <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
                         <div className="carouselTrack">
@@ -2354,84 +2942,160 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </>
               );
             })() : null}
+            {homeMode && selectedPages.size ? (
+              <div className="selectionBar">
+                <span className="selectionCount">{selectedPages.size} selected</span>
+                <span style={{ position: "relative", display: "inline-flex" }}>
+                  <button className="chatClearBtn" onClick={() => setMovePicker((v) => !v)}>Add to…</button>
+                  {movePicker ? (
+                    <div className="popover movePicker" style={{ left: 0, right: "auto" }}>
+                      {allFolderPaths.map((f) => (
+                        <button key={f} className="popoverItem" onClick={() => addPagesToFolder([...selectedPages], f)}>{f}</button>
+                      ))}
+                      {allFolderPaths.length ? <div className="popoverDivider" /> : null}
+                      <button className="popoverItem" onClick={() => removePagesFromFolder([...selectedPages], "")}>Clear folder tags</button>
+                    </div>
+                  ) : null}
+                </span>
+                {folderFilter ? (
+                  <button className="chatClearBtn" onClick={() => removePagesFromFolder([...selectedPages], folderFilter)}>Remove from folder</button>
+                ) : null}
+                <button className="chatClearBtn" onClick={() => duplicatePages([...selectedPages])}>Copy</button>
+                {selectedPages.size === 1 ? (
+                  <button className="chatClearBtn" onClick={() => { const id = [...selectedPages][0]; clearSelection(); setHomeEditingId(id); }}>Rename</button>
+                ) : null}
+                <button className="chatClearBtn" onClick={() => deletePages([...selectedPages])}>Delete</button>
+                <button className="chatClearBtn" onClick={clearSelection} title="Clear selection (Esc)">✕</button>
+              </div>
+            ) : null}
             {homeMode && !categoryFilter ? (
               <div className="folderBrowser">
                 {folderFilter ? (
                   <>
                     <div
-                      className={`folderRow folderBackRow ${folderDragOver === "__root__" ? "dragOver" : ""}`}
-                      onClick={() => { setFolderFilter(""); window.history.replaceState(null, "", "/"); }}
-                      onDragOver={(e) => { e.preventDefault(); setFolderDragOver("__root__"); }}
+                      className={`folderRow folderBackRow ${folderDragOver === "__up__" ? "dragOver" : ""}`}
+                      onClick={() => {
+                        const parent = folderFilter.includes("/") ? folderFilter.slice(0, folderFilter.lastIndexOf("/")) : "";
+                        setFolderFilter(parent);
+                        window.history.replaceState(null, "", parent ? `/?folder=${encodeURIComponent(parent)}` : "/");
+                      }}
+                      onDragOver={(e) => { e.preventDefault(); setFolderDragOver("__up__"); }}
                       onDragLeave={() => setFolderDragOver(null)}
                       onDrop={(e) => {
                         e.preventDefault();
                         setFolderDragOver(null);
                         const id = e.dataTransfer.getData("text/plain");
-                        if (id) setPageFolder(id, "");
+                        if (!id) return;
+                        const ids = selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
+                        removePagesFromFolder(ids, folderFilter);
                       }}
-                      title="Back — or drop a paper here to move it out of the folder"
+                      title="Back — or drop a paper here to remove it from this folder"
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
-                      <span className="folderName">All papers</span>
-                      <span className="folderHint">drop here to move out</span>
+                      <span className="folderName">{folderFilter.includes("/") ? folderFilter.slice(0, folderFilter.lastIndexOf("/")) : "All files"}</span>
+                      <span className="folderHint">drop here to remove from this folder</span>
                     </div>
                     <div className="folderCurrent">
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>
-                      {folderFilter}
+                      {/* Breadcrumb: every path segment navigates to its level */}
+                      {folderFilter.split("/").map((seg, i, segs) => {
+                        const prefix = segs.slice(0, i + 1).join("/");
+                        return (
+                          <span key={prefix}>
+                            {i > 0 ? <span className="crumbSep">/</span> : null}
+                            <button
+                              className="crumbBtn"
+                              onClick={() => { setFolderFilter(prefix); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(prefix)}`); }}
+                            >{seg}</button>
+                          </span>
+                        );
+                      })}
                     </div>
                   </>
-                ) : (
-                  <>
-                    {folderNames.map((f) => (
-                      <div
-                        key={f}
-                        className={`folderRow ${folderDragOver === f ? "dragOver" : ""}`}
-                        onClick={() => { setFolderFilter(f); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(f)}`); }}
-                        onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
-                        onDragLeave={() => setFolderDragOver(null)}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setFolderDragOver(null);
-                          const id = e.dataTransfer.getData("text/plain");
-                          if (id) setPageFolder(id, f);
+                ) : null}
+                {childFolders.map((f) => (
+                  <div
+                    key={f}
+                    className={`folderRow ${folderDragOver === f ? "dragOver" : ""}`}
+                    onClick={() => {
+                      if (folderRenaming?.name === f) return;
+                      setFolderFilter(f); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(f)}`);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setHomeMenu({ kind: "folder", name: f, x: e.clientX, y: e.clientY });
+                    }}
+                    onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
+                    onDragLeave={() => setFolderDragOver(null)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setFolderDragOver(null);
+                      const id = e.dataTransfer.getData("text/plain");
+                      if (!id) return;
+                      // A selected card drags its whole selection along
+                      const ids = selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
+                      addPagesToFolder(ids, f);
+                    }}
+                    title="Open folder — right-click to rename or delete, drop a paper to add it"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                    {folderRenaming?.name === f ? (
+                      <input
+                        autoFocus
+                        className="folderNewInput"
+                        value={folderRenaming.draft}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setFolderRenaming({ name: f, draft: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") renameFolder(f, folderRenaming.draft);
+                          else if (e.key === "Escape") setFolderRenaming(null);
                         }}
-                        title="Open folder — or drop a paper on it to file it"
-                      >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
-                        <span className="folderName">{f}</span>
-                        <span className="folderCount">{folderCounts[f] || 0}</span>
-                      </div>
-                    ))}
-                    {newFolderOpen ? (
-                      <div className="folderRow folderNewRow">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
-                        <input
-                          autoFocus
-                          className="folderNewInput"
-                          value={newFolderName}
-                          onChange={(e) => setNewFolderName(e.target.value)}
-                          placeholder="Folder name…"
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") { e.preventDefault(); commitNewFolder(); }
-                            else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
-                          }}
-                          onBlur={commitNewFolder}
-                        />
-                      </div>
+                        onBlur={() => renameFolder(f, folderRenaming.draft)}
+                      />
                     ) : (
-                      <button className="folderRow folderNewBtn" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }}>
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
-                        <span className="folderName">New folder</span>
-                      </button>
+                      <span className="folderName">{f.slice(f.lastIndexOf("/") + 1)}</span>
                     )}
-                  </>
+                    <span className="folderCount">{folderCounts[f] || 0}</span>
+                  </div>
+                ))}
+                {newFolderOpen ? (
+                  <div className="folderRow folderNewRow">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                    <input
+                      autoFocus
+                      className="folderNewInput"
+                      value={newFolderName}
+                      onChange={(e) => setNewFolderName(e.target.value)}
+                      placeholder="Folder name…"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); commitNewFolder(); }
+                        else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
+                      }}
+                      onBlur={commitNewFolder}
+                    />
+                  </div>
+                ) : (
+                  <button className="folderRow folderNewBtn" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                    <span className="folderName">New folder</span>
+                  </button>
                 )}
+              </div>
+            ) : null}
+            {homeMode && !categoryFilter ? (
+              <div className="homeListBar">
+                <span className="homeListLabel">{folderFilter ? "Files" : "All files"}</span>
+                <select className="homeSortSelect" value={homeSort} onChange={(e) => changeHomeSort(e.target.value)} title="Sort files">
+                  <option value="updated">Recently modified</option>
+                  <option value="created">Recently added</option>
+                  <option value="title">Title A–Z</option>
+                </select>
               </div>
             ) : null}
             {homeMode && categoryFilter ? null : (
             (homeMode ? homeVisiblePages : visibleBlocks).length === 0 ? (
               <div className="empty">{homeMode
-                ? (folderFilter ? "This folder is empty — drag papers onto it from the library." : (pageBlocks.length ? "All papers are filed in folders." : "No pages yet — open a PDF above to get started."))
+                ? (folderFilter ? "This folder is empty — drag papers onto it from the library." : "No pages yet — use the + button above to open a PDF or start a note page.")
                 : "No blocks yet."}</div>
             ) : (
               (() => {
@@ -2444,8 +3108,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   onUnlinkHighlight: readOnly ? null : unlinkHighlightFromBlock,
                   onOpenLinkTarget: (b) => {
                     const p = b.properties || {};
-                    if (p.link_page_id) openBlock(p.link_page_id, { pushNav: true });
-                    else if (p.link_url) handleDocLink(p.link_url);
+                    if (p.link_page_id) {
+                      if (p.link_highlight_id) pendingJumpRef.current = p.link_highlight_id;
+                      openBlock(p.link_page_id, { pushNav: true });
+                    } else if (p.link_url) handleDocLink(p.link_url);
                   },
                   registerRef,
                   readOnly,
@@ -2479,9 +3145,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       }
                     }
                   },
-                  onPageOpen: (pageBlock) => {
-                    if (pageBlock._pageId) openBlock(pageBlock._pageId);
+                  onPageOpen: handlePageClick,
+                  onPageContext: (pageBlock, e) => {
+                    const id = pageBlock._pageId;
+                    // Right-click keeps an existing multi-selection; otherwise selects the card
+                    setSelectedPages((prev) => (prev.has(id) ? prev : new Set([id])));
+                    lastPageClickRef.current = id;
+                    setHomeMenu({ kind: "page", id, name: pageBlock.content, x: e.clientX, y: e.clientY });
                   },
+                  selectedPageIds: selectedPages,
                   onChangeText: (id, text) => {
                     if (readOnly) return;
                     if (homeMode) {
@@ -2654,6 +3326,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 return (
                   <>
                     <BlockTree blocks={homeMode ? homeVisiblePages : blocks} readOnly={readOnly} rowProps={rowProps} />
+                    {homeMode && homeSortedPages.length > homeVisiblePages.length ? (
+                      <button
+                        ref={loadMoreRef}
+                        className="loadMoreBtn"
+                        onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}
+                      >
+                        Showing {homeVisiblePages.length} of {homeSortedPages.length} — load more
+                      </button>
+                    ) : null}
                     {dropTarget && (() => {
                       const indentStep = 14;
                       const baseOffset = 28;
@@ -2741,7 +3422,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         {before.map(bar)}
         {expanded.length ? (
           <div className="slotStackGroup">
-            <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`}>
+            <PanelGroup direction={direction} autoSaveId={`gamma-slot-${side}`} ref={(h) => { panelGroupRefs.current[`slot-${side}`] = h; }}>
               {expanded.map((w, i) => (
                 <React.Fragment key={w}>
                   {i > 0 ? <PanelResizeHandle className={`sash sash-${direction}`} /> : null}
@@ -2839,7 +3520,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     });
                   }}
                   onDrop={(e) => e.preventDefault()}
-                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id); }}
+                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id, { restoreScroll: true }); }}
                   onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } }}
                 >
                   <span className="tabTitle">{t.title}</span>
@@ -2852,21 +3533,50 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </div>
               ))}
             </div>
-            {homeMode ? (
-              <div className="urlBox">
-                <input
-                  value={inputUrl}
-                  onChange={(e) => setInputUrl(e.target.value)}
-                  placeholder="Open a PDF by URL — press Enter"
-                  onKeyDown={(e) => { if (e.key === "Enter" && !loading) openPdf(inputUrl); }}
-                />
-              </div>
-            ) : null}
+            <span data-popover="add" style={{ position: "relative", display: "inline-flex" }}>
+              <button
+                className={`iconBtn addBtn ${openPopover === "add" ? "activeIcon" : ""}`}
+                onClick={() => setOpenPopover((p) => (p === "add" ? null : "add"))}
+                title="Add — open a PDF by URL, upload a file, or start a note page"
+                aria-label="Add"
+              >
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+              </button>
+              {openPopover === "add" ? (
+                <div className="popover addPopover">
+                  <input
+                    autoFocus
+                    className="searchInput"
+                    value={addUrl}
+                    onChange={(e) => setAddUrl(e.target.value)}
+                    placeholder="Open a PDF by URL — press Enter"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && addUrl.trim() && !loading) {
+                        setOpenPopover(null);
+                        openPdf(addUrl.trim());
+                        setAddUrl("");
+                      }
+                    }}
+                  />
+                  <label className="popoverItem" style={{ cursor: loading ? "not-allowed" : "pointer" }}>
+                    Upload PDF…
+                    <input
+                      type="file"
+                      accept=".pdf"
+                      style={{ display: "none" }}
+                      disabled={loading}
+                      onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; setOpenPopover(null); if (f) uploadPdf(f); }}
+                    />
+                  </label>
+                  <button className="popoverItem" onClick={createNotePage}>New note page</button>
+                </div>
+              ) : null}
+            </span>
             <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
                 <button
                   className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
                   onClick={() => setOpenPopover((p) => (p === "downloads" ? null : "downloads"))}
-                  title="Background tasks — downloads, uploads, indexing"
+                  title="Background tasks — downloads, uploads, indexing, metadata/AI jobs"
                   aria-label="Background tasks"
                 >
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" /></svg>
@@ -2879,11 +3589,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <button
                         className="searchToggle transferClearBtn"
                         title="Clear finished"
-                        onClick={() => setTransfers((prev) => prev.filter((t) => t.status === "active"))}
+                        onClick={() => setTransfers((prev) => {
+                          const kept = prev.filter((t) => t.status === "active");
+                          const ids = new Set(kept.map((t) => t.id));
+                          for (const [u, id] of Object.entries(transferByUrlRef.current)) {
+                            if (!ids.has(id)) delete transferByUrlRef.current[u]; // cleared rows can be re-created later
+                          }
+                          return kept;
+                        })}
                       >Clear</button>
                     </div>
                     {!transfers.length && !(indexTask && (indexTask.active || indexTask.total > 0)) ? (
-                      <div className="popoverHint">No background tasks — downloads, uploads, and library indexing show up here.</div>
+                      <div className="popoverHint">No background tasks — downloads, uploads, indexing, metadata and AI jobs show up here.</div>
                     ) : null}
                     {indexTask && (indexTask.active || indexTask.total > 0) ? (
                       <div className="transferRow">
@@ -2910,7 +3627,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <span className="transferKind">
                           {t.kind === "upload"
                             ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15V3" /><path d="m7 8 5-5 5 5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>
-                            : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>}
+                            : t.kind === "ai"
+                              ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
+                              : t.kind === "import"
+                                ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                                : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>}
                         </span>
                         <span className="transferName" title={t.name}>{t.name}</span>
                         <span className="transferInfo">{t.info || ""}</span>
@@ -2936,13 +3657,62 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       onClick={() => setSearchReplaceOpen((v) => !v)}
                       title="Toggle replace"
                     >{searchReplaceOpen ? "⌄" : "›"}</button>
-                    <input
-                      autoFocus
-                      className="searchInput"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Search notes, highlights, and this PDF…"
-                    />
+                    <div className="searchInputWrap">
+                      {searchLabels.map((l) => (
+                        <span key={`${l.kind}:${l.name}`} className="categoryBadge searchChip">
+                          {l.kind === "folder"
+                            ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                            : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>}
+                          {l.name}
+                          <button
+                            className="searchChipX"
+                            title={`Remove ${l.kind === "folder" ? "folder" : "label"} filter "${l.name}"`}
+                            onClick={() => setSearchLabels((prev) => prev.filter((x) => x !== l))}
+                          >×</button>
+                        </span>
+                      ))}
+                      <input
+                        autoFocus
+                        className="searchInput"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if ((e.key === "Tab" || e.key === "Enter") && labelSuggestions.length) {
+                            e.preventDefault();
+                            confirmSearchLabel(labelSuggestions[labelSugIdx] || labelSuggestions[0]);
+                          } else if (e.key === "ArrowDown" && labelSuggestions.length) {
+                            e.preventDefault();
+                            setLabelSugIdx((i) => (i + 1) % labelSuggestions.length);
+                          } else if (e.key === "ArrowUp" && labelSuggestions.length) {
+                            e.preventDefault();
+                            setLabelSugIdx((i) => (i - 1 + labelSuggestions.length) % labelSuggestions.length);
+                          } else if (e.key === "Backspace" && !searchQuery && searchLabels.length) {
+                            setSearchLabels((prev) => prev.slice(0, -1));
+                          }
+                        }}
+                        placeholder={searchLabels.length ? "Search within labeled pages…" : "Search notes, highlights, and PDFs — Tab adds a label filter"}
+                      />
+                      {labelSuggestions.length ? (
+                        <div className="categorySuggestions searchLabelSuggest">
+                          {labelSuggestions.map((s, i) => (
+                            <button
+                              key={`${s.kind}:${s.name}`}
+                              className={`categorySuggestionItem${i === labelSugIdx ? " selected" : ""}`}
+                              onMouseDown={(e) => { e.preventDefault(); confirmSearchLabel(s); }}
+                              onMouseEnter={() => setLabelSugIdx(i)}
+                            >
+                              <span className="searchSuggestName">
+                                {s.kind === "folder"
+                                  ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                                  : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>}
+                                {s.name}
+                              </span>
+                              <span className="searchSuggestHint">Tab</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                     <button className={`searchToggle ${searchCase ? "on" : ""}`} onClick={() => setSearchCase((v) => !v)} title="Match case">Aa</button>
                     <button className={`searchToggle ${searchWhole ? "on" : ""}`} onClick={() => setSearchWhole((v) => !v)} title="Match whole word"><u>ab</u></button>
                     <button className={`searchToggle ${searchRegex ? "on" : ""}`} onClick={() => setSearchRegex((v) => !v)} title="Use regular expression">.*</button>
@@ -2966,16 +3736,37 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   ) : null}
                   <div className="searchResults">
                     {searchBusy ? <div className="searchHint">Searching…</div> : null}
-                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 && libMatches.length === 0 ? (
+                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 && libMatches.length === 0 && labelMatches.length === 0 ? (
                       <div className="searchHint">No matches.</div>
+                    ) : null}
+                    {searchLabels.length ? (
+                      <>
+                        <div className="searchSection">Filters: {searchLabels.map((c) => c.name).join(" + ")}</div>
+                        {labelMatches.length === 0 ? (
+                          <div className="searchHint">No pages carry {searchLabels.length === 1 ? "this label" : "all these labels"}.</div>
+                        ) : labelMatches.map((b) => (
+                          <button
+                            key={`lbl-${b.id}`}
+                            className="searchResult"
+                            onClick={() => { setOpenPopover(null); openBlock(b.id, { restoreScroll: true }); }}
+                          >
+                            <span className="searchResultPage">{b.content || "Untitled"}</span>
+                            <span className="searchResultText">{b.properties?.category || ""}</span>
+                          </button>
+                        ))}
+                      </>
                     ) : null}
                     {(() => {
                       // Priority: this paper's notes → this PDF's text → the
                       // rest of the workspace (other notes, other papers).
+                      // Label tokens scope everything to the labeled pages.
+                      const inScope = (pageId) => !labelPageIds || labelPageIds.has(pageId);
                       const inPage = (r) => focusedBlockId && (r.page_root_id === focusedBlockId || r.id === focusedBlockId);
-                      const notesHere = searchResults.filter(inPage);
-                      const notesElsewhere = searchResults.filter((r) => !inPage(r));
-                      const libElsewhere = libMatches.filter((r) => r.block_id !== focusedBlockId);
+                      const scoped = searchResults.filter((r) => inScope(r.page_root_id || r.id));
+                      const notesHere = scoped.filter(inPage);
+                      const notesElsewhere = scoped.filter((r) => !inPage(r));
+                      const libElsewhere = libMatches.filter((r) => r.block_id !== focusedBlockId && inScope(r.block_id));
+                      const showPdfMatches = inScope(focusedBlockId);
                       const noteRow = (r) => (
                         <button
                           key={r.id}
@@ -2994,7 +3785,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <>
                           {notesHere.length ? <div className="searchSection">Notes in this paper</div> : null}
                           {notesHere.map(noteRow)}
-                          {pdfMatches.length ? (
+                          {showPdfMatches && pdfMatches.length ? (
                             <div className="searchSection searchSectionRow">
                               <span>This PDF · {findIndex + 1}/{pdfMatches.length}</span>
                               <span className="findNav">
@@ -3003,7 +3794,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                               </span>
                             </div>
                           ) : null}
-                          {pdfMatches.map((m, i) => (
+                          {(showPdfMatches ? pdfMatches : []).map((m, i) => (
                             <button
                               key={`pdf-${i}`}
                               className={`searchResult ${i === findIndex ? "active" : ""}`}
@@ -3066,6 +3857,29 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     ) : (
                       <div className="popoverHint">Creating link…</div>
                     )}
+                    {(pageMeta || pageBibtex) ? (
+                      <>
+                        <div className="popoverDivider" />
+                        <div className="popoverSection">Slide citation</div>
+                        {pptCite ? (
+                          <div className="pptCiteBox">
+                            <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
+                            <button
+                              className="chatMsgActionBtn"
+                              onClick={() => copyCitation("ppt", pptCite)}
+                              title="Copy — pastes with real italics/bold into PowerPoint"
+                              aria-label="Copy slide citation"
+                            >
+                              {citeCopied === "ppt"
+                                ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                                : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
+                        )}
+                      </>
+                    ) : null}
                   </div>
                 ) : null}
               </span>
@@ -3073,44 +3887,101 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             {authUser?.user && (
               <span data-popover="user" style={{ position: "relative", display: "inline-flex" }}>
                 <button
-                  className="userBadge"
+                  className={`iconBtn ${openPopover === "user" ? "activeIcon" : ""}`}
                   onClick={() => setOpenPopover((p) => (p === "user" ? null : "user"))}
                   title="Account & settings"
+                  aria-label="Account & settings"
                 >
-                  {authUser.is_guest ? "guest" : authUser.user}
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
                 </button>
                 {openPopover === "user" ? (
                   <div className="popover userPopover">
-                    <div className="popoverTitle">{authUser.is_guest ? "Guest" : authUser.user}</div>
+                    <div className="userCard">
+                      <span className="userAvatar" aria-hidden="true">
+                        {authUser.is_guest
+                          ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+                          : <span className="userAvatarInitial">{authUser.user.charAt(0).toUpperCase()}</span>}
+                      </span>
+                      <span className="userCardMeta">
+                        <span className="userCardName">{authUser.is_guest ? "Guest" : authUser.user}</span>
+                        <span className="userCardRole">{authUser.is_guest ? "Temporary workspace" : "Signed in"}</span>
+                      </span>
+                    </div>
                     {authUser.is_guest ? (
-                      <div className="popoverHint">Guest workspace resets daily. Ask the admin for an account to keep your work.</div>
+                      <div className="popoverHint">Guest data resets daily. Ask the admin for an account to keep your work.</div>
                     ) : null}
-                    <div className="popoverSection">Settings</div>
-                    <label className="popoverItem attachItem" title="When a publisher PDF is paywalled or blocks server fetching, load a legal open-access copy (often the arXiv version) instead">
-                      <input type="checkbox" checked={oaFallback} onChange={(e) => setOaFallback(e.target.checked)} />
-                      <span className="attachName">Fall back to open-access / arXiv copies</span>
+
+                    <div className="popoverSection">Papers &amp; PDFs</div>
+                    <label className="settingRow" title="When a publisher PDF is paywalled or blocks server fetching, load a legal open-access copy (often the arXiv version) instead">
+                      <span className="settingText">
+                        <span className="settingLabel">Open-access fallback</span>
+                        <span className="settingDesc">Load a legal arXiv / OA copy when a publisher PDF is blocked</span>
+                      </span>
+                      <span className="switch">
+                        <input type="checkbox" checked={oaFallback} onChange={(e) => setOaFallback(e.target.checked)} />
+                        <span className="switchTrack" />
+                      </span>
                     </label>
-                    <label className="popoverItem attachItem" title="Look up title, authors, venue, and BibTeX (arXiv → DOI → AI) automatically when a paper is opened">
-                      <input type="checkbox" checked={metaAutoFetch} onChange={(e) => setMetaAutoFetch(e.target.checked)} />
-                      <span className="attachName">Auto-fetch paper metadata</span>
+                    <label className="settingRow" title="Look up title, authors, venue, and BibTeX (arXiv → DOI → AI) automatically when a paper is opened">
+                      <span className="settingText">
+                        <span className="settingLabel">Auto-fetch metadata</span>
+                        <span className="settingDesc">Resolve title, authors, venue &amp; BibTeX when a paper opens</span>
+                      </span>
+                      <span className="switch">
+                        <input type="checkbox" checked={metaAutoFetch} onChange={(e) => setMetaAutoFetch(e.target.checked)} />
+                        <span className="switchTrack" />
+                      </span>
                     </label>
-                    <label className="popoverItem attachItem" title="Keep a copy of PDFs opened by URL on the server, so they load fast and survive dead links">
-                      <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
-                      <span className="attachName">Save external PDFs on the server</span>
+                    <label className="settingRow" title="Keep a copy of PDFs opened by URL on the server, so they load fast and survive dead links">
+                      <span className="settingText">
+                        <span className="settingLabel">Save external PDFs</span>
+                        <span className="settingDesc">Cache URL-opened PDFs on the server so they survive dead links</span>
+                      </span>
+                      <span className="switch">
+                        <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
+                        <span className="switchTrack" />
+                      </span>
                     </label>
+
+                    <div className="popoverDivider" />
                     <button className="popoverItem" onClick={() => { openPromptEditor(); setOpenPopover(null); }}>
+                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>
                       AI prompts…
                     </button>
+                    {focusedBlock && !homeMode ? (
+                      <>
+                        <button
+                          className="popoverItem"
+                          onClick={() => exportPage("readable")}
+                          title="Download this page as Markdown — nested notes, highlights as quotes, metadata front-matter. Bundles the PDF & images into a .zip when the page references them."
+                        >
+                          <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                          Export this page (.md)
+                        </button>
+                        <button
+                          className="popoverItem"
+                          onClick={() => exportPage("logseq")}
+                          title="Download this page as Logseq-flavoured Markdown — re-importable via the Logseq importer."
+                        >
+                          <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                          Export this page (Logseq)
+                        </button>
+                      </>
+                    ) : null}
                     <button
                       className="popoverItem"
                       onClick={() => { setOpenPopover(null); window.location.href = `${API}/export`; }}
                       title="Download a zip backup: your notes databases + every uploaded PDF. Restore by unpacking into users/<name>/ on the server."
                     >
+                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                       Export my data (.zip)
                     </button>
-                    <div className="popoverHint">AI provider keys and models are configured on the server (.env: GAMMA_AI_*). Everything above is saved in this browser.</div>
+                    <div className="popoverHint">AI keys &amp; models are configured on the server. Preferences here are saved in this browser.</div>
                     <div className="popoverDivider" />
-                    <button className="popoverItem" onClick={doLogout}>Log out</button>
+                    <button className="popoverItem popoverItemDanger" onClick={doLogout}>
+                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
+                      Log out
+                    </button>
                   </div>
                 ) : null}
               </span>
@@ -3222,7 +4093,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       )}
 
       <div className="workArea">
-      <PanelGroup direction="horizontal" autoSaveId="gamma-work-h">
+      <PanelGroup direction="horizontal" autoSaveId="gamma-work-h" ref={(h) => { panelGroupRefs.current["work-h"] = h; }}>
       {slotWins("left").length ? (
         <>
           <Panel id="slot-left" order={1} defaultSize={26} minSize={15} className="dockSlot">
@@ -3232,7 +4103,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </>
       ) : null}
       <Panel id="slot-center" order={2} minSize={30} className="dockSlot">
-      <PanelGroup direction="vertical" autoSaveId="gamma-work-v">
+      <PanelGroup direction="vertical" autoSaveId="gamma-work-v" ref={(h) => { panelGroupRefs.current["work-v"] = h; }}>
       <Panel id="slot-main" order={1} minSize={20} className="dockSlot">
       <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
         <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
@@ -3282,8 +4153,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               onLoadState={handlePdfLoadState}
               onExternalLink={handleDocLink}
               onLinkHighlight={(h) => {
-                if (h.linkTarget?.pageId) openBlock(h.linkTarget.pageId, { pushNav: true });
-                else if (h.linkTarget?.url) handleDocLink(h.linkTarget.url);
+                if (h.linkTarget?.pageId) {
+                  if (h.linkTarget.highlightId) pendingJumpRef.current = h.linkTarget.highlightId;
+                  openBlock(h.linkTarget.pageId, { pushNav: true });
+                } else if (h.linkTarget?.url) handleDocLink(h.linkTarget.url);
               }}
               onJump={jumpToHighlightId}
               onHighlightJump={(hlId, additive) => {
@@ -3405,6 +4278,19 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 onClick={() => createLinkHighlight({ url: normalizeLinkInput(linkDialogInput) })}
               >Link</button>
             </div>
+            {refPoint && refPoint.pageId !== focusedBlockId ? (
+              <>
+                <div className="popoverSection">Copied reference point</div>
+                <button
+                  className="reportPageItem linkPageItem"
+                  onClick={() => createLinkHighlight({ pageId: refPoint.pageId, highlightId: refPoint.highlightId })}
+                  title="Link to this exact highlight — clicking the link opens the paper and jumps to it"
+                >
+                  <span className="reportPageName">{refPoint.pageTitle} — “{refPoint.quote.slice(0, 60)}{refPoint.quote.length > 60 ? "…" : ""}”</span>
+                  <span className="linkLikelyBadge">highlight</span>
+                </button>
+              </>
+            ) : null}
             <div className="popoverSection">Your papers (best match first)</div>
             <div className="reportPageList">
               {(() => {
@@ -3489,6 +4375,48 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           </div>
         </div>
       ) : null}
+      {homeMenu ? (
+        <>
+          <div
+            className="ctxMenuBackdrop"
+            onClick={() => setHomeMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setHomeMenu(null); }}
+          />
+          <div className="ctxMenu" style={{ left: homeMenu.x, top: homeMenu.y }}>
+            {homeMenu.kind === "page" ? (() => {
+              // Acting on a selected card acts on the whole selection
+              const ids = selectedPages.size > 1 && selectedPages.has(homeMenu.id) ? [...selectedPages] : [homeMenu.id];
+              const many = ids.length > 1;
+              return (
+                <>
+                  {!many ? (
+                    <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); clearSelection(); openBlock(homeMenu.id, { restoreScroll: true }); }}>Open</button>
+                  ) : null}
+                  {!many ? (
+                    <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); clearSelection(); setHomeEditingId(homeMenu.id); }}>Rename</button>
+                  ) : null}
+                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); duplicatePages(ids); }}>{many ? `Copy ${ids.length} pages` : "Copy"}</button>
+                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deletePages(ids); }}>{many ? `Delete ${ids.length} pages` : "Delete"}</button>
+                  <div className="ctxMenuLabel">Add to folder</div>
+                  {allFolderPaths.map((f) => (
+                    <button key={f} className="ctxMenuItem" onClick={() => { setHomeMenu(null); addPagesToFolder(ids, f); }}>{f}</button>
+                  ))}
+                  {folderFilter ? (
+                    <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); removePagesFromFolder(ids, folderFilter); }}>Remove from “{folderFilter}”</button>
+                  ) : null}
+                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); removePagesFromFolder(ids, ""); }}>Clear folder tags</button>
+                </>
+              );
+            })() : (
+              <>
+                <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setFolderFilter(homeMenu.name); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(homeMenu.name)}`); }}>Open</button>
+                <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setFolderRenaming({ name: homeMenu.name, draft: homeMenu.name }); }}>Rename</button>
+                <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deleteFolderByName(homeMenu.name); }}>Delete</button>
+              </>
+            )}
+          </div>
+        </>
+      ) : null}
       {highlightMenu ? (
         <>
           <div
@@ -3527,6 +4455,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               }}
             >
               {highlights.find((x) => x.id === highlightMenu.id)?.linkTarget ? "Change link…" : "Link to paper…"}
+            </button>
+            <button
+              className="ctxMenuItem"
+              onClick={() => {
+                const h = highlights.find((x) => x.id === highlightMenu.id);
+                const blk = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === highlightMenu.id);
+                setRefPoint({
+                  pageId: focusedBlockId,
+                  pageTitle: pdfTitle || "Untitled",
+                  highlightId: highlightMenu.id,
+                  quote: (h?.content?.text || "").slice(0, 200),
+                });
+                // Also a paste-able deep link: opening it jumps straight to
+                // this highlight (in the browser, chat notes, anywhere).
+                if (blk) {
+                  navigator.clipboard?.writeText(`${window.location.origin}/?block=${encodeURIComponent(blk.id)}`).catch(() => {});
+                }
+                setHighlightMenu(null);
+                setStatus("Reference point copied — paste the link, or pick it in another paper's link dialog.");
+              }}
+            >
+              Copy as reference point
             </button>
             <button
               className="ctxMenuItem"
