@@ -1754,14 +1754,7 @@ body {
 .tabClose { flex-shrink: 0; cursor: pointer; line-height: 1; }
 
 /* --- modern topbar bits --- */
-.urlBox {
-  display: flex;
-  gap: 6px;
-  flex: 1 1 auto;
-  min-width: 160px;
-  max-width: 320px;
-}
-.urlBox input { flex: 1; min-width: 0; }
+.addPopover { min-width: 300px; }
 .readOnlyTitle {
   flex: 1;
   min-width: 0;
@@ -1875,6 +1868,57 @@ body {
 .searchResultPage { font-size: 11px; color: var(--accent-dark); font-weight: 600; }
 .searchRow { display: flex; gap: 4px; align-items: center; }
 .searchRow .searchInput { flex: 1; min-width: 0; }
+/* chips + input share one box; label suggestions drop down from it */
+.searchInputWrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.searchInputWrap:focus-within { border-color: var(--accent-dark); }
+.searchInputWrap .searchInput {
+  flex: 1;
+  min-width: 90px;
+  border: none;
+  background: none;
+  padding: 5px 2px;
+}
+.searchChip { display: inline-flex; align-items: center; gap: 3px; }
+.searchPopover .searchChipX {
+  padding: 0 2px;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.searchPopover .searchChipX:hover { color: var(--text-primary); background: none; }
+.searchPopover .categorySuggestionItem {
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.searchPopover .categorySuggestionItem:hover,
+.searchPopover .categorySuggestionItem.selected { background: var(--bg-hover); }
+.searchSuggestHint {
+  font-size: 10px;
+  color: var(--text-dim);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0 4px;
+}
 .topbar .searchToggle,
 .searchToggle {
   background: none;
