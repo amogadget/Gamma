@@ -755,7 +755,6 @@ export default function App() {
   const [metaAutoFetch, setMetaAutoFetch] = useState(() => {
     try { return localStorage.getItem("gamma-meta-auto") !== "0"; } catch { return true; }
   });
-
   useEffect(() => {
     try { localStorage.setItem("gamma-pdf-save", pdfSaveLocal ? "1" : "0"); } catch {}
   }, [pdfSaveLocal]);
@@ -2003,6 +2002,43 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setShareCopied(true);
     } catch {
       setStatus("Copy failed — copy the link manually.");
+    }
+  }
+
+  // Download the current page as Markdown. The server returns a bare .md, or a
+  // .zip (page + assets/) when the page references uploaded files — we save
+  // whichever comes back, taking the filename from Content-Disposition. Using
+  // fetch+blob (not a plain navigation) so a 404/401 surfaces as a message
+  // instead of silently swapping the SPA for an error page.
+  async function exportPage(mode = "readable") {
+    const id = focusedBlock?.id;
+    if (!id) { setStatus("Open a page first to export it."); return; }
+    setOpenPopover(null);
+    setStatus("Exporting page…");
+    try {
+      const res = await fetch(`${API}/pages/${id}/export?mode=${mode}`, { credentials: "include" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const ctype = res.headers.get("Content-Type") || "";
+      // If the SPA fallback served index.html, the export route isn't live yet.
+      if (ctype.includes("text/html")) throw new Error("export route not found — restart the backend");
+      const blob = await res.blob();
+      const cd = res.headers.get("Content-Disposition") || "";
+      const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
+      const plain = /filename="?([^";]+)"?/i.exec(cd);
+      const filename = star ? decodeURIComponent(star[1])
+        : plain ? plain[1]
+        : `page.${blob.type.includes("zip") ? "zip" : "md"}`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      setStatus(`Exported ${filename}`);
+    } catch (err) {
+      setStatus(`Export failed: ${err.message}`);
     }
   }
 
@@ -3851,44 +3887,101 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             {authUser?.user && (
               <span data-popover="user" style={{ position: "relative", display: "inline-flex" }}>
                 <button
-                  className="userBadge"
+                  className={`iconBtn ${openPopover === "user" ? "activeIcon" : ""}`}
                   onClick={() => setOpenPopover((p) => (p === "user" ? null : "user"))}
                   title="Account & settings"
+                  aria-label="Account & settings"
                 >
-                  {authUser.is_guest ? "guest" : authUser.user}
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
                 </button>
                 {openPopover === "user" ? (
                   <div className="popover userPopover">
-                    <div className="popoverTitle">{authUser.is_guest ? "Guest" : authUser.user}</div>
+                    <div className="userCard">
+                      <span className="userAvatar" aria-hidden="true">
+                        {authUser.is_guest
+                          ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+                          : <span className="userAvatarInitial">{authUser.user.charAt(0).toUpperCase()}</span>}
+                      </span>
+                      <span className="userCardMeta">
+                        <span className="userCardName">{authUser.is_guest ? "Guest" : authUser.user}</span>
+                        <span className="userCardRole">{authUser.is_guest ? "Temporary workspace" : "Signed in"}</span>
+                      </span>
+                    </div>
                     {authUser.is_guest ? (
-                      <div className="popoverHint">Guest workspace resets daily. Ask the admin for an account to keep your work.</div>
+                      <div className="popoverHint">Guest data resets daily. Ask the admin for an account to keep your work.</div>
                     ) : null}
-                    <div className="popoverSection">Settings</div>
-                    <label className="popoverItem attachItem" title="When a publisher PDF is paywalled or blocks server fetching, load a legal open-access copy (often the arXiv version) instead">
-                      <input type="checkbox" checked={oaFallback} onChange={(e) => setOaFallback(e.target.checked)} />
-                      <span className="attachName">Fall back to open-access / arXiv copies</span>
+
+                    <div className="popoverSection">Papers &amp; PDFs</div>
+                    <label className="settingRow" title="When a publisher PDF is paywalled or blocks server fetching, load a legal open-access copy (often the arXiv version) instead">
+                      <span className="settingText">
+                        <span className="settingLabel">Open-access fallback</span>
+                        <span className="settingDesc">Load a legal arXiv / OA copy when a publisher PDF is blocked</span>
+                      </span>
+                      <span className="switch">
+                        <input type="checkbox" checked={oaFallback} onChange={(e) => setOaFallback(e.target.checked)} />
+                        <span className="switchTrack" />
+                      </span>
                     </label>
-                    <label className="popoverItem attachItem" title="Look up title, authors, venue, and BibTeX (arXiv → DOI → AI) automatically when a paper is opened">
-                      <input type="checkbox" checked={metaAutoFetch} onChange={(e) => setMetaAutoFetch(e.target.checked)} />
-                      <span className="attachName">Auto-fetch paper metadata</span>
+                    <label className="settingRow" title="Look up title, authors, venue, and BibTeX (arXiv → DOI → AI) automatically when a paper is opened">
+                      <span className="settingText">
+                        <span className="settingLabel">Auto-fetch metadata</span>
+                        <span className="settingDesc">Resolve title, authors, venue &amp; BibTeX when a paper opens</span>
+                      </span>
+                      <span className="switch">
+                        <input type="checkbox" checked={metaAutoFetch} onChange={(e) => setMetaAutoFetch(e.target.checked)} />
+                        <span className="switchTrack" />
+                      </span>
                     </label>
-                    <label className="popoverItem attachItem" title="Keep a copy of PDFs opened by URL on the server, so they load fast and survive dead links">
-                      <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
-                      <span className="attachName">Save external PDFs on the server</span>
+                    <label className="settingRow" title="Keep a copy of PDFs opened by URL on the server, so they load fast and survive dead links">
+                      <span className="settingText">
+                        <span className="settingLabel">Save external PDFs</span>
+                        <span className="settingDesc">Cache URL-opened PDFs on the server so they survive dead links</span>
+                      </span>
+                      <span className="switch">
+                        <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
+                        <span className="switchTrack" />
+                      </span>
                     </label>
+
+                    <div className="popoverDivider" />
                     <button className="popoverItem" onClick={() => { openPromptEditor(); setOpenPopover(null); }}>
+                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>
                       AI prompts…
                     </button>
+                    {focusedBlock && !homeMode ? (
+                      <>
+                        <button
+                          className="popoverItem"
+                          onClick={() => exportPage("readable")}
+                          title="Download this page as Markdown — nested notes, highlights as quotes, metadata front-matter. Bundles the PDF & images into a .zip when the page references them."
+                        >
+                          <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                          Export this page (.md)
+                        </button>
+                        <button
+                          className="popoverItem"
+                          onClick={() => exportPage("logseq")}
+                          title="Download this page as Logseq-flavoured Markdown — re-importable via the Logseq importer."
+                        >
+                          <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                          Export this page (Logseq)
+                        </button>
+                      </>
+                    ) : null}
                     <button
                       className="popoverItem"
                       onClick={() => { setOpenPopover(null); window.location.href = `${API}/export`; }}
                       title="Download a zip backup: your notes databases + every uploaded PDF. Restore by unpacking into users/<name>/ on the server."
                     >
+                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                       Export my data (.zip)
                     </button>
-                    <div className="popoverHint">AI provider keys and models are configured on the server (.env: GAMMA_AI_*). Everything above is saved in this browser.</div>
+                    <div className="popoverHint">AI keys &amp; models are configured on the server. Preferences here are saved in this browser.</div>
                     <div className="popoverDivider" />
-                    <button className="popoverItem" onClick={doLogout}>Log out</button>
+                    <button className="popoverItem popoverItemDanger" onClick={doLogout}>
+                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
+                      Log out
+                    </button>
                   </div>
                 ) : null}
               </span>
