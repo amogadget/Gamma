@@ -1878,7 +1878,7 @@ body {
   border-radius: 6px;
   color: var(--text-secondary);
 }
-.userPopover { min-width: 260px; }
+.userPopover { min-width: 268px; }
 .topbar .userBadge {
   background: var(--bg-raised);
   border: 1px solid var(--border-hover);
@@ -1889,6 +1889,103 @@ body {
   cursor: pointer;
 }
 .topbar .userBadge:hover { background: var(--bg-hover); }
+
+/* account card header inside the popover */
+.userCard {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 2px 4px 6px;
+}
+.userAvatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-bg);
+  color: var(--accent-bright);
+  border: 1px solid var(--border);
+}
+.userAvatarInitial { font-size: 17px; font-weight: 700; line-height: 1; }
+.userCardMeta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.userCardName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.userCardRole { font-size: 11px; color: var(--text-muted); }
+
+/* settings row with a toggle switch */
+.settingRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.settingRow:hover { background: var(--bg-hover); }
+.settingText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settingLabel { font-size: 13px; color: var(--text-primary); }
+.settingDesc { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 34px;
+  height: 20px;
+}
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.switchTrack {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  transition: background 0.15s ease;
+  pointer-events: none;
+}
+.switchTrack::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: transform 0.15s ease;
+}
+.switch input:checked + .switchTrack { background: var(--accent-dark); }
+.switch input:checked + .switchTrack::after { transform: translateX(14px); }
+.switch input:focus-visible + .switchTrack {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* leading icon + danger variant for popover action rows */
+.popover .popoverItemIcon { flex-shrink: 0; color: var(--text-muted); }
+.popover .popoverItem:hover .popoverItemIcon { color: var(--text-primary); }
+.popover .popoverItemDanger { color: #e05c5c; }
+.popover .popoverItemDanger .popoverItemIcon { color: #e05c5c; }
+.popover .popoverItemDanger:hover { background: rgba(224, 92, 92, 0.12); }
 /* search */
 .searchPopover { min-width: 380px; max-width: 70vw; }
 .searchInput {
