@@ -5,6 +5,7 @@ import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl } from ".
 import { DockWindow, ChatMarkdown } from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
 import ChatDock from "./chatDock";
+import { ContextMenu } from "./menus";
 
 
 import {
@@ -2567,7 +2568,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         {category.split(",").map((t, i) => t.trim() ? (
                           <span key={i} className="categoryTag">
                             {t.trim()}
-                            <button className="categoryTagRemove" tabIndex={-1} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); removeCategoryTag(i); }}>×</button>
+                            <button className="uiClose uiCloseSm categoryTagRemove" tabIndex={-1} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); removeCategoryTag(i); }}>×</button>
                           </span>
                         ) : null)}
                         <input
@@ -2965,7 +2966,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   <button className="chatClearBtn" onClick={() => { const id = [...selectedPages][0]; clearSelection(); setHomeEditingId(id); }}>Rename</button>
                 ) : null}
                 <button className="chatClearBtn" onClick={() => deletePages([...selectedPages])}>Delete</button>
-                <button className="chatClearBtn" onClick={clearSelection} title="Clear selection (Esc)">✕</button>
+                <button className="uiClose" onClick={clearSelection} title="Clear selection (Esc)" aria-label="Clear selection">×</button>
               </div>
             ) : null}
             {homeMode && !categoryFilter ? (
@@ -3437,6 +3438,68 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     );
   }
 
+  // The "⋮" overflow menu, shared by the editing and read-only topbars.
+  // Read-only share views omit AI chat and the import actions.
+  const renderOverflowMenu = (menuReadOnly) => (
+    <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        className={`iconBtn menuToggleBtn ${openPopover === "menu" ? "activeIcon" : ""}`}
+        onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
+        title="Menu"
+        aria-label="Menu"
+      >
+        ⋮
+      </button>
+      {openPopover === "menu" ? (
+        <div className="popover menuPopover">
+          <div className="popoverSection">Windows</div>
+          {!homeMode && pdfUrl ? (
+            <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
+              <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
+            </button>
+          ) : null}
+          {!homeMode ? (
+            <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
+              <span className="check">{notesVisible ? "✓" : ""}</span> Notes
+            </button>
+          ) : null}
+          {!menuReadOnly ? (
+            <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
+              <span className="check">{!chatHidden ? "✓" : ""}</span> AI Chat
+            </button>
+          ) : null}
+          {!menuReadOnly ? <div className="popoverDivider" /> : null}
+          {!menuReadOnly && docId && focusedBlockId ? (
+            <button
+              className="popoverItem"
+              title="Import highlights/notes saved inside the PDF file (SumatraPDF, Acrobat…)"
+              onClick={() => { importEmbeddedAnnots(focusedBlockId, docId, false); setOpenPopover(null); }}
+            >
+              Import PDF annotations
+            </button>
+          ) : null}
+          {!menuReadOnly ? (
+            <label
+              className="popoverItem importLogseqBtn"
+              title="Import Logseq PDF highlights (.pdf + .edn)"
+              style={{ cursor: loading ? "not-allowed" : "pointer" }}
+            >
+              Import Logseq…
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.edn,.md"
+                style={{ display: "none" }}
+                disabled={loading}
+                onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; setOpenPopover(null); }}
+              />
+            </label>
+          ) : null}
+        </div>
+      ) : null}
+    </span>
+  );
+
   return (
     <div
       ref={appRef}
@@ -3525,7 +3588,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 >
                   <span className="tabTitle">{t.title}</span>
                   <button
-                    className="tabClose"
+                    className="uiClose tabClose"
                     onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
                     title="Close tab"
                     aria-label={`Close ${t.title}`}
@@ -3665,7 +3728,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>}
                           {l.name}
                           <button
-                            className="searchChipX"
+                            className="uiClose uiCloseSm searchChipX"
                             title={`Remove ${l.kind === "folder" ? "folder" : "label"} filter "${l.name}"`}
                             onClick={() => setSearchLabels((prev) => prev.filter((x) => x !== l))}
                           >×</button>
@@ -3986,59 +4049,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 ) : null}
               </span>
             )}
-            <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
-              <button
-                className={`iconBtn menuToggleBtn ${openPopover === "menu" ? "activeIcon" : ""}`}
-                onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
-                title="Menu"
-                aria-label="Menu"
-              >
-                ⋮
-              </button>
-              {openPopover === "menu" ? (
-                <div className="popover menuPopover">
-                  <div className="popoverSection">Windows</div>
-                  {!homeMode && pdfUrl ? (
-                    <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
-                      <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
-                    </button>
-                  ) : null}
-                  {!homeMode ? (
-                    <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
-                      <span className="check">{notesVisible ? "✓" : ""}</span> Notes
-                    </button>
-                  ) : null}
-                  <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
-                    <span className="check">{!chatHidden ? "✓" : ""}</span> AI Chat
-                  </button>
-                  <div className="popoverDivider" />
-                  {docId && focusedBlockId ? (
-                    <button
-                      className="popoverItem"
-                      title="Import highlights/notes saved inside the PDF file (SumatraPDF, Acrobat…)"
-                      onClick={() => { importEmbeddedAnnots(focusedBlockId, docId, false); setOpenPopover(null); }}
-                    >
-                      Import PDF annotations
-                    </button>
-                  ) : null}
-                  <label
-                    className="popoverItem importLogseqBtn"
-                    title="Import Logseq PDF highlights (.pdf + .edn)"
-                    style={{ cursor: loading ? "not-allowed" : "pointer" }}
-                  >
-                    Import Logseq…
-                    <input
-                      type="file"
-                      multiple
-                      accept=".pdf,.edn,.md"
-                      style={{ display: "none" }}
-                      disabled={loading}
-                      onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; setOpenPopover(null); }}
-                    />
-                  </label>
-                </div>
-              ) : null}
-            </span>
+            {renderOverflowMenu(false)}
           </div>
           <div className="status">{status}</div>
         </>
@@ -4048,29 +4059,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
           </button>
           <span className="readOnlyTitle">{pdfTitle}</span>
-          <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
-            <button
-              className="iconBtn menuToggleBtn"
-              onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
-              title="Menu"
-              aria-label="Menu"
-            >
-              ⋮
-            </button>
-            {openPopover === "menu" ? (
-              <div className="popover menuPopover">
-                <div className="popoverSection">Windows</div>
-                {pdfUrl ? (
-                  <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
-                    <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
-                  </button>
-                ) : null}
-                <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
-                  <span className="check">{notesVisible ? "✓" : ""}</span> Notes
-                </button>
-              </div>
-            ) : null}
-          </span>
+          {renderOverflowMenu(true)}
         </div>
       )}
 
@@ -4081,15 +4070,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </div>
       )}
       {attachContextMenu && (
-        <div
-          className="attachContextMenu"
-          style={{ left: attachContextMenu.x, top: attachContextMenu.y }}
-          onMouseLeave={() => setAttachContextMenu(null)}
-        >
-          <button onClick={() => linkHighlightToBlock(attachModeBlockId, attachContextMenu.highlight)}>
+        <ContextMenu x={attachContextMenu.x} y={attachContextMenu.y} onClose={() => setAttachContextMenu(null)}>
+          <button className="ctxMenuItem" onClick={() => linkHighlightToBlock(attachModeBlockId, attachContextMenu.highlight)}>
             Link highlight here
           </button>
-        </div>
+        </ContextMenu>
       )}
 
       <div className="workArea">
@@ -4109,7 +4094,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
           {pdfUrl && !pdfHidden ? (
             <button
-              className="pdfCloseBtn"
+              className="uiClose uiCloseLg pdfCloseBtn"
               onClick={() => setPdfHidden(true)}
               title="Close PDF"
               aria-label="Close PDF"
@@ -4376,13 +4361,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </div>
       ) : null}
       {homeMenu ? (
-        <>
-          <div
-            className="ctxMenuBackdrop"
-            onClick={() => setHomeMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setHomeMenu(null); }}
-          />
-          <div className="ctxMenu" style={{ left: homeMenu.x, top: homeMenu.y }}>
+        <ContextMenu x={homeMenu.x} y={homeMenu.y} onClose={() => setHomeMenu(null)}>
             {homeMenu.kind === "page" ? (() => {
               // Acting on a selected card acts on the whole selection
               const ids = selectedPages.size > 1 && selectedPages.has(homeMenu.id) ? [...selectedPages] : [homeMenu.id];
@@ -4414,17 +4393,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deleteFolderByName(homeMenu.name); }}>Delete</button>
               </>
             )}
-          </div>
-        </>
+        </ContextMenu>
       ) : null}
       {highlightMenu ? (
-        <>
-          <div
-            className="ctxMenuBackdrop"
-            onClick={() => setHighlightMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setHighlightMenu(null); }}
-          />
-          <div className="ctxMenu" style={{ left: highlightMenu.x, top: highlightMenu.y }}>
+        <ContextMenu x={highlightMenu.x} y={highlightMenu.y} onClose={() => setHighlightMenu(null)}>
             <div className="colorRow ctxMenuColors">
               {COLORS.map((c) => (
                 <button
@@ -4487,8 +4459,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             >
               Delete
             </button>
-          </div>
-        </>
+        </ContextMenu>
       ) : null}
     </div>
   );
