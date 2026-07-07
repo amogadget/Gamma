@@ -36,17 +36,14 @@ export default function ChatDock({
   const [chatFindOpen, setChatFindOpen] = useState(false);
   const [chatFind, setChatFind] = useState("");
   const [chatFindIdx, setChatFindIdx] = useState(0);
-  const [attachPdf, setAttachPdf] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-attach-pdf") !== "0"; } catch { return true; }
-  });
+  // On by default for a conversation that hasn't seen this document yet;
+  // derived from the loaded history below, so a refresh can't re-enable it
+  // after the PDF was already sent (re-sending re-bills the whole file).
+  const [attachPdf, setAttachPdf] = useState(false);
   // Extra chat context: selected PDF pages + whether to include notes/highlights.
   const [chatDocs, setChatDocs] = useState([]);
   const [chatIncludeNotes, setChatIncludeNotes] = useState(false);
   const chatScrollRef = useRef(null);
-
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-attach-pdf", attachPdf ? "1" : "0"); } catch {}
-  }, [attachPdf]);
 
   // Load chat from backend whenever the chat bucket changes.
   useEffect(() => {
@@ -56,14 +53,21 @@ export default function ChatDock({
       .then(r => r.ok ? r.json() : { messages: [] })
       .then(data => {
         if (cancelled) return;
-        setChatMessages(data.messages || []);
+        const msgs = data.messages || [];
+        setChatMessages(msgs);
         chatLoadedForRef.current = chatKey;
-        // Fresh conversation → first question should carry the full PDF
-        if (!(data.messages || []).length) setAttachPdf(true);
+        // PDF button: on until this document has been sent in THIS
+        // conversation, then off. Messages record the doc ids they carried
+        // (pdfDocs); older saves only have display names — treat any sent
+        // PDF as covering the current one.
+        const sent = msgs.some((m) => m.pdfDocs
+          ? (docId && m.pdfDocs.includes(docId)) || m.pdfDocs.some((d) => chatDocs.includes(d))
+          : m.pdfs?.length);
+        setAttachPdf(!sent);
       })
       .catch(() => { if (!cancelled) chatLoadedForRef.current = chatKey; });
     return () => { cancelled = true; };
-  }, [chatKey]);
+  }, [chatKey, docId]);
 
   // Save chat to backend (debounced) when chatMessages changes, but only
   // after the load for the current chat bucket completed.
@@ -134,10 +138,14 @@ export default function ChatDock({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Keep the chat scrolled to the newest message.
+  // Follow the newest message only while the user is at the bottom — scrolling
+  // up to read earlier content pauses the auto-follow until they return
+  // (ChatGPT-style), so a streaming reply doesn't yank the scrollbar down.
+  const chatStickRef = useRef(true);
+  useEffect(() => { chatStickRef.current = true; }, [chatKey]);
   useEffect(() => {
     const el = chatScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && chatStickRef.current) el.scrollTop = el.scrollHeight;
   }, [chatMessages, chatLoading]);
 
   // Core chat send. baseMessages overrides the history (used when re-sending
@@ -163,13 +171,15 @@ export default function ChatDock({
       role: "user",
       text: shown,
       ...(images.length ? { images } : {}),
-      ...(pdfNames.length ? { pdfs: pdfNames } : {}),
+      // pdfDocs records WHICH documents rode along, so reloading the page
+      // can tell whether this document was already sent in the conversation.
+      ...(pdfNames.length ? { pdfs: pdfNames, pdfDocs: chatDocs.length ? [...chatDocs] : [docId] } : {}),
     };
     const sendKey = chatKey; // reply belongs to THIS conversation, even if the user navigates away
-    const appendReply = (aiMsg) => {
+    const showReply = (aiMsg, final) => {
       if (chatKeyRef.current === sendKey) {
-        setChatMessages((prev) => [...prev, aiMsg]);
-      } else {
+        setChatMessages([...prevMessages, userMsg, aiMsg]);
+      } else if (final) {
         // The user switched pages mid-request — save straight to the
         // original conversation instead of the one on screen.
         fetch(`${API}/chats/${encodeURIComponent(sendKey)}`, {
@@ -180,6 +190,7 @@ export default function ChatDock({
         }).catch(() => {});
       }
     };
+    chatStickRef.current = true; // sending always snaps back to the bottom
     setChatMessages([...prevMessages, userMsg]);
     setChatLoading(true);
     setChatLoadingKey(sendKey);
@@ -188,10 +199,12 @@ export default function ChatDock({
     if (sendingPdf) setAttachPdf(false);
     const ctrl = new AbortController();
     chatAbortRef.current = ctrl;
+    let acc = ""; // streamed reply so far — kept on Stop
     try {
-      const data = await apiJson(`${API}/ai/chat`, {
+      const res = await fetch(`${API}/ai/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         signal: ctrl.signal,
         body: JSON.stringify({
           prompt: text,
@@ -205,11 +218,41 @@ export default function ChatDock({
           pages: chatDocs,
           include_notes: chatIncludeNotes,
           images,
+          stream: true,
         }),
       });
-      appendReply({ role: "ai", text: data.response || "(no response)" });
+      if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try { detail = (await res.json()).detail || detail; } catch {}
+        throw new Error(detail);
+      }
+      // NDJSON stream: {"delta": "…"} per chunk, {"error": "…"} on failure.
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop(); // keep the trailing partial line
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const ev = JSON.parse(line);
+          if (ev.error) throw new Error(ev.error);
+          acc += ev.delta || "";
+        }
+        if (acc) showReply({ role: "ai", text: acc, partial: true });
+      }
+      showReply({ role: "ai", text: acc || "(no response)" }, true);
     } catch (err) {
-      appendReply({ role: "ai", text: err?.name === "AbortError" ? "*(stopped)*" : `Error: ${err.message}` });
+      const stopped = err?.name === "AbortError";
+      showReply({
+        role: "ai",
+        text: stopped
+          ? (acc ? `${acc}\n\n*(stopped)*` : "*(stopped)*")
+          : (acc ? `${acc}\n\n**Error:** ${err.message}` : `Error: ${err.message}`),
+      }, true);
     } finally {
       setChatLoading(false);
       setChatLoadingKey("");
@@ -300,7 +343,19 @@ export default function ChatDock({
           <button className="searchToggle" onClick={() => { setChatFindOpen(false); setChatFind(""); }} title="Close find">×</button>
         </div>
       ) : null}
-      <div className="chatMessages" ref={chatScrollRef}>
+      <div
+        className="chatMessages"
+        ref={chatScrollRef}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          chatStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+        }}
+        onWheel={(e) => {
+          // Upward intent unsticks immediately — before any scroll event —
+          // so an arriving delta can't yank the view back down first.
+          if (e.deltaY < 0) chatStickRef.current = false;
+        }}
+      >
         {chatMessages.length === 0 ? (
           <div className="chatEmpty">
             {aiInfo && !aiInfo.enabled
@@ -390,7 +445,7 @@ export default function ChatDock({
             );
           })
         )}
-        {chatLoading && chatLoadingKey === chatKey ? (
+        {chatLoading && chatLoadingKey === chatKey && !chatMessages[chatMessages.length - 1]?.partial ? (
           <div className="chatBubbleRow ai">
             <div className="chatBubble ai">
               <span className="chatTyping"><span /><span /><span /></span>

@@ -9,6 +9,7 @@ import urllib.request
 from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..auth import require_user
@@ -38,6 +39,7 @@ class AIChatRequest(BaseModel):
     pages: list = []      # page block ids to include as context (multi-PDF chat / reports)
     include_notes: bool = False  # also include the user's highlights + notes for those pages
     images: list = []     # pasted figures as data URLs ("data:image/png;base64,…")
+    stream: bool = False  # NDJSON stream of {"delta": …} lines instead of one JSON body
 
 
 def _parse_images(images: list) -> list[tuple[str, str]]:
@@ -196,7 +198,7 @@ CITE_PROMPT = (
 )
 
 
-def _anthropic_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192, images=None):
+def _anthropic_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192, images=None, stream=False):
     """Anthropic Messages API: POST /v1/messages, x-api-key auth."""
     if pdf_b64s or images:
         last = messages[-1]
@@ -215,6 +217,8 @@ def _anthropic_request(conf, messages, system, model, pdf_b64s=None, effort="", 
     }
     if effort:
         body["output_config"] = {"effort": effort}
+    if stream:
+        body["stream"] = True
     return urllib.request.Request(f"{conf['base_url']}/v1/messages", data=json.dumps(body).encode(), headers={
         "x-api-key": conf["api_key"],
         "anthropic-version": "2023-06-01",
@@ -229,7 +233,7 @@ def _anthropic_extract(data) -> str:
     return text
 
 
-def _openai_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192, images=None):
+def _openai_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192, images=None, stream=False):
     """OpenAI Chat Completions API: POST /v1/chat/completions, Bearer auth."""
     if pdf_b64s or images:
         last = messages[-1]
@@ -253,6 +257,8 @@ def _openai_request(conf, messages, system, model, pdf_b64s=None, effort="", max
     }
     if effort:
         body["reasoning_effort"] = effort
+    if stream:
+        body["stream"] = True
     return urllib.request.Request(f"{conf['base_url']}/v1/chat/completions", data=json.dumps(body).encode(), headers={
         "Authorization": f"Bearer {conf['api_key']}",
         "Content-Type": "application/json",
@@ -276,18 +282,19 @@ _WIRE = {
 }
 
 
-def _call_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None):
-    """Send a chat to the provider that serves `entry` (a model registry entry)."""
+def _open_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None, stream=False):
+    """Open the provider HTTP call for `entry` (a model registry entry).
+    Raises before any bytes are consumed, so callers can still return a
+    normal HTTP error status."""
     conf = AI_PROVIDERS[entry["provider"]]
     if not conf["api_key"]:
         raise HTTPException(status_code=503,
                             detail=f"provider '{entry['provider']}' not configured "
                                    f"(set GAMMA_AI_{entry['provider'].upper()}_API_KEY)")
-    build_request, extract_text = _WIRE[entry["provider"]]
-    req = build_request(conf, messages, system, entry["model"], pdf_b64s, effort, max_tokens, images)
+    build_request = _WIRE[entry["provider"]][0]
+    req = build_request(conf, messages, system, entry["model"], pdf_b64s, effort, max_tokens, images, stream)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read())
+        return urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as e:
         # Surface the upstream error body — "400 Bad Request" alone is undebuggable
         body = ""
@@ -297,7 +304,54 @@ def _call_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192,
             pass
         print(f"[ai] upstream {e.code}: {body}")
         raise RuntimeError(f"upstream {e.code}: {body or e.reason}")
-    return extract_text(data)
+
+
+def _call_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None):
+    """Send a chat to the provider that serves `entry`; return the full reply text."""
+    with _open_ai(messages, system, entry, pdf_b64s, effort, max_tokens, timeout, images) as resp:
+        data = json.loads(resp.read())
+    return _WIRE[entry["provider"]][1](data)
+
+
+def _sse_deltas(resp, provider):
+    """Text deltas from a provider's SSE stream (both speak `data: {json}` lines)."""
+    got_text = False
+    stop = ""
+    for raw in resp:
+        line = raw.decode("utf-8", "replace").strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if data == "[DONE]":
+            break
+        try:
+            ev = json.loads(data)
+        except ValueError:
+            continue
+        if provider == "anthropic":
+            kind = ev.get("type")
+            if kind == "content_block_delta":
+                text = (ev.get("delta") or {}).get("text") or ""
+                if text:
+                    got_text = True
+                    yield text
+            elif kind == "message_delta":
+                stop = (ev.get("delta") or {}).get("stop_reason") or stop
+            elif kind == "error":
+                raise RuntimeError((ev.get("error") or {}).get("message") or "stream error")
+        else:
+            if ev.get("error"):
+                raise RuntimeError((ev["error"] or {}).get("message") or "stream error")
+            choice = (ev.get("choices") or [{}])[0]
+            text = (choice.get("delta") or {}).get("content") or ""
+            if text:
+                got_text = True
+                yield text
+            stop = choice.get("finish_reason") or stop
+    if not got_text:
+        raise RuntimeError(
+            f"empty response (stop reason={stop or 'unknown'} — a reasoning model may have spent "
+            f"the whole token budget thinking; try effort: low or a shorter request)")
 
 
 @router.get("/ai/models")
@@ -373,10 +427,29 @@ def ai_chat(payload: AIChatRequest, request: Request):
     custom_system = (payload.system or "").strip()[:8000]
     # A custom prompt always applies; the built-in one only when there's a document
     system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
+    entry = _resolve_model(payload.model)
+    effort = _resolve_effort(payload.effort)
+    images = _parse_images(payload.images)
     try:
-        text = _call_ai(messages, system, _resolve_model(payload.model), pdf_b64s,
-                        effort=_resolve_effort(payload.effort), timeout=180,
-                        images=_parse_images(payload.images))
+        if payload.stream:
+            # Open upstream eagerly: connection/auth errors still become a
+            # proper HTTP error instead of dying inside a committed stream.
+            resp = _open_ai(messages, system, entry, pdf_b64s,
+                            effort=effort, timeout=180, images=images, stream=True)
+
+            def ndjson():
+                try:
+                    for text in _sse_deltas(resp, entry["provider"]):
+                        yield json.dumps({"delta": text}) + "\n"
+                except Exception as e:
+                    print(f"[ai_chat] stream error: {e}")
+                    yield json.dumps({"error": f"AI call failed: {e}"}) + "\n"
+                finally:
+                    resp.close()
+
+            return StreamingResponse(ndjson(), media_type="application/x-ndjson")
+        text = _call_ai(messages, system, entry, pdf_b64s,
+                        effort=effort, timeout=180, images=images)
         return {"response": text}
     except HTTPException:
         raise
