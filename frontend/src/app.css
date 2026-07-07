@@ -1372,13 +1372,67 @@ body {
   outline: none;
 }
 .folderNewInput:focus { border-color: var(--accent-dark); }
-
-/* --- Indicator in main list for recent pages --- */
-.recentIndicator {
-  color: #f5c542;
+/* breadcrumb segments in the folder header */
+.crumbBtn {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font: inherit;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.crumbBtn:hover { color: var(--accent); text-decoration: underline; }
+.crumbSep { color: var(--text-dim); padding: 0 1px; }
+/* sort bar above the home file feed */
+.homeListBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 10px 6px;
+}
+.homeListLabel {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.homeSortSelect {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  outline: none;
+  cursor: pointer;
+}
+.loadMoreBtn {
+  display: block;
+  margin: 8px auto 16px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font: inherit;
   font-size: 12px;
-  margin-right: 4px;
-  opacity: 0.85;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+.loadMoreBtn:hover { background: var(--bg-hover); color: var(--text-primary); }
+/* folder tags on file rows */
+.folderTagBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  color: var(--accent);
+  background: var(--bg-raised);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 10px;
 }
 
 /* --- Summary front-matter style (inspired by Logseq page properties) --- */
@@ -1919,6 +1973,8 @@ body {
   border-radius: 4px;
   padding: 0 4px;
 }
+.searchSuggestName { display: inline-flex; align-items: center; gap: 5px; }
+.searchSuggestName svg, .searchChip svg { flex-shrink: 0; opacity: 0.8; }
 .topbar .searchToggle,
 .searchToggle {
   background: none;

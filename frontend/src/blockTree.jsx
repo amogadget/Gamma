@@ -214,11 +214,11 @@ function BlockRow({
           // Clicking anywhere on a highlight's card jumps the PDF to it —
           // not just the little colored dot.
           if (block.highlightId) onJump?.(block.highlightId);
-          // Home page cards work the same way: click anywhere opens the page
-          // (Ctrl/Shift-click selects instead — the host decides from the event).
-          if (homeMode && block._pageId && typeof onPageOpen === "function" && !block.editMode) {
+          // Home page cards open on CLICK, not mousedown — mousedown may be
+          // the start of a drag onto a folder, and navigating away mid-drag
+          // would unmount the drop target.
+          if (homeMode && block._pageId) {
             e.preventDefault();
-            onPageOpen(block, e);
             return;
           }
           if (!readOnly && !block.editMode) {
@@ -227,6 +227,10 @@ function BlockRow({
             onStartEdit(block.id, true);
           }
         }}
+        onClick={homeMode && block._pageId && typeof onPageOpen === "function" ? (e) => {
+          if (e.target.closest("button, textarea, input, a")) return;
+          if (!block.editMode) onPageOpen(block, e);
+        } : undefined}
       >
         {hasChildren ? (
           <button
@@ -288,9 +292,14 @@ function BlockRow({
         )}
 
         <div className="blockBody">
-          {block._isRecent ? <span className="recentIndicator" title="In recent">★</span> : null}
           <div className="blockMeta">
             {block._pageId ? (block._sourceUrl ? "PDF annotation" : "regular note") : block.page ? `p.${block.page}` : "note"}
+            {block._folders?.map((f) => (
+              <span key={f} className="folderTagBadge" title={`In folder ${f}`}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                {f}
+              </span>
+            ))}
           </div>
 
           {!readOnly && block.editMode ? (

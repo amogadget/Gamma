@@ -113,14 +113,29 @@ export default function App() {
   const [categoryInput, setCategoryInput] = useState("");
   const [categorySuggestionIdx, setCategorySuggestionIdx] = useState(-1);
   const [categoryFilter, setCategoryFilter] = useState(initialCategory);
-  // File-browser home: folders are virtual — each page block stores a single
-  // `properties.folder` string; storage stays flat at root. Empty (manually
-  // created) folders live in localStorage until a paper lands in them.
+  // File-browser home: folders are "folder labels" — `properties.folder` is a
+  // comma-separated list of paths ("readout/nondestructive, benchmarks"), so a
+  // page can live in several folders at once (soft links) and `/` nests.
+  // Folders themselves are derived from the paths in use; storage stays flat
+  // at root. Empty (manually created) folders live in localStorage until a
+  // paper lands in them. No folder tags → the page sits at the library root.
   const [folderFilter, setFolderFilter] = useState(initialFolder);
   const [folderDragOver, setFolderDragOver] = useState(null);
   const [extraFolders, setExtraFolders] = useState([]);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
+  // Home feed: sort criterion + how many rows are rendered (grows on scroll).
+  const [homeSort, setHomeSort] = useState(() => {
+    try { return localStorage.getItem("gamma-home-sort") || "updated"; } catch { return "updated"; }
+  });
+  function changeHomeSort(v) {
+    setHomeSort(v);
+    try { localStorage.setItem("gamma-home-sort", v); } catch {}
+  }
+  const HOME_PAGE_CHUNK = 30;
+  const [homeShowCount, setHomeShowCount] = useState(HOME_PAGE_CHUNK);
+  useEffect(() => { setHomeShowCount(HOME_PAGE_CHUNK); }, [folderFilter, homeSort]);
+  const loadMoreRef = useRef(null);
   function updateExtraFolders(updater) {
     setExtraFolders((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
@@ -145,27 +160,25 @@ export default function App() {
     try { setExtraFolders(JSON.parse(localStorage.getItem(`gamma-extra-folders:${u}`) || "[]")); } catch { setExtraFolders([]); }
   }, [authUser?.user, readOnly]);
 
-  async function setPageFolder(pageId, folderName) {
-    try {
-      await apiJson(`${API}/blocks/${pageId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ properties: { folder: folderName || "" } }),
-      });
-      if (folderName) updateExtraFolders((prev) => prev.filter((f) => f !== folderName));
-      await fetchHomeBlocks();
-      setStatus(folderName ? `Moved to “${folderName}”.` : "Moved out of the folder.");
-    } catch (err) {
-      setStatus(`Move failed: ${err.message}`);
-    }
+  // Folder-tag helpers: parse/serialize the comma-separated path list.
+  const parseFolderTags = (raw) => (raw || "").split(",").map((s) => s.trim()).filter(Boolean);
+  // "/" nests and "," separates tags, so neither may appear in a segment name.
+  const cleanFolderSegment = (name) => (name || "").replace(/[,/]/g, " ").replace(/\s+/g, " ").trim();
+  async function writePageFolders(pageId, tags) {
+    await apiJson(`${API}/blocks/${pageId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ properties: { folder: tags.join(", ") } }),
+    });
   }
 
   function commitNewFolder() {
-    const name = newFolderName.trim();
+    const name = cleanFolderSegment(newFolderName);
     setNewFolderOpen(false);
     setNewFolderName("");
     if (!name) return;
-    updateExtraFolders((prev) => prev.includes(name) ? prev : [...prev, name]);
+    const path = folderFilter ? `${folderFilter}/${name}` : name;
+    updateExtraFolders((prev) => prev.includes(path) ? prev : [...prev, path]);
   }
 
   // --- Home file-manager: multi-select + copy/move/delete, folder rename ---
@@ -276,73 +289,87 @@ export default function App() {
     });
   }
 
-  async function movePages(ids, folderName) {
+  // Add pages to a folder (soft link — other folder tags are kept). The only
+  // tag removed is an ancestor of the target: dragging a "readout" paper into
+  // readout/nondestructive refines it, it shouldn't stay in both levels.
+  async function addPagesToFolder(ids, path) {
+    let changed = 0;
     for (const id of ids) {
-      try {
-        await apiJson(`${API}/blocks/${id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ properties: { folder: folderName || "" } }),
-        });
-      } catch {}
+      const b = homeBlocks.find((x) => x.id === id);
+      if (!b) continue;
+      const tags = parseFolderTags(b.properties?.folder);
+      if (tags.includes(path)) continue;
+      const next = tags.filter((t) => !path.startsWith(t + "/"));
+      next.push(path);
+      try { await writePageFolders(id, next); changed++; } catch {}
     }
-    if (folderName) updateExtraFolders((prev) => prev.filter((f) => f !== folderName));
+    updateExtraFolders((prev) => prev.filter((f) => f !== path));
     clearSelection();
     await fetchHomeBlocks();
-    setStatus(folderName
-      ? `Moved ${ids.length} page${ids.length === 1 ? "" : "s"} to “${folderName}”.`
-      : `Moved ${ids.length} page${ids.length === 1 ? "" : "s"} out of folders.`);
+    setStatus(changed ? `Added ${changed} page${changed === 1 ? "" : "s"} to “${path}”.` : `Already in “${path}”.`);
   }
 
-  async function renameFolder(oldName, newNameRaw) {
-    const newName = (newNameRaw || "").trim();
-    setFolderRenaming(null);
-    if (!newName || newName === oldName) return;
-    for (const b of homeBlocks) {
-      if ((b.properties?.folder || "").trim() === oldName) {
-        try {
-          await apiJson(`${API}/blocks/${b.id}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ properties: { folder: newName } }),
-          });
-        } catch {}
-      }
+  // Remove one folder tag (exact path). With path = "" strips ALL folder tags.
+  async function removePagesFromFolder(ids, path) {
+    for (const id of ids) {
+      const b = homeBlocks.find((x) => x.id === id);
+      if (!b) continue;
+      const tags = parseFolderTags(b.properties?.folder);
+      const next = path ? tags.filter((t) => t !== path) : [];
+      if (next.length === tags.length) continue;
+      try { await writePageFolders(id, next); } catch {}
     }
-    updateExtraFolders((prev) => [...new Set(prev.map((f) => (f === oldName ? newName : f)))]);
-    if (folderFilter === oldName) {
-      setFolderFilter(newName);
-      window.history.replaceState(null, "", `/?folder=${encodeURIComponent(newName)}`);
+    clearSelection();
+    await fetchHomeBlocks();
+    setStatus(path ? `Removed ${ids.length} page${ids.length === 1 ? "" : "s"} from “${path}”.` : "Cleared folder tags.");
+  }
+
+  // Rename one path segment: rewrites the prefix on every page's folder tags,
+  // so renaming a parent folder carries all its subfolders along.
+  async function renameFolder(oldPath, newNameRaw) {
+    const newName = cleanFolderSegment(newNameRaw);
+    setFolderRenaming(null);
+    const parent = oldPath.includes("/") ? oldPath.slice(0, oldPath.lastIndexOf("/")) : "";
+    const newPath = parent ? `${parent}/${newName}` : newName;
+    if (!newName || newPath === oldPath) return;
+    const mapTag = (t) => (t === oldPath ? newPath : t.startsWith(oldPath + "/") ? newPath + t.slice(oldPath.length) : t);
+    for (const b of homeBlocks) {
+      const tags = parseFolderTags(b.properties?.folder);
+      const next = [...new Set(tags.map(mapTag))];
+      if (next.join(",") === tags.join(",")) continue;
+      try { await writePageFolders(b.id, next); } catch {}
+    }
+    updateExtraFolders((prev) => [...new Set(prev.map(mapTag))]);
+    if (folderFilter === oldPath || folderFilter.startsWith(oldPath + "/")) {
+      const next = mapTag(folderFilter);
+      setFolderFilter(next);
+      window.history.replaceState(null, "", `/?folder=${encodeURIComponent(next)}`);
     }
     await fetchHomeBlocks();
-    setStatus(`Folder renamed to “${newName}”.`);
+    setStatus(`Folder renamed to “${newPath}”.`);
   }
 
-  function deleteFolderByName(name) {
-    const members = homeBlocks.filter((b) => (b.properties?.folder || "").trim() === name);
+  function deleteFolderByName(path) {
+    const inPath = (t) => t === path || t.startsWith(path + "/");
+    const members = homeBlocks.filter((b) => parseFolderTags(b.properties?.folder).some(inPath));
     setConfirmBox({
       title: "Delete folder",
       message: members.length
-        ? `Delete “${name}”? Its ${members.length} paper${members.length === 1 ? "" : "s"} move back to the library — no papers are deleted.`
-        : `Delete the empty folder “${name}”?`,
+        ? `Delete “${path}”? The folder tag is removed from its ${members.length} paper${members.length === 1 ? "" : "s"} — no papers are deleted.`
+        : `Delete the empty folder “${path}”?`,
       confirmLabel: "Delete folder",
       onConfirm: async () => {
         for (const b of members) {
-          try {
-            await apiJson(`${API}/blocks/${b.id}`, {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ properties: { folder: "" } }),
-            });
-          } catch {}
+          try { await writePageFolders(b.id, parseFolderTags(b.properties?.folder).filter((t) => !inPath(t))); } catch {}
         }
-        updateExtraFolders((prev) => prev.filter((f) => f !== name));
-        if (folderFilter === name) {
-          setFolderFilter("");
-          window.history.replaceState(null, "", "/");
+        updateExtraFolders((prev) => prev.filter((f) => !inPath(f)));
+        if (folderFilter === path || folderFilter.startsWith(path + "/")) {
+          const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+          setFolderFilter(parent);
+          window.history.replaceState(null, "", parent ? `/?folder=${encodeURIComponent(parent)}` : "/");
         }
         await fetchHomeBlocks();
-        setStatus(`Folder “${name}” deleted.`);
+        setStatus(`Folder “${path}” deleted.`);
       },
     });
   }
@@ -578,40 +605,64 @@ export default function App() {
       },
     });
   }
-  // Label filters are chips: typing autosuggests labels from the library and
+  // Every folder path in use (from page tags + manually created empties),
+  // plus all ancestor prefixes — "readout" exists once "readout/destructive"
+  // does, so it can be browsed, targeted, and searched by prefix.
+  const allFolderPaths = useMemo(() => {
+    const set = new Set();
+    const addWithPrefixes = (path) => {
+      const segs = path.split("/");
+      for (let i = 1; i <= segs.length; i++) set.add(segs.slice(0, i).join("/"));
+    };
+    for (const f of extraFolders) addWithPrefixes(f);
+    for (const b of homeBlocks) {
+      for (const t of (b.properties?.folder || "").split(",").map((s) => s.trim()).filter(Boolean)) addWithPrefixes(t);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [homeBlocks, extraFolders]);
+  // Filter chips come in two kinds — standard labels (properties.category,
+  // exact match) and folder labels (properties.folder paths, prefix match so
+  // "readout" covers readout/destructive too). Typing autosuggests both;
   // Tab/Enter confirms one into a chip. Typed text searches notes/PDFs —
-  // restricted to the labeled pages when chips are present. Multiple chips
-  // require ALL labels on a page.
-  const allLabels = useMemo(() => {
-    const seen = new Map(); // lowercase → first-seen original casing
+  // restricted to the matching pages when chips are present (all chips AND).
+  const allChipOptions = useMemo(() => {
+    const seen = new Map(); // kind:lowercase → option
     for (const b of homeBlocks) {
       for (const t of (b.properties?.category || "").split(",").map((s) => s.trim()).filter(Boolean)) {
-        if (!seen.has(t.toLowerCase())) seen.set(t.toLowerCase(), t);
+        if (!seen.has(`l:${t.toLowerCase()}`)) seen.set(`l:${t.toLowerCase()}`, { name: t, kind: "label" });
       }
     }
-    return [...seen.values()].sort((a, b) => a.localeCompare(b));
-  }, [homeBlocks]);
+    for (const f of allFolderPaths) {
+      if (!seen.has(`f:${f.toLowerCase()}`)) seen.set(`f:${f.toLowerCase()}`, { name: f, kind: "folder" });
+    }
+    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }, [homeBlocks, allFolderPaths]);
   const labelSuggestions = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [];
-    const picked = new Set(searchLabels.map((l) => l.toLowerCase()));
-    return allLabels.filter((l) => !picked.has(l.toLowerCase()) && l.toLowerCase().includes(q)).slice(0, 6);
-  }, [searchQuery, allLabels, searchLabels]);
+    const picked = new Set(searchLabels.map((l) => `${l.kind}:${l.name.toLowerCase()}`));
+    return allChipOptions.filter((o) => !picked.has(`${o.kind}:${o.name.toLowerCase()}`) && o.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [searchQuery, allChipOptions, searchLabels]);
   useEffect(() => { setLabelSugIdx(0); }, [searchQuery]);
-  function confirmSearchLabel(name) {
-    setSearchLabels((prev) => (prev.some((l) => l.toLowerCase() === name.toLowerCase()) ? prev : [...prev, name]));
+  function confirmSearchLabel(opt) {
+    setSearchLabels((prev) => (prev.some((l) => l.kind === opt.kind && l.name.toLowerCase() === opt.name.toLowerCase()) ? prev : [...prev, opt]));
     setSearchQuery("");
   }
   const searchTextQuery = useMemo(() => searchQuery.trim(), [searchQuery]);
   const labelMatches = useMemo(() => {
     if (!searchLabels.length) return [];
-    const wanted = searchLabels.map((l) => l.toLowerCase());
     return homeBlocks.filter((b) => {
       const labels = (b.properties?.category || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
-      return wanted.every((t) => labels.includes(t));
+      const folders = (b.properties?.folder || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
+      return searchLabels.every((c) => {
+        const n = c.name.toLowerCase();
+        return c.kind === "folder"
+          ? folders.some((t) => t === n || t.startsWith(n + "/"))
+          : labels.includes(n);
+      });
     });
   }, [searchLabels, homeBlocks]);
-  // With label chips active, text results only count inside labeled pages.
+  // With chips active, text results only count inside the matching pages.
   const labelPageIds = useMemo(() => (
     searchLabels.length ? new Set(labelMatches.map((b) => b.id)) : null
   ), [searchLabels.length, labelMatches]);
@@ -2204,12 +2255,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // Leaving home or changing folders drops the file-manager selection.
   useEffect(() => { setSelectedPages(new Set()); setMovePicker(false); setHomeMenu(null); }, [folderFilter, homeMode]);
   const pageOnly = !pdfUrl && !!focusedBlockId && !readOnly;
-  const recentPages = useMemo(() => {
-    return [...homeBlocks]
-      .sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""))
-      .slice(0, 4);
-  }, [homeBlocks]);
-  const recentIds = useMemo(() => new Set(recentPages.map((b) => b.id)), [recentPages]);
   const pageBlocks = useMemo(() => {
     return homeBlocks.map((b) => ({
       id: b.id,
@@ -2220,28 +2265,55 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       _pageId: b.id,
       _position: b.position,
       _sourceUrl: b.properties?.source_url,
-      _folder: (b.properties?.folder || "").trim(),
-      _isRecent: recentIds.has(b.id),
+      _folders: parseFolderTags(b.properties?.folder),
+      _createdAt: b.created_at || "",
+      _updatedAt: b.updated_at || "",
       _isEmpty: !b.content,
       editMode: homeEditingId === b.id,
     }));
-  }, [homeBlocks, recentIds, homeEditingId]);
-  // Folder names: everything referenced by a page, plus manually created empties
-  const folderNames = useMemo(() => {
-    const set = new Set(extraFolders);
-    for (const b of pageBlocks) if (b._folder) set.add(b._folder);
+  }, [homeBlocks, homeEditingId]);
+  // Folders shown at the current level: the next path segment of every known
+  // path under folderFilter ("" = root → top-level segments).
+  const childFolders = useMemo(() => {
+    const set = new Set();
+    for (const fp of allFolderPaths) {
+      if (folderFilter) {
+        if (!fp.startsWith(folderFilter + "/")) continue;
+        set.add(`${folderFilter}/${fp.slice(folderFilter.length + 1).split("/")[0]}`);
+      } else {
+        set.add(fp.split("/")[0]);
+      }
+    }
     return [...set].sort((a, b) => a.localeCompare(b));
-  }, [pageBlocks, extraFolders]);
+  }, [allFolderPaths, folderFilter]);
   const folderCounts = useMemo(() => {
     const m = {};
-    for (const b of pageBlocks) if (b._folder) m[b._folder] = (m[b._folder] || 0) + 1;
+    for (const f of childFolders) {
+      m[f] = pageBlocks.filter((b) => b._folders.some((t) => t === f || t.startsWith(f + "/"))).length;
+    }
     return m;
-  }, [pageBlocks]);
-  // What the home list shows: inside a folder → its papers; at root → unfiled papers
-  const homeVisiblePages = useMemo(() => (
-    folderFilter ? pageBlocks.filter((b) => b._folder === folderFilter)
-                 : pageBlocks.filter((b) => !b._folder)
-  ), [pageBlocks, folderFilter]);
+  }, [childFolders, pageBlocks]);
+  // What the home list shows: inside a folder → pages tagged exactly that
+  // path (deeper ones live in the subfolder rows); at root → EVERY page as a
+  // sortable recents feed, loaded incrementally.
+  const homeSortedPages = useMemo(() => {
+    const arr = folderFilter ? pageBlocks.filter((b) => b._folders.includes(folderFilter)) : [...pageBlocks];
+    const cmp = homeSort === "title" ? (a, b) => a.content.localeCompare(b.content)
+      : homeSort === "created" ? (a, b) => (b._createdAt || "").localeCompare(a._createdAt || "")
+      : (a, b) => (b._updatedAt || "").localeCompare(a._updatedAt || "");
+    return arr.sort(cmp);
+  }, [pageBlocks, folderFilter, homeSort]);
+  const homeVisiblePages = useMemo(() => homeSortedPages.slice(0, homeShowCount), [homeSortedPages, homeShowCount]);
+  // Scrolling the "load more" sentinel into view grows the feed.
+  useEffect(() => {
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) setHomeShowCount((c) => c + HOME_PAGE_CHUNK);
+    });
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [homeVisiblePages.length, homeSortedPages.length, homeMode]);
   const highlights = useMemo(() => {
     const byHlId = new Map();
     for (const b of flattenBlocks(blocks)) {
@@ -2763,7 +2835,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               </div>
             ) : null}
             {homeMode ? (() => {
-              const sorted = [...homeBlocks].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
               // Group blocks by category (comma-separated — a page can be in multiple)
               const categories = {};
               const seenInCategory = new Set();
@@ -2814,25 +2885,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
               return (
                 <>
-                  {/* Recent — all pages, scrollable carousel */}
-                  <div className="carouselRow">
-                    <div className="carouselLabel">Recent</div>
-                    <div className="carouselTrackWrap">
-                      <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
-                      <div className="carouselTrack" ref={(el) => { if (el) { el._scroll = el; } }}>
-                        {sorted.map((b) => (
-                          <button key={b.id} className="recentCard" onClick={() => openBlock(b.id)} title={b.content}>
-                            <div className="recentCardTitle">{b.content || "Untitled"}</div>
-                            <div className="recentCardMeta">
-                              {b.properties?.summary && <span className="recentCardSummary">{b.properties.summary}</span>}
-                              <span className="recentCardTime">{formatRelativeTime(b.updated_at)}</span>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                      <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
-                    </div>
-                  </div>
                   {/* Labels — one card per label */}
                   {catNames.length > 0 ? (
                     <div className="carouselRow">
@@ -2858,16 +2910,20 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               <div className="selectionBar">
                 <span className="selectionCount">{selectedPages.size} selected</span>
                 <span style={{ position: "relative", display: "inline-flex" }}>
-                  <button className="chatClearBtn" onClick={() => setMovePicker((v) => !v)}>Move to…</button>
+                  <button className="chatClearBtn" onClick={() => setMovePicker((v) => !v)}>Add to…</button>
                   {movePicker ? (
                     <div className="popover movePicker" style={{ left: 0, right: "auto" }}>
-                      <button className="popoverItem" onClick={() => movePages([...selectedPages], "")}>Library (no folder)</button>
-                      {folderNames.map((f) => (
-                        <button key={f} className="popoverItem" onClick={() => movePages([...selectedPages], f)}>{f}</button>
+                      {allFolderPaths.map((f) => (
+                        <button key={f} className="popoverItem" onClick={() => addPagesToFolder([...selectedPages], f)}>{f}</button>
                       ))}
+                      {allFolderPaths.length ? <div className="popoverDivider" /> : null}
+                      <button className="popoverItem" onClick={() => removePagesFromFolder([...selectedPages], "")}>Clear folder tags</button>
                     </div>
                   ) : null}
                 </span>
+                {folderFilter ? (
+                  <button className="chatClearBtn" onClick={() => removePagesFromFolder([...selectedPages], folderFilter)}>Remove from folder</button>
+                ) : null}
                 <button className="chatClearBtn" onClick={() => duplicatePages([...selectedPages])}>Copy</button>
                 {selectedPages.size === 1 ? (
                   <button className="chatClearBtn" onClick={() => { const id = [...selectedPages][0]; clearSelection(); setHomeEditingId(id); }}>Rename</button>
@@ -2881,108 +2937,129 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 {folderFilter ? (
                   <>
                     <div
-                      className={`folderRow folderBackRow ${folderDragOver === "__root__" ? "dragOver" : ""}`}
-                      onClick={() => { setFolderFilter(""); window.history.replaceState(null, "", "/"); }}
-                      onDragOver={(e) => { e.preventDefault(); setFolderDragOver("__root__"); }}
+                      className={`folderRow folderBackRow ${folderDragOver === "__up__" ? "dragOver" : ""}`}
+                      onClick={() => {
+                        const parent = folderFilter.includes("/") ? folderFilter.slice(0, folderFilter.lastIndexOf("/")) : "";
+                        setFolderFilter(parent);
+                        window.history.replaceState(null, "", parent ? `/?folder=${encodeURIComponent(parent)}` : "/");
+                      }}
+                      onDragOver={(e) => { e.preventDefault(); setFolderDragOver("__up__"); }}
                       onDragLeave={() => setFolderDragOver(null)}
                       onDrop={(e) => {
                         e.preventDefault();
                         setFolderDragOver(null);
                         const id = e.dataTransfer.getData("text/plain");
-                        if (id) {
-                          if (selectedPages.has(id) && selectedPages.size > 1) movePages([...selectedPages], "");
-                          else setPageFolder(id, "");
-                        }
+                        if (!id) return;
+                        const ids = selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
+                        removePagesFromFolder(ids, folderFilter);
                       }}
-                      title="Back — or drop a paper here to move it out of the folder"
+                      title="Back — or drop a paper here to remove it from this folder"
                     >
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
-                      <span className="folderName">All papers</span>
-                      <span className="folderHint">drop here to move out</span>
+                      <span className="folderName">{folderFilter.includes("/") ? folderFilter.slice(0, folderFilter.lastIndexOf("/")) : "All files"}</span>
+                      <span className="folderHint">drop here to remove from this folder</span>
                     </div>
                     <div className="folderCurrent">
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>
-                      {folderFilter}
+                      {/* Breadcrumb: every path segment navigates to its level */}
+                      {folderFilter.split("/").map((seg, i, segs) => {
+                        const prefix = segs.slice(0, i + 1).join("/");
+                        return (
+                          <span key={prefix}>
+                            {i > 0 ? <span className="crumbSep">/</span> : null}
+                            <button
+                              className="crumbBtn"
+                              onClick={() => { setFolderFilter(prefix); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(prefix)}`); }}
+                            >{seg}</button>
+                          </span>
+                        );
+                      })}
                     </div>
                   </>
-                ) : (
-                  <>
-                    {folderNames.map((f) => (
-                      <div
-                        key={f}
-                        className={`folderRow ${folderDragOver === f ? "dragOver" : ""}`}
-                        onClick={() => {
-                          if (folderRenaming?.name === f) return;
-                          setFolderFilter(f); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(f)}`);
+                ) : null}
+                {childFolders.map((f) => (
+                  <div
+                    key={f}
+                    className={`folderRow ${folderDragOver === f ? "dragOver" : ""}`}
+                    onClick={() => {
+                      if (folderRenaming?.name === f) return;
+                      setFolderFilter(f); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(f)}`);
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setHomeMenu({ kind: "folder", name: f, x: e.clientX, y: e.clientY });
+                    }}
+                    onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
+                    onDragLeave={() => setFolderDragOver(null)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setFolderDragOver(null);
+                      const id = e.dataTransfer.getData("text/plain");
+                      if (!id) return;
+                      // A selected card drags its whole selection along
+                      const ids = selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
+                      addPagesToFolder(ids, f);
+                    }}
+                    title="Open folder — right-click to rename or delete, drop a paper to add it"
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                    {folderRenaming?.name === f ? (
+                      <input
+                        autoFocus
+                        className="folderNewInput"
+                        value={folderRenaming.draft}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setFolderRenaming({ name: f, draft: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") renameFolder(f, folderRenaming.draft);
+                          else if (e.key === "Escape") setFolderRenaming(null);
                         }}
-                        onContextMenu={(e) => {
-                          e.preventDefault();
-                          setHomeMenu({ kind: "folder", name: f, x: e.clientX, y: e.clientY });
-                        }}
-                        onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
-                        onDragLeave={() => setFolderDragOver(null)}
-                        onDrop={(e) => {
-                          e.preventDefault();
-                          setFolderDragOver(null);
-                          const id = e.dataTransfer.getData("text/plain");
-                          if (id) {
-                            // A selected card drags its whole selection along
-                            if (selectedPages.has(id) && selectedPages.size > 1) movePages([...selectedPages], f);
-                            else setPageFolder(id, f);
-                          }
-                        }}
-                        title="Open folder — right-click to rename or delete, drop a paper to file it"
-                      >
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
-                        {folderRenaming?.name === f ? (
-                          <input
-                            autoFocus
-                            className="folderNewInput"
-                            value={folderRenaming.draft}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => setFolderRenaming({ name: f, draft: e.target.value })}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") renameFolder(f, folderRenaming.draft);
-                              else if (e.key === "Escape") setFolderRenaming(null);
-                            }}
-                            onBlur={() => renameFolder(f, folderRenaming.draft)}
-                          />
-                        ) : (
-                          <span className="folderName">{f}</span>
-                        )}
-                        <span className="folderCount">{folderCounts[f] || 0}</span>
-                      </div>
-                    ))}
-                    {newFolderOpen ? (
-                      <div className="folderRow folderNewRow">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
-                        <input
-                          autoFocus
-                          className="folderNewInput"
-                          value={newFolderName}
-                          onChange={(e) => setNewFolderName(e.target.value)}
-                          placeholder="Folder name…"
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") { e.preventDefault(); commitNewFolder(); }
-                            else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
-                          }}
-                          onBlur={commitNewFolder}
-                        />
-                      </div>
+                        onBlur={() => renameFolder(f, folderRenaming.draft)}
+                      />
                     ) : (
-                      <button className="folderRow folderNewBtn" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }}>
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
-                        <span className="folderName">New folder</span>
-                      </button>
+                      <span className="folderName">{f.slice(f.lastIndexOf("/") + 1)}</span>
                     )}
-                  </>
+                    <span className="folderCount">{folderCounts[f] || 0}</span>
+                  </div>
+                ))}
+                {newFolderOpen ? (
+                  <div className="folderRow folderNewRow">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                    <input
+                      autoFocus
+                      className="folderNewInput"
+                      value={newFolderName}
+                      onChange={(e) => setNewFolderName(e.target.value)}
+                      placeholder="Folder name…"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); commitNewFolder(); }
+                        else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
+                      }}
+                      onBlur={commitNewFolder}
+                    />
+                  </div>
+                ) : (
+                  <button className="folderRow folderNewBtn" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }}>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                    <span className="folderName">New folder</span>
+                  </button>
                 )}
+              </div>
+            ) : null}
+            {homeMode && !categoryFilter ? (
+              <div className="homeListBar">
+                <span className="homeListLabel">{folderFilter ? "Files" : "All files"}</span>
+                <select className="homeSortSelect" value={homeSort} onChange={(e) => changeHomeSort(e.target.value)} title="Sort files">
+                  <option value="updated">Recently modified</option>
+                  <option value="created">Recently added</option>
+                  <option value="title">Title A–Z</option>
+                </select>
               </div>
             ) : null}
             {homeMode && categoryFilter ? null : (
             (homeMode ? homeVisiblePages : visibleBlocks).length === 0 ? (
               <div className="empty">{homeMode
-                ? (folderFilter ? "This folder is empty — drag papers onto it from the library." : (pageBlocks.length ? "All papers are filed in folders." : "No pages yet — use the + button above to open a PDF or start a note page."))
+                ? (folderFilter ? "This folder is empty — drag papers onto it from the library." : "No pages yet — use the + button above to open a PDF or start a note page.")
                 : "No blocks yet."}</div>
             ) : (
               (() => {
@@ -3213,6 +3290,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 return (
                   <>
                     <BlockTree blocks={homeMode ? homeVisiblePages : blocks} readOnly={readOnly} rowProps={rowProps} />
+                    {homeMode && homeSortedPages.length > homeVisiblePages.length ? (
+                      <button
+                        ref={loadMoreRef}
+                        className="loadMoreBtn"
+                        onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}
+                      >
+                        Showing {homeVisiblePages.length} of {homeSortedPages.length} — load more
+                      </button>
+                    ) : null}
                     {dropTarget && (() => {
                       const indentStep = 14;
                       const baseOffset = 28;
@@ -3537,11 +3623,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     >{searchReplaceOpen ? "⌄" : "›"}</button>
                     <div className="searchInputWrap">
                       {searchLabels.map((l) => (
-                        <span key={l} className="categoryBadge searchChip">
-                          {l}
+                        <span key={`${l.kind}:${l.name}`} className="categoryBadge searchChip">
+                          {l.kind === "folder"
+                            ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                            : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>}
+                          {l.name}
                           <button
                             className="searchChipX"
-                            title={`Remove label filter "${l}"`}
+                            title={`Remove ${l.kind === "folder" ? "folder" : "label"} filter "${l.name}"`}
                             onClick={() => setSearchLabels((prev) => prev.filter((x) => x !== l))}
                           >×</button>
                         </span>
@@ -3571,12 +3660,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <div className="categorySuggestions searchLabelSuggest">
                           {labelSuggestions.map((s, i) => (
                             <button
-                              key={s}
+                              key={`${s.kind}:${s.name}`}
                               className={`categorySuggestionItem${i === labelSugIdx ? " selected" : ""}`}
                               onMouseDown={(e) => { e.preventDefault(); confirmSearchLabel(s); }}
                               onMouseEnter={() => setLabelSugIdx(i)}
                             >
-                              {s}<span className="searchSuggestHint">Tab</span>
+                              <span className="searchSuggestName">
+                                {s.kind === "folder"
+                                  ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                                  : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>}
+                                {s.name}
+                              </span>
+                              <span className="searchSuggestHint">Tab</span>
                             </button>
                           ))}
                         </div>
@@ -3610,7 +3705,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     ) : null}
                     {searchLabels.length ? (
                       <>
-                        <div className="searchSection">Labels: {searchLabels.join(" + ")}</div>
+                        <div className="searchSection">Filters: {searchLabels.map((c) => c.name).join(" + ")}</div>
                         {labelMatches.length === 0 ? (
                           <div className="searchHint">No pages carry {searchLabels.length === 1 ? "this label" : "all these labels"}.</div>
                         ) : labelMatches.map((b) => (
@@ -4209,11 +4304,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   ) : null}
                   <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); duplicatePages(ids); }}>{many ? `Copy ${ids.length} pages` : "Copy"}</button>
                   <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deletePages(ids); }}>{many ? `Delete ${ids.length} pages` : "Delete"}</button>
-                  <div className="ctxMenuLabel">Move to</div>
-                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); movePages(ids, ""); }}>Library (no folder)</button>
-                  {folderNames.map((f) => (
-                    <button key={f} className="ctxMenuItem" onClick={() => { setHomeMenu(null); movePages(ids, f); }}>{f}</button>
+                  <div className="ctxMenuLabel">Add to folder</div>
+                  {allFolderPaths.map((f) => (
+                    <button key={f} className="ctxMenuItem" onClick={() => { setHomeMenu(null); addPagesToFolder(ids, f); }}>{f}</button>
                   ))}
+                  {folderFilter ? (
+                    <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); removePagesFromFolder(ids, folderFilter); }}>Remove from “{folderFilter}”</button>
+                  ) : null}
+                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); removePagesFromFolder(ids, ""); }}>Clear folder tags</button>
                 </>
               );
             })() : (
