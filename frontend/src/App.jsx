@@ -396,13 +396,14 @@ export default function App() {
       },
     });
   }
-  // ":label" tokens in the search box filter pages by their labels (the
-  // colored badges under each paper title); the remaining text searches
-  // notes/PDFs as usual. ":quantum :review" requires both labels.
+  // ":label:" tokens in the search box (closed colons, so labels can contain
+  // spaces) filter by page labels; the remaining text searches notes/PDFs —
+  // restricted to the labeled pages when both are present. ":quantum::review"
+  // or ":quantum: :review:" requires both labels.
   const searchLabelTokens = useMemo(() => (
-    (searchQuery.match(/(^|\s):([\w-]+):?/g) || []).map((t) => t.replace(/[:\s]/g, "").toLowerCase()).filter(Boolean)
+    [...searchQuery.matchAll(/:([^:]+):/g)].map((m) => m[1].trim().toLowerCase()).filter(Boolean)
   ), [searchQuery]);
-  const searchTextQuery = useMemo(() => searchQuery.replace(/(^|\s):[\w-]+:?/g, " ").trim(), [searchQuery]);
+  const searchTextQuery = useMemo(() => searchQuery.replace(/:[^:]+:/g, " ").trim(), [searchQuery]);
   const labelMatches = useMemo(() => {
     if (!searchLabelTokens.length) return [];
     return homeBlocks.filter((b) => {
@@ -410,6 +411,10 @@ export default function App() {
       return searchLabelTokens.every((t) => labels.some((l) => l.includes(t)));
     });
   }, [searchLabelTokens, homeBlocks]);
+  // With labels in the query, text results only count inside labeled pages.
+  const labelPageIds = useMemo(() => (
+    searchLabelTokens.length ? new Set(labelMatches.map((b) => b.id)) : null
+  ), [searchLabelTokens.length, labelMatches]);
   useEffect(() => {
     if (openPopover !== "search" || !searchTextQuery) {
       setSearchResults([]); setPdfMatches([]); setLibMatches([]); setLibIndexing(0);
@@ -549,6 +554,7 @@ export default function App() {
   const [metaBusy, setMetaBusy] = useState(false);
   const [pptCite, setPptCite] = useState("");
   const [pptCiteBusy, setPptCiteBusy] = useState(false);
+  const [metaPopPos, setMetaPopPos] = useState({ top: 0, right: 0 }); // fixed-position anchor for the metadata popover
   const [citeCopied, setCiteCopied] = useState(""); // "bibtex" | "ppt"
   // Editable prompts for metadata extraction and PPT citations (empty = server default)
   const [metaPrompt, setMetaPrompt] = useState(() => {
@@ -2330,16 +2336,34 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       className="pageActionBtn"
                       title="Paper metadata (authors, venue, DOI, source file…)"
                       aria-label="Paper metadata"
-                      onClick={() => {
+                      onClick={(e) => {
                         const opening = openPopover !== "meta";
+                        if (opening) {
+                          // Fixed positioning so the popover floats above the
+                          // window stack instead of being clipped by the
+                          // notes window / drawn under the chat below it.
+                          const r = e.currentTarget.getBoundingClientRect();
+                          setMetaPopPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+                          setSourceDraft(inputUrl);
+                        }
                         setOpenPopover(opening ? "meta" : null);
-                        if (opening) setSourceDraft(inputUrl);
                       }}
                     >
                       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 16v-5" /><path d="M12 8h.01" /></svg>
                     </button>
                     {openPopover === "meta" ? (
-                      <div className="popover sourcePopover metaPopover">
+                      <div
+                        className="popover sourcePopover metaPopover"
+                        style={{
+                          position: "fixed",
+                          top: metaPopPos.top,
+                          right: metaPopPos.right,
+                          left: "auto",
+                          zIndex: 1400,
+                          maxHeight: `calc(100vh - ${metaPopPos.top + 12}px)`,
+                          overflowY: "auto",
+                        }}
+                      >
                         <div className="popoverTitle citeSectionRow">
                           <span>Paper metadata</span>
                           <button
@@ -3209,7 +3233,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       className="searchInput"
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Search notes, highlights, and PDFs — :label filters by label"
+                      placeholder="Search notes, highlights, and PDFs — :label: filters by label"
                     />
                     <button className={`searchToggle ${searchCase ? "on" : ""}`} onClick={() => setSearchCase((v) => !v)} title="Match case">Aa</button>
                     <button className={`searchToggle ${searchWhole ? "on" : ""}`} onClick={() => setSearchWhole((v) => !v)} title="Match whole word"><u>ab</u></button>
@@ -3239,7 +3263,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     ) : null}
                     {searchLabelTokens.length ? (
                       <>
-                        <div className="searchSection">Labels: {searchLabelTokens.map((t) => `:${t}`).join(" ")}</div>
+                        <div className="searchSection">Labels: {searchLabelTokens.map((t) => `:${t}:`).join(" ")}</div>
                         {labelMatches.length === 0 ? (
                           <div className="searchHint">No pages carry {searchLabelTokens.length === 1 ? "this label" : "all these labels"}.</div>
                         ) : labelMatches.map((b) => (
@@ -3257,10 +3281,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     {(() => {
                       // Priority: this paper's notes → this PDF's text → the
                       // rest of the workspace (other notes, other papers).
+                      // Label tokens scope everything to the labeled pages.
+                      const inScope = (pageId) => !labelPageIds || labelPageIds.has(pageId);
                       const inPage = (r) => focusedBlockId && (r.page_root_id === focusedBlockId || r.id === focusedBlockId);
-                      const notesHere = searchResults.filter(inPage);
-                      const notesElsewhere = searchResults.filter((r) => !inPage(r));
-                      const libElsewhere = libMatches.filter((r) => r.block_id !== focusedBlockId);
+                      const scoped = searchResults.filter((r) => inScope(r.page_root_id || r.id));
+                      const notesHere = scoped.filter(inPage);
+                      const notesElsewhere = scoped.filter((r) => !inPage(r));
+                      const libElsewhere = libMatches.filter((r) => r.block_id !== focusedBlockId && inScope(r.block_id));
+                      const showPdfMatches = inScope(focusedBlockId);
                       const noteRow = (r) => (
                         <button
                           key={r.id}
@@ -3279,7 +3307,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <>
                           {notesHere.length ? <div className="searchSection">Notes in this paper</div> : null}
                           {notesHere.map(noteRow)}
-                          {pdfMatches.length ? (
+                          {showPdfMatches && pdfMatches.length ? (
                             <div className="searchSection searchSectionRow">
                               <span>This PDF · {findIndex + 1}/{pdfMatches.length}</span>
                               <span className="findNav">
@@ -3288,7 +3316,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                               </span>
                             </div>
                           ) : null}
-                          {pdfMatches.map((m, i) => (
+                          {(showPdfMatches ? pdfMatches : []).map((m, i) => (
                             <button
                               key={`pdf-${i}`}
                               className={`searchResult ${i === findIndex ? "active" : ""}`}
