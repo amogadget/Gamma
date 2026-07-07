@@ -101,7 +101,8 @@ export default function App() {
     if (!readOnly) checkSession();
   }, [readOnly]);
 
-  const [inputUrl, setInputUrl] = useState(initialUrl);
+  const [inputUrl, setInputUrl] = useState(initialUrl); // current page's source URL (shown in page properties)
+  const [addUrl, setAddUrl] = useState(""); // "+" popover: URL to open
   const [pdfUrl, setPdfUrl] = useState("");
   const [docId, setDocId] = useState("");
   const [focusedBlockId, setFocusedBlockId] = useState("");
@@ -504,6 +505,8 @@ export default function App() {
   // Workspace search (Ctrl+Shift+F) with VSCode-style options:
   // Aa = match case, ab = whole word, .* = regex, plus replace-in-notes.
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchLabels, setSearchLabels] = useState([]); // confirmed label filters (chips)
+  const [labelSugIdx, setLabelSugIdx] = useState(0);
   const [searchResults, setSearchResults] = useState([]);
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchCase, setSearchCase] = useState(false);
@@ -575,25 +578,43 @@ export default function App() {
       },
     });
   }
-  // ":label:" tokens in the search box (closed colons, so labels can contain
-  // spaces) filter by page labels; the remaining text searches notes/PDFs —
-  // restricted to the labeled pages when both are present. ":quantum::review"
-  // or ":quantum: :review:" requires both labels.
-  const searchLabelTokens = useMemo(() => (
-    [...searchQuery.matchAll(/:([^:]+):/g)].map((m) => m[1].trim().toLowerCase()).filter(Boolean)
-  ), [searchQuery]);
-  const searchTextQuery = useMemo(() => searchQuery.replace(/:[^:]+:/g, " ").trim(), [searchQuery]);
+  // Label filters are chips: typing autosuggests labels from the library and
+  // Tab/Enter confirms one into a chip. Typed text searches notes/PDFs —
+  // restricted to the labeled pages when chips are present. Multiple chips
+  // require ALL labels on a page.
+  const allLabels = useMemo(() => {
+    const seen = new Map(); // lowercase → first-seen original casing
+    for (const b of homeBlocks) {
+      for (const t of (b.properties?.category || "").split(",").map((s) => s.trim()).filter(Boolean)) {
+        if (!seen.has(t.toLowerCase())) seen.set(t.toLowerCase(), t);
+      }
+    }
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  }, [homeBlocks]);
+  const labelSuggestions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    const picked = new Set(searchLabels.map((l) => l.toLowerCase()));
+    return allLabels.filter((l) => !picked.has(l.toLowerCase()) && l.toLowerCase().includes(q)).slice(0, 6);
+  }, [searchQuery, allLabels, searchLabels]);
+  useEffect(() => { setLabelSugIdx(0); }, [searchQuery]);
+  function confirmSearchLabel(name) {
+    setSearchLabels((prev) => (prev.some((l) => l.toLowerCase() === name.toLowerCase()) ? prev : [...prev, name]));
+    setSearchQuery("");
+  }
+  const searchTextQuery = useMemo(() => searchQuery.trim(), [searchQuery]);
   const labelMatches = useMemo(() => {
-    if (!searchLabelTokens.length) return [];
+    if (!searchLabels.length) return [];
+    const wanted = searchLabels.map((l) => l.toLowerCase());
     return homeBlocks.filter((b) => {
       const labels = (b.properties?.category || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
-      return searchLabelTokens.every((t) => labels.some((l) => l.includes(t)));
+      return wanted.every((t) => labels.includes(t));
     });
-  }, [searchLabelTokens, homeBlocks]);
-  // With labels in the query, text results only count inside labeled pages.
+  }, [searchLabels, homeBlocks]);
+  // With label chips active, text results only count inside labeled pages.
   const labelPageIds = useMemo(() => (
-    searchLabelTokens.length ? new Set(labelMatches.map((b) => b.id)) : null
-  ), [searchLabelTokens.length, labelMatches]);
+    searchLabels.length ? new Set(labelMatches.map((b) => b.id)) : null
+  ), [searchLabels.length, labelMatches]);
   useEffect(() => {
     if (openPopover !== "search" || !searchTextQuery) {
       setSearchResults([]); setPdfMatches([]); setLibMatches([]); setLibIndexing(0);
@@ -1477,6 +1498,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setStatus(`Open failed: ${err.message}`);
     } finally {
       setLoading(false);
+    }
+  }
+
+  // "+" popover: a blank note page (no PDF) — created in the open folder, if any.
+  async function createNotePage() {
+    if (readOnly) return;
+    setOpenPopover(null);
+    try {
+      const created = await apiJson(`${API}/blocks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ parent_id: "root", content: "New note", ...(folderFilter ? { properties: { folder: folderFilter } } : {}) }),
+      });
+      await fetchHomeBlocks();
+      await openBlock(created.id, { pushNav: true });
+    } catch (err) {
+      setStatus(`Create failed: ${err.message || err}`);
     }
   }
 
@@ -2944,7 +2982,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             {homeMode && categoryFilter ? null : (
             (homeMode ? homeVisiblePages : visibleBlocks).length === 0 ? (
               <div className="empty">{homeMode
-                ? (folderFilter ? "This folder is empty — drag papers onto it from the library." : (pageBlocks.length ? "All papers are filed in folders." : "No pages yet — open a PDF above to get started."))
+                ? (folderFilter ? "This folder is empty — drag papers onto it from the library." : (pageBlocks.length ? "All papers are filed in folders." : "No pages yet — use the + button above to open a PDF or start a note page."))
                 : "No blocks yet."}</div>
             ) : (
               (() => {
@@ -3373,16 +3411,45 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </div>
               ))}
             </div>
-            {homeMode ? (
-              <div className="urlBox">
-                <input
-                  value={inputUrl}
-                  onChange={(e) => setInputUrl(e.target.value)}
-                  placeholder="Open a PDF by URL — press Enter"
-                  onKeyDown={(e) => { if (e.key === "Enter" && !loading) openPdf(inputUrl); }}
-                />
-              </div>
-            ) : null}
+            <span data-popover="add" style={{ position: "relative", display: "inline-flex" }}>
+              <button
+                className={`iconBtn addBtn ${openPopover === "add" ? "activeIcon" : ""}`}
+                onClick={() => setOpenPopover((p) => (p === "add" ? null : "add"))}
+                title="Add — open a PDF by URL, upload a file, or start a note page"
+                aria-label="Add"
+              >
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+              </button>
+              {openPopover === "add" ? (
+                <div className="popover addPopover">
+                  <input
+                    autoFocus
+                    className="searchInput"
+                    value={addUrl}
+                    onChange={(e) => setAddUrl(e.target.value)}
+                    placeholder="Open a PDF by URL — press Enter"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && addUrl.trim() && !loading) {
+                        setOpenPopover(null);
+                        openPdf(addUrl.trim());
+                        setAddUrl("");
+                      }
+                    }}
+                  />
+                  <label className="popoverItem" style={{ cursor: loading ? "not-allowed" : "pointer" }}>
+                    Upload PDF…
+                    <input
+                      type="file"
+                      accept=".pdf"
+                      style={{ display: "none" }}
+                      disabled={loading}
+                      onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; setOpenPopover(null); if (f) uploadPdf(f); }}
+                    />
+                  </label>
+                  <button className="popoverItem" onClick={createNotePage}>New note page</button>
+                </div>
+              ) : null}
+            </span>
             <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
                 <button
                   className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
@@ -3468,13 +3535,53 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       onClick={() => setSearchReplaceOpen((v) => !v)}
                       title="Toggle replace"
                     >{searchReplaceOpen ? "⌄" : "›"}</button>
-                    <input
-                      autoFocus
-                      className="searchInput"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Search notes, highlights, and PDFs — :label: filters by label"
-                    />
+                    <div className="searchInputWrap">
+                      {searchLabels.map((l) => (
+                        <span key={l} className="categoryBadge searchChip">
+                          {l}
+                          <button
+                            className="searchChipX"
+                            title={`Remove label filter "${l}"`}
+                            onClick={() => setSearchLabels((prev) => prev.filter((x) => x !== l))}
+                          >×</button>
+                        </span>
+                      ))}
+                      <input
+                        autoFocus
+                        className="searchInput"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if ((e.key === "Tab" || e.key === "Enter") && labelSuggestions.length) {
+                            e.preventDefault();
+                            confirmSearchLabel(labelSuggestions[labelSugIdx] || labelSuggestions[0]);
+                          } else if (e.key === "ArrowDown" && labelSuggestions.length) {
+                            e.preventDefault();
+                            setLabelSugIdx((i) => (i + 1) % labelSuggestions.length);
+                          } else if (e.key === "ArrowUp" && labelSuggestions.length) {
+                            e.preventDefault();
+                            setLabelSugIdx((i) => (i - 1 + labelSuggestions.length) % labelSuggestions.length);
+                          } else if (e.key === "Backspace" && !searchQuery && searchLabels.length) {
+                            setSearchLabels((prev) => prev.slice(0, -1));
+                          }
+                        }}
+                        placeholder={searchLabels.length ? "Search within labeled pages…" : "Search notes, highlights, and PDFs — Tab adds a label filter"}
+                      />
+                      {labelSuggestions.length ? (
+                        <div className="categorySuggestions searchLabelSuggest">
+                          {labelSuggestions.map((s, i) => (
+                            <button
+                              key={s}
+                              className={`categorySuggestionItem${i === labelSugIdx ? " selected" : ""}`}
+                              onMouseDown={(e) => { e.preventDefault(); confirmSearchLabel(s); }}
+                              onMouseEnter={() => setLabelSugIdx(i)}
+                            >
+                              {s}<span className="searchSuggestHint">Tab</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
                     <button className={`searchToggle ${searchCase ? "on" : ""}`} onClick={() => setSearchCase((v) => !v)} title="Match case">Aa</button>
                     <button className={`searchToggle ${searchWhole ? "on" : ""}`} onClick={() => setSearchWhole((v) => !v)} title="Match whole word"><u>ab</u></button>
                     <button className={`searchToggle ${searchRegex ? "on" : ""}`} onClick={() => setSearchRegex((v) => !v)} title="Use regular expression">.*</button>
@@ -3501,11 +3608,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 && libMatches.length === 0 && labelMatches.length === 0 ? (
                       <div className="searchHint">No matches.</div>
                     ) : null}
-                    {searchLabelTokens.length ? (
+                    {searchLabels.length ? (
                       <>
-                        <div className="searchSection">Labels: {searchLabelTokens.map((t) => `:${t}:`).join(" ")}</div>
+                        <div className="searchSection">Labels: {searchLabels.join(" + ")}</div>
                         {labelMatches.length === 0 ? (
-                          <div className="searchHint">No pages carry {searchLabelTokens.length === 1 ? "this label" : "all these labels"}.</div>
+                          <div className="searchHint">No pages carry {searchLabels.length === 1 ? "this label" : "all these labels"}.</div>
                         ) : labelMatches.map((b) => (
                           <button
                             key={`lbl-${b.id}`}
