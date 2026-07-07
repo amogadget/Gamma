@@ -166,6 +166,185 @@ export default function App() {
     if (!name) return;
     updateExtraFolders((prev) => prev.includes(name) ? prev : [...prev, name]);
   }
+
+  // --- Home file-manager: multi-select + copy/move/delete, folder rename ---
+  const [selectedPages, setSelectedPages] = useState(() => new Set());
+  const lastPageClickRef = useRef(null); // anchor for shift-range selection
+  const [homeMenu, setHomeMenu] = useState(null); // {kind:"page"|"folder", id?, name, x, y}
+  const [folderRenaming, setFolderRenaming] = useState(null); // {name, draft}
+  const [movePicker, setMovePicker] = useState(false);
+
+  function clearSelection() { setSelectedPages(new Set()); setMovePicker(false); }
+
+  // Plain click opens; Ctrl/Cmd toggles selection; Shift selects the range
+  // from the last clicked card (standard file-manager semantics).
+  function handlePageClick(pageBlock, e) {
+    const id = pageBlock._pageId;
+    if (!id) return;
+    if (e && (e.ctrlKey || e.metaKey)) {
+      setSelectedPages((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+      lastPageClickRef.current = id;
+      return;
+    }
+    if (e && e.shiftKey && lastPageClickRef.current) {
+      const order = homeVisiblePages.map((b) => b._pageId);
+      const a = order.indexOf(lastPageClickRef.current);
+      const b = order.indexOf(id);
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelectedPages((prev) => {
+          const next = new Set(prev);
+          for (let i = lo; i <= hi; i++) next.add(order[i]);
+          return next;
+        });
+        return;
+      }
+    }
+    lastPageClickRef.current = id;
+    clearSelection();
+    openBlock(id, { restoreScroll: true });
+  }
+
+  // Deep-copy a page: new root block + a subtree clone with fresh block ids
+  // (highlight ids regenerated and same-page references remapped).
+  async function duplicatePage(pageId) {
+    const data = await apiJson(`${API}/blocks/${pageId}/subtree`);
+    const src = data.block || {};
+    const created = await apiJson(`${API}/blocks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ parent_id: "root", content: `${src.content || "Untitled"} (copy)`, properties: src.properties || {} }),
+    });
+    const hlMap = new Map();
+    const clone = (list) => (list || []).map((b) => {
+      const props = { ...(b.properties || {}) };
+      if (props.highlight_id) {
+        const nid = makeId();
+        hlMap.set(props.highlight_id, nid);
+        props.highlight_id = nid;
+      }
+      return { ...b, id: makeId(), properties: props, children: clone(b.children) };
+    });
+    const remap = (list) => {
+      for (const b of list || []) {
+        const p = b.properties;
+        if (p.linked_highlight_id && hlMap.has(p.linked_highlight_id)) p.linked_highlight_id = hlMap.get(p.linked_highlight_id);
+        remap(b.children);
+      }
+    };
+    const cloned = clone(normalizeBlocks(src.children || []));
+    remap(cloned);
+    await apiJson(`${API}/blocks/${created.id}/children`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blocks: cloned }),
+    });
+    return created.id;
+  }
+  async function duplicatePages(ids) {
+    setStatus(`Copying ${ids.length} page${ids.length === 1 ? "" : "s"}…`);
+    try {
+      for (const id of ids) await duplicatePage(id);
+      clearSelection();
+      await fetchHomeBlocks();
+      setStatus(`Copied ${ids.length} page${ids.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      setStatus(`Copy failed: ${err.message}`);
+    }
+  }
+
+  function deletePages(ids) {
+    setConfirmBox({
+      title: ids.length === 1 ? "Delete page" : `Delete ${ids.length} pages`,
+      message: `Delete ${ids.length === 1 ? "this page" : `these ${ids.length} pages`} and all their notes? This can't be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: async () => {
+        for (const id of ids) {
+          try { await apiJson(`${API}/blocks/${id}`, { method: "DELETE" }); } catch {}
+        }
+        updateTabs((prev) => prev.filter((t) => !ids.includes(t.id)));
+        clearSelection();
+        await fetchHomeBlocks();
+        setStatus(`Deleted ${ids.length} page${ids.length === 1 ? "" : "s"}.`);
+      },
+    });
+  }
+
+  async function movePages(ids, folderName) {
+    for (const id of ids) {
+      try {
+        await apiJson(`${API}/blocks/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ properties: { folder: folderName || "" } }),
+        });
+      } catch {}
+    }
+    if (folderName) updateExtraFolders((prev) => prev.filter((f) => f !== folderName));
+    clearSelection();
+    await fetchHomeBlocks();
+    setStatus(folderName
+      ? `Moved ${ids.length} page${ids.length === 1 ? "" : "s"} to “${folderName}”.`
+      : `Moved ${ids.length} page${ids.length === 1 ? "" : "s"} out of folders.`);
+  }
+
+  async function renameFolder(oldName, newNameRaw) {
+    const newName = (newNameRaw || "").trim();
+    setFolderRenaming(null);
+    if (!newName || newName === oldName) return;
+    for (const b of homeBlocks) {
+      if ((b.properties?.folder || "").trim() === oldName) {
+        try {
+          await apiJson(`${API}/blocks/${b.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ properties: { folder: newName } }),
+          });
+        } catch {}
+      }
+    }
+    updateExtraFolders((prev) => [...new Set(prev.map((f) => (f === oldName ? newName : f)))]);
+    if (folderFilter === oldName) {
+      setFolderFilter(newName);
+      window.history.replaceState(null, "", `/?folder=${encodeURIComponent(newName)}`);
+    }
+    await fetchHomeBlocks();
+    setStatus(`Folder renamed to “${newName}”.`);
+  }
+
+  function deleteFolderByName(name) {
+    const members = homeBlocks.filter((b) => (b.properties?.folder || "").trim() === name);
+    setConfirmBox({
+      title: "Delete folder",
+      message: members.length
+        ? `Delete “${name}”? Its ${members.length} paper${members.length === 1 ? "" : "s"} move back to the library — no papers are deleted.`
+        : `Delete the empty folder “${name}”?`,
+      confirmLabel: "Delete folder",
+      onConfirm: async () => {
+        for (const b of members) {
+          try {
+            await apiJson(`${API}/blocks/${b.id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ properties: { folder: "" } }),
+            });
+          } catch {}
+        }
+        updateExtraFolders((prev) => prev.filter((f) => f !== name));
+        if (folderFilter === name) {
+          setFolderFilter("");
+          window.history.replaceState(null, "", "/");
+        }
+        await fetchHomeBlocks();
+        setStatus(`Folder “${name}” deleted.`);
+      },
+    });
+  }
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
   const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
   const [zoomDraft, setZoomDraft] = useState(null);  // while typing a custom zoom %
@@ -485,6 +664,8 @@ export default function App() {
         goBackNavRef.current?.();
       } else if (e.key === "Escape") {
         setOpenPopover(null);
+        setHomeMenu(null);
+        setSelectedPages((prev) => (prev.size ? new Set() : prev));
       }
     }
     window.addEventListener("keydown", onKey);
@@ -1982,6 +2163,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
   const homeMode = !pdfUrl && !focusedBlockId && !readOnly;
+  // Leaving home or changing folders drops the file-manager selection.
+  useEffect(() => { setSelectedPages(new Set()); setMovePicker(false); setHomeMenu(null); }, [folderFilter, homeMode]);
   const pageOnly = !pdfUrl && !!focusedBlockId && !readOnly;
   const recentPages = useMemo(() => {
     return [...homeBlocks]
@@ -2633,6 +2816,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </>
               );
             })() : null}
+            {homeMode && selectedPages.size ? (
+              <div className="selectionBar">
+                <span className="selectionCount">{selectedPages.size} selected</span>
+                <span style={{ position: "relative", display: "inline-flex" }}>
+                  <button className="chatClearBtn" onClick={() => setMovePicker((v) => !v)}>Move to…</button>
+                  {movePicker ? (
+                    <div className="popover movePicker" style={{ left: 0, right: "auto" }}>
+                      <button className="popoverItem" onClick={() => movePages([...selectedPages], "")}>Library (no folder)</button>
+                      {folderNames.map((f) => (
+                        <button key={f} className="popoverItem" onClick={() => movePages([...selectedPages], f)}>{f}</button>
+                      ))}
+                    </div>
+                  ) : null}
+                </span>
+                <button className="chatClearBtn" onClick={() => duplicatePages([...selectedPages])}>Copy</button>
+                {selectedPages.size === 1 ? (
+                  <button className="chatClearBtn" onClick={() => { const id = [...selectedPages][0]; clearSelection(); setHomeEditingId(id); }}>Rename</button>
+                ) : null}
+                <button className="chatClearBtn" onClick={() => deletePages([...selectedPages])}>Delete</button>
+                <button className="chatClearBtn" onClick={clearSelection} title="Clear selection (Esc)">✕</button>
+              </div>
+            ) : null}
             {homeMode && !categoryFilter ? (
               <div className="folderBrowser">
                 {folderFilter ? (
@@ -2646,7 +2851,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         e.preventDefault();
                         setFolderDragOver(null);
                         const id = e.dataTransfer.getData("text/plain");
-                        if (id) setPageFolder(id, "");
+                        if (id) {
+                          if (selectedPages.has(id) && selectedPages.size > 1) movePages([...selectedPages], "");
+                          else setPageFolder(id, "");
+                        }
                       }}
                       title="Back — or drop a paper here to move it out of the folder"
                     >
@@ -2665,19 +2873,45 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <div
                         key={f}
                         className={`folderRow ${folderDragOver === f ? "dragOver" : ""}`}
-                        onClick={() => { setFolderFilter(f); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(f)}`); }}
+                        onClick={() => {
+                          if (folderRenaming?.name === f) return;
+                          setFolderFilter(f); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(f)}`);
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setHomeMenu({ kind: "folder", name: f, x: e.clientX, y: e.clientY });
+                        }}
                         onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
                         onDragLeave={() => setFolderDragOver(null)}
                         onDrop={(e) => {
                           e.preventDefault();
                           setFolderDragOver(null);
                           const id = e.dataTransfer.getData("text/plain");
-                          if (id) setPageFolder(id, f);
+                          if (id) {
+                            // A selected card drags its whole selection along
+                            if (selectedPages.has(id) && selectedPages.size > 1) movePages([...selectedPages], f);
+                            else setPageFolder(id, f);
+                          }
                         }}
-                        title="Open folder — or drop a paper on it to file it"
+                        title="Open folder — right-click to rename or delete, drop a paper to file it"
                       >
                         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
-                        <span className="folderName">{f}</span>
+                        {folderRenaming?.name === f ? (
+                          <input
+                            autoFocus
+                            className="folderNewInput"
+                            value={folderRenaming.draft}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setFolderRenaming({ name: f, draft: e.target.value })}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") renameFolder(f, folderRenaming.draft);
+                              else if (e.key === "Escape") setFolderRenaming(null);
+                            }}
+                            onBlur={() => renameFolder(f, folderRenaming.draft)}
+                          />
+                        ) : (
+                          <span className="folderName">{f}</span>
+                        )}
                         <span className="folderCount">{folderCounts[f] || 0}</span>
                       </div>
                     ))}
@@ -2760,9 +2994,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       }
                     }
                   },
-                  onPageOpen: (pageBlock) => {
-                    if (pageBlock._pageId) openBlock(pageBlock._pageId);
+                  onPageOpen: handlePageClick,
+                  onPageContext: (pageBlock, e) => {
+                    const id = pageBlock._pageId;
+                    // Right-click keeps an existing multi-selection; otherwise selects the card
+                    setSelectedPages((prev) => (prev.has(id) ? prev : new Set([id])));
+                    lastPageClickRef.current = id;
+                    setHomeMenu({ kind: "page", id, name: pageBlock.content, x: e.clientX, y: e.clientY });
                   },
+                  selectedPageIds: selectedPages,
                   onChangeText: (id, text) => {
                     if (readOnly) return;
                     if (homeMode) {
@@ -3839,6 +4079,45 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             </div>
           </div>
         </div>
+      ) : null}
+      {homeMenu ? (
+        <>
+          <div
+            className="ctxMenuBackdrop"
+            onClick={() => setHomeMenu(null)}
+            onContextMenu={(e) => { e.preventDefault(); setHomeMenu(null); }}
+          />
+          <div className="ctxMenu" style={{ left: homeMenu.x, top: homeMenu.y }}>
+            {homeMenu.kind === "page" ? (() => {
+              // Acting on a selected card acts on the whole selection
+              const ids = selectedPages.size > 1 && selectedPages.has(homeMenu.id) ? [...selectedPages] : [homeMenu.id];
+              const many = ids.length > 1;
+              return (
+                <>
+                  {!many ? (
+                    <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); clearSelection(); openBlock(homeMenu.id, { restoreScroll: true }); }}>Open</button>
+                  ) : null}
+                  {!many ? (
+                    <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); clearSelection(); setHomeEditingId(homeMenu.id); }}>Rename</button>
+                  ) : null}
+                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); duplicatePages(ids); }}>{many ? `Copy ${ids.length} pages` : "Copy"}</button>
+                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deletePages(ids); }}>{many ? `Delete ${ids.length} pages` : "Delete"}</button>
+                  <div className="ctxMenuLabel">Move to</div>
+                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); movePages(ids, ""); }}>Library (no folder)</button>
+                  {folderNames.map((f) => (
+                    <button key={f} className="ctxMenuItem" onClick={() => { setHomeMenu(null); movePages(ids, f); }}>{f}</button>
+                  ))}
+                </>
+              );
+            })() : (
+              <>
+                <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setFolderFilter(homeMenu.name); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(homeMenu.name)}`); }}>Open</button>
+                <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setFolderRenaming({ name: homeMenu.name, draft: homeMenu.name }); }}>Rename</button>
+                <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deleteFolderByName(homeMenu.name); }}>Delete</button>
+              </>
+            )}
+          </div>
+        </>
       ) : null}
       {highlightMenu ? (
         <>

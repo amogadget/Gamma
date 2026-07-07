@@ -23,6 +23,8 @@ function BlockRow({
   onUnlinkHighlight,
   onOpenLinkTarget,
   onPageOpen,
+  onPageContext,
+  selectedPageIds,
   onChangeText,
   onEnterSibling,
   onAddChild,
@@ -200,18 +202,23 @@ function BlockRow({
       }}
     >
       <div
-        className={`blockRow ${focusedId === block.id ? "focused" : ""}`}
+        className={`blockRow ${focusedId === block.id ? "focused" : ""} ${homeMode && selectedPageIds?.has(block._pageId) ? "pageSelected" : ""}`}
+        onContextMenu={homeMode && block._pageId && onPageContext ? (e) => {
+          e.preventDefault();
+          onPageContext(block, e);
+        } : undefined}
         onMouseDown={(e) => {
+          if (e.button !== 0) return; // right-click is the context menu's
           if (e.target.closest("button, textarea, input, a")) return;
           setFocusedId(block.id);
           // Clicking anywhere on a highlight's card jumps the PDF to it —
           // not just the little colored dot.
           if (block.highlightId) onJump?.(block.highlightId);
           // Home page cards work the same way: click anywhere opens the page
-          // (rename from inside the page instead).
+          // (Ctrl/Shift-click selects instead — the host decides from the event).
           if (homeMode && block._pageId && typeof onPageOpen === "function" && !block.editMode) {
             e.preventDefault();
-            onPageOpen(block);
+            onPageOpen(block, e);
             return;
           }
           if (!readOnly && !block.editMode) {
