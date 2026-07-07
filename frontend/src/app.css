@@ -1296,6 +1296,35 @@ body {
 }
 .folderRow svg { color: var(--accent); flex-shrink: 0; }
 .folderRow:hover { background: var(--bg-block); }
+/* --- home file-manager: selection + context menu --- */
+.selectionBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  margin: 0 0 8px;
+  background: var(--accent-bg-light);
+  border: 1px solid var(--accent-dark);
+  border-radius: 8px;
+}
+.selectionCount { font-size: 12px; color: var(--text-primary); font-weight: 600; margin-right: 4px; }
+.selectionBar .chatClearBtn { font-size: 12px; }
+.blockRow.pageSelected {
+  background: var(--accent-bg-light);
+  outline: 1px solid var(--accent-dark);
+  border-radius: 6px;
+}
+.ctxMenuLabel {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 6px 10px 2px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 4px;
+}
+.movePicker { max-height: 45vh; overflow-y: auto; top: calc(100% + 4px); z-index: 1400; }
+
 .folderRow.dragOver {
   background: var(--accent-bg);
   border-color: var(--accent-dark);
