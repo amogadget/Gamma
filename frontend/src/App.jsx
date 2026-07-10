@@ -2863,28 +2863,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 );
               }
 
-              return (
-                <>
-                  {/* Labels — one card per label */}
-                  {catNames.length > 0 ? (
-                    <div className="carouselRow">
-                      <div className="carouselLabel">Labels</div>
-                      <div className="carouselTrackWrap">
-                        <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
-                        <div className="carouselTrack">
-                          {catNames.map((cat) => (
-                            <button key={cat} className="categoryCard" onClick={() => { setCategoryFilter(cat); window.history.replaceState(null, "", `/?category=${encodeURIComponent(cat)}`); }}>
-                              <div className="categoryCardName">{cat}</div>
-                              <div className="categoryCardCount">{categories[cat].length} {categories[cat].length === 1 ? "paper" : "papers"}</div>
-                            </button>
-                          ))}
-                        </div>
-                        <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
-                      </div>
-                    </div>
-                  ) : null}
-                </>
-              );
+              // Labels are surfaced as chips on each file row now — no top
+              // carousel. Category filtering still works via ?category= URLs
+              // and search chips (handled by the categoryFilter branch above).
+              return null;
             })() : null}
             {homeMode && !categoryFilter && !folderFilter && pinnedPages.length > 0 ? (
               <div className="pinnedSection">
