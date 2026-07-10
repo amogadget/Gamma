@@ -164,11 +164,13 @@ export default function App() {
       prefsUserRef.current = "";
       setOpenTabs([]);
       setExtraFolders([]);
+      setRecentViews([]);
       return;
     }
     prefsUserRef.current = u;
     try { setOpenTabs(JSON.parse(localStorage.getItem(`gamma-tabs:${u}`) || "[]")); } catch { setOpenTabs([]); }
     try { setExtraFolders(JSON.parse(localStorage.getItem(`gamma-extra-folders:${u}`) || "[]")); } catch { setExtraFolders([]); }
+    try { setRecentViews(JSON.parse(localStorage.getItem(`gamma-recent-views:${u}`) || "[]")); } catch { setRecentViews([]); }
   }, [authUser?.user, readOnly]);
 
   // Folder-tag helpers: parse/serialize the comma-separated path list.
@@ -500,6 +502,19 @@ export default function App() {
       const next = typeof updater === "function" ? updater(prev) : updater;
       const u = prefsUserRef.current;
       if (u) { try { localStorage.setItem(`gamma-tabs:${u}`, JSON.stringify(next)); } catch {} }
+      return next;
+    });
+  }
+  // Recently-viewed pages — a device-local history for the library's top
+  // shortcut bar ([{id, at}], most recent first). Not page data, so it lives
+  // in localStorage like tabs.
+  const [recentViews, setRecentViews] = useState([]);
+  function pushRecentView(id) {
+    if (!id) return;
+    setRecentViews((prev) => {
+      const next = [{ id, at: new Date().toISOString() }, ...prev.filter((r) => r.id !== id)].slice(0, 24);
+      const u = prefsUserRef.current;
+      if (u) { try { localStorage.setItem(`gamma-recent-views:${u}`, JSON.stringify(next)); } catch {} }
       return next;
     });
   }
@@ -1221,6 +1236,12 @@ export default function App() {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
+
+  // Record a "recently viewed" entry whenever a page is opened.
+  useEffect(() => {
+    if (!focusedBlockId || readOnly || !prefsUserRef.current) return;
+    pushRecentView(focusedBlockId);
+  }, [focusedBlockId, readOnly]);
 
   // Keep the tab strip in sync with the open page.
   useEffect(() => {
@@ -2268,6 +2289,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     () => pageBlocks.filter((b) => b._pinned).sort((a, b) => (b._pinned || "").localeCompare(a._pinned || "")),
     [pageBlocks]
   );
+  // Recently-viewed pages that still exist, most recent first (top shortcut bar).
+  const recentViewedPages = useMemo(() => {
+    const byId = new Map(pageBlocks.map((b) => [b._pageId, b]));
+    return recentViews
+      .map((r) => { const b = byId.get(r.id); return b ? { ...b, _viewedAt: r.at } : null; })
+      .filter(Boolean)
+      .slice(0, 12);
+  }, [recentViews, pageBlocks]);
   // Home keyboard: Esc clears the selection, Enter opens the single selected
   // item — the standard file-manager shortcuts.
   useEffect(() => {
@@ -2863,10 +2892,30 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 );
               }
 
-              // Labels are surfaced as chips on each file row now — no top
-              // carousel. Category filtering still works via ?category= URLs
-              // and search chips (handled by the categoryFilter branch above).
-              return null;
+              // Labels are surfaced as chips on each file row now — the top
+              // carousel is a "recently viewed" shortcut bar instead. Category
+              // filtering still works via ?category= URLs and search chips
+              // (handled by the categoryFilter branch above).
+              return recentViewedPages.length > 0 ? (
+                <div className="carouselRow">
+                  <div className="carouselLabel">Recently viewed</div>
+                  <div className="carouselTrackWrap">
+                    <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
+                    <div className="carouselTrack">
+                      {recentViewedPages.map((b) => (
+                        <button key={b._pageId} className="recentCard" onClick={() => openPage(b._pageId)} title={b.content}>
+                          <div className="recentCardTitle">{b.content || "Untitled"}</div>
+                          <div className="recentCardMeta">
+                            <span className="recentCardKind">{b._sourceUrl ? "PDF" : "Note"}</span>
+                            <span className="recentCardTime">{formatRelativeTime(b._viewedAt)}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                    <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
+                  </div>
+                </div>
+              ) : null;
             })() : null}
             {homeMode && !categoryFilter && !folderFilter && pinnedPages.length > 0 ? (
               <div className="pinnedSection">
