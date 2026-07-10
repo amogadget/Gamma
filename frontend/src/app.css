@@ -1990,6 +1990,16 @@ body {
 }
 .searchResult:hover { background: var(--bg-hover); }
 .searchResultPage { font-size: 11px; color: var(--accent-dark); font-weight: 600; }
+.searchKindBadge {
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 500;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  vertical-align: 1px;
+}
 .searchRow { display: flex; gap: 4px; align-items: center; }
 .searchRow .searchInput { flex: 1; min-width: 0; }
 /* chips + input share one box; label suggestions drop down from it */

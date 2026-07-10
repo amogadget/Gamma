@@ -5,6 +5,7 @@ import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl } from ".
 import { DockWindow, ChatMarkdown } from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
 import ChatDock from "./chatDock";
+import SearchPanel from "./search";
 import { ContextMenu } from "./menus";
 
 
@@ -473,6 +474,7 @@ export default function App() {
   function handlePdfLoadState(url, st) {
     if (st.phase === "rendered") {
       pdfRenderedUrlRef.current = url; // this document's pages are now in the DOM
+      setPdfDocNonce((n) => n + 1);    // lets a pinned search re-find its matches here
       // Called from the viewer's layout effect — before paint. Applying a
       // pending restore HERE means the document appears already scrolled to
       // its position: no flash of the top, no visible jump.
@@ -530,45 +532,11 @@ export default function App() {
   }, [openPopover]);
   const [shareUrl, setShareUrl] = useState("");
   const [shareCopied, setShareCopied] = useState(false);
-  // Workspace search (Ctrl+Shift+F) with VSCode-style options:
-  // Aa = match case, ab = whole word, .* = regex, plus replace-in-notes.
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchLabels, setSearchLabels] = useState([]); // confirmed label filters (chips)
-  const [labelSugIdx, setLabelSugIdx] = useState(0);
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchBusy, setSearchBusy] = useState(false);
-  const [searchCase, setSearchCase] = useState(false);
-  const [searchWhole, setSearchWhole] = useState(false);
-  const [searchRegex, setSearchRegex] = useState(false);
-  const [searchReplaceOpen, setSearchReplaceOpen] = useState(false);
-  const [searchReplace, setSearchReplace] = useState("");
-  const [pdfMatches, setPdfMatches] = useState([]);
-  const [libMatches, setLibMatches] = useState([]); // FTS hits across ALL papers' PDF text
-  const [libIndexing, setLibIndexing] = useState(0); // papers still being indexed server-side
-  const [findIndex, setFindIndex] = useState(0); // active PDF match for find next/prev
-
-  // Open a library search hit: load the paper, then scroll to the hit's page.
-  function openLibMatch(r) {
-    setOpenPopover(null);
-    openBlock(r.block_id).then(() => {
-      let tries = 0;
-      const go = () => {
-        if (scrollToRef.current && document.querySelector("[data-page]")) {
-          scrollToRef.current({
-            position: {
-              pageNumber: r.page,
-              boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: r.page },
-              rects: [],
-            },
-          });
-        } else if (tries++ < 40) setTimeout(go, 200);
-      };
-      setTimeout(go, 600); // let the session-restore scroll settle first
-    });
-  }
-  const [searchNonce, setSearchNonce] = useState(0); // bump to re-run the search
-  const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rect, pageW, pageH}]
-  useEffect(() => { setFindIndex(0); }, [pdfMatches]);
+  // Workspace search lives in search.jsx (SearchPanel); App only holds what
+  // the PDF viewer needs from it: the match highlights and the search hook.
+  const [findMarks, setFindMarks] = useState([]); // [{page, rect, active}] painted by PdfViewer
+  const [pdfDocNonce, setPdfDocNonce] = useState(0); // bumped when a document finishes rendering
+  const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rects, pageW, pageH}]
 
   // Poll server-side task progress: slow heartbeat while logged in (so the
   // button appears even if the work was kicked off elsewhere), fast while
@@ -580,32 +548,11 @@ export default function App() {
       .then((d) => { if (!cancelled) setIndexTask(d.indexing || null); })
       .catch(() => {});
     refresh();
-    const fast = openPopover === "downloads" || libIndexing > 0 || indexTask?.active;
+    const fast = openPopover === "downloads" || indexTask?.active;
     const t = setInterval(refresh, fast ? 2000 : 8000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [openPopover, libIndexing, authUser?.user, readOnly, indexTask?.active]);
+  }, [openPopover, authUser?.user, readOnly, indexTask?.active]);
 
-  const findMarksMemo = useMemo(() => (
-    openPopover === "search" && searchQuery.trim()
-      ? pdfMatches.map((m, i) => ({ page: m.page, rect: m.rect, active: i === findIndex }))
-      : []
-  ), [pdfMatches, findIndex, openPopover, searchQuery]);
-
-  // Jump the viewer to a specific PDF match and mark it active.
-  function gotoFind(i) {
-    if (!pdfMatches.length) return;
-    const idx = ((i % pdfMatches.length) + pdfMatches.length) % pdfMatches.length;
-    setFindIndex(idx);
-    const m = pdfMatches[idx];
-    setPdfHidden(false);
-    scrollToRef.current?.({
-      position: {
-        pageNumber: m.page,
-        boundingRect: { ...m.rect, width: m.pageW, height: m.pageH, pageNumber: m.page },
-        rects: [],
-      },
-    });
-  }
   // Every folder path in use (from page tags + manually created empties),
   // plus all ancestor prefixes — "readout" exists once "readout/destructive"
   // does, so it can be browsed, targeted, and searched by prefix.
@@ -621,108 +568,6 @@ export default function App() {
     }
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [homeBlocks, extraFolders]);
-  // Filter chips come in two kinds — standard labels (properties.category,
-  // exact match) and folder labels (properties.folder paths, prefix match so
-  // "readout" covers readout/destructive too). Typing autosuggests both;
-  // Tab/Enter confirms one into a chip. Typed text searches notes/PDFs —
-  // restricted to the matching pages when chips are present (all chips AND).
-  const allChipOptions = useMemo(() => {
-    const seen = new Map(); // kind:lowercase → option
-    for (const b of homeBlocks) {
-      for (const t of (b.properties?.category || "").split(",").map((s) => s.trim()).filter(Boolean)) {
-        if (!seen.has(`l:${t.toLowerCase()}`)) seen.set(`l:${t.toLowerCase()}`, { name: t, kind: "label" });
-      }
-    }
-    for (const f of allFolderPaths) {
-      if (!seen.has(`f:${f.toLowerCase()}`)) seen.set(`f:${f.toLowerCase()}`, { name: f, kind: "folder" });
-    }
-    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [homeBlocks, allFolderPaths]);
-  const labelSuggestions = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return [];
-    const picked = new Set(searchLabels.map((l) => `${l.kind}:${l.name.toLowerCase()}`));
-    return allChipOptions.filter((o) => !picked.has(`${o.kind}:${o.name.toLowerCase()}`) && o.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [searchQuery, allChipOptions, searchLabels]);
-  useEffect(() => { setLabelSugIdx(0); }, [searchQuery]);
-  function confirmSearchLabel(opt) {
-    setSearchLabels((prev) => (prev.some((l) => l.kind === opt.kind && l.name.toLowerCase() === opt.name.toLowerCase()) ? prev : [...prev, opt]));
-    setSearchQuery("");
-  }
-  const searchTextQuery = useMemo(() => searchQuery.trim(), [searchQuery]);
-  const labelMatches = useMemo(() => {
-    if (!searchLabels.length) return [];
-    return homeBlocks.filter((b) => {
-      const labels = (b.properties?.category || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
-      const folders = (b.properties?.folder || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
-      return searchLabels.every((c) => {
-        const n = c.name.toLowerCase();
-        return c.kind === "folder"
-          ? folders.some((t) => t === n || t.startsWith(n + "/"))
-          : labels.includes(n);
-      });
-    });
-  }, [searchLabels, homeBlocks]);
-  // With chips active, text results only count inside the matching pages.
-  const labelPageIds = useMemo(() => (
-    searchLabels.length ? new Set(labelMatches.map((b) => b.id)) : null
-  ), [searchLabels.length, labelMatches]);
-  useEffect(() => {
-    if (openPopover !== "search" || !searchTextQuery) {
-      setSearchResults([]); setPdfMatches([]); setLibMatches([]); setLibIndexing(0);
-      return;
-    }
-    const timer = setTimeout(() => {
-      setSearchBusy(true);
-      const q = searchTextQuery;
-      const flags = `&case=${searchCase ? 1 : 0}&whole=${searchWhole ? 1 : 0}&regex=${searchRegex ? 1 : 0}`;
-      const notesReq = apiJson(`${API}/block-search?q=${encodeURIComponent(q)}&limit=20${flags}`)
-        .then((d) => setSearchResults(d.blocks || []))
-        .catch(() => setSearchResults([]));
-      // Full-text over every paper's PDF (server-side FTS index; the toggles
-      // don't apply here — it's plain word matching)
-      const libReq = apiJson(`${API}/pdf-search?q=${encodeURIComponent(q)}&limit=15`)
-        .then((d) => { setLibMatches(d.results || []); setLibIndexing(d.indexing || 0); })
-        .catch(() => { setLibMatches([]); setLibIndexing(0); });
-      let pdfReq = Promise.resolve();
-      if (pdfSearchRef.current) {
-        try {
-          let body = searchRegex ? q : q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          if (searchWhole) body = `\\b(?:${body})\\b`;
-          const re = new RegExp(body, searchCase ? "g" : "gi");
-          pdfReq = pdfSearchRef.current(re).then(setPdfMatches).catch(() => setPdfMatches([]));
-        } catch { setPdfMatches([]); }
-      } else {
-        setPdfMatches([]);
-      }
-      Promise.allSettled([notesReq, pdfReq, libReq]).then(() => setSearchBusy(false));
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [searchTextQuery, openPopover, searchCase, searchWhole, searchRegex, searchNonce]);
-
-  function replaceAllInNotes() {
-    const q = searchTextQuery;
-    if (!q) return;
-    setConfirmBox({
-      title: "Replace all",
-      message: `Replace all occurrences of "${q}" with "${searchReplace}" across ALL your notes?`,
-      confirmLabel: "Replace all",
-      onConfirm: async () => {
-        try {
-          const data = await apiJson(`${API}/blocks-replace`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: q, replacement: searchReplace, case: searchCase, whole: searchWhole, regex: searchRegex }),
-          });
-          setStatus(`Replaced in ${data.changed} block${data.changed === 1 ? "" : "s"}.`);
-          if (focusedBlockId) await loadBlocksForBlock(focusedBlockId);
-          setSearchNonce((n) => n + 1);
-        } catch (err) {
-          setStatus(`Replace failed: ${err.message}`);
-        }
-      },
-    });
-  }
   useEffect(() => {
     function onKey(e) {
       // Ctrl+F (and Ctrl+Shift+F) open the built-in search instead of the
@@ -3703,196 +3548,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   </div>
                 ) : null}
               </span>
-            <span data-popover="search" style={{ position: "relative", display: "inline-flex" }}>
-              <button
-                className={`iconBtn ${openPopover === "search" ? "activeIcon" : ""}`}
-                onClick={() => setOpenPopover((p) => (p === "search" ? null : "search"))}
-                title="Search all notes (Ctrl+Shift+F)"
-                aria-label="Search"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-              </button>
-              {openPopover === "search" ? (
-                <div className="popover searchPopover">
-                  <div className="searchRow">
-                    <button
-                      className={`searchToggle ${searchReplaceOpen ? "on" : ""}`}
-                      onClick={() => setSearchReplaceOpen((v) => !v)}
-                      title="Toggle replace"
-                    >{searchReplaceOpen ? "⌄" : "›"}</button>
-                    <div className="searchInputWrap">
-                      {searchLabels.map((l) => (
-                        <span key={`${l.kind}:${l.name}`} className="categoryBadge searchChip">
-                          {l.kind === "folder"
-                            ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
-                            : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>}
-                          {l.name}
-                          <button
-                            className="uiClose uiCloseSm searchChipX"
-                            title={`Remove ${l.kind === "folder" ? "folder" : "label"} filter "${l.name}"`}
-                            onClick={() => setSearchLabels((prev) => prev.filter((x) => x !== l))}
-                          >×</button>
-                        </span>
-                      ))}
-                      <input
-                        autoFocus
-                        className="searchInput"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        onKeyDown={(e) => {
-                          if ((e.key === "Tab" || e.key === "Enter") && labelSuggestions.length) {
-                            e.preventDefault();
-                            confirmSearchLabel(labelSuggestions[labelSugIdx] || labelSuggestions[0]);
-                          } else if (e.key === "ArrowDown" && labelSuggestions.length) {
-                            e.preventDefault();
-                            setLabelSugIdx((i) => (i + 1) % labelSuggestions.length);
-                          } else if (e.key === "ArrowUp" && labelSuggestions.length) {
-                            e.preventDefault();
-                            setLabelSugIdx((i) => (i - 1 + labelSuggestions.length) % labelSuggestions.length);
-                          } else if (e.key === "Backspace" && !searchQuery && searchLabels.length) {
-                            setSearchLabels((prev) => prev.slice(0, -1));
-                          }
-                        }}
-                        placeholder={searchLabels.length ? "Search within labeled pages…" : "Search notes, highlights, and PDFs — Tab adds a label filter"}
-                      />
-                      {labelSuggestions.length ? (
-                        <div className="categorySuggestions searchLabelSuggest">
-                          {labelSuggestions.map((s, i) => (
-                            <button
-                              key={`${s.kind}:${s.name}`}
-                              className={`categorySuggestionItem${i === labelSugIdx ? " selected" : ""}`}
-                              onMouseDown={(e) => { e.preventDefault(); confirmSearchLabel(s); }}
-                              onMouseEnter={() => setLabelSugIdx(i)}
-                            >
-                              <span className="searchSuggestName">
-                                {s.kind === "folder"
-                                  ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
-                                  : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>}
-                                {s.name}
-                              </span>
-                              <span className="searchSuggestHint">Tab</span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                    <button className={`searchToggle ${searchCase ? "on" : ""}`} onClick={() => setSearchCase((v) => !v)} title="Match case">Aa</button>
-                    <button className={`searchToggle ${searchWhole ? "on" : ""}`} onClick={() => setSearchWhole((v) => !v)} title="Match whole word"><u>ab</u></button>
-                    <button className={`searchToggle ${searchRegex ? "on" : ""}`} onClick={() => setSearchRegex((v) => !v)} title="Use regular expression">.*</button>
-                  </div>
-                  {searchReplaceOpen ? (
-                    <div className="searchRow">
-                      <span className="searchToggle spacer" />
-                      <input
-                        className="searchInput"
-                        value={searchReplace}
-                        onChange={(e) => setSearchReplace(e.target.value)}
-                        placeholder="Replace in notes…"
-                      />
-                      <button
-                        className="searchToggle replaceBtn"
-                        onClick={replaceAllInNotes}
-                        disabled={!searchQuery.trim()}
-                        title="Replace all matches across your notes (PDF text can't be edited)"
-                      >Replace all</button>
-                    </div>
-                  ) : null}
-                  <div className="searchResults">
-                    {searchBusy ? <div className="searchHint">Searching…</div> : null}
-                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 && libMatches.length === 0 && labelMatches.length === 0 ? (
-                      <div className="searchHint">No matches.</div>
-                    ) : null}
-                    {searchLabels.length ? (
-                      <>
-                        <div className="searchSection">Filters: {searchLabels.map((c) => c.name).join(" + ")}</div>
-                        {labelMatches.length === 0 ? (
-                          <div className="searchHint">No pages carry {searchLabels.length === 1 ? "this label" : "all these labels"}.</div>
-                        ) : labelMatches.map((b) => (
-                          <button
-                            key={`lbl-${b.id}`}
-                            className="searchResult"
-                            onClick={() => { setOpenPopover(null); openBlock(b.id, { restoreScroll: true }); }}
-                          >
-                            <span className="searchResultPage">{b.content || "Untitled"}</span>
-                            <span className="searchResultText">{b.properties?.category || ""}</span>
-                          </button>
-                        ))}
-                      </>
-                    ) : null}
-                    {(() => {
-                      // Priority: this paper's notes → this PDF's text → the
-                      // rest of the workspace (other notes, other papers).
-                      // Label tokens scope everything to the labeled pages.
-                      const inScope = (pageId) => !labelPageIds || labelPageIds.has(pageId);
-                      const inPage = (r) => focusedBlockId && (r.page_root_id === focusedBlockId || r.id === focusedBlockId);
-                      const scoped = searchResults.filter((r) => inScope(r.page_root_id || r.id));
-                      const notesHere = scoped.filter(inPage);
-                      const notesElsewhere = scoped.filter((r) => !inPage(r));
-                      const libElsewhere = libMatches.filter((r) => r.block_id !== focusedBlockId && inScope(r.block_id));
-                      const showPdfMatches = inScope(focusedBlockId);
-                      const noteRow = (r) => (
-                        <button
-                          key={r.id}
-                          className="searchResult"
-                          onClick={() => {
-                            setOpenPopover(null);
-                            if (r.page_root_id && r.page_root_id !== r.id) pendingBlockScrollRef.current = r.id;
-                            openBlock(r.page_root_id || r.id);
-                          }}
-                        >
-                          <span className="searchResultPage">{r.page_title || "Untitled"}</span>
-                          <span className="searchResultText">{r.content}</span>
-                        </button>
-                      );
-                      return (
-                        <>
-                          {notesHere.length ? <div className="searchSection">Notes in this paper</div> : null}
-                          {notesHere.map(noteRow)}
-                          {showPdfMatches && pdfMatches.length ? (
-                            <div className="searchSection searchSectionRow">
-                              <span>This PDF · {findIndex + 1}/{pdfMatches.length}</span>
-                              <span className="findNav">
-                                <button className="searchToggle" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">▲</button>
-                                <button className="searchToggle" onClick={() => gotoFind(findIndex + 1)} title="Next match">▼</button>
-                              </span>
-                            </div>
-                          ) : null}
-                          {(showPdfMatches ? pdfMatches : []).map((m, i) => (
-                            <button
-                              key={`pdf-${i}`}
-                              className={`searchResult ${i === findIndex ? "active" : ""}`}
-                              onClick={() => gotoFind(i)}
-                            >
-                              <span className="searchResultPage">p. {m.page}</span>
-                              <span className="searchResultText">…{m.snippet}…</span>
-                            </button>
-                          ))}
-                          {notesElsewhere.length ? <div className="searchSection">{focusedBlockId ? "Other notes" : "Notes"}</div> : null}
-                          {notesElsewhere.map(noteRow)}
-                          {libElsewhere.length || libIndexing ? (
-                            <div className="searchSection">{focusedBlockId ? "Other papers" : "Library PDFs"}</div>
-                          ) : null}
-                          {libIndexing ? (
-                            <div className="searchHint">Indexing {libIndexing} paper{libIndexing === 1 ? "" : "s"} in the background — results will fill in shortly.</div>
-                          ) : null}
-                          {libElsewhere.map((r, i) => (
-                            <button
-                              key={`lib-${i}`}
-                              className="searchResult"
-                              onClick={() => openLibMatch(r)}
-                              title={`Open "${r.title}" at page ${r.page}`}
-                            >
-                              <span className="searchResultPage">{r.title.slice(0, 60)} · p. {r.page}</span>
-                              <span className="searchResultText">…{r.snippet}…</span>
-                            </button>
-                          ))}
-                        </>
-                      );
-                    })()}
-                  </div>
-                </div>
-              ) : null}
-            </span>
+            <SearchPanel
+              open={openPopover === "search"}
+              onOpenChange={(v) => setOpenPopover(v ? "search" : null)}
+              focusedBlockId={focusedBlockId}
+              homeBlocks={homeBlocks}
+              allFolderPaths={allFolderPaths}
+              openBlock={openBlock}
+              pendingBlockScrollRef={pendingBlockScrollRef}
+              pdfSearchRef={pdfSearchRef}
+              scrollToRef={scrollToRef}
+              setPdfHidden={setPdfHidden}
+              docNonce={pdfDocNonce}
+              onFindMarks={setFindMarks}
+              confirm={setConfirmBox}
+              setStatus={setStatus}
+              onReplaced={async () => { if (focusedBlockId) await loadBlocksForBlock(focusedBlockId); }}
+            />
             {pdfUrl && !homeMode ? (
               <span data-popover="share" style={{ position: "relative", display: "inline-flex" }}>
                 <button
@@ -4005,6 +3677,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <span className="switchTrack" />
                       </span>
                     </label>
+                    <div className="settingRow" title="Re-extract the text of every paper for full-text search. Runs in the background — progress shows in the tasks popover.">
+                      <span className="settingText">
+                        <span className="settingLabel">Search index</span>
+                        <span className="settingDesc">Re-extract all PDF text if search results look stale</span>
+                      </span>
+                      <button
+                        className="searchToggle replaceBtn"
+                        disabled={indexTask?.active}
+                        onClick={async () => {
+                          try {
+                            const d = await apiJson(`${API}/search-reindex`, { method: "POST" });
+                            setStatus(d.busy
+                              ? "Indexing is already running — see the tasks popover."
+                              : d.scheduled
+                                ? `Re-indexing ${d.scheduled} paper${d.scheduled === 1 ? "" : "s"} in the background.`
+                                : "No papers with PDFs to index.");
+                          } catch (err) {
+                            setStatus(`Reindex failed: ${err.message}`);
+                          }
+                        }}
+                      >{indexTask?.active ? "Indexing…" : "Rebuild"}</button>
+                    </div>
 
                     <div className="popoverDivider" />
                     <button className="popoverItem" onClick={() => { openPromptEditor(); setOpenPopover(null); }}>
@@ -4132,7 +3826,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <PdfViewer url={pdfUrl} highlights={highlights}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
-              findMarks={findMarksMemo}
+              findMarks={findMarks}
               onEffectiveScale={setPdfEffScale}
               onBeforeLinkJump={pushNav}
               onLoadState={handlePdfLoadState}
