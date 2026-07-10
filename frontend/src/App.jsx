@@ -2885,37 +2885,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 </>
               );
             })() : null}
-            {homeMode && selectedPages.size ? (
-              <div className="selectionBar">
-                <span className="selectionCount">{selectedPages.size} selected</span>
-                <span style={{ position: "relative", display: "inline-flex" }}>
-                  <button className="chatClearBtn" onClick={() => setMovePicker((v) => !v)}>Add to…</button>
-                  {movePicker ? (
-                    <div className="popover movePicker" style={{ left: 0, right: "auto" }}>
-                      {allFolderPaths.map((f) => (
-                        <button key={f} className="popoverItem" onClick={() => addPagesToFolder([...selectedPages], f)}>{f}</button>
-                      ))}
-                      {allFolderPaths.length ? <div className="popoverDivider" /> : null}
-                      <button className="popoverItem" onClick={() => removePagesFromFolder([...selectedPages], "")}>Clear folder tags</button>
-                    </div>
-                  ) : null}
-                </span>
-                {folderFilter ? (
-                  <button className="chatClearBtn" onClick={() => removePagesFromFolder([...selectedPages], folderFilter)}>Remove from folder</button>
-                ) : null}
-                <button className="chatClearBtn" onClick={() => duplicatePages([...selectedPages])}>Copy</button>
-                {selectedPages.size === 1 ? (
-                  <button className="chatClearBtn" onClick={() => { const id = [...selectedPages][0]; clearSelection(); setHomeEditingId(id); }}>Rename</button>
-                ) : null}
-                {[...selectedPages].every((id) => pageBlocks.find((b) => b._pageId === id)?._pinned) ? (
-                  <button className="chatClearBtn" onClick={() => setPagesPinned([...selectedPages], false)}>Unpin</button>
-                ) : (
-                  <button className="chatClearBtn" onClick={() => setPagesPinned([...selectedPages], true)}>Pin</button>
-                )}
-                <button className="chatClearBtn" onClick={() => deletePages([...selectedPages])}>Delete</button>
-                <button className="uiClose" onClick={clearSelection} title="Clear selection (Esc)" aria-label="Clear selection">×</button>
-              </div>
-            ) : null}
             {homeMode && !categoryFilter && !folderFilter && pinnedPages.length > 0 ? (
               <div className="pinnedSection">
                 <div className="pinnedLabel"><PinIcon filled size={12} /> Pinned</div>
@@ -3192,6 +3161,71 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   ) : null}
                 </>
               )
+            ) : homeMode && !categoryFilter && homeView === "list" ? (
+              homeVisiblePages.length === 0 ? (
+                <div className="empty">{folderFilter ? "This folder is empty — drag papers onto it from the library." : "No pages yet — use the + button above to open a PDF or start a note page."}</div>
+              ) : (
+                <>
+                  <div className="fileList" onClick={(e) => { if (e.target.classList.contains("fileList")) clearSelection(); }}>
+                    {homeVisiblePages.map((b) => {
+                      const id = b._pageId;
+                      const isPinned = !!b._pinned;
+                      const isEditing = homeEditingId === id;
+                      return (
+                        <div
+                          key={id}
+                          className={`fileRow ${selectedPages.has(id) ? "selected" : ""}`}
+                          draggable={!isEditing}
+                          onDragStart={(e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; }}
+                          onClick={(e) => handlePageClick(b, e)}
+                          onDoubleClick={() => { if (!isEditing) openPage(id); }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setSelectedPages((prev) => (prev.has(id) ? prev : new Set([id])));
+                            lastPageClickRef.current = id;
+                            setHomeMenu({ kind: "page", id, name: b.content, x: e.clientX, y: e.clientY });
+                          }}
+                          title={`${b.content}\nClick to select · double-click to open`}
+                        >
+                          <span className="fileRowIcon"><FileGlyph isPdf={!!b._sourceUrl} /></span>
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              className="fileRowRename"
+                              defaultValue={b.content}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") commitPageRename(id, e.currentTarget.value);
+                                else if (e.key === "Escape") setHomeEditingId(null);
+                              }}
+                              onBlur={(e) => commitPageRename(id, e.currentTarget.value)}
+                            />
+                          ) : (
+                            <span className="fileRowName">{b.content || "Untitled"}</span>
+                          )}
+                          <span className="fileRowKind">{b._sourceUrl ? "PDF" : "Note"}</span>
+                          {b._folders?.map((f) => (
+                            <span key={f} className="folderTagBadge" title={`In folder ${f}`}>
+                              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                              {f}
+                            </span>
+                          ))}
+                          <button
+                            className={`pinBtn fileRowPin ${isPinned ? "pinned" : ""}`}
+                            title={isPinned ? "Unpin" : "Pin to top"}
+                            onClick={(e) => { e.stopPropagation(); setPagesPinned([id], !isPinned); }}
+                          ><PinIcon filled={isPinned} size={12} /></button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {homeSortedPages.length > homeVisiblePages.length ? (
+                    <button ref={loadMoreRef} className="loadMoreBtn" onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}>
+                      Showing {homeVisiblePages.length} of {homeSortedPages.length} — load more
+                    </button>
+                  ) : null}
+                </>
+              )
             ) : homeMode && categoryFilter ? null : (
             (homeMode ? homeVisiblePages : visibleBlocks).length === 0 ? (
               <div className="empty">{homeMode
@@ -3246,9 +3280,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     }
                   },
                   onPageOpen: handlePageClick,
-                  onPageActivate: (pageBlock) => openPage(pageBlock._pageId),
-                  onPagePin: (id, pinned) => setPagesPinned([id], pinned),
-                  pinnedPageIds: new Set(pinnedPages.map((b) => b._pageId)),
                   onPageContext: (pageBlock, e) => {
                     const id = pageBlock._pageId;
                     // Right-click keeps an existing multi-selection; otherwise selects the card
@@ -4330,7 +4361,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   ) : (
                     <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setPagesPinned(ids, true); }}>{many ? `Pin ${ids.length} pages` : "Pin"}</button>
                   )}
-                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); duplicatePages(ids); }}>{many ? `Copy ${ids.length} pages` : "Copy"}</button>
+                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); duplicatePages(ids); }}>{many ? `Duplicate ${ids.length} pages` : "Duplicate"}</button>
                   <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deletePages(ids); }}>{many ? `Delete ${ids.length} pages` : "Delete"}</button>
                   <div className="ctxMenuLabel">Add to folder</div>
                   {allFolderPaths.map((f) => (

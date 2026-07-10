@@ -1454,11 +1454,80 @@ body {
 .homeViewBtn:hover { color: var(--text-primary); }
 .homeViewBtn.active { background: var(--bg-input); color: var(--accent); box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
 
-/* selected states shared by list rows and tiles */
+/* selected state — a solid border (not outline) so it never clips at the
+   scroll-container edge */
 .folderRow.selected {
   background: var(--accent-bg-light);
-  outline: 1px solid var(--accent-dark);
+  border: 1px solid var(--accent-dark);
 }
+
+/* Home library file rows — their OWN display, separate from the outliner
+   block rows (no bullet, no collapse rail). Left boundary lines up with the
+   pinned strip and folder rows (all inset 4px inside the sidebar padding). */
+.fileList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 4px;
+}
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+.fileRow:hover { background: var(--bg-block); }
+.fileRow.selected { background: var(--accent-bg-light); border-color: var(--accent-dark); }
+.fileRowIcon {
+  flex: 0 0 auto;
+  width: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fileRowIcon .tileGlyph { width: 20px; height: 20px; }
+.fileRow:hover .fileGlyph, .fileRow.selected .fileGlyph { color: var(--accent); }
+.fileRowName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.fileRowRename {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--accent-dark);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  padding: 2px 6px;
+  outline: none;
+}
+.fileRowKind {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.fileRowPin { flex: 0 0 auto; opacity: 0; transition: opacity 0.12s; }
+.fileRow:hover .fileRowPin { opacity: 0.6; }
+.fileRowPin:hover, .fileRowPin.pinned { opacity: 1; }
+/* line the folder-row icon up with the file-row icon column */
+.folderBrowser .folderRow > svg { width: 20px; height: 20px; }
 
 /* hover pin button on list rows */
 .rowPinBtn {

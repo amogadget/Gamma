@@ -8,7 +8,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
 import { COLORS } from "./pdfViewer";
-import { AutoGrowTextarea, PinIcon } from "./widgets";
+import { AutoGrowTextarea } from "./widgets";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
@@ -23,9 +23,6 @@ function BlockRow({
   onUnlinkHighlight,
   onOpenLinkTarget,
   onPageOpen,
-  onPageActivate,
-  onPagePin,
-  pinnedPageIds,
   onPageContext,
   selectedPageIds,
   onChangeText,
@@ -234,10 +231,6 @@ function BlockRow({
           if (e.target.closest("button, textarea, input, a")) return;
           if (!block.editMode) onPageOpen(block, e);
         } : undefined}
-        onDoubleClick={homeMode && block._pageId && typeof onPageActivate === "function" ? (e) => {
-          if (e.target.closest("button, textarea, input, a")) return;
-          if (!block.editMode) onPageActivate(block);
-        } : undefined}
       >
         {hasChildren ? (
           <button
@@ -288,10 +281,10 @@ function BlockRow({
               >⊕</button>
             ) : null}
           </>
-        ) : block._pageId && typeof onPageActivate === "function" ? (
+        ) : block._pageId && typeof onPageOpen === "function" ? (
           <button
             className="collapseBtn dotSlot pageBulletBtn"
-            onClick={(e) => { e.stopPropagation(); onPageActivate(block); }}
+            onClick={(e) => { e.stopPropagation(); onPageOpen(block); }}
             title="Open page"
           ><span className="pageBulletDot" /></button>
         ) : (
@@ -307,18 +300,6 @@ function BlockRow({
                 {f}
               </span>
             ))}
-            {homeMode && block._pageId && typeof onPagePin === "function" ? (() => {
-              const isPinned = !!(pinnedPageIds && pinnedPageIds.has(block._pageId));
-              return (
-                <button
-                  className={`rowPinBtn ${isPinned ? "pinned" : ""}`}
-                  title={isPinned ? "Unpin" : "Pin to top"}
-                  onClick={(e) => { e.stopPropagation(); onPagePin(block._pageId, !isPinned); }}
-                >
-                  <PinIcon filled={isPinned} />
-                </button>
-              );
-            })() : null}
           </div>
 
           {!readOnly && block.editMode ? (
