@@ -1526,6 +1526,31 @@ body {
 .fileRowPin { flex: 0 0 auto; opacity: 0; transition: opacity 0.12s; }
 .fileRow:hover .fileRowPin { opacity: 0.6; }
 .fileRowPin:hover, .fileRowPin.pinned { opacity: 1; }
+/* Folder + label chips, capped to a width and clipped so they never push the
+   kind/pin off the row. Order in the row: name … [labels] PDF pin. */
+.fileRowLabels {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  margin-left: 8px;
+}
+.fileRowLabels .folderTagBadge,
+.fileRowLabels .labelTagBadge { margin-left: 0; flex: 0 0 auto; }
+.labelTagBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-secondary);
+  background: var(--bg-raised);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 10px;
+  white-space: nowrap;
+}
 /* line the folder-row icon up with the file-row icon column */
 .folderBrowser .folderRow > svg { width: 20px; height: 20px; }
 
