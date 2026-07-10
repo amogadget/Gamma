@@ -36,6 +36,29 @@ def test_fts_query_quotes_and_prefixes():
     assert _fts_query("atom imaging") == '"atom" "imaging"*'
     assert _fts_query('say "hi"') == '"say" """hi"""*'  # embedded quotes doubled
     assert _fts_query("  ") == ""
+    # Queries are normalized like the index: "3,000" and "3000" are the same
+    assert _fts_query("3,000") == _fts_query("3000") == '"3000"*'
+
+
+def test_normalize_text():
+    from gamma.textnorm import normalize_text
+    assert normalize_text("a 3,000-qubit array") == "a 3000-qubit array"
+    assert normalize_text("the sys-\ntem works") == "the system works"  # line-break hyphenation
+    assert normalize_text("eﬃcient  ﬁne") == "efficient fine"          # ligatures fold
+    assert normalize_text("well-known") == "well-known"                 # real hyphens survive
+    assert normalize_text("") == ""
+
+
+def test_fuzzy_pattern_separator_tolerance():
+    from gamma.textnorm import fuzzy_pattern
+    assert fuzzy_pattern("3000").search("a coherent 3,000-qubit system")
+    assert fuzzy_pattern("3000 qubit").search("a 3,000-qubit system")   # space matches hyphen
+    assert fuzzy_pattern("3,000-qubit").search("3000 qubit")            # and the other way
+    assert fuzzy_pattern("Qubit").search("QUBIT")                       # case-insensitive default
+    assert not fuzzy_pattern("qubit", case=True).search("QUBIT")
+    assert not fuzzy_pattern("fine", whole=True).search("refined")
+    assert fuzzy_pattern("(", regex=True) is None                       # invalid regex reported
+    assert fuzzy_pattern("   ") is None
 
 
 def test_parse_images_validates():

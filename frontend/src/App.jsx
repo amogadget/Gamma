@@ -2,9 +2,12 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS } from "./pdfViewer";
 import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl } from "./utils";
-import { DockWindow, ChatMarkdown } from "./widgets";
+import { DockWindow, ChatMarkdown, PinIcon } from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
+import { ViewToggle, FolderGlyph, FileGlyph } from "./fileBrowser";
 import ChatDock from "./chatDock";
+import SearchPanel from "./search";
+import { ContextMenu } from "./menus";
 
 
 import {
@@ -132,6 +135,14 @@ export default function App() {
     setHomeSort(v);
     try { localStorage.setItem("gamma-home-sort", v); } catch {}
   }
+  // Home layout: "list" (block-style rows) or "grid" (icon tiles).
+  const [homeView, setHomeView] = useState(() => {
+    try { return localStorage.getItem("gamma-home-view") || "list"; } catch { return "list"; }
+  });
+  function changeHomeView(v) {
+    setHomeView(v);
+    try { localStorage.setItem("gamma-home-view", v); } catch {}
+  }
   const HOME_PAGE_CHUNK = 30;
   const [homeShowCount, setHomeShowCount] = useState(HOME_PAGE_CHUNK);
   useEffect(() => { setHomeShowCount(HOME_PAGE_CHUNK); }, [folderFilter, homeSort]);
@@ -183,19 +194,21 @@ export default function App() {
 
   // --- Home file-manager: multi-select + copy/move/delete, folder rename ---
   const [selectedPages, setSelectedPages] = useState(() => new Set());
+  const [selectedFolders, setSelectedFolders] = useState(() => new Set());
   const lastPageClickRef = useRef(null); // anchor for shift-range selection
   const [homeMenu, setHomeMenu] = useState(null); // {kind:"page"|"folder", id?, name, x, y}
   const [folderRenaming, setFolderRenaming] = useState(null); // {name, draft}
   const [movePicker, setMovePicker] = useState(false);
 
-  function clearSelection() { setSelectedPages(new Set()); setMovePicker(false); }
+  function clearSelection() { setSelectedPages(new Set()); setSelectedFolders(new Set()); setMovePicker(false); }
 
-  // Plain click opens; Ctrl/Cmd toggles selection; Shift selects the range
-  // from the last clicked card (standard file-manager semantics).
+  // Modern file-manager semantics: plain click SELECTS, double-click opens.
+  // Ctrl/Cmd toggles a single item; Shift extends a range from the last click.
   function handlePageClick(pageBlock, e) {
     const id = pageBlock._pageId;
     if (!id) return;
     if (e && (e.ctrlKey || e.metaKey)) {
+      setSelectedFolders(new Set());
       setSelectedPages((prev) => {
         const next = new Set(prev);
         if (next.has(id)) next.delete(id); else next.add(id);
@@ -210,6 +223,7 @@ export default function App() {
       const b = order.indexOf(id);
       if (a !== -1 && b !== -1) {
         const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelectedFolders(new Set());
         setSelectedPages((prev) => {
           const next = new Set(prev);
           for (let i = lo; i <= hi; i++) next.add(order[i]);
@@ -218,9 +232,53 @@ export default function App() {
         return;
       }
     }
+    // Plain click: select just this page (replacing any prior selection).
     lastPageClickRef.current = id;
+    setMovePicker(false);
+    setSelectedFolders(new Set());
+    setSelectedPages(new Set([id]));
+  }
+
+  // Double-click / Enter / context-menu "Open": the old single-click behavior.
+  function openPage(id) {
+    if (!id) return;
     clearSelection();
     openBlock(id, { restoreScroll: true });
+  }
+
+  // Folder single-click selects (Ctrl toggles); double-click navigates in.
+  function handleFolderClick(path, e) {
+    if (folderRenaming?.name === path) return;
+    if (e && (e.ctrlKey || e.metaKey)) {
+      setSelectedPages(new Set());
+      setSelectedFolders((prev) => {
+        const next = new Set(prev);
+        if (next.has(path)) next.delete(path); else next.add(path);
+        return next;
+      });
+      return;
+    }
+    setMovePicker(false);
+    setSelectedPages(new Set());
+    setSelectedFolders(new Set([path]));
+  }
+  function openFolder(path) {
+    clearSelection();
+    setFolderFilter(path);
+    window.history.replaceState(null, "", `/?folder=${encodeURIComponent(path)}`);
+  }
+  // Commit a grid-tile rename (list rows rename inline via the block editor).
+  function commitPageRename(id, text) {
+    setHomeEditingId(null);
+    const t = (text || "").trim();
+    const cur = homeBlocks.find((b) => b.id === id)?.content || "";
+    if (!t || t === cur) return;
+    setHomeBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, content: t } : b)));
+    apiJson(`${API}/blocks/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: t }),
+    }).catch((err) => setStatus(`Rename failed: ${err}`));
   }
 
   // Deep-copy a page: new root block + a subtree clone with fresh block ids
@@ -287,6 +345,24 @@ export default function App() {
         setStatus(`Deleted ${ids.length} page${ids.length === 1 ? "" : "s"}.`);
       },
     });
+  }
+
+  // Pin/unpin pages. Stored on the page (properties.pinned = ISO timestamp),
+  // so it syncs across devices like folder tags. "" unpins.
+  async function setPagesPinned(ids, pinned) {
+    const stamp = pinned ? new Date().toISOString() : "";
+    try {
+      for (const id of ids) {
+        await apiJson(`${API}/blocks/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ properties: { pinned: stamp } }),
+        });
+      }
+      await fetchHomeBlocks();
+    } catch (err) {
+      setStatus(`Pin failed: ${err.message || err}`);
+    }
   }
 
   // Add pages to a folder (soft link — other folder tags are kept). The only
@@ -472,6 +548,7 @@ export default function App() {
   function handlePdfLoadState(url, st) {
     if (st.phase === "rendered") {
       pdfRenderedUrlRef.current = url; // this document's pages are now in the DOM
+      setPdfDocNonce((n) => n + 1);    // lets a pinned search re-find its matches here
       // Called from the viewer's layout effect — before paint. Applying a
       // pending restore HERE means the document appears already scrolled to
       // its position: no flash of the top, no visible jump.
@@ -529,45 +606,11 @@ export default function App() {
   }, [openPopover]);
   const [shareUrl, setShareUrl] = useState("");
   const [shareCopied, setShareCopied] = useState(false);
-  // Workspace search (Ctrl+Shift+F) with VSCode-style options:
-  // Aa = match case, ab = whole word, .* = regex, plus replace-in-notes.
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchLabels, setSearchLabels] = useState([]); // confirmed label filters (chips)
-  const [labelSugIdx, setLabelSugIdx] = useState(0);
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchBusy, setSearchBusy] = useState(false);
-  const [searchCase, setSearchCase] = useState(false);
-  const [searchWhole, setSearchWhole] = useState(false);
-  const [searchRegex, setSearchRegex] = useState(false);
-  const [searchReplaceOpen, setSearchReplaceOpen] = useState(false);
-  const [searchReplace, setSearchReplace] = useState("");
-  const [pdfMatches, setPdfMatches] = useState([]);
-  const [libMatches, setLibMatches] = useState([]); // FTS hits across ALL papers' PDF text
-  const [libIndexing, setLibIndexing] = useState(0); // papers still being indexed server-side
-  const [findIndex, setFindIndex] = useState(0); // active PDF match for find next/prev
-
-  // Open a library search hit: load the paper, then scroll to the hit's page.
-  function openLibMatch(r) {
-    setOpenPopover(null);
-    openBlock(r.block_id).then(() => {
-      let tries = 0;
-      const go = () => {
-        if (scrollToRef.current && document.querySelector("[data-page]")) {
-          scrollToRef.current({
-            position: {
-              pageNumber: r.page,
-              boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: r.page },
-              rects: [],
-            },
-          });
-        } else if (tries++ < 40) setTimeout(go, 200);
-      };
-      setTimeout(go, 600); // let the session-restore scroll settle first
-    });
-  }
-  const [searchNonce, setSearchNonce] = useState(0); // bump to re-run the search
-  const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rect, pageW, pageH}]
-  useEffect(() => { setFindIndex(0); }, [pdfMatches]);
+  // Workspace search lives in search.jsx (SearchPanel); App only holds what
+  // the PDF viewer needs from it: the match highlights and the search hook.
+  const [findMarks, setFindMarks] = useState([]); // [{page, rect, active}] painted by PdfViewer
+  const [pdfDocNonce, setPdfDocNonce] = useState(0); // bumped when a document finishes rendering
+  const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rects, pageW, pageH}]
 
   // Poll server-side task progress: slow heartbeat while logged in (so the
   // button appears even if the work was kicked off elsewhere), fast while
@@ -579,32 +622,11 @@ export default function App() {
       .then((d) => { if (!cancelled) setIndexTask(d.indexing || null); })
       .catch(() => {});
     refresh();
-    const fast = openPopover === "downloads" || libIndexing > 0 || indexTask?.active;
+    const fast = openPopover === "downloads" || indexTask?.active;
     const t = setInterval(refresh, fast ? 2000 : 8000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [openPopover, libIndexing, authUser?.user, readOnly, indexTask?.active]);
+  }, [openPopover, authUser?.user, readOnly, indexTask?.active]);
 
-  const findMarksMemo = useMemo(() => (
-    openPopover === "search" && searchQuery.trim()
-      ? pdfMatches.map((m, i) => ({ page: m.page, rect: m.rect, active: i === findIndex }))
-      : []
-  ), [pdfMatches, findIndex, openPopover, searchQuery]);
-
-  // Jump the viewer to a specific PDF match and mark it active.
-  function gotoFind(i) {
-    if (!pdfMatches.length) return;
-    const idx = ((i % pdfMatches.length) + pdfMatches.length) % pdfMatches.length;
-    setFindIndex(idx);
-    const m = pdfMatches[idx];
-    setPdfHidden(false);
-    scrollToRef.current?.({
-      position: {
-        pageNumber: m.page,
-        boundingRect: { ...m.rect, width: m.pageW, height: m.pageH, pageNumber: m.page },
-        rects: [],
-      },
-    });
-  }
   // Every folder path in use (from page tags + manually created empties),
   // plus all ancestor prefixes — "readout" exists once "readout/destructive"
   // does, so it can be browsed, targeted, and searched by prefix.
@@ -620,108 +642,6 @@ export default function App() {
     }
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [homeBlocks, extraFolders]);
-  // Filter chips come in two kinds — standard labels (properties.category,
-  // exact match) and folder labels (properties.folder paths, prefix match so
-  // "readout" covers readout/destructive too). Typing autosuggests both;
-  // Tab/Enter confirms one into a chip. Typed text searches notes/PDFs —
-  // restricted to the matching pages when chips are present (all chips AND).
-  const allChipOptions = useMemo(() => {
-    const seen = new Map(); // kind:lowercase → option
-    for (const b of homeBlocks) {
-      for (const t of (b.properties?.category || "").split(",").map((s) => s.trim()).filter(Boolean)) {
-        if (!seen.has(`l:${t.toLowerCase()}`)) seen.set(`l:${t.toLowerCase()}`, { name: t, kind: "label" });
-      }
-    }
-    for (const f of allFolderPaths) {
-      if (!seen.has(`f:${f.toLowerCase()}`)) seen.set(`f:${f.toLowerCase()}`, { name: f, kind: "folder" });
-    }
-    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [homeBlocks, allFolderPaths]);
-  const labelSuggestions = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return [];
-    const picked = new Set(searchLabels.map((l) => `${l.kind}:${l.name.toLowerCase()}`));
-    return allChipOptions.filter((o) => !picked.has(`${o.kind}:${o.name.toLowerCase()}`) && o.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [searchQuery, allChipOptions, searchLabels]);
-  useEffect(() => { setLabelSugIdx(0); }, [searchQuery]);
-  function confirmSearchLabel(opt) {
-    setSearchLabels((prev) => (prev.some((l) => l.kind === opt.kind && l.name.toLowerCase() === opt.name.toLowerCase()) ? prev : [...prev, opt]));
-    setSearchQuery("");
-  }
-  const searchTextQuery = useMemo(() => searchQuery.trim(), [searchQuery]);
-  const labelMatches = useMemo(() => {
-    if (!searchLabels.length) return [];
-    return homeBlocks.filter((b) => {
-      const labels = (b.properties?.category || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
-      const folders = (b.properties?.folder || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
-      return searchLabels.every((c) => {
-        const n = c.name.toLowerCase();
-        return c.kind === "folder"
-          ? folders.some((t) => t === n || t.startsWith(n + "/"))
-          : labels.includes(n);
-      });
-    });
-  }, [searchLabels, homeBlocks]);
-  // With chips active, text results only count inside the matching pages.
-  const labelPageIds = useMemo(() => (
-    searchLabels.length ? new Set(labelMatches.map((b) => b.id)) : null
-  ), [searchLabels.length, labelMatches]);
-  useEffect(() => {
-    if (openPopover !== "search" || !searchTextQuery) {
-      setSearchResults([]); setPdfMatches([]); setLibMatches([]); setLibIndexing(0);
-      return;
-    }
-    const timer = setTimeout(() => {
-      setSearchBusy(true);
-      const q = searchTextQuery;
-      const flags = `&case=${searchCase ? 1 : 0}&whole=${searchWhole ? 1 : 0}&regex=${searchRegex ? 1 : 0}`;
-      const notesReq = apiJson(`${API}/block-search?q=${encodeURIComponent(q)}&limit=20${flags}`)
-        .then((d) => setSearchResults(d.blocks || []))
-        .catch(() => setSearchResults([]));
-      // Full-text over every paper's PDF (server-side FTS index; the toggles
-      // don't apply here — it's plain word matching)
-      const libReq = apiJson(`${API}/pdf-search?q=${encodeURIComponent(q)}&limit=15`)
-        .then((d) => { setLibMatches(d.results || []); setLibIndexing(d.indexing || 0); })
-        .catch(() => { setLibMatches([]); setLibIndexing(0); });
-      let pdfReq = Promise.resolve();
-      if (pdfSearchRef.current) {
-        try {
-          let body = searchRegex ? q : q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          if (searchWhole) body = `\\b(?:${body})\\b`;
-          const re = new RegExp(body, searchCase ? "g" : "gi");
-          pdfReq = pdfSearchRef.current(re).then(setPdfMatches).catch(() => setPdfMatches([]));
-        } catch { setPdfMatches([]); }
-      } else {
-        setPdfMatches([]);
-      }
-      Promise.allSettled([notesReq, pdfReq, libReq]).then(() => setSearchBusy(false));
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [searchTextQuery, openPopover, searchCase, searchWhole, searchRegex, searchNonce]);
-
-  function replaceAllInNotes() {
-    const q = searchTextQuery;
-    if (!q) return;
-    setConfirmBox({
-      title: "Replace all",
-      message: `Replace all occurrences of "${q}" with "${searchReplace}" across ALL your notes?`,
-      confirmLabel: "Replace all",
-      onConfirm: async () => {
-        try {
-          const data = await apiJson(`${API}/blocks-replace`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: q, replacement: searchReplace, case: searchCase, whole: searchWhole, regex: searchRegex }),
-          });
-          setStatus(`Replaced in ${data.changed} block${data.changed === 1 ? "" : "s"}.`);
-          if (focusedBlockId) await loadBlocksForBlock(focusedBlockId);
-          setSearchNonce((n) => n + 1);
-        } catch (err) {
-          setStatus(`Replace failed: ${err.message}`);
-        }
-      },
-    });
-  }
   useEffect(() => {
     function onKey(e) {
       // Ctrl+F (and Ctrl+Shift+F) open the built-in search instead of the
@@ -2289,7 +2209,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
   const homeMode = !pdfUrl && !focusedBlockId && !readOnly;
   // Leaving home or changing folders drops the file-manager selection.
-  useEffect(() => { setSelectedPages(new Set()); setMovePicker(false); setHomeMenu(null); }, [folderFilter, homeMode]);
+  useEffect(() => { setSelectedPages(new Set()); setSelectedFolders(new Set()); setMovePicker(false); setHomeMenu(null); }, [folderFilter, homeMode]);
   const pageOnly = !pdfUrl && !!focusedBlockId && !readOnly;
   const pageBlocks = useMemo(() => {
     return homeBlocks.map((b) => ({
@@ -2302,8 +2222,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       _position: b.position,
       _sourceUrl: b.properties?.source_url,
       _folders: parseFolderTags(b.properties?.folder),
+      _labels: parseFolderTags(b.properties?.category),
       _createdAt: b.created_at || "",
       _updatedAt: b.updated_at || "",
+      _pinned: b.properties?.pinned || "",
       _isEmpty: !b.content,
       editMode: homeEditingId === b.id,
     }));
@@ -2340,6 +2262,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     return arr.sort(cmp);
   }, [pageBlocks, folderFilter, homeSort]);
   const homeVisiblePages = useMemo(() => homeSortedPages.slice(0, homeShowCount), [homeSortedPages, homeShowCount]);
+  // Pinned papers — shown as a favorites strip at the library root. Most
+  // recently pinned first.
+  const pinnedPages = useMemo(
+    () => pageBlocks.filter((b) => b._pinned).sort((a, b) => (b._pinned || "").localeCompare(a._pinned || "")),
+    [pageBlocks]
+  );
+  // Home keyboard: Esc clears the selection, Enter opens the single selected
+  // item — the standard file-manager shortcuts.
+  useEffect(() => {
+    if (!homeMode) return;
+    function onKey(e) {
+      if (e.target.closest && e.target.closest("input, textarea, [contenteditable]")) return;
+      if (e.key === "Escape" && (selectedPages.size || selectedFolders.size)) {
+        clearSelection();
+      } else if (e.key === "Enter") {
+        if (selectedFolders.size === 1) openFolder([...selectedFolders][0]);
+        else if (selectedPages.size === 1) openPage([...selectedPages][0]);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [homeMode, selectedPages, selectedFolders]);
   // Scrolling the "load more" sentinel into view grows the feed.
   useEffect(() => {
     const el = loadMoreRef.current;
@@ -2567,7 +2511,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         {category.split(",").map((t, i) => t.trim() ? (
                           <span key={i} className="categoryTag">
                             {t.trim()}
-                            <button className="categoryTagRemove" tabIndex={-1} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); removeCategoryTag(i); }}>×</button>
+                            <button className="uiClose uiCloseSm categoryTagRemove" tabIndex={-1} onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); removeCategoryTag(i); }}>×</button>
                           </span>
                         ) : null)}
                         <input
@@ -2919,53 +2863,39 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 );
               }
 
-              return (
-                <>
-                  {/* Labels — one card per label */}
-                  {catNames.length > 0 ? (
-                    <div className="carouselRow">
-                      <div className="carouselLabel">Labels</div>
-                      <div className="carouselTrackWrap">
-                        <button className="carouselArrow carouselArrowLeft" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: -220, behavior: 'smooth' }); }}>‹</button>
-                        <div className="carouselTrack">
-                          {catNames.map((cat) => (
-                            <button key={cat} className="categoryCard" onClick={() => { setCategoryFilter(cat); window.history.replaceState(null, "", `/?category=${encodeURIComponent(cat)}`); }}>
-                              <div className="categoryCardName">{cat}</div>
-                              <div className="categoryCardCount">{categories[cat].length} {categories[cat].length === 1 ? "paper" : "papers"}</div>
-                            </button>
-                          ))}
-                        </div>
-                        <button className="carouselArrow carouselArrowRight" onClick={(e) => { const t = e.currentTarget.parentElement.querySelector('.carouselTrack'); if (t) t.scrollBy({ left: 220, behavior: 'smooth' }); }}>›</button>
-                      </div>
-                    </div>
-                  ) : null}
-                </>
-              );
+              // Labels are surfaced as chips on each file row now — no top
+              // carousel. Category filtering still works via ?category= URLs
+              // and search chips (handled by the categoryFilter branch above).
+              return null;
             })() : null}
-            {homeMode && selectedPages.size ? (
-              <div className="selectionBar">
-                <span className="selectionCount">{selectedPages.size} selected</span>
-                <span style={{ position: "relative", display: "inline-flex" }}>
-                  <button className="chatClearBtn" onClick={() => setMovePicker((v) => !v)}>Add to…</button>
-                  {movePicker ? (
-                    <div className="popover movePicker" style={{ left: 0, right: "auto" }}>
-                      {allFolderPaths.map((f) => (
-                        <button key={f} className="popoverItem" onClick={() => addPagesToFolder([...selectedPages], f)}>{f}</button>
-                      ))}
-                      {allFolderPaths.length ? <div className="popoverDivider" /> : null}
-                      <button className="popoverItem" onClick={() => removePagesFromFolder([...selectedPages], "")}>Clear folder tags</button>
+            {homeMode && !categoryFilter && !folderFilter && pinnedPages.length > 0 ? (
+              <div className="pinnedSection">
+                <div className="pinnedLabel"><PinIcon filled size={12} /> Pinned</div>
+                <div className="pinnedStrip">
+                  {pinnedPages.map((b) => (
+                    <div
+                      key={b._pageId}
+                      className={`pinnedTile ${selectedPages.has(b._pageId) ? "selected" : ""}`}
+                      onClick={(e) => handlePageClick(b, e)}
+                      onDoubleClick={() => openPage(b._pageId)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setSelectedPages((prev) => (prev.has(b._pageId) ? prev : new Set([b._pageId])));
+                        lastPageClickRef.current = b._pageId;
+                        setHomeMenu({ kind: "page", id: b._pageId, name: b.content, x: e.clientX, y: e.clientY });
+                      }}
+                      title={`${b.content}\nClick to select · double-click to open`}
+                    >
+                      <FileGlyph isPdf={!!b._sourceUrl} />
+                      <span className="pinnedTileName">{b.content || "Untitled"}</span>
+                      <button
+                        className="pinBtn pinned"
+                        title="Unpin"
+                        onClick={(e) => { e.stopPropagation(); setPagesPinned([b._pageId], false); }}
+                      ><PinIcon filled size={12} /></button>
                     </div>
-                  ) : null}
-                </span>
-                {folderFilter ? (
-                  <button className="chatClearBtn" onClick={() => removePagesFromFolder([...selectedPages], folderFilter)}>Remove from folder</button>
-                ) : null}
-                <button className="chatClearBtn" onClick={() => duplicatePages([...selectedPages])}>Copy</button>
-                {selectedPages.size === 1 ? (
-                  <button className="chatClearBtn" onClick={() => { const id = [...selectedPages][0]; clearSelection(); setHomeEditingId(id); }}>Rename</button>
-                ) : null}
-                <button className="chatClearBtn" onClick={() => deletePages([...selectedPages])}>Delete</button>
-                <button className="chatClearBtn" onClick={clearSelection} title="Clear selection (Esc)">✕</button>
+                  ))}
+                </div>
               </div>
             ) : null}
             {homeMode && !categoryFilter ? (
@@ -3013,14 +2943,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     </div>
                   </>
                 ) : null}
+                {homeView === "list" ? (<>
                 {childFolders.map((f) => (
                   <div
                     key={f}
-                    className={`folderRow ${folderDragOver === f ? "dragOver" : ""}`}
-                    onClick={() => {
-                      if (folderRenaming?.name === f) return;
-                      setFolderFilter(f); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(f)}`);
-                    }}
+                    className={`folderRow ${folderDragOver === f ? "dragOver" : ""} ${selectedFolders.has(f) ? "selected" : ""}`}
+                    onClick={(e) => handleFolderClick(f, e)}
+                    onDoubleClick={() => { if (folderRenaming?.name !== f) openFolder(f); }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       setHomeMenu({ kind: "folder", name: f, x: e.clientX, y: e.clientY });
@@ -3036,7 +2965,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       const ids = selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
                       addPagesToFolder(ids, f);
                     }}
-                    title="Open folder — right-click to rename or delete, drop a paper to add it"
+                    title="Click to select · double-click to open · right-click to rename or delete · drop a paper to add it"
                   >
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
                     {folderRenaming?.name === f ? (
@@ -3080,19 +3009,217 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     <span className="folderName">New folder</span>
                   </button>
                 )}
+                </>) : null}
               </div>
             ) : null}
             {homeMode && !categoryFilter ? (
               <div className="homeListBar">
                 <span className="homeListLabel">{folderFilter ? "Files" : "All files"}</span>
+                <span className="homeListSpacer" />
                 <select className="homeSortSelect" value={homeSort} onChange={(e) => changeHomeSort(e.target.value)} title="Sort files">
                   <option value="updated">Recently modified</option>
                   <option value="created">Recently added</option>
                   <option value="title">Title A–Z</option>
                 </select>
+                <ViewToggle view={homeView} onChange={changeHomeView} />
               </div>
             ) : null}
-            {homeMode && categoryFilter ? null : (
+            {homeMode && !categoryFilter && homeView === "grid" ? (
+              (childFolders.length === 0 && homeVisiblePages.length === 0 && !newFolderOpen) ? (
+                <div className="empty">{folderFilter ? "This folder is empty — drag papers onto it from the library." : "No pages yet — use the + button above to open a PDF or start a note page."}</div>
+              ) : (
+                <>
+                  <div className="fileGrid" onClick={(e) => { if (e.target.classList.contains("fileGrid")) clearSelection(); }}>
+                    {childFolders.map((f) => (
+                      <div
+                        key={f}
+                        className={`folderTile ${folderDragOver === f ? "dragOver" : ""} ${selectedFolders.has(f) ? "selected" : ""}`}
+                        onClick={(e) => handleFolderClick(f, e)}
+                        onDoubleClick={() => { if (folderRenaming?.name !== f) openFolder(f); }}
+                        onContextMenu={(e) => { e.preventDefault(); setHomeMenu({ kind: "folder", name: f, x: e.clientX, y: e.clientY }); }}
+                        onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
+                        onDragLeave={() => setFolderDragOver(null)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setFolderDragOver(null);
+                          const id = e.dataTransfer.getData("text/plain");
+                          if (!id) return;
+                          const ids = selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
+                          addPagesToFolder(ids, f);
+                        }}
+                        title="Click to select · double-click to open · drop a paper to add it"
+                      >
+                        <FolderGlyph />
+                        {folderRenaming?.name === f ? (
+                          <input
+                            autoFocus
+                            className="tileRenameInput"
+                            defaultValue={f.slice(f.lastIndexOf("/") + 1)}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") renameFolder(f, e.currentTarget.value);
+                              else if (e.key === "Escape") setFolderRenaming(null);
+                            }}
+                            onBlur={(e) => renameFolder(f, e.currentTarget.value)}
+                          />
+                        ) : (
+                          <span className="tileName">{f.slice(f.lastIndexOf("/") + 1)}</span>
+                        )}
+                        <span className="tileFolderCount">{folderCounts[f] || 0}</span>
+                      </div>
+                    ))}
+                    {homeVisiblePages.map((b) => {
+                      const id = b._pageId;
+                      const isPinned = !!b._pinned;
+                      const isEditing = homeEditingId === id;
+                      return (
+                        <div
+                          key={id}
+                          className={`fileTile ${selectedPages.has(id) ? "selected" : ""}`}
+                          draggable={!isEditing}
+                          onDragStart={(e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; }}
+                          onClick={(e) => handlePageClick(b, e)}
+                          onDoubleClick={() => { if (!isEditing) openPage(id); }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setSelectedPages((prev) => (prev.has(id) ? prev : new Set([id])));
+                            lastPageClickRef.current = id;
+                            setHomeMenu({ kind: "page", id, name: b.content, x: e.clientX, y: e.clientY });
+                          }}
+                          title={`${b.content}\nClick to select · double-click to open`}
+                        >
+                          <button
+                            className={`pinBtn tilePinBtn ${isPinned ? "pinned" : ""}`}
+                            title={isPinned ? "Unpin" : "Pin to top"}
+                            onClick={(e) => { e.stopPropagation(); setPagesPinned([id], !isPinned); }}
+                          ><PinIcon filled={isPinned} size={12} /></button>
+                          <FileGlyph isPdf={!!b._sourceUrl} />
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              className="tileRenameInput"
+                              defaultValue={b.content}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") commitPageRename(id, e.currentTarget.value);
+                                else if (e.key === "Escape") setHomeEditingId(null);
+                              }}
+                              onBlur={(e) => commitPageRename(id, e.currentTarget.value)}
+                            />
+                          ) : (
+                            <span className="tileName">{b.content || "Untitled"}</span>
+                          )}
+                          <span className="tileKind">{b._sourceUrl ? "PDF" : "Note"}</span>
+                        </div>
+                      );
+                    })}
+                    {newFolderOpen ? (
+                      <div className="folderTile folderTileNew">
+                        <FolderGlyph />
+                        <input
+                          autoFocus
+                          className="tileRenameInput"
+                          value={newFolderName}
+                          placeholder="Folder name…"
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setNewFolderName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { e.preventDefault(); commitNewFolder(); }
+                            else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
+                          }}
+                          onBlur={commitNewFolder}
+                        />
+                      </div>
+                    ) : (
+                      <button className="folderTile folderTileAdd" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }} title="New folder">
+                        <svg className="tileGlyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                        <span className="tileName">New folder</span>
+                      </button>
+                    )}
+                  </div>
+                  {homeSortedPages.length > homeVisiblePages.length ? (
+                    <button ref={loadMoreRef} className="loadMoreBtn" onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}>
+                      Showing {homeVisiblePages.length} of {homeSortedPages.length} — load more
+                    </button>
+                  ) : null}
+                </>
+              )
+            ) : homeMode && !categoryFilter && homeView === "list" ? (
+              homeVisiblePages.length === 0 ? (
+                <div className="empty">{folderFilter ? "This folder is empty — drag papers onto it from the library." : "No pages yet — use the + button above to open a PDF or start a note page."}</div>
+              ) : (
+                <>
+                  <div className="fileList" onClick={(e) => { if (e.target.classList.contains("fileList")) clearSelection(); }}>
+                    {homeVisiblePages.map((b) => {
+                      const id = b._pageId;
+                      const isPinned = !!b._pinned;
+                      const isEditing = homeEditingId === id;
+                      return (
+                        <div
+                          key={id}
+                          className={`fileRow ${selectedPages.has(id) ? "selected" : ""}`}
+                          draggable={!isEditing}
+                          onDragStart={(e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; }}
+                          onClick={(e) => handlePageClick(b, e)}
+                          onDoubleClick={() => { if (!isEditing) openPage(id); }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setSelectedPages((prev) => (prev.has(id) ? prev : new Set([id])));
+                            lastPageClickRef.current = id;
+                            setHomeMenu({ kind: "page", id, name: b.content, x: e.clientX, y: e.clientY });
+                          }}
+                          title={`${b.content}\nClick to select · double-click to open`}
+                        >
+                          <span className="fileRowIcon"><FileGlyph isPdf={!!b._sourceUrl} /></span>
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              className="fileRowRename"
+                              defaultValue={b.content}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") commitPageRename(id, e.currentTarget.value);
+                                else if (e.key === "Escape") setHomeEditingId(null);
+                              }}
+                              onBlur={(e) => commitPageRename(id, e.currentTarget.value)}
+                            />
+                          ) : (
+                            <span className="fileRowName">{b.content || "Untitled"}</span>
+                          )}
+                          {(b._folders?.length || b._labels?.length) ? (
+                            <span className="fileRowLabels">
+                              {b._folders?.map((f) => (
+                                <span key={`f:${f}`} className="folderTagBadge" title={`In folder ${f}`}>
+                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                                  {f}
+                                </span>
+                              ))}
+                              {b._labels?.map((l) => (
+                                <span key={`l:${l}`} className="labelTagBadge" title={`Label: ${l}`}>
+                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>
+                                  {l}
+                                </span>
+                              ))}
+                            </span>
+                          ) : null}
+                          <span className="fileRowKind">{b._sourceUrl ? "PDF" : "Note"}</span>
+                          <button
+                            className={`pinBtn fileRowPin ${isPinned ? "pinned" : ""}`}
+                            title={isPinned ? "Unpin" : "Pin to top"}
+                            onClick={(e) => { e.stopPropagation(); setPagesPinned([id], !isPinned); }}
+                          ><PinIcon filled={isPinned} size={12} /></button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {homeSortedPages.length > homeVisiblePages.length ? (
+                    <button ref={loadMoreRef} className="loadMoreBtn" onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}>
+                      Showing {homeVisiblePages.length} of {homeSortedPages.length} — load more
+                    </button>
+                  ) : null}
+                </>
+              )
+            ) : homeMode && categoryFilter ? null : (
             (homeMode ? homeVisiblePages : visibleBlocks).length === 0 ? (
               <div className="empty">{homeMode
                 ? (folderFilter ? "This folder is empty — drag papers onto it from the library." : "No pages yet — use the + button above to open a PDF or start a note page.")
@@ -3437,6 +3564,89 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     );
   }
 
+  // The "⋮" overflow menu, shared by the editing and read-only topbars.
+  // Read-only share views omit AI chat and the import actions.
+  const renderOverflowMenu = (menuReadOnly) => (
+    <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        className={`iconBtn ${openPopover === "menu" ? "activeIcon" : ""}`}
+        onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
+        title="Settings"
+        aria-label="Settings"
+      >
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="18" x2="20" y2="18" /></svg>
+      </button>
+      {openPopover === "menu" ? (
+        <div className="popover menuPopover">
+          <div className="popoverSection">Windows</div>
+          {!homeMode && pdfUrl ? (
+            <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
+              <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
+            </button>
+          ) : null}
+          {!homeMode ? (
+            <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
+              <span className="check">{notesVisible ? "✓" : ""}</span> Notes
+            </button>
+          ) : null}
+          {!menuReadOnly ? (
+            <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
+              <span className="check">{!chatHidden ? "✓" : ""}</span> AI Chat
+            </button>
+          ) : null}
+          {!menuReadOnly ? <div className="popoverDivider" /> : null}
+          {!menuReadOnly && docId && focusedBlockId ? (
+            <button
+              className="popoverItem"
+              title="Import highlights/notes saved inside the PDF file (SumatraPDF, Acrobat…)"
+              onClick={() => { importEmbeddedAnnots(focusedBlockId, docId, false); setOpenPopover(null); }}
+            >
+              Import PDF annotations
+            </button>
+          ) : null}
+          {!menuReadOnly ? (
+            <label
+              className="popoverItem importLogseqBtn"
+              title="Import Logseq PDF highlights (.pdf + .edn)"
+              style={{ cursor: loading ? "not-allowed" : "pointer" }}
+            >
+              Import Logseq…
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.edn,.md"
+                style={{ display: "none" }}
+                disabled={loading}
+                onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; setOpenPopover(null); }}
+              />
+            </label>
+          ) : null}
+          {!menuReadOnly && focusedBlock && !homeMode ? (
+            <>
+              <div className="popoverDivider" />
+              <button
+                className="popoverItem"
+                onClick={() => { exportPage("readable"); setOpenPopover(null); }}
+                title="Download this page as Markdown — nested notes, highlights as quotes, metadata front-matter. Bundles the PDF & images into a .zip when the page references them."
+              >
+                <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                Export this page (.md)
+              </button>
+              <button
+                className="popoverItem"
+                onClick={() => { exportPage("logseq"); setOpenPopover(null); }}
+                title="Download this page as Logseq-flavoured Markdown — re-importable via the Logseq importer."
+              >
+                <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                Export this page (Logseq)
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </span>
+  );
+
   return (
     <div
       ref={appRef}
@@ -3525,7 +3735,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 >
                   <span className="tabTitle">{t.title}</span>
                   <button
-                    className="tabClose"
+                    className="uiClose tabClose"
                     onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
                     title="Close tab"
                     aria-label={`Close ${t.title}`}
@@ -3640,196 +3850,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   </div>
                 ) : null}
               </span>
-            <span data-popover="search" style={{ position: "relative", display: "inline-flex" }}>
-              <button
-                className={`iconBtn ${openPopover === "search" ? "activeIcon" : ""}`}
-                onClick={() => setOpenPopover((p) => (p === "search" ? null : "search"))}
-                title="Search all notes (Ctrl+Shift+F)"
-                aria-label="Search"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-              </button>
-              {openPopover === "search" ? (
-                <div className="popover searchPopover">
-                  <div className="searchRow">
-                    <button
-                      className={`searchToggle ${searchReplaceOpen ? "on" : ""}`}
-                      onClick={() => setSearchReplaceOpen((v) => !v)}
-                      title="Toggle replace"
-                    >{searchReplaceOpen ? "⌄" : "›"}</button>
-                    <div className="searchInputWrap">
-                      {searchLabels.map((l) => (
-                        <span key={`${l.kind}:${l.name}`} className="categoryBadge searchChip">
-                          {l.kind === "folder"
-                            ? <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
-                            : <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>}
-                          {l.name}
-                          <button
-                            className="searchChipX"
-                            title={`Remove ${l.kind === "folder" ? "folder" : "label"} filter "${l.name}"`}
-                            onClick={() => setSearchLabels((prev) => prev.filter((x) => x !== l))}
-                          >×</button>
-                        </span>
-                      ))}
-                      <input
-                        autoFocus
-                        className="searchInput"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        onKeyDown={(e) => {
-                          if ((e.key === "Tab" || e.key === "Enter") && labelSuggestions.length) {
-                            e.preventDefault();
-                            confirmSearchLabel(labelSuggestions[labelSugIdx] || labelSuggestions[0]);
-                          } else if (e.key === "ArrowDown" && labelSuggestions.length) {
-                            e.preventDefault();
-                            setLabelSugIdx((i) => (i + 1) % labelSuggestions.length);
-                          } else if (e.key === "ArrowUp" && labelSuggestions.length) {
-                            e.preventDefault();
-                            setLabelSugIdx((i) => (i - 1 + labelSuggestions.length) % labelSuggestions.length);
-                          } else if (e.key === "Backspace" && !searchQuery && searchLabels.length) {
-                            setSearchLabels((prev) => prev.slice(0, -1));
-                          }
-                        }}
-                        placeholder={searchLabels.length ? "Search within labeled pages…" : "Search notes, highlights, and PDFs — Tab adds a label filter"}
-                      />
-                      {labelSuggestions.length ? (
-                        <div className="categorySuggestions searchLabelSuggest">
-                          {labelSuggestions.map((s, i) => (
-                            <button
-                              key={`${s.kind}:${s.name}`}
-                              className={`categorySuggestionItem${i === labelSugIdx ? " selected" : ""}`}
-                              onMouseDown={(e) => { e.preventDefault(); confirmSearchLabel(s); }}
-                              onMouseEnter={() => setLabelSugIdx(i)}
-                            >
-                              <span className="searchSuggestName">
-                                {s.kind === "folder"
-                                  ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
-                                  : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>}
-                                {s.name}
-                              </span>
-                              <span className="searchSuggestHint">Tab</span>
-                            </button>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                    <button className={`searchToggle ${searchCase ? "on" : ""}`} onClick={() => setSearchCase((v) => !v)} title="Match case">Aa</button>
-                    <button className={`searchToggle ${searchWhole ? "on" : ""}`} onClick={() => setSearchWhole((v) => !v)} title="Match whole word"><u>ab</u></button>
-                    <button className={`searchToggle ${searchRegex ? "on" : ""}`} onClick={() => setSearchRegex((v) => !v)} title="Use regular expression">.*</button>
-                  </div>
-                  {searchReplaceOpen ? (
-                    <div className="searchRow">
-                      <span className="searchToggle spacer" />
-                      <input
-                        className="searchInput"
-                        value={searchReplace}
-                        onChange={(e) => setSearchReplace(e.target.value)}
-                        placeholder="Replace in notes…"
-                      />
-                      <button
-                        className="searchToggle replaceBtn"
-                        onClick={replaceAllInNotes}
-                        disabled={!searchQuery.trim()}
-                        title="Replace all matches across your notes (PDF text can't be edited)"
-                      >Replace all</button>
-                    </div>
-                  ) : null}
-                  <div className="searchResults">
-                    {searchBusy ? <div className="searchHint">Searching…</div> : null}
-                    {!searchBusy && searchQuery.trim() && searchResults.length === 0 && pdfMatches.length === 0 && libMatches.length === 0 && labelMatches.length === 0 ? (
-                      <div className="searchHint">No matches.</div>
-                    ) : null}
-                    {searchLabels.length ? (
-                      <>
-                        <div className="searchSection">Filters: {searchLabels.map((c) => c.name).join(" + ")}</div>
-                        {labelMatches.length === 0 ? (
-                          <div className="searchHint">No pages carry {searchLabels.length === 1 ? "this label" : "all these labels"}.</div>
-                        ) : labelMatches.map((b) => (
-                          <button
-                            key={`lbl-${b.id}`}
-                            className="searchResult"
-                            onClick={() => { setOpenPopover(null); openBlock(b.id, { restoreScroll: true }); }}
-                          >
-                            <span className="searchResultPage">{b.content || "Untitled"}</span>
-                            <span className="searchResultText">{b.properties?.category || ""}</span>
-                          </button>
-                        ))}
-                      </>
-                    ) : null}
-                    {(() => {
-                      // Priority: this paper's notes → this PDF's text → the
-                      // rest of the workspace (other notes, other papers).
-                      // Label tokens scope everything to the labeled pages.
-                      const inScope = (pageId) => !labelPageIds || labelPageIds.has(pageId);
-                      const inPage = (r) => focusedBlockId && (r.page_root_id === focusedBlockId || r.id === focusedBlockId);
-                      const scoped = searchResults.filter((r) => inScope(r.page_root_id || r.id));
-                      const notesHere = scoped.filter(inPage);
-                      const notesElsewhere = scoped.filter((r) => !inPage(r));
-                      const libElsewhere = libMatches.filter((r) => r.block_id !== focusedBlockId && inScope(r.block_id));
-                      const showPdfMatches = inScope(focusedBlockId);
-                      const noteRow = (r) => (
-                        <button
-                          key={r.id}
-                          className="searchResult"
-                          onClick={() => {
-                            setOpenPopover(null);
-                            if (r.page_root_id && r.page_root_id !== r.id) pendingBlockScrollRef.current = r.id;
-                            openBlock(r.page_root_id || r.id);
-                          }}
-                        >
-                          <span className="searchResultPage">{r.page_title || "Untitled"}</span>
-                          <span className="searchResultText">{r.content}</span>
-                        </button>
-                      );
-                      return (
-                        <>
-                          {notesHere.length ? <div className="searchSection">Notes in this paper</div> : null}
-                          {notesHere.map(noteRow)}
-                          {showPdfMatches && pdfMatches.length ? (
-                            <div className="searchSection searchSectionRow">
-                              <span>This PDF · {findIndex + 1}/{pdfMatches.length}</span>
-                              <span className="findNav">
-                                <button className="searchToggle" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">▲</button>
-                                <button className="searchToggle" onClick={() => gotoFind(findIndex + 1)} title="Next match">▼</button>
-                              </span>
-                            </div>
-                          ) : null}
-                          {(showPdfMatches ? pdfMatches : []).map((m, i) => (
-                            <button
-                              key={`pdf-${i}`}
-                              className={`searchResult ${i === findIndex ? "active" : ""}`}
-                              onClick={() => gotoFind(i)}
-                            >
-                              <span className="searchResultPage">p. {m.page}</span>
-                              <span className="searchResultText">…{m.snippet}…</span>
-                            </button>
-                          ))}
-                          {notesElsewhere.length ? <div className="searchSection">{focusedBlockId ? "Other notes" : "Notes"}</div> : null}
-                          {notesElsewhere.map(noteRow)}
-                          {libElsewhere.length || libIndexing ? (
-                            <div className="searchSection">{focusedBlockId ? "Other papers" : "Library PDFs"}</div>
-                          ) : null}
-                          {libIndexing ? (
-                            <div className="searchHint">Indexing {libIndexing} paper{libIndexing === 1 ? "" : "s"} in the background — results will fill in shortly.</div>
-                          ) : null}
-                          {libElsewhere.map((r, i) => (
-                            <button
-                              key={`lib-${i}`}
-                              className="searchResult"
-                              onClick={() => openLibMatch(r)}
-                              title={`Open "${r.title}" at page ${r.page}`}
-                            >
-                              <span className="searchResultPage">{r.title.slice(0, 60)} · p. {r.page}</span>
-                              <span className="searchResultText">…{r.snippet}…</span>
-                            </button>
-                          ))}
-                        </>
-                      );
-                    })()}
-                  </div>
-                </div>
-              ) : null}
-            </span>
+            <SearchPanel
+              open={openPopover === "search"}
+              onOpenChange={(v) => setOpenPopover(v ? "search" : null)}
+              focusedBlockId={focusedBlockId}
+              homeBlocks={homeBlocks}
+              allFolderPaths={allFolderPaths}
+              openBlock={openBlock}
+              pendingBlockScrollRef={pendingBlockScrollRef}
+              pdfSearchRef={pdfSearchRef}
+              scrollToRef={scrollToRef}
+              setPdfHidden={setPdfHidden}
+              docNonce={pdfDocNonce}
+              onFindMarks={setFindMarks}
+              confirm={setConfirmBox}
+              setStatus={setStatus}
+              onReplaced={async () => { if (focusedBlockId) await loadBlocksForBlock(focusedBlockId); }}
+            />
             {pdfUrl && !homeMode ? (
               <span data-popover="share" style={{ position: "relative", display: "inline-flex" }}>
                 <button
@@ -3942,32 +3979,34 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <span className="switchTrack" />
                       </span>
                     </label>
+                    <div className="settingRow" title="Re-extract the text of every paper for full-text search. Runs in the background — progress shows in the tasks popover.">
+                      <span className="settingText">
+                        <span className="settingLabel">Search index</span>
+                        <span className="settingDesc">Re-extract all PDF text if search results look stale</span>
+                      </span>
+                      <button
+                        className="searchToggle replaceBtn"
+                        disabled={indexTask?.active}
+                        onClick={async () => {
+                          try {
+                            const d = await apiJson(`${API}/search-reindex`, { method: "POST" });
+                            setStatus(d.busy
+                              ? "Indexing is already running — see the tasks popover."
+                              : d.scheduled
+                                ? `Re-indexing ${d.scheduled} paper${d.scheduled === 1 ? "" : "s"} in the background.`
+                                : "No papers with PDFs to index.");
+                          } catch (err) {
+                            setStatus(`Reindex failed: ${err.message}`);
+                          }
+                        }}
+                      >{indexTask?.active ? "Indexing…" : "Rebuild"}</button>
+                    </div>
 
                     <div className="popoverDivider" />
                     <button className="popoverItem" onClick={() => { openPromptEditor(); setOpenPopover(null); }}>
                       <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>
                       AI prompts…
                     </button>
-                    {focusedBlock && !homeMode ? (
-                      <>
-                        <button
-                          className="popoverItem"
-                          onClick={() => exportPage("readable")}
-                          title="Download this page as Markdown — nested notes, highlights as quotes, metadata front-matter. Bundles the PDF & images into a .zip when the page references them."
-                        >
-                          <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
-                          Export this page (.md)
-                        </button>
-                        <button
-                          className="popoverItem"
-                          onClick={() => exportPage("logseq")}
-                          title="Download this page as Logseq-flavoured Markdown — re-importable via the Logseq importer."
-                        >
-                          <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
-                          Export this page (Logseq)
-                        </button>
-                      </>
-                    ) : null}
                     <button
                       className="popoverItem"
                       onClick={() => { setOpenPopover(null); window.location.href = `${API}/export`; }}
@@ -3986,59 +4025,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 ) : null}
               </span>
             )}
-            <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
-              <button
-                className={`iconBtn menuToggleBtn ${openPopover === "menu" ? "activeIcon" : ""}`}
-                onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
-                title="Menu"
-                aria-label="Menu"
-              >
-                ⋮
-              </button>
-              {openPopover === "menu" ? (
-                <div className="popover menuPopover">
-                  <div className="popoverSection">Windows</div>
-                  {!homeMode && pdfUrl ? (
-                    <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
-                      <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
-                    </button>
-                  ) : null}
-                  {!homeMode ? (
-                    <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
-                      <span className="check">{notesVisible ? "✓" : ""}</span> Notes
-                    </button>
-                  ) : null}
-                  <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
-                    <span className="check">{!chatHidden ? "✓" : ""}</span> AI Chat
-                  </button>
-                  <div className="popoverDivider" />
-                  {docId && focusedBlockId ? (
-                    <button
-                      className="popoverItem"
-                      title="Import highlights/notes saved inside the PDF file (SumatraPDF, Acrobat…)"
-                      onClick={() => { importEmbeddedAnnots(focusedBlockId, docId, false); setOpenPopover(null); }}
-                    >
-                      Import PDF annotations
-                    </button>
-                  ) : null}
-                  <label
-                    className="popoverItem importLogseqBtn"
-                    title="Import Logseq PDF highlights (.pdf + .edn)"
-                    style={{ cursor: loading ? "not-allowed" : "pointer" }}
-                  >
-                    Import Logseq…
-                    <input
-                      type="file"
-                      multiple
-                      accept=".pdf,.edn,.md"
-                      style={{ display: "none" }}
-                      disabled={loading}
-                      onChange={(e) => { importLogseq(e.target.files); e.target.value = ""; setOpenPopover(null); }}
-                    />
-                  </label>
-                </div>
-              ) : null}
-            </span>
+            {renderOverflowMenu(false)}
           </div>
           <div className="status">{status}</div>
         </>
@@ -4048,29 +4035,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
           </button>
           <span className="readOnlyTitle">{pdfTitle}</span>
-          <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
-            <button
-              className="iconBtn menuToggleBtn"
-              onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
-              title="Menu"
-              aria-label="Menu"
-            >
-              ⋮
-            </button>
-            {openPopover === "menu" ? (
-              <div className="popover menuPopover">
-                <div className="popoverSection">Windows</div>
-                {pdfUrl ? (
-                  <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
-                    <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
-                  </button>
-                ) : null}
-                <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
-                  <span className="check">{notesVisible ? "✓" : ""}</span> Notes
-                </button>
-              </div>
-            ) : null}
-          </span>
+          {renderOverflowMenu(true)}
         </div>
       )}
 
@@ -4081,15 +4046,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </div>
       )}
       {attachContextMenu && (
-        <div
-          className="attachContextMenu"
-          style={{ left: attachContextMenu.x, top: attachContextMenu.y }}
-          onMouseLeave={() => setAttachContextMenu(null)}
-        >
-          <button onClick={() => linkHighlightToBlock(attachModeBlockId, attachContextMenu.highlight)}>
+        <ContextMenu x={attachContextMenu.x} y={attachContextMenu.y} onClose={() => setAttachContextMenu(null)}>
+          <button className="ctxMenuItem" onClick={() => linkHighlightToBlock(attachModeBlockId, attachContextMenu.highlight)}>
             Link highlight here
           </button>
-        </div>
+        </ContextMenu>
       )}
 
       <div className="workArea">
@@ -4109,7 +4070,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
           {pdfUrl && !pdfHidden ? (
             <button
-              className="pdfCloseBtn"
+              className="uiClose uiCloseLg pdfCloseBtn"
               onClick={() => setPdfHidden(true)}
               title="Close PDF"
               aria-label="Close PDF"
@@ -4147,7 +4108,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <PdfViewer url={pdfUrl} highlights={highlights}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
-              findMarks={findMarksMemo}
+              findMarks={findMarks}
               onEffectiveScale={setPdfEffScale}
               onBeforeLinkJump={pushNav}
               onLoadState={handlePdfLoadState}
@@ -4376,13 +4337,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         </div>
       ) : null}
       {homeMenu ? (
-        <>
-          <div
-            className="ctxMenuBackdrop"
-            onClick={() => setHomeMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setHomeMenu(null); }}
-          />
-          <div className="ctxMenu" style={{ left: homeMenu.x, top: homeMenu.y }}>
+        <ContextMenu x={homeMenu.x} y={homeMenu.y} onClose={() => setHomeMenu(null)}>
             {homeMenu.kind === "page" ? (() => {
               // Acting on a selected card acts on the whole selection
               const ids = selectedPages.size > 1 && selectedPages.has(homeMenu.id) ? [...selectedPages] : [homeMenu.id];
@@ -4395,7 +4350,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   {!many ? (
                     <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); clearSelection(); setHomeEditingId(homeMenu.id); }}>Rename</button>
                   ) : null}
-                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); duplicatePages(ids); }}>{many ? `Copy ${ids.length} pages` : "Copy"}</button>
+                  {ids.every((id) => pageBlocks.find((b) => b._pageId === id)?._pinned) ? (
+                    <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setPagesPinned(ids, false); }}>{many ? "Unpin" : "Unpin"}</button>
+                  ) : (
+                    <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setPagesPinned(ids, true); }}>{many ? `Pin ${ids.length} pages` : "Pin"}</button>
+                  )}
+                  <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); duplicatePages(ids); }}>{many ? `Duplicate ${ids.length} pages` : "Duplicate"}</button>
                   <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deletePages(ids); }}>{many ? `Delete ${ids.length} pages` : "Delete"}</button>
                   <div className="ctxMenuLabel">Add to folder</div>
                   {allFolderPaths.map((f) => (
@@ -4414,17 +4374,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deleteFolderByName(homeMenu.name); }}>Delete</button>
               </>
             )}
-          </div>
-        </>
+        </ContextMenu>
       ) : null}
       {highlightMenu ? (
-        <>
-          <div
-            className="ctxMenuBackdrop"
-            onClick={() => setHighlightMenu(null)}
-            onContextMenu={(e) => { e.preventDefault(); setHighlightMenu(null); }}
-          />
-          <div className="ctxMenu" style={{ left: highlightMenu.x, top: highlightMenu.y }}>
+        <ContextMenu x={highlightMenu.x} y={highlightMenu.y} onClose={() => setHighlightMenu(null)}>
             <div className="colorRow ctxMenuColors">
               {COLORS.map((c) => (
                 <button
@@ -4487,8 +4440,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             >
               Delete
             </button>
-          </div>
-        </>
+        </ContextMenu>
       ) : null}
     </div>
   );

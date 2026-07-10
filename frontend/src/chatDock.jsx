@@ -340,7 +340,7 @@ export default function ChatDock({
           <span className="chatFindCount">{chatFind.trim() ? `${chatFindMatches.length ? chatFindIdx + 1 : 0}/${chatFindMatches.length}` : ""}</span>
           <button className="searchToggle" onClick={() => gotoChatFind(chatFindIdx - 1)} disabled={!chatFindMatches.length} title="Previous match">▲</button>
           <button className="searchToggle" onClick={() => gotoChatFind(chatFindIdx + 1)} disabled={!chatFindMatches.length} title="Next match">▼</button>
-          <button className="searchToggle" onClick={() => { setChatFindOpen(false); setChatFind(""); }} title="Close find">×</button>
+          <button className="uiClose" onClick={() => { setChatFindOpen(false); setChatFind(""); }} title="Close find" aria-label="Close find">×</button>
         </div>
       ) : null}
       <div
@@ -463,7 +463,7 @@ export default function ChatDock({
               <span className="chatSelChipText">{s.slice(0, 140)}{s.length > 140 ? "…" : ""}</span>
               <button
                 type="button"
-                className="chatSelChipClose"
+                className="uiClose uiCloseSm chatSelChipClose"
                 onClick={() => setPdfSelections((prev) => prev.filter((_, j) => j !== i))}
                 title="Remove this passage"
               >×</button>
@@ -476,7 +476,7 @@ export default function ChatDock({
           {chatImages.map((src, i) => (
             <span key={i} className="chatImgPreview">
               <img src={src} alt="pasted figure" />
-              <button type="button" className="chatImgRemove" title="Remove image"
+              <button type="button" className="uiClose uiCloseSm uiCloseDanger chatImgRemove" title="Remove image"
                 onClick={() => setChatImages((prev) => prev.filter((_, j) => j !== i))}>×</button>
             </span>
           ))}

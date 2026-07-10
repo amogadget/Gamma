@@ -3,10 +3,12 @@
 ```
 main.jsx            React root
 App.jsx             the main component (still large): routing, autosave,
-                    dockable windows, login, search, home. Being decomposed.
+                    dockable windows, login, home. Being decomposed.
 blockTree.jsx       the Logseq outliner — block rows, [[refs]], drag, markdown
 logseqPdfModel.js   pure tree ops (insert/indent/outdent/flatten/cycle-check)
 pdfViewer.jsx       custom pdf.js viewer — pages, highlights, links, text search; exports COLORS
+search.jsx          workspace search (Ctrl+F): SearchPanel popover, fuzzy
+                    buildSearchRegex (mirror of backend gamma/textnorm.py)
 chatDock.jsx        the AI chat window (self-contained per-page conversation)
 widgets.jsx         shared chrome: DockWindow, ChatMarkdown, AutoGrowTextarea
 sessionState.js     localStorage: restore last workspace on bare `/`
