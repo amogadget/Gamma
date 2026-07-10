@@ -1428,6 +1428,199 @@ body {
   cursor: pointer;
 }
 .loadMoreBtn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* --- modern file-manager home: view toggle, grid tiles, pinned, pins --- */
+.homeListSpacer { flex: 1; }
+.homeViewToggle {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+.homeViewBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.homeViewBtn:hover { color: var(--text-primary); }
+.homeViewBtn.active { background: var(--bg-input); color: var(--accent); box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+
+/* selected states shared by list rows and tiles */
+.folderRow.selected {
+  background: var(--accent-bg-light);
+  outline: 1px solid var(--accent-dark);
+}
+
+/* hover pin button on list rows */
+.rowPinBtn {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 1px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s;
+}
+.blockRow:hover .rowPinBtn { opacity: 0.6; }
+.rowPinBtn:hover { opacity: 1 !important; color: var(--accent); }
+.rowPinBtn.pinned { opacity: 1; color: var(--accent); }
+
+/* pinned favorites strip */
+.pinnedSection { padding: 0 4px 4px; margin-bottom: 6px; }
+.pinnedLabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: 2px 6px 6px;
+}
+.pinnedLabel svg { color: var(--accent); }
+.pinnedStrip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.pinnedTile {
+  position: relative;
+  flex: 0 0 auto;
+  width: 128px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-block);
+  cursor: pointer;
+  user-select: none;
+}
+.pinnedTile:hover { border-color: var(--border); background: var(--bg-raised); }
+.pinnedTile.selected { border-color: var(--accent-dark); background: var(--accent-bg-light); }
+.pinnedTileName {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* file/folder grid */
+.fileGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 6px;
+  padding: 4px;
+  align-content: start;
+}
+.fileTile, .folderTile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 8px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+  user-select: none;
+  text-align: center;
+  font: inherit;
+}
+.fileTile:hover, .folderTile:hover { background: var(--bg-block); }
+.fileTile.selected, .folderTile.selected {
+  background: var(--accent-bg-light);
+  border-color: var(--accent-dark);
+}
+.folderTile.dragOver { background: var(--accent-bg); border-color: var(--accent-dark); border-style: dashed; }
+.tileGlyph { width: 52px; height: 52px; flex-shrink: 0; }
+.folderGlyph { color: var(--accent); }
+.fileGlyph { color: var(--text-muted); }
+.fileTile:hover .fileGlyph, .fileTile.selected .fileGlyph { color: var(--accent); }
+.folderTileAdd .tileGlyph, .folderTileNew .tileGlyph { color: var(--text-dim); width: 46px; height: 46px; }
+.tileName {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.25;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tileKind {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.tileFolderCount {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-raised);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+.tileRenameInput {
+  width: 100%;
+  background: var(--bg-input);
+  border: 1px solid var(--accent-dark);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 6px;
+  outline: none;
+  text-align: center;
+}
+
+/* pin button shared by grid tiles + pinned strip */
+.pinBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 6px;
+}
+.pinBtn:hover { color: var(--accent); background: var(--bg-raised); }
+.pinBtn.pinned { color: var(--accent); }
+.tilePinBtn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.fileTile:hover .tilePinBtn { opacity: 0.7; }
+.tilePinBtn:hover, .tilePinBtn.pinned { opacity: 1; }
+.pinnedTile .pinBtn { position: absolute; top: 4px; right: 4px; }
+
 /* folder tags on file rows */
 .folderTagBadge {
   display: inline-flex;
