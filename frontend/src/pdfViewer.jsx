@@ -126,40 +126,87 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   }, [highlights, displayedUrl, url]);
 
   // Expose full-text search over the loaded document (used by the search
-  // panel). Matches carry the text item's rect (at scale 1) so they can be
-  // highlighted on the page and jumped to.
+  // panel). Each page's text runs are joined into one string — so matches can
+  // span runs — and searched through a normalized view (ligatures folded,
+  // hyphenated line breaks re-joined, digit-group separators dropped) that
+  // mirrors the server index's rules in gamma/textnorm.py. Every normalized
+  // character remembers its source run, so a match maps back to exact rects
+  // (at scale 1) even when normalization changed lengths.
   useEffect(() => {
     if (!searchRef) return;
     searchRef.current = pdfDoc ? async (re) => {
       const out = [];
+      const isDash = (c) => c === "-" || (c >= "‐" && c <= "―");
       for (let p = 1; p <= pdfDoc.numPages && out.length < 200; p++) {
         const page = await pdfDoc.getPage(p);
         const vp = page.getViewport({ scale: 1 });
         const tc = await page.getTextContent();
-        for (const it of tc.items) {
-          if (out.length >= 200) break;
-          const str = it.str || "";
-          if (!str) continue;
-          const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
-          let m;
-          while ((m = rx.exec(str)) && out.length < 200) {
-            if (!m[0]) { rx.lastIndex++; continue; }
+        const items = tc.items;
+        // Page string: runs joined by their PDF line break or a space,
+        // each char tagged with its source run (-1 = synthetic filler).
+        const chars = [];
+        for (let ii = 0; ii < items.length; ii++) {
+          const str = items[ii].str || "";
+          for (let k = 0; k < str.length; k++) chars.push({ ch: str[k], it: ii, off: k });
+          if (items[ii].hasEOL) chars.push({ ch: "\n", it: -1, off: 0 });
+          else if (str && !/\s$/.test(str) && items[ii + 1]?.str && !/^\s/.test(items[ii + 1].str)) {
+            chars.push({ ch: " ", it: -1, off: 0 });
+          }
+        }
+        // Normalized view + map back into `chars`.
+        const norm = [];
+        const src = [];
+        for (let i = 0; i < chars.length; i++) {
+          let ch = chars[i].ch;
+          if (ch === "­") continue; // soft hyphen
+          if (isDash(ch) && /[a-zA-Z]/.test(chars[i - 1]?.ch || "")) {
+            // Hyphenated line break: "sys-⏎tem" → "system"
+            let j = i + 1, brk = false;
+            while (j < chars.length && /\s/.test(chars[j].ch)) { if (chars[j].ch === "\n") brk = true; j++; }
+            if (brk && /[a-zA-Z]/.test(chars[j]?.ch || "")) { i = j - 1; continue; }
+          }
+          if ((ch === "," || ch === " " || ch === " " || ch === " ")
+              && /\d/.test(chars[i - 1]?.ch || "") && /\d/.test(chars[i + 1]?.ch || "")) {
+            continue; // digit-group separator: "3,000" → "3000"
+          }
+          if (/\s/.test(ch)) ch = " ";
+          for (const c of ch.normalize("NFKC")) { norm.push(c); src.push(i); }
+        }
+        const pageStr = norm.join("");
+        const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+        let m;
+        while ((m = rx.exec(pageStr)) && out.length < 200) {
+          if (!m[0]) { rx.lastIndex++; continue; }
+          // Match range → per-run char spans → one rect per run (sliced
+          // proportionally by char position; runs are single-line).
+          const spans = new Map(); // run index -> [minOff, maxOff]
+          for (let n = m.index; n < m.index + m[0].length; n++) {
+            const c = chars[src[n]];
+            if (c.it < 0) continue;
+            const s = spans.get(c.it);
+            if (s) { s[0] = Math.min(s[0], c.off); s[1] = Math.max(s[1], c.off); }
+            else spans.set(c.it, [c.off, c.off]);
+          }
+          const rects = [];
+          for (const [ii, [o1, o2]] of spans) {
+            const it = items[ii];
+            const str = it.str || "";
             const tx = pdfjsLib.Util.transform(vp.transform, it.transform);
             const fh = Math.hypot(tx[2], tx[3]) || 10;
-            // Highlight only the matched keyword: slice the run's rect
-            // proportionally by character position (runs are single-line).
             const w = it.width || fh;
-            const x1 = tx[4] + w * (m.index / str.length);
-            const x2 = tx[4] + w * ((m.index + m[0].length) / str.length);
-            const ctxStart = Math.max(0, m.index - 40);
-            out.push({
-              page: p,
-              snippet: str.slice(ctxStart, m.index + m[0].length + 60).trim().slice(0, 140),
-              rect: { x1, y1: tx[5] - fh, x2: Math.max(x1 + 2, x2), y2: tx[5] + fh * 0.25 },
-              pageW: vp.width,
-              pageH: vp.height,
-            });
+            const x1 = tx[4] + w * (o1 / str.length);
+            const x2 = tx[4] + w * ((o2 + 1) / str.length);
+            rects.push({ x1, y1: tx[5] - fh, x2: Math.max(x1 + 2, x2), y2: tx[5] + fh * 0.25 });
           }
+          if (!rects.length) continue;
+          const ctxStart = Math.max(0, m.index - 40);
+          out.push({
+            page: p,
+            snippet: pageStr.slice(ctxStart, m.index + m[0].length + 60).trim().slice(0, 140),
+            rects,
+            pageW: vp.width,
+            pageH: vp.height,
+          });
         }
       }
       return out;

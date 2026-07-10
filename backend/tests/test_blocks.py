@@ -53,6 +53,31 @@ def test_block_search_and_replace(guest):
     assert any("shiny quux" in b["content"] for b in r.json()["blocks"])
 
 
+def test_block_search_is_separator_tolerant(guest):
+    page = make_page(guest, "Continuous operation of a coherent 3,000-qubit system")
+    r = guest.get("/api/block-search", params={"q": "3000"})
+    hit = next((b for b in r.json()["blocks"] if b["id"] == page["id"]), None)
+    assert hit, "'3000' should match the '3,000-qubit' title"
+    assert hit["kind"] == "page"
+
+
+def test_block_search_reports_kinds(guest):
+    page = make_page(guest, "Kinds page")
+    guest.post("/api/blocks", json={"parent_id": page["id"], "content": "a plaino note"})
+    r = guest.post("/api/blocks", json={"parent_id": page["id"], "content": "a hilite quote"})
+    guest.put(f"/api/blocks/{r.json()['id']}", json={"properties": {"highlight_id": "h1"}})
+    r = guest.post("/api/blocks", json={"parent_id": page["id"], "content": "a linky region"})
+    guest.put(f"/api/blocks/{r.json()['id']}",
+              json={"properties": {"highlight_id": "h2", "link_page_id": page["id"]}})
+
+    kinds = {b["content"]: b["kind"]
+             for b in guest.get("/api/block-search", params={"q": "plaino|hilite|linky",
+                                                             "regex": 1, "limit": 50}).json()["blocks"]}
+    assert kinds["a plaino note"] == "note"
+    assert kinds["a hilite quote"] == "highlight"
+    assert kinds["a linky region"] == "link"
+
+
 def test_delete_purges_chats(guest):
     page = make_page(guest, "Doomed page")
     r = guest.put(f"/api/chats/{page['id']}", json={"messages": [{"role": "user", "text": "hi"}]})

@@ -22,6 +22,7 @@ from ..blocks_store import (
 )
 from ..db import page_now, user_db_path, user_uploads_dir
 from ..storage import cleanup_orphan_uploads
+from ..textnorm import fuzzy_pattern
 
 router = APIRouter(prefix="/api", tags=["blocks"])
 
@@ -54,15 +55,20 @@ class UBPutChildrenRequest(BaseModel):
     blocks: list
 
 
-def _search_pattern(q: str, case: bool, whole: bool, regex: bool):
-    """Compile the VSCode-style search options into a regex (None = invalid)."""
-    body = q if regex else re.escape(q)
-    if whole:
-        body = rf"\b(?:{body})\b"
+def _block_kind(parent_id: str, properties: str) -> str:
+    """Classify a search hit for the UI: page title, PDF link region,
+    highlight, or plain note."""
+    if parent_id == "root":
+        return "page"
     try:
-        return re.compile(body, 0 if case else re.IGNORECASE)
-    except re.error:
-        return None
+        props = json.loads(properties) if properties else {}
+    except (ValueError, TypeError):
+        props = {}
+    if props.get("link_url") or props.get("link_page_id"):
+        return "link"
+    if props.get("highlight_id"):
+        return "highlight"
+    return "note"
 
 
 @router.get("/block-search")
@@ -76,36 +82,28 @@ async def block_search(request: Request, q: str = "", ids: str = "", limit: int 
                 return {"blocks": []}
             placeholders = ",".join("?" * len(id_list))
             rows = conn.execute(
-                f"SELECT id, content, parent_id FROM unified_blocks WHERE id IN ({placeholders})",
+                f"SELECT id, content, parent_id, properties FROM unified_blocks WHERE id IN ({placeholders})",
                 id_list,
             ).fetchall()
-        elif case or whole or regex:
-            # Option-aware search: SQLite LIKE can't express these, so scan in Python
-            pattern = _search_pattern(q, bool(case), bool(whole), bool(regex))
+        else:
+            # Scan in Python: separator-tolerant matching ("3000" hits
+            # "3,000-qubit") and the VSCode-style options can't be expressed
+            # as SQLite LIKE, and per-user note DBs are small.
+            pattern = fuzzy_pattern(q, bool(case), bool(whole), bool(regex))
             if pattern is None:
-                return {"blocks": [], "error": "invalid regex"}
+                return {"blocks": [], "error": "invalid regex" if regex else "empty query"}
             rows = [r for r in conn.execute(
-                "SELECT id, content, parent_id FROM unified_blocks "
+                "SELECT id, content, parent_id, properties FROM unified_blocks "
                 "WHERE content != '' ORDER BY updated_at DESC",
             ) if pattern.search(r[1] or "")][:limit]
-        else:
-            rows = conn.execute(
-                """
-                SELECT id, content, parent_id
-                FROM unified_blocks
-                WHERE content LIKE ? AND content != ''
-                ORDER BY updated_at DESC
-                LIMIT ?
-                """,
-                (f"%{q}%", limit),
-            ).fetchall()
         if not rows:
             return {"blocks": []}
 
         ancestors_by_id, page_root_by_id = ancestor_chains(conn, [r[0] for r in rows])
 
-        for block_id, content, _parent_id in rows:
-            block = {"id": block_id, "content": content}
+        for block_id, content, parent_id, properties in rows:
+            block = {"id": block_id, "content": content,
+                     "kind": _block_kind(parent_id, properties)}
             ancestors = ancestors_by_id.get(block_id)
             if ancestors:
                 block["ancestors"] = ancestors
@@ -131,7 +129,7 @@ async def blocks_replace(payload: BlockReplaceRequest, request: Request):
     """Search-and-replace across all block contents (VSCode-style options)."""
     if not payload.query:
         raise HTTPException(status_code=400, detail="empty query")
-    pattern = _search_pattern(payload.query, payload.case, payload.whole, payload.regex)
+    pattern = fuzzy_pattern(payload.query, payload.case, payload.whole, payload.regex)
     if pattern is None:
         raise HTTPException(status_code=400, detail="invalid regex")
     replacement = payload.replacement if payload.regex else payload.replacement.replace("\\", "\\\\")
