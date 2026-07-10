@@ -10,7 +10,7 @@ One module per API area. Mounted under `/api` in `gamma/app.py`.
 | `pdf.py`      | `/api/resolve-pdf`                  | find a real PDF url (arXiv → meta tag → Unpaywall OA) |
 | `metadata.py` | `/api/metadata/fetch`, `/cite`      | paper metadata + BibTeX + PPT citation (cached on the page) |
 | `ai.py`       | `/api/ai/chat`, `/models`, prompts  | chat, Anthropic + OpenAI, streaming NDJSON |
-| `search.py`   | `/api/search`, export               | full-text over notes/highlights |
+| `search.py`   | `/api/pdf-search`, `/tasks`         | FTS5 index over PDF text (pypdfium2, normalized via `gamma/textnorm.py`) |
 | `shares.py`   | `/api/shares/*`                     | share tokens for public read-only views |
 | `imports.py`  | `/api/import/*`                     | Logseq import + embedded-PDF-annotation import |
 

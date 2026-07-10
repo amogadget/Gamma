@@ -1,6 +1,7 @@
 """FastAPI application assembly: middleware, routers, startup maintenance, SPA serving."""
 
 import sqlite3
+import sys
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -11,6 +12,28 @@ from .auth import session_middleware
 from .db import DATA_SCHEMA, connect_users_db
 from .routers import ai, auth as auth_router, blocks, export, imports, metadata, pdf, search, shares, uploads
 from .storage import cleanup_orphan_uploads
+
+
+def _silence_windows_connection_reset():
+    """Swallow the benign ConnectionResetError [WinError 10054] that the Windows
+    Proactor event loop raises in _call_connection_lost when a client aborts an
+    in-flight stream (e.g. a browser refresh cancelling a 206 range request for a
+    PDF). The request has already completed; only the socket teardown fails, and
+    stock asyncio logs it as an alarming unhandled-callback traceback.
+    See https://github.com/python/cpython/issues/87643."""
+    if sys.platform != "win32":
+        return
+    from asyncio.proactor_events import _ProactorBasePipeTransport
+
+    _orig = _ProactorBasePipeTransport._call_connection_lost
+
+    def _quiet_call_connection_lost(self, exc):
+        try:
+            _orig(self, exc)
+        except (ConnectionResetError, ConnectionAbortedError):
+            pass
+
+    _ProactorBasePipeTransport._call_connection_lost = _quiet_call_connection_lost
 
 
 def _startup_maintenance():
@@ -38,6 +61,7 @@ def _startup_maintenance():
 
 
 def create_app() -> FastAPI:
+    _silence_windows_connection_reset()
     app = FastAPI(title="Gamma PDF Annotator")
 
     app.middleware("http")(session_middleware)
