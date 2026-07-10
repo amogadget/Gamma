@@ -1218,6 +1218,7 @@ body {
   -webkit-box-orient: vertical;
 }
 .recentCardTime { color: var(--text-dim); }
+.recentCardKind { font-size: 9.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
 
 .categoryCard {
   flex: 0 0 calc(16.666% - 8.333px);
