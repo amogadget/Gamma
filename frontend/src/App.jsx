@@ -2,8 +2,9 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS } from "./pdfViewer";
 import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl } from "./utils";
-import { DockWindow, ChatMarkdown } from "./widgets";
+import { DockWindow, ChatMarkdown, PinIcon } from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
+import { ViewToggle, FolderGlyph, FileGlyph } from "./fileBrowser";
 import ChatDock from "./chatDock";
 import SearchPanel from "./search";
 import { ContextMenu } from "./menus";
@@ -134,6 +135,14 @@ export default function App() {
     setHomeSort(v);
     try { localStorage.setItem("gamma-home-sort", v); } catch {}
   }
+  // Home layout: "list" (block-style rows) or "grid" (icon tiles).
+  const [homeView, setHomeView] = useState(() => {
+    try { return localStorage.getItem("gamma-home-view") || "list"; } catch { return "list"; }
+  });
+  function changeHomeView(v) {
+    setHomeView(v);
+    try { localStorage.setItem("gamma-home-view", v); } catch {}
+  }
   const HOME_PAGE_CHUNK = 30;
   const [homeShowCount, setHomeShowCount] = useState(HOME_PAGE_CHUNK);
   useEffect(() => { setHomeShowCount(HOME_PAGE_CHUNK); }, [folderFilter, homeSort]);
@@ -185,19 +194,21 @@ export default function App() {
 
   // --- Home file-manager: multi-select + copy/move/delete, folder rename ---
   const [selectedPages, setSelectedPages] = useState(() => new Set());
+  const [selectedFolders, setSelectedFolders] = useState(() => new Set());
   const lastPageClickRef = useRef(null); // anchor for shift-range selection
   const [homeMenu, setHomeMenu] = useState(null); // {kind:"page"|"folder", id?, name, x, y}
   const [folderRenaming, setFolderRenaming] = useState(null); // {name, draft}
   const [movePicker, setMovePicker] = useState(false);
 
-  function clearSelection() { setSelectedPages(new Set()); setMovePicker(false); }
+  function clearSelection() { setSelectedPages(new Set()); setSelectedFolders(new Set()); setMovePicker(false); }
 
-  // Plain click opens; Ctrl/Cmd toggles selection; Shift selects the range
-  // from the last clicked card (standard file-manager semantics).
+  // Modern file-manager semantics: plain click SELECTS, double-click opens.
+  // Ctrl/Cmd toggles a single item; Shift extends a range from the last click.
   function handlePageClick(pageBlock, e) {
     const id = pageBlock._pageId;
     if (!id) return;
     if (e && (e.ctrlKey || e.metaKey)) {
+      setSelectedFolders(new Set());
       setSelectedPages((prev) => {
         const next = new Set(prev);
         if (next.has(id)) next.delete(id); else next.add(id);
@@ -212,6 +223,7 @@ export default function App() {
       const b = order.indexOf(id);
       if (a !== -1 && b !== -1) {
         const [lo, hi] = a < b ? [a, b] : [b, a];
+        setSelectedFolders(new Set());
         setSelectedPages((prev) => {
           const next = new Set(prev);
           for (let i = lo; i <= hi; i++) next.add(order[i]);
@@ -220,9 +232,53 @@ export default function App() {
         return;
       }
     }
+    // Plain click: select just this page (replacing any prior selection).
     lastPageClickRef.current = id;
+    setMovePicker(false);
+    setSelectedFolders(new Set());
+    setSelectedPages(new Set([id]));
+  }
+
+  // Double-click / Enter / context-menu "Open": the old single-click behavior.
+  function openPage(id) {
+    if (!id) return;
     clearSelection();
     openBlock(id, { restoreScroll: true });
+  }
+
+  // Folder single-click selects (Ctrl toggles); double-click navigates in.
+  function handleFolderClick(path, e) {
+    if (folderRenaming?.name === path) return;
+    if (e && (e.ctrlKey || e.metaKey)) {
+      setSelectedPages(new Set());
+      setSelectedFolders((prev) => {
+        const next = new Set(prev);
+        if (next.has(path)) next.delete(path); else next.add(path);
+        return next;
+      });
+      return;
+    }
+    setMovePicker(false);
+    setSelectedPages(new Set());
+    setSelectedFolders(new Set([path]));
+  }
+  function openFolder(path) {
+    clearSelection();
+    setFolderFilter(path);
+    window.history.replaceState(null, "", `/?folder=${encodeURIComponent(path)}`);
+  }
+  // Commit a grid-tile rename (list rows rename inline via the block editor).
+  function commitPageRename(id, text) {
+    setHomeEditingId(null);
+    const t = (text || "").trim();
+    const cur = homeBlocks.find((b) => b.id === id)?.content || "";
+    if (!t || t === cur) return;
+    setHomeBlocks((prev) => prev.map((b) => (b.id === id ? { ...b, content: t } : b)));
+    apiJson(`${API}/blocks/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: t }),
+    }).catch((err) => setStatus(`Rename failed: ${err}`));
   }
 
   // Deep-copy a page: new root block + a subtree clone with fresh block ids
@@ -289,6 +345,24 @@ export default function App() {
         setStatus(`Deleted ${ids.length} page${ids.length === 1 ? "" : "s"}.`);
       },
     });
+  }
+
+  // Pin/unpin pages. Stored on the page (properties.pinned = ISO timestamp),
+  // so it syncs across devices like folder tags. "" unpins.
+  async function setPagesPinned(ids, pinned) {
+    const stamp = pinned ? new Date().toISOString() : "";
+    try {
+      for (const id of ids) {
+        await apiJson(`${API}/blocks/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ properties: { pinned: stamp } }),
+        });
+      }
+      await fetchHomeBlocks();
+    } catch (err) {
+      setStatus(`Pin failed: ${err.message || err}`);
+    }
   }
 
   // Add pages to a folder (soft link — other folder tags are kept). The only
@@ -2135,7 +2209,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
   const homeMode = !pdfUrl && !focusedBlockId && !readOnly;
   // Leaving home or changing folders drops the file-manager selection.
-  useEffect(() => { setSelectedPages(new Set()); setMovePicker(false); setHomeMenu(null); }, [folderFilter, homeMode]);
+  useEffect(() => { setSelectedPages(new Set()); setSelectedFolders(new Set()); setMovePicker(false); setHomeMenu(null); }, [folderFilter, homeMode]);
   const pageOnly = !pdfUrl && !!focusedBlockId && !readOnly;
   const pageBlocks = useMemo(() => {
     return homeBlocks.map((b) => ({
@@ -2150,6 +2224,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       _folders: parseFolderTags(b.properties?.folder),
       _createdAt: b.created_at || "",
       _updatedAt: b.updated_at || "",
+      _pinned: b.properties?.pinned || "",
       _isEmpty: !b.content,
       editMode: homeEditingId === b.id,
     }));
@@ -2186,6 +2261,28 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     return arr.sort(cmp);
   }, [pageBlocks, folderFilter, homeSort]);
   const homeVisiblePages = useMemo(() => homeSortedPages.slice(0, homeShowCount), [homeSortedPages, homeShowCount]);
+  // Pinned papers — shown as a favorites strip at the library root. Most
+  // recently pinned first.
+  const pinnedPages = useMemo(
+    () => pageBlocks.filter((b) => b._pinned).sort((a, b) => (b._pinned || "").localeCompare(a._pinned || "")),
+    [pageBlocks]
+  );
+  // Home keyboard: Esc clears the selection, Enter opens the single selected
+  // item — the standard file-manager shortcuts.
+  useEffect(() => {
+    if (!homeMode) return;
+    function onKey(e) {
+      if (e.target.closest && e.target.closest("input, textarea, [contenteditable]")) return;
+      if (e.key === "Escape" && (selectedPages.size || selectedFolders.size)) {
+        clearSelection();
+      } else if (e.key === "Enter") {
+        if (selectedFolders.size === 1) openFolder([...selectedFolders][0]);
+        else if (selectedPages.size === 1) openPage([...selectedPages][0]);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [homeMode, selectedPages, selectedFolders]);
   // Scrolling the "load more" sentinel into view grows the feed.
   useEffect(() => {
     const el = loadMoreRef.current;
@@ -2810,8 +2907,43 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 {selectedPages.size === 1 ? (
                   <button className="chatClearBtn" onClick={() => { const id = [...selectedPages][0]; clearSelection(); setHomeEditingId(id); }}>Rename</button>
                 ) : null}
+                {[...selectedPages].every((id) => pageBlocks.find((b) => b._pageId === id)?._pinned) ? (
+                  <button className="chatClearBtn" onClick={() => setPagesPinned([...selectedPages], false)}>Unpin</button>
+                ) : (
+                  <button className="chatClearBtn" onClick={() => setPagesPinned([...selectedPages], true)}>Pin</button>
+                )}
                 <button className="chatClearBtn" onClick={() => deletePages([...selectedPages])}>Delete</button>
                 <button className="uiClose" onClick={clearSelection} title="Clear selection (Esc)" aria-label="Clear selection">×</button>
+              </div>
+            ) : null}
+            {homeMode && !categoryFilter && !folderFilter && pinnedPages.length > 0 ? (
+              <div className="pinnedSection">
+                <div className="pinnedLabel"><PinIcon filled size={12} /> Pinned</div>
+                <div className="pinnedStrip">
+                  {pinnedPages.map((b) => (
+                    <div
+                      key={b._pageId}
+                      className={`pinnedTile ${selectedPages.has(b._pageId) ? "selected" : ""}`}
+                      onClick={(e) => handlePageClick(b, e)}
+                      onDoubleClick={() => openPage(b._pageId)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setSelectedPages((prev) => (prev.has(b._pageId) ? prev : new Set([b._pageId])));
+                        lastPageClickRef.current = b._pageId;
+                        setHomeMenu({ kind: "page", id: b._pageId, name: b.content, x: e.clientX, y: e.clientY });
+                      }}
+                      title={`${b.content}\nClick to select · double-click to open`}
+                    >
+                      <FileGlyph isPdf={!!b._sourceUrl} />
+                      <span className="pinnedTileName">{b.content || "Untitled"}</span>
+                      <button
+                        className="pinBtn pinned"
+                        title="Unpin"
+                        onClick={(e) => { e.stopPropagation(); setPagesPinned([b._pageId], false); }}
+                      ><PinIcon filled size={12} /></button>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
             {homeMode && !categoryFilter ? (
@@ -2859,14 +2991,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     </div>
                   </>
                 ) : null}
+                {homeView === "list" ? (<>
                 {childFolders.map((f) => (
                   <div
                     key={f}
-                    className={`folderRow ${folderDragOver === f ? "dragOver" : ""}`}
-                    onClick={() => {
-                      if (folderRenaming?.name === f) return;
-                      setFolderFilter(f); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(f)}`);
-                    }}
+                    className={`folderRow ${folderDragOver === f ? "dragOver" : ""} ${selectedFolders.has(f) ? "selected" : ""}`}
+                    onClick={(e) => handleFolderClick(f, e)}
+                    onDoubleClick={() => { if (folderRenaming?.name !== f) openFolder(f); }}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       setHomeMenu({ kind: "folder", name: f, x: e.clientX, y: e.clientY });
@@ -2882,7 +3013,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       const ids = selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
                       addPagesToFolder(ids, f);
                     }}
-                    title="Open folder — right-click to rename or delete, drop a paper to add it"
+                    title="Click to select · double-click to open · right-click to rename or delete · drop a paper to add it"
                   >
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
                     {folderRenaming?.name === f ? (
@@ -2926,19 +3057,142 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     <span className="folderName">New folder</span>
                   </button>
                 )}
+                </>) : null}
               </div>
             ) : null}
             {homeMode && !categoryFilter ? (
               <div className="homeListBar">
                 <span className="homeListLabel">{folderFilter ? "Files" : "All files"}</span>
+                <span className="homeListSpacer" />
                 <select className="homeSortSelect" value={homeSort} onChange={(e) => changeHomeSort(e.target.value)} title="Sort files">
                   <option value="updated">Recently modified</option>
                   <option value="created">Recently added</option>
                   <option value="title">Title A–Z</option>
                 </select>
+                <ViewToggle view={homeView} onChange={changeHomeView} />
               </div>
             ) : null}
-            {homeMode && categoryFilter ? null : (
+            {homeMode && !categoryFilter && homeView === "grid" ? (
+              (childFolders.length === 0 && homeVisiblePages.length === 0 && !newFolderOpen) ? (
+                <div className="empty">{folderFilter ? "This folder is empty — drag papers onto it from the library." : "No pages yet — use the + button above to open a PDF or start a note page."}</div>
+              ) : (
+                <>
+                  <div className="fileGrid" onClick={(e) => { if (e.target.classList.contains("fileGrid")) clearSelection(); }}>
+                    {childFolders.map((f) => (
+                      <div
+                        key={f}
+                        className={`folderTile ${folderDragOver === f ? "dragOver" : ""} ${selectedFolders.has(f) ? "selected" : ""}`}
+                        onClick={(e) => handleFolderClick(f, e)}
+                        onDoubleClick={() => { if (folderRenaming?.name !== f) openFolder(f); }}
+                        onContextMenu={(e) => { e.preventDefault(); setHomeMenu({ kind: "folder", name: f, x: e.clientX, y: e.clientY }); }}
+                        onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
+                        onDragLeave={() => setFolderDragOver(null)}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          setFolderDragOver(null);
+                          const id = e.dataTransfer.getData("text/plain");
+                          if (!id) return;
+                          const ids = selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
+                          addPagesToFolder(ids, f);
+                        }}
+                        title="Click to select · double-click to open · drop a paper to add it"
+                      >
+                        <FolderGlyph />
+                        {folderRenaming?.name === f ? (
+                          <input
+                            autoFocus
+                            className="tileRenameInput"
+                            defaultValue={f.slice(f.lastIndexOf("/") + 1)}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") renameFolder(f, e.currentTarget.value);
+                              else if (e.key === "Escape") setFolderRenaming(null);
+                            }}
+                            onBlur={(e) => renameFolder(f, e.currentTarget.value)}
+                          />
+                        ) : (
+                          <span className="tileName">{f.slice(f.lastIndexOf("/") + 1)}</span>
+                        )}
+                        <span className="tileFolderCount">{folderCounts[f] || 0}</span>
+                      </div>
+                    ))}
+                    {homeVisiblePages.map((b) => {
+                      const id = b._pageId;
+                      const isPinned = !!b._pinned;
+                      const isEditing = homeEditingId === id;
+                      return (
+                        <div
+                          key={id}
+                          className={`fileTile ${selectedPages.has(id) ? "selected" : ""}`}
+                          draggable={!isEditing}
+                          onDragStart={(e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; }}
+                          onClick={(e) => handlePageClick(b, e)}
+                          onDoubleClick={() => { if (!isEditing) openPage(id); }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setSelectedPages((prev) => (prev.has(id) ? prev : new Set([id])));
+                            lastPageClickRef.current = id;
+                            setHomeMenu({ kind: "page", id, name: b.content, x: e.clientX, y: e.clientY });
+                          }}
+                          title={`${b.content}\nClick to select · double-click to open`}
+                        >
+                          <button
+                            className={`pinBtn tilePinBtn ${isPinned ? "pinned" : ""}`}
+                            title={isPinned ? "Unpin" : "Pin to top"}
+                            onClick={(e) => { e.stopPropagation(); setPagesPinned([id], !isPinned); }}
+                          ><PinIcon filled={isPinned} size={12} /></button>
+                          <FileGlyph isPdf={!!b._sourceUrl} />
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              className="tileRenameInput"
+                              defaultValue={b.content}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") commitPageRename(id, e.currentTarget.value);
+                                else if (e.key === "Escape") setHomeEditingId(null);
+                              }}
+                              onBlur={(e) => commitPageRename(id, e.currentTarget.value)}
+                            />
+                          ) : (
+                            <span className="tileName">{b.content || "Untitled"}</span>
+                          )}
+                          <span className="tileKind">{b._sourceUrl ? "PDF" : "Note"}</span>
+                        </div>
+                      );
+                    })}
+                    {newFolderOpen ? (
+                      <div className="folderTile folderTileNew">
+                        <FolderGlyph />
+                        <input
+                          autoFocus
+                          className="tileRenameInput"
+                          value={newFolderName}
+                          placeholder="Folder name…"
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setNewFolderName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { e.preventDefault(); commitNewFolder(); }
+                            else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
+                          }}
+                          onBlur={commitNewFolder}
+                        />
+                      </div>
+                    ) : (
+                      <button className="folderTile folderTileAdd" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }} title="New folder">
+                        <svg className="tileGlyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                        <span className="tileName">New folder</span>
+                      </button>
+                    )}
+                  </div>
+                  {homeSortedPages.length > homeVisiblePages.length ? (
+                    <button ref={loadMoreRef} className="loadMoreBtn" onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}>
+                      Showing {homeVisiblePages.length} of {homeSortedPages.length} — load more
+                    </button>
+                  ) : null}
+                </>
+              )
+            ) : homeMode && categoryFilter ? null : (
             (homeMode ? homeVisiblePages : visibleBlocks).length === 0 ? (
               <div className="empty">{homeMode
                 ? (folderFilter ? "This folder is empty — drag papers onto it from the library." : "No pages yet — use the + button above to open a PDF or start a note page.")
@@ -2992,6 +3246,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     }
                   },
                   onPageOpen: handlePageClick,
+                  onPageActivate: (pageBlock) => openPage(pageBlock._pageId),
+                  onPagePin: (id, pinned) => setPagesPinned([id], pinned),
+                  pinnedPageIds: new Set(pinnedPages.map((b) => b._pageId)),
                   onPageContext: (pageBlock, e) => {
                     const id = pageBlock._pageId;
                     // Right-click keeps an existing multi-selection; otherwise selects the card
@@ -4068,6 +4325,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   {!many ? (
                     <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); clearSelection(); setHomeEditingId(homeMenu.id); }}>Rename</button>
                   ) : null}
+                  {ids.every((id) => pageBlocks.find((b) => b._pageId === id)?._pinned) ? (
+                    <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setPagesPinned(ids, false); }}>{many ? "Unpin" : "Unpin"}</button>
+                  ) : (
+                    <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setPagesPinned(ids, true); }}>{many ? `Pin ${ids.length} pages` : "Pin"}</button>
+                  )}
                   <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); duplicatePages(ids); }}>{many ? `Copy ${ids.length} pages` : "Copy"}</button>
                   <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deletePages(ids); }}>{many ? `Delete ${ids.length} pages` : "Delete"}</button>
                   <div className="ctxMenuLabel">Add to folder</div>
