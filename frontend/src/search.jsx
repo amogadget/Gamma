@@ -192,16 +192,27 @@ export default function SearchPanel({
       let pdfReq = Promise.resolve();
       const re = pdfSearchRef.current ? buildSearchRegex(q, { caseSensitive, wholeWord, regex: regexMode }) : null;
       if (re) {
-        pdfReq = pdfSearchRef.current(re).then((matches) => {
-          setPdfMatches(matches);
+        pdfReq = pdfSearchRef.current(re).then(async (matches) => {
           // A library hit was opened: jump to its page's first match now that
           // the document is rendered and re-searched.
           const pending = pendingFindRef.current;
-          if (pending && docNonce > pending.sinceNonce && matches.length) {
-            pendingFindRef.current = null;
-            const idx = matches.findIndex((m) => m.page === pending.page);
-            gotoFind(idx >= 0 ? idx : 0, matches);
+          if (pending && docNonce > pending.sinceNonce) {
+            if (!matches.length && !regexMode) {
+              // The library index matches words scattered across a page (AND
+              // of terms), so the exact phrase may not exist anywhere — fall
+              // back to highlighting the longest word of the query.
+              const terms = q.split(/\s+/).filter(Boolean).sort((a, b) => b.length - a.length);
+              const re2 = terms.length > 1 && pdfSearchRef.current
+                ? buildSearchRegex(terms[0], { caseSensitive, wholeWord, regex: false }) : null;
+              if (re2) matches = (await pdfSearchRef.current(re2).catch(() => [])) || [];
+            }
+            if (matches.length) {
+              pendingFindRef.current = null;
+              const idx = matches.findIndex((m) => m.page === pending.page);
+              gotoFind(idx >= 0 ? idx : 0, matches);
+            }
           }
+          setPdfMatches(matches);
         }).catch(() => setPdfMatches([]));
       } else {
         setPdfMatches([]);
