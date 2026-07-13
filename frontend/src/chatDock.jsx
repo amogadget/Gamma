@@ -11,7 +11,7 @@ export default function ChatDock({
   docId, focusedBlockId, homeBlocks, pdfTitle,
   pdfSelections, setPdfSelections,
   chatModel, setChatModel, chatEffort, setChatEffort, chatSystem,
-  aiInfo, openPromptEditor,
+  aiInfo, openPromptEditor, openAiKeysEditor,
   openPopover, setOpenPopover,
   setStatus,
   onGrip, onGripDoubleClick, collapsed, onClose,
@@ -281,22 +281,26 @@ export default function ChatDock({
 
   const headerContent = (
     <>
+      {aiInfo && !aiInfo.enabled && openAiKeysEditor ? (
+        <button className="uiBtn sm" onClick={openAiKeysEditor}
+          title="AI needs an API key — add a provider to enable chat">
+          Set up AI…
+        </button>
+      ) : null}
       {aiInfo?.models?.length > 0 ? (() => {
         const models = aiInfo.models;
         const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
         const currentId = models.some((m) => m.id === chatModel) ? chatModel : aiInfo.default;
         return (
           <span className="chatHeaderSelects">
-            {models.length > 1 ? (
-              <select className="chatModelSelect" value={currentId}
-                onChange={(e) => setChatModel(e.target.value)} title="Switch model">
-                {models.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {multiProvider ? `${m.model} · ${m.provider}` : m.model}
-                  </option>
-                ))}
-              </select>
-            ) : null}
+            <select className="chatModelSelect" value={currentId}
+              onChange={(e) => setChatModel(e.target.value)} title="Switch model">
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {multiProvider ? `${m.model} · ${m.provider_name || m.provider}` : m.model}
+                </option>
+              ))}
+            </select>
             <select className="chatModelSelect" value={chatEffort}
               onChange={(e) => setChatEffort(e.target.value)}
               title="Reasoning effort — leave on 'effort: default' unless the model supports it">
@@ -358,9 +362,15 @@ export default function ChatDock({
       >
         {chatMessages.length === 0 ? (
           <div className="chatEmpty">
-            {aiInfo && !aiInfo.enabled
-              ? "AI is not configured — set a provider key in the server .env."
-              : (focusedBlockId ? "Ask AI about this page…" : "Ask AI anything, or generate a report from your pages…")}
+            {aiInfo && !aiInfo.enabled ? (
+              openAiKeysEditor ? (
+                <>
+                  AI is not configured —{" "}
+                  <button className="chatEmptyLink" onClick={openAiKeysEditor}>add an AI provider</button>
+                  {" "}with your API key to enable it.
+                </>
+              ) : "AI is not configured."
+            ) : (focusedBlockId ? "Ask AI about this page…" : "Ask AI anything, or generate a report from your pages…")}
           </div>
         ) : (
           chatMessages.map((m, i) => {

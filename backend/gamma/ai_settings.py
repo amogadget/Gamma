@@ -1,55 +1,78 @@
-"""Per-user AI provider settings (GUI-configured API keys, base URLs, models).
+"""Per-user AI provider entries (GUI-managed API keys).
 
-Keys are per-user only — there is no env/server-wide key. They live in the
-user's data.db under the reserved `ai-settings` prefs key, which the generic
-/api/prefs endpoints refuse to serve: the only read path is the masked
-GET /api/ai/settings (last 4 characters, never the key itself). data.db is
-part of the owner's /api/export backup, which only their session can request.
+Users manage a LIST of provider entries (Settings → AI providers), each one:
+  {"id", "name", "protocol": "anthropic"|"openai", "api_key",
+   "base_url": "" = protocol default, "models": "a, b" = comma list ("" =
+   protocol default model), "created_at"}
 
-The env still provides instance defaults users inherit until they override
-them in the GUI: base URLs (GAMMA_AI_*_BASE_URL) and the model list
-(GAMMA_AI_MODELS).
+Entries live in the user's data.db under the reserved `ai-settings` prefs key,
+which the generic /api/prefs endpoints refuse to serve: the only read path is
+the masked GET /api/ai/settings (last 4 characters, never the key itself).
+data.db is part of the owner's /api/export backup, which only their session
+can request. There is no env/server-wide key.
 """
 
-from .config import AI_MODELS_ENV, AI_PROVIDERS, build_ai_models
+import secrets
+
+from .config import AI_PROTOCOLS
 from .db import get_pref, set_pref
 
 AI_SETTINGS_PREF_KEY = "ai-settings"
 
 MAX_KEY_LEN = 512
 MAX_URL_LEN = 300
-MAX_MODELS_LEN = 2000
+MAX_MODELS_LEN = 1000
+MAX_NAME_LEN = 60
+MAX_PROVIDERS = 20
 
 
-def load_ai_settings(user: str) -> dict:
-    """The user's stored settings: {"providers": {name: {"api_key", "base_url"}}, "models": str}."""
+def load_provider_entries(user: str) -> list:
     value, _ = get_pref(user, AI_SETTINGS_PREF_KEY)
-    return value if isinstance(value, dict) else {}
+    entries = (value or {}).get("providers") if isinstance(value, dict) else None
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
 
 
-def save_ai_settings(user: str, settings: dict):
-    set_pref(user, AI_SETTINGS_PREF_KEY, settings)
+def save_provider_entries(user: str, entries: list):
+    set_pref(user, AI_SETTINGS_PREF_KEY, {"providers": entries})
+
+
+def new_provider_id() -> str:
+    return secrets.token_urlsafe(6)
+
+
+def entry_models(entry: dict) -> list:
+    """The entry's model names, or its protocol's default model when unset."""
+    models = [m.strip() for m in (entry.get("models") or "").split(",") if m.strip()]
+    return models or [AI_PROTOCOLS[entry["protocol"]]["default_model"]]
 
 
 def ai_runtime(user: str) -> dict:
-    """The effective AI config for a request: env defaults (base URLs, model
-    list) overlaid with the user's stored settings and keys. Same shape
-    everywhere: {"providers": {...}, "models": [registry], "default": entry,
-    "enabled": bool}."""
-    settings = load_ai_settings(user) if user else {}
-    stored = settings.get("providers") or {}
-    providers = {}
-    for name, conf in AI_PROVIDERS.items():
-        u = stored.get(name) or {}
-        providers[name] = {
-            "api_key": (u.get("api_key") or "").strip(),
-            "base_url": ((u.get("base_url") or "").strip() or conf["base_url"]).rstrip("/"),
-            "default_model": conf["default_model"],
+    """The effective AI config for a request, built from the user's provider
+    entries: {"providers": {id: {api_key, base_url, protocol, name}},
+    "models": [{"id": "<pid>:<model>", "provider": pid, "provider_name",
+    "model"}], "default": first model or None, "enabled": bool}."""
+    entries = load_provider_entries(user) if user else []
+    providers, models = {}, []
+    for e in entries:
+        protocol = e.get("protocol")
+        pid = str(e.get("id") or "")
+        key = (e.get("api_key") or "").strip()
+        if protocol not in AI_PROTOCOLS or not pid or not key or pid in providers:
+            continue
+        name = (e.get("name") or "").strip() or AI_PROTOCOLS[protocol]["label"]
+        providers[pid] = {
+            "api_key": key,
+            "base_url": ((e.get("base_url") or "").strip() or AI_PROTOCOLS[protocol]["base_url"]).rstrip("/"),
+            "protocol": protocol,
+            "name": name,
         }
-    models = build_ai_models(providers, (settings.get("models") or "").strip() or AI_MODELS_ENV)
+        for model in entry_models(e):
+            mid = f"{pid}:{model}"
+            if mid not in [m["id"] for m in models]:
+                models.append({"id": mid, "provider": pid, "provider_name": name, "model": model})
     return {
         "providers": providers,
         "models": models,
-        "default": models[0],
-        "enabled": any(c["api_key"] for c in providers.values()),
+        "default": models[0] if models else None,
+        "enabled": bool(models),
     }
