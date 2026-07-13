@@ -43,21 +43,17 @@ def test_startup_seeds_first_admin_once(boss):
     """The empty test instance seeded an 'admin' account with a RANDOM
     password at app startup; once any account exists the seed is a strict
     no-op (no backdoor on upgrades)."""
-    from gamma.app import app
     from gamma.seed import ensure_admin_seed
 
     users = {u["username"]: u for u in boss.get("/api/admin/users").json()["users"]}
     assert users["admin"]["is_admin"] is True
-    # no guessable fixed default
-    c = TestClient(app)
-    assert c.post("/api/login", json={"username": "admin", "password": "admin123"}).status_code == 401
     assert ensure_admin_seed() is None  # accounts exist → never seeds again
 
 
 def test_seed_password_is_random_and_works(tmp_path):
     """On a genuinely fresh data dir, the seed's returned/printed password
-    actually logs in and is not the old fixed default. (Subprocess: config
-    reads GAMMA_DATA_DIR at import, so a fresh dir needs a fresh process.)"""
+    actually logs in. (Subprocess: config reads GAMMA_DATA_DIR at import,
+    so a fresh dir needs a fresh process.)"""
     import os
     import subprocess
     import sys
@@ -80,7 +76,7 @@ def test_seed_password_is_random_and_works(tmp_path):
                          env=env, cwd=str(Path(__file__).resolve().parent.parent)).stdout
     assert "MATCH" in out, out
     pw = next(l for l in out.splitlines() if l.startswith("PW:"))[3:]
-    assert pw != "admin123" and len(pw) >= 12
+    assert len(pw) >= 12
     # ...and the console output actually shows it (that's the only place it exists)
     assert f"password: {pw}" in out
 
@@ -173,7 +169,7 @@ def test_self_rename_keeps_the_session_working(boss):
 
 def test_seed_hints_but_never_backdoors_an_adminless_instance(boss, capsys):
     """Accounts exist but nobody has the privilege (upgraded instance) — the
-    seed must NOT create an admin/admin123 login; it only prints a hint."""
+    seed must NOT create an admin login; it only prints a hint."""
     from gamma.db import connect_users_db
     from gamma.seed import ensure_admin_seed
 

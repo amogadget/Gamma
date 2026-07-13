@@ -93,12 +93,12 @@ export default function App() {
   }
 
   async function doLogout() {
+    // Close the workspace while the session is still valid (flushes pending
+    // edits, clears the ?block= URL and the cached session) so nothing of this
+    // account's view leaks into whoever logs in next.
+    goHome();
     await fetch(`${API}/logout`, { method: "POST", credentials: "include" });
     setAuthUser(false);
-    clearSession();
-    setBlocks([]);
-    setPdfUrl("");
-    setDocId("");
   }
 
   useEffect(() => {
@@ -162,6 +162,16 @@ export default function App() {
   useEffect(() => {
     const u = authUser?.user;
     if (!u || readOnly) {
+      // Losing the session (logout button, expiry in another tab) must fully
+      // close the workspace: a stale focusedBlockId would get merged into the
+      // NEXT account's tab strip (applyServerTabs keeps the on-screen page) and
+      // pushed to their server prefs, and the nav-back stack would reopen this
+      // account's pages. Guarded on a previous user so the initial
+      // session-loading render doesn't wipe the deep link / saved session.
+      if (prefsUserRef.current && !readOnly) {
+        goHome();
+        setNavStack([]);
+      }
       prefsUserRef.current = "";
       setOpenTabs([]);
       setExtraFolders([]);
@@ -4769,7 +4779,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             {!usersInfo && !usersError ? <div className="reportModalHint">Loading…</div> : null}
             {usersInfo ? (
               <>
-                {usersInfo.users.map((u) => (
+                {usersInfo.users.map((u) => {
+                  // Mirrors the backend rail (admin.py counts non-guest admins):
+                  // the last admin can't be demoted, so don't offer the button.
+                  const lastAdmin = u.is_admin &&
+                    usersInfo.users.filter((x) => x.is_admin && !x.is_guest).length <= 1;
+                  return (
                   <div key={u.username} className="aiProvRow">
                     <span className="aiProvMeta">
                       <span className="aiProvName">
@@ -4819,8 +4834,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                           onClick={() => { setUsersError(""); setUserRenameEdit(null); setUserPwEdit({ username: u.username, password: "" }); }}>
                           Password…
                         </button>
-                        <button className="uiBtn sm" disabled={usersBusy}
-                          title={u.is_admin ? "Revoke the admin privilege" : "Grant the admin privilege"}
+                        <button className="uiBtn sm" disabled={usersBusy || lastAdmin}
+                          title={lastAdmin ? "The last admin can't be demoted"
+                            : u.is_admin ? "Revoke the admin privilege" : "Grant the admin privilege"}
                           onClick={() => usersCall(`/users/${encodeURIComponent(u.username)}`, "PUT", { is_admin: !u.is_admin })}>
                           {u.is_admin ? "Revoke admin" : "Make admin"}
                         </button>
@@ -4830,7 +4846,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       </span>
                     ) : null}
                   </div>
-                ))}
+                  );
+                })}
                 {usersForm ? (
                   <div className="aiProvForm">
                     <div className="promptSectionHead"><span>Add user</span></div>
