@@ -4,8 +4,10 @@ import os
 from pathlib import Path
 
 # Where all persistent state lives: users.db, users/<name>/{pages.db,data.db,uploads/}.
-# Defaults to the backend/ directory for backward compatibility with existing installs.
-DATA_DIR = Path(os.environ.get("GAMMA_DATA_DIR", "") or Path(__file__).resolve().parent.parent)
+# Defaults to a data/ folder at the repo root — the local mirror of Docker's /data
+# volume. Override with GAMMA_DATA_DIR (the Docker image sets it to /data).
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+DATA_DIR = Path(os.environ.get("GAMMA_DATA_DIR", "") or _REPO_ROOT / "data")
 USERS_DB = DATA_DIR / "users.db"
 USERS_DIR = DATA_DIR / "users"
 
