@@ -10,10 +10,11 @@ services:
       # a real folder next to this file instead, use a bind mount:
       #   - ./data:/data
       - gamma-data:/data
-    # Secrets and AI settings live in .env (copy .env.example → .env)
-    env_file:
-      - path: .env
-        required: false
+    # With a bind mount, set these to your host user's ids (`id -u` / `id -g`)
+    # so the files Gamma creates belong to you instead of root:
+    # environment:
+    #   PUID: 1000
+    #   PGID: 1000
     restart: unless-stopped
 
 volumes:
