@@ -18,6 +18,7 @@ USERS_SCHEMA = [
         username TEXT PRIMARY KEY,
         password_hash TEXT NOT NULL,
         is_guest INTEGER NOT NULL DEFAULT 0,
+        is_admin INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL
     )""",
     """CREATE TABLE IF NOT EXISTS sessions (
@@ -96,6 +97,12 @@ def connect_users_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(USERS_DB))
     for stmt in USERS_SCHEMA:
         conn.execute(stmt)
+    # Lazy upgrade for databases created before the admin privilege existed.
+    # (The auth middleware connects directly, so this must run before requests
+    # do — app startup calls connect_users_db() once, which covers it.)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(users)")]
+    if "is_admin" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     return conn
 

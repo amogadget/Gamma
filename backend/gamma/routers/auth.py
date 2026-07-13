@@ -116,7 +116,7 @@ async def get_session(request: Request):
     user = request.state.user
     if not user:
         return {"user": None}
-    return {"user": user, "is_guest": request.state.is_guest}
+    return {"user": user, "is_guest": request.state.is_guest, "is_admin": request.state.is_admin}
 
 
 @router.post("/login-guest")

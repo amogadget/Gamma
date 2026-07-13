@@ -54,7 +54,7 @@ export default function App() {
     try {
       const data = await apiJson(`${API}/session`);
       if (data.user) {
-        setAuthUser({ user: data.user, is_guest: data.is_guest });
+        setAuthUser({ user: data.user, is_guest: data.is_guest, is_admin: data.is_admin });
       } else {
         setAuthUser(false);
       }
@@ -74,8 +74,9 @@ export default function App() {
         credentials: "include",
       });
       if (!res.ok) { setLoginError("Invalid credentials"); return; }
-      const data = await res.json();
-      setAuthUser({ user: data.username, is_guest: false });
+      // Re-read the session rather than hand-building the auth state — it
+      // carries flags login doesn't return (is_admin).
+      await checkSession();
     } catch { setLoginError("Login failed"); }
   }
 
@@ -862,6 +863,103 @@ export default function App() {
     } finally {
       setAiKeysBusy(false);
     }
+  }
+
+  // User management (admins only — admin is a privilege flag, not a name).
+  const [usersOpen, setUsersOpen] = useState(false);
+  const [usersInfo, setUsersInfo] = useState(null); // {users: [{username, is_guest, is_admin, created_at}], me}
+  const [usersForm, setUsersForm] = useState(null); // {username, password, is_admin} — the add-user form
+  const [userPwEdit, setUserPwEdit] = useState(null); // {username, password} — inline set-password form
+  const [userRenameEdit, setUserRenameEdit] = useState(null); // {username, value} — inline rename form
+  const [usersBusy, setUsersBusy] = useState(false);
+  const [usersError, setUsersError] = useState("");
+
+  async function openUsersManager() {
+    setUsersError("");
+    setUsersInfo(null);
+    setUsersForm(null);
+    setUserPwEdit(null);
+    setUserRenameEdit(null);
+    setUsersOpen(true);
+    try {
+      setUsersInfo(await apiJson(`${API}/admin/users`));
+    } catch (err) {
+      setUsersError(err.message);
+    }
+  }
+
+  async function usersCall(path, method, body) {
+    setUsersBusy(true);
+    setUsersError("");
+    try {
+      const d = await apiJson(`${API}/admin${path}`, {
+        method,
+        ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+      });
+      setUsersInfo((prev) => ({ ...prev, users: d.users }));
+      if (d.warning) setStatus(d.warning);
+      return true;
+    } catch (err) {
+      setUsersError(err.message);
+      return false;
+    } finally {
+      setUsersBusy(false);
+    }
+  }
+
+  async function submitNewUser() {
+    const f = usersForm;
+    if (!f?.username.trim() || !f?.password) { setUsersError("Username and password are required."); return; }
+    if (await usersCall("/users", "POST", { username: f.username.trim(), password: f.password, is_admin: !!f.is_admin })) {
+      setUsersForm(null);
+    }
+  }
+
+  async function submitUserPassword() {
+    const f = userPwEdit;
+    if (!f?.password) { setUsersError("Password cannot be empty."); return; }
+    if (await usersCall(`/users/${encodeURIComponent(f.username)}`, "PUT", { password: f.password })) {
+      setUserPwEdit(null);
+      setStatus(`Password updated for ${f.username}.`);
+    }
+  }
+
+  async function submitUserRename() {
+    const f = userRenameEdit;
+    if (!f?.value.trim()) { setUsersError("New username required."); return; }
+    setUsersBusy(true);
+    setUsersError("");
+    try {
+      const d = await apiJson(`${API}/admin/users/${encodeURIComponent(f.username)}/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_username: f.value.trim() }),
+      });
+      setUsersInfo((prev) => ({
+        ...prev,
+        users: d.users,
+        me: d.renamed?.from === prev.me ? d.renamed.to : prev.me,
+      }));
+      setUserRenameEdit(null);
+      if (d.renamed) setStatus(`Renamed ${d.renamed.from} → ${d.renamed.to}. Sessions keep working.`);
+      // Renamed yourself? Re-read the session so the whole app re-keys
+      // (avatar, per-user prefs, synced tabs all follow the new name).
+      if (d.renamed && d.renamed.from === authUser?.user) await checkSession();
+    } catch (err) {
+      setUsersError(err.message);
+    } finally {
+      setUsersBusy(false);
+    }
+  }
+
+  function deleteUserAccount(u) {
+    setConfirmBox({
+      title: "Delete user",
+      message: `Delete "${u.username}" and ALL their data (notes, PDFs, settings)? This can't be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: () => usersCall(`/users/${encodeURIComponent(u.username)}`, "DELETE"),
+    });
   }
   // PDF passages the next chat question focuses on. Ctrl (additive) appends
   // — whether from text selection or highlight clicks; plain replaces.
@@ -4223,6 +4321,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         AI providers &amp; keys…
                       </button>
                     ) : null}
+                    {authUser.is_admin ? (
+                      <button className="popoverItem" onClick={() => { openUsersManager(); setOpenPopover(null); }}>
+                        <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+                        Manage users…
+                      </button>
+                    ) : null}
                     <div className="popoverHint">
                       {authUser.is_guest
                         ? "AI keys & models are configured on the server."
@@ -4650,6 +4754,122 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               </>
             ) : null}
             {aiKeysError ? <div className="reportModalHint aiKeysError">{aiKeysError}</div> : null}
+          </div>
+        </div>
+      ) : null}
+      {usersOpen ? (
+        <div className="reportOverlay" onClick={() => setUsersOpen(false)}>
+          <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">Users</div>
+            <div className="reportModalHint">
+              Admin is a privilege, not a name — any account can be granted it. Admins can create
+              and delete accounts, reset passwords, and grant or revoke the privilege. The last
+              admin can never be demoted or deleted.
+            </div>
+            {!usersInfo && !usersError ? <div className="reportModalHint">Loading…</div> : null}
+            {usersInfo ? (
+              <>
+                {usersInfo.users.map((u) => (
+                  <div key={u.username} className="aiProvRow">
+                    <span className="aiProvMeta">
+                      <span className="aiProvName">
+                        {u.username}
+                        {u.username === usersInfo.me ? <span className="uiTag">you</span> : null}
+                        {u.is_admin ? <span className="uiTag admin">admin</span> : null}
+                        {u.is_guest ? <span className="uiTag">guest</span> : null}
+                      </span>
+                      <span className="aiProvDesc">
+                        {u.is_guest ? "shared demo workspace, resets daily" : `created ${new Date(u.created_at).toLocaleDateString()}`}
+                      </span>
+                      {userPwEdit?.username === u.username ? (
+                        <span className="aiProvPwForm">
+                          <input
+                            className="aiKeyInput" type="password" autoComplete="new-password" autoFocus
+                            placeholder="New password"
+                            value={userPwEdit.password}
+                            onChange={(e) => setUserPwEdit((f) => ({ ...f, password: e.target.value }))}
+                            onKeyDown={(e) => { if (e.key === "Enter") submitUserPassword(); }}
+                          />
+                          <button className="uiBtn sm" onClick={() => setUserPwEdit(null)}>Cancel</button>
+                          <button className="uiBtn sm primary" disabled={usersBusy} onClick={submitUserPassword}>Set</button>
+                        </span>
+                      ) : null}
+                      {userRenameEdit?.username === u.username ? (
+                        <span className="aiProvPwForm">
+                          <input
+                            className="aiKeyInput" type="text" spellCheck={false} autoFocus
+                            placeholder="New username"
+                            value={userRenameEdit.value}
+                            onChange={(e) => setUserRenameEdit((f) => ({ ...f, value: e.target.value }))}
+                            onKeyDown={(e) => { if (e.key === "Enter") submitUserRename(); }}
+                          />
+                          <button className="uiBtn sm" onClick={() => setUserRenameEdit(null)}>Cancel</button>
+                          <button className="uiBtn sm primary" disabled={usersBusy} onClick={submitUserRename}>Rename</button>
+                        </span>
+                      ) : null}
+                    </span>
+                    {!u.is_guest ? (
+                      <span className="aiProvActions">
+                        <button className="uiBtn sm" disabled={usersBusy}
+                          title="Rename the account — sessions and share links keep working"
+                          onClick={() => { setUsersError(""); setUserPwEdit(null); setUserRenameEdit({ username: u.username, value: u.username }); }}>
+                          Rename…
+                        </button>
+                        <button className="uiBtn sm" disabled={usersBusy}
+                          onClick={() => { setUsersError(""); setUserRenameEdit(null); setUserPwEdit({ username: u.username, password: "" }); }}>
+                          Password…
+                        </button>
+                        <button className="uiBtn sm" disabled={usersBusy}
+                          title={u.is_admin ? "Revoke the admin privilege" : "Grant the admin privilege"}
+                          onClick={() => usersCall(`/users/${encodeURIComponent(u.username)}`, "PUT", { is_admin: !u.is_admin })}>
+                          {u.is_admin ? "Revoke admin" : "Make admin"}
+                        </button>
+                        {u.username !== usersInfo.me ? (
+                          <button className="uiBtn sm danger" disabled={usersBusy} onClick={() => deleteUserAccount(u)}>Delete</button>
+                        ) : null}
+                      </span>
+                    ) : null}
+                  </div>
+                ))}
+                {usersForm ? (
+                  <div className="aiProvForm">
+                    <div className="promptSectionHead"><span>Add user</span></div>
+                    <input
+                      className="aiKeyInput" type="text" spellCheck={false} autoFocus
+                      placeholder="Username (letters, digits, _ . -)"
+                      value={usersForm.username}
+                      onChange={(e) => setUsersForm((f) => ({ ...f, username: e.target.value }))}
+                    />
+                    <input
+                      className="aiKeyInput" type="password" autoComplete="new-password"
+                      placeholder="Password"
+                      value={usersForm.password}
+                      onChange={(e) => setUsersForm((f) => ({ ...f, password: e.target.value }))}
+                      onKeyDown={(e) => { if (e.key === "Enter") submitNewUser(); }}
+                    />
+                    <label className="uiCheckRow">
+                      <input type="checkbox" checked={!!usersForm.is_admin}
+                        onChange={(e) => setUsersForm((f) => ({ ...f, is_admin: e.target.checked }))} />
+                      Grant the admin privilege
+                    </label>
+                    <div className="reportModalBtns">
+                      <button className="uiBtn" onClick={() => { setUsersForm(null); setUsersError(""); }}>Cancel</button>
+                      <button className="uiBtn primary" disabled={usersBusy} onClick={submitNewUser}>
+                        {usersBusy ? "Creating…" : "Create user"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="reportModalBtns">
+                    <button className="uiBtn" onClick={() => setUsersOpen(false)}>Close</button>
+                    <button className="uiBtn primary" onClick={() => { setUsersError(""); setUserPwEdit(null); setUsersForm({ username: "", password: "", is_admin: false }); }}>
+                      + Add user
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : null}
+            {usersError ? <div className="reportModalHint aiKeysError">{usersError}</div> : null}
           </div>
         </div>
       ) : null}
