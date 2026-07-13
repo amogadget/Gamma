@@ -76,50 +76,78 @@ def test_prefs_require_session(client):
     assert anon.put("/api/prefs/open-tabs", json={"value": []}).status_code == 401
 
 
-# --- AI provider settings ----------------------------------------------------
+# --- AI provider entries (GUI key management) ---------------------------------
 
 def test_guest_cannot_store_keys(guest):
     r = guest.get("/api/ai/settings")
     assert r.status_code == 200
     assert r.json()["can_edit"] is False
-    r = guest.put("/api/ai/settings", json={"providers": {"anthropic": {"api_key": "sk-x"}}})
+    assert r.json()["providers"] == []
+    r = guest.post("/api/ai/providers", json={"protocol": "anthropic", "api_key": "sk-x-guest-key"})
     assert r.status_code == 403
 
 
-def test_user_key_is_stored_masked_and_enables_ai(alice):
-    # No env keys exist at all — AI starts disabled until the user adds a key
+def test_added_provider_is_masked_and_enables_ai(alice):
+    # No env keys exist at all — AI starts disabled until the user adds a provider
     assert alice.get("/api/ai/models").json()["enabled"] is False
 
     key = "sk-ant-api03-test-key-12345678"
-    r = alice.put("/api/ai/settings", json={
-        "providers": {"anthropic": {"api_key": key, "base_url": "https://example.com/v1x"}},
-        "models": "anthropic:claude-test-model",
+    r = alice.post("/api/ai/providers", json={
+        "protocol": "anthropic", "name": "My DeepSeek", "api_key": key,
+        "base_url": "https://example.com/v1x", "models": "claude-test-model, claude-other",
     })
     assert r.status_code == 200, r.text
-    body = r.json()
-    prov = body["providers"]["anthropic"]
+    provs = r.json()["providers"]
+    assert len(provs) == 1
+    p = provs[0]
     # Never echo the key — only a short hint
     assert key not in r.text
-    assert prov["configured"] is True
-    assert prov["key_hint"] == "…5678"
-    assert prov["base_url"] == "https://example.com/v1x"
+    assert p["key_hint"] == "…5678"
+    assert p["name"] == "My DeepSeek" and p["protocol"] == "anthropic"
+    assert p["base_url"] == "https://example.com/v1x"
+    assert p["created_at"]
 
     models = alice.get("/api/ai/models").json()
     assert models["enabled"] is True
-    assert models["default"] == "anthropic:claude-test-model"
+    assert models["default"] == f"{p['id']}:claude-test-model"
+    assert [m["model"] for m in models["models"]] == ["claude-test-model", "claude-other"]
+    assert models["models"][0]["provider_name"] == "My DeepSeek"
 
     # ...and the same masked view comes back on GET
     g = alice.get("/api/ai/settings").json()
     assert key not in str(g)
-    assert g["providers"]["anthropic"]["key_hint"] == "…5678"
+    assert g["providers"][0]["key_hint"] == "…5678"
 
 
-def test_settings_validation(alice):
-    assert alice.put("/api/ai/settings", json={"providers": {"nope": {}}}).status_code == 400
-    assert alice.put("/api/ai/settings",
-                     json={"providers": {"openai": {"base_url": "ftp://x"}}}).status_code == 400
-    assert alice.put("/api/ai/settings",
-                     json={"providers": {"openai": {"api_key": "has space"}}}).status_code == 400
+def test_edit_without_key_keeps_the_stored_one(alice):
+    pid = alice.get("/api/ai/settings").json()["providers"][0]["id"]
+    r = alice.put(f"/api/ai/providers/{pid}", json={"name": "Renamed", "models": "claude-solo"})
+    assert r.status_code == 200, r.text
+    p = r.json()["providers"][0]
+    assert p["name"] == "Renamed" and p["key_hint"] == "…5678"
+    models = alice.get("/api/ai/models").json()
+    assert models["enabled"] is True  # key survived the edit
+    assert models["default"] == f"{pid}:claude-solo"
+
+
+def test_second_provider_adds_its_models(alice):
+    r = alice.post("/api/ai/providers", json={
+        "protocol": "openai", "api_key": "sk-openai-test-key-9876",
+    })
+    assert r.status_code == 200, r.text
+    assert len(r.json()["providers"]) == 2
+    models = alice.get("/api/ai/models").json()["models"]
+    # openai entry has no model list — its protocol default appears
+    assert [m["model"] for m in models] == ["claude-solo", "gpt-4o-mini"]
+
+
+def test_provider_validation(alice):
+    assert alice.post("/api/ai/providers", json={"protocol": "nope", "api_key": "k" * 20}).status_code == 400
+    assert alice.post("/api/ai/providers", json={"protocol": "openai"}).status_code == 400  # no key
+    assert alice.post("/api/ai/providers",
+                      json={"protocol": "openai", "api_key": "sk-ok-key-123", "base_url": "ftp://x"}).status_code == 400
+    assert alice.post("/api/ai/providers", json={"protocol": "openai", "api_key": "has space"}).status_code == 400
+    assert alice.put("/api/ai/providers/does-not-exist", json={"name": "x"}).status_code == 404
 
 
 def test_export_stays_owner_only(alice):
@@ -134,10 +162,10 @@ def test_export_stays_owner_only(alice):
         assert "data.db" in z.namelist()
 
 
-def test_removing_key_disables_ai_again(alice):
-    r = alice.put("/api/ai/settings", json={"providers": {"anthropic": {"api_key": ""}}, "models": ""})
-    assert r.status_code == 200
-    assert r.json()["providers"]["anthropic"]["configured"] is False
+def test_deleting_all_providers_disables_ai(alice):
+    for p in alice.get("/api/ai/settings").json()["providers"]:
+        assert alice.delete(f"/api/ai/providers/{p['id']}").status_code == 200
+    assert alice.get("/api/ai/settings").json()["providers"] == []
     assert alice.get("/api/ai/models").json()["enabled"] is False
 
 

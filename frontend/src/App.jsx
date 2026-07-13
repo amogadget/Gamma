@@ -791,55 +791,72 @@ export default function App() {
   });
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
-  // AI provider keys (Settings → AI providers). Stored server-side per user;
-  // the server only ever returns a masked hint, so the drafts here start empty
-  // and a blank key field means "keep whatever is stored".
+  // AI providers (Settings → AI providers): a user-managed list of API keys,
+  // OpenAI-platform style. Keys are stored server-side per user; the server
+  // only ever returns a masked hint, so key fields here start empty and an
+  // empty key on edit means "keep the stored one".
   const [aiKeysOpen, setAiKeysOpen] = useState(false);
-  const [aiKeysInfo, setAiKeysInfo] = useState(null); // masked GET /ai/settings
-  const [aiKeysDraft, setAiKeysDraft] = useState(null);
+  const [aiKeysInfo, setAiKeysInfo] = useState(null); // masked GET /ai/settings: {providers: [], protocols: []}
+  const [aiKeysForm, setAiKeysForm] = useState(null); // null | {id: ""=add, protocol, name, api_key, base_url, models}
   const [aiKeysBusy, setAiKeysBusy] = useState(false);
   const [aiKeysError, setAiKeysError] = useState("");
 
   async function openAiKeysEditor() {
     setAiKeysError("");
     setAiKeysInfo(null);
-    setAiKeysDraft(null);
+    setAiKeysForm(null);
     setAiKeysOpen(true);
     try {
-      const d = await apiJson(`${API}/ai/settings`);
-      setAiKeysInfo(d);
-      const draft = { models: d.models || "" };
-      for (const name of Object.keys(d.providers || {})) {
-        draft[name] = { api_key: "", clear: false, base_url: d.providers[name].base_url || "" };
-      }
-      setAiKeysDraft(draft);
+      setAiKeysInfo(await apiJson(`${API}/ai/settings`));
     } catch (err) {
       setAiKeysError(err.message);
     }
   }
 
-  async function saveAiKeys() {
-    if (!aiKeysDraft || !aiKeysInfo) return;
+  const aiProtocolOf = (id) => aiKeysInfo?.protocols?.find((p) => p.id === id);
+
+  function startAddAiProvider() {
+    setAiKeysError("");
+    setAiKeysForm({ id: "", protocol: aiKeysInfo?.protocols?.[0]?.id || "anthropic", name: "", api_key: "", base_url: "", models: "" });
+  }
+
+  function startEditAiProvider(p) {
+    setAiKeysError("");
+    setAiKeysForm({ id: p.id, protocol: p.protocol, name: p.name || "", api_key: "", base_url: p.base_url || "", models: p.models || "" });
+  }
+
+  async function submitAiProvider() {
+    const f = aiKeysForm;
+    if (!f) return;
+    if (!f.id && !f.api_key.trim()) { setAiKeysError("An API key is required."); return; }
     setAiKeysBusy(true);
     setAiKeysError("");
     try {
-      const providers = {};
-      for (const name of Object.keys(aiKeysInfo.providers || {})) {
-        const p = { base_url: (aiKeysDraft[name]?.base_url || "").trim() };
-        if (aiKeysDraft[name]?.clear) p.api_key = "";
-        else if ((aiKeysDraft[name]?.api_key || "").trim()) p.api_key = aiKeysDraft[name].api_key.trim();
-        providers[name] = p;
-      }
-      const d = await apiJson(`${API}/ai/settings`, {
-        method: "PUT",
+      const body = { protocol: f.protocol, name: f.name.trim(), base_url: f.base_url.trim(), models: f.models.trim() };
+      if (f.api_key.trim()) body.api_key = f.api_key.trim();
+      const d = await apiJson(`${API}/ai/providers${f.id ? `/${f.id}` : ""}`, {
+        method: f.id ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ providers, models: aiKeysDraft.models || "" }),
+        body: JSON.stringify(body),
       });
       setAiKeysInfo(d);
-      setAiKeysOpen(false);
+      setAiKeysForm(null);
       // The model switchers everywhere feed off /ai/models — refresh them.
       apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
-      setStatus("AI provider settings saved.");
+    } catch (err) {
+      setAiKeysError(err.message);
+    } finally {
+      setAiKeysBusy(false);
+    }
+  }
+
+  async function deleteAiProvider(id) {
+    setAiKeysBusy(true);
+    setAiKeysError("");
+    try {
+      const d = await apiJson(`${API}/ai/providers/${id}`, { method: "DELETE" });
+      setAiKeysInfo(d);
+      apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
     } catch (err) {
       setAiKeysError(err.message);
     } finally {
@@ -3708,7 +3725,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
           chatSystem={chatSystem} aiInfo={aiInfo}
-          openPromptEditor={openPromptEditor}
+          openPromptEditor={openPromptEditor} openAiKeysEditor={openAiKeysEditor}
           openPopover={openPopover} setOpenPopover={setOpenPopover}
           setStatus={setStatus}
         />
@@ -4482,7 +4499,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             </div>
             <div className="promptSectionHead">
               <span>Chat system prompt{chatSystem ? " · custom" : ""}</span>
-              <button className="chatClearBtn" onClick={() => setPromptDraft(aiInfo?.default_prompt || "")}>Reset</button>
+              <button className="uiBtn sm" onClick={() => setPromptDraft(aiInfo?.default_prompt || "")}>Reset</button>
             </div>
             <textarea
               className="promptTextarea"
@@ -4493,7 +4510,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             />
             <div className="promptSectionHead">
               <span>Metadata extraction{metaPrompt ? " · custom" : ""}</span>
-              <button className="chatClearBtn" onClick={() => setMetaPromptDraft(aiInfo?.metadata_prompt || "")}>Reset</button>
+              <button className="uiBtn sm" onClick={() => setMetaPromptDraft(aiInfo?.metadata_prompt || "")}>Reset</button>
             </div>
             <div className="reportModalHint">Used when a paper has no arXiv id or DOI and the AI reads the first pages instead.</div>
             <textarea
@@ -4504,7 +4521,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             />
             <div className="promptSectionHead">
               <span>PPT citation{citePrompt ? " · custom" : ""}</span>
-              <button className="chatClearBtn" onClick={() => setCitePromptDraft(aiInfo?.cite_prompt || "")}>Reset</button>
+              <button className="uiBtn sm" onClick={() => setCitePromptDraft(aiInfo?.cite_prompt || "")}>Reset</button>
             </div>
             <div className="reportModalHint">Turns the paper's BibTeX into a minimal slide-ready citation (Share → PPT citation).</div>
             <textarea
@@ -4514,8 +4531,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               rows={4}
             />
             <div className="reportModalBtns">
-              <button className="chatClearBtn" onClick={() => setPromptOpen(false)}>Cancel</button>
-              <button className="chatSendBtn"
+              <button className="uiBtn" onClick={() => setPromptOpen(false)}>Cancel</button>
+              <button className="uiBtn primary"
                 onClick={() => {
                   // Saving the unmodified default = no custom prompt
                   const norm = (draft, def) => {
@@ -4536,72 +4553,103 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
             <div className="reportModalTitle">AI providers</div>
             <div className="reportModalHint">
-              Each account brings its own API key. Keys are stored on the server for your account
-              only and are never sent back to the browser — once saved, only the last 4 characters
-              are shown.
+              Bring your own API keys. Keys are stored on the server for your account only and are
+              never sent back to the browser — after saving, only the last 4 characters are shown.
             </div>
-            {!aiKeysDraft && !aiKeysError ? <div className="reportModalHint">Loading…</div> : null}
-            {aiKeysDraft && aiKeysInfo ? (
+            {!aiKeysInfo && !aiKeysError ? <div className="reportModalHint">Loading…</div> : null}
+            {aiKeysInfo ? (
               <>
-                {Object.entries(aiKeysInfo.providers).map(([name, p]) => (
-                  <div key={name}>
-                    <div className="promptSectionHead">
-                      <span>
-                        {name === "anthropic" ? "Anthropic (Messages API)" : "OpenAI (Chat Completions)"}
-                        {" · "}
-                        {aiKeysDraft[name].clear
-                          ? "key will be removed"
-                          : p.configured ? `your key ${p.key_hint}`
-                          : "not configured"}
+                {aiKeysInfo.providers.length === 0 && !aiKeysForm ? (
+                  <div className="reportModalHint">
+                    {aiKeysInfo.can_edit
+                      ? "No providers yet — add one to enable AI chat, metadata extraction and citations."
+                      : "Guest accounts can't store API keys. Ask the admin for an account to use AI features."}
+                  </div>
+                ) : null}
+                {aiKeysInfo.providers.map((p) => {
+                  const proto = aiProtocolOf(p.protocol);
+                  return (
+                    <div key={p.id} className="aiProvRow">
+                      <span className="aiProvMeta">
+                        <span className="aiProvName">{p.name || proto?.label || p.protocol}</span>
+                        <span className="aiProvDesc">
+                          {`key ${p.key_hint || "set"} · ${proto?.label || p.protocol}`}
+                          {p.base_url ? ` · ${p.base_url}` : ""}
+                          {p.created_at ? ` · added ${new Date(p.created_at).toLocaleDateString()}` : ""}
+                        </span>
+                        <span className="aiProvDesc">
+                          models: {p.models || `${proto?.default_model || "provider default"} (default)`}
+                        </span>
                       </span>
-                      {p.configured && !aiKeysDraft[name].clear ? (
-                        <button className="chatClearBtn"
-                          onClick={() => setAiKeysDraft((d) => ({ ...d, [name]: { ...d[name], api_key: "", clear: true } }))}>
-                          Remove key
-                        </button>
-                      ) : null}
+                      <span className="aiProvActions">
+                        {aiKeysInfo.can_edit ? (
+                          <>
+                            <button className="uiBtn sm" disabled={aiKeysBusy} onClick={() => startEditAiProvider(p)}>Edit</button>
+                            <button className="uiBtn sm danger" disabled={aiKeysBusy} onClick={() => deleteAiProvider(p.id)}>Remove</button>
+                          </>
+                        ) : null}
+                      </span>
+                    </div>
+                  );
+                })}
+                {aiKeysForm ? (
+                  <div className="aiProvForm">
+                    <div className="promptSectionHead"><span>{aiKeysForm.id ? "Edit provider" : "Add provider"}</span></div>
+                    <select
+                      className="aiKeyInput"
+                      value={aiKeysForm.protocol}
+                      onChange={(e) => setAiKeysForm((f) => ({ ...f, protocol: e.target.value }))}
+                    >
+                      {aiKeysInfo.protocols.map((x) => (
+                        <option key={x.id} value={x.id}>{x.label}</option>
+                      ))}
+                    </select>
+                    <div className="reportModalHint">
+                      The API format, not the vendor — many services speak one of these (DeepSeek,
+                      Kimi, GLM via Anthropic format; most others via OpenAI format).
                     </div>
                     <input
-                      className="aiKeyInput"
-                      type="password"
-                      autoComplete="new-password"
-                      spellCheck={false}
-                      placeholder={p.configured ? "Enter a new key to replace the stored one" : "API key"}
-                      value={aiKeysDraft[name].api_key}
-                      onChange={(e) => setAiKeysDraft((d) => ({ ...d, [name]: { ...d[name], api_key: e.target.value, clear: false } }))}
+                      className="aiKeyInput" type="text" spellCheck={false}
+                      placeholder='Name (optional — e.g. "DeepSeek", "work key")'
+                      value={aiKeysForm.name}
+                      onChange={(e) => setAiKeysForm((f) => ({ ...f, name: e.target.value }))}
                     />
                     <input
-                      className="aiKeyInput"
-                      type="text"
-                      spellCheck={false}
-                      placeholder={`Base URL (default: ${p.env_base_url})`}
-                      value={aiKeysDraft[name].base_url}
-                      onChange={(e) => setAiKeysDraft((d) => ({ ...d, [name]: { ...d[name], base_url: e.target.value } }))}
+                      className="aiKeyInput" type="password" autoComplete="new-password" spellCheck={false}
+                      placeholder={aiKeysForm.id ? "API key (leave empty to keep the current one)" : "API key"}
+                      value={aiKeysForm.api_key}
+                      onChange={(e) => setAiKeysForm((f) => ({ ...f, api_key: e.target.value }))}
                     />
+                    <input
+                      className="aiKeyInput" type="text" spellCheck={false}
+                      placeholder={`Base URL (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_base_url || ""})`}
+                      value={aiKeysForm.base_url}
+                      onChange={(e) => setAiKeysForm((f) => ({ ...f, base_url: e.target.value }))}
+                    />
+                    <input
+                      className="aiKeyInput" type="text" spellCheck={false}
+                      placeholder={`Models, comma-separated — first is the default (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_model || ""})`}
+                      value={aiKeysForm.models}
+                      onChange={(e) => setAiKeysForm((f) => ({ ...f, models: e.target.value }))}
+                    />
+                    <div className="reportModalBtns">
+                      <button className="uiBtn" onClick={() => { setAiKeysForm(null); setAiKeysError(""); }}>Cancel</button>
+                      <button className="uiBtn primary" disabled={aiKeysBusy} onClick={submitAiProvider}>
+                        {aiKeysBusy ? "Saving…" : aiKeysForm.id ? "Save changes" : "Add provider"}
+                      </button>
+                    </div>
                   </div>
-                ))}
-                <div className="promptSectionHead"><span>Models</span></div>
-                <div className="reportModalHint">
-                  Comma-separated “provider:model” entries; the first is the default.
-                  {aiKeysInfo.env_models ? ` Empty = the server's list (${aiKeysInfo.env_models}).` : " Empty = each configured provider's default model."}
-                </div>
-                <input
-                  className="aiKeyInput"
-                  type="text"
-                  spellCheck={false}
-                  placeholder="anthropic:claude-haiku-4-5-20251001, openai:gpt-4o-mini"
-                  value={aiKeysDraft.models}
-                  onChange={(e) => setAiKeysDraft((d) => ({ ...d, models: e.target.value }))}
-                />
+                ) : (
+                  <div className="reportModalBtns">
+                    <button className="uiBtn" onClick={() => setAiKeysOpen(false)}>Close</button>
+                    {aiKeysInfo.can_edit ? (
+                      <button className="uiBtn primary" onClick={startAddAiProvider}>+ Add provider</button>
+                    ) : null}
+                  </div>
+                )}
               </>
             ) : null}
             {aiKeysError ? <div className="reportModalHint aiKeysError">{aiKeysError}</div> : null}
-            <div className="reportModalBtns">
-              <button className="chatClearBtn" onClick={() => setAiKeysOpen(false)}>Cancel</button>
-              <button className="chatSendBtn" disabled={aiKeysBusy || !aiKeysDraft} onClick={saveAiKeys}>
-                {aiKeysBusy ? "Saving…" : "Save"}
-              </button>
-            </div>
           </div>
         </div>
       ) : null}
