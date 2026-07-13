@@ -7,6 +7,7 @@ welcome page and schemas never drift between the two.
 import secrets
 import shutil
 import sqlite3
+from contextlib import closing
 
 from fractional_indexing import generate_key_between
 
@@ -56,7 +57,10 @@ def create_user_dbs(username: str):
     user_dir.mkdir(parents=True, exist_ok=True)
     nw = page_now()
 
-    with sqlite3.connect(str(user_dir / "pages.db")) as pages_db:
+    # closing(), not just the context manager: sqlite3's `with` commits but
+    # does NOT close, and the open handle would block renaming/deleting the
+    # user directory on Windows (manage.py rename-user right after create).
+    with closing(sqlite3.connect(str(user_dir / "pages.db"))) as pages_db:
         for stmt in PAGES_SCHEMA:
             pages_db.execute(stmt)
         if not pages_db.execute("SELECT 1 FROM unified_blocks WHERE id = 'root'").fetchone():
@@ -74,7 +78,7 @@ def create_user_dbs(username: str):
                 )
         pages_db.commit()
 
-    with sqlite3.connect(str(user_dir / "data.db")) as data_db:
+    with closing(sqlite3.connect(str(user_dir / "data.db"))) as data_db:
         for stmt in DATA_SCHEMA:
             data_db.execute(stmt)
         data_db.commit()

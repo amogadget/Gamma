@@ -168,9 +168,20 @@ export default function App() {
       return;
     }
     prefsUserRef.current = u;
-    try { setOpenTabs(JSON.parse(localStorage.getItem(`gamma-tabs:${u}`) || "[]")); } catch { setOpenTabs([]); }
+    tabsSyncRef.current = "";
+    // Local cache first for instant paint…
+    let localTabs = [];
+    try { localTabs = JSON.parse(localStorage.getItem(`gamma-tabs:${u}`) || "[]"); } catch {}
+    setOpenTabs(Array.isArray(localTabs) ? localTabs : []);
     try { setExtraFolders(JSON.parse(localStorage.getItem(`gamma-extra-folders:${u}`) || "[]")); } catch { setExtraFolders([]); }
     try { setRecentViews(JSON.parse(localStorage.getItem(`gamma-recent-views:${u}`) || "[]")); } catch { setRecentViews([]); }
+    // …then the server copy, which wins (tabs sync across browsers). An
+    // account that has never synced seeds the server with this browser's tabs.
+    apiJson(`${API}/prefs/open-tabs`).then((d) => {
+      if (prefsUserRef.current !== u) return;
+      if (d.updated_at) applyServerTabs(u, d.value, d.updated_at);
+      else if (Array.isArray(localTabs) && localTabs.length) pushTabsToServer(localTabs);
+    }).catch(() => {});
   }, [authUser?.user, readOnly]);
 
   // Folder-tag helpers: parse/serialize the comma-separated path list.
@@ -491,20 +502,84 @@ export default function App() {
       return next;
     });
   }
-  // Open tabs (Chrome-style): [{id, title}], stored PER USER (and per browser)
-  // so switching accounts in the same browser never surfaces someone else's
-  // tabs. Persistence happens inside the updater (not an effect) so a user
-  // switch can't race an in-flight save into the wrong key.
+  // Open tabs (Chrome-style): [{id, title}], stored PER USER. localStorage is
+  // only a cache for instant paint — the server (/api/prefs/open-tabs) is the
+  // source of truth, so tabs follow the account across browsers. Local changes
+  // are debounce-pushed; regaining focus pulls the latest stored state.
+  // Persistence happens inside the updater (not an effect) so a user switch
+  // can't race an in-flight save into the wrong key.
   const [openTabs, setOpenTabs] = useState([]);
   const prefsUserRef = useRef(""); // whose tabs/folders are currently loaded
+  const tabsSyncRef = useRef("");  // updated_at of the last server state we applied/wrote
+  const tabsPushTimerRef = useRef(null);
+  function pushTabsToServer(tabs) {
+    if (tabsPushTimerRef.current) clearTimeout(tabsPushTimerRef.current);
+    tabsPushTimerRef.current = setTimeout(async () => {
+      tabsPushTimerRef.current = null;
+      if (!prefsUserRef.current) return;
+      try {
+        const d = await apiJson(`${API}/prefs/open-tabs`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: tabs }),
+        });
+        tabsSyncRef.current = d.updated_at || "";
+      } catch {}
+    }, 600);
+  }
+  // Apply a server-side tabs state locally without echoing it back. A pending
+  // local push is cancelled — the server copy applied here supersedes it (the
+  // merge below re-pushes when this window still holds a tab the server lost).
+  function applyServerTabs(user, value, updatedAt) {
+    tabsSyncRef.current = updatedAt || "";
+    if (tabsPushTimerRef.current) {
+      clearTimeout(tabsPushTimerRef.current);
+      tabsPushTimerRef.current = null;
+    }
+    setOpenTabs((prev) => {
+      let tabs = Array.isArray(value) ? value : [];
+      // The page open in THIS window keeps its tab even when the stored state
+      // lacks it (just opened here and not pushed yet, or closed elsewhere
+      // while it's still on screen here) — merged and pushed back.
+      const fid = focusedBlockIdRef.current;
+      if (fid && !tabs.some((t) => t.id === fid)) {
+        tabs = [...tabs, prev.find((t) => t.id === fid) || { id: fid, title: "Untitled" }];
+        pushTabsToServer(tabs);
+      }
+      try { localStorage.setItem(`gamma-tabs:${user}`, JSON.stringify(tabs)); } catch {}
+      return tabs;
+    });
+  }
   function updateTabs(updater) {
     setOpenTabs((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       const u = prefsUserRef.current;
-      if (u) { try { localStorage.setItem(`gamma-tabs:${u}`, JSON.stringify(next)); } catch {} }
+      if (u) {
+        try { localStorage.setItem(`gamma-tabs:${u}`, JSON.stringify(next)); } catch {}
+        pushTabsToServer(next);
+      }
       return next;
     });
   }
+  // Multi-browser convergence: whenever this window regains focus, pull the
+  // latest stored tabs. Skipped while a local push is pending (ours is newer).
+  useEffect(() => {
+    async function pullTabs() {
+      const u = prefsUserRef.current;
+      if (!u || document.hidden || tabsPushTimerRef.current) return;
+      try {
+        const d = await apiJson(`${API}/prefs/open-tabs`);
+        if (prefsUserRef.current !== u || !d.updated_at) return;
+        if (d.updated_at !== tabsSyncRef.current) applyServerTabs(u, d.value, d.updated_at);
+      } catch {}
+    }
+    window.addEventListener("focus", pullTabs);
+    document.addEventListener("visibilitychange", pullTabs);
+    return () => {
+      window.removeEventListener("focus", pullTabs);
+      document.removeEventListener("visibilitychange", pullTabs);
+    };
+  }, []);
   // Recently-viewed pages — a device-local history for the library's top
   // shortcut bar ([{id, at}], most recent first). Not page data, so it lives
   // in localStorage like tabs.
@@ -716,6 +791,61 @@ export default function App() {
   });
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
+  // AI provider keys (Settings → AI providers). Stored server-side per user;
+  // the server only ever returns a masked hint, so the drafts here start empty
+  // and a blank key field means "keep whatever is stored".
+  const [aiKeysOpen, setAiKeysOpen] = useState(false);
+  const [aiKeysInfo, setAiKeysInfo] = useState(null); // masked GET /ai/settings
+  const [aiKeysDraft, setAiKeysDraft] = useState(null);
+  const [aiKeysBusy, setAiKeysBusy] = useState(false);
+  const [aiKeysError, setAiKeysError] = useState("");
+
+  async function openAiKeysEditor() {
+    setAiKeysError("");
+    setAiKeysInfo(null);
+    setAiKeysDraft(null);
+    setAiKeysOpen(true);
+    try {
+      const d = await apiJson(`${API}/ai/settings`);
+      setAiKeysInfo(d);
+      const draft = { models: d.models || "" };
+      for (const name of Object.keys(d.providers || {})) {
+        draft[name] = { api_key: "", clear: false, base_url: d.providers[name].base_url || "" };
+      }
+      setAiKeysDraft(draft);
+    } catch (err) {
+      setAiKeysError(err.message);
+    }
+  }
+
+  async function saveAiKeys() {
+    if (!aiKeysDraft || !aiKeysInfo) return;
+    setAiKeysBusy(true);
+    setAiKeysError("");
+    try {
+      const providers = {};
+      for (const name of Object.keys(aiKeysInfo.providers || {})) {
+        const p = { base_url: (aiKeysDraft[name]?.base_url || "").trim() };
+        if (aiKeysDraft[name]?.clear) p.api_key = "";
+        else if ((aiKeysDraft[name]?.api_key || "").trim()) p.api_key = aiKeysDraft[name].api_key.trim();
+        providers[name] = p;
+      }
+      const d = await apiJson(`${API}/ai/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providers, models: aiKeysDraft.models || "" }),
+      });
+      setAiKeysInfo(d);
+      setAiKeysOpen(false);
+      // The model switchers everywhere feed off /ai/models — refresh them.
+      apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
+      setStatus("AI provider settings saved.");
+    } catch (err) {
+      setAiKeysError(err.message);
+    } finally {
+      setAiKeysBusy(false);
+    }
+  }
   // PDF passages the next chat question focuses on. Ctrl (additive) appends
   // — whether from text selection or highlight clicks; plain replaces.
   const [pdfSelections, setPdfSelections] = useState([]);
@@ -2783,12 +2913,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       try {
                         await apiJson(`${API}/blocks/${focusedBlockId}`, { method: "DELETE" });
                       } catch {}
-                      // Close the page's tab too (write straight to storage —
-                      // we reload right after, so state updates wouldn't stick).
+                      // Close the page's tab too (write straight to storage +
+                      // server — we reload right after, so state updates and
+                      // debounced pushes wouldn't stick).
                       try {
                         if (prefsUserRef.current) {
-                          localStorage.setItem(`gamma-tabs:${prefsUserRef.current}`,
-                            JSON.stringify(openTabs.filter((t) => t.id !== focusedBlockId)));
+                          const nextTabs = openTabs.filter((t) => t.id !== focusedBlockId);
+                          localStorage.setItem(`gamma-tabs:${prefsUserRef.current}`, JSON.stringify(nextTabs));
+                          await apiJson(`${API}/prefs/open-tabs`, {
+                            method: "PUT",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ value: nextTabs }),
+                          });
                         }
                       } catch {}
                       clearSession();
@@ -4064,7 +4200,17 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                       Export my data (.zip)
                     </button>
-                    <div className="popoverHint">AI keys &amp; models are configured on the server. Preferences here are saved in this browser.</div>
+                    {!authUser.is_guest ? (
+                      <button className="popoverItem" onClick={() => { openAiKeysEditor(); setOpenPopover(null); }}>
+                        <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></svg>
+                        AI providers &amp; keys…
+                      </button>
+                    ) : null}
+                    <div className="popoverHint">
+                      {authUser.is_guest
+                        ? "AI keys & models are configured on the server."
+                        : "API keys are stored on the server for your account and never shown again. Open tabs sync across browsers; other preferences stay in this browser."}
+                    </div>
                     <div className="popoverDivider" />
                     <button className="popoverItem popoverItemDanger" onClick={doLogout}>
                       <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
@@ -4381,6 +4527,80 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   setCitePrompt(norm(citePromptDraft, aiInfo?.cite_prompt));
                   setPromptOpen(false);
                 }}>Save</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {aiKeysOpen ? (
+        <div className="reportOverlay" onClick={() => setAiKeysOpen(false)}>
+          <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">AI providers</div>
+            <div className="reportModalHint">
+              Each account brings its own API key. Keys are stored on the server for your account
+              only and are never sent back to the browser — once saved, only the last 4 characters
+              are shown.
+            </div>
+            {!aiKeysDraft && !aiKeysError ? <div className="reportModalHint">Loading…</div> : null}
+            {aiKeysDraft && aiKeysInfo ? (
+              <>
+                {Object.entries(aiKeysInfo.providers).map(([name, p]) => (
+                  <div key={name}>
+                    <div className="promptSectionHead">
+                      <span>
+                        {name === "anthropic" ? "Anthropic (Messages API)" : "OpenAI (Chat Completions)"}
+                        {" · "}
+                        {aiKeysDraft[name].clear
+                          ? "key will be removed"
+                          : p.configured ? `your key ${p.key_hint}`
+                          : "not configured"}
+                      </span>
+                      {p.configured && !aiKeysDraft[name].clear ? (
+                        <button className="chatClearBtn"
+                          onClick={() => setAiKeysDraft((d) => ({ ...d, [name]: { ...d[name], api_key: "", clear: true } }))}>
+                          Remove key
+                        </button>
+                      ) : null}
+                    </div>
+                    <input
+                      className="aiKeyInput"
+                      type="password"
+                      autoComplete="new-password"
+                      spellCheck={false}
+                      placeholder={p.configured ? "Enter a new key to replace the stored one" : "API key"}
+                      value={aiKeysDraft[name].api_key}
+                      onChange={(e) => setAiKeysDraft((d) => ({ ...d, [name]: { ...d[name], api_key: e.target.value, clear: false } }))}
+                    />
+                    <input
+                      className="aiKeyInput"
+                      type="text"
+                      spellCheck={false}
+                      placeholder={`Base URL (default: ${p.env_base_url})`}
+                      value={aiKeysDraft[name].base_url}
+                      onChange={(e) => setAiKeysDraft((d) => ({ ...d, [name]: { ...d[name], base_url: e.target.value } }))}
+                    />
+                  </div>
+                ))}
+                <div className="promptSectionHead"><span>Models</span></div>
+                <div className="reportModalHint">
+                  Comma-separated “provider:model” entries; the first is the default.
+                  {aiKeysInfo.env_models ? ` Empty = the server's list (${aiKeysInfo.env_models}).` : " Empty = each configured provider's default model."}
+                </div>
+                <input
+                  className="aiKeyInput"
+                  type="text"
+                  spellCheck={false}
+                  placeholder="anthropic:claude-haiku-4-5-20251001, openai:gpt-4o-mini"
+                  value={aiKeysDraft.models}
+                  onChange={(e) => setAiKeysDraft((d) => ({ ...d, models: e.target.value }))}
+                />
+              </>
+            ) : null}
+            {aiKeysError ? <div className="reportModalHint aiKeysError">{aiKeysError}</div> : null}
+            <div className="reportModalBtns">
+              <button className="chatClearBtn" onClick={() => setAiKeysOpen(false)}>Cancel</button>
+              <button className="chatSendBtn" disabled={aiKeysBusy || !aiKeysDraft} onClick={saveAiKeys}>
+                {aiKeysBusy ? "Saving…" : "Save"}
+              </button>
             </div>
           </div>
         </div>

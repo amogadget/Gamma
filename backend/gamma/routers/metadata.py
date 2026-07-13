@@ -17,8 +17,8 @@ import xml.etree.ElementTree as ET
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from ..ai_settings import ai_runtime
 from ..auth import require_user
-from ..config import AI_ENABLED
 from ..db import page_now, user_db_path
 from .ai import METADATA_PROMPT, CITE_PROMPT, _call_ai, _extract_pdf_context, _resolve_model
 
@@ -127,13 +127,13 @@ def _fetch_doi(doi: str) -> tuple[dict | None, str]:
     return meta, bibtex
 
 
-def _ai_extract_meta(text: str, prompt: str, model: str) -> dict | None:
+def _ai_extract_meta(text: str, prompt: str, model: str, rt: dict) -> dict | None:
     system = (prompt or METADATA_PROMPT).strip()[:4000]
     try:
         raw = _call_ai(
             [{"role": "user", "content": f"First pages of the paper:\n\n{text[:6000]}"}],
             # Generous cap: reasoning models spend invisible tokens before the JSON
-            system, _resolve_model(model), max_tokens=8000, timeout=120,
+            system, _resolve_model(rt, model), rt, max_tokens=8000, timeout=120,
         )
         m = re.search(r"\{[\s\S]*\}", raw)
         if not m:
@@ -231,8 +231,9 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
             meta, bibtex = _fetch_doi(doi)
             if meta:
                 break
-    if not meta and AI_ENABLED and text:
-        meta = _ai_extract_meta(text, payload.prompt, payload.model)
+    rt = ai_runtime(user)
+    if not meta and rt["enabled"] and text:
+        meta = _ai_extract_meta(text, payload.prompt, payload.model, rt)
         # If the AI surfaced an identifier, prefer the authoritative record
         if meta and meta.get("arxiv_id"):
             meta = _fetch_arxiv(meta["arxiv_id"]) or meta
@@ -265,8 +266,10 @@ def metadata_cite(payload: CiteRequest, request: Request):
     _, props = _load_page(user, payload.block_id)
     if props.get("ppt_cite") and not payload.force:
         return {"citation": props["ppt_cite"], "cached": True}
-    if not AI_ENABLED:
-        raise HTTPException(status_code=503, detail="AI not configured (set a provider API key)")
+    rt = ai_runtime(user)
+    if not rt["enabled"]:
+        raise HTTPException(status_code=503,
+                            detail="AI not configured (add an API key in Settings → AI providers)")
     meta = props.get("meta")
     bibtex = props.get("bibtex", "")
     if not meta and not bibtex:
@@ -275,7 +278,7 @@ def metadata_cite(payload: CiteRequest, request: Request):
     source = bibtex or json.dumps(meta, indent=2)
     try:
         text = _call_ai([{"role": "user", "content": source}], system,
-                        _resolve_model(payload.model), max_tokens=4000, timeout=120)
+                        _resolve_model(rt, payload.model), rt, max_tokens=4000, timeout=120)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
     citation = text.strip()

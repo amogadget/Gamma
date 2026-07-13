@@ -12,9 +12,17 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ..ai_settings import (
+    MAX_KEY_LEN,
+    MAX_MODELS_LEN,
+    MAX_URL_LEN,
+    ai_runtime,
+    load_ai_settings,
+    save_ai_settings,
+)
 from ..auth import require_user
 from ..blocks_store import fetch_subtree
-from ..config import AI_DEFAULT_MODEL, AI_ENABLED, AI_MODELS, AI_PROVIDERS
+from ..config import AI_MODELS_ENV, AI_PROVIDERS
 from ..db import page_now, user_db_path, user_uploads_dir
 
 router = APIRouter(prefix="/api", tags=["ai"])
@@ -56,12 +64,13 @@ def _parse_images(images: list) -> list[tuple[str, str]]:
     return out
 
 
-def _resolve_model(requested: str) -> dict:
-    """Registry entry for a requested model id (or bare model name); default otherwise."""
-    for entry in AI_MODELS:
+def _resolve_model(rt: dict, requested: str) -> dict:
+    """Registry entry for a requested model id (or bare model name) in the
+    user's effective config (`rt` from ai_runtime()); default otherwise."""
+    for entry in rt["models"]:
         if requested == entry["id"] or requested == entry["model"]:
             return entry
-    return AI_DEFAULT_MODEL
+    return rt["default"]
 
 
 def _resolve_effort(requested: str) -> str:
@@ -282,15 +291,15 @@ _WIRE = {
 }
 
 
-def _open_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None, stream=False):
-    """Open the provider HTTP call for `entry` (a model registry entry).
-    Raises before any bytes are consumed, so callers can still return a
-    normal HTTP error status."""
-    conf = AI_PROVIDERS[entry["provider"]]
+def _open_ai(messages, system, entry, rt, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None, stream=False):
+    """Open the provider HTTP call for `entry` (a model registry entry) using
+    the user's effective config (`rt` from ai_runtime()). Raises before any
+    bytes are consumed, so callers can still return a normal HTTP error status."""
+    conf = rt["providers"][entry["provider"]]
     if not conf["api_key"]:
         raise HTTPException(status_code=503,
                             detail=f"provider '{entry['provider']}' not configured "
-                                   f"(set GAMMA_AI_{entry['provider'].upper()}_API_KEY)")
+                                   f"(add an API key in Settings → AI providers)")
     build_request = _WIRE[entry["provider"]][0]
     req = build_request(conf, messages, system, entry["model"], pdf_b64s, effort, max_tokens, images, stream)
     try:
@@ -306,9 +315,9 @@ def _open_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192,
         raise RuntimeError(f"upstream {e.code}: {body or e.reason}")
 
 
-def _call_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None):
+def _call_ai(messages, system, entry, rt, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None):
     """Send a chat to the provider that serves `entry`; return the full reply text."""
-    with _open_ai(messages, system, entry, pdf_b64s, effort, max_tokens, timeout, images) as resp:
+    with _open_ai(messages, system, entry, rt, pdf_b64s, effort, max_tokens, timeout, images) as resp:
         data = json.loads(resp.read())
     return _WIRE[entry["provider"]][1](data)
 
@@ -356,11 +365,12 @@ def _sse_deltas(resp, provider):
 
 @router.get("/ai/models")
 async def ai_models(request: Request):
-    require_user(request)
+    user = require_user(request)
+    rt = ai_runtime(user)
     return {
-        "enabled": AI_ENABLED,
-        "models": AI_MODELS,                # [{id: "provider:model", provider, model}, ...]
-        "default": AI_DEFAULT_MODEL["id"],
+        "enabled": rt["enabled"],
+        "models": rt["models"],             # [{id: "provider:model", provider, model}, ...]
+        "default": rt["default"]["id"],
         "efforts": ["low", "medium", "high"],  # offered in the UI; omitted unless picked
         "default_prompt": _SYSTEM_PROMPT,   # shown in the prompt editor
         "metadata_prompt": METADATA_PROMPT,  # AI metadata-extraction fallback
@@ -368,14 +378,91 @@ async def ai_models(request: Request):
     }
 
 
+# --- Per-user AI provider settings (GUI-configured keys) ----------------------
+# Keys are write-only from the client: GET returns a masked hint, never the key.
+# Stored under the reserved `ai-settings` prefs key in the user's data.db —
+# see gamma/ai_settings.py for the security rationale.
+
+def _masked_settings(user: str, is_guest: bool) -> dict:
+    settings = load_ai_settings(user)
+    stored = settings.get("providers") or {}
+    out = {}
+    for name, envconf in AI_PROVIDERS.items():
+        u = stored.get(name) or {}
+        user_key = (u.get("api_key") or "").strip()
+        out[name] = {
+            "configured": bool(user_key),
+            # Enough to recognize the key, never enough to use it.
+            "key_hint": f"…{user_key[-4:]}" if len(user_key) >= 12 else ("set" if user_key else ""),
+            "base_url": (u.get("base_url") or "").strip(),
+            "env_base_url": envconf["base_url"],
+        }
+    return {
+        "providers": out,
+        "models": (settings.get("models") or "").strip(),
+        "env_models": AI_MODELS_ENV,
+        "can_edit": not is_guest,
+    }
+
+
+@router.get("/ai/settings")
+async def ai_settings_get(request: Request):
+    user = require_user(request)
+    return _masked_settings(user, request.state.is_guest)
+
+
+class AISettingsRequest(BaseModel):
+    # {provider: {"api_key": str?, "base_url": str?}} — a field is only changed
+    # when present; api_key "" removes the stored key (disables that provider).
+    providers: dict = {}
+    models: str | None = None  # comma-separated "provider:model"; "" = server default list
+
+
+@router.put("/ai/settings")
+async def ai_settings_put(payload: AISettingsRequest, request: Request):
+    user = require_user(request)
+    if request.state.is_guest:
+        # The guest workspace is shared by everyone — a stored key would be
+        # spendable (though never readable) by any visitor.
+        raise HTTPException(status_code=403, detail="guest accounts cannot store API keys")
+
+    settings = load_ai_settings(user)
+    stored = settings.setdefault("providers", {})
+    for name, patch in (payload.providers or {}).items():
+        if name not in AI_PROVIDERS:
+            raise HTTPException(status_code=400, detail=f"unknown provider '{name}'")
+        if not isinstance(patch, dict):
+            raise HTTPException(status_code=400, detail="provider settings must be an object")
+        conf = stored.setdefault(name, {})
+        if "api_key" in patch:
+            key = str(patch["api_key"] or "").strip()
+            if len(key) > MAX_KEY_LEN or any(c.isspace() for c in key):
+                raise HTTPException(status_code=400, detail="invalid API key")
+            conf["api_key"] = key
+        if "base_url" in patch:
+            url = str(patch["base_url"] or "").strip().rstrip("/")
+            if (url and not re.match(r"^https?://", url)) or len(url) > MAX_URL_LEN:
+                raise HTTPException(status_code=400, detail="base URL must start with http(s)://")
+            conf["base_url"] = url
+    if payload.models is not None:
+        models = str(payload.models).strip()
+        if len(models) > MAX_MODELS_LEN:
+            raise HTTPException(status_code=400, detail="model list too long")
+        settings["models"] = models
+
+    save_ai_settings(user, settings)
+    return _masked_settings(user, request.state.is_guest)
+
+
 # Sync endpoint on purpose: the AI call can take minutes; FastAPI's threadpool
 # keeps the event loop free for other requests meanwhile.
 @router.post("/ai/chat")
 def ai_chat(payload: AIChatRequest, request: Request):
-    if not AI_ENABLED:
-        raise HTTPException(status_code=503, detail="AI not configured (set a provider API key)")
-
     user = require_user(request)
+    rt = ai_runtime(user)
+    if not rt["enabled"]:
+        raise HTTPException(status_code=503,
+                            detail="AI not configured (add an API key in Settings → AI providers)")
 
     pdf_b64s = []
     context_sections = []
@@ -427,14 +514,14 @@ def ai_chat(payload: AIChatRequest, request: Request):
     custom_system = (payload.system or "").strip()[:8000]
     # A custom prompt always applies; the built-in one only when there's a document
     system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
-    entry = _resolve_model(payload.model)
+    entry = _resolve_model(rt, payload.model)
     effort = _resolve_effort(payload.effort)
     images = _parse_images(payload.images)
     try:
         if payload.stream:
             # Open upstream eagerly: connection/auth errors still become a
             # proper HTTP error instead of dying inside a committed stream.
-            resp = _open_ai(messages, system, entry, pdf_b64s,
+            resp = _open_ai(messages, system, entry, rt, pdf_b64s,
                             effort=effort, timeout=180, images=images, stream=True)
 
             def ndjson():
@@ -448,7 +535,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                     resp.close()
 
             return StreamingResponse(ndjson(), media_type="application/x-ndjson")
-        text = _call_ai(messages, system, entry, pdf_b64s,
+        text = _call_ai(messages, system, entry, rt, pdf_b64s,
                         effort=effort, timeout=180, images=images)
         return {"response": text}
     except HTTPException:

@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 from . import config
 from .auth import session_middleware
 from .db import DATA_SCHEMA, connect_users_db
-from .routers import ai, auth as auth_router, blocks, export, imports, metadata, pdf, search, shares, uploads
+from .routers import ai, auth as auth_router, blocks, export, imports, metadata, pdf, prefs, search, shares, uploads
 from .storage import cleanup_orphan_uploads
 
 
@@ -72,6 +72,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router.router)
     app.include_router(ai.router)
+    app.include_router(prefs.router)
     app.include_router(metadata.router)
     app.include_router(search.router)
     app.include_router(shares.router)
