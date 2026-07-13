@@ -54,7 +54,7 @@ export default function App() {
     try {
       const data = await apiJson(`${API}/session`);
       if (data.user) {
-        setAuthUser({ user: data.user, is_guest: data.is_guest });
+        setAuthUser({ user: data.user, is_guest: data.is_guest, is_admin: data.is_admin });
       } else {
         setAuthUser(false);
       }
@@ -74,8 +74,9 @@ export default function App() {
         credentials: "include",
       });
       if (!res.ok) { setLoginError("Invalid credentials"); return; }
-      const data = await res.json();
-      setAuthUser({ user: data.username, is_guest: false });
+      // Re-read the session rather than hand-building the auth state — it
+      // carries flags login doesn't return (is_admin).
+      await checkSession();
     } catch { setLoginError("Login failed"); }
   }
 
@@ -92,12 +93,12 @@ export default function App() {
   }
 
   async function doLogout() {
+    // Close the workspace while the session is still valid (flushes pending
+    // edits, clears the ?block= URL and the cached session) so nothing of this
+    // account's view leaks into whoever logs in next.
+    goHome();
     await fetch(`${API}/logout`, { method: "POST", credentials: "include" });
     setAuthUser(false);
-    clearSession();
-    setBlocks([]);
-    setPdfUrl("");
-    setDocId("");
   }
 
   useEffect(() => {
@@ -161,6 +162,16 @@ export default function App() {
   useEffect(() => {
     const u = authUser?.user;
     if (!u || readOnly) {
+      // Losing the session (logout button, expiry in another tab) must fully
+      // close the workspace: a stale focusedBlockId would get merged into the
+      // NEXT account's tab strip (applyServerTabs keeps the on-screen page) and
+      // pushed to their server prefs, and the nav-back stack would reopen this
+      // account's pages. Guarded on a previous user so the initial
+      // session-loading render doesn't wipe the deep link / saved session.
+      if (prefsUserRef.current && !readOnly) {
+        goHome();
+        setNavStack([]);
+      }
       prefsUserRef.current = "";
       setOpenTabs([]);
       setExtraFolders([]);
@@ -168,9 +179,20 @@ export default function App() {
       return;
     }
     prefsUserRef.current = u;
-    try { setOpenTabs(JSON.parse(localStorage.getItem(`gamma-tabs:${u}`) || "[]")); } catch { setOpenTabs([]); }
+    tabsSyncRef.current = "";
+    // Local cache first for instant paint…
+    let localTabs = [];
+    try { localTabs = JSON.parse(localStorage.getItem(`gamma-tabs:${u}`) || "[]"); } catch {}
+    setOpenTabs(Array.isArray(localTabs) ? localTabs : []);
     try { setExtraFolders(JSON.parse(localStorage.getItem(`gamma-extra-folders:${u}`) || "[]")); } catch { setExtraFolders([]); }
     try { setRecentViews(JSON.parse(localStorage.getItem(`gamma-recent-views:${u}`) || "[]")); } catch { setRecentViews([]); }
+    // …then the server copy, which wins (tabs sync across browsers). An
+    // account that has never synced seeds the server with this browser's tabs.
+    apiJson(`${API}/prefs/open-tabs`).then((d) => {
+      if (prefsUserRef.current !== u) return;
+      if (d.updated_at) applyServerTabs(u, d.value, d.updated_at);
+      else if (Array.isArray(localTabs) && localTabs.length) pushTabsToServer(localTabs);
+    }).catch(() => {});
   }, [authUser?.user, readOnly]);
 
   // Folder-tag helpers: parse/serialize the comma-separated path list.
@@ -491,20 +513,84 @@ export default function App() {
       return next;
     });
   }
-  // Open tabs (Chrome-style): [{id, title}], stored PER USER (and per browser)
-  // so switching accounts in the same browser never surfaces someone else's
-  // tabs. Persistence happens inside the updater (not an effect) so a user
-  // switch can't race an in-flight save into the wrong key.
+  // Open tabs (Chrome-style): [{id, title}], stored PER USER. localStorage is
+  // only a cache for instant paint — the server (/api/prefs/open-tabs) is the
+  // source of truth, so tabs follow the account across browsers. Local changes
+  // are debounce-pushed; regaining focus pulls the latest stored state.
+  // Persistence happens inside the updater (not an effect) so a user switch
+  // can't race an in-flight save into the wrong key.
   const [openTabs, setOpenTabs] = useState([]);
   const prefsUserRef = useRef(""); // whose tabs/folders are currently loaded
+  const tabsSyncRef = useRef("");  // updated_at of the last server state we applied/wrote
+  const tabsPushTimerRef = useRef(null);
+  function pushTabsToServer(tabs) {
+    if (tabsPushTimerRef.current) clearTimeout(tabsPushTimerRef.current);
+    tabsPushTimerRef.current = setTimeout(async () => {
+      tabsPushTimerRef.current = null;
+      if (!prefsUserRef.current) return;
+      try {
+        const d = await apiJson(`${API}/prefs/open-tabs`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: tabs }),
+        });
+        tabsSyncRef.current = d.updated_at || "";
+      } catch {}
+    }, 600);
+  }
+  // Apply a server-side tabs state locally without echoing it back. A pending
+  // local push is cancelled — the server copy applied here supersedes it (the
+  // merge below re-pushes when this window still holds a tab the server lost).
+  function applyServerTabs(user, value, updatedAt) {
+    tabsSyncRef.current = updatedAt || "";
+    if (tabsPushTimerRef.current) {
+      clearTimeout(tabsPushTimerRef.current);
+      tabsPushTimerRef.current = null;
+    }
+    setOpenTabs((prev) => {
+      let tabs = Array.isArray(value) ? value : [];
+      // The page open in THIS window keeps its tab even when the stored state
+      // lacks it (just opened here and not pushed yet, or closed elsewhere
+      // while it's still on screen here) — merged and pushed back.
+      const fid = focusedBlockIdRef.current;
+      if (fid && !tabs.some((t) => t.id === fid)) {
+        tabs = [...tabs, prev.find((t) => t.id === fid) || { id: fid, title: "Untitled" }];
+        pushTabsToServer(tabs);
+      }
+      try { localStorage.setItem(`gamma-tabs:${user}`, JSON.stringify(tabs)); } catch {}
+      return tabs;
+    });
+  }
   function updateTabs(updater) {
     setOpenTabs((prev) => {
       const next = typeof updater === "function" ? updater(prev) : updater;
       const u = prefsUserRef.current;
-      if (u) { try { localStorage.setItem(`gamma-tabs:${u}`, JSON.stringify(next)); } catch {} }
+      if (u) {
+        try { localStorage.setItem(`gamma-tabs:${u}`, JSON.stringify(next)); } catch {}
+        pushTabsToServer(next);
+      }
       return next;
     });
   }
+  // Multi-browser convergence: whenever this window regains focus, pull the
+  // latest stored tabs. Skipped while a local push is pending (ours is newer).
+  useEffect(() => {
+    async function pullTabs() {
+      const u = prefsUserRef.current;
+      if (!u || document.hidden || tabsPushTimerRef.current) return;
+      try {
+        const d = await apiJson(`${API}/prefs/open-tabs`);
+        if (prefsUserRef.current !== u || !d.updated_at) return;
+        if (d.updated_at !== tabsSyncRef.current) applyServerTabs(u, d.value, d.updated_at);
+      } catch {}
+    }
+    window.addEventListener("focus", pullTabs);
+    document.addEventListener("visibilitychange", pullTabs);
+    return () => {
+      window.removeEventListener("focus", pullTabs);
+      document.removeEventListener("visibilitychange", pullTabs);
+    };
+  }, []);
   // Recently-viewed pages — a device-local history for the library's top
   // shortcut bar ([{id, at}], most recent first). Not page data, so it lives
   // in localStorage like tabs.
@@ -716,6 +802,175 @@ export default function App() {
   });
   const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
+  // AI providers (Settings → AI providers): a user-managed list of API keys,
+  // OpenAI-platform style. Keys are stored server-side per user; the server
+  // only ever returns a masked hint, so key fields here start empty and an
+  // empty key on edit means "keep the stored one".
+  const [aiKeysOpen, setAiKeysOpen] = useState(false);
+  const [aiKeysInfo, setAiKeysInfo] = useState(null); // masked GET /ai/settings: {providers: [], protocols: []}
+  const [aiKeysForm, setAiKeysForm] = useState(null); // null | {id: ""=add, protocol, name, api_key, base_url, models}
+  const [aiKeysBusy, setAiKeysBusy] = useState(false);
+  const [aiKeysError, setAiKeysError] = useState("");
+
+  async function openAiKeysEditor() {
+    setAiKeysError("");
+    setAiKeysInfo(null);
+    setAiKeysForm(null);
+    setAiKeysOpen(true);
+    try {
+      setAiKeysInfo(await apiJson(`${API}/ai/settings`));
+    } catch (err) {
+      setAiKeysError(err.message);
+    }
+  }
+
+  const aiProtocolOf = (id) => aiKeysInfo?.protocols?.find((p) => p.id === id);
+
+  function startAddAiProvider() {
+    setAiKeysError("");
+    setAiKeysForm({ id: "", protocol: aiKeysInfo?.protocols?.[0]?.id || "anthropic", name: "", api_key: "", base_url: "", models: "" });
+  }
+
+  function startEditAiProvider(p) {
+    setAiKeysError("");
+    setAiKeysForm({ id: p.id, protocol: p.protocol, name: p.name || "", api_key: "", base_url: p.base_url || "", models: p.models || "" });
+  }
+
+  async function submitAiProvider() {
+    const f = aiKeysForm;
+    if (!f) return;
+    if (!f.id && !f.api_key.trim()) { setAiKeysError("An API key is required."); return; }
+    setAiKeysBusy(true);
+    setAiKeysError("");
+    try {
+      const body = { protocol: f.protocol, name: f.name.trim(), base_url: f.base_url.trim(), models: f.models.trim() };
+      if (f.api_key.trim()) body.api_key = f.api_key.trim();
+      const d = await apiJson(`${API}/ai/providers${f.id ? `/${f.id}` : ""}`, {
+        method: f.id ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      setAiKeysInfo(d);
+      setAiKeysForm(null);
+      // The model switchers everywhere feed off /ai/models — refresh them.
+      apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
+    } catch (err) {
+      setAiKeysError(err.message);
+    } finally {
+      setAiKeysBusy(false);
+    }
+  }
+
+  async function deleteAiProvider(id) {
+    setAiKeysBusy(true);
+    setAiKeysError("");
+    try {
+      const d = await apiJson(`${API}/ai/providers/${id}`, { method: "DELETE" });
+      setAiKeysInfo(d);
+      apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
+    } catch (err) {
+      setAiKeysError(err.message);
+    } finally {
+      setAiKeysBusy(false);
+    }
+  }
+
+  // User management (admins only — admin is a privilege flag, not a name).
+  const [usersOpen, setUsersOpen] = useState(false);
+  const [usersInfo, setUsersInfo] = useState(null); // {users: [{username, is_guest, is_admin, created_at}], me}
+  const [usersForm, setUsersForm] = useState(null); // {username, password, is_admin} — the add-user form
+  const [userPwEdit, setUserPwEdit] = useState(null); // {username, password} — inline set-password form
+  const [userRenameEdit, setUserRenameEdit] = useState(null); // {username, value} — inline rename form
+  const [usersBusy, setUsersBusy] = useState(false);
+  const [usersError, setUsersError] = useState("");
+
+  async function openUsersManager() {
+    setUsersError("");
+    setUsersInfo(null);
+    setUsersForm(null);
+    setUserPwEdit(null);
+    setUserRenameEdit(null);
+    setUsersOpen(true);
+    try {
+      setUsersInfo(await apiJson(`${API}/admin/users`));
+    } catch (err) {
+      setUsersError(err.message);
+    }
+  }
+
+  async function usersCall(path, method, body) {
+    setUsersBusy(true);
+    setUsersError("");
+    try {
+      const d = await apiJson(`${API}/admin${path}`, {
+        method,
+        ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+      });
+      setUsersInfo((prev) => ({ ...prev, users: d.users }));
+      if (d.warning) setStatus(d.warning);
+      return true;
+    } catch (err) {
+      setUsersError(err.message);
+      return false;
+    } finally {
+      setUsersBusy(false);
+    }
+  }
+
+  async function submitNewUser() {
+    const f = usersForm;
+    if (!f?.username.trim() || !f?.password) { setUsersError("Username and password are required."); return; }
+    if (await usersCall("/users", "POST", { username: f.username.trim(), password: f.password, is_admin: !!f.is_admin })) {
+      setUsersForm(null);
+    }
+  }
+
+  async function submitUserPassword() {
+    const f = userPwEdit;
+    if (!f?.password) { setUsersError("Password cannot be empty."); return; }
+    if (await usersCall(`/users/${encodeURIComponent(f.username)}`, "PUT", { password: f.password })) {
+      setUserPwEdit(null);
+      setStatus(`Password updated for ${f.username}.`);
+    }
+  }
+
+  async function submitUserRename() {
+    const f = userRenameEdit;
+    if (!f?.value.trim()) { setUsersError("New username required."); return; }
+    setUsersBusy(true);
+    setUsersError("");
+    try {
+      const d = await apiJson(`${API}/admin/users/${encodeURIComponent(f.username)}/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_username: f.value.trim() }),
+      });
+      setUsersInfo((prev) => ({
+        ...prev,
+        users: d.users,
+        me: d.renamed?.from === prev.me ? d.renamed.to : prev.me,
+      }));
+      setUserRenameEdit(null);
+      if (d.renamed) setStatus(`Renamed ${d.renamed.from} → ${d.renamed.to}. Sessions keep working.`);
+      // Renamed yourself? Re-read the session so the whole app re-keys
+      // (avatar, per-user prefs, synced tabs all follow the new name).
+      if (d.renamed && d.renamed.from === authUser?.user) await checkSession();
+    } catch (err) {
+      setUsersError(err.message);
+    } finally {
+      setUsersBusy(false);
+    }
+  }
+
+  function deleteUserAccount(u) {
+    setConfirmBox({
+      title: "Delete user",
+      message: `Delete "${u.username}" and ALL their data (notes, PDFs, settings)? This can't be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: () => usersCall(`/users/${encodeURIComponent(u.username)}`, "DELETE"),
+    });
+  }
   // PDF passages the next chat question focuses on. Ctrl (additive) appends
   // — whether from text selection or highlight clicks; plain replaces.
   const [pdfSelections, setPdfSelections] = useState([]);
@@ -2783,12 +3038,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       try {
                         await apiJson(`${API}/blocks/${focusedBlockId}`, { method: "DELETE" });
                       } catch {}
-                      // Close the page's tab too (write straight to storage —
-                      // we reload right after, so state updates wouldn't stick).
+                      // Close the page's tab too (write straight to storage +
+                      // server — we reload right after, so state updates and
+                      // debounced pushes wouldn't stick).
                       try {
                         if (prefsUserRef.current) {
-                          localStorage.setItem(`gamma-tabs:${prefsUserRef.current}`,
-                            JSON.stringify(openTabs.filter((t) => t.id !== focusedBlockId)));
+                          const nextTabs = openTabs.filter((t) => t.id !== focusedBlockId);
+                          localStorage.setItem(`gamma-tabs:${prefsUserRef.current}`, JSON.stringify(nextTabs));
+                          await apiJson(`${API}/prefs/open-tabs`, {
+                            method: "PUT",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ value: nextTabs }),
+                          });
                         }
                       } catch {}
                       clearSession();
@@ -3572,7 +3833,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
           chatSystem={chatSystem} aiInfo={aiInfo}
-          openPromptEditor={openPromptEditor}
+          openPromptEditor={openPromptEditor} openAiKeysEditor={openAiKeysEditor}
           openPopover={openPopover} setOpenPopover={setOpenPopover}
           setStatus={setStatus}
         />
@@ -4064,7 +4325,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                       Export my data (.zip)
                     </button>
-                    <div className="popoverHint">AI keys &amp; models are configured on the server. Preferences here are saved in this browser.</div>
+                    {!authUser.is_guest ? (
+                      <button className="popoverItem" onClick={() => { openAiKeysEditor(); setOpenPopover(null); }}>
+                        <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></svg>
+                        AI providers &amp; keys…
+                      </button>
+                    ) : null}
+                    {authUser.is_admin ? (
+                      <button className="popoverItem" onClick={() => { openUsersManager(); setOpenPopover(null); }}>
+                        <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+                        Manage users…
+                      </button>
+                    ) : null}
+                    <div className="popoverHint">
+                      {authUser.is_guest
+                        ? "AI keys & models are configured on the server."
+                        : "API keys are stored on the server for your account and never shown again. Open tabs sync across browsers; other preferences stay in this browser."}
+                    </div>
                     <div className="popoverDivider" />
                     <button className="popoverItem popoverItemDanger" onClick={doLogout}>
                       <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
@@ -4336,7 +4613,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             </div>
             <div className="promptSectionHead">
               <span>Chat system prompt{chatSystem ? " · custom" : ""}</span>
-              <button className="chatClearBtn" onClick={() => setPromptDraft(aiInfo?.default_prompt || "")}>Reset</button>
+              <button className="uiBtn sm" onClick={() => setPromptDraft(aiInfo?.default_prompt || "")}>Reset</button>
             </div>
             <textarea
               className="promptTextarea"
@@ -4347,7 +4624,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             />
             <div className="promptSectionHead">
               <span>Metadata extraction{metaPrompt ? " · custom" : ""}</span>
-              <button className="chatClearBtn" onClick={() => setMetaPromptDraft(aiInfo?.metadata_prompt || "")}>Reset</button>
+              <button className="uiBtn sm" onClick={() => setMetaPromptDraft(aiInfo?.metadata_prompt || "")}>Reset</button>
             </div>
             <div className="reportModalHint">Used when a paper has no arXiv id or DOI and the AI reads the first pages instead.</div>
             <textarea
@@ -4358,7 +4635,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             />
             <div className="promptSectionHead">
               <span>PPT citation{citePrompt ? " · custom" : ""}</span>
-              <button className="chatClearBtn" onClick={() => setCitePromptDraft(aiInfo?.cite_prompt || "")}>Reset</button>
+              <button className="uiBtn sm" onClick={() => setCitePromptDraft(aiInfo?.cite_prompt || "")}>Reset</button>
             </div>
             <div className="reportModalHint">Turns the paper's BibTeX into a minimal slide-ready citation (Share → PPT citation).</div>
             <textarea
@@ -4368,8 +4645,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               rows={4}
             />
             <div className="reportModalBtns">
-              <button className="chatClearBtn" onClick={() => setPromptOpen(false)}>Cancel</button>
-              <button className="chatSendBtn"
+              <button className="uiBtn" onClick={() => setPromptOpen(false)}>Cancel</button>
+              <button className="uiBtn primary"
                 onClick={() => {
                   // Saving the unmodified default = no custom prompt
                   const norm = (draft, def) => {
@@ -4382,6 +4659,234 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   setPromptOpen(false);
                 }}>Save</button>
             </div>
+          </div>
+        </div>
+      ) : null}
+      {aiKeysOpen ? (
+        <div className="reportOverlay" onClick={() => setAiKeysOpen(false)}>
+          <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">AI providers</div>
+            <div className="reportModalHint">
+              Bring your own API keys. Keys are stored on the server for your account only and are
+              never sent back to the browser — after saving, only the last 4 characters are shown.
+            </div>
+            {!aiKeysInfo && !aiKeysError ? <div className="reportModalHint">Loading…</div> : null}
+            {aiKeysInfo ? (
+              <>
+                {aiKeysInfo.providers.length === 0 && !aiKeysForm ? (
+                  <div className="reportModalHint">
+                    {aiKeysInfo.can_edit
+                      ? "No providers yet — add one to enable AI chat, metadata extraction and citations."
+                      : "Guest accounts can't store API keys. Ask the admin for an account to use AI features."}
+                  </div>
+                ) : null}
+                {aiKeysInfo.providers.map((p) => {
+                  const proto = aiProtocolOf(p.protocol);
+                  return (
+                    <div key={p.id} className="aiProvRow">
+                      <span className="aiProvMeta">
+                        <span className="aiProvName">{p.name || proto?.label || p.protocol}</span>
+                        <span className="aiProvDesc">
+                          {`key ${p.key_hint || "set"} · ${proto?.label || p.protocol}`}
+                          {p.base_url ? ` · ${p.base_url}` : ""}
+                          {p.created_at ? ` · added ${new Date(p.created_at).toLocaleDateString()}` : ""}
+                        </span>
+                        <span className="aiProvDesc">
+                          models: {p.models || `${proto?.default_model || "provider default"} (default)`}
+                        </span>
+                      </span>
+                      <span className="aiProvActions">
+                        {aiKeysInfo.can_edit ? (
+                          <>
+                            <button className="uiBtn sm" disabled={aiKeysBusy} onClick={() => startEditAiProvider(p)}>Edit</button>
+                            <button className="uiBtn sm danger" disabled={aiKeysBusy} onClick={() => deleteAiProvider(p.id)}>Remove</button>
+                          </>
+                        ) : null}
+                      </span>
+                    </div>
+                  );
+                })}
+                {aiKeysForm ? (
+                  <div className="aiProvForm">
+                    <div className="promptSectionHead"><span>{aiKeysForm.id ? "Edit provider" : "Add provider"}</span></div>
+                    <select
+                      className="aiKeyInput"
+                      value={aiKeysForm.protocol}
+                      onChange={(e) => setAiKeysForm((f) => ({ ...f, protocol: e.target.value }))}
+                    >
+                      {aiKeysInfo.protocols.map((x) => (
+                        <option key={x.id} value={x.id}>{x.label}</option>
+                      ))}
+                    </select>
+                    <div className="reportModalHint">
+                      The API format, not the vendor — many services speak one of these (DeepSeek,
+                      Kimi, GLM via Anthropic format; most others via OpenAI format).
+                    </div>
+                    <input
+                      className="aiKeyInput" type="text" spellCheck={false}
+                      placeholder='Name (optional — e.g. "DeepSeek", "work key")'
+                      value={aiKeysForm.name}
+                      onChange={(e) => setAiKeysForm((f) => ({ ...f, name: e.target.value }))}
+                    />
+                    <input
+                      className="aiKeyInput" type="password" autoComplete="new-password" spellCheck={false}
+                      placeholder={aiKeysForm.id ? "API key (leave empty to keep the current one)" : "API key"}
+                      value={aiKeysForm.api_key}
+                      onChange={(e) => setAiKeysForm((f) => ({ ...f, api_key: e.target.value }))}
+                    />
+                    <input
+                      className="aiKeyInput" type="text" spellCheck={false}
+                      placeholder={`Base URL (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_base_url || ""})`}
+                      value={aiKeysForm.base_url}
+                      onChange={(e) => setAiKeysForm((f) => ({ ...f, base_url: e.target.value }))}
+                    />
+                    <input
+                      className="aiKeyInput" type="text" spellCheck={false}
+                      placeholder={`Models, comma-separated — first is the default (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_model || ""})`}
+                      value={aiKeysForm.models}
+                      onChange={(e) => setAiKeysForm((f) => ({ ...f, models: e.target.value }))}
+                    />
+                    <div className="reportModalBtns">
+                      <button className="uiBtn" onClick={() => { setAiKeysForm(null); setAiKeysError(""); }}>Cancel</button>
+                      <button className="uiBtn primary" disabled={aiKeysBusy} onClick={submitAiProvider}>
+                        {aiKeysBusy ? "Saving…" : aiKeysForm.id ? "Save changes" : "Add provider"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="reportModalBtns">
+                    <button className="uiBtn" onClick={() => setAiKeysOpen(false)}>Close</button>
+                    {aiKeysInfo.can_edit ? (
+                      <button className="uiBtn primary" onClick={startAddAiProvider}>+ Add provider</button>
+                    ) : null}
+                  </div>
+                )}
+              </>
+            ) : null}
+            {aiKeysError ? <div className="reportModalHint aiKeysError">{aiKeysError}</div> : null}
+          </div>
+        </div>
+      ) : null}
+      {usersOpen ? (
+        <div className="reportOverlay" onClick={() => setUsersOpen(false)}>
+          <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">Users</div>
+            <div className="reportModalHint">
+              Admin is a privilege, not a name — any account can be granted it. Admins can create
+              and delete accounts, reset passwords, and grant or revoke the privilege. The last
+              admin can never be demoted or deleted.
+            </div>
+            {!usersInfo && !usersError ? <div className="reportModalHint">Loading…</div> : null}
+            {usersInfo ? (
+              <>
+                {usersInfo.users.map((u) => {
+                  // Mirrors the backend rail (admin.py counts non-guest admins):
+                  // the last admin can't be demoted, so don't offer the button.
+                  const lastAdmin = u.is_admin &&
+                    usersInfo.users.filter((x) => x.is_admin && !x.is_guest).length <= 1;
+                  return (
+                  <div key={u.username} className="aiProvRow">
+                    <span className="aiProvMeta">
+                      <span className="aiProvName">
+                        {u.username}
+                        {u.username === usersInfo.me ? <span className="uiTag">you</span> : null}
+                        {u.is_admin ? <span className="uiTag admin">admin</span> : null}
+                        {u.is_guest ? <span className="uiTag">guest</span> : null}
+                      </span>
+                      <span className="aiProvDesc">
+                        {u.is_guest ? "shared demo workspace, resets daily" : `created ${new Date(u.created_at).toLocaleDateString()}`}
+                      </span>
+                      {userPwEdit?.username === u.username ? (
+                        <span className="aiProvPwForm">
+                          <input
+                            className="aiKeyInput" type="password" autoComplete="new-password" autoFocus
+                            placeholder="New password"
+                            value={userPwEdit.password}
+                            onChange={(e) => setUserPwEdit((f) => ({ ...f, password: e.target.value }))}
+                            onKeyDown={(e) => { if (e.key === "Enter") submitUserPassword(); }}
+                          />
+                          <button className="uiBtn sm" onClick={() => setUserPwEdit(null)}>Cancel</button>
+                          <button className="uiBtn sm primary" disabled={usersBusy} onClick={submitUserPassword}>Set</button>
+                        </span>
+                      ) : null}
+                      {userRenameEdit?.username === u.username ? (
+                        <span className="aiProvPwForm">
+                          <input
+                            className="aiKeyInput" type="text" spellCheck={false} autoFocus
+                            placeholder="New username"
+                            value={userRenameEdit.value}
+                            onChange={(e) => setUserRenameEdit((f) => ({ ...f, value: e.target.value }))}
+                            onKeyDown={(e) => { if (e.key === "Enter") submitUserRename(); }}
+                          />
+                          <button className="uiBtn sm" onClick={() => setUserRenameEdit(null)}>Cancel</button>
+                          <button className="uiBtn sm primary" disabled={usersBusy} onClick={submitUserRename}>Rename</button>
+                        </span>
+                      ) : null}
+                    </span>
+                    {!u.is_guest ? (
+                      <span className="aiProvActions">
+                        <button className="uiBtn sm" disabled={usersBusy}
+                          title="Rename the account — sessions and share links keep working"
+                          onClick={() => { setUsersError(""); setUserPwEdit(null); setUserRenameEdit({ username: u.username, value: u.username }); }}>
+                          Rename…
+                        </button>
+                        <button className="uiBtn sm" disabled={usersBusy}
+                          onClick={() => { setUsersError(""); setUserRenameEdit(null); setUserPwEdit({ username: u.username, password: "" }); }}>
+                          Password…
+                        </button>
+                        <button className="uiBtn sm" disabled={usersBusy || lastAdmin}
+                          title={lastAdmin ? "The last admin can't be demoted"
+                            : u.is_admin ? "Revoke the admin privilege" : "Grant the admin privilege"}
+                          onClick={() => usersCall(`/users/${encodeURIComponent(u.username)}`, "PUT", { is_admin: !u.is_admin })}>
+                          {u.is_admin ? "Revoke admin" : "Make admin"}
+                        </button>
+                        {u.username !== usersInfo.me ? (
+                          <button className="uiBtn sm danger" disabled={usersBusy} onClick={() => deleteUserAccount(u)}>Delete</button>
+                        ) : null}
+                      </span>
+                    ) : null}
+                  </div>
+                  );
+                })}
+                {usersForm ? (
+                  <div className="aiProvForm">
+                    <div className="promptSectionHead"><span>Add user</span></div>
+                    <input
+                      className="aiKeyInput" type="text" spellCheck={false} autoFocus
+                      placeholder="Username (letters, digits, _ . -)"
+                      value={usersForm.username}
+                      onChange={(e) => setUsersForm((f) => ({ ...f, username: e.target.value }))}
+                    />
+                    <input
+                      className="aiKeyInput" type="password" autoComplete="new-password"
+                      placeholder="Password"
+                      value={usersForm.password}
+                      onChange={(e) => setUsersForm((f) => ({ ...f, password: e.target.value }))}
+                      onKeyDown={(e) => { if (e.key === "Enter") submitNewUser(); }}
+                    />
+                    <label className="uiCheckRow">
+                      <input type="checkbox" checked={!!usersForm.is_admin}
+                        onChange={(e) => setUsersForm((f) => ({ ...f, is_admin: e.target.checked }))} />
+                      Grant the admin privilege
+                    </label>
+                    <div className="reportModalBtns">
+                      <button className="uiBtn" onClick={() => { setUsersForm(null); setUsersError(""); }}>Cancel</button>
+                      <button className="uiBtn primary" disabled={usersBusy} onClick={submitNewUser}>
+                        {usersBusy ? "Creating…" : "Create user"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="reportModalBtns">
+                    <button className="uiBtn" onClick={() => setUsersOpen(false)}>Close</button>
+                    <button className="uiBtn primary" onClick={() => { setUsersError(""); setUserPwEdit(null); setUsersForm({ username: "", password: "", is_admin: false }); }}>
+                      + Add user
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : null}
+            {usersError ? <div className="reportModalHint aiKeysError">{usersError}</div> : null}
           </div>
         </div>
       ) : null}

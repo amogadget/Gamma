@@ -12,9 +12,20 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from ..ai_settings import (
+    MAX_KEY_LEN,
+    MAX_MODELS_LEN,
+    MAX_NAME_LEN,
+    MAX_PROVIDERS,
+    MAX_URL_LEN,
+    ai_runtime,
+    load_provider_entries,
+    new_provider_id,
+    save_provider_entries,
+)
 from ..auth import require_user
 from ..blocks_store import fetch_subtree
-from ..config import AI_DEFAULT_MODEL, AI_ENABLED, AI_MODELS, AI_PROVIDERS
+from ..config import AI_PROTOCOLS
 from ..db import page_now, user_db_path, user_uploads_dir
 
 router = APIRouter(prefix="/api", tags=["ai"])
@@ -56,12 +67,13 @@ def _parse_images(images: list) -> list[tuple[str, str]]:
     return out
 
 
-def _resolve_model(requested: str) -> dict:
-    """Registry entry for a requested model id (or bare model name); default otherwise."""
-    for entry in AI_MODELS:
+def _resolve_model(rt: dict, requested: str) -> dict:
+    """Registry entry for a requested model id (or bare model name) in the
+    user's effective config (`rt` from ai_runtime()); default otherwise."""
+    for entry in rt["models"]:
         if requested == entry["id"] or requested == entry["model"]:
             return entry
-    return AI_DEFAULT_MODEL
+    return rt["default"]
 
 
 def _resolve_effort(requested: str) -> str:
@@ -282,16 +294,18 @@ _WIRE = {
 }
 
 
-def _open_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None, stream=False):
-    """Open the provider HTTP call for `entry` (a model registry entry).
-    Raises before any bytes are consumed, so callers can still return a
-    normal HTTP error status."""
-    conf = AI_PROVIDERS[entry["provider"]]
-    if not conf["api_key"]:
-        raise HTTPException(status_code=503,
-                            detail=f"provider '{entry['provider']}' not configured "
-                                   f"(set GAMMA_AI_{entry['provider'].upper()}_API_KEY)")
-    build_request = _WIRE[entry["provider"]][0]
+def _protocol(rt, entry) -> str:
+    """Wire protocol of the provider entry serving a model registry entry —
+    provider ids are user-generated, only the entry's protocol picks the wire."""
+    return rt["providers"][entry["provider"]]["protocol"]
+
+
+def _open_ai(messages, system, entry, rt, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None, stream=False):
+    """Open the provider HTTP call for `entry` (a model registry entry) using
+    the user's effective config (`rt` from ai_runtime()). Raises before any
+    bytes are consumed, so callers can still return a normal HTTP error status."""
+    conf = rt["providers"][entry["provider"]]
+    build_request = _WIRE[conf["protocol"]][0]
     req = build_request(conf, messages, system, entry["model"], pdf_b64s, effort, max_tokens, images, stream)
     try:
         return urllib.request.urlopen(req, timeout=timeout)
@@ -306,11 +320,11 @@ def _open_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192,
         raise RuntimeError(f"upstream {e.code}: {body or e.reason}")
 
 
-def _call_ai(messages, system, entry, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None):
+def _call_ai(messages, system, entry, rt, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None):
     """Send a chat to the provider that serves `entry`; return the full reply text."""
-    with _open_ai(messages, system, entry, pdf_b64s, effort, max_tokens, timeout, images) as resp:
+    with _open_ai(messages, system, entry, rt, pdf_b64s, effort, max_tokens, timeout, images) as resp:
         data = json.loads(resp.read())
-    return _WIRE[entry["provider"]][1](data)
+    return _WIRE[_protocol(rt, entry)][1](data)
 
 
 def _sse_deltas(resp, provider):
@@ -356,11 +370,12 @@ def _sse_deltas(resp, provider):
 
 @router.get("/ai/models")
 async def ai_models(request: Request):
-    require_user(request)
+    user = require_user(request)
+    rt = ai_runtime(user)
     return {
-        "enabled": AI_ENABLED,
-        "models": AI_MODELS,                # [{id: "provider:model", provider, model}, ...]
-        "default": AI_DEFAULT_MODEL["id"],
+        "enabled": rt["enabled"],
+        "models": rt["models"],             # [{id: "<pid>:<model>", provider, provider_name, model}, ...]
+        "default": rt["default"]["id"] if rt["default"] else "",
         "efforts": ["low", "medium", "high"],  # offered in the UI; omitted unless picked
         "default_prompt": _SYSTEM_PROMPT,   # shown in the prompt editor
         "metadata_prompt": METADATA_PROMPT,  # AI metadata-extraction fallback
@@ -368,14 +383,132 @@ async def ai_models(request: Request):
     }
 
 
+# --- Per-user AI provider entries (GUI key management) ------------------------
+# OpenAI-platform-style key list: add / edit / remove provider entries. Keys
+# are write-only from the client: GET returns a masked hint, never the key.
+# Stored under the reserved `ai-settings` prefs key in the user's data.db —
+# see gamma/ai_settings.py for the security rationale.
+
+def _masked_settings(user: str, is_guest: bool) -> dict:
+    out = []
+    for e in load_provider_entries(user):
+        key = (e.get("api_key") or "").strip()
+        out.append({
+            "id": e.get("id") or "",
+            "name": (e.get("name") or "").strip(),
+            "protocol": e.get("protocol") or "",
+            # Enough to recognize the key, never enough to use it.
+            "key_hint": f"…{key[-4:]}" if len(key) >= 12 else ("set" if key else ""),
+            "base_url": (e.get("base_url") or "").strip(),
+            "models": (e.get("models") or "").strip(),
+            "created_at": e.get("created_at") or "",
+        })
+    return {
+        "providers": out,
+        # Feeds the "Add provider" dropdown and the form placeholders.
+        "protocols": [
+            {"id": pid, "label": conf["label"], "default_base_url": conf["base_url"],
+             "default_model": conf["default_model"]}
+            for pid, conf in AI_PROTOCOLS.items()
+        ],
+        "can_edit": not is_guest,
+    }
+
+
+def _require_editor(request: Request) -> str:
+    user = require_user(request)
+    if request.state.is_guest:
+        # The guest workspace is shared by everyone — a stored key would be
+        # spendable (though never readable) by any visitor.
+        raise HTTPException(status_code=403, detail="guest accounts cannot store API keys")
+    return user
+
+
+class AIProviderRequest(BaseModel):
+    protocol: str = ""      # "anthropic" | "openai" (required on add)
+    name: str | None = None      # display label; "" = protocol label
+    api_key: str | None = None   # required on add; omitted/empty on edit = keep
+    base_url: str | None = None  # "" = protocol default
+    models: str | None = None    # comma-separated model names; "" = protocol default
+
+
+def _apply_provider_fields(entry: dict, payload: AIProviderRequest):
+    """Validate + copy the editable fields of a provider entry in place."""
+    if payload.name is not None:
+        entry["name"] = str(payload.name).strip()[:MAX_NAME_LEN]
+    if payload.api_key:  # never clears — deleting the entry is the only way to drop a key
+        key = str(payload.api_key).strip()
+        if not key or len(key) > MAX_KEY_LEN or any(c.isspace() for c in key):
+            raise HTTPException(status_code=400, detail="invalid API key")
+        entry["api_key"] = key
+    if payload.base_url is not None:
+        url = str(payload.base_url).strip().rstrip("/")
+        if (url and not re.match(r"^https?://", url)) or len(url) > MAX_URL_LEN:
+            raise HTTPException(status_code=400, detail="base URL must start with http(s)://")
+        entry["base_url"] = url
+    if payload.models is not None:
+        models = str(payload.models).strip()
+        if len(models) > MAX_MODELS_LEN:
+            raise HTTPException(status_code=400, detail="model list too long")
+        entry["models"] = models
+
+
+@router.get("/ai/settings")
+async def ai_settings_get(request: Request):
+    user = require_user(request)
+    return _masked_settings(user, request.state.is_guest)
+
+
+@router.post("/ai/providers")
+async def ai_provider_add(payload: AIProviderRequest, request: Request):
+    user = _require_editor(request)
+    entries = load_provider_entries(user)
+    if len(entries) >= MAX_PROVIDERS:
+        raise HTTPException(status_code=400, detail="too many providers")
+    if payload.protocol not in AI_PROTOCOLS:
+        raise HTTPException(status_code=400, detail="protocol must be 'anthropic' or 'openai'")
+    if not (payload.api_key or "").strip():
+        raise HTTPException(status_code=400, detail="API key required")
+    entry = {"id": new_provider_id(), "protocol": payload.protocol,
+             "name": "", "api_key": "", "base_url": "", "models": "",
+             "created_at": page_now()}
+    _apply_provider_fields(entry, payload)
+    entries.append(entry)
+    save_provider_entries(user, entries)
+    return _masked_settings(user, request.state.is_guest)
+
+
+@router.put("/ai/providers/{provider_id}")
+async def ai_provider_update(provider_id: str, payload: AIProviderRequest, request: Request):
+    user = _require_editor(request)
+    entries = load_provider_entries(user)
+    entry = next((e for e in entries if e.get("id") == provider_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="provider not found")
+    if payload.protocol and payload.protocol in AI_PROTOCOLS:
+        entry["protocol"] = payload.protocol
+    _apply_provider_fields(entry, payload)
+    save_provider_entries(user, entries)
+    return _masked_settings(user, request.state.is_guest)
+
+
+@router.delete("/ai/providers/{provider_id}")
+async def ai_provider_delete(provider_id: str, request: Request):
+    user = _require_editor(request)
+    entries = [e for e in load_provider_entries(user) if e.get("id") != provider_id]
+    save_provider_entries(user, entries)
+    return _masked_settings(user, request.state.is_guest)
+
+
 # Sync endpoint on purpose: the AI call can take minutes; FastAPI's threadpool
 # keeps the event loop free for other requests meanwhile.
 @router.post("/ai/chat")
 def ai_chat(payload: AIChatRequest, request: Request):
-    if not AI_ENABLED:
-        raise HTTPException(status_code=503, detail="AI not configured (set a provider API key)")
-
     user = require_user(request)
+    rt = ai_runtime(user)
+    if not rt["enabled"]:
+        raise HTTPException(status_code=503,
+                            detail="AI not configured (add an API key in Settings → AI providers)")
 
     pdf_b64s = []
     context_sections = []
@@ -427,19 +560,19 @@ def ai_chat(payload: AIChatRequest, request: Request):
     custom_system = (payload.system or "").strip()[:8000]
     # A custom prompt always applies; the built-in one only when there's a document
     system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
-    entry = _resolve_model(payload.model)
+    entry = _resolve_model(rt, payload.model)
     effort = _resolve_effort(payload.effort)
     images = _parse_images(payload.images)
     try:
         if payload.stream:
             # Open upstream eagerly: connection/auth errors still become a
             # proper HTTP error instead of dying inside a committed stream.
-            resp = _open_ai(messages, system, entry, pdf_b64s,
+            resp = _open_ai(messages, system, entry, rt, pdf_b64s,
                             effort=effort, timeout=180, images=images, stream=True)
 
             def ndjson():
                 try:
-                    for text in _sse_deltas(resp, entry["provider"]):
+                    for text in _sse_deltas(resp, _protocol(rt, entry)):
                         yield json.dumps({"delta": text}) + "\n"
                 except Exception as e:
                     print(f"[ai_chat] stream error: {e}")
@@ -448,7 +581,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                     resp.close()
 
             return StreamingResponse(ndjson(), media_type="application/x-ndjson")
-        text = _call_ai(messages, system, entry, pdf_b64s,
+        text = _call_ai(messages, system, entry, rt, pdf_b64s,
                         effort=effort, timeout=180, images=images)
         return {"response": text}
     except HTTPException:
