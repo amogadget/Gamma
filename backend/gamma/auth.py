@@ -27,16 +27,17 @@ async def session_middleware(request: Request, call_next):
     token = request.cookies.get(SESSION_COOKIE)
     request.state.user = None
     request.state.is_guest = False
+    request.state.is_admin = False
     new_session_token = None
     if token:
         with sqlite3.connect(str(USERS_DB)) as conn:
             row = conn.execute(
-                "SELECT u.username, u.is_guest, s.guest_date FROM sessions s "
+                "SELECT u.username, u.is_guest, u.is_admin, s.guest_date FROM sessions s "
                 "JOIN users u ON s.username = u.username WHERE s.token = ?",
                 (token,),
             ).fetchone()
             if row:
-                username, is_guest, guest_date = row
+                username, is_guest, is_admin, guest_date = row
                 if is_guest:
                     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                     if guest_date != today:
@@ -52,6 +53,7 @@ async def session_middleware(request: Request, call_next):
                         conn.commit()
                 request.state.user = username
                 request.state.is_guest = bool(is_guest)
+                request.state.is_admin = bool(is_admin) and not is_guest
     response = await call_next(request)
     if new_session_token:
         set_session_cookie(response, new_session_token)
@@ -63,6 +65,14 @@ def require_user(request: Request) -> str:
     user = request.state.user
     if not user:
         raise HTTPException(status_code=401)
+    return user
+
+
+def require_admin(request: Request) -> str:
+    """Return the session username or raise 401/403. Admin-only endpoints."""
+    user = require_user(request)
+    if not request.state.is_admin:
+        raise HTTPException(status_code=403, detail="admin privilege required")
     return user
 
 

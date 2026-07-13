@@ -10,7 +10,8 @@ from fastapi.responses import FileResponse
 from . import config
 from .auth import session_middleware
 from .db import DATA_SCHEMA, connect_users_db
-from .routers import ai, auth as auth_router, blocks, export, imports, metadata, pdf, prefs, search, shares, uploads
+from .routers import admin, ai, auth as auth_router, blocks, export, imports, metadata, pdf, prefs, search, shares, uploads
+from .seed import ensure_admin_seed
 from .storage import cleanup_orphan_uploads
 
 
@@ -37,9 +38,11 @@ def _silence_windows_connection_reset():
 
 
 def _startup_maintenance():
-    """Ensure users.db exists, prune orphaned uploads, and apply lightweight
-    schema upgrades to every per-user data.db (e.g. the chats table)."""
+    """Ensure users.db exists, seed a fresh instance's first admin, prune
+    orphaned uploads, and apply lightweight schema upgrades to every per-user
+    data.db (e.g. the chats table)."""
     connect_users_db().close()
+    ensure_admin_seed()
     if not config.USERS_DIR.exists():
         return
     for user_dir in config.USERS_DIR.iterdir():
@@ -71,6 +74,7 @@ def create_app() -> FastAPI:
         return {"ok": True}
 
     app.include_router(auth_router.router)
+    app.include_router(admin.router)
     app.include_router(ai.router)
     app.include_router(prefs.router)
     app.include_router(metadata.router)

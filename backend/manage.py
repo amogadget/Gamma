@@ -4,6 +4,7 @@
 Usage:
   python manage.py create-user <username> [password]
   python manage.py set-password <username> <password>
+  python manage.py set-admin <username> <on|off>   # admin = privilege flag, manages users in the GUI
   python manage.py rename-user <old> <new>
   python manage.py delete-user <username>
   python manage.py list-users
@@ -46,13 +47,30 @@ def create_user(username, password=None):
 def list_users():
     with connect_users_db() as conn:
         rows = conn.execute(
-            "SELECT username, is_guest, created_at FROM users ORDER BY created_at"
+            "SELECT username, is_guest, is_admin, created_at FROM users ORDER BY created_at"
         ).fetchall()
     if not rows:
         print("No users.")
-    for user, is_guest, created in rows:
-        tag = " [guest]" if is_guest else ""
+    for user, is_guest, is_admin, created in rows:
+        tag = " [guest]" if is_guest else (" [admin]" if is_admin else "")
         print(f"  {user}{tag}  ({created})")
+
+
+def set_admin(username, value):
+    if value not in ("on", "off"):
+        print("Usage: python manage.py set-admin <username> <on|off>")
+        return
+    if username == "guest":
+        print("The guest account cannot be an admin.")
+        return
+    with connect_users_db() as conn:
+        if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
+            print(f"User '{username}' not found.")
+            return
+        conn.execute("UPDATE users SET is_admin = ? WHERE username = ?",
+                     (1 if value == "on" else 0, username))
+        conn.commit()
+    print(f"Admin privilege {'granted to' if value == 'on' else 'revoked from'} '{username}'.")
 
 
 def delete_user(username):
@@ -61,6 +79,7 @@ def delete_user(username):
         return
     with connect_users_db() as conn:
         conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
+        conn.execute("DELETE FROM shares WHERE username = ?", (username,))
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
         conn.commit()
     user_dir = USERS_DIR / username
@@ -159,6 +178,11 @@ def main():
             print("Usage: python manage.py set-password <username> <password>")
             sys.exit(1)
         set_password(sys.argv[2], sys.argv[3])
+    elif cmd == "set-admin":
+        if len(sys.argv) < 4:
+            print("Usage: python manage.py set-admin <username> <on|off>")
+            sys.exit(1)
+        set_admin(sys.argv[2], sys.argv[3])
     elif cmd == "rename-user":
         if len(sys.argv) < 4:
             print("Usage: python manage.py rename-user <old> <new>")

@@ -2813,6 +2813,31 @@ body {
 .aiProvDesc { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
 .aiProvActions { display: flex; gap: 6px; flex-shrink: 0; }
 .aiProvForm { margin-top: 8px; }
+.aiProvPwForm { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
+.aiProvPwForm .aiKeyInput { margin-bottom: 0; width: auto; flex: 1; }
+/* small badge chips (admin / guest / you) */
+.uiTag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-block);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  vertical-align: 1px;
+}
+.uiTag.admin { color: #4a9eff; border-color: rgba(74, 158, 255, 0.4); }
+.uiCheckRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 2px 0 6px;
+  cursor: pointer;
+}
 /* selection chips (multiple via Ctrl+select) */
 .chatSelChips { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
 .chatSelChip {
@@ -2872,6 +2897,10 @@ body {
   align-items: center;
   justify-content: center;
 }
+/* The confirm dialog can be triggered FROM another modal (e.g. deleting a
+   user from the Users manager) — it must always stack above sibling overlays
+   regardless of DOM order. */
+.reportOverlay[data-popover="confirm"] { z-index: 1300; }
 .reportModal {
   background: var(--bg-surface);
   border: 1px solid var(--border);

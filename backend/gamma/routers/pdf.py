@@ -19,10 +19,14 @@ from fastapi.responses import RedirectResponse, Response
 from pydantic import BaseModel
 
 from ..auth import require_user, resolve_user
-from ..config import CONTACT_EMAIL
 from ..db import user_uploads_dir
 
 router = APIRouter(prefix="/api", tags=["pdf"])
+
+# Identifier sent to Unpaywall's polite pool (its API requires an email
+# parameter). A fixed project address — deliberately not configurable, so the
+# open-access fallback needs zero setup.
+CONTACT_EMAIL = "gamma-pdf-annotator@users.noreply.github.com"
 
 # Realistic browser headers get past simple UA filters (many hosts 403 bare bots)
 BROWSER_HEADERS = {

@@ -77,16 +77,17 @@ Copy the templates (the real files are gitignored, so your settings never land i
 
 ```bash
 cp docker-compose.yml.example docker-compose.yml
-cp .env.example .env   # edit: admin password, AI keys, contact email
+cp .env.example .env   # edit: admin password (everything else is optional)
 docker compose up -d
 ```
 
 Open <http://localhost:9001>. Everything — accounts, notes, and uploaded PDFs — lives under the container's `/data` volume, so your library survives upgrades. Back it up by copying that volume or using the in-app **Export my data** zip.
 
-Manage users in a running container:
+Users are managed in the app: sign in with an admin account → account menu → *Manage users…* (create/delete accounts, reset passwords, grant or revoke the admin privilege — admin is a flag, not a special name). The CLI equivalent still works:
 
 ```bash
 docker exec gamma python manage.py create-user alice her-password
+docker exec gamma python manage.py set-admin alice on
 docker exec gamma python manage.py list-users
 ```
 
@@ -102,6 +103,7 @@ cd backend
 python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 python manage.py create-user admin yourpassword
+python manage.py set-admin admin on                 # admin privilege → GUI user management
 python manage.py setup                              # seeds the guest account
 uvicorn app:app --host 127.0.0.1 --port 9001
 ```
@@ -144,10 +146,9 @@ Put a TLS-terminating reverse proxy (Caddy, nginx) in front of 9001 for a domain
 | `GAMMA_DATA_DIR` | No | `backend/` (`/data` in Docker) | Where users.db and per-user data live |
 | `GAMMA_STATIC_DIR` | No | unset (`/app/static` in Docker) | Built frontend to serve as SPA; unset = API only |
 | `GAMMA_PORT` | No | `9001` | Listen port (Docker entrypoint only) |
-| `GAMMA_ADMIN_USER` / `GAMMA_ADMIN_PASSWORD` | No | — | Bootstrap admin account on container start |
+| `GAMMA_ADMIN_USER` / `GAMMA_ADMIN_PASSWORD` | No | `admin` / random, printed to the log once | Overrides the account a **fresh** instance seeds itself at startup (only while no real accounts exist; never touched afterwards). Admins manage users from the GUI (account menu → *Manage users…*) |
 | `GAMMA_AI_ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Default Anthropic-protocol endpoint, e.g. `https://api.deepseek.com/anthropic` |
 | `GAMMA_AI_OPENAI_BASE_URL` | No | `https://api.openai.com` | Default OpenAI-compatible endpoint |
-| `GAMMA_CONTACT_EMAIL` | Recommended | — | Real email for the Unpaywall open-access lookup; `example.com` addresses are rejected |
 
 AI is configured in the app, not the environment: each user adds provider entries under account menu → *AI providers & keys…* (pick the API format — Anthropic Messages or OpenAI Chat Completions — then a key, plus optional label, base URL, and model list). Keys are stored server-side per user and never sent back to the browser. The base-URL variables above only change the per-protocol defaults shown in that dialog. For docker compose, put these in `.env` (see [.env.example](./.env.example)).
 

@@ -4,10 +4,13 @@ Shared by the app (daily guest reset) and manage.py (user CRUD) so the
 welcome page and schemas never drift between the two.
 """
 
+import os
 import secrets
 import shutil
 import sqlite3
 from contextlib import closing
+
+import bcrypt
 
 from fractional_indexing import generate_key_between
 
@@ -92,6 +95,45 @@ def reset_guest_data():
     if guest_dir.exists():
         shutil.rmtree(str(guest_dir))
     create_user_dbs("guest")
+
+
+def ensure_admin_seed():
+    """A fresh instance seeds its own first admin at app startup — account
+    logic lives here, not in launcher scripts. Returns (username, password)
+    when it seeded, else None.
+
+    Runs only while the instance has NO real (non-guest) accounts at all.
+    The password is RANDOM and printed to the console exactly once (a fixed
+    default would be guessable on a LAN-exposed server); GAMMA_ADMIN_USER /
+    GAMMA_ADMIN_PASSWORD can override the one-time seed. As soon as any
+    account exists this is a strict no-op — deliberately NOT keyed on "no
+    admin exists", because silently adding an admin login to an upgraded
+    multi-user instance would be a backdoor; those grant the privilege via
+    `manage.py set-admin`."""
+    username = os.environ.get("GAMMA_ADMIN_USER", "").strip() or "admin"
+    env_password = os.environ.get("GAMMA_ADMIN_PASSWORD", "")
+    password = env_password or secrets.token_urlsafe(9)  # 12 chars, URL-safe alphabet
+    with connect_users_db() as conn:
+        if conn.execute("SELECT 1 FROM users WHERE is_guest = 0").fetchone():
+            if not conn.execute("SELECT 1 FROM users WHERE is_admin = 1 AND is_guest = 0").fetchone():
+                print("[startup] no account has the admin privilege - grant one with: "
+                      "python manage.py set-admin <user> on")
+            return None
+        pwhash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+        conn.execute(
+            "INSERT INTO users (username, password_hash, is_guest, is_admin, created_at) VALUES (?, ?, 0, 1, ?)",
+            (username, pwhash, page_now()),
+        )
+        conn.commit()
+    create_user_dbs(username)
+    # ASCII only: this prints during startup, and a redirected Windows console
+    # (GBK) raises UnicodeEncodeError on characters it can't encode.
+    print(f"[startup] fresh instance - created the admin account:")
+    print(f"[startup]   username: {username}")
+    print(f"[startup]   password: {'(from GAMMA_ADMIN_PASSWORD)' if env_password else password}")
+    if not env_password:
+        print("[startup]   shown only this once - log in and change it in account menu -> Manage users")
+    return username, password
 
 
 def ensure_guest_user():
