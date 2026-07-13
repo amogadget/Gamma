@@ -92,6 +92,36 @@ export default function App() {
     } catch { setLoginError("Guest login failed"); }
   }
 
+  // Restore an "Export my data" zip into this account: notes + settings are
+  // replaced, uploaded files are merged in. Full reload afterwards — every
+  // piece of in-memory state (home feed, tabs, chats) is stale after a restore.
+  function importUserData() {
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.accept = ".zip,application/zip";
+    inp.onchange = async () => {
+      const f = inp.files?.[0];
+      if (!f) return;
+      if (!window.confirm(
+        `Restore "${f.name}" into the account "${authUser.user}"?\n\n` +
+        "ALL current notes, chats, and settings will be REPLACED by the backup. " +
+        "Uploaded PDFs are merged in (nothing is deleted). This cannot be undone."
+      )) return;
+      setStatus("Importing backup…");
+      try {
+        const fd = new FormData();
+        fd.append("file", f);
+        const res = await fetch(`${API}/import-data`, { method: "POST", body: fd, credentials: "include" });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(d.detail || res.statusText);
+        window.location.href = window.location.pathname; // fresh state, no stale ?block=
+      } catch (err) {
+        setStatus(`Import failed: ${err.message}`);
+      }
+    };
+    inp.click();
+  }
+
   async function doLogout() {
     // Close the workspace while the session is still valid (flushes pending
     // edits, clears the ?block= URL and the cached session) so nothing of this
@@ -4325,6 +4355,16 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                       Export my data (.zip)
                     </button>
+                    {!authUser.is_guest ? (
+                      <button
+                        className="popoverItem"
+                        onClick={() => { setOpenPopover(null); importUserData(); }}
+                        title="Restore an exported zip: notes and settings are replaced by the backup, uploaded files are merged in"
+                      >
+                        <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+                        Import data (.zip)…
+                      </button>
+                    ) : null}
                     {!authUser.is_guest ? (
                       <button className="popoverItem" onClick={() => { openAiKeysEditor(); setOpenPopover(null); }}>
                         <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></svg>
