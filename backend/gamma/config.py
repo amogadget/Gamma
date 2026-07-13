@@ -22,21 +22,20 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 CONTACT_EMAIL = os.environ.get("GAMMA_CONTACT_EMAIL", "gamma-pdf-annotator@example.com")
 
 # --- AI chat -----------------------------------------------------------------
-# Two wire protocols, each independently configurable so both can be offered at
-# once in the chat panel's model switcher:
+# Two wire protocols, both offered in the chat panel's model switcher:
 #   "anthropic" — Anthropic Messages API (Anthropic, DeepSeek, Kimi, GLM, ...)
 #   "openai"    — OpenAI Chat Completions API (OpenAI and compatible)
 #
-#   GAMMA_AI_ANTHROPIC_API_KEY / GAMMA_AI_ANTHROPIC_BASE_URL
-#   GAMMA_AI_OPENAI_API_KEY    / GAMMA_AI_OPENAI_BASE_URL
+# API keys are NOT env-configured: each user stores their own via the GUI
+# (Settings → AI providers), kept server-side in their data.db and resolved
+# per request by gamma/ai_settings.ai_runtime(). The env only sets instance
+# defaults users inherit until they override them in the GUI:
+#   GAMMA_AI_ANTHROPIC_BASE_URL / GAMMA_AI_OPENAI_BASE_URL
 #   GAMMA_AI_MODELS = comma-separated "provider:model" entries, e.g.
 #                     "anthropic:claude-haiku-4-5-20251001,openai:gpt-5.5"
 #                     (bare model names use GAMMA_AI_PROVIDER; the first entry
 #                     is the default model)
-#
-# Legacy single-provider names (GAMMA_AI_API_KEY/GAMMA_AI_BASE_URL/GAMMA_AI_MODEL
-# and the ANTHROPIC_* aliases) still work: they configure the GAMMA_AI_PROVIDER
-# slot, so existing .env files keep working unchanged.
+# Legacy GAMMA_AI_BASE_URL/ANTHROPIC_BASE_URL and GAMMA_AI_MODEL still work.
 
 _PROVIDER_DEFAULTS = {
     "anthropic": ("https://api.anthropic.com", "claude-haiku-4-5-20251001"),
@@ -47,18 +46,14 @@ AI_PROVIDER = os.environ.get("GAMMA_AI_PROVIDER", "anthropic").strip().lower()
 if AI_PROVIDER not in _PROVIDER_DEFAULTS:
     raise ValueError(f"GAMMA_AI_PROVIDER must be 'anthropic' or 'openai', got {AI_PROVIDER!r}")
 
-_legacy_key = os.environ.get("GAMMA_AI_API_KEY", "") or os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
 _legacy_url = os.environ.get("GAMMA_AI_BASE_URL", "") or os.environ.get("ANTHROPIC_BASE_URL", "")
 
 AI_PROVIDERS = {}
 for _name, (_url, _model) in _PROVIDER_DEFAULTS.items():
-    _key = os.environ.get(f"GAMMA_AI_{_name.upper()}_API_KEY", "")
     _base = os.environ.get(f"GAMMA_AI_{_name.upper()}_BASE_URL", "")
-    if _name == AI_PROVIDER:  # legacy single-provider vars fill the default provider's slot
-        _key = _key or _legacy_key
+    if _name == AI_PROVIDER:  # legacy single-provider var fills the default provider's slot
         _base = _base or _legacy_url
     AI_PROVIDERS[_name] = {
-        "api_key": _key,
         "base_url": (_base or _url).rstrip("/"),
         "default_model": _model,
     }
@@ -72,30 +67,29 @@ def _parse_model_entry(entry: str):
     return AI_PROVIDER, entry.strip()
 
 
-# Ordered model registry for the chat panel: [{"id": "openai:gpt-5.5", ...}, ...].
-# The first entry is the default. GAMMA_AI_MODEL / ANTHROPIC_DEFAULT_HAIKU_MODEL
-# (legacy) seed the list; unset everything → each configured provider's default.
-_model_entries = []
+def build_ai_models(providers: dict, models_str: str) -> list:
+    """Ordered model registry [{"id": "provider:model", "provider", "model"}, ...]
+    from a comma-separated "provider:model" list (first entry = default).
+    Empty list string → each keyed provider's default model; no keys at all →
+    a placeholder for the default provider. `providers` is a per-user merged
+    config from gamma/ai_settings.ai_runtime() (entries carry "api_key")."""
+    entries = [_parse_model_entry(e) for e in (models_str or "").split(",") if e.strip()]
+    if not entries:
+        entries = [(name, conf["default_model"]) for name, conf in providers.items() if conf.get("api_key")]
+    if not entries:  # nothing configured at all — placeholder for the default provider
+        entries = [(AI_PROVIDER, providers[AI_PROVIDER]["default_model"])]
+    models = []
+    for provider, model in entries:
+        mid = f"{provider}:{model}"
+        if model and mid not in [m["id"] for m in models]:
+            models.append({"id": mid, "provider": provider, "model": model})
+    return models
+
+
+# The env-configured default model list as one canonical string (users inherit
+# it until they set their own in the GUI). GAMMA_AI_MODEL /
+# ANTHROPIC_DEFAULT_HAIKU_MODEL (legacy) seed the list.
 _legacy_model = os.environ.get("GAMMA_AI_MODEL", "") or os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", "")
-if _legacy_model:
-    _model_entries.append(_parse_model_entry(_legacy_model))
-for _e in os.environ.get("GAMMA_AI_MODELS", "").split(","):
-    if _e.strip():
-        _model_entries.append(_parse_model_entry(_e))
-if not _model_entries:
-    for _name, _conf in AI_PROVIDERS.items():
-        if _conf["api_key"]:
-            _model_entries.append((_name, _conf["default_model"]))
-if not _model_entries:  # nothing configured at all — placeholder for the default provider
-    _model_entries.append((AI_PROVIDER, AI_PROVIDERS[AI_PROVIDER]["default_model"]))
-
-AI_MODELS = []
-for _provider, _model in _model_entries:
-    _id = f"{_provider}:{_model}"
-    if _model and _id not in [m["id"] for m in AI_MODELS]:
-        AI_MODELS.append({"id": _id, "provider": _provider, "model": _model})
-
-AI_DEFAULT_MODEL = AI_MODELS[0]
-
-# True when at least one provider has an API key — gates the whole chat feature.
-AI_ENABLED = any(c["api_key"] for c in AI_PROVIDERS.values())
+AI_MODELS_ENV = ",".join(
+    e.strip() for e in [_legacy_model, *os.environ.get("GAMMA_AI_MODELS", "").split(",")] if e.strip()
+)

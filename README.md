@@ -145,14 +145,12 @@ Put a TLS-terminating reverse proxy (Caddy, nginx) in front of 9001 for a domain
 | `GAMMA_STATIC_DIR` | No | unset (`/app/static` in Docker) | Built frontend to serve as SPA; unset = API only |
 | `GAMMA_PORT` | No | `9001` | Listen port (Docker entrypoint only) |
 | `GAMMA_ADMIN_USER` / `GAMMA_ADMIN_PASSWORD` | No | — | Bootstrap admin account on container start |
-| `GAMMA_AI_ANTHROPIC_API_KEY` | For AI chat* | — | Anthropic Messages API key (also DeepSeek/Kimi/GLM-compatible endpoints) |
-| `GAMMA_AI_ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | e.g. `https://api.deepseek.com/anthropic` |
-| `GAMMA_AI_OPENAI_API_KEY` | For AI chat* | — | OpenAI Chat Completions API key (or compatible server) |
-| `GAMMA_AI_OPENAI_BASE_URL` | No | `https://api.openai.com` | Any OpenAI-compatible endpoint |
-| `GAMMA_AI_MODELS` | No | providers' defaults | Model switcher list: comma-separated `provider:model` (e.g. `anthropic:claude-sonnet-5,openai:gpt-5.5`); first is the default |
+| `GAMMA_AI_ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Default Anthropic-protocol endpoint, e.g. `https://api.deepseek.com/anthropic` |
+| `GAMMA_AI_OPENAI_BASE_URL` | No | `https://api.openai.com` | Default OpenAI-compatible endpoint |
+| `GAMMA_AI_MODELS` | No | providers' defaults | Default model switcher list: comma-separated `provider:model` (e.g. `anthropic:claude-sonnet-5,openai:gpt-5.5`); first is the default |
 | `GAMMA_CONTACT_EMAIL` | Recommended | — | Real email for the Unpaywall open-access lookup; `example.com` addresses are rejected |
 
-\* Set at least one provider key to enable chat; set both to offer models from each. For docker compose, put these in `.env` (see [.env.example](./.env.example)). Legacy single-provider names (`GAMMA_AI_PROVIDER`, `GAMMA_AI_API_KEY`, …) still work.
+AI API keys are **not** environment variables: each user adds their own key in the app under account menu → *AI providers & keys…*. Keys are stored server-side per user and never sent back to the browser. The base-URL/model variables above only set instance defaults that users inherit until they override them in the same dialog. For docker compose, put these in `.env` (see [.env.example](./.env.example)).
 
 </details>
 

@@ -4,6 +4,7 @@
 Usage:
   python manage.py create-user <username> [password]
   python manage.py set-password <username> <password>
+  python manage.py rename-user <old> <new>
   python manage.py delete-user <username>
   python manage.py list-users
   python manage.py reset-guest      # wipe guest data (auto-runs daily)
@@ -12,6 +13,7 @@ Usage:
 Respects GAMMA_DATA_DIR (defaults to this directory).
 """
 
+import re
 import shutil
 import sys
 
@@ -77,6 +79,41 @@ def reset_guest():
     print("Guest account reset.")
 
 
+def rename_user(old, new):
+    """Rename an account: users/sessions/shares rows + the users/<name> data dir.
+
+    Sessions and share tokens keep working (they are keyed by token, the
+    username column is updated in place), so nobody gets logged out.
+    """
+    if old == "guest":
+        print("The guest account cannot be renamed.")
+        return
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", new):
+        print("New username must be 1-64 chars of letters, digits, '_', '.', '-' (it names a data directory).")
+        return
+    with connect_users_db() as conn:
+        if not conn.execute("SELECT 1 FROM users WHERE username = ?", (old,)).fetchone():
+            print(f"User '{old}' not found.")
+            return
+        if conn.execute("SELECT 1 FROM users WHERE username = ?", (new,)).fetchone():
+            print(f"User '{new}' already exists.")
+            return
+        conn.execute("UPDATE users SET username = ? WHERE username = ?", (new, old))
+        conn.execute("UPDATE sessions SET username = ? WHERE username = ?", (new, old))
+        conn.execute("UPDATE shares SET username = ? WHERE username = ?", (new, old))
+        conn.commit()
+    old_dir, new_dir = USERS_DIR / old, USERS_DIR / new
+    if old_dir.exists():
+        try:
+            old_dir.rename(new_dir)
+        except OSError as e:
+            print(f"Account row renamed, but moving {old_dir} -> {new_dir} failed: {e}")
+            print("Stop the server (open database handles lock the directory on Windows), "
+                  "move the folder manually, then everything is consistent.")
+            return
+    print(f"Renamed user '{old}' -> '{new}'")
+
+
 def set_password(username, password):
     if not password:
         print("Password cannot be empty.")
@@ -122,6 +159,11 @@ def main():
             print("Usage: python manage.py set-password <username> <password>")
             sys.exit(1)
         set_password(sys.argv[2], sys.argv[3])
+    elif cmd == "rename-user":
+        if len(sys.argv) < 4:
+            print("Usage: python manage.py rename-user <old> <new>")
+            sys.exit(1)
+        rename_user(sys.argv[2], sys.argv[3])
     elif cmd == "delete-user":
         if len(sys.argv) < 3:
             print("Usage: python manage.py delete-user <username>")

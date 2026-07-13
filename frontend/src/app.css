@@ -2743,6 +2743,22 @@ body {
   outline: none;
 }
 .promptTextarea:focus { border-color: var(--text-dim); }
+/* AI provider key editor (Settings → AI providers) */
+.aiKeyInput {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: inherit;
+  padding: 7px 10px;
+  margin-bottom: 6px;
+  outline: none;
+}
+.aiKeyInput:focus { border-color: var(--text-dim); }
+.aiKeysError { color: #e5534b; }
 /* selection chips (multiple via Ctrl+select) */
 .chatSelChips { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
 .chatSelChip {
