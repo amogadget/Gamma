@@ -2341,14 +2341,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // whichever comes back, taking the filename from Content-Disposition. Using
   // fetch+blob (not a plain navigation) so a 404/401 surfaces as a message
   // instead of silently swapping the SPA for an error page.
-  async function exportPage(mode = "readable") {
-    const id = focusedBlock?.id;
-    if (!id) { setStatus("Open a page first to export it."); return; }
-    setOpenPopover(null);
+  async function downloadExport(path, fallbackName) {
     setStatus("Exporting page…");
     try {
-      const res = await fetch(`${API}/pages/${id}/export?mode=${mode}`, { credentials: "include" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch(`${API}${path}`, { credentials: "include" });
+      if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.json()).detail || ""; } catch { /* not JSON */ }
+        throw new Error(detail || `HTTP ${res.status}`);
+      }
       const ctype = res.headers.get("Content-Type") || "";
       // If the SPA fallback served index.html, the export route isn't live yet.
       if (ctype.includes("text/html")) throw new Error("export route not found — restart the backend");
@@ -2356,9 +2357,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       const cd = res.headers.get("Content-Disposition") || "";
       const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
       const plain = /filename="?([^";]+)"?/i.exec(cd);
-      const filename = star ? decodeURIComponent(star[1])
-        : plain ? plain[1]
-        : `page.${blob.type.includes("zip") ? "zip" : "md"}`;
+      const filename = star ? decodeURIComponent(star[1]) : plain ? plain[1] : fallbackName;
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -2371,6 +2370,22 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     } catch (err) {
       setStatus(`Export failed: ${err.message}`);
     }
+  }
+
+  async function exportPage(mode = "readable") {
+    const id = focusedBlock?.id;
+    if (!id) { setStatus("Open a page first to export it."); return; }
+    setOpenPopover(null);
+    await downloadExport(`/pages/${id}/export?mode=${mode}`, "page.md");
+  }
+
+  // Download the PDF with the page's highlights burned in as standard PDF
+  // annotations (notes become annotation popups) — viewable anywhere.
+  async function exportAnnotatedPdf() {
+    const id = focusedBlock?.id;
+    if (!id) { setStatus("Open a page first to export it."); return; }
+    setOpenPopover(null);
+    await downloadExport(`/pages/${id}/export-pdf`, "annotated.pdf");
   }
 
   // Ask the AI for the document's title and fill it into the page name.
@@ -4106,6 +4121,16 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
                 Export this page (Logseq)
               </button>
+              {docId ? (
+                <button
+                  className="popoverItem"
+                  onClick={() => { exportAnnotatedPdf(); setOpenPopover(null); }}
+                  title="Download this paper's PDF with your highlights embedded as standard PDF annotations — notes appear as annotation popups in Acrobat, SumatraPDF, browsers, etc."
+                >
+                  <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M9 17l2-6 2 4 1.5-2.5L16 17" /></svg>
+                  Export PDF with highlights
+                </button>
+              ) : null}
             </>
           ) : null}
         </div>
