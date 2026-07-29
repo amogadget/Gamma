@@ -1069,6 +1069,22 @@ body {
   opacity: 1;
   pointer-events: auto;
 }
+/* Touch devices have no hover to reveal it with — iPadOS only fakes :hover on
+   tap, and stickily, which left the bar half-shown or unreachable. Show it.
+   [data-touch] is not redundant with the media query: in iPadOS's default
+   "Request Desktop Website" mode Safari claims (hover: hover), so the query
+   alone misses every stock iPad. main.jsx sets the attribute off
+   maxTouchPoints, which stays honest there. */
+@media (hover: none) {
+  .pdfZoomOverlay {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+:root[data-touch="1"] .pdfZoomOverlay {
+  opacity: 1;
+  pointer-events: auto;
+}
 .pdfZoomOverlay button {
   background: transparent;
   border: none;
