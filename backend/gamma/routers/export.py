@@ -21,6 +21,7 @@ from ..markdown_export import (
     render_page,
     slugify,
 )
+from ..pdf_export import annotate_pdf, highlight_note_text
 
 router = APIRouter(prefix="/api", tags=["export"])
 
@@ -81,6 +82,61 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
     if not assets:
         return _md_response(md, slug)
     return _zip_response([(f"{slug}.md", md)], assets, user_uploads_dir(user), f"{slug}.zip")
+
+
+# Sync on purpose: PyPDF2 rewriting is CPU-bound; the threadpool keeps the loop free.
+@router.get("/pages/{block_id}/export-pdf")
+def export_page_pdf(block_id: str, request: Request):
+    """The page's PDF with its highlights burned in as standard /Highlight
+    annotations (notes become the annotation popup text), so they survive in
+    any external PDF viewer."""
+    user = resolve_user(request)
+    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        rows = fetch_subtree(conn, block_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="page not found")
+    blocks = [block_to_dict(r) for r in rows]
+    root = next(b for b in blocks if b["id"] == block_id)
+    doc_id = root["properties"].get("doc_id")
+    if not doc_id:
+        raise HTTPException(status_code=400, detail="page has no PDF")
+    pdf_path = user_uploads_dir(user) / f"{doc_id}.pdf"
+    if not pdf_path.is_file():
+        raise HTTPException(status_code=404, detail="PDF not stored on the server")
+
+    children_by_id: dict = {}
+    for b in sorted(blocks, key=lambda b: b["position"] or ""):
+        children_by_id.setdefault(b["parent_id"], []).append(b)
+
+    highlights = []
+    for b in blocks:
+        props = b["properties"]
+        if not props.get("highlight_id") or not props.get("pdf_position"):
+            continue
+        # Skip annotations that came from the PDF itself (still embedded in it)
+        # and link regions (Gamma navigation aids, not annotations).
+        if props.get("imported_annot") or props.get("link_url") or props.get("link_page_id"):
+            continue
+        highlights.append({
+            "position": props["pdf_position"],
+            "color": props.get("color"),
+            "note": highlight_note_text(b, children_by_id),
+        })
+
+    try:
+        pdf_bytes, written = annotate_pdf(pdf_path.read_bytes(), highlights, author=user)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"could not annotate PDF: {e}")
+
+    slug = slugify(root.get("content"), block_id)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": _content_disposition(f"{slug}-annotated.pdf"),
+            "X-Annotations-Written": str(written),
+        },
+    )
 
 
 def _page_in_folder(props: dict, name: str) -> bool:

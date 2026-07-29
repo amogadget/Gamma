@@ -206,6 +206,8 @@ export default function App() {
       setOpenTabs([]);
       setExtraFolders([]);
       setRecentViews([]);
+      readPosRef.current = {};
+      readPosLoadedRef.current = false;
       return;
     }
     prefsUserRef.current = u;
@@ -216,6 +218,8 @@ export default function App() {
     setOpenTabs(Array.isArray(localTabs) ? localTabs : []);
     try { setExtraFolders(JSON.parse(localStorage.getItem(`gamma-extra-folders:${u}`) || "[]")); } catch { setExtraFolders([]); }
     try { setRecentViews(JSON.parse(localStorage.getItem(`gamma-recent-views:${u}`) || "[]")); } catch { setRecentViews([]); }
+    readPosLoadedRef.current = false;
+    try { readPosRef.current = JSON.parse(localStorage.getItem(`gamma-read-pos:${u}`) || "{}"); } catch { readPosRef.current = {}; }
     // …then the server copy, which wins (tabs sync across browsers). An
     // account that has never synced seeds the server with this browser's tabs.
     apiJson(`${API}/prefs/open-tabs`).then((d) => {
@@ -223,6 +227,11 @@ export default function App() {
       if (d.updated_at) applyServerTabs(u, d.value, d.updated_at);
       else if (Array.isArray(localTabs) && localTabs.length) pushTabsToServer(localTabs);
     }).catch(() => {});
+    apiJson(`${API}/prefs/read-pos`).then((d) => {
+      if (prefsUserRef.current !== u) return;
+      readPosLoadedRef.current = true;
+      mergeReadPos(u, d.value);
+    }).catch(() => { if (prefsUserRef.current === u) readPosLoadedRef.current = true; });
   }, [authUser?.user, readOnly]);
 
   // Folder-tag helpers: parse/serialize the comma-separated path list.
@@ -507,6 +516,7 @@ export default function App() {
   const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
   const [zoomDraft, setZoomDraft] = useState(null);  // while typing a custom zoom %
   const restoredPdfUrlRef = useRef(null);
+  const coarseRestorePendingRef = useRef(false); // last-read jump not yet applied
   const [blocks, setBlocks] = useState([]);
   const [homeBlocks, setHomeBlocks] = useState([]);
   const [refCache, setRefCache] = useState({}); // { [blockId]: { content, page_title } }
@@ -602,6 +612,53 @@ export default function App() {
       return next;
     });
   }
+  // Last-read positions, synced like tabs so "jump to last read" follows the
+  // account across browsers: blockId -> {page, at}. Per-paper entries merged
+  // newest-wins, so two open windows only conflict when reading the SAME
+  // paper (last writer wins) — unlike the old single global session slot,
+  // which any window (or goHome's clearSession) could clobber.
+  const readPosRef = useRef({});
+  const readPosLoadedRef = useRef(false); // first server response arrived
+  const readPosPushTimerRef = useRef(null);
+  function mergeReadPos(user, server) {
+    const merged = { ...readPosRef.current };
+    for (const [id, e] of Object.entries(server && typeof server === "object" ? server : {})) {
+      if (!e || typeof e.page !== "number") continue;
+      if (!merged[id] || (e.at || "") > (merged[id].at || "")) merged[id] = e;
+    }
+    readPosRef.current = merged;
+    try { localStorage.setItem(`gamma-read-pos:${user}`, JSON.stringify(merged)); } catch {}
+  }
+  function recordReadPos(blockId, page) {
+    const u = prefsUserRef.current;
+    if (!u || !blockId || !(page > 0)) return;
+    const prev = readPosRef.current[blockId];
+    if (prev?.page === page) return;
+    // A new local action must supersede the entry it replaces even when that
+    // entry came from a machine with a fast clock — bump 1ms past it.
+    let at = new Date().toISOString();
+    if (prev?.at && prev.at >= at) at = new Date(new Date(prev.at).getTime() + 1).toISOString();
+    const next = { ...readPosRef.current, [blockId]: { page, at } };
+    const ids = Object.keys(next);
+    if (ids.length > 200) {
+      ids.sort((a, b) => (next[a].at || "").localeCompare(next[b].at || ""));
+      for (const id of ids.slice(0, ids.length - 200)) delete next[id];
+    }
+    readPosRef.current = next;
+    try { localStorage.setItem(`gamma-read-pos:${u}`, JSON.stringify(next)); } catch {}
+    if (readPosPushTimerRef.current) clearTimeout(readPosPushTimerRef.current);
+    readPosPushTimerRef.current = setTimeout(async () => {
+      readPosPushTimerRef.current = null;
+      if (prefsUserRef.current !== u) return;
+      try {
+        await apiJson(`${API}/prefs/read-pos`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: readPosRef.current }),
+        });
+      } catch {}
+    }, 1000);
+  }
   // Multi-browser convergence: whenever this window regains focus, pull the
   // latest stored tabs. Skipped while a local push is pending (ours is newer).
   useEffect(() => {
@@ -614,11 +671,44 @@ export default function App() {
         if (d.updated_at !== tabsSyncRef.current) applyServerTabs(u, d.value, d.updated_at);
       } catch {}
     }
-    window.addEventListener("focus", pullTabs);
-    document.addEventListener("visibilitychange", pullTabs);
+    async function pullReadPos() {
+      const u = prefsUserRef.current;
+      if (!u || document.hidden || readPosPushTimerRef.current) return;
+      try {
+        const d = await apiJson(`${API}/prefs/read-pos`);
+        if (prefsUserRef.current !== u) return;
+        readPosLoadedRef.current = true;
+        mergeReadPos(u, d.value);
+      } catch {}
+    }
+    // Losing focus flushes the debounced read-pos push right away, so the
+    // window being switched TO (or a refresh moments later) pulls the fresh
+    // value — the 1s debounce otherwise loses a quick scroll-then-switch.
+    function flushReadPos() {
+      if (!readPosPushTimerRef.current || !prefsUserRef.current) return;
+      clearTimeout(readPosPushTimerRef.current);
+      readPosPushTimerRef.current = null;
+      try {
+        fetch(`${API}/prefs/read-pos`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: readPosRef.current }),
+          keepalive: true,
+          credentials: "same-origin",
+        }).catch(() => {});
+      } catch {}
+    }
+    const onWake = () => { pullTabs(); pullReadPos(); };
+    const onVisibility = () => { if (document.hidden) flushReadPos(); else onWake(); };
+    window.addEventListener("focus", onWake);
+    window.addEventListener("blur", flushReadPos);
+    window.addEventListener("pagehide", flushReadPos);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      window.removeEventListener("focus", pullTabs);
-      document.removeEventListener("visibilitychange", pullTabs);
+      window.removeEventListener("focus", onWake);
+      window.removeEventListener("blur", flushReadPos);
+      window.removeEventListener("pagehide", flushReadPos);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
   // Recently-viewed pages — a device-local history for the library's top
@@ -1233,8 +1323,36 @@ export default function App() {
         addPdfSelection(text, additive);
       }, 10);
     }
+    // Touch has no mouseup after a long-press/handle selection, so iPad picks
+    // the passage up from selectionchange instead. No modifier exists there,
+    // so it always replaces; and an emptied selection is left alone rather
+    // than cleared, since a tap into the chat is indistinguishable from a tap
+    // that dismissed the selection — and that tap must keep it.
+    let touchSeen = false;
+    let selTimer = null;
+    function onTouchStart() { touchSeen = true; }
+    function onSelectionChange() {
+      if (!touchSeen) return;
+      clearTimeout(selTimer);
+      selTimer = setTimeout(() => {
+        const sel = window.getSelection();
+        const text = sel ? sel.toString().trim() : "";
+        if (!text) return;
+        const node = sel.anchorNode;
+        const el = node?.nodeType === 3 ? node.parentElement : node;
+        if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
+        addPdfSelection(text, false);
+      }, 350);
+    }
     document.addEventListener("mouseup", onMouseUp);
-    return () => document.removeEventListener("mouseup", onMouseUp);
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      clearTimeout(selTimer);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("selectionchange", onSelectionChange);
+    };
   }, []);
 
   // Selection is page-scoped: drop it when switching documents.
@@ -1555,6 +1673,21 @@ export default function App() {
       pdfPageNumber,
     });
   }, [focusedBlockId, pdfScale, pdfHidden, notesVisible, pdfPageNumber]);
+
+  // Synced per-paper read position, fed by the scroll tracker on every scroll
+  // (a ref so the tracker effect needn't re-register). Guarded: only while
+  // the viewer is really showing this page's document and no scroll restore
+  // is in flight (the tracker reports page 1 mid-load, which must not
+  // overwrite the entry).
+  const recordScrollPageRef = useRef(null);
+  useEffect(() => {
+    recordScrollPageRef.current = (n) => {
+      if (readOnly || !focusedBlockId || !pdfUrl) return;
+      if (pdfRenderedUrlRef.current !== pdfUrl) return;
+      if (restoringForRef.current === focusedBlockId || coarseRestorePendingRef.current) return;
+      recordReadPos(focusedBlockId, n);
+    };
+  });
 
   function formatRelativeTime(iso) {
   if (!iso) return "";
@@ -2236,14 +2369,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // whichever comes back, taking the filename from Content-Disposition. Using
   // fetch+blob (not a plain navigation) so a 404/401 surfaces as a message
   // instead of silently swapping the SPA for an error page.
-  async function exportPage(mode = "readable") {
-    const id = focusedBlock?.id;
-    if (!id) { setStatus("Open a page first to export it."); return; }
-    setOpenPopover(null);
+  async function downloadExport(path, fallbackName) {
     setStatus("Exporting page…");
     try {
-      const res = await fetch(`${API}/pages/${id}/export?mode=${mode}`, { credentials: "include" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch(`${API}${path}`, { credentials: "include" });
+      if (!res.ok) {
+        let detail = "";
+        try { detail = (await res.json()).detail || ""; } catch { /* not JSON */ }
+        throw new Error(detail || `HTTP ${res.status}`);
+      }
       const ctype = res.headers.get("Content-Type") || "";
       // If the SPA fallback served index.html, the export route isn't live yet.
       if (ctype.includes("text/html")) throw new Error("export route not found — restart the backend");
@@ -2251,9 +2385,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       const cd = res.headers.get("Content-Disposition") || "";
       const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
       const plain = /filename="?([^";]+)"?/i.exec(cd);
-      const filename = star ? decodeURIComponent(star[1])
-        : plain ? plain[1]
-        : `page.${blob.type.includes("zip") ? "zip" : "md"}`;
+      const filename = star ? decodeURIComponent(star[1]) : plain ? plain[1] : fallbackName;
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -2266,6 +2398,22 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     } catch (err) {
       setStatus(`Export failed: ${err.message}`);
     }
+  }
+
+  async function exportPage(mode = "readable") {
+    const id = focusedBlock?.id;
+    if (!id) { setStatus("Open a page first to export it."); return; }
+    setOpenPopover(null);
+    await downloadExport(`/pages/${id}/export?mode=${mode}`, "page.md");
+  }
+
+  // Download the PDF with the page's highlights burned in as standard PDF
+  // annotations (notes become annotation popups) — viewable anywhere.
+  async function exportAnnotatedPdf() {
+    const id = focusedBlock?.id;
+    if (!id) { setStatus("Open a page first to export it."); return; }
+    setOpenPopover(null);
+    await downloadExport(`/pages/${id}/export-pdf`, "annotated.pdf");
   }
 
   // Ask the AI for the document's title and fill it into the page name.
@@ -2650,27 +2798,43 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     setTimeout(attempt, 100);
   }, [pdfHidden, highlights]);
 
-  // Restore PDF scroll position from session.
-  // Polls until the viewer is mounted and the doc is ready (scrollToRef is set
-  // and a page element exists), so it works on PDFs with no highlights and on
-  // slow loads. Doesn't depend on highlights.
+  // Jump to the last-read page when a document opens.
+  // Position comes from the account-synced per-paper map (read-pos pref),
+  // falling back to the legacy per-browser session slot only when it belongs
+  // to this page. Polls until the viewer is mounted and the doc is ready
+  // (scrollToRef is set and a page element exists), so it works on PDFs with
+  // no highlights and on slow loads.
   useEffect(() => {
-    if (pdfHidden) return;
+    coarseRestorePendingRef.current = false;
+    if (pdfHidden || !pdfUrl) return;
     if (restoredPdfUrlRef.current === pdfUrl) return;
+    const fid = focusedBlockIdRef.current;
     // Tab switches restore an exact per-page position (tabScrollRef) — the
-    // coarse session page number is only for reopening the app.
-    if (tabScrollRef.current[focusedBlockIdRef.current]) return;
-    const saved = loadSession().pdfPageNumber;
-    if (!saved || saved <= 1) return;
+    // coarse last-read page is only for (re)opening a paper cold.
+    if (tabScrollRef.current[fid]) return;
+    const sess = loadSession();
+    const sessSaved = fid && sess.focusedBlockId === fid ? sess.pdfPageNumber : 0;
+    coarseRestorePendingRef.current = true;
     let cancelled = false;
     let tries = 0;
+    const done = () => { coarseRestorePendingRef.current = false; };
     const tryRestore = () => {
       if (cancelled) return;
-      if (tries++ > 50) return; // give up after ~5s
+      if (tries++ > 50) { done(); return; } // give up after ~5s
       if (!scrollToRef.current || !document.querySelector('[data-page]')) {
         setTimeout(tryRestore, 100);
         return;
       }
+      // The synced map may still be in flight (fresh browser, or a cache
+      // holding this browser's OLDER position) — wait for the first server
+      // response before trusting local state.
+      if (!readPosLoadedRef.current && tries < 30) {
+        setTimeout(tryRestore, 100);
+        return;
+      }
+      const entry = fid ? readPosRef.current[fid] : null;
+      const saved = entry?.page || sessSaved;
+      if (!saved || saved <= 1) { done(); return; }
       restoredPdfUrlRef.current = pdfUrl;
       scrollToRef.current({
         position: {
@@ -2679,9 +2843,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           rects: [],
         },
       });
+      done();
     };
     tryRestore();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; done(); };
   }, [pdfUrl, pdfHidden]);
 
   // Track PDF scroll position — poll via scrollable container
@@ -2713,7 +2878,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           const r = el.getBoundingClientRect();
           if (r.top <= midY && r.bottom >= midY) {
             const n = parseInt(el.dataset.page);
-            if (n) setPdfPageNumber(n);
+            // Record via the tracker, not a pdfPageNumber effect: scrolling
+            // within a page (or back to a page the state already shows) fires
+            // no state change, but must still re-assert this window's
+            // position over one pulled from another window.
+            if (n) { setPdfPageNumber(n); recordScrollPageRef.current?.(n); }
             break;
           }
         }
@@ -3980,6 +4149,16 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
                 Export this page (Logseq)
               </button>
+              {docId ? (
+                <button
+                  className="popoverItem"
+                  onClick={() => { exportAnnotatedPdf(); setOpenPopover(null); }}
+                  title="Download this paper's PDF with your highlights embedded as standard PDF annotations — notes appear as annotation popups in Acrobat, SumatraPDF, browsers, etc."
+                >
+                  <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M9 17l2-6 2 4 1.5-2.5L16 17" /></svg>
+                  Export PDF with highlights
+                </button>
+              ) : null}
             </>
           ) : null}
         </div>
