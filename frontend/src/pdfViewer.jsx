@@ -2,11 +2,19 @@
 // annotations, text search, and the selection popup. Extracted from
 // App.jsx to keep the God component shrinking.
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import * as pdfjsLib from "pdfjs-dist";
+// The legacy build, not the default one: it ships the core-js polyfills the
+// modern build assumes (Promise.withResolvers is Safari 17.4+, and pdf.js
+// calls it the moment a loading task is created). Without it every iPad below
+// iOS 17.4 threw here at module scope and the whole app rendered blank.
+// public/pdf.worker.min.mjs is the matching legacy worker — keep both legacy.
+import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
-// Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches
-pdfjsLib.getDocument({ data: new Uint8Array() }).promise.catch(() => {});
+// Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
+// Guarded: a throw at module scope takes down every route, PDF or not.
+try {
+  pdfjsLib.getDocument({ data: new Uint8Array() }).promise.catch(() => {});
+} catch {}
 
 // Highlight palette (shared with the highlight context menu in App)
 const COLORS = [
@@ -437,6 +445,15 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
 
   // Text selection for highlight creation
   const [selPopup, setSelPopup] = useState(null);
+  // Whether this session has ever seen a real touch — a ref, not an effect
+  // local: the selection effect re-registers on every render (its callback
+  // prop is a fresh closure each time), which would keep clearing a local.
+  const touchSeenRef = useRef(false);
+  useEffect(() => {
+    function onTouchStart() { touchSeenRef.current = true; }
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    return () => document.removeEventListener("touchstart", onTouchStart);
+  }, []);
 
   // Dismiss the color popup when the user mouses down anywhere outside it
   // (without that, removing the textarea/Cancel leaves no way to back out).
@@ -455,48 +472,65 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   useEffect(() => {
     if (!onSelectionFinished) return;
     function onMouseUp() {
-      setTimeout(() => {
-        const sel = window.getSelection();
-        if (!sel || !sel.toString().trim()) { setSelPopup(null); return; }
-        const range = sel.getRangeAt(0);
-        if (!range) { setSelPopup(null); return; }
-        const node = range.startContainer;
-        const textEl = node?.nodeType === 3 ? node.parentElement?.closest?.(".textLayer") : node?.closest?.(".textLayer");
-        if (!textEl) return;
-        const pageEl = textEl.closest?.("[data-page]");
-        const pageNumber = pageEl ? parseInt(pageEl.dataset.page, 10) : null;
-        const text = sel.toString().trim();
-        if (text && pageNumber) {
-          const r = range.getBoundingClientRect();
-          // Per-line rects so multi-line highlights don't render as one big block.
-          // pdf.js text layer has many spans per line — getClientRects() returns one
-          // rect per span, so merge those that share a line into one rect per line.
-          const raw = Array.from(range.getClientRects())
-            .filter(cr => cr.width > 1 && cr.height > 1)
-            .map(cr => ({ top: cr.top, left: cr.left, right: cr.right, bottom: cr.bottom }))
-            .sort((a, b) => a.top - b.top || a.left - b.left);
-          const lineRects = [];
-          for (const cr of raw) {
-            const last = lineRects[lineRects.length - 1];
-            if (last) {
-              const overlap = Math.min(last.bottom, cr.bottom) - Math.max(last.top, cr.top);
-              const minH = Math.min(last.bottom - last.top, cr.bottom - cr.top);
-              if (overlap >= minH * 0.5) {
-                last.left = Math.min(last.left, cr.left);
-                last.right = Math.max(last.right, cr.right);
-                last.top = Math.min(last.top, cr.top);
-                last.bottom = Math.max(last.bottom, cr.bottom);
-                continue;
-              }
+      setTimeout(syncSelPopup, 10);
+    }
+    function syncSelPopup() {
+      const sel = window.getSelection();
+      if (!sel || !sel.toString().trim()) { setSelPopup(null); return; }
+      const range = sel.getRangeAt(0);
+      if (!range) { setSelPopup(null); return; }
+      const node = range.startContainer;
+      const textEl = node?.nodeType === 3 ? node.parentElement?.closest?.(".textLayer") : node?.closest?.(".textLayer");
+      if (!textEl) return;
+      const pageEl = textEl.closest?.("[data-page]");
+      const pageNumber = pageEl ? parseInt(pageEl.dataset.page, 10) : null;
+      const text = sel.toString().trim();
+      if (text && pageNumber) {
+        const r = range.getBoundingClientRect();
+        // Per-line rects so multi-line highlights don't render as one big block.
+        // pdf.js text layer has many spans per line — getClientRects() returns one
+        // rect per span, so merge those that share a line into one rect per line.
+        const raw = Array.from(range.getClientRects())
+          .filter(cr => cr.width > 1 && cr.height > 1)
+          .map(cr => ({ top: cr.top, left: cr.left, right: cr.right, bottom: cr.bottom }))
+          .sort((a, b) => a.top - b.top || a.left - b.left);
+        const lineRects = [];
+        for (const cr of raw) {
+          const last = lineRects[lineRects.length - 1];
+          if (last) {
+            const overlap = Math.min(last.bottom, cr.bottom) - Math.max(last.top, cr.top);
+            const minH = Math.min(last.bottom - last.top, cr.bottom - cr.top);
+            if (overlap >= minH * 0.5) {
+              last.left = Math.min(last.left, cr.left);
+              last.right = Math.max(last.right, cr.right);
+              last.top = Math.min(last.top, cr.top);
+              last.bottom = Math.max(last.bottom, cr.bottom);
+              continue;
             }
-            lineRects.push({ ...cr });
           }
-          setSelPopup({ text, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom }, lineRects, pageNumber });
+          lineRects.push({ ...cr });
         }
-      }, 10);
+        setSelPopup({ text, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom }, lineRects, pageNumber });
+      }
+    }
+    // iPadOS/iOS never fires mouseup for a long-press selection or for a drag
+    // of the selection handles, so touch devices would never get the highlight
+    // popup. selectionchange does fire — debounced, since it fires on every
+    // pixel of a handle drag — and only once a touch has been seen, so mouse
+    // drags keep committing on mouseup (where the modifier key is known).
+    let selTimer = null;
+    function onSelectionChange() {
+      if (!touchSeenRef.current) return;
+      clearTimeout(selTimer);
+      selTimer = setTimeout(syncSelPopup, 350);
     }
     document.addEventListener("mouseup", onMouseUp);
-    return () => document.removeEventListener("mouseup", onMouseUp);
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      clearTimeout(selTimer);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("selectionchange", onSelectionChange);
+    };
   }, [onSelectionFinished]);
 
   function handleSelConfirm(commentText, color, extra) {
