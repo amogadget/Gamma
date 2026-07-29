@@ -1323,8 +1323,36 @@ export default function App() {
         addPdfSelection(text, additive);
       }, 10);
     }
+    // Touch has no mouseup after a long-press/handle selection, so iPad picks
+    // the passage up from selectionchange instead. No modifier exists there,
+    // so it always replaces; and an emptied selection is left alone rather
+    // than cleared, since a tap into the chat is indistinguishable from a tap
+    // that dismissed the selection — and that tap must keep it.
+    let touchSeen = false;
+    let selTimer = null;
+    function onTouchStart() { touchSeen = true; }
+    function onSelectionChange() {
+      if (!touchSeen) return;
+      clearTimeout(selTimer);
+      selTimer = setTimeout(() => {
+        const sel = window.getSelection();
+        const text = sel ? sel.toString().trim() : "";
+        if (!text) return;
+        const node = sel.anchorNode;
+        const el = node?.nodeType === 3 ? node.parentElement : node;
+        if (!(viewerWrapRef.current && el && viewerWrapRef.current.contains(el))) return;
+        addPdfSelection(text, false);
+      }, 350);
+    }
     document.addEventListener("mouseup", onMouseUp);
-    return () => document.removeEventListener("mouseup", onMouseUp);
+    document.addEventListener("touchstart", onTouchStart, { passive: true });
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      clearTimeout(selTimer);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("touchstart", onTouchStart);
+      document.removeEventListener("selectionchange", onSelectionChange);
+    };
   }, []);
 
   // Selection is page-scoped: drop it when switching documents.
