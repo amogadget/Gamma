@@ -17,6 +17,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson } from "./utils";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, LabelIcon, SearchIcon } from "./icons";
 
 const DASH_CLASS = "\\-\\u2010-\\u2015";
 const DIGIT_SEP_CLASS = ",\\u00A0\\u202F\\u2009";
@@ -62,13 +63,6 @@ export function buildSearchRegex(q, { caseSensitive = false, wholeWord = false, 
     return null;
   }
 }
-
-const FolderIcon = ({ size = 11 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
-);
-const LabelIcon = ({ size = 11 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>
-);
 
 export default function SearchPanel({
   open, onOpenChange,
@@ -319,7 +313,7 @@ export default function SearchPanel({
         title="Search everything (Ctrl+F)"
         aria-label="Search"
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+        <SearchIcon size={16} />
       </button>
       {open ? (
         <div className="popover searchPopover">
@@ -333,13 +327,13 @@ export default function SearchPanel({
               aria-label="Toggle result details"
             >
               {showDetails
-                ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
-                : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="m9 6 6 6-6 6" /></svg>}
+                ? <ChevronDownIcon size={12} strokeWidth={2.4} />
+                : <ChevronRightIcon size={12} strokeWidth={2.4} />}
             </button>
             <div className="searchInputWrap">
               {labels.map((l) => (
                 <span key={`${l.kind}:${l.name}`} className="categoryBadge searchChip">
-                  {l.kind === "folder" ? <FolderIcon /> : <LabelIcon />}
+                  {l.kind === "folder" ? <FolderIcon size={11} /> : <LabelIcon size={11} />}
                   {l.name}
                   <button
                     className="uiClose uiCloseSm searchChipX"
@@ -395,10 +389,10 @@ export default function SearchPanel({
               <span className="searchNavGroup">
                 <span className="searchFindCount" title="Matches in the open PDF">{findIndex + 1}/{pdfMatches.length}</span>
                 <button className="searchToggle searchNavBtn" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6" /></svg>
+                  <ChevronUpIcon size={14} />
                 </button>
                 <button className="searchToggle searchNavBtn" onClick={() => gotoFind(findIndex + 1)} title="Next match (Enter)">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+                  <ChevronDownIcon size={14} />
                 </button>
               </span>
             ) : null}
