@@ -76,7 +76,6 @@ export default function SearchPanel({
   openBlock, pendingBlockScrollRef,
   pdfSearchRef, scrollToRef, setPdfHidden, docNonce,
   onFindMarks,
-  confirm, setStatus, onReplaced,
 }) {
   const [query, setQuery] = useState("");
   const [labels, setLabels] = useState([]); // confirmed filter chips
@@ -89,10 +88,6 @@ export default function SearchPanel({
   const [busy, setBusy] = useState(false);
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
-  const [regexMode, setRegexMode] = useState(false);
-  const [replaceOpen, setReplaceOpen] = useState(false);
-  const [replaceText, setReplaceText] = useState("");
-  const [nonce, setNonce] = useState(0); // bump to re-run the search
   // "Pinned" keeps the search live (and its PDF highlights visible) after the
   // popover closed because the user opened a library hit — so the match can
   // be highlighted in the paper it navigated to.
@@ -100,7 +95,7 @@ export default function SearchPanel({
   const pendingFindRef = useRef(null); // {page, sinceNonce} — jump here once the target doc renders
 
   const q = query.trim();
-  const opts = { caseSensitive, wholeWord, regex: regexMode };
+  const opts = { caseSensitive, wholeWord };
 
   useEffect(() => { if (open) setPinned(false); }, [open]);
   useEffect(() => { setSugIdx(0); }, [query]);
@@ -179,25 +174,25 @@ export default function SearchPanel({
     }
     const timer = setTimeout(() => {
       setBusy(true);
-      const flags = `&case=${caseSensitive ? 1 : 0}&whole=${wholeWord ? 1 : 0}&regex=${regexMode ? 1 : 0}`;
+      const flags = `&case=${caseSensitive ? 1 : 0}&whole=${wholeWord ? 1 : 0}`;
       const notesReq = apiJson(`${API}/block-search?q=${encodeURIComponent(q)}&limit=20${flags}`)
         .then((d) => setNoteHits(d.blocks || []))
         .catch(() => setNoteHits([]));
       // Full-text over every paper's PDF (server-side FTS index; normalized
-      // word matching — the Aa/ab/.* toggles only apply to notes and the
+      // word matching — the Aa/ab toggles only apply to notes and the
       // open document)
       const libReq = apiJson(`${API}/pdf-search?q=${encodeURIComponent(q)}&limit=15`)
         .then((d) => { setLibHits(d.results || []); setLibIndexing(d.indexing || 0); })
         .catch(() => { setLibHits([]); setLibIndexing(0); });
       let pdfReq = Promise.resolve();
-      const re = pdfSearchRef.current ? buildSearchRegex(q, { caseSensitive, wholeWord, regex: regexMode }) : null;
+      const re = pdfSearchRef.current ? buildSearchRegex(q, { caseSensitive, wholeWord }) : null;
       if (re) {
         pdfReq = pdfSearchRef.current(re).then(async (matches) => {
           // A library hit was opened: jump to its page's first match now that
           // the document is rendered and re-searched.
           const pending = pendingFindRef.current;
           if (pending && docNonce > pending.sinceNonce) {
-            if (!matches.length && !regexMode) {
+            if (!matches.length) {
               // The library index matches words scattered across a page (AND
               // of terms), so the exact phrase may not exist anywhere — fall
               // back to highlighting the longest word of the query.
@@ -220,7 +215,7 @@ export default function SearchPanel({
       Promise.allSettled([notesReq, libReq, pdfReq]).then(() => setBusy(false));
     }, 250);
     return () => clearTimeout(timer);
-  }, [q, open, pinned, caseSensitive, wholeWord, regexMode, nonce, docNonce]);
+  }, [q, open, pinned, caseSensitive, wholeWord, docNonce]);
 
   // Open a library content hit: pin the search, load the paper, and let the
   // re-run above land on the exact match (page-top scroll as a fallback while
@@ -265,29 +260,6 @@ export default function SearchPanel({
     openBlock(r.page_root_id || r.id);
   }
 
-  function replaceAllInNotes() {
-    if (!q) return;
-    confirm({
-      title: "Replace all",
-      message: `Replace all occurrences of "${q}" with "${replaceText}" across ALL your notes?`,
-      confirmLabel: "Replace all",
-      onConfirm: async () => {
-        try {
-          const data = await apiJson(`${API}/blocks-replace`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: q, replacement: replaceText, case: caseSensitive, whole: wholeWord, regex: regexMode }),
-          });
-          setStatus(`Replaced in ${data.changed} block${data.changed === 1 ? "" : "s"}.`);
-          await onReplaced();
-          setNonce((n) => n + 1);
-        } catch (err) {
-          setStatus(`Replace failed: ${err.message}`);
-        }
-      },
-    });
-  }
-
   // ---- result grouping: titles → this paper (notes, then PDF text) →
   // other notes → reference links → other papers' PDF content
   const inScope = (pageId) => !labelPageIds || labelPageIds.has(pageId);
@@ -307,6 +279,16 @@ export default function SearchPanel({
   const showPdfMatches = inScope(focusedBlockId);
   const anything = titleMatches.length || titlesExtra.length || notesHere.length || notesElsewhere.length
     || linkHits.length || labelMatches.length || (showPdfMatches && pdfMatches.length) || libElsewhere.length;
+
+  // One switch for the whole detail area (all the result lists). Its default
+  // comes from Settings → Search (localStorage "gamma-search-details",
+  // collapsed unless set) and is re-read each time the panel opens; the
+  // toggle button then only affects the current panel session.
+  const detailsDefault = () => {
+    try { return localStorage.getItem("gamma-search-details") === "1"; } catch { return false; }
+  };
+  const [showDetails, setShowDetails] = useState(detailsDefault);
+  useEffect(() => { if (open) setShowDetails(detailsDefault()); }, [open]);
 
   const kindBadge = (r) => (
     r.kind === "highlight" ? <span className="searchKindBadge">highlight</span>
@@ -343,10 +325,17 @@ export default function SearchPanel({
         <div className="popover searchPopover">
           <div className="searchRow">
             <button
-              className={`searchToggle ${replaceOpen ? "on" : ""}`}
-              onClick={() => setReplaceOpen((v) => !v)}
-              title="Toggle replace"
-            >{replaceOpen ? "⌄" : "›"}</button>
+              className={`searchToggle ${showDetails ? "on" : ""}`}
+              onClick={() => setShowDetails((v) => !v)}
+              title={showDetails
+                ? "Collapse result details (compact find — the default is in Settings → Search)"
+                : "Expand result details: titles, notes, and other papers"}
+              aria-label="Toggle result details"
+            >
+              {showDetails
+                ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+                : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="m9 6 6 6-6 6" /></svg>}
+            </button>
             <div className="searchInputWrap">
               {labels.map((l) => (
                 <span key={`${l.kind}:${l.name}`} className="categoryBadge searchChip">
@@ -402,83 +391,72 @@ export default function SearchPanel({
                 </div>
               ) : null}
             </div>
+            {showPdfMatches && pdfMatches.length ? (
+              <span className="searchNavGroup">
+                <span className="searchFindCount" title="Matches in the open PDF">{findIndex + 1}/{pdfMatches.length}</span>
+                <button className="searchToggle searchNavBtn" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6" /></svg>
+                </button>
+                <button className="searchToggle searchNavBtn" onClick={() => gotoFind(findIndex + 1)} title="Next match (Enter)">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+                </button>
+              </span>
+            ) : null}
             <button className={`searchToggle ${caseSensitive ? "on" : ""}`} onClick={() => setCaseSensitive((v) => !v)} title="Match case">Aa</button>
             <button className={`searchToggle ${wholeWord ? "on" : ""}`} onClick={() => setWholeWord((v) => !v)} title="Match whole word"><u>ab</u></button>
-            <button className={`searchToggle ${regexMode ? "on" : ""}`} onClick={() => setRegexMode((v) => !v)} title="Use regular expression (exact — disables fuzzy matching)">.*</button>
           </div>
-          {replaceOpen ? (
-            <div className="searchRow">
-              <span className="searchToggle spacer" />
-              <input
-                className="searchInput"
-                value={replaceText}
-                onChange={(e) => setReplaceText(e.target.value)}
-                placeholder="Replace in notes…"
-              />
-              <button
-                className="searchToggle replaceBtn"
-                onClick={replaceAllInNotes}
-                disabled={!q}
-                title="Replace all matches across your notes (PDF text can't be edited)"
-              >Replace all</button>
-            </div>
-          ) : null}
           <div className="searchResults">
             {busy ? <div className="searchHint">Searching…</div> : null}
             {!busy && q && !anything ? <div className="searchHint">No matches.</div> : null}
-            {labels.length ? (
+            {showDetails ? (
               <>
-                <div className="searchSection">Filters: {labels.map((c) => c.name).join(" + ")}</div>
-                {labelMatches.length === 0 ? (
-                  <div className="searchHint">No pages carry {labels.length === 1 ? "this label" : "all these labels"}.</div>
-                ) : labelMatches.map((b) => titleRow(b, b.properties?.category || b.properties?.folder || ""))}
+                {labels.length ? (
+                  <>
+                    <div className="searchSection">Filters: {labels.map((c) => c.name).join(" + ")}</div>
+                    {labelMatches.length === 0 ? (
+                      <div className="searchHint">No pages carry {labels.length === 1 ? "this label" : "all these labels"}.</div>
+                    ) : labelMatches.map((b) => titleRow(b, b.properties?.category || b.properties?.folder || ""))}
+                  </>
+                ) : null}
+                {titleMatches.length || titlesExtra.length ? <div className="searchSection">Titles</div> : null}
+                {titleMatches.map((b) => titleRow(b, [b.properties?.category, b.properties?.folder].filter(Boolean).join(", ")))}
+                {titlesExtra.map(noteRow)}
+                {notesHere.length ? <div className="searchSection">Notes in this paper</div> : null}
+                {notesHere.map(noteRow)}
+                {showPdfMatches && pdfMatches.length ? <div className="searchSection">This PDF</div> : null}
+                {(showPdfMatches ? pdfMatches : []).map((m, i) => (
+                  <button
+                    key={`pdf-${i}`}
+                    className={`searchResult ${i === findIndex ? "active" : ""}`}
+                    onClick={() => gotoFind(i)}
+                  >
+                    <span className="searchResultPage">p. {m.page}</span>
+                    <span className="searchResultText">…{m.snippet}…</span>
+                  </button>
+                ))}
+                {notesElsewhere.length ? <div className="searchSection">{focusedBlockId ? "Other notes" : "Notes"}</div> : null}
+                {notesElsewhere.map(noteRow)}
+                {linkHits.length ? <div className="searchSection">Reference links</div> : null}
+                {linkHits.map(noteRow)}
+                {libElsewhere.length || libIndexing ? (
+                  <div className="searchSection">{focusedBlockId ? "Other papers" : "Library PDFs"}</div>
+                ) : null}
+                {libIndexing ? (
+                  <div className="searchHint">Indexing {libIndexing} paper{libIndexing === 1 ? "" : "s"} in the background — results will fill in shortly.</div>
+                ) : null}
+                {libElsewhere.map((r, i) => (
+                  <button
+                    key={`lib-${i}`}
+                    className="searchResult"
+                    onClick={() => openLibHit(r)}
+                    title={`Open "${r.title}" at page ${r.page} — the match will be highlighted`}
+                  >
+                    <span className="searchResultPage">{r.title.slice(0, 60)} · p. {r.page}</span>
+                    <span className="searchResultText">…{r.snippet}…</span>
+                  </button>
+                ))}
               </>
             ) : null}
-            {titleMatches.length || titlesExtra.length ? <div className="searchSection">Titles</div> : null}
-            {titleMatches.map((b) => titleRow(b, [b.properties?.category, b.properties?.folder].filter(Boolean).join(", ")))}
-            {titlesExtra.map(noteRow)}
-            {notesHere.length ? <div className="searchSection">Notes in this paper</div> : null}
-            {notesHere.map(noteRow)}
-            {showPdfMatches && pdfMatches.length ? (
-              <div className="searchSection searchSectionRow">
-                <span>This PDF · {findIndex + 1}/{pdfMatches.length}</span>
-                <span className="findNav">
-                  <button className="searchToggle" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">▲</button>
-                  <button className="searchToggle" onClick={() => gotoFind(findIndex + 1)} title="Next match (Enter)">▼</button>
-                </span>
-              </div>
-            ) : null}
-            {(showPdfMatches ? pdfMatches : []).map((m, i) => (
-              <button
-                key={`pdf-${i}`}
-                className={`searchResult ${i === findIndex ? "active" : ""}`}
-                onClick={() => gotoFind(i)}
-              >
-                <span className="searchResultPage">p. {m.page}</span>
-                <span className="searchResultText">…{m.snippet}…</span>
-              </button>
-            ))}
-            {notesElsewhere.length ? <div className="searchSection">{focusedBlockId ? "Other notes" : "Notes"}</div> : null}
-            {notesElsewhere.map(noteRow)}
-            {linkHits.length ? <div className="searchSection">Reference links</div> : null}
-            {linkHits.map(noteRow)}
-            {libElsewhere.length || libIndexing ? (
-              <div className="searchSection">{focusedBlockId ? "Other papers" : "Library PDFs"}</div>
-            ) : null}
-            {libIndexing ? (
-              <div className="searchHint">Indexing {libIndexing} paper{libIndexing === 1 ? "" : "s"} in the background — results will fill in shortly.</div>
-            ) : null}
-            {libElsewhere.map((r, i) => (
-              <button
-                key={`lib-${i}`}
-                className="searchResult"
-                onClick={() => openLibHit(r)}
-                title={`Open "${r.title}" at page ${r.page} — the match will be highlighted`}
-              >
-                <span className="searchResultPage">{r.title.slice(0, 60)} · p. {r.page}</span>
-                <span className="searchResultText">…{r.snippet}…</span>
-              </button>
-            ))}
           </div>
         </div>
       ) : null}
