@@ -1113,6 +1113,110 @@ body {
   padding: 0 6px !important;
 }
 
+/* --- PDF table of contents (document outline) --- */
+.pdfOutlineBtn {
+  position: absolute;
+  top: 8px;
+  left: 14px;
+  z-index: 20;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.pdfOutlineBtn:hover { color: var(--text-primary); background: var(--bg-active); }
+.pdfOutlineBtn.open { color: var(--accent); }
+[data-theme="light"] .pdfOutlineBtn { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+
+/* Fullscreen toggle — bottom-left, same look as the TOC button. */
+.pdfFullscreenBtn {
+  position: absolute;
+  bottom: 14px;
+  left: 14px;
+  z-index: 20;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.pdfFullscreenBtn:hover { color: var(--text-primary); background: var(--bg-active); }
+[data-theme="light"] .pdfFullscreenBtn { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+
+.pdfOutlinePanel {
+  position: absolute;
+  top: 42px;
+  left: 14px;
+  bottom: 52px; /* stops above the bottom-left fullscreen button */
+  z-index: 20;
+  width: 280px;
+  max-width: 70%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 4px;
+}
+[data-theme="light"] .pdfOutlinePanel { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+
+.pdfOutlineRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 2px 6px 2px 0;
+  border-radius: 4px;
+}
+.pdfOutlineRow:hover { background: var(--bg-active); }
+.pdfOutlineNode { display: flex; flex-direction: column; }
+/* Indent guide: each nesting level draws a vertical line under its parent's
+   chevron, so the section structure reads at a glance. */
+.pdfOutlineKids {
+  display: flex;
+  flex-direction: column;
+  margin-left: 8px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+.pdfOutlineChevron {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  padding: 0;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+/* translucent gray so it stays visible on top of the row's own hover tint */
+button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: var(--text-primary); }
+.pdfOutlineChevron svg { transition: transform 0.12s; }
+.pdfOutlineChevron.open svg { transform: rotate(90deg); }
+.pdfOutlineTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
 /* When PDF is hidden, sidebar takes full width */
 .main.pdfHidden .sidebar,
 .layout-horizontal .main.pdfHidden .sidebar,
@@ -2065,13 +2169,33 @@ body {
   transition: background 0.12s ease, color 0.12s ease;
   animation: tabIn 0.15s ease-out;
   will-change: transform;
+  position: relative;
 }
+/* Chrome-style divider bar between adjacent tabs… */
+.tab::before {
+  content: "";
+  position: absolute;
+  left: -2px;
+  top: 20%;
+  height: 60%;
+  width: 1px;
+  background: var(--border);
+}
+/* …hidden next to the active or hovered tab, and before the first tab. */
+.tab:first-child::before,
+.tab.active::before,
+.tab:hover::before,
+.tab.active + .tab::before,
+.tab:hover + .tab::before { background: transparent; }
 .tab:hover { background: var(--bg-hover); }
 .tab.dragging { opacity: 0.45; }
 .tab.active {
   background: var(--bg-surface);
   border-color: var(--border);
   color: var(--text-primary);
+  /* whisper of an upward shadow: enough depth to read as lifted, without a
+     smudge bleeding above the tab strip */
+  box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.06);
 }
 .tabTitle {
   overflow: hidden;
@@ -2373,9 +2497,6 @@ body {
   border-color: var(--accent-dark);
   color: var(--text-primary);
 }
-.searchToggle.spacer { visibility: hidden; }
-.topbar .searchToggle.replaceBtn,
-.searchToggle.replaceBtn { width: auto; padding: 0 8px; white-space: nowrap; }
 .searchSection {
   font-size: 10px;
   font-weight: 600;
@@ -2384,6 +2505,29 @@ body {
   color: var(--text-dim);
   padding: 6px 4px 2px;
 }
+/* Match counter + prev/next for the open PDF, inline in the search bar
+   (browser-find style). Flat chevron buttons, tight pair, breathing room
+   around the group. */
+.searchNavGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+.searchFindCount {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  margin-right: 4px;
+}
+.searchToggle.searchNavBtn {
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 4px;
+}
+.searchToggle.searchNavBtn:disabled { opacity: 0.4; cursor: default; background: none; }
 .searchResultText {
   font-size: 12px;
   color: var(--text-secondary);
@@ -2484,6 +2628,97 @@ body {
 /* chat attach picker + zoom input */
 .popover.popUp { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
 .attachPopover { min-width: 300px; max-width: 380px; }
+/* GPT-style "+" menu: icon + label + dim hint per row */
+.chatPlusMenu { min-width: 260px; max-width: 340px; padding: 4px; }
+.chatPlusMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 8px;
+  cursor: pointer;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+}
+.chatPlusMenuItem:hover { background: var(--bg-hover); }
+.chatPlusMenuIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+.chatPlusMenuLabel { white-space: nowrap; }
+.chatPlusMenuHint {
+  color: var(--text-dim);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: auto;
+  padding-left: 10px;
+}
+/* Uploaded-PDF chips pending in the composer */
+.chatFileChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 3px 6px 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  max-width: 220px;
+}
+.chatFileChip svg { flex-shrink: 0; }
+.chatFileChipName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.chatFileChipRemove { flex-shrink: 0; }
+/* "Add papers to the chat" picker modal */
+.docPickerModal { width: min(480px, calc(100vw - 32px)); }
+.docPickerList {
+  max-height: 46vh;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Rows live outside any .popover, so they need their own flex layout —
+   without it long titles wrap under the checkbox. */
+.docPickerItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.docPickerItem:hover { background: var(--bg-hover); }
+.docPickerItem input { flex-shrink: 0; margin: 0; }
+.docPickerItem .attachName { flex: 1; min-width: 0; }
+.docPickerNotes { padding-left: 0; }
+.docPickerNotes:hover { background: none; }
+.docPickerNotes .attachName { flex: initial; }
+.docPickerBadge {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-dim);
+}
 .attachList { max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .attachItem { font-size: 12px; }
 .attachItem input { flex-shrink: 0; }
@@ -2537,7 +2772,6 @@ body {
 }
 .pageActionBtn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
 .pageActionBtn:disabled { opacity: 0.6; cursor: default; }
-.pageActionBtn.aiTitleBtn { color: var(--accent-dark); }
 .pageActionBtn.pageDeleteBtn:hover { color: #d05050; }
 .sourcePopover { min-width: 300px; right: 0; }
 .searchSectionRow { display: flex; align-items: center; justify-content: space-between; }
@@ -2778,28 +3012,41 @@ body {
 /* Uniform buttons for the settings modals (AI providers, prompt editor):
    ghost by default, .primary for the main action, .danger for destructive,
    .sm for inline row actions. */
+/* Buttons: VS-Code-settings-style rounded rects — soft radius, quiet border,
+   faint lift, width from content. */
 .uiBtn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 5px;
-  background: var(--bg-surface);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 9px;
   color: var(--text-secondary);
   font-size: 12px;
-  padding: 5px 12px;
+  font-weight: 500;
+  padding: 5px 14px;
   cursor: pointer;
   font-family: inherit;
-  line-height: 1.3;
+  line-height: 1.4;
   white-space: nowrap;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
 }
-.uiBtn:hover:not(:disabled) { background: var(--bg-block); color: var(--text-primary); }
-.uiBtn:disabled { opacity: 0.45; cursor: default; }
-.uiBtn.sm { font-size: 11px; padding: 3px 10px; border-radius: 5px; }
-.uiBtn.primary { background: var(--accent-dark); border-color: transparent; color: var(--text-secondary); }
-.uiBtn.primary:hover:not(:disabled) { background: #3568a0; color: var(--text-primary); }
+.uiBtn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.uiBtn:active:not(:disabled) { background: var(--bg-active); box-shadow: none; }
+.uiBtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.uiBtn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+.uiBtn.sm { font-size: 11.5px; padding: 4px 12px; border-radius: 8px; }
+/* Icon-only square variant (delete/edit row actions) + a same-size spacer so
+   button columns stay aligned when a row lacks the action. */
+.uiBtn.iconSq { width: 27px; height: 25px; padding: 0; flex-shrink: 0; }
+.iconSqSlot { width: 27px; flex-shrink: 0; }
+/* Users manager: fixed widths per action column so rows line up. */
+.uMgrBtn { min-width: 86px; }
+.uMgrBtnWide { min-width: 104px; }
+.uiBtn.primary { background: var(--accent-dark); border-color: transparent; color: #fff; }
+.uiBtn.primary:hover:not(:disabled) { background: #3568a0; color: #fff; }
 .uiBtn.danger:hover:not(:disabled) {
   color: #e5534b;
   border-color: rgba(229, 83, 75, 0.5);
@@ -3443,6 +3690,28 @@ body {
 .metaVal { color: var(--text-secondary); min-width: 0; word-break: break-word; }
 .metaVal a { color: var(--accent); text-decoration: none; }
 .metaVal a:hover { text-decoration: underline; }
+/* Editable metadata fields: quiet inputs that only reveal their border on
+   hover/focus, so the table still reads like a table. */
+.metaValEdit { flex: 1; display: flex; align-items: center; gap: 4px; }
+.metaInput {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 4px;
+  margin: -2px 0;
+}
+.metaInput:hover { border-color: var(--border); }
+.metaInput:focus {
+  outline: none;
+  border-color: var(--accent-dark);
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+.metaLink { display: inline-flex; align-items: center; color: var(--accent); flex-shrink: 0; }
 
 /* --- reference-link creation --- */
 .linkTipBtn {
@@ -3489,6 +3758,85 @@ body {
 
 /* --- prompt editor (3 prompts) --- */
 .promptModal { width: min(560px, calc(100vw - 32px)); overflow-y: auto; }
+
+/* --- Settings page (account popover → Settings…) ---
+   Codex-style two-column modal: category rail on the left, pane on the right. */
+.settingsModal {
+  position: relative;
+  display: flex;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: min(760px, calc(100vw - 32px));
+  height: min(600px, calc(100vh - 48px));
+  overflow: hidden;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+.settingsSidebar {
+  flex: 0 0 176px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 14px 8px;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+}
+.settingsSideTitle {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  padding: 2px 10px 10px;
+}
+.settingsNavBtn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: none;
+  border: none;
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.settingsNavBtn svg { flex-shrink: 0; color: var(--text-muted); }
+.settingsNavBtn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.settingsNavBtn.active { background: var(--bg-active); color: var(--text-primary); font-weight: 600; }
+.settingsNavBtn.active svg { color: var(--text-primary); }
+.settingsPane {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 18px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settingsPaneTitle {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  padding-right: 28px; /* room for the close button */
+}
+.settingsPaneHint { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
+.settingsDivider { height: 1px; background: var(--border); margin: 6px 0; flex-shrink: 0; }
+.settingsClose { position: absolute; top: 12px; right: 12px; }
+.settingsPane .settingRow { flex-shrink: 0; }
+/* Provider rows double as the active-key picker in the AI pane. */
+.aiProvSelectable { cursor: pointer; }
+.aiProvSelectable .aiProvMeta { flex: 1; }
+.aiProvRadio { margin: 3px 8px 0 0; flex-shrink: 0; accent-color: var(--accent); }
+.aiProvActiveBadge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--accent-dark);
+  border-radius: 99px;
+  padding: 0 6px;
+  margin-left: 6px;
+  vertical-align: 1px;
+}
 .promptSectionHead {
   display: flex;
   align-items: center;
