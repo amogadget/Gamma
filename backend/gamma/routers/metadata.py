@@ -242,12 +242,18 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
             if better:
                 meta, bibtex = better, bib
     if not meta:
+        # Negative cache: remember the failed attempt on the page so clients
+        # stop auto-retrying on every open. Manual ↻ (force) still retries,
+        # and a success below clears the marker.
+        props["meta_error"] = {"at": page_now(), "detail": "no arXiv id, DOI, or AI match"}
+        _save_props(user, payload.block_id, props)
         raise HTTPException(status_code=404, detail="no metadata found (no arXiv id, DOI, or AI match)")
 
     if not bibtex:
         bibtex = _build_bibtex(meta)
     props["meta"] = meta
     props["bibtex"] = bibtex
+    props.pop("meta_error", None)
     props.pop("ppt_cite", None)  # metadata changed — cached citation is stale
     _save_props(user, payload.block_id, props)
     return {"meta": meta, "bibtex": bibtex, "source": meta.get("source", ""), "cached": False}
@@ -281,6 +287,7 @@ def metadata_update(payload: MetaUpdateRequest, request: Request):
         "source": "manual",
     }
     props.pop("ppt_cite", None)  # metadata changed — cached citation is stale
+    props.pop("meta_error", None)  # hand-edits settle (or reset) a failed lookup
     if not any(v for k, v in meta.items() if k != "source"):
         props.pop("meta", None)
         props.pop("bibtex", None)
