@@ -253,6 +253,46 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
     return {"meta": meta, "bibtex": bibtex, "source": meta.get("source", ""), "cached": False}
 
 
+class MetaUpdateRequest(BaseModel):
+    block_id: str
+    meta: dict = {}
+
+
+@router.post("/metadata/update")
+def metadata_update(payload: MetaUpdateRequest, request: Request):
+    """Save hand-edited metadata. BibTeX is rebuilt from the edited fields and
+    the cached slide citation is invalidated. All-blank fields clear the
+    cached metadata entirely."""
+    user = require_user(request)
+    _, props = _load_page(user, payload.block_id)
+    m = payload.meta or {}
+    authors = m.get("authors") or []
+    if isinstance(authors, str):
+        authors = [a.strip() for a in re.split(r",| and ", authors) if a.strip()]
+    meta = {
+        "title": str(m.get("title") or "").strip()[:500],
+        "authors": [str(a).strip()[:200] for a in authors if str(a).strip()],
+        "year": str(m.get("year") or "").strip()[:20],
+        "venue": str(m.get("venue") or "").strip()[:300],
+        "volume": str(m.get("volume") or "").strip()[:40],
+        "pages": str(m.get("pages") or "").strip()[:60],
+        "doi": str(m.get("doi") or "").strip()[:200],
+        "arxiv_id": str(m.get("arxiv_id") or "").strip()[:60],
+        "source": "manual",
+    }
+    props.pop("ppt_cite", None)  # metadata changed — cached citation is stale
+    if not any(v for k, v in meta.items() if k != "source"):
+        props.pop("meta", None)
+        props.pop("bibtex", None)
+        _save_props(user, payload.block_id, props)
+        return {"meta": None, "bibtex": "", "source": "", "cached": False}
+    bibtex = _build_bibtex(meta)
+    props["meta"] = meta
+    props["bibtex"] = bibtex
+    _save_props(user, payload.block_id, props)
+    return {"meta": meta, "bibtex": bibtex, "source": "manual", "cached": False}
+
+
 class CiteRequest(BaseModel):
     block_id: str
     prompt: str = ""   # custom PPT-citation prompt (empty = built-in)
