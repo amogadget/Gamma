@@ -1,6 +1,6 @@
 // Shared presentational widgets: dockable-window chrome, chat markdown,
 // and the auto-growing textarea.
-import React, { useEffect, useMemo, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -75,17 +75,18 @@ const AutoGrowTextarea = React.forwardRef(function AutoGrowTextarea(props, forwa
   );
 });
 
-// Pin glyph — outline when unpinned, filled when pinned. Shared by the list
-// rows, grid tiles, and the pinned strip so the affordance is identical.
-function PinIcon({ filled = false, size = 13 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24"
-      fill={filled ? "currentColor" : "none"} stroke="currentColor"
-      strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M12 17v5" />
-      <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
-    </svg>
-  );
+// Copy-confirmation flash: `copied` holds whatever key was passed to `flash`
+// (true, a message index, "bibtex", …) and reverts to null after `ms`.
+// One definition for chat messages, the citation buttons, and the share
+// dialog, so the confirm timing can't drift apart.
+function useCopied(ms = 1500) {
+  const [copied, setCopied] = useState(null);
+  const flash = useCallback((key = true) => {
+    setCopied(key);
+    setTimeout(() => setCopied((cur) => (cur === key ? null : cur)), ms);
+  }, [ms]);
+  const reset = useCallback(() => setCopied(null), []);
+  return [copied, flash, reset];
 }
 
-export { DockWindow, ChatMarkdown, AutoGrowTextarea, PinIcon };
+export { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied };

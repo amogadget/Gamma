@@ -17,7 +17,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson } from "./utils";
-import { ChevronDownIcon, FolderIcon, LabelIcon, SearchIcon } from "./icons";
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, LabelIcon, SearchIcon } from "./icons";
 
 const DASH_CLASS = "\\-\\u2010-\\u2015";
 const DIGIT_SEP_CLASS = ",\\u00A0\\u202F\\u2009";
@@ -328,7 +328,7 @@ export default function SearchPanel({
             >
               {showDetails
                 ? <ChevronDownIcon size={12} strokeWidth={2.4} />
-                : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="m9 6 6 6-6 6" /></svg>}
+                : <ChevronRightIcon size={12} strokeWidth={2.4} />}
             </button>
             <div className="searchInputWrap">
               {labels.map((l) => (
@@ -389,7 +389,7 @@ export default function SearchPanel({
               <span className="searchNavGroup">
                 <span className="searchFindCount" title="Matches in the open PDF">{findIndex + 1}/{pdfMatches.length}</span>
                 <button className="searchToggle searchNavBtn" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6" /></svg>
+                  <ChevronUpIcon size={14} />
                 </button>
                 <button className="searchToggle searchNavBtn" onClick={() => gotoFind(findIndex + 1)} title="Next match (Enter)">
                   <ChevronDownIcon size={14} />
