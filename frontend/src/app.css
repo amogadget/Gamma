@@ -209,6 +209,26 @@ body {
   min-height: 38px;
 }
 
+/* Settings → Diagnostics: session system log — scrolls in place, text is
+   selectable for copying into bug reports. */
+.sysLogBox {
+  margin-top: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+.sysLogRow { display: flex; gap: 10px; padding: 2px 0; }
+.sysLogTime { color: var(--text-tertiary); flex: none; font-variant-numeric: tabular-nums; }
+.sysLogMsg { color: var(--text-muted); word-break: break-word; }
+.sysLogEmpty { color: var(--text-tertiary); padding: 4px 0; }
+
 .pdfSaveToggle {
   display: flex;
   align-items: center;
@@ -320,6 +340,7 @@ body {
 }
 
 .main {
+  position: relative; /* anchors the floating status pill */
   flex: 1;
   min-height: 0;
   display: flex !important;
@@ -1025,79 +1046,46 @@ body {
 /* Look comes from .uiClose.uiCloseLg; this only positions it over the PDF. */
 .pdfCloseBtn {
   position: absolute;
-  top: 8px;
+  bottom: 14px;
   right: 14px;
   z-index: var(--z-dock);
 }
 
+/* Zoom column — mid-left, always visible, same look as the TOC and
+   fullscreen buttons (28px-wide elevated rounded box, tertiary icons). */
 .pdfZoomOverlay {
   position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
   z-index: 20;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
+  width: 28px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 4px 8px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  padding: 3px 0;
 }
 [data-theme="light"] .pdfZoomOverlay {
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
-.viewerWrap:hover .pdfZoomOverlay {
-  opacity: 1;
-  pointer-events: auto;
-}
-/* Touch devices have no hover to reveal it with — iPadOS only fakes :hover on
-   tap, and stickily, which left the bar half-shown or unreachable. Show it.
-   [data-touch] is not redundant with the media query: in iPadOS's default
-   "Request Desktop Website" mode Safari claims (hover: hover), so the query
-   alone misses every stock iPad. main.jsx sets the attribute off
-   maxTouchPoints, which stays honest there. */
-@media (hover: none) {
-  .pdfZoomOverlay {
-    opacity: 1;
-    pointer-events: auto;
-  }
-}
-:root[data-touch="1"] .pdfZoomOverlay {
-  opacity: 1;
-  pointer-events: auto;
-}
 .pdfZoomOverlay button {
   background: transparent;
   border: none;
-  color: var(--text-primary);
-  font-size: 16px;
-  width: 26px;
-  height: 26px;
-  border-radius: 4px;
+  color: var(--text-tertiary);
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 6px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.pdfZoomOverlay button:hover { background: var(--bg-active); }
-.pdfZoomLevel {
-  color: var(--text-tertiary);
-  font-size: 12px;
-  min-width: 36px;
-  text-align: center;
-}
-.pdfFitWidthBtn {
-  font-size: 12px !important;
-  color: var(--text-tertiary) !important;
-  width: auto !important;
-  min-width: 40px !important;
-  padding: 0 6px !important;
-}
+.pdfZoomOverlay button:hover { color: var(--text-primary); background: var(--bg-active); }
 
 /* --- PDF table of contents (document outline) --- */
 .pdfOutlineBtn {
@@ -1120,9 +1108,11 @@ body {
 .pdfOutlineBtn.open { color: var(--accent); }
 [data-theme="light"] .pdfOutlineBtn { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 
-/* Download/render status pill floating over the PDF pane while a document
-   loads (or fails) — so a slow remote server never looks like a hang. */
-.pdfLoadPill {
+/* The floating status pill — the app's single transient-message surface
+   (status messages, PDF load progress, load errors), anchored top-center of
+   the main pane. Fed through App's postPill() channels; only one message
+   renders at a time, so pills can never overlap. */
+.statusPill {
   position: absolute;
   top: 10px;
   left: 50%;
@@ -1139,20 +1129,25 @@ body {
   color: var(--text-muted);
   font-size: 12px;
   box-shadow: 0 3px 12px rgba(0,0,0,0.25);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 0.4s;
 }
-.pdfLoadPill.error { color: #e07a6a; border-color: rgba(224, 122, 106, 0.5); }
-.pdfLoadPill .pdfLoadText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pdfLoadSpin {
+.statusPill.fading { opacity: 0; }
+.statusPill.error { color: #e07a6a; border-color: rgba(224, 122, 106, 0.5); }
+.statusPill.interactive { pointer-events: auto; } /* has a Retry button */
+.statusPill .pillText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pillSpin {
   flex: none;
   width: 12px;
   height: 12px;
   border: 2px solid var(--border-light);
   border-top-color: var(--text-muted);
   border-radius: 50%;
-  animation: pdfLoadSpin 0.9s linear infinite;
+  animation: pillSpin 0.9s linear infinite;
 }
-@keyframes pdfLoadSpin { to { transform: rotate(360deg); } }
-.pdfLoadRetryBtn {
+@keyframes pillSpin { to { transform: rotate(360deg); } }
+.pillRetryBtn {
   flex: none;
   padding: 2px 10px;
   background: var(--bg-raised);
@@ -1162,7 +1157,7 @@ body {
   font-size: 12px;
   cursor: pointer;
 }
-.pdfLoadRetryBtn:hover { background: var(--bg-hover); }
+.pillRetryBtn:hover { background: var(--bg-hover); }
 
 /* Fullscreen toggle — bottom-left, same look as the TOC button. */
 .pdfFullscreenBtn {
@@ -1189,7 +1184,7 @@ body {
   top: 42px;
   left: 14px;
   bottom: 52px; /* stops above the bottom-left fullscreen button */
-  z-index: 20;
+  z-index: 25; /* above the zoom column, which sits mid-left under it */
   width: 280px;
   max-width: 70%;
   overflow-y: auto;
@@ -2763,19 +2758,6 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-color: #8ab4f8;
   background: color-mix(in srgb, #8ab4f8 12%, transparent);
 }
-.pdfZoomInput {
-  width: 34px;
-  background: none;
-  border: none;
-  border-bottom: 1px solid transparent;
-  color: inherit;
-  font: inherit;
-  text-align: right;
-  outline: none;
-  padding: 0;
-}
-.pdfZoomInput:hover, .pdfZoomInput:focus { border-bottom-color: var(--accent-dark); }
-
 /* --- sidebar docking --- */
 /* page action buttons on the title line: AI title, metadata, delete */
 .pageActionCol {

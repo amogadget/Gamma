@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS } from "./pdfViewer";
 import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl } from "./utils";
@@ -522,7 +522,6 @@ export default function App() {
   }
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
   const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
-  const [zoomDraft, setZoomDraft] = useState(null);  // while typing a custom zoom %
   // Browser fullscreen (whole app, like F11). webkit-prefixed fallbacks are
   // for iPadOS Safari, which never shipped the unprefixed API.
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -551,7 +550,74 @@ export default function App() {
   const [backlinks, setBacklinks] = useState([]);
   const [chatHidden, setChatHidden] = useState(false);
   const [homeEditingId, setHomeEditingId] = useState(null);
-  const [status, setStatus] = useState("Ready.");
+  // ---- Unified floating message pill ---------------------------------------
+  // ONE pill, many sources. Each source posts into its own named channel
+  // (status messages, the PDF load lifecycle, …) via postPill(channel, entry);
+  // the pill renders a single winner, so messages can never overlap.
+  //   entry: { msg, spinner?, error?, retry?, final? }
+  // Ongoing entries (spinner) hold their channel until the source posts again
+  // or clears it (entry = null). Final entries linger ~0.6s, then fade out.
+  // When several channels are active: error > lingering final > ongoing,
+  // ties broken by recency.
+  const [status, setStatusRaw] = useState("Ready.");
+  // System log (Settings → Diagnostics): status messages, PDF load activity,
+  // and uncaught errors from this session. In-memory only.
+  const [sysLog, setSysLog] = useState([]); // [{t, msg}], capped
+  const logSys = useCallback((msg) => {
+    setSysLog((prev) => [...prev.slice(-499), { t: Date.now(), msg: String(msg) }]);
+  }, []);
+  useEffect(() => {
+    const onErr = (e) => logSys(`error: ${e.message || "unknown"}${e.filename ? ` (${e.filename.split("/").pop()}:${e.lineno})` : ""}`);
+    const onRej = (e) => logSys(`unhandled rejection: ${e.reason?.message || e.reason || "unknown"}`);
+    window.addEventListener("error", onErr);
+    window.addEventListener("unhandledrejection", onRej);
+    return () => {
+      window.removeEventListener("error", onErr);
+      window.removeEventListener("unhandledrejection", onRej);
+    };
+  }, [logSys]);
+  const [pillChannels, setPillChannels] = useState({}); // channel -> entry (+ seq, fading)
+  const pillSeqRef = useRef(0);
+  const pillTimersRef = useRef({}); // channel -> pending linger/fade timers
+  const postPill = useCallback((channel, entry) => {
+    const timers = pillTimersRef.current;
+    (timers[channel] || []).forEach(clearTimeout);
+    delete timers[channel];
+    if (!entry) {
+      setPillChannels((prev) => {
+        if (!(channel in prev)) return prev;
+        const next = { ...prev };
+        delete next[channel];
+        return next;
+      });
+      return;
+    }
+    const seq = ++pillSeqRef.current;
+    setPillChannels((prev) => ({ ...prev, [channel]: { ...entry, seq, fading: false } }));
+    if (entry.final) {
+      // Only touch the entry we posted — a newer post owns the channel.
+      const ifMine = (fn) => setPillChannels((prev) => (prev[channel]?.seq === seq ? fn(prev) : prev));
+      timers[channel] = [
+        setTimeout(() => ifMine((prev) => ({ ...prev, [channel]: { ...prev[channel], fading: true } })), 600),
+        setTimeout(() => ifMine((prev) => { const next = { ...prev }; delete next[channel]; return next; }), 1000),
+      ];
+    }
+  }, []);
+  useEffect(() => () => Object.values(pillTimersRef.current).forEach((ts) => ts.forEach(clearTimeout)), []);
+  const pillShown = useMemo(() => {
+    const rank = (e) => (e.error ? 3 : e.final ? 2 : 1);
+    return Object.values(pillChannels).sort((a, b) => rank(b) - rank(a) || b.seq - a.seq)[0] || null;
+  }, [pillChannels]);
+  // Status messages: logged (Settings → Diagnostics), mirrored into the
+  // optional debug status bar, and posted to the pill. Messages ending in
+  // "…"/"..." are in-progress; anything else is final.
+  const setStatus = useCallback((msg) => {
+    const text = String(msg);
+    setStatusRaw(text);
+    logSys(text);
+    const ongoing = /(\.\.\.|…)\s*$/.test(text);
+    postPill("status", { msg: text, spinner: ongoing, final: !ongoing });
+  }, [postPill, logSys]);
   const [loading, setLoading] = useState(false);
   // Window layout: ordered window ids per dock slot. Sizes are handled by
   // react-resizable-panels (persisted via autoSaveId), so this only stores
@@ -795,6 +861,36 @@ export default function App() {
   // One row per URL: a re-download (LRU eviction, retry) reactivates the
   // existing entry instead of stacking duplicates.
   function handlePdfLoadState(url, st) {
+    // System log: lifecycle transitions only — byte progress would spam it.
+    if (st.phase !== "progress") {
+      const shortUrl = url.length > 100 ? url.slice(0, 100) + "…" : url;
+      logSys(`pdf ${st.phase}${st.bytes ? ` (${fmtBytes(st.bytes)})` : ""}${st.detail ? ` — ${st.detail}` : ""}: ${shortUrl}`);
+    }
+    // Feed the shared status pill — one channel for the whole load lifecycle,
+    // so load progress and status messages can never stack.
+    if (st.phase === "start") {
+      postPill("pdf-load", { msg: "Requesting PDF…", spinner: true });
+      // Escalate the wording if the server keeps us waiting with no bytes.
+      // postPill clears this timer whenever the channel posts again.
+      pillTimersRef.current["pdf-load"] = [setTimeout(() => {
+        setPillChannels((prev) => prev["pdf-load"]?.msg === "Requesting PDF…"
+          ? { ...prev, "pdf-load": { ...prev["pdf-load"], msg: "Still waiting — the server may be fetching the PDF from its source…" } }
+          : prev);
+      }, 6000)];
+    } else if (st.phase === "progress") {
+      postPill("pdf-load", {
+        msg: st.total
+          ? `Downloading… ${fmtBytes(st.loaded)} of ${fmtBytes(st.total)} (${Math.min(99, Math.floor((st.loaded / st.total) * 100))}%)`
+          : `Downloading… ${fmtBytes(st.loaded)}`,
+        spinner: true,
+      });
+    } else if (st.phase === "done" || st.phase === "cached") {
+      postPill("pdf-load", { msg: "Preparing document…", spinner: true });
+    } else if (st.phase === "error") {
+      postPill("pdf-load", { msg: `PDF load failed — ${st.detail || "unknown error"}`, error: true, retry: true });
+    } else if (st.phase === "cancelled" || st.phase === "rendered") {
+      postPill("pdf-load", null);
+    }
     if (st.phase === "rendered") {
       pdfRenderedUrlRef.current = url; // this document's pages are now in the DOM
       setPdfDocNonce((n) => n + 1);    // lets a pinned search re-find its matches here
@@ -935,6 +1031,14 @@ export default function App() {
   const [searchDetailsDefault, setSearchDetailsDefault] = useState(() => {
     try { return localStorage.getItem("gamma-search-details") === "1"; } catch { return false; }
   });
+  // The always-on status bar under the tabs — off by default, the floating
+  // pill carries user-facing messages; the bar is a debugging aid.
+  const [statusBarVisible, setStatusBarVisible] = useState(() => {
+    try { return localStorage.getItem("gamma-status-bar") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-status-bar", statusBarVisible ? "1" : "0"); } catch {}
+  }, [statusBarVisible]);
   useEffect(() => {
     try { localStorage.setItem("gamma-pdf-save", pdfSaveLocal ? "1" : "0"); } catch {}
   }, [pdfSaveLocal]);
@@ -949,6 +1053,7 @@ export default function App() {
   }, [searchDetailsDefault]);
   const pageTitleSaveTimerRef = useRef(null);
   const viewerWrapRef = useRef(null);
+  const pdfRetryRef = useRef(null); // set by PdfViewer: re-runs a failed load (pill's Retry button)
   const appRef = useRef(null);
 
   // --- AI chat: model switcher, PDF attachment, selection focus, report ---
@@ -4812,7 +4917,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             )}
             {renderOverflowMenu(false)}
           </div>
-          <div className="status">{status}</div>
+          {statusBarVisible ? <div className="status">{status}</div> : null}
         </>
       ) : (
         <div className="topbar">
@@ -4852,6 +4957,18 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       <PanelGroup direction="vertical" autoSaveId="gamma-work-v" ref={(h) => { panelGroupRefs.current["work-v"] = h; }}>
       <Panel id="slot-main" order={1} minSize={20} className="dockSlot">
       <div className={`main ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`}>
+        {pillShown ? (
+          <div
+            className={"statusPill" + (pillShown.fading ? " fading" : "") + (pillShown.error ? " error" : "") + (pillShown.retry ? " interactive" : "")}
+            role="status"
+          >
+            {pillShown.spinner ? <span className="pillSpin" aria-hidden="true" /> : null}
+            <span className="pillText">{pillShown.msg}</span>
+            {pillShown.retry ? (
+              <button type="button" className="pillRetryBtn" onClick={() => pdfRetryRef.current?.()}>Retry</button>
+            ) : null}
+          </div>
+        ) : null}
         <div className={`viewerWrap ${(pdfHidden || homeMode || pageOnly) ? "pdfHidden" : ""}`} ref={viewerWrapRef}>
           {pdfUrl && !pdfHidden ? (
             <button
@@ -4866,21 +4983,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               <button onClick={() => zoomStep(-1)} title="Zoom out" aria-label="Zoom out">
                 <ZoomOutIcon size={15} />
               </button>
-              <span className="pdfZoomLevel">
-                <input
-                  className="pdfZoomInput"
-                  value={zoomDraft !== null ? zoomDraft : String(Math.round(pdfEffScale * 100))}
-                  onFocus={(e) => { setZoomDraft(String(Math.round(pdfEffScale * 100))); e.target.select(); }}
-                  onChange={(e) => setZoomDraft(e.target.value.replace(/[^0-9]/g, "").slice(0, 3))}
-                  onBlur={() => {
-                    const n = parseInt(zoomDraft, 10);
-                    if (!isNaN(n) && n > 0) setPdfScale(String(Math.max(0.4, Math.min(4, n / 100))));
-                    setZoomDraft(null);
-                  }}
-                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                  title="Type a zoom percentage"
-                />%
-              </span>
               <button onClick={() => zoomStep(1)} title="Zoom in" aria-label="Zoom in">
                 <ZoomInIcon size={15} />
               </button>
@@ -4911,6 +5013,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               onEffectiveScale={setPdfEffScale}
               onBeforeLinkJump={pushNav}
               onLoadState={handlePdfLoadState}
+              retryRef={pdfRetryRef}
               onExternalLink={handleDocLink}
               onLinkHighlight={(h) => {
                 if (h.linkTarget?.pageId) {
@@ -5087,6 +5190,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 ["ai", "AI & API keys", <KeyIcon key="i" size={15} />],
                 ["prompts", "Prompts", <SlidersIcon key="i" size={15} />],
                 ["search", "Search", <SearchIcon size={15} key="i" />],
+                ["diagnostics", "Diagnostics", <ActivityIcon size={15} key="i" />],
               ].map(([id, label, icon]) => (
                 <button
                   key={id}
@@ -5447,6 +5551,53 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         }
                       }}
                     >{indexTask?.active ? "Indexing…" : "Rebuild"}</button>
+                  </div>
+                </>
+              ) : null}
+
+              {settingsOpen === "diagnostics" ? (
+                <>
+                  <div className="settingsPaneTitle">Diagnostics</div>
+                  <div className="settingsPaneHint">
+                    Status messages show briefly as a floating pill. For debugging you can pin them
+                    to a permanent bar under the tabs, and review everything from this session below.
+                  </div>
+                  <label className="settingRow">
+                    <span className="settingText">
+                      <span className="settingLabel">Show status bar</span>
+                      <span className="settingDesc">Keep the latest status message always visible in a bar below the tabs.</span>
+                    </span>
+                    <span className="switch">
+                      <input type="checkbox" checked={statusBarVisible} onChange={(e) => setStatusBarVisible(e.target.checked)} />
+                      <span className="switchTrack" />
+                    </span>
+                  </label>
+                  <div className="settingRow">
+                    <span className="settingText">
+                      <span className="settingLabel">System log</span>
+                      <span className="settingDesc">Application events from this session — status messages, PDF load activity, and errors. Newest first; not saved across reloads.</span>
+                    </span>
+                    <button
+                      className="uiBtn sm"
+                      disabled={!sysLog.length}
+                      onClick={() => {
+                        const text = sysLog
+                          .map((e) => `${new Date(e.t).toLocaleTimeString([], { hour12: false })} ${e.msg}`)
+                          .join("\n");
+                        navigator.clipboard?.writeText(text).then(
+                          () => setStatus("Log copied."),
+                          () => setStatus("Copy failed — copy manually."),
+                        );
+                      }}
+                    >Copy</button>
+                  </div>
+                  <div className="sysLogBox">
+                    {sysLog.length ? [...sysLog].reverse().map((e, i) => (
+                      <div key={sysLog.length - i} className="sysLogRow">
+                        <span className="sysLogTime">{new Date(e.t).toLocaleTimeString([], { hour12: false })}</span>
+                        <span className="sysLogMsg">{e.msg}</span>
+                      </div>
+                    )) : <div className="sysLogEmpty">Nothing logged yet this session.</div>}
                   </div>
                 </>
               ) : null}
