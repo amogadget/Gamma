@@ -68,6 +68,10 @@ def test_proxy_save_writes_complete_file_then_redirects(guest, monkeypatch):
     r2 = guest.get("/api/pdf", params={"source_url": url}, follow_redirects=False)
     assert r2.status_code == 302
     assert r2.headers["location"] == f"/api/uploads/{doc_id}.pdf"
+    # Saved copies are immutable (hash-named) — served with a month-long cache.
+    r3 = guest.get(f"/api/uploads/{doc_id}.pdf")
+    assert r3.status_code == 200
+    assert r3.headers["cache-control"] == "public, max-age=2592000, immutable"
 
 
 def test_proxy_rejects_non_pdf(guest, monkeypatch):

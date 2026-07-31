@@ -81,7 +81,10 @@ async def serve_upload(filename: str, request: Request):
     path = find_upload_file(filename, request)
     if not path:
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=3600"})
+    # Filenames are content hashes (or URL hashes the server only writes once),
+    # so a given name can never serve different bytes — cache hard for a month.
+    return FileResponse(path, media_type=media_type,
+                        headers={"Cache-Control": "public, max-age=2592000, immutable"})
 
 
 @router.post("/cleanup-uploads")
