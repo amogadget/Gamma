@@ -8,6 +8,7 @@ import { ViewToggle, FolderGlyph, FileGlyph } from "./fileBrowser";
 import ChatDock from "./chatDock";
 import SearchPanel from "./search";
 import { ContextMenu } from "./menus";
+import { CheckIcon, CopyIcon, FileIcon, FolderIcon, FolderPlusIcon, LabelIcon, LinkIcon, SearchIcon } from "./icons";
 
 
 import {
@@ -1008,6 +1009,11 @@ export default function App() {
   }
 
   const aiProtocolOf = (id) => aiKeysInfo?.protocols?.find((p) => p.id === id);
+  // Sign-in protocols (ChatGPT OAuth) have no key/base-URL fields — the
+  // backend marks them with auth: "oauth" in the protocols payload.
+  const isOauthProto = (id) => aiProtocolOf(id)?.auth === "oauth";
+  // The model switchers everywhere feed off /ai/models — refresh after edits.
+  const refreshAiModels = () => apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
 
   function startAddAiProvider() {
     setAiKeysError("");
@@ -1019,38 +1025,106 @@ export default function App() {
     setAiKeysForm({ id: p.id, protocol: p.protocol, name: p.name || "", api_key: "", base_url: p.base_url || "", models: p.models || "" });
   }
 
-  async function submitAiProvider() {
+  // Model picker for the form: API protocols are listed live from the
+  // provider's /v1/models (typed key, or the stored one when editing);
+  // ChatGPT (OAuth) gets the backend's known-good list.
+  const [aiModelCatalog, setAiModelCatalog] = useState(null); // null | {loading} | {models} | {error}
+  async function loadModelCatalog() {
     const f = aiKeysForm;
     if (!f) return;
-    if (!f.id && !f.api_key.trim()) { setAiKeysError("An API key is required."); return; }
-    setAiKeysBusy(true);
+    setAiModelCatalog({ loading: true });
+    try {
+      const d = await apiJson(`${API}/ai/model-catalog`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider_id: f.id || "", protocol: f.protocol,
+          api_key: f.api_key.trim(), base_url: f.base_url.trim(),
+        }),
+      });
+      setAiModelCatalog({ models: d.models || [] });
+    } catch (err) {
+      setAiModelCatalog({ error: friendlyApiError(err) });
+    }
+  }
+  function addCatalogModel(m) {
+    if (!m) return;
+    setAiKeysForm((f) => {
+      if (!f) return f;
+      const cur = parseFolderTags(f.models);
+      return cur.includes(m) ? f : { ...f, models: [...cur, m].join(", ") };
+    });
+  }
+  function removeModel(m) {
+    setAiKeysForm((f) => f ? { ...f, models: parseFolderTags(f.models).filter((x) => x !== m).join(", ") } : f);
+  }
+  const [customModel, setCustomModel] = useState(""); // free-form entry next to the picker
+  const formModels = parseFolderTags(aiKeysForm?.models);
+  const availModels = (aiModelCatalog?.models || []).filter((m) => !formModels.includes(m));
+
+  // Reset the picker whenever the form target changes, then load the catalog
+  // as soon as it's possible without extra typing: OAuth entries always
+  // (static list); API entries when editing one with a stored key. A freshly
+  // typed key triggers the load on blur instead.
+  useEffect(() => {
+    setAiModelCatalog(null);
+    setCustomModel("");
+    const f = aiKeysForm;
+    if (!f) return;
+    const stored = f.id ? aiKeysInfo?.providers?.find((p) => p.id === f.id) : null;
+    if (isOauthProto(f.protocol) || stored?.key_hint) loadModelCatalog();
+  }, [aiKeysForm?.id, aiKeysForm?.protocol]);
+
+  // "Sign in with ChatGPT": opens the OAuth page in a new tab. Its redirect
+  // (localhost:1455) fails to load — the user pastes that URL back into the
+  // form and submit completes the exchange server-side.
+  async function startChatGPTAuth() {
     setAiKeysError("");
     try {
-      const body = { protocol: f.protocol, name: f.name.trim(), base_url: f.base_url.trim(), models: f.models.trim() };
-      if (f.api_key.trim()) body.api_key = f.api_key.trim();
-      const d = await apiJson(`${API}/ai/providers${f.id ? `/${f.id}` : ""}`, {
-        method: f.id ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      setAiKeysInfo(d);
-      setAiKeysForm(null);
-      // The model switchers everywhere feed off /ai/models — refresh them.
-      apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
+      const d = await apiJson(`${API}/ai/oauth/chatgpt/start`, { method: "POST" });
+      setAiKeysForm((f) => (f ? { ...f, oauthState: d.state } : f));
+      window.open(d.auth_url, "_blank", "noopener");
     } catch (err) {
       setAiKeysError(err.message);
-    } finally {
-      setAiKeysBusy(false);
     }
   }
 
+  async function submitAiProvider() {
+    const f = aiKeysForm;
+    if (!f) return;
+    const oauth = isOauthProto(f.protocol);
+    const oauthCb = oauth ? (f.oauthCallback || "").trim() : "";
+    if (oauth && !oauthCb && !f.id) { setAiKeysError("Sign in with ChatGPT and paste the callback URL to connect."); return; }
+    if (oauthCb && !f.oauthState) { setAiKeysError('Hit "Open ChatGPT sign-in" first, then paste the URL it ends on.'); return; }
+    if (!oauth && !f.id && !f.api_key.trim()) { setAiKeysError("An API key is required."); return; }
+    // Complete the OAuth exchange when a callback was pasted; otherwise a
+    // plain field edit (name/models — plus key/base URL for key entries).
+    const req = oauthCb
+      ? { url: `${API}/ai/oauth/chatgpt/complete`, method: "POST",
+          body: { state: f.oauthState, callback: oauthCb, provider_id: f.id || "",
+                  name: f.name.trim(), models: f.models.trim() } }
+      : { url: `${API}/ai/providers${f.id ? `/${f.id}` : ""}`, method: f.id ? "PUT" : "POST",
+          body: { protocol: f.protocol, name: f.name.trim(), base_url: f.base_url.trim(), models: f.models.trim(),
+                  ...(f.api_key.trim() ? { api_key: f.api_key.trim() } : {}) } };
+    await runAiKeysRequest(() => apiJson(req.url, {
+      method: req.method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req.body),
+    }), true);
+  }
+
   async function deleteAiProvider(id) {
+    await runAiKeysRequest(() => apiJson(`${API}/ai/providers/${id}`, { method: "DELETE" }));
+  }
+
+  // Shared busy/error/refresh protocol for provider-list mutations.
+  async function runAiKeysRequest(call, closeForm = false) {
     setAiKeysBusy(true);
     setAiKeysError("");
     try {
-      const d = await apiJson(`${API}/ai/providers/${id}`, { method: "DELETE" });
-      setAiKeysInfo(d);
-      apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
+      setAiKeysInfo(await call());
+      if (closeForm) setAiKeysForm(null);
+      refreshAiModels();
     } catch (err) {
       setAiKeysError(err.message);
     } finally {
@@ -1199,6 +1273,49 @@ export default function App() {
     if (openPopover === "meta") setMetaDraft(metaToDraft(pageMeta));
   }, [openPopover, pageMeta]);
 
+  // A missing endpoint means the running server predates this build: the SPA
+  // catch-all answers instead (HTML → JSON parse error, or 405 on POST).
+  function friendlyApiError(err) {
+    const m = err?.message || "failed";
+    return /Unexpected token|Method Not Allowed|not valid JSON/i.test(m)
+      ? "endpoint missing — restart/update the server" : m.slice(0, 120);
+  }
+
+  // PDF-text health shown in the metadata popover: a scanned/image-only PDF is
+  // why metadata lookups fail and AI chat answers blind — surface it. One
+  // fetch serves both the popover-open effect and the ↻ recheck button.
+  const [pdfTextInfo, setPdfTextInfo] = useState(null); // null | {checking} | {error} | {found, ok, chars}
+  async function checkPdfText(retryMeta = false) {
+    setPdfTextInfo({ checking: true });
+    try {
+      const d = await apiJson(`${API}/pdf-text-status?doc_id=${encodeURIComponent(docId)}`);
+      setPdfTextInfo(d);
+      // Text became available (e.g. the source file was replaced) and there's
+      // still no metadata — retry the lookup right away.
+      if (retryMeta && d.ok && !pageMeta && focusedBlock) fetchMetadata(focusedBlock, true);
+    } catch (err) {
+      setPdfTextInfo({ error: friendlyApiError(err) });
+      if (retryMeta) setStatus(`Text check failed: ${err.message}`);
+    }
+  }
+  useEffect(() => {
+    if (openPopover !== "meta" || !docId || readOnly) { setPdfTextInfo(null); return; }
+    checkPdfText();
+  }, [openPopover, docId]);
+
+  // Modal preview of what the AI actually gets to read.
+  const [pdfTextPreview, setPdfTextPreview] = useState(null); // null | {loading} | {text}
+  async function openPdfTextPreview() {
+    if (!docId) return;
+    setPdfTextPreview({ loading: true });
+    try {
+      const d = await apiJson(`${API}/pdf-text-status?doc_id=${encodeURIComponent(docId)}&preview=12000`);
+      setPdfTextPreview({ text: d.text || "(no text)" });
+    } catch (err) {
+      setPdfTextPreview({ text: `Preview failed: ${friendlyApiError(err)}` });
+    }
+  }
+
   async function saveMetaEdits() {
     const blockId = focusedBlockIdRef.current;
     if (!blockId || !metaDraft) return;
@@ -1279,6 +1396,12 @@ export default function App() {
     } catch (err) {
       updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
       if (focusedBlockIdRef.current === block.id) setStatus(`Metadata: ${err.message}`);
+      // Mirror the server's negative-cache marker into the client copy —
+      // otherwise the next autosave PUTs the stale properties and resurrects
+      // the auto-retry on every open.
+      setFocusedBlock((prev) => prev && prev.id === block.id
+        ? { ...prev, properties: { ...prev.properties, meta_error: { at: new Date().toISOString(), detail: (err.message || "failed").slice(0, 200) } } }
+        : prev);
     } finally {
       setMetaBusy(false);
     }
@@ -1394,7 +1517,7 @@ export default function App() {
 
   useEffect(() => {
     if (!authUser?.user || readOnly) return;
-    apiJson(`${API}/ai/models`).then(setAiInfo).catch(() => {});
+    refreshAiModels();
   }, [authUser]);
 
   useEffect(() => {
@@ -3086,7 +3209,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             {focusedBlockId && !readOnly ? (
               <div className="categoryFrontmatter">
                 <span className="categoryIcon" title="Labels">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>
+                  <LabelIcon size={13} />
                 </span>
                 {categoryEditing ? (() => {
                     const currentTags = category.split(",").map(t => t.trim()).filter(Boolean);
@@ -3276,6 +3399,41 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                           {pageMeta?.source ? (
                             <div className="metaRow"><span className="metaKey">Source</span><span className="metaVal">{pageMeta.source === "ai" ? "AI-extracted" : pageMeta.source === "manual" ? "edited by hand" : pageMeta.source}</span></div>
                           ) : null}
+                          <div className="metaRow">
+                            <span className="metaKey">PDF text</span>
+                            <span className="metaVal" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                              {!pdfTextInfo || pdfTextInfo.checking ? "checking…"
+                                : pdfTextInfo.error ? `check failed — ${pdfTextInfo.error}`
+                                : !pdfTextInfo.found ? "file not on server"
+                                : pdfTextInfo.ok ? "✓ extracted"
+                                : "✗ none — scanned or image-only? AI can't read it"}
+                              {pdfTextInfo?.ok ? (
+                                <button className="searchToggle" title="Preview the extracted text (what the AI reads)"
+                                  onClick={openPdfTextPreview}>view</button>
+                              ) : null}
+                              {pdfTextInfo && !pdfTextInfo.checking && !pdfTextInfo.ok ? (
+                                <button
+                                  className="searchToggle"
+                                  title="Re-check text extraction (e.g. after replacing the source file) — retries the metadata lookup if text appears"
+                                  onClick={() => checkPdfText(true)}
+                                >↻</button>
+                              ) : null}
+                            </span>
+                          </div>
+                          {pdfTextPreview ? (
+                            <div className="reportOverlay" onClick={() => setPdfTextPreview(null)}>
+                              <div className="reportModal" style={{ width: "min(640px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()}>
+                                <div className="reportModalTitle">Extracted PDF text</div>
+                                <div className="reportPageList" style={{ maxHeight: "60vh", whiteSpace: "pre-wrap", fontSize: 12, color: "var(--text-secondary)", padding: 10 }}>
+                                  {pdfTextPreview.loading ? "Extracting…" : pdfTextPreview.text}
+                                </div>
+                                {!pdfTextPreview.loading ? <div className="reportModalHint">First 12,000 characters — the AI context is drawn from this.</div> : null}
+                                <div className="reportModalBtns">
+                                  <button className="uiBtn" onClick={() => setPdfTextPreview(null)}>Close</button>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
                         </div>
                         {!pageMeta ? (
                           <div className="popoverHint">{metaBusy
@@ -3311,8 +3469,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                                   aria-label="Copy slide citation"
                                 >
                                   {citeCopied === "ppt"
-                                    ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                                    : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+                                    ? <CheckIcon size={13} />
+                                    : <CopyIcon size={13} />}
                                 </button>
                               </div>
                             ) : (
@@ -3323,7 +3481,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         {pageBibtex ? (
                           <div className="reportModalBtns">
                             <button className="chatClearBtn" onClick={() => copyCitation("bibtex", pageBibtex)} title="Copy the BibTeX entry">
-                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 4, verticalAlign: "-1px" }}><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+                              <CopyIcon size={11} style={{ marginRight: 4, verticalAlign: "-1px" }} />
                               {citeCopied === "bibtex" ? "Copied ✓" : "BibTeX"}
                             </button>
                           </div>
@@ -3619,7 +3777,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     }}
                     title="Click to select · double-click to open · right-click to rename or delete · drop a paper to add it"
                   >
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                    <FolderIcon size={15} />
                     {folderRenaming?.name === f ? (
                       <input
                         autoFocus
@@ -3641,7 +3799,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 ))}
                 {newFolderOpen ? (
                   <div className="folderRow folderNewRow">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                    <FolderPlusIcon size={15} />
                     <input
                       autoFocus
                       className="folderNewInput"
@@ -3657,7 +3815,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   </div>
                 ) : (
                   <button className="folderRow folderNewBtn" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }}>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                    <FolderPlusIcon size={15} />
                     <span className="folderName">New folder</span>
                   </button>
                 )}
@@ -3842,13 +4000,13 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             <span className="fileRowLabels">
                               {b._folders?.map((f) => (
                                 <span key={`f:${f}`} className="folderTagBadge" title={`In folder ${f}`}>
-                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                                  <FolderIcon size={10} />
                                   {f}
                                 </span>
                               ))}
                               {b._labels?.map((l) => (
                                 <span key={`l:${l}`} className="labelTagBadge" title={`Label: ${l}`}>
-                                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></svg>
+                                  <LabelIcon size={10} />
                                   {l}
                                 </span>
                               ))}
@@ -4480,10 +4638,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <span className={`transferStatus ${indexTask.active ? "active" : "done"}`}>
                           {indexTask.active
                             ? <span className="transferSpin inline" />
-                            : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>}
+                            : <CheckIcon size={12} strokeWidth={2.6} />}
                         </span>
                         <span className="transferKind">
-                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
+                          <SearchIcon size={12} />
                         </span>
                         <span className="transferName">Indexing PDF library for search</span>
                         <span className="transferInfo">{indexTask.done}/{indexTask.total}</span>
@@ -4494,7 +4652,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         <span className={`transferStatus ${t.status}`}>
                           {t.status === "active" ? <span className="transferSpin inline" />
                             : t.status === "done"
-                              ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                              ? <CheckIcon size={12} strokeWidth={2.6} />
                               : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 8v5" /><path d="M12 16.5h.01" /><circle cx="12" cy="12" r="9" /></svg>}
                         </span>
                         <span className="transferKind">
@@ -4503,7 +4661,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             : t.kind === "ai"
                               ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
                               : t.kind === "import"
-                                ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                                ? <FileIcon size={12} />
                                 : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>}
                         </span>
                         <span className="transferName" title={t.name}>{t.name}</span>
@@ -4540,7 +4698,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   title="Share"
                   aria-label="Share"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+                  <LinkIcon size={16} />
                 </button>
                 {openPopover === "share" ? (
                   <div className="popover sharePopover">
@@ -4568,8 +4726,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                               aria-label="Copy slide citation"
                             >
                               {citeCopied === "ppt"
-                                ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                                : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+                                ? <CheckIcon size={13} />
+                                : <CopyIcon size={13} />}
                             </button>
                           </div>
                         ) : (
@@ -4921,7 +5079,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 ["papers", "Papers & PDFs", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /><path d="M15 2v5h5" /></svg>],
                 ["ai", "AI & API keys", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></svg>],
                 ["prompts", "Prompts", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>],
-                ["search", "Search", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>],
+                ["search", "Search", <SearchIcon size={15} key="i" />],
               ].map(([id, label, icon]) => (
                 <button
                   key={id}
@@ -5011,7 +5169,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                                 {activeKeyId === p.id ? <span className="aiProvActiveBadge">in use</span> : null}
                               </span>
                               <span className="aiProvDesc">
-                                {`key ${p.key_hint || "set"} · ${proto?.label || p.protocol}`}
+                                {isOauthProto(p.protocol)
+                                  ? `${p.oauth_connected ? `signed in${p.account ? ` as ${p.account}` : ""}` : "not connected"} · ChatGPT subscription`
+                                  : `key ${p.key_hint || "set"} · ${proto?.label || p.protocol}`}
                                 {p.base_url ? ` · ${p.base_url}` : ""}
                                 {p.created_at ? ` · added ${new Date(p.created_at).toLocaleDateString()}` : ""}
                               </span>
@@ -5050,38 +5210,117 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                               <option key={x.id} value={x.id}>{x.label}</option>
                             ))}
                           </select>
-                          <div className="reportModalHint">
-                            The API format, not the vendor — many services speak one of these (DeepSeek,
-                            Kimi, GLM via Anthropic format; most others via OpenAI format).
-                          </div>
+                          {isOauthProto(aiKeysForm.protocol) ? (
+                            <div className="reportModalHint">
+                              No API key — usage is billed to your ChatGPT Plus/Pro subscription.
+                              <ol style={{ margin: "6px 0 0", paddingLeft: 18, display: "grid", gap: 3 }}>
+                                <li><b>Open ChatGPT sign-in</b> below and log in to your ChatGPT account.</li>
+                                <li>The login ends on a <b>"can't be reached"</b> error page — that's normal
+                                  (it redirects to localhost:1455, where nothing is listening).</li>
+                                <li>Copy the <b>full address</b> of that error page from the browser's
+                                  address bar (<code>http://localhost:1455/auth/callback?code=…</code>).</li>
+                                <li>Paste it below and hit <b>Connect</b>.</li>
+                              </ol>
+                            </div>
+                          ) : (
+                            <div className="reportModalHint">
+                              The API format, not the vendor — many services speak one of these (DeepSeek,
+                              Kimi, GLM via Anthropic format; most others via OpenAI format).
+                            </div>
+                          )}
+                          {isOauthProto(aiKeysForm.protocol) ? (
+                            // Sign-in button + paste box sit directly under the
+                            // numbered guide that references them.
+                            <>
+                              <div className="reportModalBtns" style={{ justifyContent: "flex-start" }}>
+                                <button className="uiBtn" disabled={aiKeysBusy} onClick={startChatGPTAuth}>
+                                  {aiKeysForm.oauthState ? "Re-open ChatGPT sign-in" : "Open ChatGPT sign-in"}
+                                </button>
+                              </div>
+                              <input
+                                className="aiKeyInput" type="text" spellCheck={false}
+                                placeholder="Paste the callback URL (http://localhost:1455/auth/callback?code=…)"
+                                value={aiKeysForm.oauthCallback || ""}
+                                onChange={(e) => setAiKeysForm((f) => ({ ...f, oauthCallback: e.target.value }))}
+                              />
+                            </>
+                          ) : null}
                           <input
                             className="aiKeyInput" type="text" spellCheck={false}
                             placeholder='Name (optional — e.g. "DeepSeek", "work key")'
                             value={aiKeysForm.name}
                             onChange={(e) => setAiKeysForm((f) => ({ ...f, name: e.target.value }))}
                           />
-                          <input
-                            className="aiKeyInput" type="password" autoComplete="new-password" spellCheck={false}
-                            placeholder={aiKeysForm.id ? "API key (leave empty to keep the current one)" : "API key"}
-                            value={aiKeysForm.api_key}
-                            onChange={(e) => setAiKeysForm((f) => ({ ...f, api_key: e.target.value }))}
-                          />
-                          <input
-                            className="aiKeyInput" type="text" spellCheck={false}
-                            placeholder={`Base URL (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_base_url || ""})`}
-                            value={aiKeysForm.base_url}
-                            onChange={(e) => setAiKeysForm((f) => ({ ...f, base_url: e.target.value }))}
-                          />
-                          <input
-                            className="aiKeyInput" type="text" spellCheck={false}
-                            placeholder={`Models, comma-separated — first is the default (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_model || ""})`}
-                            value={aiKeysForm.models}
-                            onChange={(e) => setAiKeysForm((f) => ({ ...f, models: e.target.value }))}
-                          />
+                          {!isOauthProto(aiKeysForm.protocol) ? (
+                            <>
+                              <input
+                                className="aiKeyInput" type="password" autoComplete="new-password" spellCheck={false}
+                                placeholder={aiKeysForm.id ? "API key (leave empty to keep the current one)" : "API key"}
+                                value={aiKeysForm.api_key}
+                                onChange={(e) => setAiKeysForm((f) => ({ ...f, api_key: e.target.value }))}
+                                onBlur={() => { if (aiKeysForm?.api_key?.trim()) loadModelCatalog(); }}
+                              />
+                              <input
+                                className="aiKeyInput" type="text" spellCheck={false}
+                                placeholder={`Base URL (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_base_url || ""})`}
+                                value={aiKeysForm.base_url}
+                                onChange={(e) => setAiKeysForm((f) => ({ ...f, base_url: e.target.value }))}
+                              />
+                            </>
+                          ) : null}
+                          <div className="reportModalHint" style={{ margin: 0 }}>
+                            Models — the first is the default
+                            {formModels.length === 0 ? ` (none picked: uses ${aiProtocolOf(aiKeysForm.protocol)?.default_model || "provider default"})` : ""}
+                          </div>
+                          {formModels.length ? (
+                            <div className="aiModelChips">
+                              {formModels.map((m, i) => (
+                                <span className="categoryTag" key={m}>
+                                  {m}
+                                  {i === 0 ? <span className="uiTag">default</span> : null}
+                                  <button className="uiClose uiCloseSm" title="Remove model"
+                                    aria-label={`Remove ${m}`} onClick={() => removeModel(m)}>×</button>
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          <div className="aiProvPwForm">
+                            <select className="aiKeyInput" value=""
+                              disabled={!availModels.length}
+                              onChange={(e) => addCatalogModel(e.target.value)}>
+                              <option value="">
+                                {aiModelCatalog?.loading ? "Loading model list…"
+                                  : aiModelCatalog?.error ? "Model list unavailable"
+                                  : availModels.length ? `+ Add a model (${availModels.length} available)…`
+                                  : aiModelCatalog?.models ? "All listed models added"
+                                  : "+ Add a model…"}
+                              </option>
+                              {availModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                            </select>
+                            <input className="aiKeyInput" type="text" spellCheck={false}
+                              placeholder="Custom model — Enter to add"
+                              value={customModel}
+                              onChange={(e) => setCustomModel(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key !== "Enter") return;
+                                e.preventDefault();
+                                if (customModel.trim()) { addCatalogModel(customModel.trim()); setCustomModel(""); }
+                              }}
+                            />
+                          </div>
+                          {aiModelCatalog?.error ? (
+                            <div className="reportModalHint" style={{ margin: 0 }}>
+                              {aiModelCatalog.error}{" "}
+                              <button className="searchToggle" title="Retry loading the model list" onClick={loadModelCatalog}>↻</button>
+                            </div>
+                          ) : null}
                           <div className="reportModalBtns">
                             <button className="uiBtn" onClick={() => { setAiKeysForm(null); setAiKeysError(""); }}>Cancel</button>
                             <button className="uiBtn primary" disabled={aiKeysBusy} onClick={submitAiProvider}>
-                              {aiKeysBusy ? "Saving…" : aiKeysForm.id ? "Save changes" : "Add key"}
+                              {aiKeysBusy ? "Saving…"
+                                : isOauthProto(aiKeysForm.protocol)
+                                  ? ((aiKeysForm.oauthCallback || "").trim() || !aiKeysForm.id ? "Connect" : "Save changes")
+                                  : aiKeysForm.id ? "Save changes" : "Add key"}
                             </button>
                           </div>
                         </div>

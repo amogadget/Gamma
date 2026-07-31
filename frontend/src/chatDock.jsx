@@ -6,6 +6,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson } from "./utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea } from "./widgets";
+import { CheckIcon, ChevronDownIcon, CopyIcon, FileIcon } from "./icons";
 
 export default function ChatDock({
   docId, focusedBlockId, homeBlocks, pdfTitle, openTabs,
@@ -381,7 +382,7 @@ export default function ChatDock({
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6" /></svg>
           </button>
           <button className="searchToggle searchNavBtn" onClick={() => gotoChatFind(chatFindIdx + 1)} disabled={!chatFindMatches.length} title="Next match">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+            <ChevronDownIcon size={14} />
           </button>
           <button className="uiClose" onClick={() => { setChatFindOpen(false); setChatFind(""); }} title="Close find" aria-label="Close find">×</button>
         </div>
@@ -465,7 +466,7 @@ export default function ChatDock({
                       <div className="chatMsgPdfs">
                         {m.pdfs.map((n, j) => (
                           <span key={j} className="chatPdfChip" title={n}>
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                            <FileIcon size={11} />
                             {n.slice(0, 40)}{n.length > 40 ? "…" : ""}
                           </span>
                         ))}
@@ -479,8 +480,8 @@ export default function ChatDock({
                     <button type="button" className="chatMsgActionBtn" title="Copy message"
                       onClick={() => copyChatMessage(i, m.text)}>
                       {copiedMsgIdx === i
-                        ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                        : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+                        ? <CheckIcon size={13} />
+                        : <CopyIcon size={13} />}
                     </button>
                     {isUser && !chatLoading ? (
                       <button type="button" className="chatMsgActionBtn" title="Edit and re-send (removes later messages)"
@@ -524,7 +525,7 @@ export default function ChatDock({
         <div className="chatImgPreviewRow">
           {chatFiles.map((f, i) => (
             <span key={i} className="chatFileChip" title={`${f.name} — sent with your next message`}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+              <FileIcon size={12} />
               <span className="chatFileChipName">{f.name}</span>
               <button type="button" className="uiClose uiCloseSm chatFileChipRemove" title="Remove file"
                 onClick={() => setChatFiles((prev) => prev.filter((_, j) => j !== i))}>×</button>
@@ -595,7 +596,7 @@ export default function ChatDock({
             ? "Full PDF file is sent with each message (model sees figures & tables). Click to switch to extracted text only."
             : "Send the full PDF file with your messages so the model sees figures & tables (uses more tokens). Click to enable."}
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+          <FileIcon size={12} />
           PDF
         </button>
         <AutoGrowTextarea

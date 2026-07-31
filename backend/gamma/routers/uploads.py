@@ -1,15 +1,14 @@
-"""PDF/image uploads (content-hash deduped) and upload serving/cleanup."""
+"""PDF/image uploads (content-hash deduped) and upload serving."""
 
 import hashlib
-import sqlite3
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from ..auth import require_user
 from ..config import MAX_UPLOAD_BYTES
-from ..db import user_db_path, user_uploads_dir
-from ..storage import ALLOWED_IMAGE_TYPES, IMAGE_EXTENSIONS, IMAGE_MEDIA_TYPES, cleanup_orphan_uploads, find_upload_file
+from ..db import user_uploads_dir
+from ..storage import ALLOWED_IMAGE_TYPES, IMAGE_EXTENSIONS, IMAGE_MEDIA_TYPES, find_upload_file
 
 router = APIRouter(prefix="/api", tags=["uploads"])
 
@@ -87,9 +86,3 @@ async def serve_upload(filename: str, request: Request):
                         headers={"Cache-Control": "public, max-age=2592000, immutable"})
 
 
-@router.post("/cleanup-uploads")
-async def manual_cleanup_uploads(request: Request):
-    user = require_user(request)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        removed = cleanup_orphan_uploads(conn, user_uploads_dir(user))
-    return {"ok": True, "removed_uploads": removed}

@@ -689,20 +689,6 @@ body {
   height: 20px;
 }
 
-.highlightDotBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.highlightDot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-}
-
-
 .layoutControls {
   display: flex;
   gap: 8px;
@@ -3189,11 +3175,6 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   white-space: nowrap;
 }
 .chatAttachToggle input { display: none; }
-.chatAttachToggle.on {
-  color: #8ab4f8;
-  border-color: #8ab4f8;
-  background: color-mix(in srgb, #8ab4f8 12%, transparent);
-}
 /* report modal */
 .reportOverlay {
   position: fixed;
@@ -3865,7 +3846,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .settingsPaneHint { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
 .settingsDivider { height: 1px; background: var(--border); margin: 6px 0; flex-shrink: 0; }
-.settingsClose { position: absolute; top: 12px; right: 12px; }
+.settingsClose { position: absolute; top: 14px; right: 20px; }
+
+/* Model list in the AI-provider form — chips are .categoryTag (same look as
+   the page label chips), the "default" marker is .uiTag. */
+.aiModelChips { display: flex; flex-wrap: wrap; gap: 5px; }
 .settingsPane .settingRow { flex-shrink: 0; }
 /* Provider rows double as the active-key picker in the AI pane. */
 .aiProvSelectable { cursor: pointer; }
