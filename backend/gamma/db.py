@@ -59,7 +59,7 @@ DATA_SCHEMA = [
 ]
 
 
-def _connect_data_db(username: str) -> sqlite3.Connection:
+def connect_data_db(username: str) -> sqlite3.Connection:
     conn = sqlite3.connect(str(USERS_DIR / username / "data.db"))
     for stmt in DATA_SCHEMA:
         conn.execute(stmt)
@@ -68,7 +68,7 @@ def _connect_data_db(username: str) -> sqlite3.Connection:
 
 def get_pref(username: str, key: str):
     """(value, updated_at) from the user's prefs KV store, or (None, "") when unset."""
-    with _connect_data_db(username) as db:
+    with connect_data_db(username) as db:
         row = db.execute("SELECT value, updated_at FROM prefs WHERE key = ?", (key,)).fetchone()
     if not row:
         return None, ""
@@ -81,7 +81,7 @@ def get_pref(username: str, key: str):
 def set_pref(username: str, key: str, value) -> str:
     """Store a pref (last write wins); returns the new updated_at."""
     now = page_now()
-    with _connect_data_db(username) as db:
+    with connect_data_db(username) as db:
         db.execute(
             "INSERT INTO prefs (key, value, updated_at) VALUES (?, ?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",

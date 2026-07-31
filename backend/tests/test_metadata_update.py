@@ -62,3 +62,21 @@ def test_update_all_blank_clears_meta(guest):
 def test_update_missing_page_404(guest):
     r = guest.post("/api/metadata/update", json={"block_id": "nope", "meta": {"title": "x"}})
     assert r.status_code == 404
+
+
+def test_failed_fetch_is_negative_cached_and_cleared_by_update(guest):
+    # No doc_id / source_url and AI unconfigured — the lookup finds nothing.
+    page = make_page(guest, "No meta anywhere")
+    r = guest.post("/api/metadata/fetch", json={"block_id": page["id"]})
+    assert r.status_code == 404
+    props = guest.get(f"/api/blocks/{page['id']}").json()["properties"]
+    assert props["meta_error"]["at"]  # marker clients use to skip auto-retry
+
+    # Hand-editing the metadata settles the failure: the marker is removed.
+    r = guest.post("/api/metadata/update", json={
+        "block_id": page["id"], "meta": {"title": "Filled by hand", "year": "2026"},
+    })
+    assert r.status_code == 200
+    props = guest.get(f"/api/blocks/{page['id']}").json()["properties"]
+    assert "meta_error" not in props
+    assert props["meta"]["title"] == "Filled by hand"

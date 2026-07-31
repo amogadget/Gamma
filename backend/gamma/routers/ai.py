@@ -4,14 +4,17 @@ import base64
 import json
 import re
 import sqlite3
+import time
 import urllib.error
 import urllib.request
+import uuid
 from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from .. import chatgpt_oauth
 from ..ai_settings import (
     MAX_KEY_LEN,
     MAX_MODELS_LEN,
@@ -21,12 +24,14 @@ from ..ai_settings import (
     ai_runtime,
     load_provider_entries,
     new_provider_id,
+    require_ai_runtime,
     save_provider_entries,
 )
 from ..auth import require_user
 from ..blocks_store import fetch_subtree
 from ..config import AI_PROTOCOLS
-from ..db import page_now, user_db_path, user_uploads_dir
+from ..db import connect_data_db, page_now, user_db_path, user_uploads_dir
+from ..pdf_text import PDF_EXTRACT_FAILED, extract_text
 
 router = APIRouter(prefix="/api", tags=["ai"])
 
@@ -169,23 +174,20 @@ def _pdf_path(user: str, doc_id: str):
     return pdf_path if pdf_path.exists() else None
 
 
+def _truncate(text: str, limit: int) -> str:
+    return text[:limit] + "\n…[truncated]" if len(text) > limit else text
+
+
 def _extract_pdf_context(user: str, doc_id: str, limit: int = 8000) -> str:
     pdf_path = _pdf_path(user, doc_id)
     if not pdf_path:
         print("[ai_chat] PDF still not found after download attempt")
         return ""
     try:
-        from PyPDF2 import PdfReader
-        reader = PdfReader(str(pdf_path))
-        pages_text = [t for page in reader.pages if (t := page.extract_text())]
-        context = "\n\n".join(pages_text)
-        print(f"[ai_chat] context={len(pages_text)} pages, {len(context)} chars")
-        if len(context) > limit:
-            context = context[:limit] + "\n…[truncated]"
-        return context
+        return _truncate(extract_text(str(pdf_path), limit), limit)
     except Exception as e:
         print(f"[ai_chat] extraction error: {e}")
-        return "(PDF text extraction failed)"
+        return PDF_EXTRACT_FAILED
 
 
 def _load_pdf_b64(user: str, doc_id: str) -> str | None:
@@ -198,6 +200,30 @@ def _load_pdf_b64(user: str, doc_id: str) -> str | None:
         print(f"[ai_chat] PDF too large to attach ({len(data)} bytes), falling back to text")
         return None
     return base64.standard_b64encode(data).decode("ascii")
+
+
+# Sync def: extraction runs in the threadpool (pdfium stops at the sample cap).
+@router.get("/pdf-text-status")
+def pdf_text_status(doc_id: str, request: Request, preview: int = 0):
+    """Whether a doc's PDF yields extractable text. Feeds the metadata
+    popover's health row — a scanned/image-only PDF is why AI answers blind
+    and metadata lookups come up empty. `preview` > 0 additionally returns
+    that many characters of the text itself (capped)."""
+    user = require_user(request)
+    preview = min(max(preview, 0), 20000)
+    pdf_path = _pdf_path(user, doc_id)
+    if not pdf_path:
+        return {"found": False, "ok": False, "chars": 0}
+    try:
+        text = extract_text(str(pdf_path), preview or 4000)
+        stripped = text.strip()
+        out = {"found": True, "ok": len(stripped) >= 50, "chars": len(stripped)}
+        if preview:
+            out["text"] = text[:preview]
+        return out
+    except Exception as e:
+        print(f"[pdf-text-status] {e}")
+        return {"found": True, "ok": False, "chars": 0}
 
 
 _SYSTEM_PROMPT = ("You are a research assistant helping the user understand a PDF they are reading. "
@@ -306,9 +332,61 @@ def _openai_extract(data) -> str:
     return text
 
 
+def _chatgpt_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192, images=None, stream=False):
+    """ChatGPT backend (subscription OAuth): POST {base}/responses.
+
+    Speaks the Responses API and ONLY streams SSE — non-stream callers join
+    the deltas in _call_ai. Attachments use the Responses input_file /
+    input_image parts; ai_chat falls back to extracted text if the backend
+    rejects the file part."""
+    items = []
+    for m in messages:
+        if m["role"] == "assistant":
+            items.append({"type": "message", "role": "assistant",
+                          "content": [{"type": "output_text", "text": m["content"]}]})
+        else:
+            items.append({"type": "message", "role": "user",
+                          "content": [{"type": "input_text", "text": m["content"]}]})
+    if pdf_b64s or images:
+        last = items[-1]
+        last["content"] = [
+            *[{"type": "input_file", "filename": f"document-{i + 1}.pdf",
+               "file_data": f"data:application/pdf;base64,{b}"}
+              for i, b in enumerate(pdf_b64s or [])],
+            *[{"type": "input_image", "image_url": f"data:{mt};base64,{b}"}
+              for (mt, b) in (images or [])],
+            *last["content"],
+        ]
+    body = {
+        "model": model,
+        "instructions": system or "You are a helpful research assistant.",
+        "input": items,
+        "tools": [],
+        "tool_choice": "auto",
+        "parallel_tool_calls": False,
+        "store": False,   # the backend requires stateless requests
+        "stream": True,   # …and always streams
+        "include": [],
+    }
+    if effort:
+        body["reasoning"] = {"effort": effort}
+    return urllib.request.Request(f"{conf['base_url']}/responses", data=json.dumps(body).encode(), headers={
+        "Authorization": f"Bearer {conf['api_key']}",
+        "chatgpt-account-id": conf.get("account_id", ""),
+        "OpenAI-Beta": "responses=experimental",
+        "originator": "codex_cli_rs",
+        "session_id": str(uuid.uuid4()),
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
+    })
+
+
+# protocol -> (request builder, non-stream reply extractor). chatgpt has no
+# extractor: its backend only streams, so _read_reply joins the SSE deltas.
 _WIRE = {
     "anthropic": (_anthropic_request, _anthropic_extract),
     "openai": (_openai_request, _openai_extract),
+    "chatgpt": (_chatgpt_request, None),
 }
 
 
@@ -316,6 +394,25 @@ def _protocol(rt, entry) -> str:
     """Wire protocol of the provider entry serving a model registry entry —
     provider ids are user-generated, only the entry's protocol picks the wire."""
     return rt["providers"][entry["provider"]]["protocol"]
+
+
+class UpstreamError(RuntimeError):
+    """Provider HTTP error with the status attached (fallback logic keys on it)."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+def _upstream_detail(e: urllib.error.HTTPError, cap: int = 500) -> str:
+    """Human-readable upstream failure — the body, not just the status line
+    ("400 Bad Request" alone is undebuggable)."""
+    body = ""
+    try:
+        body = e.read().decode("utf-8", "replace")[:cap]
+    except Exception:
+        pass
+    return f"upstream {e.code}: {body or e.reason}"
 
 
 def _open_ai(messages, system, entry, rt, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None, stream=False):
@@ -328,21 +425,23 @@ def _open_ai(messages, system, entry, rt, pdf_b64s=None, effort="", max_tokens=8
     try:
         return urllib.request.urlopen(req, timeout=timeout)
     except urllib.error.HTTPError as e:
-        # Surface the upstream error body — "400 Bad Request" alone is undebuggable
-        body = ""
-        try:
-            body = e.read().decode("utf-8", "replace")[:500]
-        except Exception:
-            pass
-        print(f"[ai] upstream {e.code}: {body}")
-        raise RuntimeError(f"upstream {e.code}: {body or e.reason}")
+        detail = _upstream_detail(e)
+        print(f"[ai] {detail}")
+        raise UpstreamError(e.code, detail)
+
+
+def _read_reply(resp, proto) -> str:
+    """Full reply text from an open provider response, any protocol.
+    chatgpt's backend only streams — join its SSE deltas."""
+    if proto == "chatgpt":
+        return "".join(_sse_deltas(resp, proto))
+    return _WIRE[proto][1](json.loads(resp.read()))
 
 
 def _call_ai(messages, system, entry, rt, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None):
     """Send a chat to the provider that serves `entry`; return the full reply text."""
     with _open_ai(messages, system, entry, rt, pdf_b64s, effort, max_tokens, timeout, images) as resp:
-        data = json.loads(resp.read())
-    return _WIRE[_protocol(rt, entry)][1](data)
+        return _read_reply(resp, _protocol(rt, entry))
 
 
 def _sse_deltas(resp, provider):
@@ -371,6 +470,18 @@ def _sse_deltas(resp, provider):
                 stop = (ev.get("delta") or {}).get("stop_reason") or stop
             elif kind == "error":
                 raise RuntimeError((ev.get("error") or {}).get("message") or "stream error")
+        elif provider == "chatgpt":
+            kind = ev.get("type") or ""
+            if kind == "response.output_text.delta":
+                text = ev.get("delta") or ""
+                if text:
+                    got_text = True
+                    yield text
+            elif kind == "response.completed":
+                stop = ((ev.get("response") or {}).get("status")) or "completed"
+            elif kind in ("response.failed", "error"):
+                err = ((ev.get("response") or {}).get("error") or {}) if kind == "response.failed" else ev
+                raise RuntimeError(err.get("message") or "stream error")
         else:
             if ev.get("error"):
                 raise RuntimeError((ev["error"] or {}).get("message") or "stream error")
@@ -411,6 +522,7 @@ def _masked_settings(user: str, is_guest: bool) -> dict:
     out = []
     for e in load_provider_entries(user):
         key = (e.get("api_key") or "").strip()
+        oauth = e.get("oauth") if isinstance(e.get("oauth"), dict) else {}
         out.append({
             "id": e.get("id") or "",
             "name": (e.get("name") or "").strip(),
@@ -420,13 +532,18 @@ def _masked_settings(user: str, is_guest: bool) -> dict:
             "base_url": (e.get("base_url") or "").strip(),
             "models": (e.get("models") or "").strip(),
             "created_at": e.get("created_at") or "",
+            # ChatGPT sign-in entries: connection status + account label only,
+            # never the tokens themselves.
+            "oauth_connected": bool(oauth.get("access_token")),
+            "account": oauth.get("email") or "",
         })
     return {
         "providers": out,
         # Feeds the "Add provider" dropdown and the form placeholders.
+        # auth "oauth" = sign-in entries (no API key field in the form).
         "protocols": [
             {"id": pid, "label": conf["label"], "default_base_url": conf["base_url"],
-             "default_model": conf["default_model"]}
+             "default_model": conf["default_model"], "auth": conf.get("auth", "key")}
             for pid, conf in AI_PROTOCOLS.items()
         ],
         "can_edit": not is_guest,
@@ -483,6 +600,9 @@ async def ai_provider_add(payload: AIProviderRequest, request: Request):
     entries = load_provider_entries(user)
     if len(entries) >= MAX_PROVIDERS:
         raise HTTPException(status_code=400, detail="too many providers")
+    if AI_PROTOCOLS.get(payload.protocol, {}).get("auth") == "oauth":
+        raise HTTPException(status_code=400,
+                            detail="ChatGPT entries are created by signing in — use the Connect button")
     if payload.protocol not in AI_PROTOCOLS:
         raise HTTPException(status_code=400, detail="protocol must be 'anthropic' or 'openai'")
     if not (payload.api_key or "").strip():
@@ -503,7 +623,11 @@ async def ai_provider_update(provider_id: str, payload: AIProviderRequest, reque
     entry = next((e for e in entries if e.get("id") == provider_id), None)
     if not entry:
         raise HTTPException(status_code=404, detail="provider not found")
-    if payload.protocol and payload.protocol in AI_PROTOCOLS:
+    # Protocol edits never cross the key/OAuth boundary — a sign-in entry stays
+    # a sign-in entry (name/models remain editable through this endpoint).
+    if (payload.protocol and payload.protocol in AI_PROTOCOLS
+            and AI_PROTOCOLS[payload.protocol].get("auth")
+                == AI_PROTOCOLS.get(entry.get("protocol"), {}).get("auth")):
         entry["protocol"] = payload.protocol
     _apply_provider_fields(entry, payload)
     save_provider_entries(user, entries)
@@ -518,18 +642,197 @@ async def ai_provider_delete(provider_id: str, request: Request):
     return _masked_settings(user, request.state.is_guest)
 
 
-# Sync endpoint on purpose: the AI call can take minutes; FastAPI's threadpool
-# keeps the event loop free for other requests meanwhile.
-@router.post("/ai/chat")
-def ai_chat(payload: AIChatRequest, request: Request):
-    user = require_user(request)
-    rt = ai_runtime(user)
-    if not rt["enabled"]:
-        raise HTTPException(status_code=503,
-                            detail="AI not configured (add an API key in Settings → AI providers)")
+# Fallback when the live listing is unreachable (not connected yet, offline):
+# models the ChatGPT backend has been known to serve.
+_CHATGPT_MODEL_FALLBACK = [
+    "gpt-5.1", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini",
+    "gpt-5", "gpt-5-codex",
+]
+# GET {base}/models gates its answer on the caller's version — keep in rough
+# sync with a current Codex CLI release so new models show up.
+_CHATGPT_CLIENT_VERSION = "0.146.0"
 
+
+def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
+    """Live model list from the ChatGPT (codex) backend, Codex CLI's own
+    listing call: GET {base}/models?client_version=… with the OAuth bearer.
+    Falls back to the known-good list when no entry is connected or the
+    fetch fails."""
+    providers = ai_runtime(user)["providers"]
+    conf = providers.get(provider_id)
+    if not conf or conf.get("protocol") != "chatgpt":
+        # Pre-connect "Add key" form has no entry yet — any connected one will do.
+        conf = next((c for c in providers.values() if c.get("protocol") == "chatgpt"), None)
+    if not conf:
+        return _CHATGPT_MODEL_FALLBACK
+    try:
+        req = URLRequest(
+            f"{conf['base_url']}/models?client_version={_CHATGPT_CLIENT_VERSION}",
+            headers={
+                "Authorization": f"Bearer {conf['api_key']}",
+                "chatgpt-account-id": conf.get("account_id", ""),
+                "originator": "codex_cli_rs",
+            })
+        with urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+        listed, hidden = [], []
+        for m in data.get("models") or []:
+            slug = str(m.get("slug") or "").strip()
+            vis = m.get("visibility") or "list"
+            if not slug or vis == "none":  # "none" = not usable by this account
+                continue
+            (hidden if vis == "hide" else listed).append(slug)
+        # `hide` marks picker-hidden but usable slugs — offer them after the
+        # listed ones rather than dropping them.
+        models = list(dict.fromkeys(listed + hidden))
+        return models or _CHATGPT_MODEL_FALLBACK
+    except Exception as e:
+        print(f"[ai] chatgpt model listing failed, using fallback: {e}")
+        return _CHATGPT_MODEL_FALLBACK
+
+
+class ModelCatalogRequest(BaseModel):
+    provider_id: str = ""  # saved entry to use the stored key of; "" = use the fields below
+    protocol: str = ""
+    api_key: str = ""
+    base_url: str = ""
+
+
+# Sync def: the upstream /v1/models fetch runs in the threadpool.
+@router.post("/ai/model-catalog")
+def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
+    """Model names offered by a provider, for the settings form's model picker.
+    API protocols are asked live (GET /v1/models with the entry's key); the
+    ChatGPT backend is asked via Codex CLI's listing call with the OAuth
+    token (known-good fallback list when not connected)."""
+    user = _require_editor(request)
+    entry = {}
+    protocol = payload.protocol
+    if payload.provider_id:
+        entry = next((e for e in load_provider_entries(user) if e.get("id") == payload.provider_id), None) or {}
+        protocol = entry.get("protocol") or protocol
+    if protocol == "chatgpt":
+        return {"models": _chatgpt_model_catalog(user, payload.provider_id)}
+    if protocol not in AI_PROTOCOLS:
+        raise HTTPException(status_code=400, detail="unknown protocol")
+    key = (payload.api_key or "").strip() or (entry.get("api_key") or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="enter the API key first, then load the model list")
+    base = ((payload.base_url or "").strip() or (entry.get("base_url") or "").strip()
+            or AI_PROTOCOLS[protocol]["base_url"]).rstrip("/")
+    try:
+        if protocol == "anthropic":
+            req = URLRequest(f"{base}/v1/models?limit=100",
+                             headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+        else:
+            req = URLRequest(f"{base}/v1/models", headers={"Authorization": f"Bearer {key}"})
+        with urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise HTTPException(status_code=400, detail=f"model list failed: {_upstream_detail(e, 200)}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"model list failed: {e}")
+    ids = [str(m.get("id") or "") for m in (data.get("data") or []) if m.get("id")]
+    if protocol == "openai":
+        # The account listing includes embeddings/audio/image models the chat
+        # endpoint can't use — keep the conversational families.
+        ids = [i for i in ids
+               if re.match(r"^(gpt-|o\d|chatgpt-)", i)
+               and not re.search(r"embed|whisper|tts|audio|image|dall-e|moderation|transcribe|realtime|search", i)]
+    return {"models": sorted(set(ids))}
+
+
+# --- ChatGPT subscription sign-in (OAuth PKCE, Codex CLI's flow) --------------
+# start → the browser opens auth.openai.com; after login it is redirected to
+# http://localhost:1455/auth/callback (which fails to load — nothing listens
+# there when Gamma runs remotely). The user pastes that URL into complete,
+# which redeems the code with the stashed PKCE verifier and stores the tokens
+# on a provider entry. See gamma/chatgpt_oauth.py.
+
+_OAUTH_STATES: dict = {}  # state -> {"verifier", "at"} — in-memory, 15 min TTL
+_OAUTH_STATE_TTL = 900
+
+# First models offered on a fresh connect; freely editable per entry afterwards.
+_CHATGPT_DEFAULT_MODELS = "gpt-5.1, gpt-5.1-codex"
+
+
+@router.post("/ai/oauth/chatgpt/start")
+async def chatgpt_auth_start(request: Request):
+    _require_editor(request)
+    now = time.time()
+    for k in [k for k, v in _OAUTH_STATES.items() if now - v["at"] > _OAUTH_STATE_TTL]:
+        del _OAUTH_STATES[k]
+    state, verifier, url = chatgpt_oauth.start_auth()
+    _OAUTH_STATES[state] = {"verifier": verifier, "at": now}
+    return {"auth_url": url, "state": state}
+
+
+class ChatGPTAuthComplete(BaseModel):
+    state: str = ""
+    callback: str = ""      # pasted redirect URL (or a bare authorization code)
+    provider_id: str = ""   # existing entry to reconnect; "" creates a new one
+    name: str = ""
+    models: str = ""
+
+
+@router.post("/ai/oauth/chatgpt/complete")
+async def chatgpt_auth_complete(payload: ChatGPTAuthComplete, request: Request):
+    user = _require_editor(request)
+    st = _OAUTH_STATES.pop(payload.state, None)
+    if not st or time.time() - st["at"] > _OAUTH_STATE_TTL:
+        raise HTTPException(status_code=400,
+                            detail="sign-in session expired — hit 'Open ChatGPT sign-in' again")
+    try:
+        code = chatgpt_oauth.parse_callback(payload.callback, payload.state)
+        oauth = chatgpt_oauth.exchange_code(code, st["verifier"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"token exchange failed: {e}")
+
+    entries = load_provider_entries(user)
+    if payload.provider_id:
+        entry = next((e for e in entries if e.get("id") == payload.provider_id), None)
+        if not entry or entry.get("protocol") != "chatgpt":
+            raise HTTPException(status_code=404, detail="provider not found")
+        entry["oauth"] = oauth
+        if payload.name.strip():
+            entry["name"] = payload.name.strip()[:MAX_NAME_LEN]
+        if payload.models.strip():
+            entry["models"] = payload.models.strip()[:MAX_MODELS_LEN]
+    else:
+        if len(entries) >= MAX_PROVIDERS:
+            raise HTTPException(status_code=400, detail="too many providers")
+        entries.append({
+            "id": new_provider_id(),
+            "protocol": "chatgpt",
+            "name": payload.name.strip()[:MAX_NAME_LEN] or "ChatGPT",
+            "api_key": "",
+            "base_url": "",
+            "models": payload.models.strip()[:MAX_MODELS_LEN] or _CHATGPT_DEFAULT_MODELS,
+            "created_at": page_now(),
+            "oauth": oauth,
+        })
+    save_provider_entries(user, entries)
+    return _masked_settings(user, request.state.is_guest)
+
+
+def _pdf_text_from_b64(b64: str, limit: int = 8000) -> str:
+    """Extracted text of a base64 PDF (fallback when native attach is refused)."""
+    try:
+        return _truncate(extract_text(base64.standard_b64decode(b64), limit), limit)
+    except Exception as e:
+        print(f"[ai_chat] uploaded-PDF extraction failed: {e}")
+        return ""
+
+
+def _gather_inputs(user: str, payload: AIChatRequest, allow_native: bool):
+    """(pdf_b64s, context) for a chat request. allow_native=False forces every
+    document into extracted text — the fallback when a provider (the ChatGPT
+    backend) rejects native file parts."""
     pdf_b64s = []
     context_sections = []
+    attach = payload.attach_pdf and allow_native
 
     page_ids = [str(p) for p in (payload.pages or []) if p][:6]
     if page_ids:
@@ -548,7 +851,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                 props = json.loads(row[1] or "{}")
                 doc_id = props.get("doc_id") or ""
                 attached = False
-                if doc_id and payload.attach_pdf:
+                if doc_id and attach:
                     b64 = _load_pdf_b64(user, doc_id)
                     if b64 and total_b64 + len(b64) < 20_000_000:
                         pdf_b64s.append(b64)
@@ -564,7 +867,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                         context_sections.append(section)
     elif payload.doc_id:
         # Single-document chat for the open page
-        if payload.attach_pdf:
+        if attach:
             b64 = _load_pdf_b64(user, payload.doc_id)
             if b64:
                 pdf_b64s.append(b64)
@@ -574,22 +877,66 @@ def ai_chat(payload: AIChatRequest, request: Request):
                 context_sections.append(txt)
 
     # Ad-hoc uploads from the chat "+" menu ride along regardless of attach_pdf.
-    pdf_b64s.extend(_parse_files(payload.files))
+    for i, b64 in enumerate(_parse_files(payload.files)):
+        if allow_native:
+            pdf_b64s.append(b64)
+        else:
+            txt = _pdf_text_from_b64(b64)
+            if txt:
+                context_sections.append(f"### Attached PDF {i + 1}\n{txt}")
 
-    context = "\n\n---\n\n".join(context_sections)
-    messages = _build_messages(payload, context)
-    custom_system = (payload.system or "").strip()[:8000]
-    # A custom prompt always applies; the built-in one only when there's a document
-    system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
+    return pdf_b64s, "\n\n---\n\n".join(context_sections)
+
+
+# Providers whose backend refused native input_file parts — skip the wasted
+# upload on later requests. In-memory: a restart retries native once.
+_NATIVE_PDF_REJECTED: set = set()
+
+
+# Sync endpoint on purpose: the AI call can take minutes; FastAPI's threadpool
+# keeps the event loop free for other requests meanwhile.
+@router.post("/ai/chat")
+def ai_chat(payload: AIChatRequest, request: Request):
+    user = require_user(request)
+    rt = require_ai_runtime(user)
+
     entry = _resolve_model(rt, payload.model)
     effort = _resolve_effort(payload.effort)
     images = _parse_images(payload.images)
+    custom_system = (payload.system or "").strip()[:8000]
+
+    def prepared(allow_native):
+        pdf_b64s, context = _gather_inputs(user, payload, allow_native)
+        messages = _build_messages(payload, context)
+        # A custom prompt always applies; the built-in one only when there's a document
+        system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
+        return pdf_b64s, messages, system
+
+    def open_with_fallback(stream):
+        """Open the upstream call; if the ChatGPT backend refuses native PDF
+        parts (4xx before any bytes), retry with extracted text. A provider
+        that rejected native parts and then succeeded as text is remembered,
+        so later requests skip the wasted multi-MB upload."""
+        attempts = (False,) if entry["provider"] in _NATIVE_PDF_REJECTED else (True, False)
+        for native in attempts:
+            pdf_b64s, messages, system = prepared(native)
+            try:
+                resp = _open_ai(messages, system, entry, rt, pdf_b64s,
+                                effort=effort, timeout=180, images=images, stream=stream)
+                if not native and True in attempts:
+                    _NATIVE_PDF_REJECTED.add(entry["provider"])
+                return resp
+            except UpstreamError as e:
+                if not (native and pdf_b64s and _protocol(rt, entry) == "chatgpt"
+                        and 400 <= e.status < 500):
+                    raise
+                print(f"[ai_chat] chatgpt rejected native PDF parts, retrying as text: {e}")
+
     try:
         if payload.stream:
             # Open upstream eagerly: connection/auth errors still become a
             # proper HTTP error instead of dying inside a committed stream.
-            resp = _open_ai(messages, system, entry, rt, pdf_b64s,
-                            effort=effort, timeout=180, images=images, stream=True)
+            resp = open_with_fallback(True)
 
             def ndjson():
                 try:
@@ -602,8 +949,8 @@ def ai_chat(payload: AIChatRequest, request: Request):
                     resp.close()
 
             return StreamingResponse(ndjson(), media_type="application/x-ndjson")
-        text = _call_ai(messages, system, entry, rt, pdf_b64s,
-                        effort=effort, timeout=180, images=images)
+        with open_with_fallback(False) as resp2:
+            text = _read_reply(resp2, _protocol(rt, entry))
         return {"response": text}
     except HTTPException:
         raise
@@ -666,14 +1013,10 @@ class ChatSaveRequest(BaseModel):
     messages: list
 
 
-_CHATS_TABLE = "CREATE TABLE IF NOT EXISTS chats (block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)"
-
-
 @router.get("/chats/{block_id}")
 async def get_chat(block_id: str, request: Request):
     user = require_user(request)
-    with sqlite3.connect(user_db_path(user, "data.db")) as db:
-        db.execute(_CHATS_TABLE)
+    with connect_data_db(user) as db:
         row = db.execute("SELECT messages FROM chats WHERE block_id = ?", (block_id,)).fetchone()
     return {"messages": json.loads(row[0]) if row else []}
 
@@ -681,8 +1024,7 @@ async def get_chat(block_id: str, request: Request):
 @router.put("/chats/{block_id}")
 async def save_chat(block_id: str, payload: ChatSaveRequest, request: Request):
     user = require_user(request)
-    with sqlite3.connect(user_db_path(user, "data.db")) as db:
-        db.execute(_CHATS_TABLE)
+    with connect_data_db(user) as db:
         db.execute(
             "INSERT INTO chats (block_id, messages, updated_at) VALUES (?, ?, ?) "
             "ON CONFLICT(block_id) DO UPDATE SET messages = excluded.messages, updated_at = excluded.updated_at",
@@ -695,8 +1037,7 @@ async def save_chat(block_id: str, payload: ChatSaveRequest, request: Request):
 @router.delete("/chats/{block_id}")
 async def delete_chat(block_id: str, request: Request):
     user = require_user(request)
-    with sqlite3.connect(user_db_path(user, "data.db")) as db:
-        db.execute(_CHATS_TABLE)
+    with connect_data_db(user) as db:
         db.execute("DELETE FROM chats WHERE block_id = ?", (block_id,))
         db.commit()
     return {"ok": True}
