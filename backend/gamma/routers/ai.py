@@ -50,6 +50,7 @@ class AIChatRequest(BaseModel):
     pages: list = []      # page block ids to include as context (multi-PDF chat / reports)
     include_notes: bool = False  # also include the user's highlights + notes for those pages
     images: list = []     # pasted figures as data URLs ("data:image/png;base64,…")
+    files: list = []      # uploaded PDFs as {name, data} with a data URL — attached natively
     stream: bool = False  # NDJSON stream of {"delta": …} lines instead of one JSON body
 
 
@@ -64,6 +65,23 @@ def _parse_images(images: list) -> list[tuple[str, str]]:
         if len(b64) > 8_000_000:  # ~6 MB image — beyond that providers reject anyway
             continue
         out.append(("image/jpeg" if mt == "image/jpg" else mt, b64))
+    return out
+
+
+def _parse_files(files: list) -> list[str]:
+    """Base64 payloads of uploaded PDF data URLs ({name, data} items); junk
+    and oversize entries are dropped."""
+    out = []
+    for f in (files or [])[:4]:
+        if not isinstance(f, dict):
+            continue
+        m = re.match(r"^data:application/pdf;base64,([A-Za-z0-9+/=]+)$", str(f.get("data", "")))
+        if not m:
+            continue
+        b64 = m.group(1)
+        if len(b64) > MAX_ATTACH_PDF_BYTES * 4 // 3:
+            continue
+        out.append(b64)
     return out
 
 
@@ -554,6 +572,9 @@ def ai_chat(payload: AIChatRequest, request: Request):
             txt = _extract_pdf_context(user, payload.doc_id)
             if txt:
                 context_sections.append(txt)
+
+    # Ad-hoc uploads from the chat "+" menu ride along regardless of attach_pdf.
+    pdf_b64s.extend(_parse_files(payload.files))
 
     context = "\n\n---\n\n".join(context_sections)
     messages = _build_messages(payload, context)

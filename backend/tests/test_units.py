@@ -68,6 +68,18 @@ def test_parse_images_validates():
     assert parsed == [("image/png", "iVBORw0KGgo=")]
 
 
+def test_parse_files_validates():
+    from gamma.routers.ai import _parse_files
+    good = {"name": "paper.pdf", "data": "data:application/pdf;base64,JVBERi0="}
+    junk = [
+        {"name": "x.png", "data": "data:image/png;base64,iVBORw0KGgo="},  # wrong type
+        {"name": "no-data"},
+        "not a dict",
+        good,
+    ]
+    assert _parse_files(junk) == ["JVBERi0="]
+
+
 def test_extract_pdf_annotations_resolves_indirects():
     from PyPDF2 import PdfWriter, PdfReader
     from PyPDF2.generic import (ArrayObject, DictionaryObject, FloatObject,
