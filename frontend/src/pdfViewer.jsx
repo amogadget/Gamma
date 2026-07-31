@@ -443,6 +443,31 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   goToDestRef.current = goToDest;
   const goToDestStable = useMemo(() => (d) => goToDestRef.current?.(d), []);
 
+  // Document outline (table of contents). Loaded per document; the toggle
+  // button only appears when the PDF actually has one.
+  const [outline, setOutline] = useState(null);
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setOutline(null);
+    if (!pdfDoc) return;
+    pdfDoc.getOutline()
+      .then((o) => { if (!cancelled && o && o.length) setOutline(o); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [pdfDoc]);
+  // Clicking anywhere outside the panel (including a TOC jump landing in the
+  // document) dismisses it, like a menu.
+  useEffect(() => {
+    if (!outlineOpen) return;
+    function onDown(e) {
+      if (e.target.closest?.(".pdfOutlinePanel") || e.target.closest?.(".pdfOutlineBtn")) return;
+      setOutlineOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [outlineOpen]);
+
   // Text selection for highlight creation
   const [selPopup, setSelPopup] = useState(null);
   // Whether this session has ever seen a real touch — a ref, not an effect
@@ -560,7 +585,26 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   }
 
   return (
-    <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
+    <div style={{ position: "relative", height: "100%" }}>
+      {outline ? (
+        <button
+          className={"pdfOutlineBtn" + (outlineOpen ? " open" : "")}
+          onClick={() => setOutlineOpen((o) => !o)}
+          title={outlineOpen ? "Hide table of contents" : "Table of contents"}
+          aria-label="Toggle table of contents"
+          type="button"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 6H3" /><path d="M16 12H3" /><path d="M16 18H3" /><path d="M21 6h.01" /><path d="M21 12h.01" /><path d="M21 18h.01" /></svg>
+        </button>
+      ) : null}
+      {outline && outlineOpen ? (
+        <div className="pdfOutlinePanel">
+          {outline.map((it, i) => (
+            <OutlineNode key={i} item={it} depth={0} onDest={goToDestStable} onUrl={stableCbs.onExternalLink} />
+          ))}
+        </div>
+      ) : null}
+      <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={`${docSeq}-${i + 1}`} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
@@ -577,6 +621,50 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           <PlainTip onConfirm={handleSelConfirm} onLink={() => handleSelConfirm("", null, { link: true })} />
         </div>
       )}
+      </div>
+    </div>
+  );
+}
+
+// One outline entry: click jumps to its destination, chevron collapses its
+// children. Top-level sections start expanded, deeper levels collapsed.
+// Children nest inside a wrapper whose left border draws the indent guide.
+function OutlineNode({ item, depth, onDest, onUrl }) {
+  const [open, setOpen] = useState(depth === 0);
+  const kids = item.items || [];
+  return (
+    <div className="pdfOutlineNode">
+      <div className="pdfOutlineRow">
+        {kids.length ? (
+          <button
+            className={"pdfOutlineChevron" + (open ? " open" : "")}
+            onClick={() => setOpen((o) => !o)}
+            aria-label={open ? "Collapse section" : "Expand section"}
+            type="button"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+          </button>
+        ) : (
+          <span className="pdfOutlineChevron" />
+        )}
+        <span
+          className="pdfOutlineTitle"
+          title={item.title}
+          onClick={() => {
+            if (item.dest) onDest(item.dest);
+            else if (item.url) onUrl?.(item.url);
+          }}
+        >
+          {item.title}
+        </span>
+      </div>
+      {open && kids.length ? (
+        <div className="pdfOutlineKids">
+          {kids.map((k, i) => (
+            <OutlineNode key={i} item={k} depth={depth + 1} onDest={onDest} onUrl={onUrl} />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -614,12 +702,20 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         setPageSize({ width: vp.width, height: vp.height });
 
         const canvas = canvasRef.current;
-        // Cap the backing resolution: 3-4× DPR screens quadruple the pixel
-        // work for no visible gain at reading sizes.
-        const pr = Math.min(2, window.devicePixelRatio || 1);
-        canvas.width = vp.width * pr; canvas.height = vp.height * pr;
+        // Backing resolution: at least 2× the CSS size — canvas antialiasing
+        // at exactly 1× looks visibly soft next to the browser's native PDF
+        // viewer, and supersampling + browser downscale is much crisper on
+        // standard-DPI screens. Follows devicePixelRatio up to 3× for high-DPI
+        // displays. A per-page pixel budget (the old 2×-DPR worst case) keeps
+        // extreme zoom levels from allocating enormous canvases.
+        let pr = Math.min(3, Math.max(2, window.devicePixelRatio || 1));
+        const BUDGET = 32e6; // device pixels per page (~128 MB RGBA)
+        if (vp.width * vp.height * pr * pr > BUDGET) {
+          pr = Math.max(1, Math.sqrt(BUDGET / (vp.width * vp.height)));
+        }
+        canvas.width = Math.floor(vp.width * pr); canvas.height = Math.floor(vp.height * pr);
         canvas.style.width = vp.width + "px"; canvas.style.height = vp.height + "px";
-        const ctx = canvas.getContext("2d"); ctx.scale(pr, pr);
+        const ctx = canvas.getContext("2d"); ctx.setTransform(pr, 0, 0, pr, 0, 0);
         // Cancel any in-flight render (rapid zoom changes) instead of stacking them
         try { renderTaskRef.current?.cancel(); } catch {}
         const task = page.render({ canvasContext: ctx, viewport: vp });
