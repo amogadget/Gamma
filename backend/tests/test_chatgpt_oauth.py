@@ -133,15 +133,61 @@ def test_expired_token_is_refreshed_lazily(erin, monkeypatch):
     assert saved["oauth"]["access_token"] == fresh["access_token"]
 
 
-def test_model_catalog_static_for_chatgpt_and_key_required_otherwise(erin):
+class _FakeResp:
+    def __init__(self, body):
+        self._body = body
+
+    def read(self):
+        return json.dumps(self._body).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_model_catalog_asks_chatgpt_backend_live(erin, monkeypatch):
+    import gamma.routers.ai as ai_mod
+
     entry = next(p for p in erin.get("/api/ai/settings").json()["providers"]
                  if p["protocol"] == "chatgpt")
+    seen = {}
+
+    def fake_urlopen(req, timeout=0):
+        seen["url"] = req.full_url
+        seen["auth"] = req.get_header("Authorization")
+        return _FakeResp({"models": [
+            {"slug": "gpt-6-codex", "visibility": "list"},
+            {"slug": "gpt-5.1-codex", "visibility": "list"},
+            {"slug": "gpt-6-codex", "visibility": "list"},       # dupe collapses
+            {"slug": "gpt-5-codex-mini", "visibility": "hide"},  # usable, offered last
+            {"slug": "gpt-4-gone", "visibility": "none"},        # dropped
+        ]})
+
+    monkeypatch.setattr(ai_mod, "urlopen", fake_urlopen)
     r = erin.post("/api/ai/model-catalog", json={"provider_id": entry["id"]})
     assert r.status_code == 200
-    assert "gpt-5.1" in r.json()["models"]
+    assert r.json()["models"] == ["gpt-6-codex", "gpt-5.1-codex", "gpt-5-codex-mini"]
+    assert "chatgpt.com/backend-api/codex/models" in seen["url"]
+    assert "client_version=" in seen["url"]
+    assert seen["auth"].startswith("Bearer ")
 
+    # No provider_id (pre-connect form): any connected chatgpt entry serves
     r = erin.post("/api/ai/model-catalog", json={"protocol": "chatgpt"})
-    assert "gpt-5.1-codex" in r.json()["models"]
+    assert "gpt-6-codex" in r.json()["models"]
+
+
+def test_model_catalog_falls_back_when_listing_fails(erin, monkeypatch):
+    import gamma.routers.ai as ai_mod
+
+    def boom(req, timeout=0):
+        raise OSError("no route to host")
+
+    monkeypatch.setattr(ai_mod, "urlopen", boom)
+    r = erin.post("/api/ai/model-catalog", json={"protocol": "chatgpt"})
+    assert r.status_code == 200
+    assert r.json()["models"] == ai_mod._CHATGPT_MODEL_FALLBACK
 
     # API protocols need a key (typed or stored) before asking /v1/models
     r = erin.post("/api/ai/model-catalog", json={"protocol": "openai"})

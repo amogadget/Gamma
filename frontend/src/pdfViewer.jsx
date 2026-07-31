@@ -10,7 +10,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
 import { fmtBytes } from "./utils";
-import { LinkIcon } from "./icons";
+import { ChevronRightIcon, LinkIcon, OutlineIcon } from "./icons";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 // Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
 // Guarded: a throw at module scope takes down every route, PDF or not.
@@ -769,7 +769,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           aria-label="Toggle table of contents"
           type="button"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 6H3" /><path d="M16 12H3" /><path d="M16 18H3" /><path d="M21 6h.01" /><path d="M21 12h.01" /><path d="M21 18h.01" /></svg>
+          <OutlineIcon size={16} />
         </button>
       ) : null}
       {outline && outlineOpen ? (
@@ -817,7 +817,7 @@ function OutlineNode({ item, depth, onDest, onUrl }) {
             aria-label={open ? "Collapse section" : "Expand section"}
             type="button"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+            <ChevronRightIcon size={10} strokeWidth={2.5} />
           </button>
         ) : (
           <span className="pdfOutlineChevron" />

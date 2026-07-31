@@ -3265,19 +3265,6 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   line-height: 1.45;
   font-family: inherit;
 }
-.chatSendBtn {
-  background: var(--accent-dark);
-  border: none;
-  border-radius: 4px;
-  color: var(--text-secondary);
-  padding: 5px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  font-family: inherit;
-}
-.chatSendBtn:disabled { opacity: 0.4; cursor: default; }
-.chatSendBtn:hover:not(:disabled) { background: #3568a0; }
-
 /* --- Login page --- */
 .loginPage {
   display: flex;
@@ -3561,20 +3548,18 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   align-self: center;
 }
 .chatPlusCount { font-size: 10px; font-weight: 600; margin-left: 1px; }
-.chatSendBtn.chatCircleBtn {
+/* Round send/stop variant of .uiBtn (chat composer). */
+.uiBtn.chatCircleBtn {
   border-radius: 999px;
   width: 27px;
   height: 27px;
   padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  border: none;
   flex-shrink: 0;
   align-self: center;
-  color: #fff;
 }
-.chatStopBtn { background: var(--bg-subtle); color: var(--text-primary); }
-.chatStopBtn:hover { background: var(--bg-hover) !important; }
+.uiBtn.chatCircleBtn.chatStopBtn { background: var(--bg-subtle); color: var(--text-primary); }
+.uiBtn.chatCircleBtn.chatStopBtn:hover:not(:disabled) { background: var(--bg-hover); }
 
 /* --- downloads & uploads (Chrome-style transfer list) --- */
 .topbar .transferBtn { position: relative; }
@@ -3851,6 +3836,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 /* Model list in the AI-provider form — chips are .categoryTag (same look as
    the page label chips), the "default" marker is .uiTag. */
 .aiModelChips { display: flex; flex-wrap: wrap; gap: 5px; }
+/* …and the same chips on the saved-provider rows. */
+.aiProvModels { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .settingsPane .settingRow { flex-shrink: 0; }
 /* Provider rows double as the active-key picker in the AI pane. */
 .aiProvSelectable { cursor: pointer; }
@@ -3952,5 +3939,5 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .confirmModal { width: min(400px, calc(100vw - 32px)); }
 .confirmMessage { font-size: 13px; color: var(--text-secondary); }
 .linkPromptUrl { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.chatSendBtn.dangerBtn { background: #b93c3c; color: #fff; }
-.chatSendBtn.dangerBtn:hover:not(:disabled) { background: #d04848; }
+.uiBtn.primary.dangerBtn { background: #b93c3c; }
+.uiBtn.primary.dangerBtn:hover:not(:disabled) { background: #d04848; }
