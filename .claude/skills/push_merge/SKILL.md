@@ -35,14 +35,9 @@ Turn the working tree into a pushed branch + PR against `main`.
 4. **Push**: `git push -u origin <branch>`.
 
 5. **PR**: `gh pr create --base main --title "<title>" --body "<summary>"` —
-   a few bullet points of what changed and how it was verified; body ends
-   with:
+   a few bullet points of what changed and how it was verified.
 
-   ```
-   🤖 Generated with [Claude Code](https://claude.com/claude-code)
-   ```
-
-   Report the PR URL.
+6. **Merge**: If the PR is clean and ready to merge, merge.
 
 ## After the merge
 
