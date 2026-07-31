@@ -33,16 +33,16 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 - **Highlight** — select text, pick a color, add a comment. Each highlight becomes a block.
 - **Outliner notes** — highlights and free notes are the same kind of block: nest them, drag-reorder, `[[link]]` between them, write markdown + math. Click a note to jump the PDF to it (and back).
 - **Reference links** — link a citation in the PDF to another paper in your library; blue underlined regions are clickable, and a global **← Back** unwinds jumps across documents.
-- **Ask the AI** — chat about the open paper (or several at once) with Anthropic or OpenAI models, paste figures, or attach the whole PDF so the model sees tables and plots.
+- **Ask the AI** — chat about the open paper (or pick several at once) with Anthropic or OpenAI models, or just sign in with your ChatGPT subscription — no API key. Paste figures, or attach the whole PDF so the model sees tables and plots.
 - **Dockable panels** — drag any window's grip to the left, right, or bottom; double-click to collapse.
 
 <!-- Demo GIF slot ➜ record: the AI chat answering a question about the open paper. Save as docs/demo-chat.gif -->
 
 ### 🗂 Organize your library
 
-![Home page with folders, recent carousel, and labels](./docs/screenshots/02-home-carousels.png)
+![Home page with folders, recently viewed, and the recents feed](./docs/screenshots/02-home-carousels.png)
 
-A file-browser home: drag papers into folders (storage stays flat — folders are just metadata), tag them with labels, and search **everything at once** with `Ctrl+F` — notes, highlights, and the PDF's own text, with match-case / whole-word / regex and replace-across-notes.
+A file-browser home: a recents feed of all your papers (sort by updated / created / title), a *Recently viewed* row on top, folders you drag papers into (storage stays flat — folders are just metadata, so a paper can live in several), and labels. `Ctrl+F` searches **everything at once** — notes, highlights, and the full text of every PDF in your library — with match-case / whole-word / regex toggles, label chips to narrow the scope, and a collapsed mode that works like a browser find bar. Matching is forgiving: "3000" finds "3,000-qubit" across a line break.
 
 <!-- Demo GIF slot ➜ record: dragging a paper into a folder, then a Ctrl+F search lighting up matches. Save as docs/demo-library.gif -->
 
@@ -62,7 +62,8 @@ App-level username/password auth with per-user isolated data. Guest accounts get
 
 ### A few more things
 
-- **Metadata & citations** — on open, each paper is resolved (arXiv → DOI → AI) so the title, authors, and venue auto-fill. One click copies BibTeX or a slide-ready citation that pastes into PowerPoint with real italics.
+- **Metadata & citations** — on open, each paper is resolved (arXiv → DOI → AI) so the title, authors, and venue auto-fill; any field can be hand-edited in the popover. One click copies BibTeX or a slide-ready citation that pastes into PowerPoint with real italics.
+- **Tabs follow you** — open tabs sync to your account, so another browser or device picks up right where you left off.
 - **Import existing annotations** — highlights already saved in the file by SumatraPDF, Acrobat, or Preview are imported as blocks. Logseq PDF exports import too.
 - **Open access fallback** — a paywalled DOI falls back to a legal open-access copy (via Unpaywall) when one exists.
 - **Export** — download a zip of all your data (SQLite snapshots + every upload) from the account menu.
@@ -150,7 +151,7 @@ Put a TLS-terminating reverse proxy (Caddy, nginx) in front of 9001 for a domain
 | `GAMMA_AI_ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Default Anthropic-protocol endpoint, e.g. `https://api.deepseek.com/anthropic` |
 | `GAMMA_AI_OPENAI_BASE_URL` | No | `https://api.openai.com` | Default OpenAI-compatible endpoint |
 
-AI is configured in the app, not the environment: each user adds provider entries under account menu → *AI providers & keys…* (pick the API format — Anthropic Messages or OpenAI Chat Completions — then a key, plus optional label, base URL, and model list). Keys are stored server-side per user and never sent back to the browser. The base-URL variables above only change the per-protocol defaults shown in that dialog. For docker compose, put these in `.env` (see [.env.example](./.env.example)).
+AI is configured in the app, not the environment: each user adds provider entries under account menu → *AI providers & keys…* (pick the API format — Anthropic Messages or OpenAI Chat Completions — then a key, plus optional label, base URL, and model list), or connects a ChatGPT Plus/Pro subscription with *Sign in with ChatGPT* — OAuth, no key at all. Keys are stored server-side per user and never sent back to the browser. The base-URL variables above only change the per-protocol defaults shown in that dialog. For docker compose, put these in `.env` (see [.env.example](./.env.example)).
 
 </details>
 
