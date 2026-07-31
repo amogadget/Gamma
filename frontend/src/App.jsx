@@ -515,6 +515,26 @@ export default function App() {
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
   const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
   const [zoomDraft, setZoomDraft] = useState(null);  // while typing a custom zoom %
+  // Browser fullscreen (whole app, like F11). webkit-prefixed fallbacks are
+  // for iPadOS Safari, which never shipped the unprefixed API.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(!!(document.fullscreenElement || document.webkitFullscreenElement));
+    document.addEventListener("fullscreenchange", onFs);
+    document.addEventListener("webkitfullscreenchange", onFs);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFs);
+      document.removeEventListener("webkitfullscreenchange", onFs);
+    };
+  }, []);
+  function toggleFullscreen() {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+    } else {
+      const el = document.documentElement;
+      (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el)?.catch?.(() => {});
+    }
+  }
   const restoredPdfUrlRef = useRef(null);
   const coarseRestorePendingRef = useRef(false); // last-read jump not yet applied
   const [blocks, setBlocks] = useState([]);
@@ -896,6 +916,11 @@ export default function App() {
   const [metaAutoFetch, setMetaAutoFetch] = useState(() => {
     try { return localStorage.getItem("gamma-meta-auto") !== "0"; } catch { return true; }
   });
+  // Search popover: whether the result-detail lists start expanded (SearchPanel
+  // re-reads the key each time it opens; compact find is the default).
+  const [searchDetailsDefault, setSearchDetailsDefault] = useState(() => {
+    try { return localStorage.getItem("gamma-search-details") === "1"; } catch { return false; }
+  });
   useEffect(() => {
     try { localStorage.setItem("gamma-pdf-save", pdfSaveLocal ? "1" : "0"); } catch {}
   }, [pdfSaveLocal]);
@@ -905,6 +930,9 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-meta-auto", metaAutoFetch ? "1" : "0"); } catch {}
   }, [metaAutoFetch]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-search-details", searchDetailsDefault ? "1" : "0"); } catch {}
+  }, [searchDetailsDefault]);
   const pageTitleSaveTimerRef = useRef(null);
   const viewerWrapRef = useRef(null);
   const appRef = useRef(null);
@@ -920,28 +948,57 @@ export default function App() {
   const [chatSystem, setChatSystem] = useState(() => {
     try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
   });
-  const [promptOpen, setPromptOpen] = useState(false);
   const [promptDraft, setPromptDraft] = useState("");
   // AI providers (Settings → AI providers): a user-managed list of API keys,
   // OpenAI-platform style. Keys are stored server-side per user; the server
   // only ever returns a masked hint, so key fields here start empty and an
   // empty key on edit means "keep the stored one".
-  const [aiKeysOpen, setAiKeysOpen] = useState(false);
   const [aiKeysInfo, setAiKeysInfo] = useState(null); // masked GET /ai/settings: {providers: [], protocols: []}
   const [aiKeysForm, setAiKeysForm] = useState(null); // null | {id: ""=add, protocol, name, api_key, base_url, models}
   const [aiKeysBusy, setAiKeysBusy] = useState(false);
   const [aiKeysError, setAiKeysError] = useState("");
 
-  async function openAiKeysEditor() {
+  // The settings page (account popover → Settings…): two-column modal,
+  // categories on the left, the selected pane on the right.
+  const [settingsOpen, setSettingsOpen] = useState(null); // null | "papers" | "ai" | "prompts" | "search" | "account"
+  // Which provider entry (API key) AI requests use. Only the key is chosen
+  // here — the model itself is picked in the chat panel, scoped to this key.
+  const [aiProvider, setAiProvider] = useState(() => {
+    try { return localStorage.getItem("gamma-ai-provider") || ""; } catch { return ""; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-ai-provider", aiProvider); } catch {}
+  }, [aiProvider]);
+  // Keep the selected model inside the active key's model list. Every AI call
+  // (chat, metadata, citations, titles) sends chatModel, so this is what
+  // actually routes requests to the chosen key.
+  useEffect(() => {
+    const all = aiInfo?.models || [];
+    if (!all.length) return;
+    const scoped = aiProvider && all.some((m) => m.provider === aiProvider)
+      ? all.filter((m) => m.provider === aiProvider)
+      : all;
+    if (!scoped.some((m) => m.id === chatModel)) setChatModel(scoped[0].id);
+  }, [aiProvider, aiInfo, chatModel]);
+
+  async function loadAiKeys() {
     setAiKeysError("");
     setAiKeysInfo(null);
     setAiKeysForm(null);
-    setAiKeysOpen(true);
     try {
       setAiKeysInfo(await apiJson(`${API}/ai/settings`));
     } catch (err) {
       setAiKeysError(err.message);
     }
+  }
+  // Entering the AI pane always refetches the masked key list.
+  useEffect(() => {
+    if (settingsOpen === "ai" && authUser?.user && !readOnly) loadAiKeys();
+  }, [settingsOpen]);
+
+  function openAiKeysEditor() {
+    setSettingsOpen("ai");
+    setOpenPopover(null);
   }
 
   const aiProtocolOf = (id) => aiKeysInfo?.protocols?.find((p) => p.id === id);
@@ -1118,6 +1175,49 @@ export default function App() {
   const [pptCiteBusy, setPptCiteBusy] = useState(false);
   const [metaPopPos, setMetaPopPos] = useState({ top: 0, right: 0 }); // fixed-position anchor for the metadata popover
   const [citeCopied, setCiteCopied] = useState(""); // "bibtex" | "ppt"
+  // Editable copy of the metadata fields shown in the popover. Kept as flat
+  // strings (authors comma-joined); rebuilt whenever the popover opens or a
+  // fetch lands, so a refresh replaces any half-typed edits with the result.
+  const metaToDraft = (m) => ({
+    title: m?.title || "",
+    authors: (m?.authors || []).join(", "),
+    venue: m?.venue || "",
+    year: m?.year || "",
+    volume: m?.volume || "",
+    pages: m?.pages || "",
+    doi: m?.doi || "",
+    arxiv_id: m?.arxiv_id || "",
+  });
+  const [metaDraft, setMetaDraft] = useState(null);
+  useEffect(() => {
+    if (openPopover === "meta") setMetaDraft(metaToDraft(pageMeta));
+  }, [openPopover, pageMeta]);
+
+  async function saveMetaEdits() {
+    const blockId = focusedBlockIdRef.current;
+    if (!blockId || !metaDraft) return;
+    try {
+      const data = await apiJson(`${API}/metadata/update`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ block_id: blockId, meta: metaDraft }),
+      });
+      if (focusedBlockIdRef.current !== blockId) return;
+      setPageMeta(data.meta || null);
+      setPageBibtex(data.bibtex || "");
+      setPptCite(""); // edited metadata invalidates the cached slide citation
+      setFocusedBlock((prev) => prev && prev.id === blockId
+        ? { ...prev, properties: { ...prev.properties, meta: data.meta, bibtex: data.bibtex, ppt_cite: "" } }
+        : prev);
+      if (data.meta?.title && /^PDF Notes - /.test(focusedBlock?.content || "")) {
+        await renameTitle(data.meta.title);
+      }
+      fetchHomeBlocks(); // keep the library's meta fresh for DOI-link matching
+      setStatus("Metadata saved.");
+    } catch (err) {
+      setStatus(`Metadata save failed: ${err.message}`);
+    }
+  }
   // Editable prompts for metadata extraction and PPT citations (empty = server default)
   const [metaPrompt, setMetaPrompt] = useState(() => {
     try { return localStorage.getItem("gamma-meta-prompt") || ""; } catch { return ""; }
@@ -2507,12 +2607,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     await loadBlocksForBlock(focusedBlockId);
   }
 
-  function openPromptEditor() {
+  // (Re)entering the Prompts pane rebuilds the drafts from the saved values —
+  // switching away without saving is the cancel path.
+  useEffect(() => {
+    if (settingsOpen !== "prompts") return;
     setPromptDraft(chatSystem || aiInfo?.default_prompt || "");
     setMetaPromptDraft(metaPrompt || aiInfo?.metadata_prompt || "");
     setCitePromptDraft(citePrompt || aiInfo?.cite_prompt || "");
-    setPromptOpen(true);
-  }
+  }, [settingsOpen]);
 
 
   // --- reference links: PDF text regions manually linked to papers ----------
@@ -3072,21 +3174,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             {!readOnly && focusedBlockId ? (
               <div className="pageActionCol">
                 {docId ? (
-                  <button
-                    className="pageActionBtn aiTitleBtn"
-                    title="AI: read the PDF and fill in the paper's title"
-                    aria-label="Fill in title with AI"
-                    onClick={aiFillTitle}
-                    disabled={aiTitleBusy}
-                  >
-                    {aiTitleBusy ? (
-                      <span className="chatTyping"><span /><span /><span /></span>
-                    ) : (
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
-                    )}
-                  </button>
-                ) : null}
-                {docId ? (
                   <span data-popover="meta" style={{ position: "relative", display: "inline-flex" }}>
                     <button
                       className="pageActionBtn"
@@ -3122,30 +3209,69 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       >
                         <div className="popoverTitle citeSectionRow">
                           <span>Paper metadata</span>
-                          <button
-                            className="searchToggle"
-                            title="Refresh metadata (arXiv → DOI → AI)"
-                            disabled={metaBusy}
-                            onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
-                          >{metaBusy ? "…" : "↻"}</button>
+                          <span style={{ display: "inline-flex", gap: 4 }}>
+                            <button
+                              className="searchToggle"
+                              title="AI: read the PDF and fill in the paper's title"
+                              aria-label="Fill in title with AI"
+                              disabled={aiTitleBusy}
+                              onClick={aiFillTitle}
+                            >{aiTitleBusy ? "…" : (
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
+                            )}</button>
+                            <button
+                              className="searchToggle"
+                              title="Refresh metadata (arXiv → DOI → AI)"
+                              disabled={metaBusy}
+                              onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
+                            >{metaBusy ? "…" : "↻"}</button>
+                          </span>
                         </div>
-                        {pageMeta ? (
-                          <div className="metaTable">
-                            <div className="metaRow"><span className="metaKey">Title</span><span className="metaVal">{pageMeta.title}</span></div>
-                            <div className="metaRow"><span className="metaKey">Authors</span><span className="metaVal">{(pageMeta.authors || []).join(", ") || "—"}</span></div>
-                            <div className="metaRow"><span className="metaKey">Venue</span><span className="metaVal">{pageMeta.venue || "—"}</span></div>
-                            <div className="metaRow"><span className="metaKey">Year</span><span className="metaVal">{pageMeta.year || "—"}{pageMeta.volume ? ` · vol. ${pageMeta.volume}` : ""}{pageMeta.pages ? `, pp. ${pageMeta.pages}` : ""}</span></div>
-                            {pageMeta.doi ? (
-                              <div className="metaRow"><span className="metaKey">DOI</span><span className="metaVal"><a href={`https://doi.org/${pageMeta.doi}`} target="_blank" rel="noreferrer">{pageMeta.doi}</a></span></div>
-                            ) : null}
-                            {pageMeta.arxiv_id ? (
-                              <div className="metaRow"><span className="metaKey">arXiv</span><span className="metaVal"><a href={`https://arxiv.org/abs/${pageMeta.arxiv_id}`} target="_blank" rel="noreferrer">{pageMeta.arxiv_id}</a></span></div>
-                            ) : null}
-                            <div className="metaRow"><span className="metaKey">Source</span><span className="metaVal">{pageMeta.source === "ai" ? "AI-extracted" : pageMeta.source}</span></div>
+                        <div className="metaTable">
+                          {[
+                            ["Title", "title"],
+                            ["Authors", "authors"],
+                            ["Venue", "venue"],
+                            ["Year", "year"],
+                            ["Volume", "volume"],
+                            ["Pages", "pages"],
+                            ["DOI", "doi"],
+                            ["arXiv", "arxiv_id"],
+                          ].map(([label, key]) => (
+                            <div className="metaRow" key={key}>
+                              <span className="metaKey">{label}</span>
+                              <span className="metaVal metaValEdit">
+                                <input
+                                  className="metaInput"
+                                  value={metaDraft?.[key] ?? ""}
+                                  onChange={(e) => setMetaDraft((d) => ({ ...(d || metaToDraft(null)), [key]: e.target.value }))}
+                                  placeholder="—"
+                                />
+                                {key === "doi" && metaDraft?.doi?.trim() ? (
+                                  <a className="metaLink" href={`https://doi.org/${metaDraft.doi.trim()}`} target="_blank" rel="noreferrer" title="Open on doi.org">
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
+                                  </a>
+                                ) : null}
+                                {key === "arxiv_id" && metaDraft?.arxiv_id?.trim() ? (
+                                  <a className="metaLink" href={`https://arxiv.org/abs/${metaDraft.arxiv_id.trim()}`} target="_blank" rel="noreferrer" title="Open on arXiv">
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
+                                  </a>
+                                ) : null}
+                              </span>
+                            </div>
+                          ))}
+                          {pageMeta?.source ? (
+                            <div className="metaRow"><span className="metaKey">Source</span><span className="metaVal">{pageMeta.source === "ai" ? "AI-extracted" : pageMeta.source === "manual" ? "edited by hand" : pageMeta.source}</span></div>
+                          ) : null}
+                        </div>
+                        {!pageMeta ? (
+                          <div className="popoverHint">{metaBusy ? "Fetching metadata…" : "No metadata found — fill the fields in by hand, or hit ↻ to retry."}</div>
+                        ) : null}
+                        {metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metaToDraft(pageMeta)) ? (
+                          <div className="reportModalBtns">
+                            <button className="chatSendBtn" onClick={saveMetaEdits}>Save metadata</button>
                           </div>
-                        ) : (
-                          <div className="popoverHint">{metaBusy ? "Fetching metadata…" : "No metadata yet — hit ↻ to fetch."}</div>
-                        )}
+                        ) : null}
                         {(pageMeta || pageBibtex) ? (
                           <>
                             <div className="popoverDivider" />
@@ -4028,11 +4154,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           {...common}
           onClose={() => setChatHidden(true)}
           docId={docId} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pdfTitle={pdfTitle}
+          openTabs={openTabs}
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
-          chatSystem={chatSystem} aiInfo={aiInfo}
-          openPromptEditor={openPromptEditor} openAiKeysEditor={openAiKeysEditor}
+          chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider}
+          openAiKeysEditor={openAiKeysEditor}
           openPopover={openPopover} setOpenPopover={setOpenPopover}
           setStatus={setStatus}
         />
@@ -4382,9 +4509,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               setPdfHidden={setPdfHidden}
               docNonce={pdfDocNonce}
               onFindMarks={setFindMarks}
-              confirm={setConfirmBox}
-              setStatus={setStatus}
-              onReplaced={async () => { if (focusedBlockId) await loadBlocksForBlock(focusedBlockId); }}
             />
             {pdfUrl && !homeMode ? (
               <span data-popover="share" style={{ position: "relative", display: "inline-flex" }}>
@@ -4466,70 +4590,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     {authUser.is_guest ? (
                       <div className="popoverHint">Guest data resets daily. Ask the admin for an account to keep your work.</div>
                     ) : null}
-
-                    <div className="popoverSection">Papers &amp; PDFs</div>
-                    <label className="settingRow" title="When a publisher PDF is paywalled or blocks server fetching, load a legal open-access copy (often the arXiv version) instead">
-                      <span className="settingText">
-                        <span className="settingLabel">Open-access fallback</span>
-                        <span className="settingDesc">Load a legal arXiv / OA copy when a publisher PDF is blocked</span>
-                      </span>
-                      <span className="switch">
-                        <input type="checkbox" checked={oaFallback} onChange={(e) => setOaFallback(e.target.checked)} />
-                        <span className="switchTrack" />
-                      </span>
-                    </label>
-                    <label className="settingRow" title="Look up title, authors, venue, and BibTeX (arXiv → DOI → AI) automatically when a paper is opened">
-                      <span className="settingText">
-                        <span className="settingLabel">Auto-fetch metadata</span>
-                        <span className="settingDesc">Resolve title, authors, venue &amp; BibTeX when a paper opens</span>
-                      </span>
-                      <span className="switch">
-                        <input type="checkbox" checked={metaAutoFetch} onChange={(e) => setMetaAutoFetch(e.target.checked)} />
-                        <span className="switchTrack" />
-                      </span>
-                    </label>
-                    <label className="settingRow" title="Keep a copy of PDFs opened by URL on the server, so they load fast and survive dead links">
-                      <span className="settingText">
-                        <span className="settingLabel">Save external PDFs</span>
-                        <span className="settingDesc">Cache URL-opened PDFs on the server so they survive dead links</span>
-                      </span>
-                      <span className="switch">
-                        <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
-                        <span className="switchTrack" />
-                      </span>
-                    </label>
-                    <div className="settingRow" title="Re-extract the text of every paper for full-text search. Runs in the background — progress shows in the tasks popover.">
-                      <span className="settingText">
-                        <span className="settingLabel">Search index</span>
-                        <span className="settingDesc">Re-extract all PDF text if search results look stale</span>
-                      </span>
-                      <button
-                        className="searchToggle replaceBtn"
-                        disabled={indexTask?.active}
-                        onClick={async () => {
-                          try {
-                            const d = await apiJson(`${API}/search-reindex`, { method: "POST" });
-                            setStatus(d.busy
-                              ? "Indexing is already running — see the tasks popover."
-                              : d.scheduled
-                                ? `Re-indexing ${d.scheduled} paper${d.scheduled === 1 ? "" : "s"} in the background.`
-                                : "No papers with PDFs to index.");
-                          } catch (err) {
-                            setStatus(`Reindex failed: ${err.message}`);
-                          }
-                        }}
-                      >{indexTask?.active ? "Indexing…" : "Rebuild"}</button>
-                    </div>
-
                     <div className="popoverDivider" />
-                    <button className="popoverItem" onClick={() => { openPromptEditor(); setOpenPopover(null); }}>
-                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>
-                      AI prompts…
+                    <button className="popoverItem" onClick={() => { setSettingsOpen("papers"); setOpenPopover(null); }}>
+                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
+                      Settings…
                     </button>
                     <button
                       className="popoverItem"
                       onClick={() => { setOpenPopover(null); window.location.href = `${API}/export`; }}
-                      title="Download a zip backup: your notes databases + every uploaded PDF. Restore by unpacking into users/<name>/ on the server."
+                      title="Download a zip backup: your notes databases + every uploaded PDF"
                     >
                       <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
                       Export my data (.zip)
@@ -4544,23 +4613,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         Import data (.zip)…
                       </button>
                     ) : null}
-                    {!authUser.is_guest ? (
-                      <button className="popoverItem" onClick={() => { openAiKeysEditor(); setOpenPopover(null); }}>
-                        <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></svg>
-                        AI providers &amp; keys…
-                      </button>
-                    ) : null}
                     {authUser.is_admin ? (
                       <button className="popoverItem" onClick={() => { openUsersManager(); setOpenPopover(null); }}>
                         <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
                         Manage users…
                       </button>
                     ) : null}
-                    <div className="popoverHint">
-                      {authUser.is_guest
-                        ? "AI keys & models are configured on the server."
-                        : "API keys are stored on the server for your account and never shown again. Open tabs sync across browsers; other preferences stay in this browser."}
-                    </div>
                     <div className="popoverDivider" />
                     <button className="popoverItem popoverItemDanger" onClick={doLogout}>
                       <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
@@ -4648,6 +4706,20 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5v14" /><path d="M21 5v14" /><path d="M7 12h10" /><path d="m9 9-3 3 3 3" /><path d="m15 9 3 3-3 3" /></svg>
               </button>
             </div>
+          ) : null}
+          {pdfUrl && !pdfHidden ? (
+            <button
+              className="pdfFullscreenBtn"
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "Exit full screen" : "Full screen"}
+              aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+            >
+              {isFullscreen ? (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3" /><path d="M21 8h-3a2 2 0 0 1-2-2V3" /><path d="M3 16h3a2 2 0 0 1 2 2v3" /><path d="M16 21v-3a2 2 0 0 1 2-2h3" /></svg>
+              ) : (
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></svg>
+              )}
+            </button>
           ) : null}
           {pdfUrl ? (
             <PdfViewer url={pdfUrl} highlights={highlights}
@@ -4823,166 +4895,290 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           </div>
         </div>
       ) : null}
-      {promptOpen ? (
-        <div className="reportOverlay" onClick={() => setPromptOpen(false)}>
-          <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
-            <div className="reportModalTitle">AI prompts</div>
-            <div className="reportModalHint">
-              Custom prompts are saved in this browser. Saving a prompt unchanged from its default keeps the built-in behavior.
+      {settingsOpen ? (
+        <div className="reportOverlay" onClick={() => setSettingsOpen(null)}>
+          <div className="settingsModal" onClick={(e) => e.stopPropagation()}>
+            <div className="settingsSidebar">
+              <div className="settingsSideTitle">Settings</div>
+              {[
+                ["papers", "Papers & PDFs", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /><path d="M15 2v5h5" /></svg>],
+                ["ai", "AI & API keys", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></svg>],
+                ["prompts", "Prompts", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>],
+                ["search", "Search", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>],
+              ].map(([id, label, icon]) => (
+                <button
+                  key={id}
+                  className={`settingsNavBtn ${settingsOpen === id ? "active" : ""}`}
+                  onClick={() => setSettingsOpen(id)}
+                >{icon}{label}</button>
+              ))}
             </div>
-            <div className="promptSectionHead">
-              <span>Chat system prompt{chatSystem ? " · custom" : ""}</span>
-              <button className="uiBtn sm" onClick={() => setPromptDraft(aiInfo?.default_prompt || "")}>Reset</button>
-            </div>
-            <textarea
-              className="promptTextarea"
-              value={promptDraft}
-              onChange={(e) => setPromptDraft(e.target.value)}
-              rows={5}
-              placeholder="You are a research assistant…"
-            />
-            <div className="promptSectionHead">
-              <span>Metadata extraction{metaPrompt ? " · custom" : ""}</span>
-              <button className="uiBtn sm" onClick={() => setMetaPromptDraft(aiInfo?.metadata_prompt || "")}>Reset</button>
-            </div>
-            <div className="reportModalHint">Used when a paper has no arXiv id or DOI and the AI reads the first pages instead.</div>
-            <textarea
-              className="promptTextarea"
-              value={metaPromptDraft}
-              onChange={(e) => setMetaPromptDraft(e.target.value)}
-              rows={4}
-            />
-            <div className="promptSectionHead">
-              <span>PPT citation{citePrompt ? " · custom" : ""}</span>
-              <button className="uiBtn sm" onClick={() => setCitePromptDraft(aiInfo?.cite_prompt || "")}>Reset</button>
-            </div>
-            <div className="reportModalHint">Turns the paper's BibTeX into a minimal slide-ready citation (Share → PPT citation).</div>
-            <textarea
-              className="promptTextarea"
-              value={citePromptDraft}
-              onChange={(e) => setCitePromptDraft(e.target.value)}
-              rows={4}
-            />
-            <div className="reportModalBtns">
-              <button className="uiBtn" onClick={() => setPromptOpen(false)}>Cancel</button>
-              <button className="uiBtn primary"
-                onClick={() => {
-                  // Saving the unmodified default = no custom prompt
-                  const norm = (draft, def) => {
-                    const d = (draft || "").trim();
-                    return d === (def || "").trim() ? "" : d;
-                  };
-                  setChatSystem(norm(promptDraft, aiInfo?.default_prompt));
-                  setMetaPrompt(norm(metaPromptDraft, aiInfo?.metadata_prompt));
-                  setCitePrompt(norm(citePromptDraft, aiInfo?.cite_prompt));
-                  setPromptOpen(false);
-                }}>Save</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-      {aiKeysOpen ? (
-        <div className="reportOverlay" onClick={() => setAiKeysOpen(false)}>
-          <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
-            <div className="reportModalTitle">AI providers</div>
-            <div className="reportModalHint">
-              Bring your own API keys. Keys are stored on the server for your account only and are
-              never sent back to the browser — after saving, only the last 4 characters are shown.
-            </div>
-            {!aiKeysInfo && !aiKeysError ? <div className="reportModalHint">Loading…</div> : null}
-            {aiKeysInfo ? (
-              <>
-                {aiKeysInfo.providers.length === 0 && !aiKeysForm ? (
-                  <div className="reportModalHint">
-                    {aiKeysInfo.can_edit
-                      ? "No providers yet — add one to enable AI chat, metadata extraction and citations."
-                      : "Guest accounts can't store API keys. Ask the admin for an account to use AI features."}
+            <div className="settingsPane">
+              <button className="uiClose settingsClose" onClick={() => setSettingsOpen(null)} title="Close settings" aria-label="Close settings">×</button>
+
+              {settingsOpen === "papers" ? (
+                <>
+                  <div className="settingsPaneTitle">Papers &amp; PDFs</div>
+                  <div className="settingsPaneHint">How papers are fetched, stored, and enriched when you open them. These preferences are saved in this browser.</div>
+                  <label className="settingRow">
+                    <span className="settingText">
+                      <span className="settingLabel">Open-access fallback</span>
+                      <span className="settingDesc">When a publisher PDF is paywalled or refuses to download, load a legal open-access copy instead — usually the arXiv version. A note tells you when the substitute isn't the published version.</span>
+                    </span>
+                    <span className="switch">
+                      <input type="checkbox" checked={oaFallback} onChange={(e) => setOaFallback(e.target.checked)} />
+                      <span className="switchTrack" />
+                    </span>
+                  </label>
+                  <label className="settingRow">
+                    <span className="settingText">
+                      <span className="settingLabel">Auto-fetch metadata</span>
+                      <span className="settingDesc">Look up title, authors, venue, and BibTeX the first time a paper opens (arXiv → DOI → AI). Turn this off to fetch only via the ↻ button in the metadata popover.</span>
+                    </span>
+                    <span className="switch">
+                      <input type="checkbox" checked={metaAutoFetch} onChange={(e) => setMetaAutoFetch(e.target.checked)} />
+                      <span className="switchTrack" />
+                    </span>
+                  </label>
+                  <label className="settingRow">
+                    <span className="settingText">
+                      <span className="settingLabel">Save external PDFs</span>
+                      <span className="settingDesc">Keep a server copy of PDFs opened from a URL, so they load instantly next time and survive dead links.</span>
+                    </span>
+                    <span className="switch">
+                      <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
+                      <span className="switchTrack" />
+                    </span>
+                  </label>
+                </>
+              ) : null}
+
+              {settingsOpen === "ai" ? (
+                <>
+                  <div className="settingsPaneTitle">AI &amp; API keys</div>
+                  <div className="settingsPaneHint">
+                    Bring your own API keys. They are stored on the server for your account and never sent
+                    back to the browser — after saving, only the last 4 characters are shown. The selected
+                    key is the one AI requests are billed to; the model itself is picked in the chat
+                    panel's model menu, which lists the models of the selected key.
                   </div>
-                ) : null}
-                {aiKeysInfo.providers.map((p) => {
-                  const proto = aiProtocolOf(p.protocol);
-                  return (
-                    <div key={p.id} className="aiProvRow">
-                      <span className="aiProvMeta">
-                        <span className="aiProvName">{p.name || proto?.label || p.protocol}</span>
-                        <span className="aiProvDesc">
-                          {`key ${p.key_hint || "set"} · ${proto?.label || p.protocol}`}
-                          {p.base_url ? ` · ${p.base_url}` : ""}
-                          {p.created_at ? ` · added ${new Date(p.created_at).toLocaleDateString()}` : ""}
-                        </span>
-                        <span className="aiProvDesc">
-                          models: {p.models || `${proto?.default_model || "provider default"} (default)`}
-                        </span>
-                      </span>
-                      <span className="aiProvActions">
-                        {aiKeysInfo.can_edit ? (
-                          <>
-                            <button className="uiBtn sm" disabled={aiKeysBusy} onClick={() => startEditAiProvider(p)}>Edit</button>
-                            <button className="uiBtn sm danger" disabled={aiKeysBusy} onClick={() => deleteAiProvider(p.id)}>Remove</button>
-                          </>
-                        ) : null}
-                      </span>
-                    </div>
-                  );
-                })}
-                {aiKeysForm ? (
-                  <div className="aiProvForm">
-                    <div className="promptSectionHead"><span>{aiKeysForm.id ? "Edit provider" : "Add provider"}</span></div>
-                    <select
-                      className="aiKeyInput"
-                      value={aiKeysForm.protocol}
-                      onChange={(e) => setAiKeysForm((f) => ({ ...f, protocol: e.target.value }))}
-                    >
-                      {aiKeysInfo.protocols.map((x) => (
-                        <option key={x.id} value={x.id}>{x.label}</option>
-                      ))}
-                    </select>
-                    <div className="reportModalHint">
-                      The API format, not the vendor — many services speak one of these (DeepSeek,
-                      Kimi, GLM via Anthropic format; most others via OpenAI format).
-                    </div>
-                    <input
-                      className="aiKeyInput" type="text" spellCheck={false}
-                      placeholder='Name (optional — e.g. "DeepSeek", "work key")'
-                      value={aiKeysForm.name}
-                      onChange={(e) => setAiKeysForm((f) => ({ ...f, name: e.target.value }))}
-                    />
-                    <input
-                      className="aiKeyInput" type="password" autoComplete="new-password" spellCheck={false}
-                      placeholder={aiKeysForm.id ? "API key (leave empty to keep the current one)" : "API key"}
-                      value={aiKeysForm.api_key}
-                      onChange={(e) => setAiKeysForm((f) => ({ ...f, api_key: e.target.value }))}
-                    />
-                    <input
-                      className="aiKeyInput" type="text" spellCheck={false}
-                      placeholder={`Base URL (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_base_url || ""})`}
-                      value={aiKeysForm.base_url}
-                      onChange={(e) => setAiKeysForm((f) => ({ ...f, base_url: e.target.value }))}
-                    />
-                    <input
-                      className="aiKeyInput" type="text" spellCheck={false}
-                      placeholder={`Models, comma-separated — first is the default (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_model || ""})`}
-                      value={aiKeysForm.models}
-                      onChange={(e) => setAiKeysForm((f) => ({ ...f, models: e.target.value }))}
-                    />
-                    <div className="reportModalBtns">
-                      <button className="uiBtn" onClick={() => { setAiKeysForm(null); setAiKeysError(""); }}>Cancel</button>
-                      <button className="uiBtn primary" disabled={aiKeysBusy} onClick={submitAiProvider}>
-                        {aiKeysBusy ? "Saving…" : aiKeysForm.id ? "Save changes" : "Add provider"}
-                      </button>
-                    </div>
+                  {!aiKeysInfo && !aiKeysError ? <div className="settingsPaneHint">Loading…</div> : null}
+                  {aiKeysInfo ? (
+                    <>
+                      {aiKeysInfo.providers.length === 0 && !aiKeysForm ? (
+                        <div className="settingsPaneHint">
+                          {aiKeysInfo.can_edit
+                            ? "No keys yet — add one to enable AI chat, metadata extraction, and citations."
+                            : "Guest accounts can't store API keys. Ask the admin for an account to use AI features."}
+                        </div>
+                      ) : null}
+                      {aiKeysInfo.providers.map((p) => {
+                        const proto = aiProtocolOf(p.protocol);
+                        const activeKeyId = aiKeysInfo.providers.some((x) => x.id === aiProvider)
+                          ? aiProvider : aiKeysInfo.providers[0]?.id;
+                        return (
+                          <label key={p.id} className={`aiProvRow aiProvSelectable ${activeKeyId === p.id ? "active" : ""}`}>
+                            {aiKeysInfo.providers.length > 1 ? (
+                              <input
+                                type="radio"
+                                className="aiProvRadio"
+                                name="activeAiKey"
+                                checked={activeKeyId === p.id}
+                                onChange={() => setAiProvider(p.id)}
+                                title="Use this key for AI requests"
+                              />
+                            ) : null}
+                            <span className="aiProvMeta">
+                              <span className="aiProvName">
+                                {p.name || proto?.label || p.protocol}
+                                {activeKeyId === p.id ? <span className="aiProvActiveBadge">in use</span> : null}
+                              </span>
+                              <span className="aiProvDesc">
+                                {`key ${p.key_hint || "set"} · ${proto?.label || p.protocol}`}
+                                {p.base_url ? ` · ${p.base_url}` : ""}
+                                {p.created_at ? ` · added ${new Date(p.created_at).toLocaleDateString()}` : ""}
+                              </span>
+                              <span className="aiProvDesc">
+                                models: {p.models || `${proto?.default_model || "provider default"} (default)`}
+                              </span>
+                            </span>
+                            <span className="aiProvActions">
+                              {aiKeysInfo.can_edit ? (
+                                <>
+                                  <button className="uiBtn sm iconSq" disabled={aiKeysBusy}
+                                    title="Edit this key" aria-label={`Edit ${p.name || p.protocol}`}
+                                    onClick={() => startEditAiProvider(p)}>
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /></svg>
+                                  </button>
+                                  <button className="uiBtn sm iconSq danger" disabled={aiKeysBusy}
+                                    title="Remove this key" aria-label={`Remove ${p.name || p.protocol}`}
+                                    onClick={() => deleteAiProvider(p.id)}>
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
+                                  </button>
+                                </>
+                              ) : null}
+                            </span>
+                          </label>
+                        );
+                      })}
+                      {aiKeysForm ? (
+                        <div className="aiProvForm">
+                          <div className="promptSectionHead"><span>{aiKeysForm.id ? "Edit key" : "Add key"}</span></div>
+                          <select
+                            className="aiKeyInput"
+                            value={aiKeysForm.protocol}
+                            onChange={(e) => setAiKeysForm((f) => ({ ...f, protocol: e.target.value }))}
+                          >
+                            {aiKeysInfo.protocols.map((x) => (
+                              <option key={x.id} value={x.id}>{x.label}</option>
+                            ))}
+                          </select>
+                          <div className="reportModalHint">
+                            The API format, not the vendor — many services speak one of these (DeepSeek,
+                            Kimi, GLM via Anthropic format; most others via OpenAI format).
+                          </div>
+                          <input
+                            className="aiKeyInput" type="text" spellCheck={false}
+                            placeholder='Name (optional — e.g. "DeepSeek", "work key")'
+                            value={aiKeysForm.name}
+                            onChange={(e) => setAiKeysForm((f) => ({ ...f, name: e.target.value }))}
+                          />
+                          <input
+                            className="aiKeyInput" type="password" autoComplete="new-password" spellCheck={false}
+                            placeholder={aiKeysForm.id ? "API key (leave empty to keep the current one)" : "API key"}
+                            value={aiKeysForm.api_key}
+                            onChange={(e) => setAiKeysForm((f) => ({ ...f, api_key: e.target.value }))}
+                          />
+                          <input
+                            className="aiKeyInput" type="text" spellCheck={false}
+                            placeholder={`Base URL (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_base_url || ""})`}
+                            value={aiKeysForm.base_url}
+                            onChange={(e) => setAiKeysForm((f) => ({ ...f, base_url: e.target.value }))}
+                          />
+                          <input
+                            className="aiKeyInput" type="text" spellCheck={false}
+                            placeholder={`Models, comma-separated — first is the default (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_model || ""})`}
+                            value={aiKeysForm.models}
+                            onChange={(e) => setAiKeysForm((f) => ({ ...f, models: e.target.value }))}
+                          />
+                          <div className="reportModalBtns">
+                            <button className="uiBtn" onClick={() => { setAiKeysForm(null); setAiKeysError(""); }}>Cancel</button>
+                            <button className="uiBtn primary" disabled={aiKeysBusy} onClick={submitAiProvider}>
+                              {aiKeysBusy ? "Saving…" : aiKeysForm.id ? "Save changes" : "Add key"}
+                            </button>
+                          </div>
+                        </div>
+                      ) : aiKeysInfo.can_edit ? (
+                        <div className="reportModalBtns">
+                          <button className="uiBtn primary" onClick={startAddAiProvider}>+ Add key</button>
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                  {aiKeysError ? <div className="settingsPaneHint aiKeysError">{aiKeysError}</div> : null}
+                </>
+              ) : null}
+
+              {settingsOpen === "prompts" ? (
+                <>
+                  <div className="settingsPaneTitle">Prompts</div>
+                  <div className="settingsPaneHint">
+                    The instructions Gamma sends with each kind of AI request. Custom prompts are saved in
+                    this browser; saving a prompt unchanged from its default keeps the built-in behavior.
                   </div>
-                ) : (
+                  <div className="promptSectionHead">
+                    <span>Chat system prompt{chatSystem ? " · custom" : ""}</span>
+                    <button className="uiBtn sm" onClick={() => setPromptDraft(aiInfo?.default_prompt || "")}>Reset</button>
+                  </div>
+                  <textarea
+                    className="promptTextarea"
+                    value={promptDraft}
+                    onChange={(e) => setPromptDraft(e.target.value)}
+                    rows={5}
+                    placeholder="You are a research assistant…"
+                  />
+                  <div className="promptSectionHead">
+                    <span>Metadata extraction{metaPrompt ? " · custom" : ""}</span>
+                    <button className="uiBtn sm" onClick={() => setMetaPromptDraft(aiInfo?.metadata_prompt || "")}>Reset</button>
+                  </div>
+                  <div className="settingsPaneHint">Used when a paper has no arXiv id or DOI and the AI reads the first pages instead.</div>
+                  <textarea
+                    className="promptTextarea"
+                    value={metaPromptDraft}
+                    onChange={(e) => setMetaPromptDraft(e.target.value)}
+                    rows={4}
+                  />
+                  <div className="promptSectionHead">
+                    <span>PPT citation{citePrompt ? " · custom" : ""}</span>
+                    <button className="uiBtn sm" onClick={() => setCitePromptDraft(aiInfo?.cite_prompt || "")}>Reset</button>
+                  </div>
+                  <div className="settingsPaneHint">Turns the paper's BibTeX into a minimal slide-ready citation (metadata popover → Slide citation).</div>
+                  <textarea
+                    className="promptTextarea"
+                    value={citePromptDraft}
+                    onChange={(e) => setCitePromptDraft(e.target.value)}
+                    rows={4}
+                  />
                   <div className="reportModalBtns">
-                    <button className="uiBtn" onClick={() => setAiKeysOpen(false)}>Close</button>
-                    {aiKeysInfo.can_edit ? (
-                      <button className="uiBtn primary" onClick={startAddAiProvider}>+ Add provider</button>
-                    ) : null}
+                    <button className="uiBtn primary"
+                      onClick={() => {
+                        // Saving the unmodified default = no custom prompt
+                        const norm = (draft, def) => {
+                          const d = (draft || "").trim();
+                          return d === (def || "").trim() ? "" : d;
+                        };
+                        setChatSystem(norm(promptDraft, aiInfo?.default_prompt));
+                        setMetaPrompt(norm(metaPromptDraft, aiInfo?.metadata_prompt));
+                        setCitePrompt(norm(citePromptDraft, aiInfo?.cite_prompt));
+                        setStatus("Prompts saved.");
+                      }}>Save prompts</button>
                   </div>
-                )}
-              </>
-            ) : null}
-            {aiKeysError ? <div className="reportModalHint aiKeysError">{aiKeysError}</div> : null}
+                </>
+              ) : null}
+
+              {settingsOpen === "search" ? (
+                <>
+                  <div className="settingsPaneTitle">Search</div>
+                  <div className="settingsPaneHint">
+                    Full-text search covers your notes and the text of every PDF in the library. PDFs are
+                    indexed automatically in the background the first time search needs them.
+                  </div>
+                  <label className="settingRow">
+                    <span className="settingText">
+                      <span className="settingLabel">Expand result details by default</span>
+                      <span className="settingDesc">Open search with the full result lists (titles, notes, other papers) already visible. When off, search starts compact — just the match counter for the open PDF — and the list button in the search bar shows the details.</span>
+                    </span>
+                    <span className="switch">
+                      <input type="checkbox" checked={searchDetailsDefault} onChange={(e) => setSearchDetailsDefault(e.target.checked)} />
+                      <span className="switchTrack" />
+                    </span>
+                  </label>
+                  <div className="settingRow">
+                    <span className="settingText">
+                      <span className="settingLabel">Rebuild the PDF text index</span>
+                      <span className="settingDesc">Re-extract the text of every paper. Use this if library-wide search results look stale or incomplete. Runs in the background — progress shows in the tasks popover.</span>
+                    </span>
+                    <button
+                      className="uiBtn sm"
+                      disabled={indexTask?.active}
+                      onClick={async () => {
+                        try {
+                          const d = await apiJson(`${API}/search-reindex`, { method: "POST" });
+                          setStatus(d.busy
+                            ? "Indexing is already running — see the tasks popover."
+                            : d.scheduled
+                              ? `Re-indexing ${d.scheduled} paper${d.scheduled === 1 ? "" : "s"} in the background.`
+                              : "No papers with PDFs to index.");
+                        } catch (err) {
+                          setStatus(`Reindex failed: ${err.message}`);
+                        }
+                      }}
+                    >{indexTask?.active ? "Indexing…" : "Rebuild"}</button>
+                  </div>
+                </>
+              ) : null}
+
+            </div>
           </div>
         </div>
       ) : null}
@@ -5044,24 +5240,31 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     </span>
                     {!u.is_guest ? (
                       <span className="aiProvActions">
-                        <button className="uiBtn sm" disabled={usersBusy}
+                        <button className="uiBtn sm uMgrBtn" disabled={usersBusy}
                           title="Rename the account — sessions and share links keep working"
                           onClick={() => { setUsersError(""); setUserPwEdit(null); setUserRenameEdit({ username: u.username, value: u.username }); }}>
                           Rename…
                         </button>
-                        <button className="uiBtn sm" disabled={usersBusy}
+                        <button className="uiBtn sm uMgrBtn" disabled={usersBusy}
                           onClick={() => { setUsersError(""); setUserRenameEdit(null); setUserPwEdit({ username: u.username, password: "" }); }}>
                           Password…
                         </button>
-                        <button className="uiBtn sm" disabled={usersBusy || lastAdmin}
+                        <button className="uiBtn sm uMgrBtnWide" disabled={usersBusy || lastAdmin}
                           title={lastAdmin ? "The last admin can't be demoted"
                             : u.is_admin ? "Revoke the admin privilege" : "Grant the admin privilege"}
                           onClick={() => usersCall(`/users/${encodeURIComponent(u.username)}`, "PUT", { is_admin: !u.is_admin })}>
                           {u.is_admin ? "Revoke admin" : "Make admin"}
                         </button>
                         {u.username !== usersInfo.me ? (
-                          <button className="uiBtn sm danger" disabled={usersBusy} onClick={() => deleteUserAccount(u)}>Delete</button>
-                        ) : null}
+                          <button className="uiBtn sm iconSq danger" disabled={usersBusy}
+                            title="Delete this account and all its data"
+                            aria-label={`Delete ${u.username}`}
+                            onClick={() => deleteUserAccount(u)}>
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
+                          </button>
+                        ) : (
+                          <span className="iconSqSlot" aria-hidden="true" />
+                        )}
                       </span>
                     ) : null}
                   </div>
