@@ -44,4 +44,16 @@ AI_PROTOCOLS = {
                      or "https://api.openai.com").rstrip("/"),
         "default_model": "gpt-4o-mini",
     },
+    # No API key: the entry holds OAuth tokens from signing in with a ChatGPT
+    # account (Codex CLI's flow) — usage is billed to the subscription. The
+    # base URL is the Codex Responses endpoint on the ChatGPT backend.
+    # auth "oauth" marks sign-in protocols for the settings form and the
+    # provider CRUD guards (default is "key").
+    "chatgpt": {
+        "label": "ChatGPT (subscription sign-in)",
+        "base_url": (os.environ.get("GAMMA_AI_CHATGPT_BASE_URL", "")
+                     or "https://chatgpt.com/backend-api/codex").rstrip("/"),
+        "default_model": "gpt-5.1",
+        "auth": "oauth",
+    },
 }

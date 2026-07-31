@@ -74,6 +74,12 @@ def test_proxy_save_writes_complete_file_then_redirects(guest, monkeypatch):
     assert r3.headers["cache-control"] == "public, max-age=2592000, immutable"
 
 
+def test_pdf_text_status_missing_doc(guest):
+    r = guest.get("/api/pdf-text-status", params={"doc_id": "deadbeefdeadbeefdeadbeef"})
+    assert r.status_code == 200
+    assert r.json() == {"found": False, "ok": False, "chars": 0}
+
+
 def test_proxy_rejects_non_pdf(guest, monkeypatch):
     made = _fake(monkeypatch, data=b"<html>paywall</html>", ctype="text/html")
     r = guest.get("/api/pdf", params={"source_url": "https://example.org/not-a-pdf"})

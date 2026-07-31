@@ -9,6 +9,7 @@ import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
 import { COLORS } from "./pdfViewer";
 import { AutoGrowTextarea } from "./widgets";
+import { FolderIcon, LinkIcon } from "./icons";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
@@ -296,7 +297,7 @@ function BlockRow({
             {block._pageId ? (block._sourceUrl ? "PDF annotation" : "regular note") : block.page ? `p.${block.page}` : "note"}
             {block._folders?.map((f) => (
               <span key={f} className="folderTagBadge" title={`In folder ${f}`}>
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+                <FolderIcon size={10} />
                 {f}
               </span>
             ))}
@@ -408,7 +409,7 @@ function BlockRow({
               title={block.properties.link_url || "Open linked paper"}
               onClick={(e) => { e.stopPropagation(); onOpenLinkTarget?.(block); }}
             >
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+              <LinkIcon size={11} strokeWidth={2.4} />
               {block.properties.link_page_id
                 ? "linked paper"
                 : (block.properties.link_url || "").replace(/^https?:\/\//i, "").slice(0, 48)}

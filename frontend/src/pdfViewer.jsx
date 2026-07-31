@@ -10,6 +10,7 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
 import { fmtBytes } from "./utils";
+import { LinkIcon } from "./icons";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 // Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
 // Guarded: a throw at module scope takes down every route, PDF or not.
@@ -1034,7 +1035,7 @@ function PlainTip({ onConfirm, onLink }) {
             type="button"
             title="Link this reference to a paper (DOI / arXiv / existing PDF)"
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+            <LinkIcon size={13} />
           </button>
         ) : null}
       </div>
