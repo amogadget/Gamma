@@ -17,9 +17,10 @@ import xml.etree.ElementTree as ET
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..ai_settings import ai_runtime
+from ..ai_settings import ai_runtime, require_ai_runtime
 from ..auth import require_user
 from ..db import page_now, user_db_path
+from ..pdf_text import PDF_EXTRACT_FAILED
 from .ai import METADATA_PROMPT, CITE_PROMPT, _call_ai, _extract_pdf_context, _resolve_model
 
 router = APIRouter(prefix="/api", tags=["metadata"])
@@ -221,6 +222,8 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
     doc_id = props.get("doc_id") or ""
     source_url = props.get("source_url") or props.get("sourceUrl") or ""
     text = _extract_pdf_context(user, doc_id, limit=6000) if doc_id else ""
+    if text == PDF_EXTRACT_FAILED:  # nothing for the AI to read
+        text = ""
 
     meta, bibtex = None, ""
     arxiv_id = _find_arxiv_id(source_url, text)
@@ -313,10 +316,7 @@ def metadata_cite(payload: CiteRequest, request: Request):
     _, props = _load_page(user, payload.block_id)
     if props.get("ppt_cite") and not payload.force:
         return {"citation": props["ppt_cite"], "cached": True}
-    rt = ai_runtime(user)
-    if not rt["enabled"]:
-        raise HTTPException(status_code=503,
-                            detail="AI not configured (add an API key in Settings → AI providers)")
+    rt = require_ai_runtime(user)
     meta = props.get("meta")
     bibtex = props.get("bibtex", "")
     if not meta and not bibtex:

@@ -20,7 +20,8 @@ from ..blocks_store import (
     flatten_tree,
     last_child_position,
 )
-from ..db import page_now, user_db_path, user_uploads_dir
+from ..db import connect_data_db, page_now, user_db_path, user_uploads_dir
+from ..markdown_export import build_tree
 from ..storage import cleanup_orphan_uploads
 from ..textnorm import fuzzy_pattern
 
@@ -229,19 +230,7 @@ async def ub_get_subtree(block_id: str, request: Request):
         rows = fetch_subtree(conn, block_id)
     if not rows:
         raise HTTPException(status_code=404, detail="block not found")
-    # Build a full id→node map, wire children, then return the root node by id
-    by_id: dict = {}
-    for r in rows:
-        node = block_to_dict(r)
-        node["children"] = []
-        by_id[r[0]] = node
-    for node in by_id.values():
-        parent = by_id.get(node["parent_id"])
-        if parent:
-            parent["children"].append(node)
-    for node in by_id.values():
-        node["children"].sort(key=lambda n: n["position"])
-    return {"block": by_id.get(block_id)}
+    return {"block": build_tree(rows, block_id)}
 
 
 @router.get("/blocks/{block_id}/backlinks")
@@ -342,9 +331,8 @@ def _purge_derived_data(user: str, conn, deleted_ids: list):
         live_docs = {r[0] for r in conn.execute(
             "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks "
             "WHERE json_extract(properties, '$.doc_id') IS NOT NULL").fetchall()}
-        with sqlite3.connect(user_db_path(user, "data.db")) as ddb:
+        with connect_data_db(user) as ddb:
             _ensure_schema(ddb)
-            ddb.execute("CREATE TABLE IF NOT EXISTS chats (block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)")
             ddb.executemany("DELETE FROM chats WHERE block_id = ?", [(i,) for i in deleted_ids])
             stale = [r[0] for r in ddb.execute("SELECT doc_id FROM pdf_fts_docs").fetchall() if r[0] not in live_docs]
             for d in stale:
