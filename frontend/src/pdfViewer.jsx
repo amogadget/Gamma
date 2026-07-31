@@ -38,6 +38,56 @@ function cachePdf(url, buf) {
   while (PDF_CACHE.size > PDF_CACHE_MAX) PDF_CACHE.delete(PDF_CACHE.keys().next().value);
 }
 
+// Persistent second-level cache via the Cache Storage API: survives refreshes,
+// closed tabs, and browser restarts, so a paper is downloaded once per month
+// per browser. Content behind a URL never changes (upload names are content
+// hashes; proxy-saved files are written once), so serving from disk is safe.
+// caches is undefined in insecure contexts (plain http over LAN) — every
+// helper degrades to a no-op there and the HTTP cache picks up the slack.
+const DISK_CACHE_NAME = "gamma-pdf-v1";
+const DISK_CACHE_TTL_MS = 30 * 24 * 3600 * 1000; // one month
+const DISK_CACHE_MAX = 30; // papers kept on disk
+
+async function diskCacheGet(url) {
+  try {
+    if (typeof caches === "undefined") return null;
+    const cache = await caches.open(DISK_CACHE_NAME);
+    const hit = await cache.match(url);
+    if (!hit) return null;
+    const at = parseInt(hit.headers.get("x-cached-at") || "0", 10);
+    if (!at || Date.now() - at > DISK_CACHE_TTL_MS) {
+      cache.delete(url).catch(() => {});
+      return null;
+    }
+    return await hit.arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
+async function diskCachePut(url, buf) {
+  let copy;
+  try {
+    copy = buf.slice(0); // synchronously, before the caller hands buf to pdf.js
+    if (typeof caches === "undefined") return;
+    const cache = await caches.open(DISK_CACHE_NAME);
+    await cache.put(url, new Response(copy, {
+      headers: { "Content-Type": "application/pdf", "x-cached-at": String(Date.now()) },
+    }));
+    // Evict the oldest entries beyond the cap (Cache Storage has no TTL of its own)
+    const keys = await cache.keys();
+    if (keys.length > DISK_CACHE_MAX) {
+      const dated = await Promise.all(keys.map(async (req) => ({
+        req, at: parseInt((await cache.match(req))?.headers.get("x-cached-at") || "0", 10),
+      })));
+      dated.sort((a, b) => a.at - b.at);
+      for (const d of dated.slice(0, keys.length - DISK_CACHE_MAX)) {
+        await cache.delete(d.req);
+      }
+    }
+  } catch {}
+}
+
 // Abort a download when no bytes arrive for this long — a hung server
 // otherwise leaves the fetch (and the UI) waiting forever.
 const STALL_MS = 45000;
@@ -77,6 +127,12 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
     // ordinary cache hits have no row and ignore this.
     onLoadState?.(url, { phase: "cached" });
     return cached;
+  }
+  const disk = await diskCacheGet(url);
+  if (disk) {
+    if (isCancelled()) return null;
+    onLoadState?.(url, { phase: "cached" });
+    return disk;
   }
   onLoadState?.(url, { phase: "start" });
   // Stall watchdog: abort when the connection goes silent — the proxy may sit
@@ -140,6 +196,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
       data = await readBody(probe, beat);
       if (isCancelled()) return null;
     }
+    diskCachePut(url, data); // fire-and-forget; copies the buffer synchronously
     onLoadState?.(url, { phase: "done", bytes: data.byteLength });
     return data;
   } catch (e) {
