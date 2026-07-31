@@ -820,6 +820,12 @@ export default function App() {
       }
       const name = (pdfTitle || decodeURIComponent((url.split("source_url=")[1] || url).split("/").pop() || "PDF")).slice(0, 60);
       transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…" });
+    } else if (st.phase === "progress") {
+      const id = transferByUrlRef.current[url];
+      if (id) updateTransfer(id, {
+        status: "active",
+        info: st.total ? `${fmtBytes(st.loaded)} / ${fmtBytes(st.total)}` : `${fmtBytes(st.loaded)}…`,
+      });
     } else {
       const id = transferByUrlRef.current[url];
       if (!id) return;
@@ -829,7 +835,7 @@ export default function App() {
       } else {
         updateTransfer(id, st.phase === "done"
           ? { status: "done", info: fmtBytes(st.bytes) }
-          : { status: "error", info: "failed" });
+          : { status: "error", info: (st.detail || "failed").slice(0, 60) });
       }
     }
   }
@@ -1207,7 +1213,7 @@ export default function App() {
       setPageBibtex(data.bibtex || "");
       setPptCite(""); // edited metadata invalidates the cached slide citation
       setFocusedBlock((prev) => prev && prev.id === blockId
-        ? { ...prev, properties: { ...prev.properties, meta: data.meta, bibtex: data.bibtex, ppt_cite: "" } }
+        ? { ...prev, properties: { ...prev.properties, meta: data.meta, bibtex: data.bibtex, ppt_cite: "", meta_error: undefined } }
         : prev);
       if (data.meta?.title && /^PDF Notes - /.test(focusedBlock?.content || "")) {
         await renameTitle(data.meta.title);
@@ -1255,7 +1261,7 @@ export default function App() {
       setPageBibtex(data.bibtex || "");
       setPptCite(""); // fresh metadata invalidates the cached slide citation
       setFocusedBlock((prev) => prev && prev.id === block.id
-        ? { ...prev, properties: { ...prev.properties, meta: data.meta, bibtex: data.bibtex } }
+        ? { ...prev, properties: { ...prev.properties, meta: data.meta, bibtex: data.bibtex, meta_error: undefined } }
         : prev);
       // Auto-fill the page title from metadata when it's still the default filename
       // title — awaited so the library refetch below can't win the race and
@@ -1294,6 +1300,7 @@ export default function App() {
     setPageMeta(null);
     setPageBibtex("");
     if (!metaAutoFetch) return; // manual via ↻ only
+    if (b.properties.meta_error) return; // a past lookup failed — retry only via ↻
     if (attemptedMetaRef.current.has(b.id)) return;
     attemptedMetaRef.current.add(b.id);
     fetchMetadata(b, false);
@@ -3245,6 +3252,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                                   className="metaInput"
                                   value={metaDraft?.[key] ?? ""}
                                   onChange={(e) => setMetaDraft((d) => ({ ...(d || metaToDraft(null)), [key]: e.target.value }))}
+                                  onKeyDown={(e) => {
+                                    if (e.key !== "Enter") return;
+                                    e.preventDefault();
+                                    // Enter = Save (only when something actually changed)
+                                    if (metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metaToDraft(pageMeta))) saveMetaEdits();
+                                  }}
                                   placeholder="—"
                                 />
                                 {key === "doi" && metaDraft?.doi?.trim() ? (
@@ -3265,7 +3278,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                           ) : null}
                         </div>
                         {!pageMeta ? (
-                          <div className="popoverHint">{metaBusy ? "Fetching metadata…" : "No metadata found — fill the fields in by hand, or hit ↻ to retry."}</div>
+                          <div className="popoverHint">{metaBusy
+                            ? "Fetching metadata…"
+                            : focusedBlock?.properties?.meta_error
+                              ? "A previous lookup found nothing — it won't retry automatically. Fill the fields in by hand, or hit ↻ to retry."
+                              : "No metadata found — fill the fields in by hand, or hit ↻ to retry."}</div>
                         ) : null}
                         {metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metaToDraft(pageMeta)) ? (
                           <div className="reportModalBtns">
