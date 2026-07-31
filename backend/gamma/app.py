@@ -97,8 +97,15 @@ def create_app() -> FastAPI:
             candidate = (static_dir / path).resolve()
             # Path-traversal guard: only serve files inside the static dir
             if path and candidate.is_file() and candidate.is_relative_to(static_dir.resolve()):
-                return FileResponse(candidate)
-            return FileResponse(index_html)
+                if path.startswith("assets/"):
+                    # Vite content-hashes these filenames — safe to cache forever.
+                    return FileResponse(candidate, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+                # Unhashed files (pdf.worker.min.mjs, favicons…) change in place on
+                # upgrade — always revalidate (cheap 304 via the ETag).
+                return FileResponse(candidate, headers={"Cache-Control": "no-cache"})
+            # index.html must revalidate every load, or clients keep referencing
+            # deleted hashed assets after a deploy.
+            return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
 
     _startup_maintenance()
     return app

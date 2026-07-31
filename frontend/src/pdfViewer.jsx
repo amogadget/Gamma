@@ -9,6 +9,8 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 // public/pdf.worker.min.mjs is the matching legacy worker — keep both legacy.
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
+import { fmtBytes } from "./utils";
+import { ChevronRightIcon, LinkIcon, OutlineIcon } from "./icons";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 // Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
 // Guarded: a throw at module scope takes down every route, PDF or not.
@@ -37,9 +39,88 @@ function cachePdf(url, buf) {
   while (PDF_CACHE.size > PDF_CACHE_MAX) PDF_CACHE.delete(PDF_CACHE.keys().next().value);
 }
 
-// Download a PDF (cache-first) and report progress phases to the host.
-// Returns the ArrayBuffer, or null when the load failed or was cancelled
-// (both already reported via onLoadState).
+// Persistent second-level cache via the Cache Storage API: survives refreshes,
+// closed tabs, and browser restarts, so a paper is downloaded once per month
+// per browser. Content behind a URL never changes (upload names are content
+// hashes; proxy-saved files are written once), so serving from disk is safe.
+// caches is undefined in insecure contexts (plain http over LAN) — every
+// helper degrades to a no-op there and the HTTP cache picks up the slack.
+const DISK_CACHE_NAME = "gamma-pdf-v1";
+const DISK_CACHE_TTL_MS = 30 * 24 * 3600 * 1000; // one month
+const DISK_CACHE_MAX = 30; // papers kept on disk
+
+async function diskCacheGet(url) {
+  try {
+    if (typeof caches === "undefined") return null;
+    const cache = await caches.open(DISK_CACHE_NAME);
+    const hit = await cache.match(url);
+    if (!hit) return null;
+    const at = parseInt(hit.headers.get("x-cached-at") || "0", 10);
+    if (!at || Date.now() - at > DISK_CACHE_TTL_MS) {
+      cache.delete(url).catch(() => {});
+      return null;
+    }
+    return await hit.arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
+async function diskCachePut(url, buf) {
+  let copy;
+  try {
+    copy = buf.slice(0); // synchronously, before the caller hands buf to pdf.js
+    if (typeof caches === "undefined") return;
+    const cache = await caches.open(DISK_CACHE_NAME);
+    await cache.put(url, new Response(copy, {
+      headers: { "Content-Type": "application/pdf", "x-cached-at": String(Date.now()) },
+    }));
+    // Evict the oldest entries beyond the cap (Cache Storage has no TTL of its own)
+    const keys = await cache.keys();
+    if (keys.length > DISK_CACHE_MAX) {
+      const dated = await Promise.all(keys.map(async (req) => ({
+        req, at: parseInt((await cache.match(req))?.headers.get("x-cached-at") || "0", 10),
+      })));
+      dated.sort((a, b) => a.at - b.at);
+      for (const d of dated.slice(0, keys.length - DISK_CACHE_MAX)) {
+        await cache.delete(d.req);
+      }
+    }
+  } catch {}
+}
+
+// Abort a download when no bytes arrive for this long — a hung server
+// otherwise leaves the fetch (and the UI) waiting forever.
+const STALL_MS = 45000;
+
+// Drain a Response body chunk-by-chunk so byte progress can be reported
+// while the download runs (arrayBuffer() only resolves at the very end).
+async function readBody(resp, onChunk) {
+  if (!resp.body?.getReader) {
+    const buf = await resp.arrayBuffer();
+    onChunk(buf.byteLength);
+    return buf;
+  }
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    size += value.byteLength;
+    onChunk(value.byteLength);
+  }
+  const buf = new Uint8Array(size);
+  let off = 0;
+  for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
+  return buf.buffer;
+}
+
+// Download a PDF (cache-first) and report progress phases to the host:
+// start → progress (bytes) → done, or error {detail}. Returns the
+// ArrayBuffer, or null when the load failed or was cancelled (both already
+// reported via onLoadState).
 async function fetchPdfData(url, onLoadState, isCancelled) {
   const cached = PDF_CACHE.get(url);
   if (cached) {
@@ -48,40 +129,88 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
     onLoadState?.(url, { phase: "cached" });
     return cached;
   }
-  onLoadState?.(url, { phase: "start" });
-  // Parallel range requests overlap with worker download. Each range is its
-  // own HTTP/2 stream so flow-control doesn't single-stream-cap us. Probe
-  // the size via a 1-byte range request (backend doesn't allow HEAD).
-  const probe = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include" });
-  if (isCancelled()) return null;
-  if (!probe.ok) { onLoadState?.(url, { phase: "error" }); return null; }
-  await probe.arrayBuffer();
-  const m = (probe.headers.get("content-range") || "").match(/\/(\d+)$/);
-  const total = m ? parseInt(m[1], 10) : 0;
-  let data;
-  if (total > 0) {
-    const N = 6;
-    const chunkSize = Math.ceil(total / N);
-    const parts = await Promise.all(Array.from({ length: N }, (_, i) => {
-      const start = i * chunkSize;
-      const end = Math.min(start + chunkSize - 1, total - 1);
-      return fetch(url, { headers: { Range: `bytes=${start}-${end}` }, credentials: "include" })
-        .then((r) => r.arrayBuffer());
-    }));
+  const disk = await diskCacheGet(url);
+  if (disk) {
     if (isCancelled()) return null;
-    const buf = new Uint8Array(total);
-    let off = 0;
-    for (const p of parts) { buf.set(new Uint8Array(p), off); off += p.byteLength; }
-    data = buf.buffer;
-  } else {
-    const resp = await fetch(url, { credentials: "include" });
-    if (isCancelled()) return null;
-    if (!resp.ok) { onLoadState?.(url, { phase: "error" }); return null; }
-    data = await resp.arrayBuffer();
-    if (isCancelled()) return null;
+    onLoadState?.(url, { phase: "cached" });
+    return disk;
   }
-  onLoadState?.(url, { phase: "done", bytes: data.byteLength });
-  return data;
+  onLoadState?.(url, { phase: "start" });
+  // Stall watchdog: abort when the connection goes silent — the proxy may sit
+  // for a while before its upstream download produces the first byte, but a
+  // connection with no bytes for STALL_MS is dead, not slow.
+  const ctrl = new AbortController();
+  let loaded = 0, total = 0, lastByteAt = Date.now(), lastReport = 0, stalled = false;
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastByteAt > STALL_MS) { stalled = true; ctrl.abort(); }
+  }, 5000);
+  const beat = (n) => {
+    loaded += n;
+    lastByteAt = Date.now();
+    if (Date.now() - lastReport > 200) {
+      lastReport = Date.now();
+      onLoadState?.(url, { phase: "progress", loaded, total });
+    }
+  };
+  try {
+    // Probe with a 1-byte range request (backend doesn't allow HEAD). Servers
+    // that honor it (local uploads) reveal the size for parallel range
+    // requests; the /api/pdf proxy ignores Range and answers 200 with the
+    // whole file — that response IS the download, stream it directly instead
+    // of discarding it and fetching everything a second time.
+    const probe = await fetch(url, { headers: { Range: "bytes=0-0" }, credentials: "include", signal: ctrl.signal });
+    if (isCancelled()) return null;
+    if (!probe.ok) {
+      let detail = `HTTP ${probe.status}`;
+      try {
+        const j = JSON.parse(await probe.text());
+        if (typeof j.detail === "string") detail = j.detail;
+      } catch {}
+      onLoadState?.(url, { phase: "error", detail });
+      return null;
+    }
+    const m = (probe.headers.get("content-range") || "").match(/\/(\d+)$/);
+    let data;
+    if (probe.status === 206 && m) {
+      total = parseInt(m[1], 10);
+      await probe.arrayBuffer(); // the 1 probe byte
+      // Parallel range requests overlap with worker download. Each range is
+      // its own HTTP/2 stream so flow-control doesn't single-stream-cap us.
+      const N = 6;
+      const chunkSize = Math.ceil(total / N);
+      const parts = await Promise.all(Array.from({ length: N }, (_, i) => {
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize - 1, total - 1);
+        return fetch(url, { headers: { Range: `bytes=${start}-${end}` }, credentials: "include", signal: ctrl.signal })
+          .then((r) => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return readBody(r, beat);
+          });
+      }));
+      if (isCancelled()) return null;
+      const buf = new Uint8Array(total);
+      let off = 0;
+      for (const p of parts) { buf.set(new Uint8Array(p), off); off += p.byteLength; }
+      data = buf.buffer;
+    } else {
+      total = parseInt(probe.headers.get("content-length") || "0", 10) || 0;
+      data = await readBody(probe, beat);
+      if (isCancelled()) return null;
+    }
+    diskCachePut(url, data); // fire-and-forget; copies the buffer synchronously
+    onLoadState?.(url, { phase: "done", bytes: data.byteLength });
+    return data;
+  } catch (e) {
+    if (!isCancelled()) {
+      onLoadState?.(url, {
+        phase: "error",
+        detail: stalled ? `no data for ${Math.round(STALL_MS / 1000)}s — server not responding` : (e.message || "network error"),
+      });
+    }
+    return null;
+  } finally {
+    clearInterval(watchdog);
+  }
 }
 
 function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks, onExternalLink, onBeforeLinkJump, onLoadState }) {
@@ -90,6 +219,9 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   const [numPages, setNumPages] = useState(0);
   const [docSeq, setDocSeq] = useState(0); // bumped per document — keys the page tree so swaps are atomic
   const [displayedUrl, setDisplayedUrl] = useState(""); // url of the document on screen (lags `url` during a load)
+  const [loadState, setLoadState] = useState(null); // {phase, loaded?, total?, detail?} of the in-flight load — drives the status pill
+  const [retryNonce, setRetryNonce] = useState(0); // bumped by the Retry button to re-run a failed load
+  const loadStartRef = useRef(0); // when the current load began — the pill shows a "still waiting" hint after a while
   const [forcePages, setForcePages] = useState(new Set());
   const pageHeightsRef = useRef([]); // viewport heights at scale 1, indexed 0..n-1
 
@@ -266,9 +398,16 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   useEffect(() => {
     if (!url) return;
     let cancelled = false;
+    loadStartRef.current = Date.now();
+    // Mirror load phases into local state (for the status pill) while still
+    // forwarding them to the host's transfer list.
+    const report = (u, st) => {
+      if (!cancelled) setLoadState(st);
+      onLoadState?.(u, st);
+    };
     (async () => {
       try {
-        const data = await fetchPdfData(url, onLoadState, () => cancelled);
+        const data = await fetchPdfData(url, report, () => cancelled);
         if (!data || cancelled) return;
         cachePdf(url, data); // insert or bump LRU position
         const doc = await pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise;
@@ -294,6 +433,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         setDocSeq((s) => s + 1);
         setDisplayedUrl(url);
         setPdfDoc(doc);
+        setLoadState(null); // the document is on screen — drop the status pill
         // Old doc torn down after the swap commit — destroying it while its
         // pages are still mounted spams transport-destroyed rejections.
         if (prev && prev !== doc) setTimeout(() => prev.destroy().catch(() => {}), 1000);
@@ -306,8 +446,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
             setPageHeights([...heights]);
           }
         }
-      } catch {
-        if (!cancelled) onLoadState?.(url, { phase: "error" });
+      } catch (e) {
+        if (!cancelled) report(url, { phase: "error", detail: e?.message || "failed to open the PDF" });
       }
     })();
     return () => {
@@ -316,7 +456,17 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       // now-orphaned "downloading…" task entry.
       onLoadState?.(url, { phase: "cancelled" });
     };
-  }, [url]);
+  }, [url, retryNonce]);
+
+  // While a load is in flight, tick once a second so the status pill can show
+  // elapsed-time hints ("still waiting…") without any bytes arriving.
+  const [, setLoadTick] = useState(0);
+  const loading = !!url && displayedUrl !== url && !!loadState;
+  useEffect(() => {
+    if (!loading || loadState?.phase === "error") return;
+    const t = setInterval(() => setLoadTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [loading, loadState?.phase]);
 
   // Preserve scroll position across zoom changes by anchoring on the page
   // currently at the top of the viewport (and how far down within it),
@@ -586,6 +736,31 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
 
   return (
     <div style={{ position: "relative", height: "100%" }}>
+      {loading ? (
+        <div className={"pdfLoadPill" + (loadState.phase === "error" ? " error" : "")} role="status">
+          {loadState.phase === "error" ? (
+            <>
+              <span className="pdfLoadText">PDF load failed — {loadState.detail || "unknown error"}</span>
+              <button type="button" className="pdfLoadRetryBtn" onClick={() => setRetryNonce((n) => n + 1)}>Retry</button>
+            </>
+          ) : (
+            <>
+              <span className="pdfLoadSpin" aria-hidden="true" />
+              <span className="pdfLoadText">
+                {loadState.phase === "progress"
+                  ? (loadState.total
+                    ? `Downloading… ${fmtBytes(loadState.loaded)} of ${fmtBytes(loadState.total)} (${Math.min(99, Math.floor((loadState.loaded / loadState.total) * 100))}%)`
+                    : `Downloading… ${fmtBytes(loadState.loaded)}`)
+                  : loadState.phase === "start"
+                    ? (Date.now() - loadStartRef.current > 6000
+                      ? "Still waiting — the server may be fetching the PDF from its source…"
+                      : "Requesting PDF…")
+                    : "Preparing document…"}
+              </span>
+            </>
+          )}
+        </div>
+      ) : null}
       {outline ? (
         <button
           className={"pdfOutlineBtn" + (outlineOpen ? " open" : "")}
@@ -594,7 +769,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           aria-label="Toggle table of contents"
           type="button"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 6H3" /><path d="M16 12H3" /><path d="M16 18H3" /><path d="M21 6h.01" /><path d="M21 12h.01" /><path d="M21 18h.01" /></svg>
+          <OutlineIcon size={16} />
         </button>
       ) : null}
       {outline && outlineOpen ? (
@@ -642,7 +817,7 @@ function OutlineNode({ item, depth, onDest, onUrl }) {
             aria-label={open ? "Collapse section" : "Expand section"}
             type="button"
           >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+            <ChevronRightIcon size={10} strokeWidth={2.5} />
           </button>
         ) : (
           <span className="pdfOutlineChevron" />
@@ -860,7 +1035,7 @@ function PlainTip({ onConfirm, onLink }) {
             type="button"
             title="Link this reference to a paper (DOI / arXiv / existing PDF)"
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>
+            <LinkIcon size={13} />
           </button>
         ) : null}
       </div>

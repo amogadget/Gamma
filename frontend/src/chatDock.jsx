@@ -5,7 +5,8 @@
 // prompt preferences it also needs elsewhere.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson } from "./utils";
-import { DockWindow, ChatMarkdown, AutoGrowTextarea } from "./widgets";
+import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied } from "./widgets";
+import { ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FileIcon, PaperclipIcon, PencilIcon, StopIcon } from "./icons";
 
 export default function ChatDock({
   docId, focusedBlockId, homeBlocks, pdfTitle, openTabs,
@@ -32,7 +33,7 @@ export default function ChatDock({
   const chatAbortRef = useRef(null); // in-flight chat request, so Stop can cancel it
   const [chatImages, setChatImages] = useState([]); // pasted figures (data URLs) pending send
   const [editingMsg, setEditingMsg] = useState(null); // {idx, text} — editing a sent user message
-  const [copiedMsgIdx, setCopiedMsgIdx] = useState(null);
+  const [copiedMsgIdx, flashCopiedMsg] = useCopied(1200);
   const [chatFindOpen, setChatFindOpen] = useState(false);
   const [chatFind, setChatFind] = useState("");
   const [chatFindIdx, setChatFindIdx] = useState(0);
@@ -308,8 +309,7 @@ export default function ChatDock({
   async function copyChatMessage(idx, text) {
     try {
       await navigator.clipboard.writeText(text || "");
-      setCopiedMsgIdx(idx);
-      setTimeout(() => setCopiedMsgIdx((cur) => (cur === idx ? null : cur)), 1200);
+      flashCopiedMsg(idx);
     } catch {}
   }
 
@@ -378,10 +378,10 @@ export default function ChatDock({
           />
           <span className="chatFindCount">{chatFind.trim() ? `${chatFindMatches.length ? chatFindIdx + 1 : 0}/${chatFindMatches.length}` : ""}</span>
           <button className="searchToggle searchNavBtn" onClick={() => gotoChatFind(chatFindIdx - 1)} disabled={!chatFindMatches.length} title="Previous match">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m18 15-6-6-6 6" /></svg>
+            <ChevronUpIcon size={14} />
           </button>
           <button className="searchToggle searchNavBtn" onClick={() => gotoChatFind(chatFindIdx + 1)} disabled={!chatFindMatches.length} title="Next match">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6" /></svg>
+            <ChevronDownIcon size={14} />
           </button>
           <button className="uiClose" onClick={() => { setChatFindOpen(false); setChatFind(""); }} title="Close find" aria-label="Close find">×</button>
         </div>
@@ -465,7 +465,7 @@ export default function ChatDock({
                       <div className="chatMsgPdfs">
                         {m.pdfs.map((n, j) => (
                           <span key={j} className="chatPdfChip" title={n}>
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+                            <FileIcon size={11} />
                             {n.slice(0, 40)}{n.length > 40 ? "…" : ""}
                           </span>
                         ))}
@@ -479,13 +479,13 @@ export default function ChatDock({
                     <button type="button" className="chatMsgActionBtn" title="Copy message"
                       onClick={() => copyChatMessage(i, m.text)}>
                       {copiedMsgIdx === i
-                        ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                        : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>}
+                        ? <CheckIcon size={13} />
+                        : <CopyIcon size={13} />}
                     </button>
                     {isUser && !chatLoading ? (
                       <button type="button" className="chatMsgActionBtn" title="Edit and re-send (removes later messages)"
                         onClick={() => setEditingMsg({ idx: i, text: m.text })}>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
+                        <PencilIcon size={13} />
                       </button>
                     ) : null}
                   </div>
@@ -524,7 +524,7 @@ export default function ChatDock({
         <div className="chatImgPreviewRow">
           {chatFiles.map((f, i) => (
             <span key={i} className="chatFileChip" title={`${f.name} — sent with your next message`}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+              <FileIcon size={12} />
               <span className="chatFileChipName">{f.name}</span>
               <button type="button" className="uiClose uiCloseSm chatFileChipRemove" title="Remove file"
                 onClick={() => setChatFiles((prev) => prev.filter((_, j) => j !== i))}>×</button>
@@ -562,7 +562,7 @@ export default function ChatDock({
               <button type="button" className="chatPlusMenuItem"
                 onClick={() => { setOpenPopover(null); fileInputRef.current?.click(); }}>
                 <span className="chatPlusMenuIcon">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>
+                  <PaperclipIcon size={15} />
                 </span>
                 <span className="chatPlusMenuLabel">Add photos &amp; files</span>
                 <span className="chatPlusMenuHint">Images or PDFs from your computer</span>
@@ -570,7 +570,7 @@ export default function ChatDock({
               <button type="button" className="chatPlusMenuItem"
                 onClick={() => { setOpenPopover(null); setDocPickerQuery(""); setDocPicker(true); }}>
                 <span className="chatPlusMenuIcon">
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" /></svg>
+                  <BookIcon size={15} />
                 </span>
                 <span className="chatPlusMenuLabel">Add papers from library</span>
                 <span className="chatPlusMenuHint">{chatDocs.length ? `${chatDocs.length} selected` : "Search your papers"}</span>
@@ -595,7 +595,7 @@ export default function ChatDock({
             ? "Full PDF file is sent with each message (model sees figures & tables). Click to switch to extracted text only."
             : "Send the full PDF file with your messages so the model sees figures & tables (uses more tokens). Click to enable."}
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /></svg>
+          <FileIcon size={12} />
           PDF
         </button>
         <AutoGrowTextarea
@@ -610,12 +610,12 @@ export default function ChatDock({
           placeholder={chatFiles.length ? `Ask about the attached file${chatFiles.length > 1 ? "s" : ""}…` : chatImages.length ? "Ask about the pasted figure…" : (pdfSelections.length ? (pdfSelections.length > 1 ? `Ask about the ${pdfSelections.length} selected passages…` : "Ask about the selection… (Ctrl+select adds more)") : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : (focusedBlockId ? "Ask about this page… (Shift+Enter for a new line)" : "Ask AI… (paste images to attach)")))}
         />
         {chatLoading ? (
-          <button className="chatSendBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+          <button className="uiBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
+            <StopIcon size={11} />
           </button>
         ) : (
-          <button className="chatSendBtn chatCircleBtn" type="submit" disabled={!chatInput.trim()} title="Send" aria-label="Send">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
+          <button className="uiBtn primary chatCircleBtn" type="submit" disabled={!chatInput.trim()} title="Send" aria-label="Send">
+            <ArrowUpIcon size={14} strokeWidth={2.4} />
           </button>
         )}
       </form>
@@ -691,7 +691,7 @@ export default function ChatDock({
               {chatDocs.length ? (
                 <button className="chatClearBtn" onClick={() => setChatDocs([])}>Clear selection</button>
               ) : null}
-              <button className="chatSendBtn" onClick={() => setDocPicker(false)}>Done</button>
+              <button className="uiBtn primary" onClick={() => setDocPicker(false)}>Done</button>
             </div>
           </div>
         </div>

@@ -689,20 +689,6 @@ body {
   height: 20px;
 }
 
-.highlightDotBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.highlightDot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-}
-
-
 .layoutControls {
   display: flex;
   gap: 8px;
@@ -1133,6 +1119,50 @@ body {
 .pdfOutlineBtn:hover { color: var(--text-primary); background: var(--bg-active); }
 .pdfOutlineBtn.open { color: var(--accent); }
 [data-theme="light"] .pdfOutlineBtn { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+
+/* Download/render status pill floating over the PDF pane while a document
+   loads (or fails) — so a slow remote server never looks like a hang. */
+.pdfLoadPill {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(86%, 520px);
+  padding: 6px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 12px;
+  box-shadow: 0 3px 12px rgba(0,0,0,0.25);
+}
+.pdfLoadPill.error { color: #e07a6a; border-color: rgba(224, 122, 106, 0.5); }
+.pdfLoadPill .pdfLoadText { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdfLoadSpin {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-light);
+  border-top-color: var(--text-muted);
+  border-radius: 50%;
+  animation: pdfLoadSpin 0.9s linear infinite;
+}
+@keyframes pdfLoadSpin { to { transform: rotate(360deg); } }
+.pdfLoadRetryBtn {
+  flex: none;
+  padding: 2px 10px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+.pdfLoadRetryBtn:hover { background: var(--bg-hover); }
 
 /* Fullscreen toggle — bottom-left, same look as the TOC button. */
 .pdfFullscreenBtn {
@@ -3145,11 +3175,6 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   white-space: nowrap;
 }
 .chatAttachToggle input { display: none; }
-.chatAttachToggle.on {
-  color: #8ab4f8;
-  border-color: #8ab4f8;
-  background: color-mix(in srgb, #8ab4f8 12%, transparent);
-}
 /* report modal */
 .reportOverlay {
   position: fixed;
@@ -3240,19 +3265,6 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   line-height: 1.45;
   font-family: inherit;
 }
-.chatSendBtn {
-  background: var(--accent-dark);
-  border: none;
-  border-radius: 4px;
-  color: var(--text-secondary);
-  padding: 5px 12px;
-  font-size: 12px;
-  cursor: pointer;
-  font-family: inherit;
-}
-.chatSendBtn:disabled { opacity: 0.4; cursor: default; }
-.chatSendBtn:hover:not(:disabled) { background: #3568a0; }
-
 /* --- Login page --- */
 .loginPage {
   display: flex;
@@ -3536,20 +3548,18 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   align-self: center;
 }
 .chatPlusCount { font-size: 10px; font-weight: 600; margin-left: 1px; }
-.chatSendBtn.chatCircleBtn {
+/* Round send/stop variant of .uiBtn (chat composer). */
+.uiBtn.chatCircleBtn {
   border-radius: 999px;
   width: 27px;
   height: 27px;
   padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  border: none;
   flex-shrink: 0;
   align-self: center;
-  color: #fff;
 }
-.chatStopBtn { background: var(--bg-subtle); color: var(--text-primary); }
-.chatStopBtn:hover { background: var(--bg-hover) !important; }
+.uiBtn.chatCircleBtn.chatStopBtn { background: var(--bg-subtle); color: var(--text-primary); }
+.uiBtn.chatCircleBtn.chatStopBtn:hover:not(:disabled) { background: var(--bg-hover); }
 
 /* --- downloads & uploads (Chrome-style transfer list) --- */
 .topbar .transferBtn { position: relative; }
@@ -3821,7 +3831,13 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .settingsPaneHint { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
 .settingsDivider { height: 1px; background: var(--border); margin: 6px 0; flex-shrink: 0; }
-.settingsClose { position: absolute; top: 12px; right: 12px; }
+.settingsClose { position: absolute; top: 14px; right: 20px; }
+
+/* Model list in the AI-provider form — chips are .categoryTag (same look as
+   the page label chips), the "default" marker is .uiTag. */
+.aiModelChips { display: flex; flex-wrap: wrap; gap: 5px; }
+/* …and the same chips on the saved-provider rows. */
+.aiProvModels { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .settingsPane .settingRow { flex-shrink: 0; }
 /* Provider rows double as the active-key picker in the AI pane. */
 .aiProvSelectable { cursor: pointer; }
@@ -3923,5 +3939,5 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .confirmModal { width: min(400px, calc(100vw - 32px)); }
 .confirmMessage { font-size: 13px; color: var(--text-secondary); }
 .linkPromptUrl { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.chatSendBtn.dangerBtn { background: #b93c3c; color: #fff; }
-.chatSendBtn.dangerBtn:hover:not(:disabled) { background: #d04848; }
+.uiBtn.primary.dangerBtn { background: #b93c3c; }
+.uiBtn.primary.dangerBtn:hover:not(:disabled) { background: #d04848; }

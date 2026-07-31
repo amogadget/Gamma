@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..auth import require_user, resolve_user
@@ -194,29 +194,13 @@ def proxy_pdf(source_url: str, request: Request):
     if local_path.exists():
         return RedirectResponse(f"/api/uploads/{pdf_doc_id}.pdf", status_code=302)
 
-    # Download from source
+    # Download from source. Streamed through to the client as upstream bytes
+    # arrive — buffering the whole file first meant the browser saw zero bytes
+    # (and no progress) until the entire upstream download finished, which on
+    # a slow link looked like a hang.
     try:
         req = URLRequest(source_url, headers=BROWSER_HEADERS)
-        with urlopen(req, timeout=30) as resp:
-            final_url = resp.geturl()
-            content_type = resp.headers.get("Content-Type", "").lower()
-            data = resp.read()
-
-        if "application/pdf" not in content_type:
-            raise HTTPException(status_code=400, detail=f"final URL is not a PDF: {content_type}")
-
-        if want_save:
-            uploads.mkdir(parents=True, exist_ok=True)
-            local_path.write_bytes(data)
-
-        return Response(
-            content=data,
-            media_type="application/pdf",
-            headers={
-                "Cache-Control": "public, max-age=3600",
-                "X-Source-Url": final_url,
-            },
-        )
+        resp = urlopen(req, timeout=30)
     except HTTPError as e:
         if e.code in (401, 403):
             raise HTTPException(
@@ -226,7 +210,38 @@ def proxy_pdf(source_url: str, request: Request):
         raise HTTPException(status_code=400, detail=f"upstream HTTP error: {e.code}")
     except URLError as e:
         raise HTTPException(status_code=400, detail=f"upstream URL error: {e.reason}")
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"pdf proxy failed: {str(e)}")
+
+    content_type = resp.headers.get("Content-Type", "").lower()
+    if "application/pdf" not in content_type:
+        resp.close()
+        raise HTTPException(status_code=400, detail=f"final URL is not a PDF: {content_type}")
+    final_url = resp.geturl()
+    length = resp.headers.get("Content-Length") or ""
+
+    def stream():
+        # Saving buffers chunks on the side and writes the file only after a
+        # complete download — a client abort mid-stream must not leave a
+        # truncated PDF in uploads (it would shadow the source forever).
+        chunks = [] if want_save else None
+        complete = False
+        try:
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    complete = True
+                    break
+                if chunks is not None:
+                    chunks.append(chunk)
+                yield chunk
+        finally:
+            resp.close()
+            if chunks is not None and complete:
+                uploads.mkdir(parents=True, exist_ok=True)
+                local_path.write_bytes(b"".join(chunks))
+
+    headers = {"Cache-Control": "public, max-age=3600", "X-Source-Url": final_url}
+    if length.isdigit():
+        headers["Content-Length"] = length
+    return StreamingResponse(stream(), media_type="application/pdf", headers=headers)

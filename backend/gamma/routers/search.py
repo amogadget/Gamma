@@ -24,6 +24,7 @@ from fastapi import APIRouter, Request
 
 from ..auth import require_user
 from ..db import page_now, user_db_path
+from ..pdf_text import extract_pages
 from ..textnorm import INDEX_VERSION, normalize_text
 from .ai import _pdf_path
 
@@ -52,35 +53,8 @@ def _ensure_schema(conn):
 
 
 def _extract_pages(path) -> list[str]:
-    """Text per page (1-based order). pypdfium2 first — PyPDF2 mangles word
-    spacing badly enough to break phrase search."""
-    try:
-        import pypdfium2 as pdfium
-        pdf = pdfium.PdfDocument(str(path))
-        try:
-            out = []
-            for i in range(min(len(pdf), _MAX_PAGES)):
-                page = pdf[i]
-                textpage = page.get_textpage()
-                out.append(textpage.get_text_bounded() or "")
-                textpage.close()
-                page.close()
-            return out
-        finally:
-            pdf.close()
-    except Exception as e:
-        print(f"[pdf-search] pypdfium2 extraction failed ({e}), falling back to PyPDF2")
-    from PyPDF2 import PdfReader
-    reader = PdfReader(str(path))
-    out = []
-    for i, pg in enumerate(reader.pages):
-        if i >= _MAX_PAGES:
-            break
-        try:
-            out.append(pg.extract_text() or "")
-        except Exception:
-            out.append("")
-    return out
+    """Text per page (1-based order) — the shared extractor in gamma.pdf_text."""
+    return extract_pages(str(path), _MAX_PAGES)
 
 
 def _index_doc(user: str, doc_id: str):

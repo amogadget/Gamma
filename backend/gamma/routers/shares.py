@@ -3,7 +3,6 @@
 import secrets
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
 from ..auth import require_user
 from ..db import connect_users_db, page_now
