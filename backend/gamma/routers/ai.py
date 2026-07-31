@@ -642,13 +642,53 @@ async def ai_provider_delete(provider_id: str, request: Request):
     return _masked_settings(user, request.state.is_guest)
 
 
-# Models the ChatGPT backend is known to serve (it has no public listing
-# endpoint). The entry's models field stays free-form — this only feeds the
-# "add a model" dropdown.
-_CHATGPT_MODEL_CATALOG = [
+# Fallback when the live listing is unreachable (not connected yet, offline):
+# models the ChatGPT backend has been known to serve.
+_CHATGPT_MODEL_FALLBACK = [
     "gpt-5.1", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini",
     "gpt-5", "gpt-5-codex",
 ]
+# GET {base}/models gates its answer on the caller's version — keep in rough
+# sync with a current Codex CLI release so new models show up.
+_CHATGPT_CLIENT_VERSION = "0.146.0"
+
+
+def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
+    """Live model list from the ChatGPT (codex) backend, Codex CLI's own
+    listing call: GET {base}/models?client_version=… with the OAuth bearer.
+    Falls back to the known-good list when no entry is connected or the
+    fetch fails."""
+    providers = ai_runtime(user)["providers"]
+    conf = providers.get(provider_id)
+    if not conf or conf.get("protocol") != "chatgpt":
+        # Pre-connect "Add key" form has no entry yet — any connected one will do.
+        conf = next((c for c in providers.values() if c.get("protocol") == "chatgpt"), None)
+    if not conf:
+        return _CHATGPT_MODEL_FALLBACK
+    try:
+        req = URLRequest(
+            f"{conf['base_url']}/models?client_version={_CHATGPT_CLIENT_VERSION}",
+            headers={
+                "Authorization": f"Bearer {conf['api_key']}",
+                "chatgpt-account-id": conf.get("account_id", ""),
+                "originator": "codex_cli_rs",
+            })
+        with urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+        listed, hidden = [], []
+        for m in data.get("models") or []:
+            slug = str(m.get("slug") or "").strip()
+            vis = m.get("visibility") or "list"
+            if not slug or vis == "none":  # "none" = not usable by this account
+                continue
+            (hidden if vis == "hide" else listed).append(slug)
+        # `hide` marks picker-hidden but usable slugs — offer them after the
+        # listed ones rather than dropping them.
+        models = list(dict.fromkeys(listed + hidden))
+        return models or _CHATGPT_MODEL_FALLBACK
+    except Exception as e:
+        print(f"[ai] chatgpt model listing failed, using fallback: {e}")
+        return _CHATGPT_MODEL_FALLBACK
 
 
 class ModelCatalogRequest(BaseModel):
@@ -663,7 +703,8 @@ class ModelCatalogRequest(BaseModel):
 def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     """Model names offered by a provider, for the settings form's model picker.
     API protocols are asked live (GET /v1/models with the entry's key); the
-    ChatGPT backend has no listing endpoint, so a known-good list is returned."""
+    ChatGPT backend is asked via Codex CLI's listing call with the OAuth
+    token (known-good fallback list when not connected)."""
     user = _require_editor(request)
     entry = {}
     protocol = payload.protocol
@@ -671,7 +712,7 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
         entry = next((e for e in load_provider_entries(user) if e.get("id") == payload.provider_id), None) or {}
         protocol = entry.get("protocol") or protocol
     if protocol == "chatgpt":
-        return {"models": _CHATGPT_MODEL_CATALOG}
+        return {"models": _chatgpt_model_catalog(user, payload.provider_id)}
     if protocol not in AI_PROTOCOLS:
         raise HTTPException(status_code=400, detail="unknown protocol")
     key = (payload.api_key or "").strip() or (entry.get("api_key") or "").strip()

@@ -2,13 +2,20 @@ import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "re
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS } from "./pdfViewer";
 import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl } from "./utils";
-import { DockWindow, ChatMarkdown, PinIcon } from "./widgets";
+import { DockWindow, ChatMarkdown, useCopied } from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
-import { ViewToggle, FolderGlyph, FileGlyph } from "./fileBrowser";
+import { ViewToggle } from "./fileBrowser";
 import ChatDock from "./chatDock";
 import SearchPanel from "./search";
 import { ContextMenu } from "./menus";
-import { CheckIcon, CopyIcon, FileIcon, FolderIcon, FolderPlusIcon, LabelIcon, LinkIcon, SearchIcon } from "./icons";
+import {
+  ActivityIcon, AlertCircleIcon, ArrowLeftIcon, CheckIcon, CopyIcon, DownloadIcon, ExportIcon,
+  ExternalLinkIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
+  FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, KeyIcon, LabelIcon,
+  LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PaperIcon, PenIcon, PinIcon, PlusIcon,
+  SearchIcon, SettingsIcon, SlidersIcon, SparklesIcon, Trash2Icon, TrashIcon, UploadIcon,
+  UserIcon, UsersIcon, ZoomInIcon, ZoomOutIcon,
+} from "./icons";
 
 
 import {
@@ -853,7 +860,7 @@ export default function App() {
     return () => document.removeEventListener("pointerdown", onDown);
   }, [openPopover]);
   const [shareUrl, setShareUrl] = useState("");
-  const [shareCopied, setShareCopied] = useState(false);
+  const [shareCopied, flashShareCopied, resetShareCopied] = useCopied();
   // Workspace search lives in search.jsx (SearchPanel); App only holds what
   // the PDF viewer needs from it: the match highlights and the search hook.
   const [findMarks, setFindMarks] = useState([]); // [{page, rect, active}] painted by PdfViewer
@@ -1027,7 +1034,8 @@ export default function App() {
 
   // Model picker for the form: API protocols are listed live from the
   // provider's /v1/models (typed key, or the stored one when editing);
-  // ChatGPT (OAuth) gets the backend's known-good list.
+  // ChatGPT (OAuth) is listed live from the codex backend via the entry's
+  // sign-in token (known-good fallback list before connecting).
   const [aiModelCatalog, setAiModelCatalog] = useState(null); // null | {loading} | {models} | {error}
   async function loadModelCatalog() {
     const f = aiKeysForm;
@@ -1254,7 +1262,7 @@ export default function App() {
   const [pptCite, setPptCite] = useState("");
   const [pptCiteBusy, setPptCiteBusy] = useState(false);
   const [metaPopPos, setMetaPopPos] = useState({ top: 0, right: 0 }); // fixed-position anchor for the metadata popover
-  const [citeCopied, setCiteCopied] = useState(""); // "bibtex" | "ppt"
+  const [citeCopied, flashCiteCopied, resetCiteCopied] = useCopied(); // "bibtex" | "ppt"
   // Editable copy of the metadata fields shown in the popover. Kept as flat
   // strings (authors comma-joined); rebuilt whenever the popover opens or a
   // fetch lands, so a refresh replaces any half-typed edits with the result.
@@ -1411,7 +1419,7 @@ export default function App() {
   // (arXiv → DOI → AI on the server). Cached in the page's properties.
   useEffect(() => {
     setPptCite("");
-    setCiteCopied("");
+    resetCiteCopied();
     const b = focusedBlock;
     if (readOnly || !b?.id || !b.properties?.doc_id) { setPageMeta(null); setPageBibtex(""); return; }
     if (b.properties.meta) {
@@ -1508,8 +1516,7 @@ export default function App() {
       } else {
         await navigator.clipboard.writeText(text || "");
       }
-      setCiteCopied(kind);
-      setTimeout(() => setCiteCopied(""), 1500);
+      flashCiteCopied(kind);
     } catch {
       setStatus("Copy failed — copy manually.");
     }
@@ -2579,7 +2586,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         credentials: "include",
       });
       setShareUrl(`${window.location.origin}${window.location.pathname}?share=${data.token}`);
-      setShareCopied(false);
+      resetShareCopied();
     } catch (err) {
       setStatus(`Share failed: ${err.message}`);
     }
@@ -2588,7 +2595,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   async function copyShareLink() {
     try {
       await navigator.clipboard.writeText(shareUrl);
-      setShareCopied(true);
+      flashShareCopied();
     } catch {
       setStatus("Copy failed — copy the link manually.");
     }
@@ -3322,7 +3329,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         setOpenPopover(opening ? "meta" : null);
                       }}
                     >
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 16v-5" /><path d="M12 8h.01" /></svg>
+                      <InfoIcon size={15} />
                     </button>
                     {openPopover === "meta" ? (
                       <div
@@ -3347,7 +3354,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                               disabled={aiTitleBusy}
                               onClick={aiFillTitle}
                             >{aiTitleBusy ? "…" : (
-                              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
+                              <SparklesIcon size={13} />
                             )}</button>
                             <button
                               className="searchToggle"
@@ -3385,12 +3392,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                                 />
                                 {key === "doi" && metaDraft?.doi?.trim() ? (
                                   <a className="metaLink" href={`https://doi.org/${metaDraft.doi.trim()}`} target="_blank" rel="noreferrer" title="Open on doi.org">
-                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
+                                    <ExternalLinkIcon size={11} />
                                   </a>
                                 ) : null}
                                 {key === "arxiv_id" && metaDraft?.arxiv_id?.trim() ? (
                                   <a className="metaLink" href={`https://arxiv.org/abs/${metaDraft.arxiv_id.trim()}`} target="_blank" rel="noreferrer" title="Open on arXiv">
-                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></svg>
+                                    <ExternalLinkIcon size={11} />
                                   </a>
                                 ) : null}
                               </span>
@@ -3444,7 +3451,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         ) : null}
                         {metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metaToDraft(pageMeta)) ? (
                           <div className="reportModalBtns">
-                            <button className="chatSendBtn" onClick={saveMetaEdits}>Save metadata</button>
+                            <button className="uiBtn primary" onClick={saveMetaEdits}>Save metadata</button>
                           </div>
                         ) : null}
                         {(pageMeta || pageBibtex) ? (
@@ -3503,7 +3510,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         {sourceDraft.trim() && sourceDraft.trim() !== inputUrl ? (
                           <div className="reportModalBtns">
                             <button
-                              className="chatSendBtn"
+                              className="uiBtn primary"
                               onClick={async () => {
                                 const url = sourceDraft.trim();
                                 setOpenPopover(null);
@@ -3557,7 +3564,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     },
                   })}
                 >
-                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+                  <TrashIcon size={15} />
                 </button>
               </div>
             ) : null}
@@ -3731,12 +3738,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       }}
                       title="Back — or drop a paper here to remove it from this folder"
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
+                      <ArrowLeftIcon size={14} />
                       <span className="folderName">{folderFilter.includes("/") ? folderFilter.slice(0, folderFilter.lastIndexOf("/")) : "All files"}</span>
                       <span className="folderHint">drop here to remove from this folder</span>
                     </div>
                     <div className="folderCurrent">
-                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" /></svg>
+                      <FolderOpenIcon size={15} />
                       {/* Breadcrumb: every path segment navigates to its level */}
                       {folderFilter.split("/").map((seg, i, segs) => {
                         const prefix = segs.slice(0, i + 1).join("/");
@@ -3942,7 +3949,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       </div>
                     ) : (
                       <button className="folderTile folderTileAdd" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }} title="New folder">
-                        <svg className="tileGlyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /><path d="M12 10v6" /><path d="M9 13h6" /></svg>
+                        <FolderPlusIcon className="tileGlyph" size={null} strokeWidth={1.5} />
                         <span className="tileName">New folder</span>
                       </button>
                     )}
@@ -4385,7 +4392,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         title="Settings"
         aria-label="Settings"
       >
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="4" y1="12" x2="20" y2="12" /><line x1="4" y1="18" x2="20" y2="18" /></svg>
+        <MenuIcon size={17} />
       </button>
       {openPopover === "menu" ? (
         <div className="popover menuPopover">
@@ -4440,7 +4447,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 onClick={() => { exportPage("readable"); setOpenPopover(null); }}
                 title="Download this page as Markdown — nested notes, highlights as quotes, metadata front-matter. Bundles the PDF & images into a .zip when the page references them."
               >
-                <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                <FileTextIcon className="popoverItemIcon" size={15} />
                 Export this page (.md)
               </button>
               <button
@@ -4448,7 +4455,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 onClick={() => { exportPage("logseq"); setOpenPopover(null); }}
                 title="Download this page as Logseq-flavoured Markdown — re-importable via the Logseq importer."
               >
-                <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></svg>
+                <FileTextIcon className="popoverItemIcon" size={15} />
                 Export this page (Logseq)
               </button>
               {docId ? (
@@ -4457,7 +4464,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   onClick={() => { exportAnnotatedPdf(); setOpenPopover(null); }}
                   title="Download this paper's PDF with your highlights embedded as standard PDF annotations — notes appear as annotation popups in Acrobat, SumatraPDF, browsers, etc."
                 >
-                  <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><path d="M9 17l2-6 2 4 1.5-2.5L16 17" /></svg>
+                  <FileHighlightIcon className="popoverItemIcon" size={15} />
                   Export PDF with highlights
                 </button>
               ) : null}
@@ -4503,7 +4510,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               title="Home"
               aria-label="Home"
             >
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+              <HomeIcon size={17} />
             </button>
             {navStackLen > 0 ? (
               <button
@@ -4513,7 +4520,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 title={`Back to where you were${navStackLen > 1 ? ` (${navStackLen} steps)` : ""} — Alt+← · right-click to clear`}
                 aria-label="Back"
               >
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></svg>
+                <ArrowLeftIcon size={17} strokeWidth={2.2} />
                 <span className="navBackBadge">{Math.min(navStackLen, 30)}</span>
               </button>
             ) : null}
@@ -4571,7 +4578,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 title="Add — open a PDF by URL, upload a file, or start a note page"
                 aria-label="Add"
               >
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+                <PlusIcon size={17} strokeWidth={2.2} />
               </button>
               {openPopover === "add" ? (
                 <div className="popover addPopover">
@@ -4610,7 +4617,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   title="Background tasks — downloads, uploads, indexing, metadata/AI jobs"
                   aria-label="Background tasks"
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" /></svg>
+                  <ActivityIcon size={16} />
                   {(transfers.some((t) => t.status === "active") || indexTask?.active) ? <span className="transferSpin" /> : null}
                 </button>
                 {openPopover === "downloads" ? (
@@ -4653,16 +4660,16 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                           {t.status === "active" ? <span className="transferSpin inline" />
                             : t.status === "done"
                               ? <CheckIcon size={12} strokeWidth={2.6} />
-                              : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M12 8v5" /><path d="M12 16.5h.01" /><circle cx="12" cy="12" r="9" /></svg>}
+                              : <AlertCircleIcon size={12} strokeWidth={2.4} />}
                         </span>
                         <span className="transferKind">
                           {t.kind === "upload"
-                            ? <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 15V3" /><path d="m7 8 5-5 5 5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>
+                            ? <UploadIcon size={12} />
                             : t.kind === "ai"
-                              ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>
+                              ? <SparklesIcon size={12} />
                               : t.kind === "import"
                                 ? <FileIcon size={12} />
-                                : <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M21 17v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2" /></svg>}
+                                : <DownloadIcon size={12} />}
                         </span>
                         <span className="transferName" title={t.name}>{t.name}</span>
                         <span className="transferInfo">{t.info || ""}</span>
@@ -4707,7 +4714,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     {shareUrl ? (
                       <div className="shareRow">
                         <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
-                        <button className="chatSendBtn" onClick={copyShareLink}>{shareCopied ? "Copied ✓" : "Copy"}</button>
+                        <button className="uiBtn primary" onClick={copyShareLink}>{shareCopied ? "Copied ✓" : "Copy"}</button>
                       </div>
                     ) : (
                       <div className="popoverHint">Creating link…</div>
@@ -4747,14 +4754,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                   title="Account & settings"
                   aria-label="Account & settings"
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+                  <UserIcon size={18} />
                 </button>
                 {openPopover === "user" ? (
                   <div className="popover userPopover">
                     <div className="userCard">
                       <span className="userAvatar" aria-hidden="true">
                         {authUser.is_guest
-                          ? <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+                          ? <UserIcon size={20} />
                           : <span className="userAvatarInitial">{authUser.user.charAt(0).toUpperCase()}</span>}
                       </span>
                       <span className="userCardMeta">
@@ -4767,7 +4774,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     ) : null}
                     <div className="popoverDivider" />
                     <button className="popoverItem" onClick={() => { setSettingsOpen("papers"); setOpenPopover(null); }}>
-                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
+                      <SettingsIcon className="popoverItemIcon" size={15} />
                       Settings…
                     </button>
                     <button
@@ -4775,7 +4782,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       onClick={() => { setOpenPopover(null); window.location.href = `${API}/export`; }}
                       title="Download a zip backup: your notes databases + every uploaded PDF"
                     >
-                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>
+                      <ExportIcon className="popoverItemIcon" size={15} />
                       Export my data (.zip)
                     </button>
                     {!authUser.is_guest ? (
@@ -4784,19 +4791,19 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         onClick={() => { setOpenPopover(null); importUserData(); }}
                         title="Restore an exported zip: notes and settings are replaced by the backup, uploaded files are merged in"
                       >
-                        <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
+                        <ImportIcon className="popoverItemIcon" size={15} />
                         Import data (.zip)…
                       </button>
                     ) : null}
                     {authUser.is_admin ? (
                       <button className="popoverItem" onClick={() => { openUsersManager(); setOpenPopover(null); }}>
-                        <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+                        <UsersIcon className="popoverItemIcon" size={15} />
                         Manage users…
                       </button>
                     ) : null}
                     <div className="popoverDivider" />
                     <button className="popoverItem popoverItemDanger" onClick={doLogout}>
-                      <svg className="popoverItemIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
+                      <LogOutIcon className="popoverItemIcon" size={15} />
                       Log out
                     </button>
                   </div>
@@ -4810,7 +4817,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       ) : (
         <div className="topbar">
           <button className="iconBtn homeBtn" disabled title="Home" aria-label="Home">
-            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>
+            <HomeIcon size={17} />
           </button>
           <span className="readOnlyTitle">{pdfTitle}</span>
           {renderOverflowMenu(true)}
@@ -4857,7 +4864,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           {pdfUrl && !pdfHidden ? (
             <div className="pdfZoomOverlay">
               <button onClick={() => zoomStep(-1)} title="Zoom out" aria-label="Zoom out">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /></svg>
+                <ZoomOutIcon size={15} />
               </button>
               <span className="pdfZoomLevel">
                 <input
@@ -4875,10 +4882,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 />%
               </span>
               <button onClick={() => zoomStep(1)} title="Zoom in" aria-label="Zoom in">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /><path d="M11 8v6" /></svg>
+                <ZoomInIcon size={15} />
               </button>
               <button className="pdfFitWidthBtn" onClick={() => setPdfScale("page-width")} title="Fit to width" aria-label="Fit to width">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 5v14" /><path d="M21 5v14" /><path d="M7 12h10" /><path d="m9 9-3 3 3 3" /><path d="m15 9 3 3-3 3" /></svg>
+                <FitWidthIcon size={15} />
               </button>
             </div>
           ) : null}
@@ -4890,9 +4897,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
             >
               {isFullscreen ? (
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3" /><path d="M21 8h-3a2 2 0 0 1-2-2V3" /><path d="M3 16h3a2 2 0 0 1 2 2v3" /><path d="M16 21v-3a2 2 0 0 1 2-2h3" /></svg>
+                <MinimizeIcon size={15} />
               ) : (
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></svg>
+                <MaximizeIcon size={15} />
               )}
             </button>
           ) : null}
@@ -4977,7 +4984,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <div className="reportModalBtns">
               <button className="chatClearBtn" onClick={() => setConfirmBox(null)} autoFocus>Cancel</button>
               <button
-                className={`chatSendBtn ${confirmBox.danger ? "dangerBtn" : ""}`}
+                className={`uiBtn primary ${confirmBox.danger ? "dangerBtn" : ""}`}
                 onClick={() => { const fn = confirmBox.onConfirm; setConfirmBox(null); fn?.(); }}
               >{confirmBox.confirmLabel || "OK"}</button>
             </div>
@@ -4997,7 +5004,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 title="Resolve this link as a PDF and open it as a new paper in Gamma"
               >Fetch into Gamma</button>
               <button
-                className="chatSendBtn"
+                className="uiBtn primary"
                 onClick={() => { window.open(linkPrompt, "_blank", "noopener"); setLinkPrompt(null); }}
               >Open in browser</button>
             </div>
@@ -5026,7 +5033,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 }}
               />
               <button
-                className="chatSendBtn"
+                className="uiBtn primary"
                 disabled={!linkDialogInput.trim()}
                 onClick={() => createLinkHighlight({ url: normalizeLinkInput(linkDialogInput) })}
               >Link</button>
@@ -5076,9 +5083,9 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
             <div className="settingsSidebar">
               <div className="settingsSideTitle">Settings</div>
               {[
-                ["papers", "Papers & PDFs", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /><path d="M15 2v5h5" /></svg>],
-                ["ai", "AI & API keys", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4" /></svg>],
-                ["prompts", "Prompts", <svg key="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="21" x2="4" y2="14" /><line x1="4" y1="10" x2="4" y2="3" /><line x1="12" y1="21" x2="12" y2="12" /><line x1="12" y1="8" x2="12" y2="3" /><line x1="20" y1="21" x2="20" y2="16" /><line x1="20" y1="12" x2="20" y2="3" /><line x1="1" y1="14" x2="7" y2="14" /><line x1="9" y1="8" x2="15" y2="8" /><line x1="17" y1="16" x2="23" y2="16" /></svg>],
+                ["papers", "Papers & PDFs", <PaperIcon key="i" size={15} />],
+                ["ai", "AI & API keys", <KeyIcon key="i" size={15} />],
+                ["prompts", "Prompts", <SlidersIcon key="i" size={15} />],
                 ["search", "Search", <SearchIcon size={15} key="i" />],
               ].map(([id, label, icon]) => (
                 <button
@@ -5175,8 +5182,15 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                                 {p.base_url ? ` · ${p.base_url}` : ""}
                                 {p.created_at ? ` · added ${new Date(p.created_at).toLocaleDateString()}` : ""}
                               </span>
-                              <span className="aiProvDesc">
-                                models: {p.models || `${proto?.default_model || "provider default"} (default)`}
+                              <span className="aiProvDesc aiProvModels">
+                                {(parseFolderTags(p.models).length
+                                  ? parseFolderTags(p.models)
+                                  : [proto?.default_model || "provider default"]).map((m, i) => (
+                                  <span className="categoryTag" key={m}>
+                                    {m}
+                                    {i === 0 ? <span className="uiTag">default</span> : null}
+                                  </span>
+                                ))}
                               </span>
                             </span>
                             <span className="aiProvActions">
@@ -5185,12 +5199,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                                   <button className="uiBtn sm iconSq" disabled={aiKeysBusy}
                                     title="Edit this key" aria-label={`Edit ${p.name || p.protocol}`}
                                     onClick={() => startEditAiProvider(p)}>
-                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /></svg>
+                                    <PenIcon size={13} />
                                   </button>
                                   <button className="uiBtn sm iconSq danger" disabled={aiKeysBusy}
                                     title="Remove this key" aria-label={`Remove ${p.name || p.protocol}`}
                                     onClick={() => deleteAiProvider(p.id)}>
-                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
+                                    <Trash2Icon size={13} />
                                   </button>
                                 </>
                               ) : null}
@@ -5285,28 +5299,31 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             </div>
                           ) : null}
                           <div className="aiProvPwForm">
-                            <select className="aiKeyInput" value=""
-                              disabled={!availModels.length}
-                              onChange={(e) => addCatalogModel(e.target.value)}>
-                              <option value="">
-                                {aiModelCatalog?.loading ? "Loading model list…"
-                                  : aiModelCatalog?.error ? "Model list unavailable"
-                                  : availModels.length ? `+ Add a model (${availModels.length} available)…`
-                                  : aiModelCatalog?.models ? "All listed models added"
-                                  : "+ Add a model…"}
-                              </option>
-                              {availModels.map((m) => <option key={m} value={m}>{m}</option>)}
-                            </select>
                             <input className="aiKeyInput" type="text" spellCheck={false}
-                              placeholder="Custom model — Enter to add"
+                              list="aiModelSuggestions"
+                              placeholder={aiModelCatalog?.loading ? "Add a model — loading the provider's list…"
+                                : availModels.length ? `Add a model — type or pick (${availModels.length} available), Enter to add`
+                                : "Add a model — Enter to add"}
                               value={customModel}
-                              onChange={(e) => setCustomModel(e.target.value)}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                const t = e.nativeEvent?.inputType;
+                                // A datalist pick (no/replacement inputType) adds right away;
+                                // typed text waits for Enter so prefixes of longer names stay typable.
+                                if ((!t || t === "insertReplacementText") && availModels.includes(v)) {
+                                  addCatalogModel(v);
+                                  setCustomModel("");
+                                } else setCustomModel(v);
+                              }}
                               onKeyDown={(e) => {
                                 if (e.key !== "Enter") return;
                                 e.preventDefault();
                                 if (customModel.trim()) { addCatalogModel(customModel.trim()); setCustomModel(""); }
                               }}
                             />
+                            <datalist id="aiModelSuggestions">
+                              {availModels.map((m) => <option key={m} value={m} />)}
+                            </datalist>
                           </div>
                           {aiModelCatalog?.error ? (
                             <div className="reportModalHint" style={{ margin: 0 }}>
@@ -5516,7 +5533,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             title="Delete this account and all its data"
                             aria-label={`Delete ${u.username}`}
                             onClick={() => deleteUserAccount(u)}>
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
+                            <Trash2Icon size={13} />
                           </button>
                         ) : (
                           <span className="iconSqSlot" aria-hidden="true" />
