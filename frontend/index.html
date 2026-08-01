@@ -8,10 +8,42 @@
     <link rel="preload" href="/pdf.worker.min.mjs" as="worker" crossorigin="anonymous">
     <style>
       html, body, #root { margin: 0; height: 100%; background: #111; }
+      @media (prefers-color-scheme: light) {
+        html, body, #root { background: #f6f6f4; }
+      }
+      /* First-load splash: index.html is tiny and paints immediately, while
+         the app bundle (~450 kB gzipped) downloads and parses — without this
+         that window is a pure blank page. Lives inside #root, so React's
+         first render commit replaces it automatically. */
+      #splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        color: #8a8a8a;
+        font: 13px system-ui, -apple-system, sans-serif;
+      }
+      #splash .spin {
+        width: 22px;
+        height: 22px;
+        border: 2.5px solid rgba(138, 138, 138, 0.25);
+        border-top-color: #8a8a8a;
+        border-radius: 50%;
+        animation: splashSpin 0.9s linear infinite;
+      }
+      @keyframes splashSpin { to { transform: rotate(360deg); } }
     </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="splash">
+        <div class="spin"></div>
+        <div>Loading Gamma…</div>
+      </div>
+    </div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
