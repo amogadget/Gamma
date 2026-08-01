@@ -4,7 +4,7 @@
 // App provides context (open paper, library, selections) and the model/effort/
 // prompt preferences it also needs elsewhere.
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { API, apiJson } from "./utils";
+import { API, apiJson, isEnterCommit } from "./utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied } from "./widgets";
 import { ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FileIcon, PaperclipIcon, PencilIcon, StopIcon } from "./icons";
 
@@ -372,7 +372,7 @@ export default function ChatDock({
             onChange={(e) => setChatFind(e.target.value)}
             placeholder="Find in chat…"
             onKeyDown={(e) => {
-              if (e.key === "Enter") { e.preventDefault(); gotoChatFind(e.shiftKey ? chatFindIdx - 1 : chatFindIdx + 1); }
+              if (isEnterCommit(e)) { e.preventDefault(); gotoChatFind(e.shiftKey ? chatFindIdx - 1 : chatFindIdx + 1); }
               else if (e.key === "Escape") { e.preventDefault(); setChatFindOpen(false); setChatFind(""); }
             }}
           />
@@ -426,7 +426,7 @@ export default function ChatDock({
                         value={editingMsg.text}
                         onChange={(e) => setEditingMsg({ idx: i, text: e.target.value })}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
+                          if (isEnterCommit(e) && !e.shiftKey) {
                             e.preventDefault();
                             const base = chatMessages.slice(0, i);
                             const text = editingMsg.text;
@@ -605,7 +605,7 @@ export default function ChatDock({
           onChange={(e) => setChatInput(e.target.value)}
           onPaste={handleChatPaste}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+            if (isEnterCommit(e) && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
           }}
           placeholder={chatFiles.length ? `Ask about the attached file${chatFiles.length > 1 ? "s" : ""}…` : chatImages.length ? "Ask about the pasted figure…" : (pdfSelections.length ? (pdfSelections.length > 1 ? `Ask about the ${pdfSelections.length} selected passages…` : "Ask about the selection… (Ctrl+select adds more)") : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : (focusedBlockId ? "Ask about this page… (Shift+Enter for a new line)" : "Ask AI… (paste images to attach)")))}
         />

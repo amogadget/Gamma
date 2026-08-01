@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS } from "./pdfViewer";
-import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl } from "./utils";
+import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl, isEnterCommit } from "./utils";
 import { DockWindow, ChatMarkdown, useCopied } from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
 import { ViewToggle } from "./fileBrowser";
@@ -2122,8 +2122,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setStatus("Not a PDF file.");
       return;
     }
-    if (file.size > 50 * 1024 * 1024) {
-      setStatus("File too large (max 50 MB).");
+    if (file.size > 40 * 1024 * 1024) {
+      setStatus("File too large (max 40 MB).");
       return;
     }
     setLoading(true);
@@ -2400,7 +2400,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           requestAnimationFrame(applySizes);
         }
       }
-      if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
+      if (opts?.restoreScroll) {
+        restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
+        restoreNotesScroll(tabScrollRef.current[blockId]);
+      }
       setStatus("Ready.");
       return openedPdfUrl;
     } catch (err) {
@@ -2431,7 +2434,33 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     if (!authUser?.user || readOnly) return;
     try { pageLayoutsRef.current = JSON.parse(localStorage.getItem(`gamma-page-layouts:${authUser.user}`) || "{}"); }
     catch { pageLayoutsRef.current = {}; }
+    try { tabScrollRef.current = JSON.parse(localStorage.getItem(`gamma-tab-scroll:${authUser.user}`) || "{}"); }
+    catch { tabScrollRef.current = {}; }
   }, [authUser?.user, readOnly]);
+  function persistTabScroll() {
+    const user = prefsUserRef.current;
+    if (!user) return;
+    try {
+      const all = tabScrollRef.current || {};
+      const keys = Object.keys(all);
+      let out = all;
+      if (keys.length > 200) {
+        out = {};
+        for (const k of keys.slice(-200)) out[k] = all[k];
+        tabScrollRef.current = out;
+      }
+      localStorage.setItem(`gamma-tab-scroll:${user}`, JSON.stringify(out));
+    } catch {}
+  }
+  useEffect(() => {
+    const onUnload = () => persistTabScroll();
+    window.addEventListener("beforeunload", onUnload);
+    window.addEventListener("pagehide", onUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onUnload);
+      window.removeEventListener("pagehide", onUnload);
+    };
+  }, []);
   const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
   const restoringForRef = useRef(null); // block whose restore hasn't landed yet
   const pdfRenderedUrlRef = useRef(""); // url of the document whose pages are in the DOM
@@ -2450,15 +2479,19 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         localStorage.setItem(`gamma-page-layouts:${prefsUserRef.current}`, JSON.stringify(pageLayoutsRef.current));
       } catch {}
     }
-    // Only record a position when the viewer is actually showing THIS page's
-    // document: mid-load the scroller still holds the previous document (or a
-    // clamped 0), and a pending restore means the real position hasn't been
-    // applied yet — in both cases keep the previously saved value.
+    // Notes-panel scroll — independent of the PDF gates (works on note-only pages).
+    const notesScroller = document.querySelector(".sidebar .blockList");
+    if (focusedBlockId && notesScroller) {
+      const prev = tabScrollRef.current[focusedBlockId] || {};
+      tabScrollRef.current[focusedBlockId] = { ...prev, notesTop: notesScroller.scrollTop };
+    }
+    // PDF viewer scroll — only trust it when the target doc is on screen.
     if (restoringForRef.current && restoringForRef.current === focusedBlockId) return;
     if (!pdfUrl || pdfRenderedUrlRef.current !== pdfUrl) return;
     const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
     if (focusedBlockId && scroller) {
-      tabScrollRef.current[focusedBlockId] = { top: scroller.scrollTop, scale: pdfEffScale };
+      const prev = tabScrollRef.current[focusedBlockId] || {};
+      tabScrollRef.current[focusedBlockId] = { ...prev, top: scroller.scrollTop, scale: pdfEffScale };
     }
   }
   function cancelPdfRestore() {
@@ -2472,7 +2505,22 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   function leaveCurrentPage() {
     flushPendingSave();
     captureScrollPos();
+    persistTabScroll();
     cancelPdfRestore();
+  }
+  function restoreNotesScroll(entry) {
+    if (!entry || entry.notesTop == null) return;
+    const target = entry.notesTop;
+    let tries = 0;
+    const tryScroll = () => {
+      const el = document.querySelector(".sidebar .blockList");
+      if (el && el.scrollHeight > target + 1) {
+        el.scrollTo({ top: target, behavior: "instant" });
+        return;
+      }
+      if (tries++ < 40) setTimeout(tryScroll, 80);
+    };
+    tryScroll();
   }
   // Scroll the viewer back to an exact position. Two gates, both required:
   // the TARGET document must be the one rendered (the old document stays in
@@ -3089,7 +3137,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       if (e.target.closest && e.target.closest("input, textarea, [contenteditable]")) return;
       if (e.key === "Escape" && (selectedPages.size || selectedFolders.size)) {
         clearSelection();
-      } else if (e.key === "Enter") {
+      } else if (isEnterCommit(e)) {
         if (selectedFolders.size === 1) openFolder([...selectedFolders][0]);
         else if (selectedPages.size === 1) openPage([...selectedPages][0]);
       }
@@ -3310,7 +3358,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 onChange={(e) => setTitleDraft(e.target.value)}
                 onBlur={() => { renameTitle(titleDraft); setTitleEditing(false); }}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") { e.currentTarget.blur(); }
+                  if (isEnterCommit(e)) { e.currentTarget.blur(); }
                   else if (e.key === "Escape") { setTitleDraft(pdfTitle); setTitleEditing(false); }
                 }}
               />
@@ -3374,12 +3422,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             } else if (e.key === "ArrowUp") {
                               e.preventDefault();
                               setCategorySuggestionIdx(i => Math.max(i - 1, -1));
-                            } else if (e.key === "Enter" && categorySuggestionIdx >= 0 && categorySuggestionIdx < suggestions.length) {
+                            } else if (isEnterCommit(e) && categorySuggestionIdx >= 0 && categorySuggestionIdx < suggestions.length) {
                               e.preventDefault();
                               addCategoryTag(suggestions[categorySuggestionIdx]);
                               setCategoryInput("");
                               setCategorySuggestionIdx(-1);
-                            } else if (e.key === "Enter") {
+                            } else if (isEnterCommit(e)) {
                               e.preventDefault();
                               commitAndCloseCategory();
                             } else if (e.key === "Escape") {
@@ -3905,7 +3953,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => setFolderRenaming({ name: f, draft: e.target.value })}
                         onKeyDown={(e) => {
-                          if (e.key === "Enter") renameFolder(f, folderRenaming.draft);
+                          if (isEnterCommit(e)) renameFolder(f, folderRenaming.draft);
                           else if (e.key === "Escape") setFolderRenaming(null);
                         }}
                         onBlur={() => renameFolder(f, folderRenaming.draft)}
@@ -3926,7 +3974,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       onChange={(e) => setNewFolderName(e.target.value)}
                       placeholder="Folder name…"
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") { e.preventDefault(); commitNewFolder(); }
+                        if (isEnterCommit(e)) { e.preventDefault(); commitNewFolder(); }
                         else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
                       }}
                       onBlur={commitNewFolder}
@@ -3986,7 +4034,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             defaultValue={f.slice(f.lastIndexOf("/") + 1)}
                             onClick={(e) => e.stopPropagation()}
                             onKeyDown={(e) => {
-                              if (e.key === "Enter") renameFolder(f, e.currentTarget.value);
+                              if (isEnterCommit(e)) renameFolder(f, e.currentTarget.value);
                               else if (e.key === "Escape") setFolderRenaming(null);
                             }}
                             onBlur={(e) => renameFolder(f, e.currentTarget.value)}
@@ -4030,7 +4078,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                               defaultValue={b.content}
                               onClick={(e) => e.stopPropagation()}
                               onKeyDown={(e) => {
-                                if (e.key === "Enter") commitPageRename(id, e.currentTarget.value);
+                                if (isEnterCommit(e)) commitPageRename(id, e.currentTarget.value);
                                 else if (e.key === "Escape") setHomeEditingId(null);
                               }}
                               onBlur={(e) => commitPageRename(id, e.currentTarget.value)}
@@ -4053,7 +4101,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                           onClick={(e) => e.stopPropagation()}
                           onChange={(e) => setNewFolderName(e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === "Enter") { e.preventDefault(); commitNewFolder(); }
+                            if (isEnterCommit(e)) { e.preventDefault(); commitNewFolder(); }
                             else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
                           }}
                           onBlur={commitNewFolder}
@@ -4107,7 +4155,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                               defaultValue={b.content}
                               onClick={(e) => e.stopPropagation()}
                               onKeyDown={(e) => {
-                                if (e.key === "Enter") commitPageRename(id, e.currentTarget.value);
+                                if (isEnterCommit(e)) commitPageRename(id, e.currentTarget.value);
                                 else if (e.key === "Escape") setHomeEditingId(null);
                               }}
                               onBlur={(e) => commitPageRename(id, e.currentTarget.value)}
@@ -4701,7 +4749,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     onChange={(e) => setAddUrl(e.target.value)}
                     placeholder="Open a PDF by URL — press Enter"
                     onKeyDown={(e) => {
-                      if (e.key === "Enter" && addUrl.trim() && !loading) {
+                      if (isEnterCommit(e) && addUrl.trim() && !loading) {
                         setOpenPopover(null);
                         openPdf(addUrl.trim());
                         setAddUrl("");
@@ -5136,7 +5184,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 value={linkDialogInput}
                 onChange={(e) => setLinkDialogInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && linkDialogInput.trim()) {
+                  if (isEnterCommit(e) && linkDialogInput.trim()) {
                     e.preventDefault();
                     createLinkHighlight({ url: normalizeLinkInput(linkDialogInput) });
                   } else if (e.key === "Escape") { setLinkDialog(null); }
@@ -5649,7 +5697,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             placeholder="New password"
                             value={userPwEdit.password}
                             onChange={(e) => setUserPwEdit((f) => ({ ...f, password: e.target.value }))}
-                            onKeyDown={(e) => { if (e.key === "Enter") submitUserPassword(); }}
+                            onKeyDown={(e) => { if (isEnterCommit(e)) submitUserPassword(); }}
                           />
                           <button className="uiBtn sm" onClick={() => setUserPwEdit(null)}>Cancel</button>
                           <button className="uiBtn sm primary" disabled={usersBusy} onClick={submitUserPassword}>Set</button>
@@ -5662,7 +5710,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             placeholder="New username"
                             value={userRenameEdit.value}
                             onChange={(e) => setUserRenameEdit((f) => ({ ...f, value: e.target.value }))}
-                            onKeyDown={(e) => { if (e.key === "Enter") submitUserRename(); }}
+                            onKeyDown={(e) => { if (isEnterCommit(e)) submitUserRename(); }}
                           />
                           <button className="uiBtn sm" onClick={() => setUserRenameEdit(null)}>Cancel</button>
                           <button className="uiBtn sm primary" disabled={usersBusy} onClick={submitUserRename}>Rename</button>
@@ -5715,7 +5763,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       placeholder="Password"
                       value={usersForm.password}
                       onChange={(e) => setUsersForm((f) => ({ ...f, password: e.target.value }))}
-                      onKeyDown={(e) => { if (e.key === "Enter") submitNewUser(); }}
+                      onKeyDown={(e) => { if (isEnterCommit(e)) submitNewUser(); }}
                     />
                     <label className="uiCheckRow">
                       <input type="checkbox" checked={!!usersForm.is_admin}

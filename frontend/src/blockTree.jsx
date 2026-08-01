@@ -9,6 +9,7 @@ import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
 import { COLORS } from "./pdfViewer";
 import { AutoGrowTextarea } from "./widgets";
+import { isEnterCommit } from "./utils";
 import { FolderIcon, LinkIcon } from "./icons";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
@@ -330,10 +331,10 @@ function BlockRow({
                 if (refPopup && searchResults.length > 0) {
                   if (e.key === "ArrowDown") { e.preventDefault(); setRefSelectedIdx((i) => Math.min(i + 1, searchResults.length - 1)); return; }
                   if (e.key === "ArrowUp") { e.preventDefault(); setRefSelectedIdx((i) => Math.max(i - 1, 0)); return; }
-                  if (e.key === "Enter") { e.preventDefault(); insertRef(searchResults[refSelectedIdx]); return; }
+                  if (isEnterCommit(e)) { e.preventDefault(); insertRef(searchResults[refSelectedIdx]); return; }
                   if (e.key === "Escape") { e.preventDefault(); setRefPopup(null); return; }
                 }
-                if (e.key === "Enter" && !e.shiftKey) {
+                if (isEnterCommit(e) && !e.shiftKey) {
                   e.preventDefault();
                   onEnterSibling(block.id);
                 } else if (e.key === "Tab" && !e.shiftKey) {

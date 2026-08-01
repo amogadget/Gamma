@@ -57,4 +57,12 @@ async function resolvePdfUrl(rawUrl, allowOa = true) {
   });
 }
 
-export { API, makeId, fmtBytes, sha256, getDocIdForUrl, apiJson, resolvePdfUrl };
+// True when the user pressed Enter as an action, not to commit an IME
+// composition (Pinyin, Kotoeri, etc.). React's synthetic KeyboardEvent
+// exposes `nativeEvent.isComposing`; the 229 keyCode is the legacy signal
+// browsers still send for the same case.
+function isEnterCommit(e) {
+  return e.key === "Enter" && !e.nativeEvent?.isComposing && e.keyCode !== 229;
+}
+
+export { API, makeId, fmtBytes, sha256, getDocIdForUrl, apiJson, resolvePdfUrl, isEnterCommit };

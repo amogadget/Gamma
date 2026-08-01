@@ -16,7 +16,7 @@
 // come from the same engine that draws the page, so they are always exact.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { API, apiJson } from "./utils";
+import { API, apiJson, isEnterCommit } from "./utils";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, LabelIcon, SearchIcon } from "./icons";
 
 const DASH_CLASS = "\\-\\u2010-\\u2015";
@@ -348,10 +348,10 @@ export default function SearchPanel({
                 value={query}
                 onChange={(e) => { setQuery(e.target.value); setPinned(false); pendingFindRef.current = null; }}
                 onKeyDown={(e) => {
-                  if ((e.key === "Tab" || e.key === "Enter") && suggestions.length) {
+                  if ((e.key === "Tab" || isEnterCommit(e)) && suggestions.length) {
                     e.preventDefault();
                     confirmLabel(suggestions[sugIdx] || suggestions[0]);
-                  } else if (e.key === "Enter" && pdfMatches.length) {
+                  } else if (isEnterCommit(e) && pdfMatches.length) {
                     e.preventDefault();
                     gotoFind(findIndex + (e.shiftKey ? -1 : 1));
                   } else if (e.key === "ArrowDown" && suggestions.length) {
