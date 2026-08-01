@@ -17,11 +17,13 @@ import xml.etree.ElementTree as ET
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from ..ai_client import call_ai as _call_ai
+from ..ai_context import extract_pdf_context as _extract_pdf_context
 from ..ai_settings import ai_runtime, require_ai_runtime
 from ..auth import require_user
 from ..db import page_now, user_db_path
 from ..pdf_text import PDF_EXTRACT_FAILED
-from .ai import METADATA_PROMPT, CITE_PROMPT, _call_ai, _extract_pdf_context, _resolve_model
+from .ai import CITE_PROMPT, METADATA_PROMPT, _resolve_model
 
 router = APIRouter(prefix="/api", tags=["metadata"])
 
