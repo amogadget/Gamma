@@ -1,5 +1,5 @@
-// Shared presentational widgets: dockable-window chrome, chat markdown,
-// and the auto-growing textarea.
+// Shared presentational widgets: workspace chrome, dockable windows, chat
+// markdown, and the auto-growing textarea.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -89,4 +89,105 @@ function useCopied(ms = 1500) {
   return [copied, flash, reset];
 }
 
-export { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied };
+function PopoverAnchor({ name, children, className = "" }) {
+  return (
+    <span data-popover={name} className={`popoverAnchor ${className}`.trim()}>
+      {children}
+    </span>
+  );
+}
+
+function OpenTabs({
+  tabs,
+  activeId,
+  draggingId,
+  tabElements,
+  dragTab,
+  onDraggingChange,
+  onReorder,
+  onOpen,
+  onClose,
+}) {
+  return (
+    <div className="tabStrip" role="tablist">
+      {tabs.map((tab) => (
+        <div
+          key={tab.id}
+          role="tab"
+          ref={(element) => {
+            if (element) tabElements.current.set(tab.id, element);
+            else tabElements.current.delete(tab.id);
+          }}
+          className={`tab ${tab.id === activeId ? "active" : ""} ${draggingId === tab.id ? "dragging" : ""}`}
+          title={tab.title}
+          draggable
+          onDragStart={(event) => {
+            dragTab.current = tab.id;
+            onDraggingChange(tab.id);
+            event.dataTransfer.effectAllowed = "move";
+          }}
+          onDragEnd={() => {
+            dragTab.current = null;
+            onDraggingChange(null);
+          }}
+          onDragOver={(event) => {
+            const draggedId = dragTab.current;
+            if (!draggedId || draggedId === tab.id) return;
+            event.preventDefault();
+            onReorder(draggedId, tab.id);
+          }}
+          onDrop={(event) => event.preventDefault()}
+          onClick={() => {
+            if (tab.id !== activeId) onOpen(tab.id);
+          }}
+          onAuxClick={(event) => {
+            if (event.button === 1) {
+              event.preventDefault();
+              onClose(tab.id);
+            }
+          }}
+        >
+          <span className="tabTitle">{tab.title}</span>
+          <button
+            className="uiClose tabClose"
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose(tab.id);
+            }}
+            title="Close tab"
+            aria-label={`Close ${tab.title}`}
+          >
+            ×
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function BlockDropIndicator({ target }) {
+  if (!target) return null;
+  const indentStep = 14;
+  const baseOffset = 28;
+  const left = target.rect.left + baseOffset + target.depth * indentStep;
+  return (
+    <div
+      className="dropIndicator"
+      style={{
+        top: target.above ? target.rect.top : target.rect.bottom,
+        left,
+        width: Math.max(40, target.rect.width - (baseOffset + target.depth * indentStep)),
+      }}
+    />
+  );
+}
+
+export {
+  AutoGrowTextarea,
+  BlockDropIndicator,
+  ChatMarkdown,
+  DockWindow,
+  OpenTabs,
+  PopoverAnchor,
+  useCopied,
+};
