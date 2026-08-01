@@ -38,54 +38,76 @@ function cachePdf(url, buf) {
   while (PDF_CACHE.size > PDF_CACHE_MAX) PDF_CACHE.delete(PDF_CACHE.keys().next().value);
 }
 
-// Persistent second-level cache via the Cache Storage API: survives refreshes,
-// closed tabs, and browser restarts, so a paper is downloaded once per month
-// per browser. Content behind a URL never changes (upload names are content
-// hashes; proxy-saved files are written once), so serving from disk is safe.
-// caches is undefined in insecure contexts (plain http over LAN) — every
-// helper degrades to a no-op there and the HTTP cache picks up the slack.
-const DISK_CACHE_NAME = "gamma-pdf-v1";
+// Persistent second-level cache: survives refreshes, closed tabs, and browser
+// restarts, so a paper is downloaded once per month per browser. IndexedDB on
+// purpose, NOT the Cache Storage API: caches is undefined in insecure
+// contexts, and this app is typically reached over plain http (LAN/Tailscale)
+// — which silently disabled the old cache and re-downloaded "cached" papers
+// after every reload. IndexedDB works everywhere. Content behind a URL never
+// changes (upload names are content hashes; proxy-saved files are written
+// once), so serving from disk is safe.
 const DISK_CACHE_TTL_MS = 30 * 24 * 3600 * 1000; // one month
 const DISK_CACHE_MAX = 30; // papers kept on disk
 
+function idbOpen() {
+  return new Promise((resolve, reject) => {
+    const rq = indexedDB.open("gamma-pdf-cache", 1);
+    rq.onupgradeneeded = () => rq.result.createObjectStore("pdfs").createIndex("at", "at");
+    rq.onsuccess = () => resolve(rq.result);
+    rq.onerror = () => reject(rq.error);
+  });
+}
+function idbReq(rq) {
+  return new Promise((resolve, reject) => {
+    rq.onsuccess = () => resolve(rq.result);
+    rq.onerror = () => reject(rq.error);
+  });
+}
+
 async function diskCacheGet(url) {
+  let db;
   try {
-    if (typeof caches === "undefined") return null;
-    const cache = await caches.open(DISK_CACHE_NAME);
-    const hit = await cache.match(url);
-    if (!hit) return null;
-    const at = parseInt(hit.headers.get("x-cached-at") || "0", 10);
-    if (!at || Date.now() - at > DISK_CACHE_TTL_MS) {
-      cache.delete(url).catch(() => {});
+    db = await idbOpen();
+    const row = await idbReq(db.transaction("pdfs").objectStore("pdfs").get(url));
+    if (!row) return null;
+    if (Date.now() - row.at > DISK_CACHE_TTL_MS) {
+      await idbReq(db.transaction("pdfs", "readwrite").objectStore("pdfs").delete(url));
       return null;
     }
-    return await hit.arrayBuffer();
+    return row.buf;
   } catch {
     return null;
+  } finally {
+    db?.close();
   }
 }
 
 async function diskCachePut(url, buf) {
-  let copy;
+  let db;
   try {
-    copy = buf.slice(0); // synchronously, before the caller hands buf to pdf.js
-    if (typeof caches === "undefined") return;
-    const cache = await caches.open(DISK_CACHE_NAME);
-    await cache.put(url, new Response(copy, {
-      headers: { "Content-Type": "application/pdf", "x-cached-at": String(Date.now()) },
-    }));
-    // Evict the oldest entries beyond the cap (Cache Storage has no TTL of its own)
-    const keys = await cache.keys();
-    if (keys.length > DISK_CACHE_MAX) {
-      const dated = await Promise.all(keys.map(async (req) => ({
-        req, at: parseInt((await cache.match(req))?.headers.get("x-cached-at") || "0", 10),
-      })));
-      dated.sort((a, b) => a.at - b.at);
-      for (const d of dated.slice(0, keys.length - DISK_CACHE_MAX)) {
-        await cache.delete(d.req);
-      }
+    const copy = buf.slice(0); // synchronously, before the caller hands buf to pdf.js
+    db = await idbOpen();
+    const store = db.transaction("pdfs", "readwrite").objectStore("pdfs");
+    await idbReq(store.put({ buf: copy, at: Date.now() }, url));
+    // Evict the oldest entries beyond the cap. A key cursor on the "at" index
+    // walks oldest-first without loading the buffers themselves.
+    let excess = (await idbReq(store.count())) - DISK_CACHE_MAX;
+    if (excess > 0) {
+      await new Promise((resolve) => {
+        const cur = store.index("at").openKeyCursor();
+        cur.onsuccess = () => {
+          const c = cur.result;
+          if (!c || excess <= 0) return resolve();
+          store.delete(c.primaryKey);
+          excess--;
+          c.continue();
+        };
+        cur.onerror = () => resolve();
+      });
     }
-  } catch {}
+  } catch {} finally {
+    db?.close();
+  }
 }
 
 // Abort a download when no bytes arrive for this long — a hung server
@@ -381,6 +403,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         const data = await fetchPdfData(url, onLoadState, () => cancelled);
         if (!data || cancelled) return;
         cachePdf(url, data); // insert or bump LRU position
+        onLoadState?.(url, { phase: "parsing" });
         const doc = await pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise;
         if (cancelled) { doc.destroy().catch(() => {}); return; }
         // Measure pages BEFORE showing the document: exact viewports for the
@@ -390,8 +413,10 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         // getPage is a worker round trip and this loop blocks first paint.
         const n = doc.numPages;
         const EXACT = 8;
+        const measured = Math.min(n, EXACT);
         const heights = [];
-        for (let i = 1; i <= Math.min(n, EXACT); i++) {
+        for (let i = 1; i <= measured; i++) {
+          onLoadState?.(url, { phase: "measuring", done: i - 1, total: measured });
           try { heights.push((await doc.getPage(i)).getViewport({ scale: 1 }).height); }
           catch { heights.push(heights[0] || 800); }
           if (cancelled) { doc.destroy().catch(() => {}); return; }
