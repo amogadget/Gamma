@@ -861,8 +861,8 @@ export default function App() {
   // One row per URL: a re-download (LRU eviction, retry) reactivates the
   // existing entry instead of stacking duplicates.
   function handlePdfLoadState(url, st) {
-    // System log: lifecycle transitions only — byte progress would spam it.
-    if (st.phase !== "progress") {
+    // System log: lifecycle transitions only — byte/page progress would spam it.
+    if (st.phase !== "progress" && st.phase !== "measuring") {
       const shortUrl = url.length > 100 ? url.slice(0, 100) + "…" : url;
       logSys(`pdf ${st.phase}${st.bytes ? ` (${fmtBytes(st.bytes)})` : ""}${st.detail ? ` — ${st.detail}` : ""}: ${shortUrl}`);
     }
@@ -886,6 +886,10 @@ export default function App() {
       });
     } else if (st.phase === "done" || st.phase === "cached") {
       postPill("pdf-load", { msg: "Preparing document…", spinner: true });
+    } else if (st.phase === "parsing") {
+      postPill("pdf-load", { msg: "Preparing document — parsing…", spinner: true });
+    } else if (st.phase === "measuring") {
+      postPill("pdf-load", { msg: `Preparing document — measuring page ${st.done + 1} of ${st.total}…`, spinner: true });
     } else if (st.phase === "error") {
       postPill("pdf-load", { msg: `PDF load failed — ${st.detail || "unknown error"}`, error: true, retry: true });
     } else if (st.phase === "cancelled" || st.phase === "rendered") {
@@ -910,6 +914,9 @@ export default function App() {
       }
       return;
     }
+    // Local phases — no transfer row to update (falling through would hit the
+    // catch-all branch and mark the download as errored).
+    if (st.phase === "parsing" || st.phase === "measuring") return;
     if (url.startsWith("/api/uploads/")) return;
     if (st.phase === "cached") {
       const id = transferByUrlRef.current[url];
