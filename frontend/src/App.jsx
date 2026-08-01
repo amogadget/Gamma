@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS } from "./pdfViewer";
-import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl } from "./utils";
+import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl, setExpectedUser } from "./utils";
 import {
   BlockDropIndicator,
   ChatMarkdown,
@@ -49,7 +49,7 @@ import {
   normalizeBlocks
 } from "./logseqPdfModel";
 import { loadSession, saveSession, clearSession } from "./sessionState";
-import { AuthLoading, LoginPage } from "./LoginPage";
+import { AuthLoading, LoginPage, SessionConflictPage } from "./LoginPage";
 import SettingsDialog from "./settings";
 import {
   cleanFolderSegment,
@@ -77,6 +77,48 @@ export default function App() {
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
+  // Username that now owns the browser session when it's no longer this tab's
+  // user (someone logged into another account from a second tab) — freezes the
+  // tab behind SessionConflictPage until reload.
+  const [sessionConflict, setSessionConflict] = useState(null);
+
+  // Publish this tab's identity: the X-Gamma-User guard header on API calls
+  // (utils.js fetch wrapper) plus a localStorage beacon other tabs listen to.
+  useEffect(() => {
+    const me = authUser && authUser.user && authUser.user !== "_public" ? authUser.user : null;
+    setExpectedUser(me);
+    if (me) {
+      try { localStorage.setItem("gamma-active-user", me); } catch {}
+    }
+  }, [authUser]);
+
+  // Detect the session being taken over by another account. Three signals:
+  // the backend's 409 on a guarded API call, the localStorage beacon from the
+  // tab that logged in, and a session re-check when this tab regains focus.
+  useEffect(() => {
+    if (readOnly) return;
+    const me = authUser && authUser.user && authUser.user !== "_public" ? authUser.user : null;
+    if (!me) return;
+    function conflict(who) {
+      if (who && who !== me) setSessionConflict(who);
+      else if (!who) setAuthUser(false); // logged out elsewhere → login page
+    }
+    function onMismatch(e) { conflict(e.detail?.user || ""); }
+    function onStorage(e) {
+      if (e.key === "gamma-active-user" && e.newValue !== null) conflict(e.newValue);
+    }
+    function onFocus() {
+      apiJson(`${API}/session`).then((d) => conflict(d.user || "")).catch(() => {});
+    }
+    window.addEventListener("gamma-user-mismatch", onMismatch);
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("gamma-user-mismatch", onMismatch);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [authUser, readOnly]);
 
   async function checkSession() {
     try {
@@ -156,6 +198,9 @@ export default function App() {
     // account's view leaks into whoever logs in next.
     goHome();
     await fetch(`${API}/logout`, { method: "POST", credentials: "include" });
+    // Logout kills the browser-wide session: tell other tabs of this account
+    // so they drop to the login page instead of failing on their next save.
+    try { localStorage.setItem("gamma-active-user", ""); } catch {}
     setAuthUser(false);
   }
 
@@ -3258,6 +3303,17 @@ export default function App() {
         onPasswordChange={setLoginPass}
         onSubmit={doLogin}
         onGuestLogin={doGuestLogin}
+      />
+    );
+  }
+
+  if (sessionConflict) {
+    return (
+      <SessionConflictPage
+        tabUser={authUser.user}
+        activeUser={sessionConflict}
+        // Plain pathname: this tab's ?block= belongs to the old account.
+        onReload={() => { window.location.href = window.location.pathname; }}
       />
     );
   }

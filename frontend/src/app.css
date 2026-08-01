@@ -2496,6 +2496,17 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   font-family: inherit;
 }
 .loginGuestBtn:hover { background: var(--bg-hover); }
+.loginConflictText {
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+.loginConflictHint {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 12px;
+}
 
 /* --- User badge --- */
 .userBadge {
