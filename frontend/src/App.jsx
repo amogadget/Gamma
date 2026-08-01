@@ -9,7 +9,7 @@ import ChatDock from "./chatDock";
 import SearchPanel from "./search";
 import { ContextMenu } from "./menus";
 import {
-  ActivityIcon, AlertCircleIcon, ArrowLeftIcon, CheckIcon, CopyIcon, DownloadIcon, ExportIcon,
+  ActivityIcon, AlertCircleIcon, ArrowLeftIcon, BookIcon, CheckIcon, CopyIcon, DownloadIcon, ExportIcon,
   ExternalLinkIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
   FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, KeyIcon, LabelIcon,
   LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PaperIcon, PenIcon, PinIcon, PlusIcon,
@@ -848,6 +848,9 @@ export default function App() {
   // server-side work (library indexing), shown in one popover.
   const [transfers, setTransfers] = useState([]); // [{id, name, kind, status, info}]
   const [indexTask, setIndexTask] = useState(null); // {total, done, active} from /api/tasks
+  // The server remembers the last run's progress forever; this hides the
+  // finished row after "Clear" until a new indexing run starts.
+  const [indexTaskCleared, setIndexTaskCleared] = useState(false);
   const transferByUrlRef = useRef({});
   function addTransfer(t) {
     const id = makeId();
@@ -977,7 +980,11 @@ export default function App() {
     if (!authUser?.user || readOnly) return;
     let cancelled = false;
     const refresh = () => apiJson(`${API}/tasks`)
-      .then((d) => { if (!cancelled) setIndexTask(d.indexing || null); })
+      .then((d) => {
+        if (cancelled) return;
+        setIndexTask(d.indexing || null);
+        if (d.indexing?.active) setIndexTaskCleared(false);
+      })
       .catch(() => {});
     refresh();
     const fast = openPopover === "downloads" || indexTask?.active;
@@ -1074,6 +1081,15 @@ export default function App() {
   const [chatSystem, setChatSystem] = useState(() => {
     try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
   });
+  const readContextChars = (key, fallback) => {
+    try {
+      const value = Number.parseInt(localStorage.getItem(key) || "", 10);
+      return Number.isFinite(value) && value >= 100 && value <= 1000000 ? value : fallback;
+    } catch { return fallback; }
+  };
+  const [chatContextChars, setChatContextChars] = useState(() => readContextChars("gamma-chat-context-chars", 8000));
+  const [metaContextChars, setMetaContextChars] = useState(() => readContextChars("gamma-meta-context-chars", 6000));
+  const [multiContextChars, setMultiContextChars] = useState(() => readContextChars("gamma-multi-context-chars", 18000));
   const [promptDraft, setPromptDraft] = useState("");
   // AI providers (Settings → AI providers): a user-managed list of API keys,
   // OpenAI-platform style. Keys are stored server-side per user; the server
@@ -1095,16 +1111,27 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-ai-provider", aiProvider); } catch {}
   }, [aiProvider]);
-  // Keep the selected model inside the active key's model list. Every AI call
-  // (chat, metadata, citations, titles) sends chatModel, so this is what
-  // actually routes requests to the chosen key.
+  // Last model picked per key, so switching keys and back restores the pick
+  // (a workspace-wide memory — the chat model is never per-PDF).
+  const chatModelMemRef = useRef(null);
+  if (chatModelMemRef.current === null) {
+    try { chatModelMemRef.current = JSON.parse(localStorage.getItem("gamma-chat-model-by-key") || "{}") || {}; }
+    catch { chatModelMemRef.current = {}; }
+  }
+  // Keep the selected model inside the active key's model list: switching to
+  // a key restores its remembered model, or falls back to its first one.
+  // Every AI call (chat, metadata, citations, titles) sends chatModel, so
+  // this is what actually routes requests to the chosen key.
   useEffect(() => {
     const all = aiInfo?.models || [];
     if (!all.length) return;
     const scoped = aiProvider && all.some((m) => m.provider === aiProvider)
       ? all.filter((m) => m.provider === aiProvider)
       : all;
-    if (!scoped.some((m) => m.id === chatModel)) setChatModel(scoped[0].id);
+    if (!scoped.some((m) => m.id === chatModel)) {
+      const remembered = chatModelMemRef.current[scoped[0].provider];
+      setChatModel(scoped.some((m) => m.id === remembered) ? remembered : scoped[0].id);
+    }
   }, [aiProvider, aiInfo, chatModel]);
 
   async function loadAiKeys() {
@@ -1181,18 +1208,22 @@ export default function App() {
   const [customModel, setCustomModel] = useState(""); // free-form entry next to the picker
   const formModels = parseFolderTags(aiKeysForm?.models);
   const availModels = (aiModelCatalog?.models || []).filter((m) => !formModels.includes(m));
+  // A ChatGPT entry that isn't signed in yet can't list models — its list
+  // comes from the connected account, so the fetch waits for Connect.
+  const formStoredEntry = aiKeysForm?.id ? aiKeysInfo?.providers?.find((p) => p.id === aiKeysForm.id) : null;
+  const formOauthPending = !!aiKeysForm && isOauthProto(aiKeysForm.protocol) && !formStoredEntry?.oauth_connected;
 
   // Reset the picker whenever the form target changes, then load the catalog
-  // as soon as it's possible without extra typing: OAuth entries always
-  // (static list); API entries when editing one with a stored key. A freshly
-  // typed key triggers the load on blur instead.
+  // as soon as it's possible without extra typing: entries with a stored
+  // credential (API key or completed sign-in). A freshly typed key triggers
+  // the load on blur instead; a fresh OAuth entry after Connect.
   useEffect(() => {
     setAiModelCatalog(null);
     setCustomModel("");
     const f = aiKeysForm;
     if (!f) return;
     const stored = f.id ? aiKeysInfo?.providers?.find((p) => p.id === f.id) : null;
-    if (isOauthProto(f.protocol) || stored?.key_hint) loadModelCatalog();
+    if (stored?.oauth_connected || stored?.key_hint) loadModelCatalog();
   }, [aiKeysForm?.id, aiKeysForm?.protocol]);
 
   // "Sign in with ChatGPT": opens the OAuth page in a new tab. Its redirect
@@ -1233,8 +1264,20 @@ export default function App() {
     }), true);
   }
 
-  async function deleteAiProvider(id) {
-    await runAiKeysRequest(() => apiJson(`${API}/ai/providers/${id}`, { method: "DELETE" }));
+  function deleteAiProvider(p) {
+    const label = p.name || aiProtocolOf(p.protocol)?.label || p.protocol;
+    setConfirmBox({
+      title: "Remove AI key",
+      message: `Remove the "${label}" key? AI requests through it will stop working. This cannot be undone.`,
+      confirmLabel: "Remove",
+      danger: true,
+      onConfirm: async () => {
+        // Close a form that edits this entry — saving it would 404 ("provider
+        // not found") — and forget it as the active key.
+        await runAiKeysRequest(() => apiJson(`${API}/ai/providers/${p.id}`, { method: "DELETE" }), aiKeysForm?.id === p.id);
+        if (aiProvider === p.id) setAiProvider("");
+      },
+    });
   }
 
   // Shared busy/error/refresh protocol for provider-list mutations.
@@ -1490,7 +1533,13 @@ export default function App() {
       const data = await apiJson(`${API}/metadata/fetch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ block_id: block.id, prompt: metaPrompt || "", model: chatModel || "", force: !!force }),
+        body: JSON.stringify({
+          block_id: block.id,
+          prompt: metaPrompt || "",
+          model: chatModel || "",
+          force: !!force,
+          context_char_limit: metaContextChars,
+        }),
       });
       updateTransfer(taskId, { status: "done", info: data.cached ? "cached" : data.source === "ai" ? "AI-extracted" : data.source || "" });
       if (focusedBlockIdRef.current !== block.id) return;
@@ -1640,7 +1689,16 @@ export default function App() {
   }, [authUser]);
 
   useEffect(() => {
-    try { localStorage.setItem("gamma-chat-model", chatModel); } catch {}
+    if (!chatModel) return;
+    try {
+      localStorage.setItem("gamma-chat-model", chatModel);
+      // Also file it under its key (registry ids are "<entryId>:<model>").
+      const key = (aiInfo?.models || []).find((m) => m.id === chatModel)?.provider || chatModel.split(":")[0];
+      if (key) {
+        chatModelMemRef.current = { ...chatModelMemRef.current, [key]: chatModel };
+        localStorage.setItem("gamma-chat-model-by-key", JSON.stringify(chatModelMemRef.current));
+      }
+    } catch {}
   }, [chatModel]);
   useEffect(() => {
     try { localStorage.setItem("gamma-chat-effort", chatEffort); } catch {}
@@ -1648,6 +1706,15 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-chat-system", chatSystem); } catch {}
   }, [chatSystem]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-context-chars", String(chatContextChars)); } catch {}
+  }, [chatContextChars]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-meta-context-chars", String(metaContextChars)); } catch {}
+  }, [metaContextChars]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-multi-context-chars", String(multiContextChars)); } catch {}
+  }, [multiContextChars]);
 
   // Capture text selected inside the PDF viewer so chat can focus on it.
   // Committed on mouseup (not selectionchange) so the modifier key is known:
@@ -4453,6 +4520,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
           chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider}
+          chatContextChars={chatContextChars} multiContextChars={multiContextChars}
           openAiKeysEditor={openAiKeysEditor}
           openPopover={openPopover} setOpenPopover={setOpenPopover}
           setStatus={setStatus}
@@ -4739,20 +4807,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <button
                         className="searchToggle transferClearBtn"
                         title="Clear finished"
-                        onClick={() => setTransfers((prev) => {
-                          const kept = prev.filter((t) => t.status === "active");
-                          const ids = new Set(kept.map((t) => t.id));
-                          for (const [u, id] of Object.entries(transferByUrlRef.current)) {
-                            if (!ids.has(id)) delete transferByUrlRef.current[u]; // cleared rows can be re-created later
-                          }
-                          return kept;
-                        })}
+                        onClick={() => {
+                          if (!indexTask?.active) setIndexTaskCleared(true);
+                          setTransfers((prev) => {
+                            const kept = prev.filter((t) => t.status === "active");
+                            const ids = new Set(kept.map((t) => t.id));
+                            for (const [u, id] of Object.entries(transferByUrlRef.current)) {
+                              if (!ids.has(id)) delete transferByUrlRef.current[u]; // cleared rows can be re-created later
+                            }
+                            return kept;
+                          });
+                        }}
                       >Clear</button>
                     </div>
-                    {!transfers.length && !(indexTask && (indexTask.active || indexTask.total > 0)) ? (
+                    {!transfers.length && !(indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0))) ? (
                       <div className="popoverHint">No background tasks — downloads, uploads, indexing, metadata and AI jobs show up here.</div>
                     ) : null}
-                    {indexTask && (indexTask.active || indexTask.total > 0) ? (
+                    {indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0)) ? (
                       <div className="transferRow">
                         <span className={`transferStatus ${indexTask.active ? "active" : "done"}`}>
                           {indexTask.active
@@ -4826,7 +4897,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     {shareUrl ? (
                       <div className="shareRow">
                         <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
-                        <button className="uiBtn primary" onClick={copyShareLink}>{shareCopied ? "Copied ✓" : "Copy"}</button>
+                        <button
+                          className="chatMsgActionBtn"
+                          onClick={copyShareLink}
+                          title="Copy link"
+                          aria-label="Copy share link"
+                        >
+                          {shareCopied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+                        </button>
                       </div>
                     ) : (
                       <div className="popoverHint">Creating link…</div>
@@ -5196,6 +5274,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 ["papers", "Papers & PDFs", <PaperIcon key="i" size={15} />],
                 ["ai", "AI & API keys", <KeyIcon key="i" size={15} />],
                 ["prompts", "Prompts", <SlidersIcon key="i" size={15} />],
+                ["context", "AI context", <BookIcon key="i" size={15} />],
                 ["search", "Search", <SearchIcon size={15} key="i" />],
                 ["diagnostics", "Diagnostics", <ActivityIcon size={15} key="i" />],
               ].map(([id, label, icon]) => (
@@ -5207,7 +5286,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
               ))}
             </div>
             <div className="settingsPane">
-              <button className="uiClose settingsClose" onClick={() => setSettingsOpen(null)} title="Close settings" aria-label="Close settings">×</button>
+              <button className="uiClose uiCloseLg settingsClose" onClick={() => setSettingsOpen(null)} title="Close settings" aria-label="Close settings">×</button>
 
               {settingsOpen === "papers" ? (
                 <>
@@ -5296,11 +5375,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                               <span className="aiProvDesc aiProvModels">
                                 {(parseFolderTags(p.models).length
                                   ? parseFolderTags(p.models)
-                                  : [proto?.default_model || "provider default"]).map((m, i) => (
-                                  <span className="categoryTag" key={m}>
-                                    {m}
-                                    {i === 0 ? <span className="uiTag">default</span> : null}
-                                  </span>
+                                  : [proto?.default_model || "provider default"]).map((m) => (
+                                  <span className="categoryTag" key={m}>{m}</span>
                                 ))}
                               </span>
                             </span>
@@ -5314,7 +5390,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                                   </button>
                                   <button className="uiBtn sm iconSq danger" disabled={aiKeysBusy}
                                     title="Remove this key" aria-label={`Remove ${p.name || p.protocol}`}
-                                    onClick={() => deleteAiProvider(p.id)}>
+                                    onClick={() => deleteAiProvider(p)}>
                                     <Trash2Icon size={13} />
                                   </button>
                                 </>
@@ -5393,16 +5469,31 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                               />
                             </>
                           ) : null}
-                          <div className="reportModalHint" style={{ margin: 0 }}>
-                            Models — the first is the default
-                            {formModels.length === 0 ? ` (none picked: uses ${aiProtocolOf(aiKeysForm.protocol)?.default_model || "provider default"})` : ""}
+                          <div className="reportModalHint aiModelsHead" style={{ margin: 0 }}>
+                            <span>
+                              Models — shown in the chat panel's model menu
+                              {formModels.length === 0 ? ` (none picked: uses ${aiProtocolOf(aiKeysForm.protocol)?.default_model || "the provider default"})` : ""}
+                            </span>
+                            <button
+                              className="searchToggle transferClearBtn"
+                              disabled={!!aiModelCatalog?.loading || formOauthPending}
+                              title={formOauthPending
+                                ? "Connect with ChatGPT first — the model list comes from your account"
+                                : "Ask the provider which models this key can use"}
+                              onClick={loadModelCatalog}
+                            >
+                              {aiModelCatalog?.loading
+                                ? <><span className="transferSpin inline" /> fetching models…</>
+                                : aiModelCatalog?.models
+                                  ? `↻ ${aiModelCatalog.models.length} usable models`
+                                  : formOauthPending ? "Models list after connect" : "Fetch usable models"}
+                            </button>
                           </div>
                           {formModels.length ? (
                             <div className="aiModelChips">
-                              {formModels.map((m, i) => (
+                              {formModels.map((m) => (
                                 <span className="categoryTag" key={m}>
                                   {m}
-                                  {i === 0 ? <span className="uiTag">default</span> : null}
                                   <button className="uiClose uiCloseSm" title="Remove model"
                                     aria-label={`Remove ${m}`} onClick={() => removeModel(m)}>×</button>
                                 </span>
@@ -5516,6 +5607,67 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         setCitePrompt(norm(citePromptDraft, aiInfo?.cite_prompt));
                         setStatus("Prompts saved.");
                       }}>Save prompts</button>
+                  </div>
+                </>
+              ) : null}
+
+              {settingsOpen === "context" ? (
+                <>
+                  <div className="settingsPaneTitle">AI context</div>
+                  <div className="settingsPaneHint">
+                    Control how much extracted PDF text Gamma sends to the AI. Larger values may improve
+                    answers about later pages, but use more input tokens, cost more, and take longer.
+                    These preferences are saved in this browser.
+                  </div>
+                  {[
+                    {
+                      label: "Single-paper chat",
+                      desc: "Maximum characters extracted from the open paper for a normal chat message.",
+                      value: chatContextChars,
+                      set: setChatContextChars,
+                      fallback: 8000,
+                    },
+                    {
+                      label: "Metadata extraction",
+                      desc: "Maximum characters read while detecting identifiers and extracting paper metadata.",
+                      value: metaContextChars,
+                      set: setMetaContextChars,
+                      fallback: 6000,
+                    },
+                    {
+                      label: "Multi-paper chat total",
+                      desc: "Total character budget shared evenly by the selected papers.",
+                      value: multiContextChars,
+                      set: setMultiContextChars,
+                      fallback: 18000,
+                    },
+                  ].map((item) => (
+                    <label className="settingRow" key={item.label}>
+                      <span className="settingText">
+                        <span className="settingLabel">{item.label}</span>
+                        <span className="settingDesc">{item.desc}</span>
+                      </span>
+                      <input
+                        className="aiKeyInput contextLimitInput"
+                        type="number"
+                        min="100"
+                        max="1000000"
+                        step="1000"
+                        value={item.value}
+                        onChange={(e) => {
+                          const value = Number.parseInt(e.target.value, 10);
+                          if (Number.isFinite(value)) item.set(Math.min(1000000, Math.max(100, value)));
+                        }}
+                      />
+                    </label>
+                  ))}
+                  <div className="reportModalBtns">
+                    <button className="uiBtn" onClick={() => {
+                      setChatContextChars(8000);
+                      setMetaContextChars(6000);
+                      setMultiContextChars(18000);
+                      setStatus("AI context limits reset.");
+                    }}>Reset defaults</button>
                   </div>
                 </>
               ) : null}

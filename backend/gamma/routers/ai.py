@@ -12,7 +12,7 @@ from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import chatgpt_oauth
 from ..ai_settings import (
@@ -57,6 +57,8 @@ class AIChatRequest(BaseModel):
     images: list = []     # pasted figures as data URLs ("data:image/png;base64,…")
     files: list = []      # uploaded PDFs as {name, data} with a data URL — attached natively
     stream: bool = False  # NDJSON stream of {"delta": …} lines instead of one JSON body
+    context_char_limit: int = Field(default=8000, ge=100, le=1_000_000)
+    multi_context_char_limit: int = Field(default=18000, ge=100, le=1_000_000)
 
 
 def _parse_images(images: list) -> list[tuple[str, str]]:
@@ -642,11 +644,11 @@ async def ai_provider_delete(provider_id: str, request: Request):
     return _masked_settings(user, request.state.is_guest)
 
 
-# Fallback when the live listing is unreachable (not connected yet, offline):
-# models the ChatGPT backend has been known to serve.
+# Fallback when the live listing fails on a connected entry (offline, backend
+# hiccup): models the ChatGPT backend has been known to serve.
 _CHATGPT_MODEL_FALLBACK = [
-    "gpt-5.1", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini",
-    "gpt-5", "gpt-5-codex",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
 ]
 # GET {base}/models gates its answer on the caller's version — keep in rough
 # sync with a current Codex CLI release so new models show up.
@@ -656,15 +658,16 @@ _CHATGPT_CLIENT_VERSION = "0.146.0"
 def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
     """Live model list from the ChatGPT (codex) backend, Codex CLI's own
     listing call: GET {base}/models?client_version=… with the OAuth bearer.
-    Falls back to the known-good list when no entry is connected or the
-    fetch fails."""
+    Needs a connected entry — the list is account-gated; falls back to the
+    known-good list only when the fetch itself fails."""
     providers = ai_runtime(user)["providers"]
     conf = providers.get(provider_id)
     if not conf or conf.get("protocol") != "chatgpt":
         # Pre-connect "Add key" form has no entry yet — any connected one will do.
         conf = next((c for c in providers.values() if c.get("protocol") == "chatgpt"), None)
     if not conf:
-        return _CHATGPT_MODEL_FALLBACK
+        raise HTTPException(status_code=400,
+                            detail="sign in with ChatGPT first — the model list comes from your account")
     try:
         req = URLRequest(
             f"{conf['base_url']}/models?client_version={_CHATGPT_CLIENT_VERSION}",
@@ -752,8 +755,9 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
 _OAUTH_STATES: dict = {}  # state -> {"verifier", "at"} — in-memory, 15 min TTL
 _OAUTH_STATE_TTL = 900
 
-# First models offered on a fresh connect; freely editable per entry afterwards.
-_CHATGPT_DEFAULT_MODELS = "gpt-5.1, gpt-5.1-codex"
+# Last-resort models seeded on a fresh connect when even the live listing
+# fails; freely editable per entry afterwards.
+_CHATGPT_DEFAULT_MODELS = "gpt-5.6-sol, gpt-5.6-terra"
 
 
 @router.post("/ai/oauth/chatgpt/start")
@@ -803,16 +807,27 @@ async def chatgpt_auth_complete(payload: ChatGPTAuthComplete, request: Request):
     else:
         if len(entries) >= MAX_PROVIDERS:
             raise HTTPException(status_code=400, detail="too many providers")
-        entries.append({
+        entry = {
             "id": new_provider_id(),
             "protocol": "chatgpt",
             "name": payload.name.strip()[:MAX_NAME_LEN] or "ChatGPT",
             "api_key": "",
             "base_url": "",
-            "models": payload.models.strip()[:MAX_MODELS_LEN] or _CHATGPT_DEFAULT_MODELS,
+            "models": payload.models.strip()[:MAX_MODELS_LEN],
             "created_at": page_now(),
             "oauth": oauth,
-        })
+        }
+        entries.append(entry)
+        if not entry["models"]:
+            # Seed the model list live from the account instead of a
+            # hardcoded (quickly stale) default. Tokens must be stored first —
+            # the listing call reads them back through ai_runtime.
+            save_provider_entries(user, entries)
+            try:
+                live = _chatgpt_model_catalog(user, entry["id"])
+            except Exception:
+                live = []
+            entry["models"] = ", ".join(live[:2])[:MAX_MODELS_LEN] or _CHATGPT_DEFAULT_MODELS
     save_provider_entries(user, entries)
     return _masked_settings(user, request.state.is_guest)
 
@@ -838,7 +853,7 @@ def _gather_inputs(user: str, payload: AIChatRequest, allow_native: bool):
     if page_ids:
         # Multi-page context: attach/extract each selected page's PDF, and
         # optionally the user's highlights + notes for it.
-        text_budget = max(3000, 18000 // len(page_ids))
+        text_budget = max(1, payload.multi_context_char_limit // len(page_ids))
         total_b64 = 0
         with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
             for pid in page_ids:
@@ -872,7 +887,7 @@ def _gather_inputs(user: str, payload: AIChatRequest, allow_native: bool):
             if b64:
                 pdf_b64s.append(b64)
         if not pdf_b64s:
-            txt = _extract_pdf_context(user, payload.doc_id)
+            txt = _extract_pdf_context(user, payload.doc_id, limit=payload.context_char_limit)
             if txt:
                 context_sections.append(txt)
 

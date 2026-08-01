@@ -2293,7 +2293,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .popover .check { display: inline-block; width: 14px; color: var(--accent-dark); font-weight: 700; }
 .topbar .iconBtn.activeIcon { background: var(--bg-hover); color: var(--text-primary); }
 .sharePopover { min-width: 320px; }
-.shareRow { display: flex; gap: 6px; }
+.shareRow { display: flex; align-items: center; gap: 6px; }
 .shareRow input {
   flex: 1;
   min-width: 0;
@@ -3665,7 +3665,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .pptCitePreview p { margin: 0; }
 /* Beat the generic ".topbar button" pill when the box renders inside the
    topbar (share popover) — keep the flat icon look it has elsewhere. */
-.pptCiteBox .chatMsgActionBtn {
+.pptCiteBox .chatMsgActionBtn,
+.shareRow .chatMsgActionBtn {
   padding: 0;
   background: none;
   border: none;
@@ -3813,14 +3814,23 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .settingsPaneHint { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
 .settingsDivider { height: 1px; background: var(--border); margin: 6px 0; flex-shrink: 0; }
-.settingsClose { position: absolute; top: 14px; right: 20px; }
+/* A 28px (Lg) button tucked into the modal's 12px-radius corner, its circle
+   concentric with the corner arc. */
+.settingsClose { position: absolute; top: 12px; right: 12px; }
 
 /* Model list in the AI-provider form — chips are .categoryTag (same look as
-   the page label chips), the "default" marker is .uiTag. */
+   the page label chips). */
 .aiModelChips { display: flex; flex-wrap: wrap; gap: 5px; }
+/* "Models" header row in the form: hint text left, fetch-models button right. */
+.aiModelsHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.aiModelsHead .searchToggle { flex-shrink: 0; gap: 5px; }
+.aiModelsHead .searchToggle:disabled { opacity: 0.45; cursor: default; background: none; }
 /* …and the same chips on the saved-provider rows. */
 .aiProvModels { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .settingsPane .settingRow { flex-shrink: 0; }
+/* Look comes from .aiKeyInput (the standard settings text field); this only
+   sizes the number box inside its settingRow. */
+.contextLimitInput { width: 112px; flex: 0 0 auto; margin-bottom: 0; text-align: right; }
 /* Provider rows double as the active-key picker in the AI pane. */
 .aiProvSelectable { cursor: pointer; }
 .aiProvSelectable .aiProvMeta { flex: 1; }

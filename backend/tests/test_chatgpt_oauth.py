@@ -92,8 +92,24 @@ def test_plain_add_endpoint_refuses_chatgpt_protocol(erin):
     assert "sign" in r.json()["detail"].lower()
 
 
+def test_model_catalog_needs_signin_before_connect(erin):
+    # No connected ChatGPT entry yet — the account-gated list can't be served,
+    # and a stale hardcoded one must not be.
+    r = erin.post("/api/ai/model-catalog", json={"protocol": "chatgpt"})
+    assert r.status_code == 400
+    assert "sign in" in r.json()["detail"].lower()
+
+
 def test_connect_flow_creates_masked_entry_and_models(erin, monkeypatch):
+    import gamma.routers.ai as ai_mod
+
     monkeypatch.setattr(co, "_token_request", lambda form: _fake_tokens())
+    # A fresh connect seeds its model list live from the account (first two).
+    monkeypatch.setattr(ai_mod, "urlopen", lambda req, timeout=0: _FakeResp({"models": [
+        {"slug": "gpt-6-sol", "visibility": "list"},
+        {"slug": "gpt-6-terra", "visibility": "list"},
+        {"slug": "gpt-6-luna", "visibility": "list"},
+    ]}))
     state = erin.post("/api/ai/oauth/chatgpt/start").json()["state"]
     r = erin.post("/api/ai/oauth/chatgpt/complete", json={
         "state": state,
@@ -104,11 +120,11 @@ def test_connect_flow_creates_masked_entry_and_models(erin, monkeypatch):
     entry = next(p for p in r.json()["providers"] if p["protocol"] == "chatgpt")
     assert entry["oauth_connected"] is True
     assert entry["account"] == "tim@example.com"
-    assert "gpt-5.1" in entry["models"]
+    assert entry["models"] == "gpt-6-sol, gpt-6-terra"
     assert "access" not in json.dumps(entry)  # tokens never reach the browser
 
     models = erin.get("/api/ai/models").json()
-    assert any(m["model"] == "gpt-5.1" and m["provider"] == entry["id"] for m in models["models"])
+    assert any(m["model"] == "gpt-6-sol" and m["provider"] == entry["id"] for m in models["models"])
 
     # replay of the same state is rejected (one-shot verifier)
     r2 = erin.post("/api/ai/oauth/chatgpt/complete", json={"state": state, "callback": "code"})
