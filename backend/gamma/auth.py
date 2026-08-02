@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from .config import USERS_DB
 from .db import page_now
@@ -54,6 +55,22 @@ async def session_middleware(request: Request, call_next):
                 request.state.user = username
                 request.state.is_guest = bool(is_guest)
                 request.state.is_admin = bool(is_admin) and not is_guest
+    # The session cookie is browser-wide, so logging in from a second tab
+    # silently switches every other tab's identity. Tabs declare who they
+    # think is signed in (X-Gamma-User); on mismatch refuse the request
+    # instead of reading/writing the wrong account's data. Requests without
+    # the header (share views, pdf.js range requests) behave as before.
+    expected = request.headers.get("x-gamma-user")
+    if expected is not None and request.url.path.startswith("/api/") \
+            and expected != (request.state.user or ""):
+        now_who = f'"{request.state.user}"' if request.state.user else "signed out"
+        resp = JSONResponse(
+            {"detail": f'This tab is signed in as "{expected}", but the browser '
+                       f"session is now {now_who}. Reload the tab to continue."},
+            status_code=409,
+        )
+        resp.headers["X-Gamma-Session-User"] = request.state.user or ""
+        return resp
     response = await call_next(request)
     if new_session_token:
         set_session_cookie(response, new_session_token)
