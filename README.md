@@ -13,12 +13,10 @@
 <!-- Demo GIF slot ➜ record: highlight text on the PDF, watch the note appear in the tree, click it to jump back. Save as docs/demo-annotate.gif and swap the image above for it. -->
 
 ```bash
-docker run -d -p 9001:9001 -v gamma-data:/data \
-  -e GAMMA_ADMIN_USER=admin -e GAMMA_ADMIN_PASSWORD=change-me \
-  ghcr.io/tim4431/gamma:latest
+docker run -d --name gamma -p 9001:9001 -v gamma-data:/data ghcr.io/tim4431/gamma:latest
 ```
 
-Open <http://localhost:9001> and log in. (Full setup with AI keys → [Install](#install).)
+Open <http://localhost:9001> and log in as `admin` — a fresh instance seeds the account itself and prints its password once to the log (`docker logs gamma`). No environment variables needed. (Full setup → [Install](#install).)
 
 ---
 
@@ -74,15 +72,14 @@ App-level username/password auth with per-user isolated data. Guest accounts get
 
 ### Docker Compose (recommended)
 
-Copy the templates (the real files are gitignored, so your settings never land in commits), set your password and optional AI keys, and start:
+Copy the template (the real file is gitignored, so local tweaks never land in commits) and start:
 
 ```bash
 cp docker-compose.yml.example docker-compose.yml
-cp .env.example .env   # edit: admin password (everything else is optional)
 docker compose up -d
 ```
 
-Open <http://localhost:9001>. Everything — accounts, notes, and uploaded PDFs — lives under the container's `/data` volume, so your library survives upgrades. Back it up by copying that volume or using the in-app **Export my data** zip; restore a zip with **Import data** in the same menu. If you bind-mount `/data` to a host folder, set `PUID`/`PGID` to your user's ids (`id -u` / `id -g`) so the files belong to you instead of root.
+Open <http://localhost:9001> and log in with the seeded `admin` password from `docker logs gamma` (printed once on first start). Everything — accounts, notes, and uploaded PDFs — lives under the container's `/data` volume, so your library survives upgrades. Back it up by copying that volume or using the in-app **Export my data** zip; restore a zip with **Import data** in the same menu. If you bind-mount `/data` to a host folder, set `PUID`/`PGID` to your user's ids (`id -u` / `id -g`) so the files belong to you instead of root.
 
 Users are managed in the app: sign in with an admin account → account menu → *Manage users…* (create/delete accounts, reset passwords, grant or revoke the admin privilege — admin is a flag, not a special name). The CLI equivalent still works:
 
@@ -151,7 +148,7 @@ Put a TLS-terminating reverse proxy (Caddy, nginx) in front of 9001 for a domain
 | `GAMMA_AI_ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Default Anthropic-protocol endpoint, e.g. `https://api.deepseek.com/anthropic` |
 | `GAMMA_AI_OPENAI_BASE_URL` | No | `https://api.openai.com` | Default OpenAI-compatible endpoint |
 
-AI is configured in the app, not the environment: each user adds provider entries under account menu → *AI providers & keys…* (pick the API format — Anthropic Messages or OpenAI Chat Completions — then a key, plus optional label, base URL, and model list), or connects a ChatGPT Plus/Pro subscription with *Sign in with ChatGPT* — OAuth, no key at all. Keys are stored server-side per user and never sent back to the browser. The base-URL variables above only change the per-protocol defaults shown in that dialog. For docker compose, put these in `.env` (see [.env.example](./.env.example)).
+AI is configured in the app, not the environment: each user adds provider entries under account menu → *AI providers & keys…* (pick the API format — Anthropic Messages or OpenAI Chat Completions — then a key, plus optional label, base URL, and model list), or connects a ChatGPT Plus/Pro subscription with *Sign in with ChatGPT* — OAuth, no key at all. Keys are stored server-side per user and never sent back to the browser. The base-URL variables above only change the per-protocol defaults shown in that dialog.
 
 </details>
 

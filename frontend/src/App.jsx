@@ -1,8 +1,15 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS } from "./pdfViewer";
-import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl } from "./utils";
-import { DockWindow, ChatMarkdown, useCopied } from "./widgets";
+import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl, setExpectedUser } from "./utils";
+import {
+  BlockDropIndicator,
+  ChatMarkdown,
+  DockWindow,
+  OpenTabs,
+  PopoverAnchor,
+  useCopied,
+} from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
 import { ViewToggle } from "./fileBrowser";
 import ChatDock from "./chatDock";
@@ -11,9 +18,9 @@ import { ContextMenu } from "./menus";
 import {
   ActivityIcon, AlertCircleIcon, ArrowLeftIcon, CheckIcon, CopyIcon, DownloadIcon, ExportIcon,
   ExternalLinkIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
-  FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, KeyIcon, LabelIcon,
-  LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PaperIcon, PenIcon, PinIcon, PlusIcon,
-  SearchIcon, SettingsIcon, SlidersIcon, SparklesIcon, Trash2Icon, TrashIcon, UploadIcon,
+  FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
+  LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PinIcon, PlusIcon,
+  SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, TrashIcon, UploadIcon,
   UserIcon, UsersIcon, ZoomInIcon, ZoomOutIcon,
 } from "./icons";
 
@@ -42,6 +49,19 @@ import {
   normalizeBlocks
 } from "./logseqPdfModel";
 import { loadSession, saveSession, clearSession } from "./sessionState";
+import { AuthLoading, LoginPage, SessionConflictPage } from "./LoginPage";
+import SettingsDialog from "./settings";
+import {
+  cleanFolderSegment,
+  findPageForUrl,
+  formatRelativeTime,
+  friendlyApiError,
+  getPdfPageTitle,
+  metadataToDraft,
+  normalizeLinkInput,
+  parseFolderTags,
+  scorePaperMatch,
+} from "./libraryUtils";
 
 export default function App() {
   const params = new URLSearchParams(window.location.search);
@@ -57,6 +77,48 @@ export default function App() {
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
+  // Username that now owns the browser session when it's no longer this tab's
+  // user (someone logged into another account from a second tab) — freezes the
+  // tab behind SessionConflictPage until reload.
+  const [sessionConflict, setSessionConflict] = useState(null);
+
+  // Publish this tab's identity: the X-Gamma-User guard header on API calls
+  // (utils.js fetch wrapper) plus a localStorage beacon other tabs listen to.
+  useEffect(() => {
+    const me = authUser && authUser.user && authUser.user !== "_public" ? authUser.user : null;
+    setExpectedUser(me);
+    if (me) {
+      try { localStorage.setItem("gamma-active-user", me); } catch {}
+    }
+  }, [authUser]);
+
+  // Detect the session being taken over by another account. Three signals:
+  // the backend's 409 on a guarded API call, the localStorage beacon from the
+  // tab that logged in, and a session re-check when this tab regains focus.
+  useEffect(() => {
+    if (readOnly) return;
+    const me = authUser && authUser.user && authUser.user !== "_public" ? authUser.user : null;
+    if (!me) return;
+    function conflict(who) {
+      if (who && who !== me) setSessionConflict(who);
+      else if (!who) setAuthUser(false); // logged out elsewhere → login page
+    }
+    function onMismatch(e) { conflict(e.detail?.user || ""); }
+    function onStorage(e) {
+      if (e.key === "gamma-active-user" && e.newValue !== null) conflict(e.newValue);
+    }
+    function onFocus() {
+      apiJson(`${API}/session`).then((d) => conflict(d.user || "")).catch(() => {});
+    }
+    window.addEventListener("gamma-user-mismatch", onMismatch);
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      window.removeEventListener("gamma-user-mismatch", onMismatch);
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [authUser, readOnly]);
 
   async function checkSession() {
     try {
@@ -136,6 +198,9 @@ export default function App() {
     // account's view leaks into whoever logs in next.
     goHome();
     await fetch(`${API}/logout`, { method: "POST", credentials: "include" });
+    // Logout kills the browser-wide session: tell other tabs of this account
+    // so they drop to the login page instead of failing on their next save.
+    try { localStorage.setItem("gamma-active-user", ""); } catch {}
     setAuthUser(false);
   }
 
@@ -243,9 +308,7 @@ export default function App() {
   }, [authUser?.user, readOnly]);
 
   // Folder-tag helpers: parse/serialize the comma-separated path list.
-  const parseFolderTags = (raw) => (raw || "").split(",").map((s) => s.trim()).filter(Boolean);
   // "/" nests and "," separates tags, so neither may appear in a segment name.
-  const cleanFolderSegment = (name) => (name || "").replace(/[,/]/g, " ").replace(/\s+/g, " ").trim();
   async function writePageFolders(pageId, tags) {
     await apiJson(`${API}/blocks/${pageId}`, {
       method: "PUT",
@@ -848,6 +911,9 @@ export default function App() {
   // server-side work (library indexing), shown in one popover.
   const [transfers, setTransfers] = useState([]); // [{id, name, kind, status, info}]
   const [indexTask, setIndexTask] = useState(null); // {total, done, active} from /api/tasks
+  // The server remembers the last run's progress forever; this hides the
+  // finished row after "Clear" until a new indexing run starts.
+  const [indexTaskCleared, setIndexTaskCleared] = useState(false);
   const transferByUrlRef = useRef({});
   function addTransfer(t) {
     const id = makeId();
@@ -977,7 +1043,11 @@ export default function App() {
     if (!authUser?.user || readOnly) return;
     let cancelled = false;
     const refresh = () => apiJson(`${API}/tasks`)
-      .then((d) => { if (!cancelled) setIndexTask(d.indexing || null); })
+      .then((d) => {
+        if (cancelled) return;
+        setIndexTask(d.indexing || null);
+        if (d.indexing?.active) setIndexTaskCleared(false);
+      })
       .catch(() => {});
     refresh();
     const fast = openPopover === "downloads" || indexTask?.active;
@@ -1074,6 +1144,15 @@ export default function App() {
   const [chatSystem, setChatSystem] = useState(() => {
     try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
   });
+  const readContextChars = (key, fallback) => {
+    try {
+      const value = Number.parseInt(localStorage.getItem(key) || "", 10);
+      return Number.isFinite(value) && value >= 100 && value <= 1000000 ? value : fallback;
+    } catch { return fallback; }
+  };
+  const [chatContextChars, setChatContextChars] = useState(() => readContextChars("gamma-chat-context-chars", 8000));
+  const [metaContextChars, setMetaContextChars] = useState(() => readContextChars("gamma-meta-context-chars", 6000));
+  const [multiContextChars, setMultiContextChars] = useState(() => readContextChars("gamma-multi-context-chars", 18000));
   const [promptDraft, setPromptDraft] = useState("");
   // AI providers (Settings → AI providers): a user-managed list of API keys,
   // OpenAI-platform style. Keys are stored server-side per user; the server
@@ -1095,16 +1174,27 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-ai-provider", aiProvider); } catch {}
   }, [aiProvider]);
-  // Keep the selected model inside the active key's model list. Every AI call
-  // (chat, metadata, citations, titles) sends chatModel, so this is what
-  // actually routes requests to the chosen key.
+  // Last model picked per key, so switching keys and back restores the pick
+  // (a workspace-wide memory — the chat model is never per-PDF).
+  const chatModelMemRef = useRef(null);
+  if (chatModelMemRef.current === null) {
+    try { chatModelMemRef.current = JSON.parse(localStorage.getItem("gamma-chat-model-by-key") || "{}") || {}; }
+    catch { chatModelMemRef.current = {}; }
+  }
+  // Keep the selected model inside the active key's model list: switching to
+  // a key restores its remembered model, or falls back to its first one.
+  // Every AI call (chat, metadata, citations, titles) sends chatModel, so
+  // this is what actually routes requests to the chosen key.
   useEffect(() => {
     const all = aiInfo?.models || [];
     if (!all.length) return;
     const scoped = aiProvider && all.some((m) => m.provider === aiProvider)
       ? all.filter((m) => m.provider === aiProvider)
       : all;
-    if (!scoped.some((m) => m.id === chatModel)) setChatModel(scoped[0].id);
+    if (!scoped.some((m) => m.id === chatModel)) {
+      const remembered = chatModelMemRef.current[scoped[0].provider];
+      setChatModel(scoped.some((m) => m.id === remembered) ? remembered : scoped[0].id);
+    }
   }, [aiProvider, aiInfo, chatModel]);
 
   async function loadAiKeys() {
@@ -1181,18 +1271,22 @@ export default function App() {
   const [customModel, setCustomModel] = useState(""); // free-form entry next to the picker
   const formModels = parseFolderTags(aiKeysForm?.models);
   const availModels = (aiModelCatalog?.models || []).filter((m) => !formModels.includes(m));
+  // A ChatGPT entry that isn't signed in yet can't list models — its list
+  // comes from the connected account, so the fetch waits for Connect.
+  const formStoredEntry = aiKeysForm?.id ? aiKeysInfo?.providers?.find((p) => p.id === aiKeysForm.id) : null;
+  const formOauthPending = !!aiKeysForm && isOauthProto(aiKeysForm.protocol) && !formStoredEntry?.oauth_connected;
 
   // Reset the picker whenever the form target changes, then load the catalog
-  // as soon as it's possible without extra typing: OAuth entries always
-  // (static list); API entries when editing one with a stored key. A freshly
-  // typed key triggers the load on blur instead.
+  // as soon as it's possible without extra typing: entries with a stored
+  // credential (API key or completed sign-in). A freshly typed key triggers
+  // the load on blur instead; a fresh OAuth entry after Connect.
   useEffect(() => {
     setAiModelCatalog(null);
     setCustomModel("");
     const f = aiKeysForm;
     if (!f) return;
     const stored = f.id ? aiKeysInfo?.providers?.find((p) => p.id === f.id) : null;
-    if (isOauthProto(f.protocol) || stored?.key_hint) loadModelCatalog();
+    if (stored?.oauth_connected || stored?.key_hint) loadModelCatalog();
   }, [aiKeysForm?.id, aiKeysForm?.protocol]);
 
   // "Sign in with ChatGPT": opens the OAuth page in a new tab. Its redirect
@@ -1233,8 +1327,20 @@ export default function App() {
     }), true);
   }
 
-  async function deleteAiProvider(id) {
-    await runAiKeysRequest(() => apiJson(`${API}/ai/providers/${id}`, { method: "DELETE" }));
+  function deleteAiProvider(p) {
+    const label = p.name || aiProtocolOf(p.protocol)?.label || p.protocol;
+    setConfirmBox({
+      title: "Remove AI key",
+      message: `Remove the "${label}" key? AI requests through it will stop working. This cannot be undone.`,
+      confirmLabel: "Remove",
+      danger: true,
+      onConfirm: async () => {
+        // Close a form that edits this entry — saving it would 404 ("provider
+        // not found") — and forget it as the active key.
+        await runAiKeysRequest(() => apiJson(`${API}/ai/providers/${p.id}`, { method: "DELETE" }), aiKeysForm?.id === p.id);
+        if (aiProvider === p.id) setAiProvider("");
+      },
+    });
   }
 
   // Shared busy/error/refresh protocol for provider-list mutations.
@@ -1378,28 +1484,10 @@ export default function App() {
   // Editable copy of the metadata fields shown in the popover. Kept as flat
   // strings (authors comma-joined); rebuilt whenever the popover opens or a
   // fetch lands, so a refresh replaces any half-typed edits with the result.
-  const metaToDraft = (m) => ({
-    title: m?.title || "",
-    authors: (m?.authors || []).join(", "),
-    venue: m?.venue || "",
-    year: m?.year || "",
-    volume: m?.volume || "",
-    pages: m?.pages || "",
-    doi: m?.doi || "",
-    arxiv_id: m?.arxiv_id || "",
-  });
   const [metaDraft, setMetaDraft] = useState(null);
   useEffect(() => {
-    if (openPopover === "meta") setMetaDraft(metaToDraft(pageMeta));
+    if (openPopover === "meta") setMetaDraft(metadataToDraft(pageMeta));
   }, [openPopover, pageMeta]);
-
-  // A missing endpoint means the running server predates this build: the SPA
-  // catch-all answers instead (HTML → JSON parse error, or 405 on POST).
-  function friendlyApiError(err) {
-    const m = err?.message || "failed";
-    return /Unexpected token|Method Not Allowed|not valid JSON/i.test(m)
-      ? "endpoint missing — restart/update the server" : m.slice(0, 120);
-  }
 
   // PDF-text health shown in the metadata popover: a scanned/image-only PDF is
   // why metadata lookups fail and AI chat answers blind — surface it. One
@@ -1490,7 +1578,13 @@ export default function App() {
       const data = await apiJson(`${API}/metadata/fetch`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ block_id: block.id, prompt: metaPrompt || "", model: chatModel || "", force: !!force }),
+        body: JSON.stringify({
+          block_id: block.id,
+          prompt: metaPrompt || "",
+          model: chatModel || "",
+          force: !!force,
+          context_char_limit: metaContextChars,
+        }),
       });
       updateTransfer(taskId, { status: "done", info: data.cached ? "cached" : data.source === "ai" ? "AI-extracted" : data.source || "" });
       if (focusedBlockIdRef.current !== block.id) return;
@@ -1640,7 +1734,16 @@ export default function App() {
   }, [authUser]);
 
   useEffect(() => {
-    try { localStorage.setItem("gamma-chat-model", chatModel); } catch {}
+    if (!chatModel) return;
+    try {
+      localStorage.setItem("gamma-chat-model", chatModel);
+      // Also file it under its key (registry ids are "<entryId>:<model>").
+      const key = (aiInfo?.models || []).find((m) => m.id === chatModel)?.provider || chatModel.split(":")[0];
+      if (key) {
+        chatModelMemRef.current = { ...chatModelMemRef.current, [key]: chatModel };
+        localStorage.setItem("gamma-chat-model-by-key", JSON.stringify(chatModelMemRef.current));
+      }
+    } catch {}
   }, [chatModel]);
   useEffect(() => {
     try { localStorage.setItem("gamma-chat-effort", chatEffort); } catch {}
@@ -1648,6 +1751,15 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-chat-system", chatSystem); } catch {}
   }, [chatSystem]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-context-chars", String(chatContextChars)); } catch {}
+  }, [chatContextChars]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-meta-context-chars", String(metaContextChars)); } catch {}
+  }, [metaContextChars]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-multi-context-chars", String(multiContextChars)); } catch {}
+  }, [multiContextChars]);
 
   // Capture text selected inside the PDF viewer so chat can focus on it.
   // Committed on mouseup (not selectionchange) so the modifier key is known:
@@ -2037,33 +2149,6 @@ export default function App() {
       recordReadPos(focusedBlockId, n);
     };
   });
-
-  function formatRelativeTime(iso) {
-  if (!iso) return "";
-  // Backend sends naive ISO (no tz suffix), but the values are UTC. Append Z so JS parses them as UTC.
-  const then = new Date(/[Zz]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + "Z").getTime();
-  const now = Date.now();
-  const secs = Math.max(1, Math.floor((now - then) / 1000));
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  const weeks = Math.floor(days / 7);
-  if (weeks < 5) return `${weeks}w ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  const years = Math.floor(days / 365);
-  return `${years}y ago`;
-}
-
-function getPdfPageTitle(targetDocId, targetInputUrl) {
-    const tail = (targetInputUrl || "").split("/").pop() || "";
-    const cleaned = decodeURIComponent(tail).trim();
-    return cleaned ? `PDF Notes - ${cleaned}` : `PDF Notes - ${targetDocId}`;
-  }
 
   async function loadBlocksForBlock(blockId) {
     try {
@@ -2869,26 +2954,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // --- reference links: PDF text regions manually linked to papers ----------
 
   // Match a URL against the library: DOI or arXiv id already known → that page.
-  function findPageForUrl(url) {
-    const doiM = (url || "").match(/10\.\d{4,9}\/[^\s?#]+/);
-    const doi = doiM ? decodeURIComponent(doiM[0]).replace(/[.,;)\]]+$/, "").toLowerCase() : "";
-    const arxM = (url || "").match(/arxiv(?:\.org\/(?:abs|pdf)\/|[:.])(\d{4}\.\d{4,5})/i);
-    const arx = arxM ? arxM[1] : "";
-    if (!doi && !arx) return null;
-    for (const b of homeBlocks) {
-      const p = b.properties || {};
-      const m = p.meta || {};
-      if (doi && (m.doi || "").toLowerCase() === doi) return b.id;
-      if (arx && (m.arxiv_id === arx || (p.source_url || "").includes(arx))) return b.id;
-      if (doi && (p.source_url || "").toLowerCase().includes(doi)) return b.id;
-    }
-    return null;
-  }
-
   // Any document link (PDF annotation or manual reference link): if the target
   // paper is already in the library, open it; otherwise ask fetch-vs-browser.
   function handleDocLink(url) {
-    const pid = findPageForUrl(url);
+    const pid = findPageForUrl(url, homeBlocks);
     if (pid) {
       setStatus("Already in your library — opening.");
       openBlock(pid, { pushNav: true });
@@ -2899,40 +2968,6 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
 
   // Rank a library paper against the selected reference text: author surnames
   // and identifiers weigh most, then title words, year, volume, venue.
-  function scorePaperMatch(text, b) {
-    const t = (text || "").toLowerCase();
-    if (!t) return 0;
-    const words = new Set(t.split(/[^a-z0-9]+/).filter((w) => w.length > 3));
-    const p = b.properties || {};
-    const m = p.meta || {};
-    let score = 0;
-    if (m.doi && t.includes(String(m.doi).toLowerCase())) score += 20;
-    if (m.arxiv_id && t.includes(m.arxiv_id)) score += 20;
-    for (const a of (m.authors || [])) {
-      const last = String(a).trim().split(/\s+/).pop().toLowerCase();
-      if (last.length > 2 && t.includes(last)) score += 4;
-    }
-    for (const w of String(m.title || b.content || "").toLowerCase().split(/[^a-z0-9]+/)) {
-      if (w.length > 3 && words.has(w)) score += 2;
-    }
-    if (m.year && t.includes(String(m.year))) score += 2;
-    if (m.volume && new RegExp(`\\b${m.volume}\\b`).test(t)) score += 2;
-    for (const w of String(m.venue || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)) {
-      if (w.length > 2 && t.includes(w)) score += 1;
-    }
-    return score;
-  }
-
-  // Bare DOIs / arXiv ids typed into the link dialog become proper URLs.
-  function normalizeLinkInput(s) {
-    s = (s || "").trim();
-    if (!s) return "";
-    if (/^https?:\/\//i.test(s)) return s;
-    if (/^arxiv:/i.test(s)) return `https://arxiv.org/abs/${s.slice(6).trim()}`;
-    if (/^\d{4}\.\d{4,5}(v\d+)?$/.test(s)) return `https://arxiv.org/abs/${s}`;
-    return `https://doi.org/${s.replace(/^doi:\s*/i, "")}`;
-  }
-
   function createLinkHighlight(target) {
     const ld = linkDialog;
     if (!ld) return;
@@ -3256,44 +3291,30 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   }, [pdfUrl, pdfHidden]);
 
   // Login page state
-  if (authUser === null) {
-    return <div className="app"><div className="loginPage"><div className="loginCard"><div className="loginTitle">Gamma</div><p style={{color:"var(--text-muted)",textAlign:"center",marginBottom:24}}>Loading...</p></div></div></div>;
-  }
+  if (authUser === null) return <AuthLoading />;
 
   if (authUser === false) {
     return (
-      <div className="app">
-        <div className="loginPage">
-          <div className="loginCard">
-            <div className="loginTitle">Gamma</div>
-            <p className="loginSubtitle">Annotate PDFs, Share Your Thinking</p>
-            <form onSubmit={doLogin}>
-              <input
-                type="text"
-                value={loginUser}
-                onChange={(e) => setLoginUser(e.target.value)}
-                placeholder="Username"
-                className="loginInput"
-                autoFocus
-              />
-              <input
-                type="password"
-                value={loginPass}
-                onChange={(e) => setLoginPass(e.target.value)}
-                placeholder="Password"
-                className="loginInput"
-              />
-              {loginError ? <div className="loginError">{loginError}</div> : null}
-              <button type="submit" className="loginBtn" disabled={!loginUser.trim() || !loginPass.trim()}>
-                Log in
-              </button>
-              <button type="button" className="loginGuestBtn" onClick={doGuestLogin}>
-                Continue as guest
-              </button>
-            </form>
-          </div>
-        </div>
-      </div>
+      <LoginPage
+        username={loginUser}
+        password={loginPass}
+        error={loginError}
+        onUsernameChange={setLoginUser}
+        onPasswordChange={setLoginPass}
+        onSubmit={doLogin}
+        onGuestLogin={doGuestLogin}
+      />
+    );
+  }
+
+  if (sessionConflict) {
+    return (
+      <SessionConflictPage
+        tabUser={authUser.user}
+        activeUser={sessionConflict}
+        // Plain pathname: this tab's ?block= belongs to the old account.
+        onReload={() => { window.location.href = window.location.pathname; }}
+      />
     );
   }
 
@@ -3493,12 +3514,12 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                                 <input
                                   className="metaInput"
                                   value={metaDraft?.[key] ?? ""}
-                                  onChange={(e) => setMetaDraft((d) => ({ ...(d || metaToDraft(null)), [key]: e.target.value }))}
+                                  onChange={(e) => setMetaDraft((d) => ({ ...(d || metadataToDraft(null)), [key]: e.target.value }))}
                                   onKeyDown={(e) => {
                                     if (e.key !== "Enter") return;
                                     e.preventDefault();
                                     // Enter = Save (only when something actually changed)
-                                    if (metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metaToDraft(pageMeta))) saveMetaEdits();
+                                    if (metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metadataToDraft(pageMeta))) saveMetaEdits();
                                   }}
                                   placeholder="—"
                                 />
@@ -3561,7 +3582,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                               ? "A previous lookup found nothing — it won't retry automatically. Fill the fields in by hand, or hit ↻ to retry."
                               : "No metadata found — fill the fields in by hand, or hit ↻ to retry."}</div>
                         ) : null}
-                        {metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metaToDraft(pageMeta)) ? (
+                        {metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metadataToDraft(pageMeta)) ? (
                           <div className="reportModalBtns">
                             <button className="uiBtn primary" onClick={saveMetaEdits}>Save metadata</button>
                           </div>
@@ -4391,28 +4412,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                         Showing {homeVisiblePages.length} of {homeSortedPages.length} — load more
                       </button>
                     ) : null}
-                    {dropTarget && (() => {
-                      const indentStep = 14;
-                      const baseOffset = 28;
-                      const lineLeft = dropTarget.rect.left + baseOffset + dropTarget.depth * indentStep;
-                      return (
-                        <div
-                          className="dropIndicator"
-                          style={{
-                            position: "fixed",
-                            top: dropTarget.above ? dropTarget.rect.top : dropTarget.rect.bottom,
-                            left: lineLeft,
-                            width: Math.max(40, dropTarget.rect.width - (baseOffset + dropTarget.depth * indentStep)),
-                            height: 2,
-                            background: "#4a9eff",
-                            pointerEvents: "none",
-                            zIndex: 1000,
-                            transform: "translateY(-1px)",
-                            transition: "left 25ms ease-out",
-                          }}
-                        />
-                      );
-                    })()}
+                    <BlockDropIndicator target={dropTarget} />
                   </>
                 );
               })()
@@ -4453,6 +4453,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
           chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider}
+          chatContextChars={chatContextChars} multiContextChars={multiContextChars}
           openAiKeysEditor={openAiKeysEditor}
           openPopover={openPopover} setOpenPopover={setOpenPopover}
           setStatus={setStatus}
@@ -4497,7 +4498,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // The "⋮" overflow menu, shared by the editing and read-only topbars.
   // Read-only share views omit AI chat and the import actions.
   const renderOverflowMenu = (menuReadOnly) => (
-    <span data-popover="menu" style={{ position: "relative", display: "inline-flex" }}>
+    <PopoverAnchor name="menu">
       <button
         className={`iconBtn ${openPopover === "menu" ? "activeIcon" : ""}`}
         onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
@@ -4584,7 +4585,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           ) : null}
         </div>
       ) : null}
-    </span>
+    </PopoverAnchor>
   );
 
   return (
@@ -4636,53 +4637,25 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                 <span className="navBackBadge">{Math.min(navStackLen, 30)}</span>
               </button>
             ) : null}
-            <div className="tabStrip" role="tablist">
-              {openTabs.map((t) => (
-                <div
-                  key={t.id}
-                  role="tab"
-                  ref={(el) => {
-                    if (el) tabElsRef.current.set(t.id, el);
-                    else tabElsRef.current.delete(t.id);
-                  }}
-                  className={`tab ${t.id === focusedBlockId ? "active" : ""} ${draggingTabId === t.id ? "dragging" : ""}`}
-                  title={t.title}
-                  draggable
-                  onDragStart={(e) => {
-                    dragTabRef.current = t.id;
-                    setDraggingTabId(t.id);
-                    e.dataTransfer.effectAllowed = "move";
-                  }}
-                  onDragEnd={() => { dragTabRef.current = null; setDraggingTabId(null); }}
-                  onDragOver={(e) => {
-                    // Chrome-style live reorder: hovering another tab swaps places
-                    const dragged = dragTabRef.current;
-                    if (!dragged || dragged === t.id) return;
-                    e.preventDefault();
-                    updateTabs((prev) => {
-                      const from = prev.findIndex((x) => x.id === dragged);
-                      const to = prev.findIndex((x) => x.id === t.id);
-                      if (from < 0 || to < 0 || from === to) return prev;
-                      const next = [...prev];
-                      const [moved] = next.splice(from, 1);
-                      next.splice(to, 0, moved);
-                      return next;
-                    });
-                  }}
-                  onDrop={(e) => e.preventDefault()}
-                  onClick={() => { if (t.id !== focusedBlockId) openBlock(t.id, { restoreScroll: true }); }}
-                  onAuxClick={(e) => { if (e.button === 1) { e.preventDefault(); closeTab(t.id); } }}
-                >
-                  <span className="tabTitle">{t.title}</span>
-                  <button
-                    className="uiClose tabClose"
-                    onClick={(e) => { e.stopPropagation(); closeTab(t.id); }}
-                    title="Close tab"
-                    aria-label={`Close ${t.title}`}
-                  >×</button>
-                </div>
-              ))}
-            </div>
+            <OpenTabs
+              tabs={openTabs}
+              activeId={focusedBlockId}
+              draggingId={draggingTabId}
+              tabElements={tabElsRef}
+              dragTab={dragTabRef}
+              onDraggingChange={setDraggingTabId}
+              onReorder={(dragged, target) => updateTabs((prev) => {
+                const from = prev.findIndex((tab) => tab.id === dragged);
+                const to = prev.findIndex((tab) => tab.id === target);
+                if (from < 0 || to < 0 || from === to) return prev;
+                const next = [...prev];
+                const [moved] = next.splice(from, 1);
+                next.splice(to, 0, moved);
+                return next;
+              })}
+              onOpen={(id) => openBlock(id, { restoreScroll: true })}
+              onClose={closeTab}
+            />
             <span data-popover="add" style={{ position: "relative", display: "inline-flex" }}>
               <button
                 className={`iconBtn addBtn ${openPopover === "add" ? "activeIcon" : ""}`}
@@ -4739,20 +4712,23 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                       <button
                         className="searchToggle transferClearBtn"
                         title="Clear finished"
-                        onClick={() => setTransfers((prev) => {
-                          const kept = prev.filter((t) => t.status === "active");
-                          const ids = new Set(kept.map((t) => t.id));
-                          for (const [u, id] of Object.entries(transferByUrlRef.current)) {
-                            if (!ids.has(id)) delete transferByUrlRef.current[u]; // cleared rows can be re-created later
-                          }
-                          return kept;
-                        })}
+                        onClick={() => {
+                          if (!indexTask?.active) setIndexTaskCleared(true);
+                          setTransfers((prev) => {
+                            const kept = prev.filter((t) => t.status === "active");
+                            const ids = new Set(kept.map((t) => t.id));
+                            for (const [u, id] of Object.entries(transferByUrlRef.current)) {
+                              if (!ids.has(id)) delete transferByUrlRef.current[u]; // cleared rows can be re-created later
+                            }
+                            return kept;
+                          });
+                        }}
                       >Clear</button>
                     </div>
-                    {!transfers.length && !(indexTask && (indexTask.active || indexTask.total > 0)) ? (
+                    {!transfers.length && !(indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0))) ? (
                       <div className="popoverHint">No background tasks — downloads, uploads, indexing, metadata and AI jobs show up here.</div>
                     ) : null}
-                    {indexTask && (indexTask.active || indexTask.total > 0) ? (
+                    {indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0)) ? (
                       <div className="transferRow">
                         <span className={`transferStatus ${indexTask.active ? "active" : "done"}`}>
                           {indexTask.active
@@ -4826,7 +4802,14 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                     {shareUrl ? (
                       <div className="shareRow">
                         <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
-                        <button className="uiBtn primary" onClick={copyShareLink}>{shareCopied ? "Copied ✓" : "Copy"}</button>
+                        <button
+                          className="chatMsgActionBtn"
+                          onClick={copyShareLink}
+                          title="Copy link"
+                          aria-label="Copy share link"
+                        >
+                          {shareCopied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+                        </button>
                       </div>
                     ) : (
                       <div className="popoverHint">Creating link…</div>
@@ -5187,432 +5170,83 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           </div>
         </div>
       ) : null}
-      {settingsOpen ? (
-        <div className="reportOverlay" onClick={() => setSettingsOpen(null)}>
-          <div className="settingsModal" onClick={(e) => e.stopPropagation()}>
-            <div className="settingsSidebar">
-              <div className="settingsSideTitle">Settings</div>
-              {[
-                ["papers", "Papers & PDFs", <PaperIcon key="i" size={15} />],
-                ["ai", "AI & API keys", <KeyIcon key="i" size={15} />],
-                ["prompts", "Prompts", <SlidersIcon key="i" size={15} />],
-                ["search", "Search", <SearchIcon size={15} key="i" />],
-                ["diagnostics", "Diagnostics", <ActivityIcon size={15} key="i" />],
-              ].map(([id, label, icon]) => (
-                <button
-                  key={id}
-                  className={`settingsNavBtn ${settingsOpen === id ? "active" : ""}`}
-                  onClick={() => setSettingsOpen(id)}
-                >{icon}{label}</button>
-              ))}
-            </div>
-            <div className="settingsPane">
-              <button className="uiClose settingsClose" onClick={() => setSettingsOpen(null)} title="Close settings" aria-label="Close settings">×</button>
-
-              {settingsOpen === "papers" ? (
-                <>
-                  <div className="settingsPaneTitle">Papers &amp; PDFs</div>
-                  <div className="settingsPaneHint">How papers are fetched, stored, and enriched when you open them. These preferences are saved in this browser.</div>
-                  <label className="settingRow">
-                    <span className="settingText">
-                      <span className="settingLabel">Open-access fallback</span>
-                      <span className="settingDesc">When a publisher PDF is paywalled or refuses to download, load a legal open-access copy instead — usually the arXiv version. A note tells you when the substitute isn't the published version.</span>
-                    </span>
-                    <span className="switch">
-                      <input type="checkbox" checked={oaFallback} onChange={(e) => setOaFallback(e.target.checked)} />
-                      <span className="switchTrack" />
-                    </span>
-                  </label>
-                  <label className="settingRow">
-                    <span className="settingText">
-                      <span className="settingLabel">Auto-fetch metadata</span>
-                      <span className="settingDesc">Look up title, authors, venue, and BibTeX the first time a paper opens (arXiv → DOI → AI). Turn this off to fetch only via the ↻ button in the metadata popover.</span>
-                    </span>
-                    <span className="switch">
-                      <input type="checkbox" checked={metaAutoFetch} onChange={(e) => setMetaAutoFetch(e.target.checked)} />
-                      <span className="switchTrack" />
-                    </span>
-                  </label>
-                  <label className="settingRow">
-                    <span className="settingText">
-                      <span className="settingLabel">Save external PDFs</span>
-                      <span className="settingDesc">Keep a server copy of PDFs opened from a URL, so they load instantly next time and survive dead links.</span>
-                    </span>
-                    <span className="switch">
-                      <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
-                      <span className="switchTrack" />
-                    </span>
-                  </label>
-                </>
-              ) : null}
-
-              {settingsOpen === "ai" ? (
-                <>
-                  <div className="settingsPaneTitle">AI &amp; API keys</div>
-                  <div className="settingsPaneHint">
-                    Bring your own API keys. They are stored on the server for your account and never sent
-                    back to the browser — after saving, only the last 4 characters are shown. The selected
-                    key is the one AI requests are billed to; the model itself is picked in the chat
-                    panel's model menu, which lists the models of the selected key.
-                  </div>
-                  {!aiKeysInfo && !aiKeysError ? <div className="settingsPaneHint">Loading…</div> : null}
-                  {aiKeysInfo ? (
-                    <>
-                      {aiKeysInfo.providers.length === 0 && !aiKeysForm ? (
-                        <div className="settingsPaneHint">
-                          {aiKeysInfo.can_edit
-                            ? "No keys yet — add one to enable AI chat, metadata extraction, and citations."
-                            : "Guest accounts can't store API keys. Ask the admin for an account to use AI features."}
-                        </div>
-                      ) : null}
-                      {aiKeysInfo.providers.map((p) => {
-                        const proto = aiProtocolOf(p.protocol);
-                        const activeKeyId = aiKeysInfo.providers.some((x) => x.id === aiProvider)
-                          ? aiProvider : aiKeysInfo.providers[0]?.id;
-                        return (
-                          <label key={p.id} className={`aiProvRow aiProvSelectable ${activeKeyId === p.id ? "active" : ""}`}>
-                            {aiKeysInfo.providers.length > 1 ? (
-                              <input
-                                type="radio"
-                                className="aiProvRadio"
-                                name="activeAiKey"
-                                checked={activeKeyId === p.id}
-                                onChange={() => setAiProvider(p.id)}
-                                title="Use this key for AI requests"
-                              />
-                            ) : null}
-                            <span className="aiProvMeta">
-                              <span className="aiProvName">
-                                {p.name || proto?.label || p.protocol}
-                                {activeKeyId === p.id ? <span className="aiProvActiveBadge">in use</span> : null}
-                              </span>
-                              <span className="aiProvDesc">
-                                {isOauthProto(p.protocol)
-                                  ? `${p.oauth_connected ? `signed in${p.account ? ` as ${p.account}` : ""}` : "not connected"} · ChatGPT subscription`
-                                  : `key ${p.key_hint || "set"} · ${proto?.label || p.protocol}`}
-                                {p.base_url ? ` · ${p.base_url}` : ""}
-                                {p.created_at ? ` · added ${new Date(p.created_at).toLocaleDateString()}` : ""}
-                              </span>
-                              <span className="aiProvDesc aiProvModels">
-                                {(parseFolderTags(p.models).length
-                                  ? parseFolderTags(p.models)
-                                  : [proto?.default_model || "provider default"]).map((m, i) => (
-                                  <span className="categoryTag" key={m}>
-                                    {m}
-                                    {i === 0 ? <span className="uiTag">default</span> : null}
-                                  </span>
-                                ))}
-                              </span>
-                            </span>
-                            <span className="aiProvActions">
-                              {aiKeysInfo.can_edit ? (
-                                <>
-                                  <button className="uiBtn sm iconSq" disabled={aiKeysBusy}
-                                    title="Edit this key" aria-label={`Edit ${p.name || p.protocol}`}
-                                    onClick={() => startEditAiProvider(p)}>
-                                    <PenIcon size={13} />
-                                  </button>
-                                  <button className="uiBtn sm iconSq danger" disabled={aiKeysBusy}
-                                    title="Remove this key" aria-label={`Remove ${p.name || p.protocol}`}
-                                    onClick={() => deleteAiProvider(p.id)}>
-                                    <Trash2Icon size={13} />
-                                  </button>
-                                </>
-                              ) : null}
-                            </span>
-                          </label>
-                        );
-                      })}
-                      {aiKeysForm ? (
-                        <div className="aiProvForm">
-                          <div className="promptSectionHead"><span>{aiKeysForm.id ? "Edit key" : "Add key"}</span></div>
-                          <select
-                            className="aiKeyInput"
-                            value={aiKeysForm.protocol}
-                            onChange={(e) => setAiKeysForm((f) => ({ ...f, protocol: e.target.value }))}
-                          >
-                            {aiKeysInfo.protocols.map((x) => (
-                              <option key={x.id} value={x.id}>{x.label}</option>
-                            ))}
-                          </select>
-                          {isOauthProto(aiKeysForm.protocol) ? (
-                            <div className="reportModalHint">
-                              No API key — usage is billed to your ChatGPT Plus/Pro subscription.
-                              <ol style={{ margin: "6px 0 0", paddingLeft: 18, display: "grid", gap: 3 }}>
-                                <li><b>Open ChatGPT sign-in</b> below and log in to your ChatGPT account.</li>
-                                <li>The login ends on a <b>"can't be reached"</b> error page — that's normal
-                                  (it redirects to localhost:1455, where nothing is listening).</li>
-                                <li>Copy the <b>full address</b> of that error page from the browser's
-                                  address bar (<code>http://localhost:1455/auth/callback?code=…</code>).</li>
-                                <li>Paste it below and hit <b>Connect</b>.</li>
-                              </ol>
-                            </div>
-                          ) : (
-                            <div className="reportModalHint">
-                              The API format, not the vendor — many services speak one of these (DeepSeek,
-                              Kimi, GLM via Anthropic format; most others via OpenAI format).
-                            </div>
-                          )}
-                          {isOauthProto(aiKeysForm.protocol) ? (
-                            // Sign-in button + paste box sit directly under the
-                            // numbered guide that references them.
-                            <>
-                              <div className="reportModalBtns" style={{ justifyContent: "flex-start" }}>
-                                <button className="uiBtn" disabled={aiKeysBusy} onClick={startChatGPTAuth}>
-                                  {aiKeysForm.oauthState ? "Re-open ChatGPT sign-in" : "Open ChatGPT sign-in"}
-                                </button>
-                              </div>
-                              <input
-                                className="aiKeyInput" type="text" spellCheck={false}
-                                placeholder="Paste the callback URL (http://localhost:1455/auth/callback?code=…)"
-                                value={aiKeysForm.oauthCallback || ""}
-                                onChange={(e) => setAiKeysForm((f) => ({ ...f, oauthCallback: e.target.value }))}
-                              />
-                            </>
-                          ) : null}
-                          <input
-                            className="aiKeyInput" type="text" spellCheck={false}
-                            placeholder='Name (optional — e.g. "DeepSeek", "work key")'
-                            value={aiKeysForm.name}
-                            onChange={(e) => setAiKeysForm((f) => ({ ...f, name: e.target.value }))}
-                          />
-                          {!isOauthProto(aiKeysForm.protocol) ? (
-                            <>
-                              <input
-                                className="aiKeyInput" type="password" autoComplete="new-password" spellCheck={false}
-                                placeholder={aiKeysForm.id ? "API key (leave empty to keep the current one)" : "API key"}
-                                value={aiKeysForm.api_key}
-                                onChange={(e) => setAiKeysForm((f) => ({ ...f, api_key: e.target.value }))}
-                                onBlur={() => { if (aiKeysForm?.api_key?.trim()) loadModelCatalog(); }}
-                              />
-                              <input
-                                className="aiKeyInput" type="text" spellCheck={false}
-                                placeholder={`Base URL (optional — default ${aiProtocolOf(aiKeysForm.protocol)?.default_base_url || ""})`}
-                                value={aiKeysForm.base_url}
-                                onChange={(e) => setAiKeysForm((f) => ({ ...f, base_url: e.target.value }))}
-                              />
-                            </>
-                          ) : null}
-                          <div className="reportModalHint" style={{ margin: 0 }}>
-                            Models — the first is the default
-                            {formModels.length === 0 ? ` (none picked: uses ${aiProtocolOf(aiKeysForm.protocol)?.default_model || "provider default"})` : ""}
-                          </div>
-                          {formModels.length ? (
-                            <div className="aiModelChips">
-                              {formModels.map((m, i) => (
-                                <span className="categoryTag" key={m}>
-                                  {m}
-                                  {i === 0 ? <span className="uiTag">default</span> : null}
-                                  <button className="uiClose uiCloseSm" title="Remove model"
-                                    aria-label={`Remove ${m}`} onClick={() => removeModel(m)}>×</button>
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                          <div className="aiProvPwForm">
-                            <input className="aiKeyInput" type="text" spellCheck={false}
-                              list="aiModelSuggestions"
-                              placeholder={aiModelCatalog?.loading ? "Add a model — loading the provider's list…"
-                                : availModels.length ? `Add a model — type or pick (${availModels.length} available), Enter to add`
-                                : "Add a model — Enter to add"}
-                              value={customModel}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                const t = e.nativeEvent?.inputType;
-                                // A datalist pick (no/replacement inputType) adds right away;
-                                // typed text waits for Enter so prefixes of longer names stay typable.
-                                if ((!t || t === "insertReplacementText") && availModels.includes(v)) {
-                                  addCatalogModel(v);
-                                  setCustomModel("");
-                                } else setCustomModel(v);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key !== "Enter") return;
-                                e.preventDefault();
-                                if (customModel.trim()) { addCatalogModel(customModel.trim()); setCustomModel(""); }
-                              }}
-                            />
-                            <datalist id="aiModelSuggestions">
-                              {availModels.map((m) => <option key={m} value={m} />)}
-                            </datalist>
-                          </div>
-                          {aiModelCatalog?.error ? (
-                            <div className="reportModalHint" style={{ margin: 0 }}>
-                              {aiModelCatalog.error}{" "}
-                              <button className="searchToggle" title="Retry loading the model list" onClick={loadModelCatalog}>↻</button>
-                            </div>
-                          ) : null}
-                          <div className="reportModalBtns">
-                            <button className="uiBtn" onClick={() => { setAiKeysForm(null); setAiKeysError(""); }}>Cancel</button>
-                            <button className="uiBtn primary" disabled={aiKeysBusy} onClick={submitAiProvider}>
-                              {aiKeysBusy ? "Saving…"
-                                : isOauthProto(aiKeysForm.protocol)
-                                  ? ((aiKeysForm.oauthCallback || "").trim() || !aiKeysForm.id ? "Connect" : "Save changes")
-                                  : aiKeysForm.id ? "Save changes" : "Add key"}
-                            </button>
-                          </div>
-                        </div>
-                      ) : aiKeysInfo.can_edit ? (
-                        <div className="reportModalBtns">
-                          <button className="uiBtn primary" onClick={startAddAiProvider}>+ Add key</button>
-                        </div>
-                      ) : null}
-                    </>
-                  ) : null}
-                  {aiKeysError ? <div className="settingsPaneHint aiKeysError">{aiKeysError}</div> : null}
-                </>
-              ) : null}
-
-              {settingsOpen === "prompts" ? (
-                <>
-                  <div className="settingsPaneTitle">Prompts</div>
-                  <div className="settingsPaneHint">
-                    The instructions Gamma sends with each kind of AI request. Custom prompts are saved in
-                    this browser; saving a prompt unchanged from its default keeps the built-in behavior.
-                  </div>
-                  <div className="promptSectionHead">
-                    <span>Chat system prompt{chatSystem ? " · custom" : ""}</span>
-                    <button className="uiBtn sm" onClick={() => setPromptDraft(aiInfo?.default_prompt || "")}>Reset</button>
-                  </div>
-                  <textarea
-                    className="promptTextarea"
-                    value={promptDraft}
-                    onChange={(e) => setPromptDraft(e.target.value)}
-                    rows={5}
-                    placeholder="You are a research assistant…"
-                  />
-                  <div className="promptSectionHead">
-                    <span>Metadata extraction{metaPrompt ? " · custom" : ""}</span>
-                    <button className="uiBtn sm" onClick={() => setMetaPromptDraft(aiInfo?.metadata_prompt || "")}>Reset</button>
-                  </div>
-                  <div className="settingsPaneHint">Used when a paper has no arXiv id or DOI and the AI reads the first pages instead.</div>
-                  <textarea
-                    className="promptTextarea"
-                    value={metaPromptDraft}
-                    onChange={(e) => setMetaPromptDraft(e.target.value)}
-                    rows={4}
-                  />
-                  <div className="promptSectionHead">
-                    <span>PPT citation{citePrompt ? " · custom" : ""}</span>
-                    <button className="uiBtn sm" onClick={() => setCitePromptDraft(aiInfo?.cite_prompt || "")}>Reset</button>
-                  </div>
-                  <div className="settingsPaneHint">Turns the paper's BibTeX into a minimal slide-ready citation (metadata popover → Slide citation).</div>
-                  <textarea
-                    className="promptTextarea"
-                    value={citePromptDraft}
-                    onChange={(e) => setCitePromptDraft(e.target.value)}
-                    rows={4}
-                  />
-                  <div className="reportModalBtns">
-                    <button className="uiBtn primary"
-                      onClick={() => {
-                        // Saving the unmodified default = no custom prompt
-                        const norm = (draft, def) => {
-                          const d = (draft || "").trim();
-                          return d === (def || "").trim() ? "" : d;
-                        };
-                        setChatSystem(norm(promptDraft, aiInfo?.default_prompt));
-                        setMetaPrompt(norm(metaPromptDraft, aiInfo?.metadata_prompt));
-                        setCitePrompt(norm(citePromptDraft, aiInfo?.cite_prompt));
-                        setStatus("Prompts saved.");
-                      }}>Save prompts</button>
-                  </div>
-                </>
-              ) : null}
-
-              {settingsOpen === "search" ? (
-                <>
-                  <div className="settingsPaneTitle">Search</div>
-                  <div className="settingsPaneHint">
-                    Full-text search covers your notes and the text of every PDF in the library. PDFs are
-                    indexed automatically in the background the first time search needs them.
-                  </div>
-                  <label className="settingRow">
-                    <span className="settingText">
-                      <span className="settingLabel">Expand result details by default</span>
-                      <span className="settingDesc">Open search with the full result lists (titles, notes, other papers) already visible. When off, search starts compact — just the match counter for the open PDF — and the list button in the search bar shows the details.</span>
-                    </span>
-                    <span className="switch">
-                      <input type="checkbox" checked={searchDetailsDefault} onChange={(e) => setSearchDetailsDefault(e.target.checked)} />
-                      <span className="switchTrack" />
-                    </span>
-                  </label>
-                  <div className="settingRow">
-                    <span className="settingText">
-                      <span className="settingLabel">Rebuild the PDF text index</span>
-                      <span className="settingDesc">Re-extract the text of every paper. Use this if library-wide search results look stale or incomplete. Runs in the background — progress shows in the tasks popover.</span>
-                    </span>
-                    <button
-                      className="uiBtn sm"
-                      disabled={indexTask?.active}
-                      onClick={async () => {
-                        try {
-                          const d = await apiJson(`${API}/search-reindex`, { method: "POST" });
-                          setStatus(d.busy
-                            ? "Indexing is already running — see the tasks popover."
-                            : d.scheduled
-                              ? `Re-indexing ${d.scheduled} paper${d.scheduled === 1 ? "" : "s"} in the background.`
-                              : "No papers with PDFs to index.");
-                        } catch (err) {
-                          setStatus(`Reindex failed: ${err.message}`);
-                        }
-                      }}
-                    >{indexTask?.active ? "Indexing…" : "Rebuild"}</button>
-                  </div>
-                </>
-              ) : null}
-
-              {settingsOpen === "diagnostics" ? (
-                <>
-                  <div className="settingsPaneTitle">Diagnostics</div>
-                  <div className="settingsPaneHint">
-                    Status messages show briefly as a floating pill. For debugging you can pin them
-                    to a permanent bar under the tabs, and review everything from this session below.
-                  </div>
-                  <label className="settingRow">
-                    <span className="settingText">
-                      <span className="settingLabel">Show status bar</span>
-                      <span className="settingDesc">Keep the latest status message always visible in a bar below the tabs.</span>
-                    </span>
-                    <span className="switch">
-                      <input type="checkbox" checked={statusBarVisible} onChange={(e) => setStatusBarVisible(e.target.checked)} />
-                      <span className="switchTrack" />
-                    </span>
-                  </label>
-                  <div className="settingRow">
-                    <span className="settingText">
-                      <span className="settingLabel">System log</span>
-                      <span className="settingDesc">Application events from this session — status messages, PDF load activity, and errors. Newest first; not saved across reloads.</span>
-                    </span>
-                    <button
-                      className="uiBtn sm"
-                      disabled={!sysLog.length}
-                      onClick={() => {
-                        const text = sysLog
-                          .map((e) => `${new Date(e.t).toLocaleTimeString([], { hour12: false })} ${e.msg}`)
-                          .join("\n");
-                        navigator.clipboard?.writeText(text).then(
-                          () => setStatus("Log copied."),
-                          () => setStatus("Copy failed — copy manually."),
-                        );
-                      }}
-                    >Copy</button>
-                  </div>
-                  <div className="sysLogBox">
-                    {sysLog.length ? [...sysLog].reverse().map((e, i) => (
-                      <div key={sysLog.length - i} className="sysLogRow">
-                        <span className="sysLogTime">{new Date(e.t).toLocaleTimeString([], { hour12: false })}</span>
-                        <span className="sysLogMsg">{e.msg}</span>
-                      </div>
-                    )) : <div className="sysLogEmpty">Nothing logged yet this session.</div>}
-                  </div>
-                </>
-              ) : null}
-
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <SettingsDialog
+        activePane={settingsOpen}
+        onPaneChange={setSettingsOpen}
+        onClose={() => setSettingsOpen(null)}
+        papers={{
+          oaFallback,
+          setOaFallback,
+          metaAutoFetch,
+          setMetaAutoFetch,
+          pdfSaveLocal,
+          setPdfSaveLocal,
+        }}
+        ai={{
+          aiKeysInfo,
+          aiKeysError,
+          setAiKeysError,
+          aiKeysBusy,
+          aiKeysForm,
+          setAiKeysForm,
+          aiProvider,
+          setAiProvider,
+          aiModelCatalog,
+          formOauthPending,
+          formModels,
+          availModels,
+          customModel,
+          setCustomModel,
+          aiProtocolOf,
+          isOauthProto,
+          startAddAiProvider,
+          startEditAiProvider,
+          deleteAiProvider,
+          startChatGPTAuth,
+          loadModelCatalog,
+          addCatalogModel,
+          removeModel,
+          submitAiProvider,
+        }}
+        prompts={{
+          aiInfo,
+          chatSystem,
+          metaPrompt,
+          citePrompt,
+          promptDraft,
+          setPromptDraft,
+          metaPromptDraft,
+          setMetaPromptDraft,
+          citePromptDraft,
+          setCitePromptDraft,
+          savePrompts: () => {
+            const normalizePrompt = (draft, defaultValue) => {
+              const value = (draft || "").trim();
+              return value === (defaultValue || "").trim() ? "" : value;
+            };
+            setChatSystem(normalizePrompt(promptDraft, aiInfo?.default_prompt));
+            setMetaPrompt(normalizePrompt(metaPromptDraft, aiInfo?.metadata_prompt));
+            setCitePrompt(normalizePrompt(citePromptDraft, aiInfo?.cite_prompt));
+            setStatus("Prompts saved.");
+          },
+        }}
+        context={{
+          chatContextChars,
+          setChatContextChars,
+          metaContextChars,
+          setMetaContextChars,
+          multiContextChars,
+          setMultiContextChars,
+          reset: () => {
+            setChatContextChars(8000);
+            setMetaContextChars(6000);
+            setMultiContextChars(18000);
+            setStatus("AI context limits reset.");
+          },
+        }}
+        search={{ searchDetailsDefault, setSearchDetailsDefault, indexTask, setStatus }}
+        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus }}
+      />
       {usersOpen ? (
         <div className="reportOverlay" onClick={() => setUsersOpen(false)}>
           <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
