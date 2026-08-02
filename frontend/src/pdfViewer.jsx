@@ -45,15 +45,53 @@ function pageTopAt(heights, idx, scale) {
   return y;
 }
 
-// Recently downloaded PDFs, so reopening a paper (tab switch, back button)
-// doesn't re-download a multi-MB file. pdf.js detaches the buffer it's
-// handed, so entries are cloned on use.
+// The most recently downloaded PDF, so an immediate reopen doesn't re-read it.
+// pdf.js detaches the buffer it's handed, so entries are cloned on use.
+// Deliberately ONE entry, not a handful of papers. These are the raw bytes,
+// and the raw bytes are the cheap half: re-reading a 50 MB paper out of
+// IndexedDB below measures at ~31 ms. Holding four of them costs ~400 MB for
+// scanned papers (each is also cloned into the worker) and buys 31 ms. That
+// budget belongs to DOC_CACHE instead, which holds the expensive half.
 const PDF_CACHE = new Map(); // url -> ArrayBuffer, insertion order = LRU
-const PDF_CACHE_MAX = 4;
+const PDF_CACHE_MAX = 1;
 function cachePdf(url, buf) {
   PDF_CACHE.delete(url);
   PDF_CACHE.set(url, buf);
   while (PDF_CACHE.size > PDF_CACHE_MAX) PDF_CACHE.delete(PDF_CACHE.keys().next().value);
+}
+
+// Parsed, partly-decoded documents, kept alive across tab switches.
+//
+// Re-opening a paper used to destroy its PDFDocumentProxy and build a new one,
+// which threw away everything pdf.js had already done. On a 380-page scan a
+// DevTools trace put 4.7 s of the ~5 s wait in four worker tasks of ~1.1 s
+// each — one per page on screen, pure-JS decode of a full-page scan image —
+// while the main thread sat idle. Every one of those was repeated work.
+//
+// The reuse happens on the main thread: PDFPageProxy keeps its operator list
+// (pdf.mjs, the `if (!intentState.displayReadyCapability)` guard in render),
+// and page unmount here only sets a cancelled flag — it never cancels the
+// render task — so the list survives and a re-render replays it without
+// touching the worker. NOT via pdf.js's GlobalImageCache: that requires an
+// image to appear on >= 2 pages (NUM_PAGES_THRESHOLD), and a scan's pages
+// each carry their own, so it caches none of them.
+//
+// Two documents: the one on screen plus the one being switched back to.
+const DOC_CACHE = new Map(); // url -> {doc, heights, widths}, insertion order = LRU
+const DOC_CACHE_MAX = 2;
+function cacheDoc(url, entry) {
+  DOC_CACHE.delete(url);
+  DOC_CACHE.set(url, entry);
+  while (DOC_CACHE.size > DOC_CACHE_MAX) {
+    // Oldest first, and never the one just inserted — that one is on screen.
+    const victim = [...DOC_CACHE.keys()].find((k) => k !== url);
+    if (!victim) break;
+    const { doc } = DOC_CACHE.get(victim);
+    DOC_CACHE.delete(victim);
+    // Deferred: its pages have only just unmounted, and destroying a document
+    // out from under in-flight render tasks spams transport-destroyed errors.
+    setTimeout(() => doc.destroy().catch(() => {}), 1000);
+  }
 }
 
 // Persistent second-level cache: survives refreshes, closed tabs, and browser
@@ -472,13 +510,38 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // swapping only when the new doc is fully measured is what prevents the
   // blank flash and the scrollbar resizing repeatedly during a tab switch.
   const displayedDocRef = useRef(null);
-  useEffect(() => () => { displayedDocRef.current?.destroy().catch(() => {}); }, []);
+  // No teardown on unmount: documents belong to DOC_CACHE now, which is what
+  // makes coming back cheap. Its own eviction is the only thing that destroys.
+
+  // The swap: heights, page tree, and document land in ONE commit, so the
+  // scrollbar changes exactly once and the host's pre-paint scroll restore
+  // sees a layout that is already final.
+  const commitDoc = (docUrl, doc, heights, widths, exact) => {
+    displayedDocRef.current = doc;
+    heightsExactRef.current = exact;
+    pageHeightsRef.current = heights;
+    pageWidthsRef.current = widths;
+    setPageHeights(heights);
+    setNumPages(doc.numPages);
+    setDocSeq((s) => s + 1);
+    setDisplayedUrl(docUrl);
+    setPdfDoc(doc);
+  };
 
   useEffect(() => {
     if (!url) return;
     let cancelled = false;
     (async () => {
       try {
+        // Still alive from an earlier open — no download, no re-parse, and no
+        // re-decode of the pages already rendered. Straight to the swap.
+        const live = DOC_CACHE.get(url);
+        if (live) {
+          cacheDoc(url, live); // bump LRU position
+          onLoadState?.(url, { phase: "cached" });
+          commitDoc(url, live.doc, live.heights, live.widths, true);
+          return;
+        }
         const data = await fetchPdfData(url, onLoadState, () => cancelled);
         if (!data || cancelled) return;
         cachePdf(url, data); // insert or bump LRU position
@@ -503,19 +566,11 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           if (cancelled) { doc.destroy().catch(() => {}); return; }
         }
         for (let i = heights.length; i < n; i++) { heights.push(heights[0] || FALLBACK_H); widths.push(widths[0] || FALLBACK_W); }
-        const prev = displayedDocRef.current;
-        displayedDocRef.current = doc;
-        heightsExactRef.current = n <= EXACT;
-        pageHeightsRef.current = heights;
-        pageWidthsRef.current = widths;
-        setPageHeights(heights);
-        setNumPages(n);
-        setDocSeq((s) => s + 1);
-        setDisplayedUrl(url);
-        setPdfDoc(doc);
-        // Old doc torn down after the swap commit — destroying it while its
-        // pages are still mounted spams transport-destroyed rejections.
-        if (prev && prev !== doc) setTimeout(() => prev.destroy().catch(() => {}), 1000);
+        // Hand the live arrays to the cache: the refinement below mutates them
+        // in place, so a later reopen gets the refined values, not a snapshot
+        // taken before the loop ran.
+        cacheDoc(url, { doc, heights, widths });
+        commitDoc(url, doc, heights, widths, n <= EXACT);
         // Refine the estimated heights in the background (long docs only).
         for (let i = EXACT; i < n; i++) {
           if (cancelled) return;
