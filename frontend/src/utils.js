@@ -2,6 +2,89 @@
 
 const API = "/api";
 
+// ---- Session identity guard -------------------------------------------------
+// The session cookie is shared by every tab of the browser, so logging in from
+// a second tab silently switches this tab's identity — and its autosaves would
+// write into the other account. Each tab declares who it believes is signed in
+// via an X-Gamma-User header on every API call; the backend answers 409 when
+// the cookie no longer matches. The header is injected in a window.fetch
+// wrapper so all call sites (autosave, keepalive unload flushes, uploads,
+// chat streams) are covered without touching each one.
+
+let expectedUser = null;
+
+function setExpectedUser(user) {
+  expectedUser = user || null;
+}
+
+// Auth endpoints legitimately inspect or change the session — never guard them.
+const AUTH_PATHS = new Set([`${API}/login`, `${API}/login-guest`, `${API}/logout`, `${API}/session`]);
+
+const rawFetch = window.fetch.bind(window);
+window.fetch = function (input, options) {
+  const url = typeof input === "string" ? input : (input && input.url) || "";
+  const path = url.startsWith("/") ? url.split("?")[0] : "";
+  const isApi = path.startsWith(`${API}/`);
+  const method = String(options?.method || input?.method || "GET").toUpperCase();
+  const expectedAtStart = expectedUser;
+  const started = performance.now();
+  if (expectedUser && isApi && !AUTH_PATHS.has(path)) {
+    options = { ...(options || {}) };
+    if (options.headers instanceof Headers) {
+      options.headers = new Headers(options.headers);
+      options.headers.set("X-Gamma-User", expectedUser);
+    } else {
+      options.headers = { ...(options.headers || {}), "X-Gamma-User": expectedUser };
+    }
+  }
+  const promise = rawFetch(input, options);
+  promise.then((r) => {
+    if (r.status === 409 && r.headers.has("X-Gamma-Session-User")) {
+      const who = r.headers.get("X-Gamma-Session-User");
+      window.dispatchEvent(new CustomEvent(
+        who ? "gamma-user-mismatch" : "gamma-auth-expired",
+        { detail: { user: who } },
+      ));
+    }
+    if (!isApi) return;
+    const elapsed = Math.round(performance.now() - started);
+    if (r.ok && !AUTH_PATHS.has(path) && elapsed < 2000) return;
+    const requestId = r.headers.get("X-Gamma-Request-ID") || "";
+    const timing = `${elapsed} ms${requestId ? `, request ${requestId}` : ""}`;
+    const emit = (detail = "") => {
+      let explanation = detail;
+      if (r.status === 409 && r.headers.has("X-Gamma-Session-User")) {
+        const actual = r.headers.get("X-Gamma-Session-User") || "signed out";
+        explanation = `session changed from ${expectedAtStart || "unknown"} to ${actual}`;
+      } else if (r.status === 401 && !explanation) {
+        explanation = "authentication required or session expired";
+      }
+      window.dispatchEvent(new CustomEvent("gamma-api-log", {
+        detail: {
+          message: `API ${method} ${path} → ${r.status} in ${timing}${explanation ? ` — ${explanation}` : ""}`,
+        },
+      }));
+    };
+    if (r.ok) {
+      emit("");
+    } else {
+      r.clone().json()
+        .then((body) => emit(typeof body?.detail === "string" ? body.detail : ""))
+        .catch(() => emit(""));
+    }
+  }).catch((error) => {
+    if (!isApi) return;
+    const elapsed = Math.round(performance.now() - started);
+    window.dispatchEvent(new CustomEvent("gamma-api-log", {
+      detail: {
+        message: `API ${method} ${path} failed after ${elapsed} ms — ${error?.message || "network error"}`,
+      },
+    }));
+  });
+  return promise;
+};
+// -----------------------------------------------------------------------------
+
 function makeId() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -65,4 +148,4 @@ function isEnterCommit(e) {
   return e.key === "Enter" && !e.nativeEvent?.isComposing && e.keyCode !== 229;
 }
 
-export { API, makeId, fmtBytes, sha256, getDocIdForUrl, apiJson, resolvePdfUrl, isEnterCommit };
+export { API, makeId, fmtBytes, sha256, getDocIdForUrl, apiJson, resolvePdfUrl, setExpectedUser, isEnterCommit };

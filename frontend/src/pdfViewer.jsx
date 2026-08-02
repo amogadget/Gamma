@@ -27,6 +27,24 @@ const COLORS = [
 
 const EMPTY_MARKS = [];
 
+// One zoom policy for every entry point (toolbar buttons in App, Ctrl+scroll
+// here) — a limit change must not leave the two out of agreement.
+export const ZOOM_MIN = 0.2, ZOOM_MAX = 4;
+export const clampZoom = (s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, s));
+
+// Page layout model shared by the placeholder styles and all scroll math:
+// page boxes stack with a fixed gap, and unmeasured pages assume page 1's
+// size (FALLBACK_* is the last resort before even that is known).
+const PAGE_GAP = 8;
+const FALLBACK_H = 800, FALLBACK_W = 600;
+
+// Content-y of page idx's top edge at the given scale.
+function pageTopAt(heights, idx, scale) {
+  let y = 0;
+  for (let i = 0; i < idx; i++) y += (heights[i] || FALLBACK_H) * scale + PAGE_GAP;
+  return y;
+}
+
 // Recently downloaded PDFs, so reopening a paper (tab switch, back button)
 // doesn't re-download a multi-MB file. pdf.js detaches the buffer it's
 // handed, so entries are cloned on use.
@@ -210,7 +228,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -224,12 +242,16 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   }, [retryRef]);
   const [forcePages, setForcePages] = useState(new Set());
   const pageHeightsRef = useRef([]); // viewport heights at scale 1, indexed 0..n-1
+  const pageWidthsRef = useRef([]); // viewport widths at scale 1 — the zoom anchor's horizontal math needs them
+  const heightsExactRef = useRef(true); // false while a long doc's tail heights are page-1 estimates still refining
+  const lastScrollRef = useRef(0); // scrollTop as of the last scroll event — the pre-clamp value during a zoom commit
+  const lastScrollLeftRef = useRef(0);
 
   // Stable callback identities so memoized pages don't re-render every time a
   // parent state change recreates the handler closures. The wrappers always
   // dispatch to the latest handlers via the ref.
   const cbRef = useRef({});
-  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink };
+  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLoadState, onZoomTo };
   const stableCbs = useMemo(() => ({
     onJump: (...a) => cbRef.current.onJump?.(...a),
     onHighlightJump: (...a) => cbRef.current.onHighlightJump?.(...a),
@@ -237,6 +259,58 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     onHighlightContext: (...a) => cbRef.current.onHighlightContext?.(...a),
     onExternalLink: (...a) => cbRef.current.onExternalLink?.(...a),
   }), []);
+
+  // "rendered" only means blank page boxes committed to the DOM — each canvas
+  // paints asynchronously after that. Hold the swapped-in url here until the
+  // first page reports a successful paint, then tell the host ("painted") so
+  // it can drop its "Rendering page…" message. Later paints (scroll, zoom)
+  // find the ref empty and no-op.
+  const awaitingPaintRef = useRef(null);
+  const onPagePainted = useMemo(() => () => {
+    const u = awaitingPaintRef.current;
+    if (!u) return;
+    awaitingPaintRef.current = null;
+    cbRef.current.onLoadState?.(u, { phase: "painted" });
+  }, []);
+
+  // Ctrl/Cmd + scroll zooms (this is also what a trackpad pinch reports).
+  // Native non-passive listener on purpose: React's root wheel listener is
+  // passive, so preventDefault (needed to block the browser's own page zoom)
+  // wouldn't work from an onWheel prop. The scale compounds per event in
+  // wheelScaleRef (the committed prop lags behind a fast train), but the
+  // dispatch is coalesced to one per frame — every dispatch re-renders every
+  // page, and a trackpad pinch fires far more events than commits are worth.
+  const wheelScaleRef = useRef(1); // what the next wheel step compounds on
+  const wheelRafRef = useRef(0);
+  const zoomAnchorRef = useRef(null); // viewport point to zoom around; consumed by the anchor effect, null → viewport center
+  // Set when a new document mounts; consumed by the next scale change so the
+  // anchor effect can tell "fit-width settling for the swapped-in document"
+  // apart from a user zoom — the two need different anchoring (see below).
+  const docSwapPendingRef = useRef(false);
+  useEffect(() => {
+    const el = viewerRef.current;
+    if (!el) return;
+    const onWheel = (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY; // LINE mode (Firefox) → ~px
+      const cur = wheelScaleRef.current;
+      const next = clampZoom(cur * Math.exp(-dy * 0.0015));
+      if (next === cur) return; // pinned at a clamp limit — don't leave a stale anchor behind
+      const r = el.getBoundingClientRect();
+      zoomAnchorRef.current = { x: e.clientX - r.left, y: e.clientY - r.top };
+      wheelScaleRef.current = next;
+      docSwapPendingRef.current = false; // an explicit zoom, whatever mounted before it
+      if (!wheelRafRef.current) {
+        wheelRafRef.current = requestAnimationFrame(() => {
+          wheelRafRef.current = 0;
+          cbRef.current.onZoomTo?.(wheelScaleRef.current);
+        });
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => { el.removeEventListener("wheel", onWheel); cancelAnimationFrame(wheelRafRef.current); };
+  }, []);
 
   // Group find marks per page once, sharing one frozen empty array so pages
   // without marks keep referentially-equal props (memo stays effective).
@@ -360,25 +434,27 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   const numericScale = parseFloat(pdfScaleValue);
   const isFitWidth = isNaN(numericScale);
   const scale = isFitWidth ? fitWidthScale : numericScale;
+  // Resync the wheel's compounding base to the committed scale — but not
+  // while a coalesced dispatch is still in flight: events that arrived since
+  // are compounded into the ref, and overwriting it here would drop them
+  // (measurably: a 6-notch train only zoomed ~3 notches' worth).
+  useEffect(() => {
+    if (!wheelRafRef.current) wheelScaleRef.current = scale;
+  }, [scale]);
   useEffect(() => { onEffectiveScale?.(scale); }, [scale, onEffectiveScale]);
   useEffect(() => {
     if (!isFitWidth || !pdfDoc || !viewerRef.current) return;
-    let cancelled = false;
-    const compute = async () => {
-      try {
-        const page = await pdfDoc.getPage(1);
-        if (cancelled || !viewerRef.current) return;
-        const naturalW = page.getViewport({ scale: 1 }).width;
-        const containerW = viewerRef.current.clientWidth;
-        if (naturalW > 0 && containerW > 0) {
-          setFitWidthScale(Math.max(0.2, containerW / naturalW));
-        }
-      } catch {}
+    // Page 1's width is in pageWidthsRef, measured before the doc was shown —
+    // no async worker round trip per sidebar drag / rotation.
+    const compute = () => {
+      const naturalW = pageWidthsRef.current[0];
+      const containerW = viewerRef.current?.clientWidth;
+      if (naturalW > 0 && containerW > 0) setFitWidthScale(Math.max(ZOOM_MIN, containerW / naturalW));
     };
     compute();
     const ro = new ResizeObserver(compute);
     ro.observe(viewerRef.current);
-    return () => { cancelled = true; ro.disconnect(); };
+    return () => ro.disconnect();
   }, [isFitWidth, pdfDoc]);
 
   // Tell the host which document's pages are in the DOM. Layout effect on
@@ -386,7 +462,10 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // apply a restored scroll position and the user never sees the document at
   // the wrong offset.
   useLayoutEffect(() => {
-    if (pdfDoc) onLoadState?.(url, { phase: "rendered" });
+    if (pdfDoc) {
+      awaitingPaintRef.current = url;
+      onLoadState?.(url, { phase: "rendered" });
+    }
   }, [pdfDoc]);
 
   // The document currently on screen. Kept visible while the next one loads —
@@ -414,17 +493,21 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         const n = doc.numPages;
         const EXACT = 8;
         const measured = Math.min(n, EXACT);
-        const heights = [];
+        const heights = [], widths = [];
         for (let i = 1; i <= measured; i++) {
           onLoadState?.(url, { phase: "measuring", done: i - 1, total: measured });
-          try { heights.push((await doc.getPage(i)).getViewport({ scale: 1 }).height); }
-          catch { heights.push(heights[0] || 800); }
+          try {
+            const vp1 = (await doc.getPage(i)).getViewport({ scale: 1 });
+            heights.push(vp1.height); widths.push(vp1.width);
+          } catch { heights.push(heights[0] || FALLBACK_H); widths.push(widths[0] || FALLBACK_W); }
           if (cancelled) { doc.destroy().catch(() => {}); return; }
         }
-        for (let i = heights.length; i < n; i++) heights.push(heights[0] || 800);
+        for (let i = heights.length; i < n; i++) { heights.push(heights[0] || FALLBACK_H); widths.push(widths[0] || FALLBACK_W); }
         const prev = displayedDocRef.current;
         displayedDocRef.current = doc;
+        heightsExactRef.current = n <= EXACT;
         pageHeightsRef.current = heights;
+        pageWidthsRef.current = widths;
         setPageHeights(heights);
         setNumPages(n);
         setDocSeq((s) => s + 1);
@@ -436,12 +519,17 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         // Refine the estimated heights in the background (long docs only).
         for (let i = EXACT; i < n; i++) {
           if (cancelled) return;
-          try { heights[i] = (await doc.getPage(i + 1)).getViewport({ scale: 1 }).height; } catch {}
+          try {
+            const vp1 = (await doc.getPage(i + 1)).getViewport({ scale: 1 });
+            heights[i] = vp1.height; widths[i] = vp1.width;
+          } catch {}
           if ((i + 1) % 50 === 0 || i === n - 1) {
             pageHeightsRef.current = [...heights];
+            pageWidthsRef.current = [...widths];
             setPageHeights([...heights]);
           }
         }
+        heightsExactRef.current = true; // layout is final — the zoom settle loop can stand down
       } catch (e) {
         if (!cancelled) onLoadState?.(url, { phase: "error", detail: e?.message || "failed to open the PDF" });
       }
@@ -454,96 +542,115 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     };
   }, [url, retryNonce]);
 
-  // Preserve scroll position across zoom changes by anchoring on the page
-  // currently at the top of the viewport (and how far down within it),
-  // then re-placing that exact page+offset after pages re-render at the
-  // new size. Pure-fraction preservation drifts because of the fixed 8px
-  // inter-page margins; page anchoring is exact.
+  // A document swap replaces the scroller's content wholesale: the host's
+  // tab restore has just set scrollTop (pre-paint, in the "rendered"
+  // callback), but the scroll-tracking refs still describe the OLD document
+  // until its scroll event dispatches. Resync them now — this layout effect
+  // is defined after the "rendered" one, so it sees the restored value. Also
+  // flag the swap for the anchor effect below.
+  useLayoutEffect(() => {
+    docSwapPendingRef.current = true;
+    // A settle loop from a zoom on the PREVIOUS document may still be alive
+    // (its [scale] cleanup never fires when the swap keeps the scale, e.g.
+    // both tabs at the same numeric zoom) — the swap's scrollHeight change
+    // would trip it into stamping old-document coordinates over the restored
+    // position. Kill it.
+    cancelAnimationFrame(anchorRafRef.current);
+    if (viewerRef.current) {
+      lastScrollRef.current = viewerRef.current.scrollTop;
+      lastScrollLeftRef.current = viewerRef.current.scrollLeft;
+    }
+  }, [docSeq]);
+
+  // Preserve position across zoom changes by keeping one anchor point fixed
+  // on screen: the mouse position for Ctrl+scroll (set in zoomAnchorRef by
+  // the wheel handler), the viewport center for button zooms and fit-width
+  // recomputes. The content under the anchor is found in OLD-scale
+  // coordinates (page index + fraction into it — exact despite the fixed 8px
+  // inter-page margins) and re-placed at the same screen point at the new
+  // scale.
+  //
+  // Document swaps are the exception (docSwapPendingRef): when the swapped-in
+  // document's fit-width scale settles, the scale change is not a zoom. The
+  // restored scrollTop was computed against the OLD document's effective
+  // scale — the only one known pre-paint — i.e. the ratio was applied to the
+  // raw scrollTop, so its exact inverse is a TOP-of-viewport re-map
+  // (anchor point 0,0), not a centered one. Anchoring the viewport center
+  // here is what made tab switches land hundreds of px off.
+  //
+  // Layout effect + the scroll-tracked refs, on purpose: the page boxes
+  // resize in this same commit, and when zooming out that shrinks the scroll
+  // range — by the time this runs the browser may have clamped
+  // scrollTop/scrollLeft, so reading them live would anchor on the wrong
+  // content. The refs still hold the pre-zoom values (the clamp's scroll
+  // event hasn't dispatched yet), and writing the corrected position before
+  // paint means no visible jump at all.
   const prevScaleRef = useRef(scale);
-  const scaleNowRef = useRef(scale);
-  scaleNowRef.current = scale;
-  const anchorGenRef = useRef(0);   // bumping cancels the previous rAF loop
-  const anchorRef = useRef(null);   // {idx, frac}: tracked visual anchor
-  const anchorHoldRef = useRef(0);  // until this timestamp, scroll events are ours
-  useEffect(() => { anchorRef.current = null; }, [pdfDoc]);
-  // Track the visual anchor (page under the viewport top + fraction into it)
-  // on every settled scroll. The zoom/resize effect below REPLAYS this
-  // tracked anchor instead of deriving one from scrollTop at effect time:
-  // by then the commit has already reshaped the layout and the browser's
-  // native scroll anchoring has already moved scrollTop, so a scrollTop
-  // read there interpreted at the OLD scale lands pages away (fast splitter
-  // drags visibly walked the document). The hold window skips the scroll
-  // events our own placements and the browser's mid-burst adjustments fire.
-  useEffect(() => {
-    const v = viewerRef.current;
-    if (!v) return;
-    let raf = 0;
-    const onScroll = () => {
-      if (raf || performance.now() < anchorHoldRef.current) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        if (performance.now() < anchorHoldRef.current) return;
-        const vr = v.getBoundingClientRect();
-        for (const p of v.querySelectorAll("[data-page]")) {
-          const r = p.getBoundingClientRect();
-          if (r.bottom > vr.top) {
-            anchorRef.current = { idx: +p.getAttribute("data-page") - 1, frac: (vr.top - r.top) / Math.max(1, r.height) };
-            break;
-          }
-        }
-      });
-    };
-    v.addEventListener("scroll", onScroll, { passive: true });
-    return () => { v.removeEventListener("scroll", onScroll); if (raf) cancelAnimationFrame(raf); };
-  }, []);
-  useEffect(() => {
+  const anchorRafRef = useRef(0); // live settle-loop frame — cancelled on re-zoom AND on document swap
+  useLayoutEffect(() => {
     const prev = prevScaleRef.current;
     prevScaleRef.current = scale;
+    const anchor = zoomAnchorRef.current;
+    zoomAnchorRef.current = null;
+    const docSwap = docSwapPendingRef.current;
+    docSwapPendingRef.current = false;
     if (prev === scale || !viewerRef.current) return;
     const v = viewerRef.current;
     const heights = pageHeightsRef.current;
     if (heights.length === 0) return;
-    const gen = ++anchorGenRef.current;
+    const ax = docSwap ? 0 : anchor ? anchor.x : v.clientWidth / 2;
+    const ay = docSwap ? 0 : anchor ? anchor.y : v.clientHeight / 2;
 
-    let a = anchorRef.current;
-    if (!a) {
-      // Cold fallback (no scroll happened yet): derive from the OLD scale.
-      let acc = 0, anchorIdx = 0, fracInPage = 0;
-      for (let i = 0; i < heights.length; i++) {
-        const ph = (heights[i] || 800) * prev;
-        if (acc + ph + 8 > v.scrollTop) {
-          anchorIdx = i;
-          fracInPage = (v.scrollTop - acc) / Math.max(1, ph);
-          break;
-        }
-        acc += ph + 8;
+    // Find the page covering the anchor's content-y at the OLD scale. The
+    // anchor may sit in the fixed 8px gap below the page — that slice does
+    // NOT scale with the zoom, so it's kept separate (gapPx) instead of being
+    // folded into the page fraction.
+    const oldY = lastScrollRef.current + ay;
+    let acc = 0, anchorIdx = 0, fracInPage = 0, gapPx = 0;
+    for (let i = 0; i < heights.length; i++) {
+      const ph = (heights[i] || FALLBACK_H) * prev;
+      if (acc + ph + PAGE_GAP > oldY) {
+        anchorIdx = i;
+        fracInPage = Math.min(1, (oldY - acc) / ph);
+        gapPx = Math.max(0, oldY - acc - ph);
+        break;
       }
-      a = { idx: anchorIdx, frac: fracInPage };
-      anchorRef.current = a;
+      acc += ph + PAGE_GAP;
     }
 
-    // After re-render, place the same page+offset at the top.
-    let tries = 0;
-    let lastSH = -1;
-    const restore = () => {
-      if (anchorGenRef.current !== gen || !viewerRef.current) return; // superseded
-      // A newer scale already committed but its effect hasn't run yet — a
-      // placement computed for OUR scale against the new layout is garbage.
-      if (scaleNowRef.current !== scale) { if (tries++ < 60) requestAnimationFrame(restore); return; }
-      const v2 = viewerRef.current;
-      if (v2.scrollHeight !== lastSH) {
-        lastSH = v2.scrollHeight;
-        let newAcc = 0;
-        for (let i = 0; i < a.idx; i++) {
-          newAcc += (heights[i] || 800) * scale + 8;
-        }
-        const targetH = (heights[a.idx] || 800) * scale;
-        anchorHoldRef.current = performance.now() + 400;
-        v2.scrollTop = newAcc + a.frac * targetH;
-      }
-      if (tries++ < 30) requestAnimationFrame(restore);
+    // Content-x under the anchor, in base (scale-1) page coordinates. A page
+    // narrower than the viewport is centered by its auto margins; a wider one
+    // sits at x=0 — max(0, …) covers both layouts, before and after.
+    const clientW = v.clientWidth;
+    const pw = pageWidthsRef.current[anchorIdx] || FALLBACK_W;
+    const oldLeft = Math.max(0, (clientW - pw * prev) / 2);
+    const baseX = (lastScrollLeftRef.current + ax - oldLeft) / prev;
+
+    const place = () => {
+      v.scrollTop = pageTopAt(heights, anchorIdx, scale)
+        + fracInPage * (heights[anchorIdx] || FALLBACK_H) * scale + gapPx - ay;
+      const newLeft = Math.max(0, (clientW - pw * scale) / 2);
+      v.scrollLeft = newLeft + baseX * scale - ax;
+      lastScrollRef.current = v.scrollTop;
+      lastScrollLeftRef.current = v.scrollLeft;
     };
-    requestAnimationFrame(restore);
+    place();
+    if (heightsExactRef.current) return; // every height is measured — nothing can shift, skip the settle loop
+    // Safety net: estimated heights (long docs) can still refine right after
+    // a zoom and shift the layout — re-place while scrollHeight settles. The
+    // cleanup cancel is load-bearing: without it, each step of a continuous
+    // Ctrl+scroll leaves this loop alive, and the NEXT step's layout change
+    // trips the stale loop into re-placing old-scale coordinates over the
+    // fresh ones — the zoom visibly slides off the anchor.
+    let tries = 0;
+    let lastSH = v.scrollHeight;
+    const tick = () => {
+      if (!viewerRef.current) return;
+      if (viewerRef.current.scrollHeight !== lastSH) { lastSH = viewerRef.current.scrollHeight; place(); }
+      if (tries++ < 30) anchorRafRef.current = requestAnimationFrame(tick);
+    };
+    anchorRafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(anchorRafRef.current);
   }, [scale]);
 
   // Pre-compute every page's natural height. The values feed both the jump
@@ -570,16 +677,13 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           const page = await pdfDoc.getPage(i + 1);
           heights[i] = page.getViewport({ scale: 1 }).height;
         } catch (e) {
-          heights[i] = 800;
+          heights[i] = FALLBACK_H;
         }
       }
 
       // Compute page-top from cached heights (accurate even for unrendered pages)
-      let pageTop = 8 * (pn - 1); // 8px margin per page
-      for (let i = 0; i < pn - 1; i++) {
-        pageTop += (heights[i] || 800) * scale;
-      }
-      const curH = (heights[pn - 1] || 800) * scale;
+      const pageTop = pageTopAt(heights, pn - 1, scale);
+      const curH = (heights[pn - 1] || FALLBACK_H) * scale;
       const storedH = r?.height || 1;
       const highlightY = r ? r.y1 * curH / storedH : 0;
       const targetTop = pageTop + highlightY - 80;
@@ -786,7 +890,14 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           ))}
         </div>
       ) : null}
-      <div ref={viewerRef} className="pdfViewer" style={{ height: "100%", overflowY: "auto", overflowX: "hidden" }}>
+      {/* overflow-anchor off: the browser's own scroll anchoring would fight
+          the zoom re-placement above with adjustments of its own. */}
+      <div ref={viewerRef} className="pdfViewer"
+        style={{ height: "100%", overflowY: "auto", overflowX: "auto", overflowAnchor: "none" }}
+        onScroll={(e) => {
+          lastScrollRef.current = e.currentTarget.scrollTop;
+          lastScrollLeftRef.current = e.currentTarget.scrollLeft;
+        }}>
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={`${docSeq}-${i + 1}`} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
@@ -796,6 +907,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           findMarks={marksByPage.get(i + 1) || EMPTY_MARKS}
           onInternalLink={goToDestStable}
           onExternalLink={stableCbs.onExternalLink}
+          onPainted={onPagePainted}
         />
       ))}
       {selPopup && onSelectionFinished && (
@@ -851,12 +963,13 @@ function OutlineNode({ item, depth, onDest, onUrl }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
   const pageRef = useRef(null);
   const renderTaskRef = useRef(null);
+  const linksForRef = useRef(null); // page whose link annotations are already in `links`
   const [pageSize, setPageSize] = useState(null);
   const [visible, setVisible] = useState(false);
   const [links, setLinks] = useState([]); // link annotations, rects at scale 1
@@ -881,7 +994,11 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         if (cancelled || !wrapRef.current) return;
         pageRef.current = page;
         const vp = page.getViewport({ scale });
-        setPageSize({ width: vp.width, height: vp.height });
+        const vpBase = page.getViewport({ scale: 1 });
+        // Base (scale-1) size — render multiplies by the CURRENT scale, so the
+        // page box resizes in the same commit as a zoom change instead of
+        // keeping its old size until this async re-render completes.
+        setPageSize({ width: vpBase.width, height: vpBase.height });
 
         const canvas = canvasRef.current;
         // Backing resolution: at least 2× the CSS size — canvas antialiasing
@@ -896,7 +1013,6 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
           pr = Math.max(1, Math.sqrt(BUDGET / (vp.width * vp.height)));
         }
         canvas.width = Math.floor(vp.width * pr); canvas.height = Math.floor(vp.height * pr);
-        canvas.style.width = vp.width + "px"; canvas.style.height = vp.height + "px";
         const ctx = canvas.getContext("2d"); ctx.setTransform(pr, 0, 0, pr, 0, 0);
         // Cancel any in-flight render (rapid zoom changes) instead of stacking them
         try { renderTaskRef.current?.cancel(); } catch {}
@@ -909,30 +1025,35 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
           if (err instanceof pdfjsLib.RenderingCancelledException) return;
           throw err;
         }
+        if (cancelled) return;
+        onPainted?.();
 
         const textL = textRef.current;
         textL.innerHTML = "";
-        const baseVp = page.getViewport({ scale: 1 });
-        textL.style.width = baseVp.width + "px";
-        textL.style.height = baseVp.height + "px";
+        textL.style.width = vpBase.width + "px";
+        textL.style.height = vpBase.height + "px";
         textL.style.transform = `scale(${scale})`;
         const tc = await page.getTextContent();
         pdfjsLib.renderTextLayer({ textContentSource: tc, container: textL, viewport: vp });
 
-        // Link annotations (in-PDF references + external URLs), stored at scale 1.
-        const annots = await page.getAnnotations();
-        if (cancelled) return;
-        const vp1 = page.getViewport({ scale: 1 });
-        setLinks(annots
-          .filter((a) => a.subtype === "Link" && (a.url || a.dest))
-          .map((a) => {
-            const r = vp1.convertToViewportRectangle(a.rect);
-            return {
-              left: Math.min(r[0], r[2]), top: Math.min(r[1], r[3]),
-              w: Math.abs(r[2] - r[0]), h: Math.abs(r[3] - r[1]),
-              url: a.url || null, dest: a.dest || null,
-            };
-          }));
+        // Link annotations (in-PDF references + external URLs), stored at
+        // scale 1 and multiplied in JSX — so they only need computing once per
+        // page, not again on every zoom re-render.
+        if (linksForRef.current !== page) {
+          const annots = await page.getAnnotations();
+          if (cancelled) return;
+          linksForRef.current = page;
+          setLinks(annots
+            .filter((a) => a.subtype === "Link" && (a.url || a.dest))
+            .map((a) => {
+              const r = vpBase.convertToViewportRectangle(a.rect);
+              return {
+                left: Math.min(r[0], r[2]), top: Math.min(r[1], r[3]),
+                w: Math.abs(r[2] - r[0]), h: Math.abs(r[3] - r[1]),
+                url: a.url || null, dest: a.dest || null,
+              };
+            }));
+        }
       } catch (e) {
         // A cancelled run rejects mid-await (doc swapped, transport
         // destroyed) — that's teardown, not an error worth logging.
@@ -942,17 +1063,20 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
     return () => { cancelled = true; };
   }, [pdfDoc, pageNumber, scale, visible]);
 
-  const curW = pageSize?.width || 1, curH = pageSize?.height || 1;
+  const curW = pageSize ? pageSize.width * scale : 1, curH = pageSize ? pageSize.height * scale : 1;
 
   return (
     <div ref={wrapRef} data-page={pageNumber} className="pdfPageWrap"
       style={{
-        margin: "0 auto 8px", position: "relative", background: "#fff",
+        margin: `0 auto ${PAGE_GAP}px`, position: "relative", background: "#fff",
         width: pageSize ? curW : undefined,
         height: pageSize ? curH : (reservedHeight || undefined),
         minHeight: pageSize || reservedHeight ? undefined : 200,
       }}>
-      <canvas ref={canvasRef} style={{ display: "block" }} />
+      {/* 100% of the wrapper: on a zoom change the old bitmap stretches to the
+          new size immediately (blurry for a moment) instead of sitting at its
+          old size in a resized box until the sharp re-render lands. */}
+      <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
       <div ref={textRef} className="textLayer" style={{
         userSelect: readOnly ? "none" : "text", WebkitUserSelect: readOnly ? "none" : "text",
       }} />

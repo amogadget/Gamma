@@ -12,6 +12,7 @@ export default function ChatDock({
   docId, focusedBlockId, homeBlocks, pdfTitle, openTabs,
   pdfSelections, setPdfSelections,
   chatModel, setChatModel, chatEffort, setChatEffort, chatSystem, setAiProvider,
+  chatContextChars, multiContextChars,
   aiInfo, aiProvider, openAiKeysEditor,
   openPopover, setOpenPopover,
   setStatus,
@@ -166,14 +167,22 @@ export default function ChatDock({
     return () => window.removeEventListener("keydown", onKey);
   }, [docPicker]);
 
-  // Follow the newest message only while the user is at the bottom — scrolling
-  // up to read earlier content pauses the auto-follow until they return
-  // (ChatGPT-style), so a streaming reply doesn't yank the scrollbar down.
+  // Follow the newest message only while stuck to the bottom (ChatGPT-style):
+  // ANY upward scroll — wheel, scrollbar drag, touch — unsticks immediately,
+  // even a small one; scrolling back down to the bottom re-sticks. Our own
+  // scroll-to-bottom writes are flagged so their scroll events can't re-stick.
   const chatStickRef = useRef(true);
+  const chatProgScrollRef = useRef(false);
+  const chatLastScrollTopRef = useRef(0);
   useEffect(() => { chatStickRef.current = true; }, [chatKey]);
   useEffect(() => {
     const el = chatScrollRef.current;
-    if (el && chatStickRef.current) el.scrollTop = el.scrollHeight;
+    if (!el || !chatStickRef.current) return;
+    const target = el.scrollHeight - el.clientHeight;
+    if (el.scrollTop < target - 1) {
+      chatProgScrollRef.current = true;
+      el.scrollTop = target;
+    }
   }, [chatMessages, chatLoading]);
 
   // Core chat send. baseMessages overrides the history (used when re-sending
@@ -253,6 +262,8 @@ export default function ChatDock({
           include_notes: chatIncludeNotes,
           images,
           files,
+          context_char_limit: chatContextChars,
+          multi_context_char_limit: multiContextChars,
           stream: true,
         }),
       });
@@ -397,7 +408,14 @@ export default function ChatDock({
         ref={chatScrollRef}
         onScroll={(e) => {
           const el = e.currentTarget;
-          chatStickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+          const last = chatLastScrollTopRef.current;
+          chatLastScrollTopRef.current = el.scrollTop;
+          if (chatProgScrollRef.current) { chatProgScrollRef.current = false; return; }
+          if (el.scrollTop < last) {
+            chatStickRef.current = false; // any upward move de-sticks
+          } else if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) {
+            chatStickRef.current = true; // back at the bottom → follow again
+          }
         }}
         onWheel={(e) => {
           // Upward intent unsticks immediately — before any scroll event —

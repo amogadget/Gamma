@@ -22,11 +22,11 @@ import threading
 
 from fastapi import APIRouter, Request
 
+from ..ai_context import pdf_path as _pdf_path
 from ..auth import require_user
 from ..db import page_now, user_db_path
 from ..pdf_text import extract_pages
 from ..textnorm import INDEX_VERSION, normalize_text
-from .ai import _pdf_path
 
 router = APIRouter(prefix="/api", tags=["search"])
 
