@@ -2,6 +2,7 @@
 
 import secrets
 import sqlite3
+import time
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
@@ -13,6 +14,38 @@ from .seed import reset_guest_data
 
 SESSION_COOKIE = "session"
 SESSION_MAX_AGE = 365 * 24 * 3600
+_AUTH_PATHS = {"/api/login", "/api/login-guest", "/api/logout", "/api/session"}
+
+
+def _finish_request_log(request: Request, response, started: float, expected: str | None, reason: str = ""):
+    """Correlate browser diagnostics with useful, low-noise CLI context."""
+    request_id = request.state.request_id
+    response.headers["X-Gamma-Request-ID"] = request_id
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    status = response.status_code
+    path = request.url.path
+    # Uvicorn already prints every access. Supplement only failures,
+    # authentication operations, and requests slow enough to investigate.
+    if status < 400 and path not in _AUTH_PATHS and elapsed_ms < 2000:
+        return response
+    if not reason:
+        if status == 401:
+            reason = "authentication-required"
+        elif status == 403:
+            reason = "forbidden"
+        elif status >= 500:
+            reason = "server-error"
+        elif path in _AUTH_PATHS:
+            reason = "session-operation"
+        else:
+            reason = "request-rejected"
+    print(
+        f"[http] request={request_id} {request.method} {path} status={status} "
+        f"duration_ms={elapsed_ms:.1f} session={request.state.user or '-'} "
+        f"expected={expected if expected is not None else '-'} reason={reason}",
+        flush=True,
+    )
+    return response
 
 
 def set_session_cookie(response, token: str):
@@ -25,6 +58,8 @@ async def session_middleware(request: Request, call_next):
     Guest sessions are date-stamped: on the first request of a new UTC day the
     guest workspace is wiped, re-seeded, and a fresh session is issued.
     """
+    started = time.perf_counter()
+    request.state.request_id = secrets.token_hex(4)
     token = request.cookies.get(SESSION_COOKIE)
     request.state.user = None
     request.state.is_guest = False
@@ -70,11 +105,11 @@ async def session_middleware(request: Request, call_next):
             status_code=409,
         )
         resp.headers["X-Gamma-Session-User"] = request.state.user or ""
-        return resp
+        return _finish_request_log(request, resp, started, expected, "session-mismatch")
     response = await call_next(request)
     if new_session_token:
         set_session_cookie(response, new_session_token)
-    return response
+    return _finish_request_log(request, response, started, expected)
 
 
 def require_user(request: Request) -> str:

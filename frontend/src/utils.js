@@ -24,15 +24,18 @@ const rawFetch = window.fetch.bind(window);
 window.fetch = function (input, options) {
   const url = typeof input === "string" ? input : (input && input.url) || "";
   const path = url.startsWith("/") ? url.split("?")[0] : "";
-  if (!expectedUser || !path.startsWith(`${API}/`) || AUTH_PATHS.has(path)) {
-    return rawFetch(input, options);
-  }
-  options = { ...(options || {}) };
-  if (options.headers instanceof Headers) {
-    options.headers = new Headers(options.headers);
-    options.headers.set("X-Gamma-User", expectedUser);
-  } else {
-    options.headers = { ...(options.headers || {}), "X-Gamma-User": expectedUser };
+  const isApi = path.startsWith(`${API}/`);
+  const method = String(options?.method || input?.method || "GET").toUpperCase();
+  const expectedAtStart = expectedUser;
+  const started = performance.now();
+  if (expectedUser && isApi && !AUTH_PATHS.has(path)) {
+    options = { ...(options || {}) };
+    if (options.headers instanceof Headers) {
+      options.headers = new Headers(options.headers);
+      options.headers.set("X-Gamma-User", expectedUser);
+    } else {
+      options.headers = { ...(options.headers || {}), "X-Gamma-User": expectedUser };
+    }
   }
   const promise = rawFetch(input, options);
   promise.then((r) => {
@@ -43,7 +46,41 @@ window.fetch = function (input, options) {
         { detail: { user: who } },
       ));
     }
-  }).catch(() => {});
+    if (!isApi) return;
+    const elapsed = Math.round(performance.now() - started);
+    if (r.ok && !AUTH_PATHS.has(path) && elapsed < 2000) return;
+    const requestId = r.headers.get("X-Gamma-Request-ID") || "";
+    const timing = `${elapsed} ms${requestId ? `, request ${requestId}` : ""}`;
+    const emit = (detail = "") => {
+      let explanation = detail;
+      if (r.status === 409 && r.headers.has("X-Gamma-Session-User")) {
+        const actual = r.headers.get("X-Gamma-Session-User") || "signed out";
+        explanation = `session changed from ${expectedAtStart || "unknown"} to ${actual}`;
+      } else if (r.status === 401 && !explanation) {
+        explanation = "authentication required or session expired";
+      }
+      window.dispatchEvent(new CustomEvent("gamma-api-log", {
+        detail: {
+          message: `API ${method} ${path} → ${r.status} in ${timing}${explanation ? ` — ${explanation}` : ""}`,
+        },
+      }));
+    };
+    if (r.ok) {
+      emit("");
+    } else {
+      r.clone().json()
+        .then((body) => emit(typeof body?.detail === "string" ? body.detail : ""))
+        .catch(() => emit(""));
+    }
+  }).catch((error) => {
+    if (!isApi) return;
+    const elapsed = Math.round(performance.now() - started);
+    window.dispatchEvent(new CustomEvent("gamma-api-log", {
+      detail: {
+        message: `API ${method} ${path} failed after ${elapsed} ms — ${error?.message || "network error"}`,
+      },
+    }));
+  });
   return promise;
 };
 // -----------------------------------------------------------------------------

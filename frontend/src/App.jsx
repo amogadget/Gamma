@@ -199,10 +199,10 @@ export default function App() {
   }
 
   async function doLogout() {
-    // Close the workspace while the session is still valid (flushes pending
-    // edits, clears the ?block= URL and the cached session) so nothing of this
-    // account's view leaks into whoever logs in next.
-    goHome();
+    // Flush pending edits while the session is still valid. Setting authUser
+    // false after the cookie is removed performs a local-only workspace
+    // teardown, without starting reads that race logout.
+    leaveCurrentPage();
     await fetch(`${API}/logout`, { method: "POST", credentials: "include" });
     // Logout kills the browser-wide session: tell other tabs of this account
     // so they drop to the login page instead of failing on their next save.
@@ -278,7 +278,8 @@ export default function App() {
       // account's pages. Guarded on a previous user so the initial
       // session-loading render doesn't wipe the deep link / saved session.
       if (prefsUserRef.current && !readOnly) {
-        goHome();
+        // Local teardown only: there is no authenticated account to refresh.
+        goHome(false);
         setNavStack([]);
       }
       prefsUserRef.current = "";
@@ -638,11 +639,14 @@ export default function App() {
   useEffect(() => {
     const onErr = (e) => logSys(`error: ${e.message || "unknown"}${e.filename ? ` (${e.filename.split("/").pop()}:${e.lineno})` : ""}`);
     const onRej = (e) => logSys(`unhandled rejection: ${e.reason?.message || e.reason || "unknown"}`);
+    const onApi = (e) => { if (e.detail?.message) logSys(e.detail.message); };
     window.addEventListener("error", onErr);
     window.addEventListener("unhandledrejection", onRej);
+    window.addEventListener("gamma-api-log", onApi);
     return () => {
       window.removeEventListener("error", onErr);
       window.removeEventListener("unhandledrejection", onRej);
+      window.removeEventListener("gamma-api-log", onApi);
     };
   }, [logSys]);
   const [pillChannels, setPillChannels] = useState({}); // channel -> entry (+ seq, fading)
@@ -2650,7 +2654,7 @@ export default function App() {
   goBackNavRef.current = goBackNav;
   const navStackLen = navStack.length;
 
-  function goHome() {
+  function goHome(refreshHome = true) {
     leaveCurrentPage();
     clearSession();
     suppressAutosaveRef.current = true;
@@ -2667,7 +2671,7 @@ export default function App() {
     setPdfHidden(false);
     setFolderFilter("");
     setCategoryFilter("");
-    fetchHomeBlocks();
+    if (refreshHome) fetchHomeBlocks();
     window.history.replaceState({}, "", window.location.pathname);
   }
 
