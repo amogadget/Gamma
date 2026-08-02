@@ -27,6 +27,7 @@ def test_user_guard_mismatch_rejected(guest):
     r = guest.get("/api/blocks/root/children", headers={"X-Gamma-User": "someone-else"})
     assert r.status_code == 409
     assert r.headers["X-Gamma-Session-User"] == "guest"
+    assert len(r.headers["X-Gamma-Request-ID"]) == 8
 
     r = guest.post("/api/blocks", json={"parent_id": "root", "content": "x"},
                    headers={"X-Gamma-User": "someone-else"})

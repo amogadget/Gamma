@@ -44,18 +44,6 @@ A file-browser home: a recents feed of all your papers (sort by updated / create
 
 <!-- Demo GIF slot ➜ record: dragging a paper into a folder, then a Ctrl+F search lighting up matches. Save as docs/demo-library.gif -->
 
-### 🔗 Share read-only
-
-![Read-only shared view of an annotated PDF](./docs/screenshots/04-shared-view.png)
-
-Mint a public link for any annotated paper. Recipients see the PDF, highlights, and notes — no login, no editing.
-
-### 🔑 Accounts & guest
-
-![Login page with guest option](./docs/screenshots/03-login.png)
-
-App-level username/password auth with per-user isolated data. Guest accounts get a fresh workspace that resets daily — no signup.
-
 ---
 
 ### A few more things
