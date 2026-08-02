@@ -15,7 +15,7 @@ USERS_DIR = DATA_DIR / "users"
 # serves it as an SPA — no separate static file server or reverse proxy needed.
 STATIC_DIR = os.environ.get("GAMMA_STATIC_DIR", "")
 
-MAX_UPLOAD_BYTES = 40 * 1024 * 1024  # 40 MB — matches MAX_ATTACH_PDF_BYTES (bigger PDFs blow ChatGPT's context window)
+MAX_UPLOAD_BYTES = 55 * 1024 * 1024  # 55 MB
 
 # --- AI chat -----------------------------------------------------------------
 # AI configuration is per-user, not env: each user adds provider entries in the

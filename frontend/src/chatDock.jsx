@@ -11,7 +11,7 @@ import { ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyI
 export default function ChatDock({
   docId, focusedBlockId, homeBlocks, pdfTitle, openTabs,
   pdfSelections, setPdfSelections,
-  chatModel, setChatModel, chatEffort, setChatEffort, chatSystem,
+  chatModel, setChatModel, chatEffort, setChatEffort, chatSystem, setAiProvider,
   aiInfo, aiProvider, openAiKeysEditor,
   openPopover, setOpenPopover,
   setStatus,
@@ -322,17 +322,23 @@ export default function ChatDock({
         </button>
       ) : null}
       {aiInfo?.models?.length > 0 ? (() => {
-        // Scoped to the active key (Settings → AI & API keys); all models
-        // only when no key is selected or the selected one is gone.
-        const models = aiProvider && aiInfo.models.some((m) => m.provider === aiProvider)
-          ? aiInfo.models.filter((m) => m.provider === aiProvider)
-          : aiInfo.models;
+        // Show every configured model, not just the active key's. Picking one
+        // from a different provider also flips the Settings-side aiProvider so
+        // the two selectors stay in sync (previously the model-scope effect
+        // in App.jsx snapped chatModel back and made cross-provider picks a
+        // no-op).
+        const models = aiInfo.models;
         const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
         const currentId = models.some((m) => m.id === chatModel) ? chatModel : models[0].id;
         return (
           <span className="chatHeaderSelects">
             <select className="chatModelSelect" value={currentId}
-              onChange={(e) => setChatModel(e.target.value)} title="Switch model">
+              onChange={(e) => {
+                const id = e.target.value;
+                const picked = models.find((m) => m.id === id);
+                if (picked && picked.provider !== aiProvider) setAiProvider?.(picked.provider);
+                setChatModel(id);
+              }} title="Switch model">
               {models.map((m) => (
                 <option key={m.id} value={m.id}>
                   {multiProvider ? `${m.model} · ${m.provider_name || m.provider}` : m.model}

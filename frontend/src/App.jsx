@@ -1195,19 +1195,53 @@ export default function App() {
     if (isOauthProto(f.protocol) || stored?.key_hint) loadModelCatalog();
   }, [aiKeysForm?.id, aiKeysForm?.protocol]);
 
-  // "Sign in with ChatGPT": opens the OAuth page in a new tab. Its redirect
-  // (localhost:1455) fails to load — the user pastes that URL back into the
-  // form and submit completes the exchange server-side.
+  // "Sign in with ChatGPT": opens the OAuth page in a centered popup, tracks
+  // when the popup closes, and — when the user has copied the failed-callback
+  // URL from the address bar — tries to auto-paste it via the Clipboard API
+  // and finish the exchange without any manual input.
+  // "Sign in with ChatGPT": popup opens auth.openai.com. The user signs in,
+  // OpenAI redirects to localhost:1455/auth/callback (nothing listens there —
+  // the URL just fails to load). We watch popup.closed; when it closes we try
+  // to read the callback URL from the clipboard and auto-submit. If clipboard
+  // access is blocked, the paste input is focused so Cmd+V finishes the job.
+  // (Cross-origin blocks popup.location for the whole flow, so no polling of
+  // the popup's URL — clipboard is the only handle we have.)
+  const oauthWatchRef = useRef(null);
   async function startChatGPTAuth() {
     setAiKeysError("");
     try {
       const d = await apiJson(`${API}/ai/oauth/chatgpt/start`, { method: "POST" });
-      setAiKeysForm((f) => (f ? { ...f, oauthState: d.state } : f));
-      window.open(d.auth_url, "_blank", "noopener");
+      setAiKeysForm((f) => (f ? { ...f, oauthState: d.state, oauthWaiting: true } : f));
+      const w = 520, h = 720;
+      const y = Math.max(0, (window.screen?.height || 800) - h) / 2;
+      const x = Math.max(0, (window.screen?.width || 1200) - w) / 2;
+      const popup = window.open(d.auth_url, "chatgpt-oauth",
+        `width=${w},height=${h},left=${x},top=${y}`);
+      if (oauthWatchRef.current) clearInterval(oauthWatchRef.current);
+      oauthWatchRef.current = setInterval(async () => {
+        if (!popup || popup.closed) {
+          clearInterval(oauthWatchRef.current);
+          oauthWatchRef.current = null;
+          setAiKeysForm((f) => (f ? { ...f, oauthWaiting: false } : f));
+          try {
+            const m = (await navigator.clipboard.readText() || "").trim()
+              .match(/https?:\/\/localhost:1455\/auth\/callback[^\s]*/);
+            if (m) {
+              setAiKeysForm((f) => (f ? { ...f, oauthCallback: m[0] } : f));
+              setTimeout(() => submitAiProvider(), 0);
+              return;
+            }
+          } catch {}
+          setTimeout(() => document.getElementById("chatgpt-oauth-cb-input")?.focus(), 50);
+        }
+      }, 500);
     } catch (err) {
       setAiKeysError(err.message);
     }
   }
+  useEffect(() => () => {
+    if (oauthWatchRef.current) clearInterval(oauthWatchRef.current);
+  }, []);
 
   async function submitAiProvider() {
     const f = aiKeysForm;
@@ -1947,12 +1981,12 @@ export default function App() {
           if (rootId && rootId !== initialBlockId) {
             pendingBlockScrollRef.current = initialBlockId;
             pendingJumpRef.current = initialBlockId; // highlight blocks also jump the PDF
-            openBlock(rootId);
+            openBlock(rootId, { restoreScroll: true });
           } else {
-            openBlock(initialBlockId);
+            openBlock(initialBlockId, { restoreScroll: true });
           }
         } catch {
-          openBlock(initialBlockId);
+          openBlock(initialBlockId, { restoreScroll: true });
         }
       })();
     }
@@ -1964,7 +1998,7 @@ export default function App() {
       // Bare `/` — try restore last session
       const session = loadSession();
       if (session.focusedBlockId) {
-        openBlock(session.focusedBlockId).catch(() => {
+        openBlock(session.focusedBlockId, { restoreScroll: true }).catch(() => {
           clearSession();
           setFocusedBlockId("");
         });
@@ -2122,8 +2156,8 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       setStatus("Not a PDF file.");
       return;
     }
-    if (file.size > 40 * 1024 * 1024) {
-      setStatus("File too large (max 40 MB).");
+    if (file.size > 55 * 1024 * 1024) {
+      setStatus("File too large (max 55 MB).");
       return;
     }
     setLoading(true);
@@ -2452,13 +2486,43 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       localStorage.setItem(`gamma-tab-scroll:${user}`, JSON.stringify(out));
     } catch {}
   }
+  // Scroll persistence: live-capture pixel-exact scrollTop on every scroll,
+  // trailing-debounce save to localStorage, flush on unload/hide. scroll
+  // doesn't bubble → capture-phase listener catches any descendant.
+  const captureScrollPosRef = useRef(() => {});
+  const persistTabScrollRef = useRef(() => {});
   useEffect(() => {
-    const onUnload = () => persistTabScroll();
-    window.addEventListener("beforeunload", onUnload);
-    window.addEventListener("pagehide", onUnload);
+    let saveTimer = null;
+    const scheduleSave = () => {
+      if (saveTimer) return;
+      saveTimer = setTimeout(() => { saveTimer = null; persistTabScrollRef.current(); }, 1000);
+    };
+    function onScroll(e) {
+      const fid = focusedBlockIdRef.current;
+      if (!fid) return;
+      const el = e.target;
+      if (!(el instanceof HTMLElement)) return;
+      const prev = tabScrollRef.current[fid] || {};
+      if (el.classList.contains("blockList") && el.closest(".sidebar")) {
+        tabScrollRef.current[fid] = { ...prev, notesTop: el.scrollTop };
+        scheduleSave();
+      } else if (el.classList.contains("pdfViewer")) {
+        tabScrollRef.current[fid] = { ...prev, top: el.scrollTop };
+        scheduleSave();
+      }
+    }
+    const onHidden = () => { captureScrollPosRef.current(); persistTabScrollRef.current(); };
+    const onVisibility = () => { if (document.visibilityState === "hidden") onHidden(); };
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("beforeunload", onHidden);
+    window.addEventListener("pagehide", onHidden);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      window.removeEventListener("beforeunload", onUnload);
-      window.removeEventListener("pagehide", onUnload);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("beforeunload", onHidden);
+      window.removeEventListener("pagehide", onHidden);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (saveTimer) clearTimeout(saveTimer);
     };
   }, []);
   const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
@@ -2494,6 +2558,11 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       tabScrollRef.current[focusedBlockId] = { ...prev, top: scroller.scrollTop, scale: pdfEffScale };
     }
   }
+  // Point the beforeunload/pagehide refs at the freshest closures so unload
+  // captures the CURRENT page's scroll position (leaveCurrentPage only fires
+  // on navigation, not on refresh).
+  captureScrollPosRef.current = captureScrollPos;
+  persistTabScrollRef.current = persistTabScroll;
   function cancelPdfRestore() {
     restoreTokenRef.current++;
     restoringForRef.current = null;
@@ -4500,7 +4569,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
-          chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider}
+          chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider} setAiProvider={setAiProvider}
           openAiKeysEditor={openAiKeysEditor}
           openPopover={openPopover} setOpenPopover={setOpenPopover}
           setStatus={setStatus}
@@ -5405,14 +5474,41 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
                             // Sign-in button + paste box sit directly under the
                             // numbered guide that references them.
                             <>
-                              <div className="reportModalBtns" style={{ justifyContent: "flex-start" }}>
+                              <div className="reportModalBtns" style={{ justifyContent: "flex-start", gap: 6 }}>
                                 <button className="uiBtn" disabled={aiKeysBusy} onClick={startChatGPTAuth}>
                                   {aiKeysForm.oauthState ? "Re-open ChatGPT sign-in" : "Open ChatGPT sign-in"}
                                 </button>
+                                <button
+                                  className="uiBtn"
+                                  disabled={aiKeysBusy || !aiKeysForm.oauthState}
+                                  title="Read the callback URL from your clipboard"
+                                  onClick={async () => {
+                                    try {
+                                      const text = (await navigator.clipboard.readText() || "").trim();
+                                      const m = text.match(/https?:\/\/localhost:1455\/auth\/callback[^\s]*/);
+                                      if (m) {
+                                        setAiKeysForm((f) => (f ? { ...f, oauthCallback: m[0] } : f));
+                                        setAiKeysError("");
+                                      } else {
+                                        setAiKeysError("Clipboard doesn't look like a localhost:1455 callback URL.");
+                                      }
+                                    } catch (err) {
+                                      setAiKeysError(`Clipboard read blocked: ${err.message || err}`);
+                                    }
+                                  }}
+                                >Paste from clipboard</button>
                               </div>
+                              {aiKeysForm.oauthWaiting ? (
+                                <div className="reportModalHint">
+                                  Waiting for the popup… After signing in, the browser will hit an
+                                  error page — just <b>copy that URL</b> from the popup's address
+                                  bar and close the popup. This form will pick it up automatically.
+                                </div>
+                              ) : null}
                               <input
+                                id="chatgpt-oauth-cb-input"
                                 className="aiKeyInput" type="text" spellCheck={false}
-                                placeholder="Paste the callback URL (http://localhost:1455/auth/callback?code=…)"
+                                placeholder="Callback URL — auto-filled from clipboard when the popup closes"
                                 value={aiKeysForm.oauthCallback || ""}
                                 onChange={(e) => setAiKeysForm((f) => ({ ...f, oauthCallback: e.target.value }))}
                               />

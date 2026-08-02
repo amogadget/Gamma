@@ -35,7 +35,7 @@ from ..pdf_text import PDF_EXTRACT_FAILED, extract_text
 
 router = APIRouter(prefix="/api", tags=["ai"])
 
-MAX_ATTACH_PDF_BYTES = 15 * 1024 * 1024  # keep base64 payload well under API request limits
+MAX_ATTACH_PDF_BYTES = 40 * 1024 * 1024  # 55MB doesn't work even on gpt-5.6-sol; 40 is the empirical ceiling
 
 # Reasoning-depth values accepted by both wire protocols (Anthropic
 # output_config.effort / OpenAI reasoning_effort). Only sent when the user
