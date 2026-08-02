@@ -292,6 +292,13 @@ _CHATGPT_MODEL_FALLBACK = [
 # GET {base}/models gates its answer on the caller's version — keep in rough
 # sync with a current Codex CLI release so new models show up.
 _CHATGPT_CLIENT_VERSION = "0.146.0"
+_MODEL_CATALOG_TIMEOUT = 5
+
+
+def _model_catalog_json(req: URLRequest) -> dict:
+    """Fetch one model catalog with a short, UI-friendly timeout."""
+    with urlopen(req, timeout=_MODEL_CATALOG_TIMEOUT) as resp:
+        return json.loads(resp.read())
 
 
 def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
@@ -315,8 +322,7 @@ def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
                 "chatgpt-account-id": conf.get("account_id", ""),
                 "originator": "codex_cli_rs",
             })
-        with urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read())
+        data = _model_catalog_json(req)
         listed, hidden = [], []
         for m in data.get("models") or []:
             slug = str(m.get("slug") or "").strip()
@@ -365,11 +371,19 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     try:
         if protocol == "anthropic":
             req = URLRequest(f"{base}/v1/models?limit=100",
-                             headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+                             headers={
+                                 "x-api-key": key,
+                                 "anthropic-version": "2023-06-01",
+                                 "Accept": "application/json",
+                                 "User-Agent": "Gamma/model-catalog",
+                             })
         else:
-            req = URLRequest(f"{base}/v1/models", headers={"Authorization": f"Bearer {key}"})
-        with urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read())
+            req = URLRequest(f"{base}/v1/models", headers={
+                "Authorization": f"Bearer {key}",
+                "Accept": "application/json",
+                "User-Agent": "Gamma/model-catalog",
+            })
+        data = _model_catalog_json(req)
     except urllib.error.HTTPError as e:
         raise HTTPException(status_code=400, detail=f"model list failed: {_upstream_detail(e, 200)}")
     except Exception as e:

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import PdfViewer, { COLORS } from "./pdfViewer";
+import PdfViewer, { COLORS, clampZoom } from "./pdfViewer";
 import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl, setExpectedUser } from "./utils";
 import {
   BlockDropIndicator,
@@ -62,6 +62,12 @@ import {
   parseFolderTags,
   scorePaperMatch,
 } from "./libraryUtils";
+
+// PDF load phases that own a row in the background-transfers popover; every
+// other phase is viewer-local. Allowlist on purpose — the transfer handling's
+// catch-all marks unrecognized phases as failed, so a new local phase must
+// fail closed (ignored) rather than show a spurious error row.
+const TRANSFER_PHASES = new Set(["start", "progress", "done", "cached", "error", "cancelled"]);
 
 export default function App() {
   const params = new URLSearchParams(window.location.search);
@@ -642,7 +648,11 @@ export default function App() {
   const [pillChannels, setPillChannels] = useState({}); // channel -> entry (+ seq, fading)
   const pillSeqRef = useRef(0);
   const pillTimersRef = useRef({}); // channel -> pending linger/fade timers
-  const postPill = useCallback((channel, entry) => {
+  // opts.after = [ms, patch]: once ms elapse — if this entry still owns the
+  // channel — merge patch into it, or clear the channel when patch is null.
+  // Callers use it for escalations and stuck-spinner caps without touching
+  // the timer bookkeeping themselves.
+  const postPill = useCallback((channel, entry, opts) => {
     const timers = pillTimersRef.current;
     (timers[channel] || []).forEach(clearTimeout);
     delete timers[channel];
@@ -657,13 +667,22 @@ export default function App() {
     }
     const seq = ++pillSeqRef.current;
     setPillChannels((prev) => ({ ...prev, [channel]: { ...entry, seq, fading: false } }));
+    // Only touch the entry we posted — a newer post owns the channel.
+    const ifMine = (fn) => setPillChannels((prev) => (prev[channel]?.seq === seq ? fn(prev) : prev));
     if (entry.final) {
-      // Only touch the entry we posted — a newer post owns the channel.
-      const ifMine = (fn) => setPillChannels((prev) => (prev[channel]?.seq === seq ? fn(prev) : prev));
       timers[channel] = [
         setTimeout(() => ifMine((prev) => ({ ...prev, [channel]: { ...prev[channel], fading: true } })), 600),
         setTimeout(() => ifMine((prev) => { const next = { ...prev }; delete next[channel]; return next; }), 1000),
       ];
+    }
+    if (opts?.after) {
+      const [ms, patch] = opts.after;
+      (timers[channel] ||= []).push(setTimeout(() => ifMine((prev) => {
+        const next = { ...prev };
+        if (patch === null) delete next[channel];
+        else next[channel] = { ...next[channel], ...patch };
+        return next;
+      }), ms));
     }
   }, []);
   useEffect(() => () => Object.values(pillTimersRef.current).forEach((ts) => ts.forEach(clearTimeout)), []);
@@ -935,14 +954,9 @@ export default function App() {
     // Feed the shared status pill — one channel for the whole load lifecycle,
     // so load progress and status messages can never stack.
     if (st.phase === "start") {
-      postPill("pdf-load", { msg: "Requesting PDF…", spinner: true });
-      // Escalate the wording if the server keeps us waiting with no bytes.
-      // postPill clears this timer whenever the channel posts again.
-      pillTimersRef.current["pdf-load"] = [setTimeout(() => {
-        setPillChannels((prev) => prev["pdf-load"]?.msg === "Requesting PDF…"
-          ? { ...prev, "pdf-load": { ...prev["pdf-load"], msg: "Still waiting — the server may be fetching the PDF from its source…" } }
-          : prev);
-      }, 6000)];
+      // Escalates if the server keeps us waiting with no bytes.
+      postPill("pdf-load", { msg: "Requesting PDF…", spinner: true },
+        { after: [6000, { msg: "Still waiting — the server may be fetching the PDF from its source…" }] });
     } else if (st.phase === "progress") {
       postPill("pdf-load", {
         msg: st.total
@@ -958,10 +972,14 @@ export default function App() {
       postPill("pdf-load", { msg: `Preparing document — measuring page ${st.done + 1} of ${st.total}…`, spinner: true });
     } else if (st.phase === "error") {
       postPill("pdf-load", { msg: `PDF load failed — ${st.detail || "unknown error"}`, error: true, retry: true });
-    } else if (st.phase === "cancelled" || st.phase === "rendered") {
+    } else if (st.phase === "cancelled" || st.phase === "painted") {
       postPill("pdf-load", null);
     }
     if (st.phase === "rendered") {
+      // Pages are in the DOM but the first canvas paint is still in flight —
+      // keep the pill up until the viewer reports "painted". Safety-capped so
+      // a paint that errors out can't leave the spinner stuck forever.
+      postPill("pdf-load", { msg: "Rendering page…", spinner: true }, { after: [20000, null] });
       pdfRenderedUrlRef.current = url; // this document's pages are now in the DOM
       setPdfDocNonce((n) => n + 1);    // lets a pinned search re-find its matches here
       // Called from the viewer's layout effect — before paint. Applying a
@@ -980,9 +998,9 @@ export default function App() {
       }
       return;
     }
-    // Local phases — no transfer row to update (falling through would hit the
-    // catch-all branch and mark the download as errored).
-    if (st.phase === "parsing" || st.phase === "measuring") return;
+    // Only phases that own a transfer row from here on — the catch-all branch
+    // below marks anything unrecognized as a failed download.
+    if (!TRANSFER_PHASES.has(st.phase)) return;
     if (url.startsWith("/api/uploads/")) return;
     if (st.phase === "cached") {
       const id = transferByUrlRef.current[url];
@@ -2485,6 +2503,10 @@ export default function App() {
           requestAnimationFrame(applySizes);
         }
       }
+      // Zoom travels with the page too. Applied before the PDF mounts, so a
+      // numeric zoom is already in effect when the scroll restore runs — its
+      // scale ratio is then exactly 1 and the position lands exactly.
+      if (savedUi?.pdfScale) setPdfScale(savedUi.pdfScale);
       if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
       setStatus("Ready.");
       return openedPdfUrl;
@@ -2528,7 +2550,7 @@ export default function App() {
       for (const [k, h] of Object.entries(panelGroupRefs.current)) {
         try { if (h) sizes[k] = h.getLayout(); } catch {}
       }
-      pageLayoutsRef.current[focusedBlockId] = { layout, collapsed: collapsedWins, pdfHidden, chatHidden, notesVisible, sizes };
+      pageLayoutsRef.current[focusedBlockId] = { layout, collapsed: collapsedWins, pdfHidden, chatHidden, notesVisible, sizes, pdfScale };
       try {
         const keys = Object.keys(pageLayoutsRef.current);
         while (keys.length > 80) delete pageLayoutsRef.current[keys.shift()];
@@ -3003,7 +3025,19 @@ export default function App() {
   function zoomStep(dir) {
     const cur = Math.round(pdfEffScale * 100);
     const next = dir > 0 ? (Math.floor(cur / 20) + 1) * 20 : (Math.ceil(cur / 20) - 1) * 20;
-    setPdfScale(String(Math.max(0.2, Math.min(4, next / 100))));
+    zoomTo(next / 100);
+  }
+  // Every zoom change goes through here — buttons, Ctrl+scroll, fit-width —
+  // so applying the scale and announcing it can't come apart.
+  function zoomTo(next) {
+    if (next === "page-width") {
+      setPdfScale("page-width");
+      postPill("pdf-zoom", { msg: "Fit to width", final: true });
+      return;
+    }
+    const s = clampZoom(next);
+    setPdfScale(String(Math.round(s * 10000) / 10000));
+    postPill("pdf-zoom", { msg: `Zoom ${Math.round(s * 100)}%`, final: true });
   }
 
   function jumpToHighlightId(highlightId) {
@@ -3634,12 +3668,6 @@ export default function App() {
                           onChange={(e) => setSourceDraft(e.target.value)}
                           placeholder="PDF URL or /api/uploads/…"
                         />
-                        {sourceDraft && !sourceDraft.startsWith("/api/") ? (
-                          <label className="popoverItem attachItem">
-                            <input type="checkbox" checked={pdfSaveLocal} onChange={(e) => setPdfSaveLocal(e.target.checked)} />
-                            <span className="attachName">Save a copy on the server</span>
-                          </label>
-                        ) : null}
                         {sourceDraft.trim() && sourceDraft.trim() !== inputUrl ? (
                           <div className="reportModalBtns">
                             <button
@@ -4976,7 +5004,7 @@ export default function App() {
               <button onClick={() => zoomStep(1)} title="Zoom in" aria-label="Zoom in">
                 <ZoomInIcon size={15} />
               </button>
-              <button className="pdfFitWidthBtn" onClick={() => setPdfScale("page-width")} title="Fit to width" aria-label="Fit to width">
+              <button className="pdfFitWidthBtn" onClick={() => zoomTo("page-width")} title="Fit to width" aria-label="Fit to width">
                 <FitWidthIcon size={15} />
               </button>
             </div>
@@ -5001,6 +5029,7 @@ export default function App() {
               searchRef={pdfSearchRef}
               findMarks={findMarks}
               onEffectiveScale={setPdfEffScale}
+              onZoomTo={zoomTo}
               onBeforeLinkJump={pushNav}
               onLoadState={handlePdfLoadState}
               retryRef={pdfRetryRef}
