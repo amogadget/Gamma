@@ -3,8 +3,10 @@ chatgpt wire protocol (Responses API request shape + SSE parsing). All external
 calls are faked — no network."""
 
 import base64
+import io
 import json
 import time
+import urllib.error
 
 import bcrypt
 import pytest
@@ -209,6 +211,55 @@ def test_model_catalog_falls_back_when_listing_fails(erin, monkeypatch):
     r = erin.post("/api/ai/model-catalog", json={"protocol": "openai"})
     assert r.status_code == 400
     assert "key" in r.json()["detail"]
+
+
+def test_api_model_catalog_uses_one_short_attempt(erin, monkeypatch):
+    import gamma.routers.ai as ai_mod
+
+    calls = []
+
+    def timed_out(req, timeout=0):
+        calls.append((req, timeout))
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(ai_mod, "urlopen", timed_out)
+    r = erin.post("/api/ai/model-catalog", json={
+        "protocol": "openai",
+        "api_key": "sk-test",
+    })
+
+    assert r.status_code == 400
+    assert "timed out" in r.json()["detail"]
+    assert len(calls) == 1
+    assert calls[0][1] == 5
+    assert calls[0][0].get_header("User-agent") == "Gamma/model-catalog"
+
+
+def test_api_model_catalog_does_not_retry_auth_error(erin, monkeypatch):
+    import gamma.routers.ai as ai_mod
+
+    calls = 0
+
+    def unauthorized(req, timeout=0):
+        nonlocal calls
+        calls += 1
+        raise urllib.error.HTTPError(
+            req.full_url,
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b'{"error":{"message":"bad key"}}'),
+        )
+
+    monkeypatch.setattr(ai_mod, "urlopen", unauthorized)
+    r = erin.post("/api/ai/model-catalog", json={
+        "protocol": "openai",
+        "api_key": "sk-bad",
+    })
+
+    assert r.status_code == 400
+    assert "bad key" in r.json()["detail"]
+    assert calls == 1
 
 
 # --- Wire protocol ------------------------------------------------------------
