@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from ..auth import require_user
 from ..config import MAX_UPLOAD_BYTES
 from ..db import user_uploads_dir
+from .. import flatten_queue
 from ..storage import ALLOWED_IMAGE_TYPES, IMAGE_EXTENSIONS, IMAGE_MEDIA_TYPES, find_upload_file
 
 router = APIRouter(prefix="/api", tags=["uploads"])
@@ -29,6 +30,9 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
     already_existed = target.exists()
     if not already_existed:
         target.write_bytes(contents)
+    # MRC scans render ~10x slower than they need to; the flattened copy takes
+    # over once it exists (see gamma/flatten_queue).
+    flatten_queue.schedule(user, digest)
 
     return {
         "doc_id": digest,
@@ -75,7 +79,9 @@ async def serve_upload(filename: str, request: Request):
         media_type = IMAGE_MEDIA_TYPES[ext]
     else:
         raise HTTPException(status_code=400, detail="unsupported file type")
-    if not stem or not all(c in "0123456789abcdef" for c in stem):
+    # Flattened copies live beside the original as "<doc_id>-flat.pdf".
+    bare = stem[:-len(flatten_queue.FLAT_SUFFIX)] if stem.endswith(flatten_queue.FLAT_SUFFIX) else stem
+    if not bare or not all(c in "0123456789abcdef" for c in bare):
         raise HTTPException(status_code=400, detail="invalid filename")
     path = find_upload_file(filename, request)
     if not path:

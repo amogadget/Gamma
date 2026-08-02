@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
+from .. import flatten_queue
 from ..auth import require_user, resolve_user
 from ..db import user_uploads_dir
 
@@ -240,6 +241,9 @@ def proxy_pdf(source_url: str, request: Request):
             if chunks is not None and complete:
                 uploads.mkdir(parents=True, exist_ok=True)
                 local_path.write_bytes(b"".join(chunks))
+                # Same treatment as a direct upload: MRC scans fetched from the
+                # web get a flattened copy in the background.
+                flatten_queue.schedule(user, local_path.stem)
 
     headers = {"Cache-Control": "public, max-age=3600", "X-Source-Url": final_url}
     if length.isdigit():

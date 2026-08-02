@@ -4,5 +4,6 @@ bcrypt==5.0.0
 pydantic==2.13.2
 PyPDF2==3.0.1
 pypdfium2==5.11.0
+pikepdf==10.11.0
 python-multipart==0.0.26
 fractional-indexing==0.1.3
