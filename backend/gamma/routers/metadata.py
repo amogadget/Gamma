@@ -22,6 +22,7 @@ from ..ai_context import extract_pdf_context as _extract_pdf_context
 from ..ai_settings import ai_runtime, require_ai_runtime
 from ..auth import require_user
 from ..db import page_now, user_db_path
+from ..logbuf import log
 from ..pdf_text import PDF_EXTRACT_FAILED
 from .ai import CITE_PROMPT, METADATA_PROMPT, _resolve_model
 
@@ -89,7 +90,7 @@ def _fetch_arxiv(arxiv_id: str) -> dict | None:
             "source": "arxiv",
         }
     except Exception as e:
-        print(f"[metadata] arxiv lookup failed: {e}")
+        log.warning(f"[metadata] arxiv lookup failed: {e}")
         return None
 
 
@@ -100,7 +101,7 @@ def _fetch_doi(doi: str) -> tuple[dict | None, str]:
     try:
         data = json.loads(_http_get(url, accept="application/vnd.citationstyles.csl+json"))
     except Exception as e:
-        print(f"[metadata] doi lookup failed: {e}")
+        log.warning(f"[metadata] doi lookup failed: {e}")
         return None, ""
     title = data.get("title") or ""
     if isinstance(title, list):
@@ -143,7 +144,7 @@ def _ai_extract_meta(text: str, prompt: str, model: str, rt: dict) -> dict | Non
             return None
         data = json.loads(m.group(0))
     except Exception as e:
-        print(f"[metadata] AI extraction failed: {e}")
+        log.warning(f"[metadata] AI extraction failed: {e}")
         return None
     if not (data.get("title") or "").strip():
         return None

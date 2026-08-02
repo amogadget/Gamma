@@ -78,13 +78,14 @@ Now :9002 is a pixel-identical, disposable copy of the showcase workspace.
 | `docs/screenshots/01-annotated-pdf.png` | paper with visible highlights + note tree + AI chat showing an answered question | `/?page=<id>` |
 | `docs/screenshots/02-home-carousels.png` | home: recently-viewed row, folders, recents feed | `/` |
 | `docs/demo-download-and-chat.gif` | open paper by URL (pasted) → drag-select the abstract sentence → ask the AI briefly, watch the answer stream (the README **hero** GIF, first image) | `:9001` |
-| `docs/demo-reference-links.gif` | atom-arrays paper, page 3 (GIF starts right before the zoom): **zoom into** the tiny "36" citation → click it once → jumps to the reference → **select just the "36." number** (makes ref 36 obvious) → click its arXiv link → **Fetch into Gamma** (README "Link and organize" section) | `:9001` |
+| `docs/demo-reference-links.gif` | atom-arrays paper, page 3: click the tiny "36" citation once → jumps to the reference → select just the "36." number → click its arXiv link → **Fetch into Gamma**. Recorded at normal scale; a smooth **camera zoom** (post-process, `gen-zoom.py`) magnifies the citation+reference — the page itself never zooms (README "Link and organize" section) | `:9001` |
 | `docs/demo-library.gif` | drag a paper into a folder, then Ctrl+F lighting up matches | isolated |
 
 GIF slots exist as HTML comments in README.md — when adding one, replace the
 comment with `![…](./docs/demo-*.gif)`. Each GIF has its own checked-in
 recorder next to this file: [record-download-and-chat.mjs](./record-download-and-chat.mjs),
-[record-reference-links.mjs](./record-reference-links.mjs).
+[record-reference-links.mjs](./record-reference-links.mjs) (paired with
+[gen-zoom.py](./gen-zoom.py), which applies its camera zoom).
 
 ## Driving the UI (selectors that work)
 
@@ -129,34 +130,34 @@ it and writes the webm path to `video_*.txt`) and adapt.
   click `button:has-text("Fetch into Gamma")` to resolve+open it as a new paper.
   Scroll a citation into view with `span.scrollIntoView({block:'center'})`
   first — page 3's text sits well below the fold after `[data-page="3"]`
-  scrollIntoView. Superscript citations are tiny: **zoom in** so they read (see
-  below). To click an external link reliably at any zoom/scroll, fire its DOM
-  `el.click()` (React onClick) rather than `mouse.click(coords)` — the box can
-  be off to the side under horizontal scroll.
-- **Zoom (make small text legible)**: dispatch a synthetic Ctrl+`WheelEvent` on
-  `.pdfViewer` — Playwright drops the modifier on a real `mouse.wheel`, so
-  `el.dispatchEvent(new WheelEvent('wheel',{clientX,clientY,deltaY:-160,ctrlKey:true,bubbles:true}))`.
-  It zooms anchored at `(clientX,clientY)`, so aim it at the thing you want big
-  (the citation); a few small steps animate nicely. Zoom persists across jumps.
-  End the take with `[aria-label="Fit to width"]` to reset (also restores the
-  demo's default scale).
-- **Selecting text to emphasize** (e.g. make a jumped-to reference obvious):
-  for a **large** run of text a real mouse drag renders the blue selection
-  well. For a **tiny** target (a single reference number like "36.") a real
-  drag anchors unreliably and can select the whole page — instead set an exact
-  programmatic `Range` on that span's text node (`removeAllRanges()` first,
-  then `addRange`, then dispatch `mouseup`); it paints cleanly **provided the
-  view is stable**. On the 2-column reference page at high zoom the view is
-  jumpy right after a jump — don't use `scrollIntoView` there; set
-  `.pdfViewer.scrollLeft/scrollTop` explicitly and wait a beat so the line sits
-  put before you read coordinates or select. Selecting also drops a "Selection"
-  chip into the chat input (it becomes chat context) — harmless, hidden once
-  the fetch modal opens.
-- **Trim the loading pre-roll**: the GIF should start on the action, not the
-  open+scroll. Stamp `Date.now()` right after `newPage()` (≈ video t=0) and
-  again right before the first meaningful step; write the delta out and pass it
-  (minus ~0.6 s of lead-in) to ffmpeg `-ss`. `record-reference-links.mjs`
-  writes this to `preroll.txt`.
+  scrollIntoView. To click an external link reliably, fire its DOM `el.click()`
+  (React onClick) rather than `mouse.click(coords)`.
+- **Zoom = a post-process CAMERA zoom, NOT the app's zoom.** Do **not** zoom
+  Gamma itself (wheel/`[aria-label="Zoom in"]`) — at high app zoom the 2-column
+  reference page reflows and horizontal-scrolls, which is jumpy and moves your
+  click targets. Instead record at **normal scale** (stable) and animate a
+  smooth zoom on the GIF afterwards with ffmpeg `zoompan`. The recorder
+  (`record-reference-links.mjs`) captures the ROI screen-centers (citation
+  `R1`, reference `R2`) and time marks to `links_zoom.json`; `gen-zoom.py`
+  turns that into a zoom that ramps in → holds → ramps out, over a window
+  centred on the midpoint of R1/R2 and sized to contain both (so one fixed
+  camera covers citation, reference, and the centred fetch modal). Both ROIs
+  must be scrolled to the same vertical center so they share the window.
+  - **recordVideo size MUST equal the CSS viewport** (`{1440,900}`), not 2×.
+    `deviceScaleFactor:2` already renders sharp; a 2× recordVideo size
+    mis-maps the frame (content ends up in a sub-rectangle) and every crop
+    coordinate is wrong. CSS px then equal video px 1:1.
+  - zoompan zooms a crop of the frame, so it upscales ~1.15× at the GIF width —
+    slightly softer than the app's own re-render, but avoids all the reflow.
+- **Selecting a tiny target** (e.g. just the "36." reference number to make the
+  reference obvious): a real mouse drag over a few-px span anchors unreliably
+  and can select the whole page — set an exact programmatic `Range` on that
+  span's text node (`removeAllRanges()`, `addRange`, dispatch `mouseup`); it
+  paints the blue selection fine. Selecting also drops a "Selection" chip into
+  the chat input (harmless).
+- **Trim the loading pre-roll**: the GIF should start on the action. The
+  recorder stamps the video-time of the first meaningful step (`m0` in
+  `links_zoom.json`); `gen-zoom.py` trims to `m0 - 0.5` via the `trim` filter.
 - **Gotcha — "Fetch into Gamma" only shows if the paper isn't already in the
   library**: `handleDocLink` opens an existing paper directly (no modal). Every
   successful fetch adds the target, so **before each links run** delete the

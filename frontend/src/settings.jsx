@@ -433,6 +433,71 @@ function SearchSettings({ value }) {
   );
 }
 
+// Admin-only view of the backend's in-memory log (GET /api/admin/logs).
+// Polls with a seq cursor while the pane is open; secrets are scrubbed
+// server-side before entries ever reach the buffer.
+function ServerLogBox({ setStatus }) {
+  const [entries, setEntries] = React.useState(null); // null = first poll pending
+  const [error, setError] = React.useState("");
+  const stateRef = React.useRef({ cursor: 0, entries: [] });
+  React.useEffect(() => {
+    let alive = true;
+    async function poll() {
+      try {
+        const data = await apiJson(`${API}/admin/logs?after=${stateRef.current.cursor}`);
+        if (!alive) return;
+        const fresh = data.entries || [];
+        if (fresh.length) {
+          stateRef.current.cursor = fresh[fresh.length - 1].seq;
+          stateRef.current.entries = [...stateRef.current.entries, ...fresh].slice(-500);
+        }
+        setEntries([...stateRef.current.entries]);
+        setError("");
+      } catch (err) {
+        if (alive) { setError(err.message); setEntries((prev) => prev || []); }
+      }
+    }
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => { alive = false; clearInterval(timer); };
+  }, []);
+  function copyServerLog() {
+    const text = stateRef.current.entries
+      .map((entry) => `${new Date(entry.t * 1000).toLocaleTimeString([], { hour12: false })} ${entry.level} ${entry.msg}`)
+      .join("\n");
+    navigator.clipboard?.writeText(text).then(
+      () => setStatus("Server log copied."),
+      () => setStatus("Copy failed—copy manually."),
+    );
+  }
+  const shown = entries || [];
+  return (
+    <>
+      <div className="settingRow">
+        <span className="settingText">
+          <span className="settingLabel">Server log</span>
+          <span className="settingDesc">Backend events since the server started, newest first. Secrets are masked; visible to admins only.</span>
+        </span>
+        <button className="uiBtn sm" disabled={!shown.length} onClick={copyServerLog}>Copy</button>
+      </div>
+      <div className="sysLogBox">
+        {shown.length ? [...shown].reverse().map((entry) => (
+          <div key={entry.seq} className="sysLogRow">
+            <span className="sysLogTime">{new Date(entry.t * 1000).toLocaleTimeString([], { hour12: false })}</span>
+            <span className="sysLogMsg">{entry.level !== "INFO" ? `[${entry.level}] ` : ""}{entry.msg}</span>
+          </div>
+        )) : (
+          <div className="sysLogEmpty">
+            {error ? `Server log unavailable: ${error}`
+              : entries ? "Nothing logged since the server started."
+                : "Loading…"}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
 function DiagnosticsSettings({ value }) {
   function copyLog() {
     const text = value.sysLog
@@ -469,6 +534,7 @@ function DiagnosticsSettings({ value }) {
           </div>
         )) : <div className="sysLogEmpty">Nothing logged yet this session.</div>}
       </div>
+      {value.isAdmin ? <ServerLogBox setStatus={value.setStatus} /> : null}
     </>
   );
 }

@@ -5278,7 +5278,7 @@ export default function App() {
           },
         }}
         search={{ searchDetailsDefault, setSearchDetailsDefault, indexTask, setStatus }}
-        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus }}
+        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, isAdmin: !!authUser?.is_admin }}
       />
       {usersOpen ? (
         <div className="reportOverlay" onClick={() => setUsersOpen(false)}>

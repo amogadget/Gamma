@@ -303,7 +303,7 @@ body {
 }
 .sysLogRow { display: flex; gap: 10px; padding: 2px 0; }
 .sysLogTime { color: var(--text-tertiary); flex: none; font-variant-numeric: tabular-nums; }
-.sysLogMsg { color: var(--text-muted); word-break: break-word; }
+.sysLogMsg { color: var(--text-muted); word-break: break-word; white-space: pre-wrap; } /* pre-wrap: server tracebacks are multi-line */
 .sysLogEmpty { color: var(--text-tertiary); padding: 4px 0; }
 
 .pdfSaveToggle {

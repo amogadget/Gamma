@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from .config import USERS_DB
 from .db import page_now
+from .logbuf import log
 from .seed import reset_guest_data
 
 SESSION_COOKIE = "session"
@@ -39,11 +40,10 @@ def _finish_request_log(request: Request, response, started: float, expected: st
             reason = "session-operation"
         else:
             reason = "request-rejected"
-    print(
+    log.info(
         f"[http] request={request_id} {request.method} {path} status={status} "
         f"duration_ms={elapsed_ms:.1f} session={request.state.user or '-'} "
-        f"expected={expected if expected is not None else '-'} reason={reason}",
-        flush=True,
+        f"expected={expected if expected is not None else '-'} reason={reason}"
     )
     return response
 
