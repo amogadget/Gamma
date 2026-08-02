@@ -162,6 +162,49 @@ def setup():
     print("Setup complete.")
 
 
+def flatten_uploads(username=None):
+    """Rewrite MRC scans already in uploads/ as one image per page.
+
+    Same work the upload hook does, applied to what predates it. Runs inline
+    (not on the server's worker) so the console shows progress and finishing
+    means finished.
+    """
+    from gamma import flatten_queue
+    from gamma.flatten_mrc import flatten, needs_flattening
+
+    users = [username] if username else sorted(
+        d.name for d in USERS_DIR.iterdir() if d.is_dir()) if USERS_DIR.exists() else []
+    total_done = total_skipped = 0
+    for user in users:
+        uploads = USERS_DIR / user / "uploads"
+        if not uploads.exists():
+            continue
+        for f in sorted(uploads.glob("*.pdf")):
+            if f.stem.endswith(flatten_queue.FLAT_SUFFIX):
+                continue
+            dst = flatten_queue.flat_path(user, f.stem)
+            if dst.exists():
+                flatten_queue._point_blocks_at(user, f.stem)
+                continue
+            if not needs_flattening(f):
+                total_skipped += 1
+                continue
+            print(f"  {user}/{f.stem}: flattening {f.stat().st_size // (1024*1024)} MB ...", flush=True)
+            tmp = dst.with_suffix(".part")
+            try:
+                if flatten(f, tmp):
+                    tmp.replace(dst)
+                    flatten_queue._point_blocks_at(user, f.stem)
+                    print(f"    -> {dst.name} ({dst.stat().st_size // (1024*1024)} MB)", flush=True)
+                    total_done += 1
+                else:
+                    tmp.unlink(missing_ok=True)
+            except Exception as e:
+                tmp.unlink(missing_ok=True)
+                print(f"    failed: {e}", flush=True)
+    print(f"Flattened {total_done} document(s); {total_skipped} needed no change.")
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
@@ -199,6 +242,8 @@ def main():
         reset_guest()
     elif cmd == "setup":
         setup()
+    elif cmd == "flatten-uploads":
+        flatten_uploads(sys.argv[2] if len(sys.argv) > 2 else None)
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)

@@ -23,6 +23,7 @@ import threading
 from fastapi import APIRouter, Request
 
 from ..ai_context import pdf_path as _pdf_path
+from .. import flatten_queue
 from ..auth import require_user
 from ..db import page_now, user_db_path
 from ..pdf_text import extract_pages
@@ -130,7 +131,8 @@ def background_tasks(request: Request):
     with _index_lock:
         t = _index_threads.get(user)
         prog = _index_progress.get(user) or {"total": 0, "done": 0}
-        return {"indexing": {**prog, "active": bool(t and t.is_alive())}}
+        indexing = {**prog, "active": bool(t and t.is_alive())}
+    return {"indexing": indexing, "flattening": flatten_queue.progress()}
 
 
 def _fts_query(q: str) -> str:
