@@ -312,6 +312,23 @@ export default function App() {
       readPosLoadedRef.current = true;
       mergeReadPos(u, d.value);
     }).catch(() => { if (prefsUserRef.current === u) readPosLoadedRef.current = true; });
+    // Which model answers is an account-level choice, not a per-browser one:
+    // localStorage alone means a new browser (or cleared site data) silently
+    // drops the user onto whichever provider happens to be first.
+    aiSelLoadedRef.current = false;
+    apiJson(`${API}/prefs/ai-selection`).then((d) => {
+      if (prefsUserRef.current !== u) return;
+      const v = d.value || {};
+      if (d.updated_at && v.model) {
+        // Set the provider first: the effect that keeps the model inside the
+        // active key's list would otherwise see the new model against the old
+        // key and snap it back.
+        setAiProvider(v.provider || "");
+        setChatModel(v.model);
+        if (typeof v.effort === "string") setChatEffort(v.effort);
+      }
+      aiSelLoadedRef.current = true;   // pushes are armed only after this
+    }).catch(() => { if (prefsUserRef.current === u) aiSelLoadedRef.current = true; });
   }, [authUser?.user, readOnly]);
 
   // Folder-tag helpers: parse/serialize the comma-separated path list.
@@ -800,6 +817,8 @@ export default function App() {
   const readPosRef = useRef({});
   const readPosLoadedRef = useRef(false); // first server response arrived
   const readPosPushTimerRef = useRef(null);
+  const aiSelLoadedRef = useRef(false);      // server copy of the AI choice has been read
+  const aiSelPushTimerRef = useRef(null);
   function mergeReadPos(user, server) {
     const merged = { ...readPosRef.current };
     for (const [id, e] of Object.entries(server && typeof server === "object" ? server : {})) {
@@ -1791,6 +1810,26 @@ export default function App() {
     if (!authUser?.user || readOnly) return;
     refreshAiModels();
   }, [authUser]);
+
+  // …and pushed back so it follows the account to the next browser. Armed only
+  // once the server's copy has been read, or the first render would overwrite
+  // the stored choice with whatever localStorage happened to hold.
+  useEffect(() => {
+    if (!authUser?.user || readOnly || !aiSelLoadedRef.current || !chatModel) return;
+    const u = authUser.user;
+    if (aiSelPushTimerRef.current) clearTimeout(aiSelPushTimerRef.current);
+    aiSelPushTimerRef.current = setTimeout(async () => {
+      aiSelPushTimerRef.current = null;
+      if (prefsUserRef.current !== u) return;
+      try {
+        await apiJson(`${API}/prefs/ai-selection`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: { model: chatModel, provider: aiProvider, effort: chatEffort } }),
+        });
+      } catch {}
+    }, 800);
+  }, [chatModel, aiProvider, chatEffort, authUser]);
 
   useEffect(() => {
     if (!chatModel) return;
