@@ -460,6 +460,42 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // new size. Pure-fraction preservation drifts because of the fixed 8px
   // inter-page margins; page anchoring is exact.
   const prevScaleRef = useRef(scale);
+  const scaleNowRef = useRef(scale);
+  scaleNowRef.current = scale;
+  const anchorGenRef = useRef(0);   // bumping cancels the previous rAF loop
+  const anchorRef = useRef(null);   // {idx, frac}: tracked visual anchor
+  const anchorHoldRef = useRef(0);  // until this timestamp, scroll events are ours
+  useEffect(() => { anchorRef.current = null; }, [pdfDoc]);
+  // Track the visual anchor (page under the viewport top + fraction into it)
+  // on every settled scroll. The zoom/resize effect below REPLAYS this
+  // tracked anchor instead of deriving one from scrollTop at effect time:
+  // by then the commit has already reshaped the layout and the browser's
+  // native scroll anchoring has already moved scrollTop, so a scrollTop
+  // read there interpreted at the OLD scale lands pages away (fast splitter
+  // drags visibly walked the document). The hold window skips the scroll
+  // events our own placements and the browser's mid-burst adjustments fire.
+  useEffect(() => {
+    const v = viewerRef.current;
+    if (!v) return;
+    let raf = 0;
+    const onScroll = () => {
+      if (raf || performance.now() < anchorHoldRef.current) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        if (performance.now() < anchorHoldRef.current) return;
+        const vr = v.getBoundingClientRect();
+        for (const p of v.querySelectorAll("[data-page]")) {
+          const r = p.getBoundingClientRect();
+          if (r.bottom > vr.top) {
+            anchorRef.current = { idx: +p.getAttribute("data-page") - 1, frac: (vr.top - r.top) / Math.max(1, r.height) };
+            break;
+          }
+        }
+      });
+    };
+    v.addEventListener("scroll", onScroll, { passive: true });
+    return () => { v.removeEventListener("scroll", onScroll); if (raf) cancelAnimationFrame(raf); };
+  }, []);
   useEffect(() => {
     const prev = prevScaleRef.current;
     prevScaleRef.current = scale;
@@ -467,33 +503,43 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     const v = viewerRef.current;
     const heights = pageHeightsRef.current;
     if (heights.length === 0) return;
+    const gen = ++anchorGenRef.current;
 
-    // Find the page covering the current scrollTop using the OLD scale.
-    let acc = 0, anchorIdx = 0, fracInPage = 0;
-    for (let i = 0; i < heights.length; i++) {
-      const ph = (heights[i] || 800) * prev;
-      if (acc + ph + 8 > v.scrollTop) {
-        anchorIdx = i;
-        fracInPage = (v.scrollTop - acc) / Math.max(1, ph);
-        break;
+    let a = anchorRef.current;
+    if (!a) {
+      // Cold fallback (no scroll happened yet): derive from the OLD scale.
+      let acc = 0, anchorIdx = 0, fracInPage = 0;
+      for (let i = 0; i < heights.length; i++) {
+        const ph = (heights[i] || 800) * prev;
+        if (acc + ph + 8 > v.scrollTop) {
+          anchorIdx = i;
+          fracInPage = (v.scrollTop - acc) / Math.max(1, ph);
+          break;
+        }
+        acc += ph + 8;
       }
-      acc += ph + 8;
+      a = { idx: anchorIdx, frac: fracInPage };
+      anchorRef.current = a;
     }
 
     // After re-render, place the same page+offset at the top.
     let tries = 0;
     let lastSH = -1;
     const restore = () => {
-      if (!viewerRef.current) return;
+      if (anchorGenRef.current !== gen || !viewerRef.current) return; // superseded
+      // A newer scale already committed but its effect hasn't run yet — a
+      // placement computed for OUR scale against the new layout is garbage.
+      if (scaleNowRef.current !== scale) { if (tries++ < 60) requestAnimationFrame(restore); return; }
       const v2 = viewerRef.current;
       if (v2.scrollHeight !== lastSH) {
         lastSH = v2.scrollHeight;
         let newAcc = 0;
-        for (let i = 0; i < anchorIdx; i++) {
+        for (let i = 0; i < a.idx; i++) {
           newAcc += (heights[i] || 800) * scale + 8;
         }
-        const targetH = (heights[anchorIdx] || 800) * scale;
-        v2.scrollTop = newAcc + fracInPage * targetH;
+        const targetH = (heights[a.idx] || 800) * scale;
+        anchorHoldRef.current = performance.now() + 400;
+        v2.scrollTop = newAcc + a.frac * targetH;
       }
       if (tries++ < 30) requestAnimationFrame(restore);
     };

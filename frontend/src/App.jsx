@@ -904,12 +904,15 @@ export default function App() {
       const p = pendingRestoreRef.current;
       if (p && p.url === url && restoreTokenRef.current === p.token) {
         const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
-        const targetTop = p.entry.top * ((pdfEffScaleRef.current || p.entry.scale || 1) / (p.entry.scale || 1));
-        if (scroller && scroller.scrollHeight > targetTop) {
+        if (scroller) {
+          const targetTop = Math.min(pdfRestoreTargetTop(p.entry, scroller), Math.max(0, scroller.scrollHeight - scroller.clientHeight));
           scroller.scrollTo({ top: targetTop, behavior: "instant" });
-          pendingRestoreRef.current = null;
-          restoreTokenRef.current++; // the fallback loop is no longer needed
-          if (restoringForRef.current === p.blockId) restoringForRef.current = null;
+          // Deliberately NOT final: fit-width and page-height refinement keep
+          // moving the layout for a while after first paint. restorePdfScroll's
+          // loop re-asserts the anchor once the layout settles and only then
+          // clears the restoring state — capturing (or trusting) the scroll
+          // position mid-settle is what corrupted saved entries when the user
+          // flipped tabs quickly.
         }
       }
       return;
@@ -1808,6 +1811,43 @@ export default function App() {
     }
   }, [blocks, readOnly]);
 
+  // The notes panel (.sidebar .blockList) is one DOM element reused across
+  // page switches, so its scrollTop leaks from the previous page. On page
+  // switch, land on this page's remembered position or at the top for first
+  // visits. A queued block target (deep link, search hit, jump-to-latest)
+  // takes priority — its scrollIntoView defines the position instead. On tab
+  // switches the panel's rows are committed in the same render that set
+  // focusedBlockId and the first attempt applies synchronously; on cold
+  // loads the sidebar mounts a beat later (auth still resolving), hence the
+  // short retry loop.
+  useEffect(() => {
+    if (pendingBlockScrollRef.current) return;
+    const saved = focusedBlockId ? tabScrollRef.current[focusedBlockId]?.notesTop : null;
+    const target = saved != null ? saved : 0;
+    let cancelled = false;
+    let tries = 0;
+    let lastH = -1;
+    const apply = () => {
+      if (cancelled) return;
+      const el = document.querySelector(".sidebar .blockList");
+      if (el) {
+        const h = el.scrollHeight;
+        if (h === lastH) {
+          // Row heights settled (fonts and markdown rendered) — without this
+          // gate, scroll anchoring drags an early-applied position along as
+          // rows above it grow during a cold load. Final assert, then done.
+          if (Math.abs(el.scrollTop - target) > 1) el.scrollTop = target;
+          return;
+        }
+        lastH = h;
+        el.scrollTop = target;
+      }
+      if (tries++ < 40) setTimeout(apply, 100);
+    };
+    apply();
+    return () => { cancelled = true; };
+  }, [focusedBlockId]);
+
   useEffect(() => {
     if (!pendingBlockScrollRef.current) return;
     const id = pendingBlockScrollRef.current;
@@ -2394,8 +2434,10 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
       }
 
       // Scroll notes panel to the most recently updated block, unless a
-      // specific target was already queued (e.g. ?block=... deep link).
-      if (!pendingBlockScrollRef.current && childBlocks.length > 0) {
+      // specific target was already queued (e.g. ?block=... deep link) or
+      // the caller is restoring a saved scroll position (tab switch,
+      // session restore) — that position wins over "jump to latest edit".
+      if (!pendingBlockScrollRef.current && !opts?.restoreScroll && childBlocks.length > 0) {
         let latest = null;
         for (const b of flattenBlocks(childBlocks)) {
           if (!latest || (b.updated_at || "") > (latest.updated_at || "")) latest = b;
@@ -2434,10 +2476,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
           requestAnimationFrame(applySizes);
         }
       }
-      if (opts?.restoreScroll) {
-        restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
-        restoreNotesScroll(tabScrollRef.current[blockId]);
-      }
+      if (opts?.restoreScroll) restorePdfScroll(tabScrollRef.current[blockId], blockId, openedPdfUrl);
       setStatus("Ready.");
       return openedPdfUrl;
     } catch (err) {
@@ -2456,10 +2495,43 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   const [navStack, setNavStack] = useState([]);
   const pdfEffScaleRef = useRef(1);
   useEffect(() => { pdfEffScaleRef.current = pdfEffScale; }, [pdfEffScale]);
+  // .pdfViewer is one persistent DOM element that pdf.js just swaps content
+  // in, so its scrollTop carries over across doc swaps — B ends up at A's
+  // pixel position when there is no saved position for B to restore to.
+  // Reset here, but skip if a pending restore is already queued: child
+  // effects fire before parent effects, so rendered's scrollTo(target) has
+  // already been applied by the time this parent effect runs; without the
+  // guard we'd overwrite the restore with 0.
+  useEffect(() => {
+    if (pendingRestoreRef.current) return;
+    const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+    if (scroller) scroller.scrollTop = 0;
+  }, [pdfUrl]);
 
   // Exact per-page reading positions so switching tabs returns to where you
-  // were, not just to the same page. blockId -> {top, scale}.
-  const tabScrollRef = useRef({});
+  // were, not just to the same page. blockId -> {top, scale, notesTop}.
+  // Loaded synchronously (not in an effect): the session-restore openBlock
+  // fires from a mount effect before auth resolves, so an [authUser]-gated
+  // load would always lose that race and refresh restores would see {}.
+  // Global key on purpose, same as gamma-session (which picks the page to
+  // reopen) — entries are keyed by block id, so accounts can't collide.
+  const tabScrollRef = useRef(null);
+  if (tabScrollRef.current == null) {
+    try { tabScrollRef.current = JSON.parse(localStorage.getItem("gamma-tab-scroll") || "{}") || {}; }
+    catch { tabScrollRef.current = {}; }
+  }
+  if (typeof window !== "undefined") window._tabScroll = tabScrollRef.current;
+  function persistTabScroll() {
+    try {
+      const keys = Object.keys(tabScrollRef.current);
+      if (keys.length > 200) {
+        const out = {};
+        for (const k of keys.slice(-200)) out[k] = tabScrollRef.current[k];
+        tabScrollRef.current = out;
+      }
+      localStorage.setItem("gamma-tab-scroll", JSON.stringify(tabScrollRef.current));
+    } catch {}
+  }
   // Per-page window layout (dock slots, collapsed bars, hidden windows, and
   // panel size ratios) — captured when leaving a page, restored on reopen.
   const pageLayoutsRef = useRef({});
@@ -2468,63 +2540,7 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
     if (!authUser?.user || readOnly) return;
     try { pageLayoutsRef.current = JSON.parse(localStorage.getItem(`gamma-page-layouts:${authUser.user}`) || "{}"); }
     catch { pageLayoutsRef.current = {}; }
-    try { tabScrollRef.current = JSON.parse(localStorage.getItem(`gamma-tab-scroll:${authUser.user}`) || "{}"); }
-    catch { tabScrollRef.current = {}; }
   }, [authUser?.user, readOnly]);
-  function persistTabScroll() {
-    const user = prefsUserRef.current;
-    if (!user) return;
-    try {
-      const all = tabScrollRef.current || {};
-      const keys = Object.keys(all);
-      let out = all;
-      if (keys.length > 200) {
-        out = {};
-        for (const k of keys.slice(-200)) out[k] = all[k];
-        tabScrollRef.current = out;
-      }
-      localStorage.setItem(`gamma-tab-scroll:${user}`, JSON.stringify(out));
-    } catch {}
-  }
-  // Scroll persistence: live-capture pixel-exact scrollTop on every scroll,
-  // trailing-debounce save to localStorage, flush on unload/hide. scroll
-  // doesn't bubble → capture-phase listener catches any descendant.
-  const captureScrollPosRef = useRef(() => {});
-  const persistTabScrollRef = useRef(() => {});
-  useEffect(() => {
-    let saveTimer = null;
-    const scheduleSave = () => {
-      if (saveTimer) return;
-      saveTimer = setTimeout(() => { saveTimer = null; persistTabScrollRef.current(); }, 1000);
-    };
-    function onScroll(e) {
-      const fid = focusedBlockIdRef.current;
-      if (!fid) return;
-      const el = e.target;
-      if (!(el instanceof HTMLElement)) return;
-      const prev = tabScrollRef.current[fid] || {};
-      if (el.classList.contains("blockList") && el.closest(".sidebar")) {
-        tabScrollRef.current[fid] = { ...prev, notesTop: el.scrollTop };
-        scheduleSave();
-      } else if (el.classList.contains("pdfViewer")) {
-        tabScrollRef.current[fid] = { ...prev, top: el.scrollTop };
-        scheduleSave();
-      }
-    }
-    const onHidden = () => { captureScrollPosRef.current(); persistTabScrollRef.current(); };
-    const onVisibility = () => { if (document.visibilityState === "hidden") onHidden(); };
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("beforeunload", onHidden);
-    window.addEventListener("pagehide", onHidden);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("beforeunload", onHidden);
-      window.removeEventListener("pagehide", onHidden);
-      document.removeEventListener("visibilitychange", onVisibility);
-      if (saveTimer) clearTimeout(saveTimer);
-    };
-  }, []);
   const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
   const restoringForRef = useRef(null); // block whose restore hasn't landed yet
   const pdfRenderedUrlRef = useRef(""); // url of the document whose pages are in the DOM
@@ -2543,26 +2559,60 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
         localStorage.setItem(`gamma-page-layouts:${prefsUserRef.current}`, JSON.stringify(pageLayoutsRef.current));
       } catch {}
     }
-    // Notes-panel scroll — independent of the PDF gates (works on note-only pages).
+    // Notes-panel scroll — ahead of the PDF gates so note-only pages (and
+    // pages whose PDF is still loading) still remember their position.
     const notesScroller = document.querySelector(".sidebar .blockList");
     if (focusedBlockId && notesScroller) {
       const prev = tabScrollRef.current[focusedBlockId] || {};
       tabScrollRef.current[focusedBlockId] = { ...prev, notesTop: notesScroller.scrollTop };
     }
-    // PDF viewer scroll — only trust it when the target doc is on screen.
-    if (restoringForRef.current && restoringForRef.current === focusedBlockId) return;
-    if (!pdfUrl || pdfRenderedUrlRef.current !== pdfUrl) return;
-    const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
-    if (focusedBlockId && scroller) {
-      const prev = tabScrollRef.current[focusedBlockId] || {};
-      tabScrollRef.current[focusedBlockId] = { ...prev, top: scroller.scrollTop, scale: pdfEffScale };
+    // Only record a PDF position when the viewer is actually showing THIS
+    // page's document: mid-load the scroller still holds the previous document
+    // (or a clamped 0), and a pending restore means the real position hasn't
+    // been applied yet — in both cases keep the previously saved value.
+    const restoring = restoringForRef.current && restoringForRef.current === focusedBlockId;
+    if (!restoring && pdfUrl && pdfRenderedUrlRef.current === pdfUrl) {
+      const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+      if (focusedBlockId && scroller) {
+        const prev = tabScrollRef.current[focusedBlockId] || {};
+        const entry = { ...prev, top: scroller.scrollTop, scale: pdfEffScale };
+        // Scale-invariant anchor: the page under the viewport top plus the
+        // fraction into it, measured off the live DOM. Restoring from raw
+        // top × (scale ratio) mis-scales the fixed 8px inter-page margins,
+        // and every capture bakes the previous restore's error back in — the
+        // position crept a few px further on each refresh / A→B→A cycle.
+        const sRect = scroller.getBoundingClientRect();
+        for (const p of scroller.querySelectorAll("[data-page]")) {
+          const r = p.getBoundingClientRect();
+          const pageTop = r.top - sRect.top + scroller.scrollTop;
+          if (pageTop + r.height > scroller.scrollTop) {
+            entry.page = Number(p.getAttribute("data-page"));
+            entry.frac = Math.max(0, (scroller.scrollTop - pageTop) / Math.max(1, r.height));
+            break;
+          }
+        }
+        tabScrollRef.current[focusedBlockId] = entry;
+      }
     }
+    persistTabScroll();
   }
-  // Point the beforeunload/pagehide refs at the freshest closures so unload
-  // captures the CURRENT page's scroll position (leaveCurrentPage only fires
-  // on navigation, not on refresh).
+  // Refresh/close never goes through leaveCurrentPage — capture on the way
+  // out (and when the browser tab is hidden) so reload lands back on the
+  // exact pixel. The ref keeps the listeners on the freshest closure.
+  const captureScrollPosRef = useRef(() => {});
   captureScrollPosRef.current = captureScrollPos;
-  persistTabScrollRef.current = persistTabScroll;
+  useEffect(() => {
+    const onHidden = () => captureScrollPosRef.current();
+    const onVisibility = () => { if (document.visibilityState === "hidden") onHidden(); };
+    window.addEventListener("beforeunload", onHidden);
+    window.addEventListener("pagehide", onHidden);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("beforeunload", onHidden);
+      window.removeEventListener("pagehide", onHidden);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
   function cancelPdfRestore() {
     restoreTokenRef.current++;
     restoringForRef.current = null;
@@ -2574,22 +2624,24 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   function leaveCurrentPage() {
     flushPendingSave();
     captureScrollPos();
-    persistTabScroll();
     cancelPdfRestore();
   }
-  function restoreNotesScroll(entry) {
-    if (!entry || entry.notesTop == null) return;
-    const target = entry.notesTop;
-    let tries = 0;
-    const tryScroll = () => {
-      const el = document.querySelector(".sidebar .blockList");
-      if (el && el.scrollHeight > target + 1) {
-        el.scrollTo({ top: target, behavior: "instant" });
-        return;
+  // Where a saved entry lands in the CURRENT layout. Prefer the page+frac
+  // anchor (scale-invariant, immune to the fixed inter-page margins); fall
+  // back to top × scale-ratio for entries saved before anchors existed and
+  // for nav-stack entries. Reads the live DOM, so callers should re-invoke
+  // it per attempt rather than caching the result.
+  function pdfRestoreTargetTop(entry, scroller) {
+    if (entry.page != null && scroller) {
+      const p = scroller.querySelector(`[data-page="${entry.page}"]`);
+      if (p) {
+        const sRect = scroller.getBoundingClientRect();
+        const r = p.getBoundingClientRect();
+        const pageTop = r.top - sRect.top + scroller.scrollTop;
+        return pageTop + (entry.frac || 0) * r.height;
       }
-      if (tries++ < 40) setTimeout(tryScroll, 80);
-    };
-    tryScroll();
+    }
+    return entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
   }
   // Scroll the viewer back to an exact position. Two gates, both required:
   // the TARGET document must be the one rendered (the old document stays in
@@ -2598,34 +2650,54 @@ function getPdfPageTitle(targetDocId, targetInputUrl) {
   // stable for two ticks (pages get real heights asynchronously). The jump
   // itself is instant, after the new document is visible.
   function restorePdfScroll(entry, blockId, targetUrl) {
-    if (entry?.top == null || !targetUrl) return;
+    if ((entry?.top == null && entry?.page == null) || !targetUrl) return;
     const token = ++restoreTokenRef.current;
     restoringForRef.current = blockId || null;
-    // Preferred path: the "rendered" callback applies this pre-paint the
-    // moment the target document mounts. The polling loop below is the
-    // fallback (already-rendered documents, layout not tall enough yet).
+    // The "rendered" callback applies a first placement pre-paint the moment
+    // the target document mounts (no flash of the wrong offset). This loop
+    // owns the END of the restore: it tracks the anchor while fit-width and
+    // page-height refinement keep reshaping the layout, re-asserts once the
+    // layout has been stable for two ticks, and only then clears the
+    // restoring state (which is what un-gates captureScrollPos). Finishing
+    // at first paint instead let quick tab flips capture mid-settle
+    // positions and permanently corrupt the saved entry.
     pendingRestoreRef.current = { url: targetUrl, entry, blockId, token };
     let tries = 0;
     let lastH = -1;
-    const finish = () => { if (restoringForRef.current === blockId) restoringForRef.current = null; };
-    const tryScroll = () => {
-      if (restoreTokenRef.current !== token) return; // superseded by a newer navigation
+    let lastScale = -1;
+    let userMoved = false;
+    let listenersOn = null;
+    const onUserInput = () => { userMoved = true; };
+    const userEvents = ["wheel", "touchstart", "pointerdown"];
+    const finish = () => {
+      if (listenersOn) for (const ev of userEvents) listenersOn.removeEventListener(ev, onUserInput);
+      if (pendingRestoreRef.current?.token === token) pendingRestoreRef.current = null;
+      if (restoringForRef.current === blockId) restoringForRef.current = null;
+    };
+    const tick = () => {
+      if (restoreTokenRef.current !== token) { finish(); return; } // superseded by a newer navigation
+      if (userMoved) { finish(); return; } // the user took over — their position wins
       if (pdfRenderedUrlRef.current === targetUrl) {
         const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
-        const h = scroller ? scroller.scrollHeight : 0;
-        const targetTop = entry.top * ((pdfEffScaleRef.current || entry.scale || 1) / (entry.scale || 1));
-        if (scroller && h > targetTop && h === lastH) {
+        if (scroller) {
+          if (listenersOn !== scroller) {
+            if (listenersOn) for (const ev of userEvents) listenersOn.removeEventListener(ev, onUserInput);
+            for (const ev of userEvents) scroller.addEventListener(ev, onUserInput, { passive: true });
+            listenersOn = scroller;
+          }
+          const h = scroller.scrollHeight;
+          const scale = pdfEffScaleRef.current;
+          const targetTop = Math.min(pdfRestoreTargetTop(entry, scroller), Math.max(0, h - scroller.clientHeight));
           scroller.scrollTo({ top: targetTop, behavior: "instant" });
-          pendingRestoreRef.current = null;
-          finish();
-          return;
+          if (h === lastH && scale === lastScale) { finish(); return; } // settled — this placement is final
+          lastH = h;
+          lastScale = scale;
         }
-        lastH = h;
       }
-      if (tries++ < 80) setTimeout(tryScroll, 120);
+      if (tries++ < 80) setTimeout(tick, 120);
       else finish();
     };
-    tryScroll();
+    tick();
   }
 
   function pushNav() {
