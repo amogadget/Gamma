@@ -2,6 +2,8 @@ archive/
 example/
 HANDOFF.md
 STATUS.md
+CLAUDE.md
+.claude/skills/
 node_modules/
 venv/
 .venv/
