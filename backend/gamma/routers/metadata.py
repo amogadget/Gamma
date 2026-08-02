@@ -15,13 +15,15 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
+from ..ai_client import call_ai as _call_ai
+from ..ai_context import extract_pdf_context as _extract_pdf_context
 from ..ai_settings import ai_runtime, require_ai_runtime
 from ..auth import require_user
 from ..db import page_now, user_db_path
 from ..pdf_text import PDF_EXTRACT_FAILED
-from .ai import METADATA_PROMPT, CITE_PROMPT, _call_ai, _extract_pdf_context, _resolve_model
+from .ai import CITE_PROMPT, METADATA_PROMPT, _resolve_model
 
 router = APIRouter(prefix="/api", tags=["metadata"])
 
@@ -208,6 +210,7 @@ class MetaFetchRequest(BaseModel):
     prompt: str = ""   # custom AI metadata-extraction prompt (empty = built-in)
     model: str = ""
     force: bool = False
+    context_char_limit: int = Field(default=6000, ge=100, le=1_000_000)
 
 
 # Sync endpoints: external lookups + PyPDF2 text extraction run in the threadpool.
@@ -221,7 +224,7 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
 
     doc_id = props.get("doc_id") or ""
     source_url = props.get("source_url") or props.get("sourceUrl") or ""
-    text = _extract_pdf_context(user, doc_id, limit=6000) if doc_id else ""
+    text = _extract_pdf_context(user, doc_id, limit=payload.context_char_limit) if doc_id else ""
     if text == PDF_EXTRACT_FAILED:  # nothing for the AI to read
         text = ""
 

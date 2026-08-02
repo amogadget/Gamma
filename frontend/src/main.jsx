@@ -2,6 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.jsx";
 import "./app.css";
+import "./library.css";
+import "./settings.css";
 
 // iPadOS defaults to "Request Desktop Website", where Safari reports
 // (hover: hover) and (pointer: fine) exactly like a Mac — so no media query

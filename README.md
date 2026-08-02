@@ -6,61 +6,36 @@
 
 # Gamma PDF Annotator
 
-**Highlight PDFs in your browser, keep the notes as a nested outliner, share the result with a link.** Self-hosted, multi-user, Logseq-inspired.
+**Organize papers and knowledge, in one place.** Self-hosted, multi-user, Logseq-inspired: read and annotate PDFs in your browser, keep the notes as a nested outliner, and link everything together.
 
-![Annotated PDF with block tree and AI chat](./docs/screenshots/01-annotated-pdf.png)
+## 📄 Read & annotate
 
-<!-- Demo GIF slot ➜ record: highlight text on the PDF, watch the note appear in the tree, click it to jump back. Save as docs/demo-annotate.gif and swap the image above for it. -->
-
-```bash
-docker run -d -p 9001:9001 -v gamma-data:/data \
-  -e GAMMA_ADMIN_USER=admin -e GAMMA_ADMIN_PASSWORD=change-me \
-  ghcr.io/tim4431/gamma:latest
-```
-
-Open <http://localhost:9001> and log in. (Full setup with AI keys → [Install](#install).)
-
----
-
-## Take the tour
-
-### 📄 Read & annotate
-
-![PDF with highlights, note tree, and AI chat](./docs/screenshots/01-annotated-pdf.png)
+![Open a paper by URL, highlight the abstract, and ask the AI to explain it](./docs/demo-download-and-chat.gif)
 
 Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma finds the PDF) or drag the file in. Then:
 
 - **Highlight** — select text, pick a color, add a comment. Each highlight becomes a block.
 - **Outliner notes** — highlights and free notes are the same kind of block: nest them, drag-reorder, `[[link]]` between them, write markdown + math. Click a note to jump the PDF to it (and back).
-- **Reference links** — link a citation in the PDF to another paper in your library; blue underlined regions are clickable, and a global **← Back** unwinds jumps across documents.
 - **Ask the AI** — chat about the open paper (or pick several at once) with Anthropic or OpenAI models, or just sign in with your ChatGPT subscription — no API key. Paste figures, or attach the whole PDF so the model sees tables and plots.
 - **Dockable panels** — drag any window's grip to the left, right, or bottom; double-click to collapse.
 
-<!-- Demo GIF slot ➜ record: the AI chat answering a question about the open paper. Save as docs/demo-chat.gif -->
+## 🔗 Link and organize
 
-### 🗂 Organize your library
+![Follow a citation to its reference, then fetch the cited arXiv paper into Gamma with one click](./docs/demo-reference-links.gif)
 
-![Home page with folders, recently viewed, and the recents feed](./docs/screenshots/02-home-carousels.png)
-
-A file-browser home: a recents feed of all your papers (sort by updated / created / title), a *Recently viewed* row on top, folders you drag papers into (storage stays flat — folders are just metadata, so a paper can live in several), and labels. `Ctrl+F` searches **everything at once** — notes, highlights, and the full text of every PDF in your library — with match-case / whole-word / regex toggles, label chips to narrow the scope, and a collapsed mode that works like a browser find bar. Matching is forgiving: "3000" finds "3,000-qubit" across a line break.
+- **Reference links** — citations in the PDF are clickable: jump to the reference, unwind jumps across documents with a global **← Back**, and fetch a cited arXiv/DOI paper into your library in one click. You can also link a citation to a paper you already have.
+- **Folders & labels** — drag papers into folders (storage stays flat, so a paper can live in several) and tag them with labels; the home page is a file-browser with a recents feed and a *Recently viewed* row.
+- **Search everything** — `Ctrl+F` searches across notes, highlights, and the full text of every PDF at once, with match-case / whole-word / regex toggles and label chips to narrow the scope. Matching is forgiving: "3000" finds "3,000-qubit" across a line break.
 
 <!-- Demo GIF slot ➜ record: dragging a paper into a folder, then a Ctrl+F search lighting up matches. Save as docs/demo-library.gif -->
 
-### 🔗 Share read-only
-
-![Read-only shared view of an annotated PDF](./docs/screenshots/04-shared-view.png)
-
-Mint a public link for any annotated paper. Recipients see the PDF, highlights, and notes — no login, no editing.
-
-### 🔑 Accounts & guest
-
-![Login page with guest option](./docs/screenshots/03-login.png)
-
-App-level username/password auth with per-user isolated data. Guest accounts get a fresh workspace that resets daily — no signup.
-
 ---
 
-### A few more things
+## A closer look
+
+![PDF with highlights, the note tree, and AI chat side by side](./docs/screenshots/01-annotated-pdf.png)
+
+![Home page with folders, a Recently viewed row, and the recents feed](./docs/screenshots/02-home-carousels.png)
 
 - **Metadata & citations** — on open, each paper is resolved (arXiv → DOI → AI) so the title, authors, and venue auto-fill; any field can be hand-edited in the popover. One click copies BibTeX or a slide-ready citation that pastes into PowerPoint with real italics.
 - **Tabs follow you** — open tabs sync to your account, so another browser or device picks up right where you left off.
@@ -72,17 +47,24 @@ App-level username/password auth with per-user isolated data. Guest accounts get
 
 ## Install
 
+### Quickstart
+
+```bash
+docker run -d --name gamma -p 9001:9001 -v gamma-data:/data ghcr.io/tim4431/gamma:latest
+```
+
+Open <http://localhost:9001> and log in as `admin` — a fresh instance seeds the account itself and prints its password once to the log (`docker logs gamma`). No environment variables needed.
+
 ### Docker Compose (recommended)
 
-Copy the templates (the real files are gitignored, so your settings never land in commits), set your password and optional AI keys, and start:
+Copy the template (the real file is gitignored, so local tweaks never land in commits) and start:
 
 ```bash
 cp docker-compose.yml.example docker-compose.yml
-cp .env.example .env   # edit: admin password (everything else is optional)
 docker compose up -d
 ```
 
-Open <http://localhost:9001>. Everything — accounts, notes, and uploaded PDFs — lives under the container's `/data` volume, so your library survives upgrades. Back it up by copying that volume or using the in-app **Export my data** zip; restore a zip with **Import data** in the same menu. If you bind-mount `/data` to a host folder, set `PUID`/`PGID` to your user's ids (`id -u` / `id -g`) so the files belong to you instead of root.
+Open <http://localhost:9001> and log in with the seeded `admin` password from `docker logs gamma` (printed once on first start). Everything — accounts, notes, and uploaded PDFs — lives under the container's `/data` volume, so your library survives upgrades. Back it up by copying that volume or using the in-app **Export my data** zip; restore a zip with **Import data** in the same menu. If you bind-mount `/data` to a host folder, set `PUID`/`PGID` to your user's ids (`id -u` / `id -g`) so the files belong to you instead of root.
 
 Users are managed in the app: sign in with an admin account → account menu → *Manage users…* (create/delete accounts, reset passwords, grant or revoke the admin privilege — admin is a flag, not a special name). The CLI equivalent still works:
 
@@ -151,7 +133,7 @@ Put a TLS-terminating reverse proxy (Caddy, nginx) in front of 9001 for a domain
 | `GAMMA_AI_ANTHROPIC_BASE_URL` | No | `https://api.anthropic.com` | Default Anthropic-protocol endpoint, e.g. `https://api.deepseek.com/anthropic` |
 | `GAMMA_AI_OPENAI_BASE_URL` | No | `https://api.openai.com` | Default OpenAI-compatible endpoint |
 
-AI is configured in the app, not the environment: each user adds provider entries under account menu → *AI providers & keys…* (pick the API format — Anthropic Messages or OpenAI Chat Completions — then a key, plus optional label, base URL, and model list), or connects a ChatGPT Plus/Pro subscription with *Sign in with ChatGPT* — OAuth, no key at all. Keys are stored server-side per user and never sent back to the browser. The base-URL variables above only change the per-protocol defaults shown in that dialog. For docker compose, put these in `.env` (see [.env.example](./.env.example)).
+AI is configured in the app, not the environment: each user adds provider entries under account menu → *AI providers & keys…* (pick the API format — Anthropic Messages or OpenAI Chat Completions — then a key, plus optional label, base URL, and model list), or connects a ChatGPT Plus/Pro subscription with *Sign in with ChatGPT* — OAuth, no key at all. Keys are stored server-side per user and never sent back to the browser. The base-URL variables above only change the per-protocol defaults shown in that dialog.
 
 </details>
 

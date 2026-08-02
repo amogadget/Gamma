@@ -2,18 +2,22 @@
 
 ```
 main.jsx            React root
-App.jsx             the main component (still large): routing, autosave,
-                    dockable windows, login, home. Being decomposed.
+App.jsx             application orchestration: routing, autosave, docking, home
+libraryUtils.js     pure library/paper rules shared across application views
+LoginPage.jsx       loading and login screens
+settings.jsx        settings dialog and its papers/AI/search/diagnostic panes
 blockTree.jsx       the Logseq outliner — block rows, [[refs]], drag, markdown
 logseqPdfModel.js   pure tree ops (insert/indent/outdent/flatten/cycle-check)
 pdfViewer.jsx       custom pdf.js viewer — pages, highlights, links, text search; exports COLORS
 search.jsx          workspace search (Ctrl+F): SearchPanel popover, fuzzy
                     buildSearchRegex (mirror of backend gamma/textnorm.py)
 chatDock.jsx        the AI chat window (self-contained per-page conversation)
-widgets.jsx         shared chrome: DockWindow, ChatMarkdown, AutoGrowTextarea
+widgets.jsx         shared chrome: dock windows, tabs, popovers, markdown, inputs
 sessionState.js     localStorage: restore last workspace on bare `/`
 utils.js            API base, fetch wrapper, ids, hashing, formatting
-app.css             all styles
+app.css             shared controls plus workspace, PDF, blocks, and chat
+library.css         home library, folders, file views, selection, and pins
+settings.css        settings dialog layout and settings-specific controls
 ```
 
 ## How-tos

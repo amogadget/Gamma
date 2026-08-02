@@ -1,0 +1,563 @@
+/* Home library: carousels, folders, list/grid views, selection, and pins. */
+
+/* --- Home: carousel sections --- */
+.carouselRow {
+  margin-bottom: 20px;
+  padding: 0 4px;
+}
+.carouselLabel {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+.carouselTrackWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.carouselTrack {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
+  padding: 4px 0;
+  flex: 1;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.carouselTrack::-webkit-scrollbar {
+  display: none;
+}
+.carouselArrow {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  color: var(--text-tertiary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.85;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.carouselArrow:hover {
+  opacity: 1;
+  background: var(--bg-raised);
+}
+.carouselArrowLeft {
+  left: -14px;
+}
+.carouselArrowRight {
+  right: -14px;
+}
+.recentCard {
+  flex: 0 0 calc(16.666% - 8.333px);
+  min-width: 100px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-primary);
+  font: inherit;
+  scroll-snap-align: start;
+  transition: background 120ms ease, border-color 120ms ease;
+  min-height: 58px;
+}
+.recentCard:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
+}
+.recentCardTitle {
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 500;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  margin-bottom: 6px;
+}
+.recentCardMeta {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.recentCardSummary {
+  color: var(--text-muted);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  -webkit-box-orient: vertical;
+}
+.recentCardTime { color: var(--text-dim); }
+.recentCardKind { font-size: 9.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+
+.categoryBackBtn {
+  display: inline-block;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  margin-bottom: 12px;
+  transition: background 120ms ease, color 120ms ease;
+}
+.categoryBackBtn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+}
+.categoryFilterHeading {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 16px;
+}
+
+/* --- file-browser home: folders --- */
+.folderBrowser {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+.folderRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  border: 1px dashed transparent;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  width: 100%;
+  user-select: none;
+}
+.folderRow svg { color: var(--accent); flex-shrink: 0; }
+.folderRow:hover { background: var(--bg-block); }
+/* --- home file-manager: selection + context menu --- */
+.blockRow.pageSelected {
+  background: var(--accent-bg-light);
+  outline: 1px solid var(--accent-dark);
+  border-radius: 6px;
+}
+.ctxMenuLabel {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 6px 10px 2px;
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 4px;
+}
+.movePicker { max-height: 45vh; overflow-y: auto; top: calc(100% + 4px); z-index: 1400; }
+
+.folderRow.dragOver {
+  background: var(--accent-bg);
+  border-color: var(--accent-dark);
+}
+.folderName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folderCount {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg-raised);
+  border-radius: 999px;
+  padding: 1px 8px;
+  flex-shrink: 0;
+}
+.folderHint { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
+.folderBackRow svg { color: var(--text-muted); }
+.folderCurrent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 4px 10px 8px;
+}
+.folderCurrent svg { color: var(--accent); }
+.folderNewBtn { color: var(--text-muted); }
+.folderNewBtn svg { color: var(--text-muted); }
+.folderNewBtn:hover { color: var(--text-primary); }
+.folderNewInput {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  padding: 3px 8px;
+}
+.folderNewInput:focus { border-color: var(--accent-dark); }
+/* breadcrumb segments in the folder header */
+.crumbBtn {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  font: inherit;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.crumbBtn:hover { color: var(--accent); text-decoration: underline; }
+.crumbSep { color: var(--text-dim); padding: 0 1px; }
+/* sort bar above the home file feed */
+.homeListBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 10px 6px;
+}
+.homeListLabel {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.homeSortSelect {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  outline: none;
+  cursor: pointer;
+}
+.loadMoreBtn {
+  display: block;
+  margin: 8px auto 16px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+
+/* --- modern file-manager home: view toggle, grid tiles, pinned, pins --- */
+.homeListSpacer { flex: 1; }
+.homeViewToggle {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+.homeViewBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.homeViewBtn:hover { color: var(--text-primary); }
+.homeViewBtn.active { background: var(--bg-input); color: var(--accent); box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+
+/* selected state — a solid border (not outline) so it never clips at the
+   scroll-container edge */
+.folderRow.selected {
+  background: var(--accent-bg-light);
+  border: 1px solid var(--accent-dark);
+}
+
+/* Home library file rows — their OWN display, separate from the outliner
+   block rows (no bullet, no collapse rail). Left boundary lines up with the
+   pinned strip and folder rows (all inset 4px inside the sidebar padding). */
+.fileList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 4px;
+}
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+.fileRow:hover { background: var(--bg-block); }
+.fileRow.selected,
+.fileTile.selected,
+.folderTile.selected {
+  background: var(--accent-bg-light);
+  border-color: var(--accent-dark);
+}
+.fileRowIcon {
+  flex: 0 0 auto;
+  width: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fileRowIcon .tileGlyph,
+.folderBrowser .folderRow > svg {
+  width: 20px;
+  height: 20px;
+}
+.fileRow:hover .fileGlyph, .fileRow.selected .fileGlyph { color: var(--accent); }
+.fileRowName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+.fileRowRename {
+  flex: 1;
+  min-width: 0;
+  border-color: var(--accent-dark);
+  font-size: 14px;
+  padding: 2px 6px;
+}
+.fileRowKind {
+  flex: 0 0 auto;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.fileRowPin { flex: 0 0 auto; opacity: 0; transition: opacity 0.12s; }
+.fileRow:hover .fileRowPin { opacity: 0.6; }
+.fileRowPin:hover, .fileRowPin.pinned { opacity: 1; }
+/* Folder + label chips, capped to a width and clipped so they never push the
+   kind/pin off the row. Order in the row: name … [labels] PDF pin. */
+.fileRowLabels {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  overflow: hidden;
+  margin-left: 8px;
+}
+.fileRowLabels .folderTagBadge,
+.fileRowLabels .labelTagBadge { margin-left: 0; flex: 0 0 auto; }
+.labelTagBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-secondary);
+  background: var(--bg-raised);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+/* line the folder-row icon up with the file-row icon column */
+
+/* hover pin button on list rows */
+.rowPinBtn {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 1px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, color 0.12s;
+}
+.blockRow:hover .rowPinBtn { opacity: 0.6; }
+.rowPinBtn:hover { opacity: 1 !important; color: var(--accent); }
+.rowPinBtn.pinned { opacity: 1; color: var(--accent); }
+
+/* pinned favorites strip */
+.pinnedSection { padding: 0 4px 4px; margin-bottom: 6px; }
+.pinnedLabel {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: 2px 6px 6px;
+}
+.pinnedLabel svg { color: var(--accent); }
+.pinnedStrip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.pinnedTile {
+  position: relative;
+  flex: 0 0 auto;
+  width: 128px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-block);
+  cursor: pointer;
+  user-select: none;
+}
+.pinnedTile:hover { border-color: var(--border); background: var(--bg-raised); }
+.pinnedTile.selected { border-color: var(--accent-dark); background: var(--accent-bg-light); }
+.pinnedTileName {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* file/folder grid */
+.fileGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 6px;
+  padding: 4px;
+  align-content: start;
+}
+.fileTile, .folderTile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 8px 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: none;
+  cursor: pointer;
+  user-select: none;
+  text-align: center;
+  font: inherit;
+}
+.fileTile:hover, .folderTile:hover { background: var(--bg-block); }
+.folderTile.dragOver { background: var(--accent-bg); border-color: var(--accent-dark); border-style: dashed; }
+.tileGlyph { width: 52px; height: 52px; flex-shrink: 0; }
+.folderGlyph { color: var(--accent); }
+.fileGlyph { color: var(--text-muted); }
+.fileTile:hover .fileGlyph, .fileTile.selected .fileGlyph { color: var(--accent); }
+.folderTileAdd .tileGlyph, .folderTileNew .tileGlyph { color: var(--text-dim); width: 46px; height: 46px; }
+.tileName {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  line-height: 1.25;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tileKind {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.tileFolderCount {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: var(--bg-raised);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+.tileRenameInput {
+  width: 100%;
+  border-color: var(--accent-dark);
+  font-size: 12px;
+  padding: 2px 6px;
+  text-align: center;
+}
+
+/* pin button shared by grid tiles + pinned strip */
+.pinBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 6px;
+}
+.pinBtn:hover { color: var(--accent); background: var(--bg-raised); }
+.pinBtn.pinned { color: var(--accent); }
+.tilePinBtn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.fileTile:hover .tilePinBtn { opacity: 0.7; }
+.tilePinBtn:hover, .tilePinBtn.pinned { opacity: 1; }
+.pinnedTile .pinBtn { position: absolute; top: 4px; right: 4px; }
+
+/* folder tags on file rows */
+.folderTagBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  color: var(--accent);
+  background: var(--bg-raised);
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 10px;
+}

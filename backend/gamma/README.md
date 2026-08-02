@@ -9,6 +9,8 @@ auth.py            session middleware → request.state.user (+ daily guest rese
 seed.py            per-user DB creation, guest welcome page
 blocks_store.py    recursive-CTE tree helpers
 storage.py         uploads (content-addressed) + orphan cleanup
+ai_client.py       provider HTTP protocols + streaming response parsing
+ai_context.py      PDF attachments, extraction, and chat context assembly
 logseq_import.py   EDN / Markdown importers
 app.py             assembly + SPA serving
 routers/           one module per API area — see routers/README.md

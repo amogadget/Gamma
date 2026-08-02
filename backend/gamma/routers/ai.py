@@ -1,20 +1,34 @@
-"""AI chat (Anthropic or OpenAI wire protocol), report generation, and chat history."""
+"""AI chat, provider settings, model discovery, and ChatGPT OAuth routes."""
 
-import base64
 import json
 import re
-import sqlite3
 import time
 import urllib.error
-import urllib.request
-import uuid
 from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import chatgpt_oauth
+from ..ai_client import (
+    UpstreamError,
+    call_ai as _call_ai,
+    chatgpt_request as _chatgpt_request,
+    open_ai as _open_ai,
+    protocol as _protocol,
+    read_reply as _read_reply,
+    sse_deltas as _sse_deltas,
+    upstream_detail as _upstream_detail,
+)
+from ..ai_context import (
+    build_messages as _build_messages,
+    extract_pdf_context as _extract_pdf_context,
+    gather_inputs as _gather_inputs,
+    parse_files as _parse_files,
+    parse_images as _parse_images,
+    pdf_path as _pdf_path,
+)
 from ..ai_settings import (
     MAX_KEY_LEN,
     MAX_MODELS_LEN,
@@ -28,14 +42,10 @@ from ..ai_settings import (
     save_provider_entries,
 )
 from ..auth import require_user
-from ..blocks_store import fetch_subtree
 from ..config import AI_PROTOCOLS
-from ..db import connect_data_db, page_now, user_db_path, user_uploads_dir
-from ..pdf_text import PDF_EXTRACT_FAILED, extract_text
+from ..db import page_now
 
 router = APIRouter(prefix="/api", tags=["ai"])
-
-MAX_ATTACH_PDF_BYTES = 40 * 1024 * 1024  # 55MB doesn't work even on gpt-5.6-sol; 40 is the empirical ceiling
 
 # Reasoning-depth values accepted by both wire protocols (Anthropic
 # output_config.effort / OpenAI reasoning_effort). Only sent when the user
@@ -46,48 +56,19 @@ EFFORT_LEVELS = {"minimal", "low", "medium", "high", "xhigh", "max"}
 class AIChatRequest(BaseModel):
     prompt: str
     doc_id: str = ""
-    history: list = []  # [{role: "user"|"ai", text: str}, ...]
+    history: list = Field(default_factory=list)  # [{role: "user"|"ai", text: str}, ...]
     model: str = ""       # model registry id ("provider:model"), must be in AI_MODELS
     selection: str = ""   # text the user selected in the PDF — focus the answer on it
     attach_pdf: bool = False  # send the PDF itself instead of extracted text
     effort: str = ""      # reasoning effort; empty = provider default (param omitted)
     system: str = ""      # custom system prompt; empty = built-in default
-    pages: list = []      # page block ids to include as context (multi-PDF chat / reports)
+    pages: list = Field(default_factory=list)  # page block ids for multi-PDF chat / reports
     include_notes: bool = False  # also include the user's highlights + notes for those pages
-    images: list = []     # pasted figures as data URLs ("data:image/png;base64,…")
-    files: list = []      # uploaded PDFs as {name, data} with a data URL — attached natively
+    images: list = Field(default_factory=list)  # pasted figures as data URLs
+    files: list = Field(default_factory=list)  # uploaded PDFs as {name, data} data URLs
     stream: bool = False  # NDJSON stream of {"delta": …} lines instead of one JSON body
-
-
-def _parse_images(images: list) -> list[tuple[str, str]]:
-    """Validated (media_type, base64) pairs from data URLs; junk is dropped."""
-    out = []
-    for s in (images or [])[:4]:
-        m = re.match(r"^data:(image/(?:png|jpeg|jpg|gif|webp));base64,([A-Za-z0-9+/=]+)$", str(s))
-        if not m:
-            continue
-        mt, b64 = m.group(1), m.group(2)
-        if len(b64) > 8_000_000:  # ~6 MB image — beyond that providers reject anyway
-            continue
-        out.append(("image/jpeg" if mt == "image/jpg" else mt, b64))
-    return out
-
-
-def _parse_files(files: list) -> list[str]:
-    """Base64 payloads of uploaded PDF data URLs ({name, data} items); junk
-    and oversize entries are dropped."""
-    out = []
-    for f in (files or [])[:4]:
-        if not isinstance(f, dict):
-            continue
-        m = re.match(r"^data:application/pdf;base64,([A-Za-z0-9+/=]+)$", str(f.get("data", "")))
-        if not m:
-            continue
-        b64 = m.group(1)
-        if len(b64) > MAX_ATTACH_PDF_BYTES * 4 // 3:
-            continue
-        out.append(b64)
-    return out
+    context_char_limit: int = Field(default=8000, ge=100, le=1_000_000)
+    multi_context_char_limit: int = Field(default=18000, ge=100, le=1_000_000)
 
 
 def _resolve_model(rt: dict, requested: str) -> dict:
@@ -102,104 +83,6 @@ def _resolve_model(rt: dict, requested: str) -> dict:
 def _resolve_effort(requested: str) -> str:
     requested = (requested or "").strip().lower()
     return requested if requested in EFFORT_LEVELS else ""
-
-
-def _final_prompt(payload: AIChatRequest) -> str:
-    prompt = payload.prompt
-    selection = (payload.selection or "").strip()[:24000]
-    if selection:
-        prompt = (
-            f"{prompt}\n\n"
-            f'The user has selected the following passage(s) from the document '
-            f'(multiple passages are separated by "---"). '
-            f'Answer specifically about them:\n"""\n{selection}\n"""'
-        )
-    return prompt
-
-
-def _build_messages(payload: AIChatRequest, context: str):
-    """Build the messages array with chat history and PDF context.
-    Context is prepended to the first user message. History is included
-    for multi-turn conversations."""
-    msgs = []
-    has_context = bool(context)
-    context_used = False
-    for h in (payload.history or []):
-        # Anthropic Messages API requires "user" / "assistant"; the frontend
-        # tags assistant turns as "ai" in its local chat state.
-        role = "assistant" if h.get("role") == "ai" else "user"
-        content = h.get("text", "")
-        if role == "user" and has_context and not context_used:
-            content = f"Here is the PDF text:\n\n{context}\n\nUser question: {content}"
-            context_used = True
-        msgs.append({"role": role, "content": content})
-    # Always append the current prompt
-    content = _final_prompt(payload)
-    if has_context and not context_used:
-        content = f"Here is the PDF text:\n\n{context}\n\nUser question: {content}"
-    msgs.append({"role": "user", "content": content})
-    return msgs
-
-
-def _download_pdf_from_source(user: str, doc_id: str, pdf_path):
-    """Best-effort: fetch the PDF from its recorded source_url so we can extract text."""
-    print(f"[ai_chat] PDF NOT FOUND at {pdf_path}, attempting download from source_url")
-    try:
-        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-            row = conn.execute(
-                "SELECT properties FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?",
-                (doc_id,),
-            ).fetchone()
-        if not row:
-            return
-        props = json.loads(row[0] or "{}")
-        src = props.get("source_url") or props.get("sourceUrl") or ""
-        if not src:
-            return
-        req = URLRequest(src, headers={"User-Agent": "Mozilla/5.0", "Accept": "application/pdf,*/*;q=0.8"})
-        with urlopen(req, timeout=30) as resp:
-            pdf_data = resp.read()
-        pdf_path.parent.mkdir(parents=True, exist_ok=True)
-        pdf_path.write_bytes(pdf_data)
-        print(f"[ai_chat] downloaded {len(pdf_data)} bytes from {src}")
-    except Exception as dl_err:
-        print(f"[ai_chat] download failed: {dl_err}")
-
-
-def _pdf_path(user: str, doc_id: str):
-    """Local path of the doc's PDF, downloading from source_url if needed."""
-    pdf_path = user_uploads_dir(user) / f"{doc_id}.pdf"
-    if not pdf_path.exists():
-        _download_pdf_from_source(user, doc_id, pdf_path)
-    return pdf_path if pdf_path.exists() else None
-
-
-def _truncate(text: str, limit: int) -> str:
-    return text[:limit] + "\n…[truncated]" if len(text) > limit else text
-
-
-def _extract_pdf_context(user: str, doc_id: str, limit: int = 8000) -> str:
-    pdf_path = _pdf_path(user, doc_id)
-    if not pdf_path:
-        print("[ai_chat] PDF still not found after download attempt")
-        return ""
-    try:
-        return _truncate(extract_text(str(pdf_path), limit), limit)
-    except Exception as e:
-        print(f"[ai_chat] extraction error: {e}")
-        return PDF_EXTRACT_FAILED
-
-
-def _load_pdf_b64(user: str, doc_id: str) -> str | None:
-    """Base64 of the doc's PDF for native attachment, or None if unavailable/too big."""
-    pdf_path = _pdf_path(user, doc_id)
-    if not pdf_path:
-        return None
-    data = pdf_path.read_bytes()
-    if len(data) > MAX_ATTACH_PDF_BYTES:
-        print(f"[ai_chat] PDF too large to attach ({len(data)} bytes), falling back to text")
-        return None
-    return base64.standard_b64encode(data).decode("ascii")
 
 
 # Sync def: extraction runs in the threadpool (pdfium stops at the sample cap).
@@ -253,248 +136,6 @@ CITE_PROMPT = (
     "without _et al._; for two authors use \"Surname & Surname\"."
 )
 
-
-def _anthropic_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192, images=None, stream=False):
-    """Anthropic Messages API: POST /v1/messages, x-api-key auth."""
-    if pdf_b64s or images:
-        last = messages[-1]
-        last["content"] = [
-            *[{"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b}}
-              for b in (pdf_b64s or [])],
-            *[{"type": "image", "source": {"type": "base64", "media_type": mt, "data": b}}
-              for (mt, b) in (images or [])],
-            {"type": "text", "text": last["content"]},
-        ]
-    body = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": messages,
-    }
-    if effort:
-        body["output_config"] = {"effort": effort}
-    if stream:
-        body["stream"] = True
-    return urllib.request.Request(f"{conf['base_url']}/v1/messages", data=json.dumps(body).encode(), headers={
-        "x-api-key": conf["api_key"],
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-    })
-
-
-def _anthropic_extract(data) -> str:
-    text = "".join(c.get("text", "") for c in data.get("content", []) if c.get("type") == "text")
-    if not text.strip():
-        raise RuntimeError(f"empty response (stop_reason={data.get('stop_reason', 'unknown')})")
-    return text
-
-
-def _openai_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192, images=None, stream=False):
-    """OpenAI Chat Completions API: POST /v1/chat/completions, Bearer auth."""
-    if pdf_b64s or images:
-        last = messages[-1]
-        last["content"] = [
-            *[{"type": "file", "file": {"filename": f"document-{i + 1}.pdf",
-                                        "file_data": f"data:application/pdf;base64,{b}"}}
-              for i, b in enumerate(pdf_b64s or [])],
-            *[{"type": "image_url", "image_url": {"url": f"data:{mt};base64,{b}"}}
-              for (mt, b) in (images or [])],
-            {"type": "text", "text": last["content"]},
-        ]
-    if system:
-        messages = [{"role": "system", "content": system}] + messages
-    body = {
-        "model": model,
-        # not max_tokens: current OpenAI models 400 on it ("use max_completion_tokens").
-        # The cap covers hidden reasoning tokens too, so it must be generous —
-        # reasoning models can burn thousands of tokens before the first visible one.
-        "max_completion_tokens": max_tokens,
-        "messages": messages,
-    }
-    if effort:
-        body["reasoning_effort"] = effort
-    if stream:
-        body["stream"] = True
-    return urllib.request.Request(f"{conf['base_url']}/v1/chat/completions", data=json.dumps(body).encode(), headers={
-        "Authorization": f"Bearer {conf['api_key']}",
-        "Content-Type": "application/json",
-    })
-
-
-def _openai_extract(data) -> str:
-    choices = data.get("choices") or [{}]
-    text = (choices[0].get("message") or {}).get("content") or ""
-    if not text.strip():
-        reason = choices[0].get("finish_reason", "unknown")
-        raise RuntimeError(
-            f"empty response (finish_reason={reason} — a reasoning model may have spent "
-            f"the whole token budget thinking; try effort: low or a shorter request)")
-    return text
-
-
-def _chatgpt_request(conf, messages, system, model, pdf_b64s=None, effort="", max_tokens=8192, images=None, stream=False):
-    """ChatGPT backend (subscription OAuth): POST {base}/responses.
-
-    Speaks the Responses API and ONLY streams SSE — non-stream callers join
-    the deltas in _call_ai. Attachments use the Responses input_file /
-    input_image parts; ai_chat falls back to extracted text if the backend
-    rejects the file part."""
-    items = []
-    for m in messages:
-        if m["role"] == "assistant":
-            items.append({"type": "message", "role": "assistant",
-                          "content": [{"type": "output_text", "text": m["content"]}]})
-        else:
-            items.append({"type": "message", "role": "user",
-                          "content": [{"type": "input_text", "text": m["content"]}]})
-    if pdf_b64s or images:
-        last = items[-1]
-        last["content"] = [
-            *[{"type": "input_file", "filename": f"document-{i + 1}.pdf",
-               "file_data": f"data:application/pdf;base64,{b}"}
-              for i, b in enumerate(pdf_b64s or [])],
-            *[{"type": "input_image", "image_url": f"data:{mt};base64,{b}"}
-              for (mt, b) in (images or [])],
-            *last["content"],
-        ]
-    body = {
-        "model": model,
-        "instructions": system or "You are a helpful research assistant.",
-        "input": items,
-        "tools": [],
-        "tool_choice": "auto",
-        "parallel_tool_calls": False,
-        "store": False,   # the backend requires stateless requests
-        "stream": True,   # …and always streams
-        "include": [],
-    }
-    if effort:
-        body["reasoning"] = {"effort": effort}
-    return urllib.request.Request(f"{conf['base_url']}/responses", data=json.dumps(body).encode(), headers={
-        "Authorization": f"Bearer {conf['api_key']}",
-        "chatgpt-account-id": conf.get("account_id", ""),
-        "OpenAI-Beta": "responses=experimental",
-        "originator": "codex_cli_rs",
-        "session_id": str(uuid.uuid4()),
-        "Accept": "text/event-stream",
-        "Content-Type": "application/json",
-    })
-
-
-# protocol -> (request builder, non-stream reply extractor). chatgpt has no
-# extractor: its backend only streams, so _read_reply joins the SSE deltas.
-_WIRE = {
-    "anthropic": (_anthropic_request, _anthropic_extract),
-    "openai": (_openai_request, _openai_extract),
-    "chatgpt": (_chatgpt_request, None),
-}
-
-
-def _protocol(rt, entry) -> str:
-    """Wire protocol of the provider entry serving a model registry entry —
-    provider ids are user-generated, only the entry's protocol picks the wire."""
-    return rt["providers"][entry["provider"]]["protocol"]
-
-
-class UpstreamError(RuntimeError):
-    """Provider HTTP error with the status attached (fallback logic keys on it)."""
-
-    def __init__(self, status: int, message: str):
-        super().__init__(message)
-        self.status = status
-
-
-def _upstream_detail(e: urllib.error.HTTPError, cap: int = 500) -> str:
-    """Human-readable upstream failure — the body, not just the status line
-    ("400 Bad Request" alone is undebuggable)."""
-    body = ""
-    try:
-        body = e.read().decode("utf-8", "replace")[:cap]
-    except Exception:
-        pass
-    return f"upstream {e.code}: {body or e.reason}"
-
-
-def _open_ai(messages, system, entry, rt, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None, stream=False):
-    """Open the provider HTTP call for `entry` (a model registry entry) using
-    the user's effective config (`rt` from ai_runtime()). Raises before any
-    bytes are consumed, so callers can still return a normal HTTP error status."""
-    conf = rt["providers"][entry["provider"]]
-    build_request = _WIRE[conf["protocol"]][0]
-    req = build_request(conf, messages, system, entry["model"], pdf_b64s, effort, max_tokens, images, stream)
-    try:
-        return urllib.request.urlopen(req, timeout=timeout)
-    except urllib.error.HTTPError as e:
-        detail = _upstream_detail(e)
-        print(f"[ai] {detail}")
-        raise UpstreamError(e.code, detail)
-
-
-def _read_reply(resp, proto) -> str:
-    """Full reply text from an open provider response, any protocol.
-    chatgpt's backend only streams — join its SSE deltas."""
-    if proto == "chatgpt":
-        return "".join(_sse_deltas(resp, proto))
-    return _WIRE[proto][1](json.loads(resp.read()))
-
-
-def _call_ai(messages, system, entry, rt, pdf_b64s=None, effort="", max_tokens=8192, timeout=60, images=None):
-    """Send a chat to the provider that serves `entry`; return the full reply text."""
-    with _open_ai(messages, system, entry, rt, pdf_b64s, effort, max_tokens, timeout, images) as resp:
-        return _read_reply(resp, _protocol(rt, entry))
-
-
-def _sse_deltas(resp, provider):
-    """Text deltas from a provider's SSE stream (both speak `data: {json}` lines)."""
-    got_text = False
-    stop = ""
-    for raw in resp:
-        line = raw.decode("utf-8", "replace").strip()
-        if not line.startswith("data:"):
-            continue
-        data = line[5:].strip()
-        if data == "[DONE]":
-            break
-        try:
-            ev = json.loads(data)
-        except ValueError:
-            continue
-        if provider == "anthropic":
-            kind = ev.get("type")
-            if kind == "content_block_delta":
-                text = (ev.get("delta") or {}).get("text") or ""
-                if text:
-                    got_text = True
-                    yield text
-            elif kind == "message_delta":
-                stop = (ev.get("delta") or {}).get("stop_reason") or stop
-            elif kind == "error":
-                raise RuntimeError((ev.get("error") or {}).get("message") or "stream error")
-        elif provider == "chatgpt":
-            kind = ev.get("type") or ""
-            if kind == "response.output_text.delta":
-                text = ev.get("delta") or ""
-                if text:
-                    got_text = True
-                    yield text
-            elif kind == "response.completed":
-                stop = ((ev.get("response") or {}).get("status")) or "completed"
-            elif kind in ("response.failed", "error"):
-                err = ((ev.get("response") or {}).get("error") or {}) if kind == "response.failed" else ev
-                raise RuntimeError(err.get("message") or "stream error")
-        else:
-            if ev.get("error"):
-                raise RuntimeError((ev["error"] or {}).get("message") or "stream error")
-            choice = (ev.get("choices") or [{}])[0]
-            text = (choice.get("delta") or {}).get("content") or ""
-            if text:
-                got_text = True
-                yield text
-            stop = choice.get("finish_reason") or stop
-    if not got_text:
-        raise RuntimeError(
-            f"empty response (stop reason={stop or 'unknown'} — a reasoning model may have spent "
-            f"the whole token budget thinking; try effort: low or a shorter request)")
 
 
 @router.get("/ai/models")
@@ -642,29 +283,37 @@ async def ai_provider_delete(provider_id: str, request: Request):
     return _masked_settings(user, request.state.is_guest)
 
 
-# Fallback when the live listing is unreachable (not connected yet, offline):
-# models the ChatGPT backend has been known to serve.
+# Fallback when the live listing fails on a connected entry (offline, backend
+# hiccup): models the ChatGPT backend has been known to serve.
 _CHATGPT_MODEL_FALLBACK = [
-    "gpt-5.1", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini",
-    "gpt-5", "gpt-5-codex",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
 ]
 # GET {base}/models gates its answer on the caller's version — keep in rough
 # sync with a current Codex CLI release so new models show up.
 _CHATGPT_CLIENT_VERSION = "0.146.0"
+_MODEL_CATALOG_TIMEOUT = 5
+
+
+def _model_catalog_json(req: URLRequest) -> dict:
+    """Fetch one model catalog with a short, UI-friendly timeout."""
+    with urlopen(req, timeout=_MODEL_CATALOG_TIMEOUT) as resp:
+        return json.loads(resp.read())
 
 
 def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
     """Live model list from the ChatGPT (codex) backend, Codex CLI's own
     listing call: GET {base}/models?client_version=… with the OAuth bearer.
-    Falls back to the known-good list when no entry is connected or the
-    fetch fails."""
+    Needs a connected entry — the list is account-gated; falls back to the
+    known-good list only when the fetch itself fails."""
     providers = ai_runtime(user)["providers"]
     conf = providers.get(provider_id)
     if not conf or conf.get("protocol") != "chatgpt":
         # Pre-connect "Add key" form has no entry yet — any connected one will do.
         conf = next((c for c in providers.values() if c.get("protocol") == "chatgpt"), None)
     if not conf:
-        return _CHATGPT_MODEL_FALLBACK
+        raise HTTPException(status_code=400,
+                            detail="sign in with ChatGPT first — the model list comes from your account")
     try:
         req = URLRequest(
             f"{conf['base_url']}/models?client_version={_CHATGPT_CLIENT_VERSION}",
@@ -673,8 +322,7 @@ def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
                 "chatgpt-account-id": conf.get("account_id", ""),
                 "originator": "codex_cli_rs",
             })
-        with urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read())
+        data = _model_catalog_json(req)
         listed, hidden = [], []
         for m in data.get("models") or []:
             slug = str(m.get("slug") or "").strip()
@@ -723,11 +371,19 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     try:
         if protocol == "anthropic":
             req = URLRequest(f"{base}/v1/models?limit=100",
-                             headers={"x-api-key": key, "anthropic-version": "2023-06-01"})
+                             headers={
+                                 "x-api-key": key,
+                                 "anthropic-version": "2023-06-01",
+                                 "Accept": "application/json",
+                                 "User-Agent": "Gamma/model-catalog",
+                             })
         else:
-            req = URLRequest(f"{base}/v1/models", headers={"Authorization": f"Bearer {key}"})
-        with urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read())
+            req = URLRequest(f"{base}/v1/models", headers={
+                "Authorization": f"Bearer {key}",
+                "Accept": "application/json",
+                "User-Agent": "Gamma/model-catalog",
+            })
+        data = _model_catalog_json(req)
     except urllib.error.HTTPError as e:
         raise HTTPException(status_code=400, detail=f"model list failed: {_upstream_detail(e, 200)}")
     except Exception as e:
@@ -752,8 +408,9 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
 _OAUTH_STATES: dict = {}  # state -> {"verifier", "at"} — in-memory, 15 min TTL
 _OAUTH_STATE_TTL = 900
 
-# First models offered on a fresh connect; freely editable per entry afterwards.
-_CHATGPT_DEFAULT_MODELS = "gpt-5.1, gpt-5.1-codex"
+# Last-resort models seeded on a fresh connect when even the live listing
+# fails; freely editable per entry afterwards.
+_CHATGPT_DEFAULT_MODELS = "gpt-5.6-sol, gpt-5.6-terra"
 
 
 @router.post("/ai/oauth/chatgpt/start")
@@ -803,89 +460,31 @@ async def chatgpt_auth_complete(payload: ChatGPTAuthComplete, request: Request):
     else:
         if len(entries) >= MAX_PROVIDERS:
             raise HTTPException(status_code=400, detail="too many providers")
-        entries.append({
+        entry = {
             "id": new_provider_id(),
             "protocol": "chatgpt",
             "name": payload.name.strip()[:MAX_NAME_LEN] or "ChatGPT",
             "api_key": "",
             "base_url": "",
-            "models": payload.models.strip()[:MAX_MODELS_LEN] or _CHATGPT_DEFAULT_MODELS,
+            "models": payload.models.strip()[:MAX_MODELS_LEN],
             "created_at": page_now(),
             "oauth": oauth,
-        })
+        }
+        entries.append(entry)
+        if not entry["models"]:
+            # Seed the model list live from the account instead of a
+            # hardcoded (quickly stale) default. Tokens must be stored first —
+            # the listing call reads them back through ai_runtime.
+            save_provider_entries(user, entries)
+            try:
+                live = _chatgpt_model_catalog(user, entry["id"])
+            except Exception:
+                live = []
+            entry["models"] = ", ".join(live[:2])[:MAX_MODELS_LEN] or _CHATGPT_DEFAULT_MODELS
     save_provider_entries(user, entries)
     return _masked_settings(user, request.state.is_guest)
 
 
-def _pdf_text_from_b64(b64: str, limit: int = 8000) -> str:
-    """Extracted text of a base64 PDF (fallback when native attach is refused)."""
-    try:
-        return _truncate(extract_text(base64.standard_b64decode(b64), limit), limit)
-    except Exception as e:
-        print(f"[ai_chat] uploaded-PDF extraction failed: {e}")
-        return ""
-
-
-def _gather_inputs(user: str, payload: AIChatRequest, allow_native: bool):
-    """(pdf_b64s, context) for a chat request. allow_native=False forces every
-    document into extracted text — the fallback when a provider (the ChatGPT
-    backend) rejects native file parts."""
-    pdf_b64s = []
-    context_sections = []
-    attach = payload.attach_pdf and allow_native
-
-    page_ids = [str(p) for p in (payload.pages or []) if p][:6]
-    if page_ids:
-        # Multi-page context: attach/extract each selected page's PDF, and
-        # optionally the user's highlights + notes for it.
-        text_budget = max(3000, 18000 // len(page_ids))
-        total_b64 = 0
-        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-            for pid in page_ids:
-                row = conn.execute(
-                    "SELECT content, properties FROM unified_blocks WHERE id = ?", (pid,)
-                ).fetchone()
-                if not row:
-                    continue
-                title = row[0] or "Untitled"
-                props = json.loads(row[1] or "{}")
-                doc_id = props.get("doc_id") or ""
-                attached = False
-                if doc_id and attach:
-                    b64 = _load_pdf_b64(user, doc_id)
-                    if b64 and total_b64 + len(b64) < 20_000_000:
-                        pdf_b64s.append(b64)
-                        total_b64 += len(b64)
-                        attached = True
-                if doc_id and not attached:
-                    txt = _extract_pdf_context(user, doc_id, limit=text_budget)
-                    if txt:
-                        context_sections.append(f"### {title}\n{txt}")
-                if payload.include_notes:
-                    section = _page_report_section(conn, user, pid, 0)  # notes only, no PDF excerpt
-                    if section:
-                        context_sections.append(section)
-    elif payload.doc_id:
-        # Single-document chat for the open page
-        if attach:
-            b64 = _load_pdf_b64(user, payload.doc_id)
-            if b64:
-                pdf_b64s.append(b64)
-        if not pdf_b64s:
-            txt = _extract_pdf_context(user, payload.doc_id)
-            if txt:
-                context_sections.append(txt)
-
-    # Ad-hoc uploads from the chat "+" menu ride along regardless of attach_pdf.
-    for i, b64 in enumerate(_parse_files(payload.files)):
-        if allow_native:
-            pdf_b64s.append(b64)
-        else:
-            txt = _pdf_text_from_b64(b64)
-            if txt:
-                context_sections.append(f"### Attached PDF {i + 1}\n{txt}")
-
-    return pdf_b64s, "\n\n---\n\n".join(context_sections)
 
 
 # Providers whose backend refused native input_file parts — skip the wasted
@@ -957,87 +556,3 @@ def ai_chat(payload: AIChatRequest, request: Request):
     except Exception as e:
         print(f"[ai_chat] API error: {e}")
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
-
-
-# --- Per-page notes/highlights context (used by multi-paper chat) ------------
-
-def _page_report_section(conn, user: str, page_id: str, pdf_budget: int) -> str | None:
-    rows = fetch_subtree(conn, page_id)
-    if not rows:
-        return None
-    by_parent: dict = {}
-    root = None
-    for r in rows:
-        if r[0] == page_id:
-            root = r
-        else:
-            by_parent.setdefault(r[1], []).append(r)
-    for v in by_parent.values():
-        v.sort(key=lambda r: r[2])
-
-    props = json.loads(root[4] or "{}")
-    highlights: list[str] = []
-    notes: list[str] = []
-
-    def walk(bid, depth):
-        for r in by_parent.get(bid, []):
-            p = json.loads(r[4] or "{}")
-            quote = (p.get("quote") or "").strip()
-            content = (r[3] or "").strip()
-            if quote:
-                entry = f'- Highlighted: "{quote}"'
-                if content:
-                    entry += f"\n  User note: {content}"
-                highlights.append(entry)
-            elif content:
-                notes.append("  " * depth + f"- {content}")
-            walk(r[0], depth + 1)
-
-    walk(page_id, 0)
-
-    lines = [f"### {root[3] or 'Untitled'}"]
-    if props.get("summary"):
-        lines.append(f"Summary: {props['summary']}")
-    if props.get("doc_id") and pdf_budget > 0:
-        excerpt = _extract_pdf_context(user, props["doc_id"], limit=pdf_budget)
-        if excerpt:
-            lines.append(f"Document text (excerpt):\n{excerpt}")
-    if highlights:
-        lines.append("User's highlighted passages:\n" + "\n".join(highlights))
-    if notes:
-        lines.append("User's notes:\n" + "\n".join(notes))
-    return "\n\n".join(lines)
-
-
-class ChatSaveRequest(BaseModel):
-    messages: list
-
-
-@router.get("/chats/{block_id}")
-async def get_chat(block_id: str, request: Request):
-    user = require_user(request)
-    with connect_data_db(user) as db:
-        row = db.execute("SELECT messages FROM chats WHERE block_id = ?", (block_id,)).fetchone()
-    return {"messages": json.loads(row[0]) if row else []}
-
-
-@router.put("/chats/{block_id}")
-async def save_chat(block_id: str, payload: ChatSaveRequest, request: Request):
-    user = require_user(request)
-    with connect_data_db(user) as db:
-        db.execute(
-            "INSERT INTO chats (block_id, messages, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT(block_id) DO UPDATE SET messages = excluded.messages, updated_at = excluded.updated_at",
-            (block_id, json.dumps(payload.messages), page_now()),
-        )
-        db.commit()
-    return {"ok": True}
-
-
-@router.delete("/chats/{block_id}")
-async def delete_chat(block_id: str, request: Request):
-    user = require_user(request)
-    with connect_data_db(user) as db:
-        db.execute("DELETE FROM chats WHERE block_id = ?", (block_id,))
-        db.commit()
-    return {"ok": True}
