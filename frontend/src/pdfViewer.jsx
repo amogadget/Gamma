@@ -665,7 +665,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // scrolling across many pages is what made find-next feel sluggish.
   const scrollToPositionRef = useRef(null);
   useEffect(() => {
-    scrollToPositionRef.current = async ({ position, behavior }) => {
+    scrollToPositionRef.current = async ({ position, behavior, offset }) => {
       const pn = position?.pageNumber || position?.boundingRect?.pageNumber;
       if (!pn || !viewerRef.current || !pdfDoc) return;
       const r = position?.boundingRect;
@@ -686,7 +686,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       const curH = (heights[pn - 1] || FALLBACK_H) * scale;
       const storedH = r?.height || 1;
       const highlightY = r ? r.y1 * curH / storedH : 0;
-      const targetTop = pageTop + highlightY - 80;
+      const targetTop = pageTop + highlightY - (offset ?? 80);
       const dist = Math.abs(targetTop - viewerRef.current.scrollTop);
       viewerRef.current.scrollTo({ top: targetTop, behavior: behavior || (dist > 1500 ? "auto" : "smooth") });
 
@@ -699,6 +699,38 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     };
     if (scrollRef) scrollRef.current = scrollToPositionRef.current;
   }, [scrollRef, scale, pdfDoc]);
+
+  // Current-page widget (top-right): tracks scrolling, and typing a number
+  // jumps. The "current" page is the one covering a point a third of the way
+  // down the viewport — closer to "the page I'm reading" than the strict top
+  // edge, which flips the counter while the previous page still fills most of
+  // the screen. setState bails out when the value is unchanged, so scroll
+  // events don't re-render.
+  const [curPage, setCurPage] = useState(1);
+  const [pageInput, setPageInput] = useState(null); // non-null while the box is being edited
+  const syncCurPage = () => {
+    const v = viewerRef.current;
+    if (!v || !numPages) return;
+    const heights = pageHeightsRef.current;
+    const y = v.scrollTop + v.clientHeight / 3;
+    let acc = 0, pn = numPages;
+    for (let i = 0; i < numPages; i++) {
+      acc += (heights[i] || FALLBACK_H) * scale + PAGE_GAP;
+      if (acc > y) { pn = i + 1; break; }
+    }
+    setCurPage(pn);
+  };
+  // Resync outside of scroll events: document swaps (a restore to the same
+  // scrollTop fires no scroll event), zoom changes, and height refinement on
+  // long documents can all move the page under the reference point.
+  useEffect(() => { syncCurPage(); }, [docSeq, scale, numPages, pageHeights]);
+  const jumpToPage = (pn) => {
+    if (!numPages || !Number.isFinite(pn)) return;
+    const p = Math.max(1, Math.min(numPages, pn));
+    // offset 0: land exactly on the page's top edge, not the highlight
+    // jump's 80px context margin.
+    scrollToPositionRef.current?.({ position: { pageNumber: p }, offset: 0 });
+  };
 
   // In-PDF link annotations: internal destinations jump within the document.
   async function goToDest(dest) {
@@ -926,6 +958,31 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           <OutlineIcon size={16} />
         </button>
       ) : null}
+      {numPages > 0 ? (
+        <div className="pdfPageWidget" title="Type a page number and press Enter to jump">
+          <input
+            type="text"
+            inputMode="numeric"
+            value={pageInput ?? String(curPage)}
+            style={{ width: `${Math.max(1, (pageInput ?? String(curPage)).length)}ch` }}
+            onFocus={(e) => { setPageInput(String(curPage)); e.target.select(); }}
+            onChange={(e) => setPageInput(e.target.value.replace(/[^0-9]/g, ""))}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                jumpToPage(parseInt(pageInput, 10));
+                e.currentTarget.blur();
+                e.stopPropagation();
+              } else if (e.key === "Escape") {
+                e.currentTarget.blur();
+                e.stopPropagation();
+              }
+            }}
+            onBlur={() => setPageInput(null)}
+            aria-label="Current page"
+          />
+          <span className="pdfPageTotal">/ {numPages}</span>
+        </div>
+      ) : null}
       {outline && outlineOpen ? (
         <div className="pdfOutlinePanel">
           {outline.map((it, i) => (
@@ -940,6 +997,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         onScroll={(e) => {
           lastScrollRef.current = e.currentTarget.scrollTop;
           lastScrollLeftRef.current = e.currentTarget.scrollLeft;
+          syncCurPage();
         }}>
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={`${docSeq}-${i + 1}`} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
