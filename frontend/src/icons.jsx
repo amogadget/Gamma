@@ -54,6 +54,9 @@ export const LinkIcon = (p) => (
 export const ExternalLinkIcon = (p) => (
   <Icon {...p}><path d="M15 3h6v6" /><path d="M10 14 21 3" /><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" /></Icon>
 );
+export const EyeIcon = (p) => (
+  <Icon {...p}><path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0" /><circle cx="12" cy="12" r="3" /></Icon>
+);
 
 // Chevrons & arrows.
 export const ChevronDownIcon = (p) => (

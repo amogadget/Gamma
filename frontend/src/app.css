@@ -2827,6 +2827,25 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   outline: 1px solid rgba(80, 140, 255, 0.55);
 }
 
+/* --- area notes (Ctrl+drag rectangle selection on the PDF) --- */
+/* Ctrl held: dragging draws a rectangle, so cue it over everything on the page. */
+.pdfViewer.areaCursor .pdfPageWrap,
+.pdfViewer.areaCursor .textLayer,
+.pdfViewer.areaCursor .textLayer span {
+  cursor: crosshair;
+}
+/* The rubber band while dragging, and the drawn rect while the color tip is open.
+   Pages are always white, so a fixed accent blue works in both themes. */
+.pdfAreaMarquee {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 1.5px dashed rgba(80, 140, 255, 0.9);
+  background: rgba(80, 140, 255, 0.08);
+  border-radius: 2px;
+}
+
 /* --- citation export (share popover) --- */
 .citeMetaLine {
   font-size: 12px;
@@ -2882,7 +2901,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border: 1px solid transparent;
   border-radius: 4px;
   padding: 1px 4px;
-  margin: -2px 0;
+  /* Pull the input left by its border+padding so its text starts flush at the
+     value column, aligned with the read-only rows below. */
+  margin: -2px 0 -2px -5px;
 }
 .metaInput:hover { border-color: var(--border); }
 .metaInput:focus {
@@ -2892,6 +2913,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-primary);
 }
 .metaLink { display: inline-flex; align-items: center; color: var(--accent); flex-shrink: 0; }
+/* Icon buttons inside metadata rows: negative vertical margins keep the 20px
+   hit target from inflating the text row's height, so keys and values stay
+   on one baseline. */
+.metaTable .metaRowBtn { width: 20px; height: 20px; margin: -4px 0; }
 
 /* --- reference-link creation --- */
 .linkTipBtn {

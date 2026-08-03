@@ -1,7 +1,7 @@
 // The pdf.js-based viewer: lazy page rendering, highlights, link
 // annotations, text search, and the selection popup. Extracted from
 // App.jsx to keep the God component shrinking.
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 // The legacy build, not the default one: it ships the core-js polyfills the
 // modern build assumes (Promise.withResolvers is Safari 17.4+, and pdf.js
 // calls it the moment a loading task is created). Without it every iPad below
@@ -766,6 +766,30 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => document.removeEventListener("touchstart", onTouchStart);
   }, []);
 
+  // Ctrl held (when annotating is allowed) → crosshair over the pages: the
+  // cue that dragging now draws an area note instead of selecting text.
+  const canAnnotate = !!onSelectionFinished;
+  const [areaCursor, setAreaCursor] = useState(false);
+  useEffect(() => {
+    if (!canAnnotate) return;
+    const kd = (e) => { if (e.key === "Control") setAreaCursor(true); };
+    const ku = (e) => { if (e.key === "Control") setAreaCursor(false); };
+    const off = () => setAreaCursor(false);
+    window.addEventListener("keydown", kd);
+    window.addEventListener("keyup", ku);
+    window.addEventListener("blur", off);
+    return () => {
+      window.removeEventListener("keydown", kd);
+      window.removeEventListener("keyup", ku);
+      window.removeEventListener("blur", off);
+      setAreaCursor(false);
+    };
+  }, [canAnnotate]);
+
+  // A finished Ctrl+drag on a page: hold the rect (drawn by that page while
+  // the popup is up) and offer the same color tip as a text selection.
+  const onAreaSelected = useCallback((sel) => setSelPopup({ kind: "area", ...sel }), []);
+
   // Dismiss the color popup when the user mouses down anywhere outside it
   // (without that, removing the textarea/Cancel leaves no way to back out).
   useEffect(() => {
@@ -786,10 +810,13 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       setTimeout(syncSelPopup, 10);
     }
     function syncSelPopup() {
+      // "No text selected" must not dismiss an area popup — the drag that
+      // created it ends in a mouseup with an empty selection by design.
+      const keepArea = (p) => (p && p.kind === "area" ? p : null);
       const sel = window.getSelection();
-      if (!sel || !sel.toString().trim()) { setSelPopup(null); return; }
+      if (!sel || !sel.toString().trim()) { setSelPopup(keepArea); return; }
       const range = sel.getRangeAt(0);
-      if (!range) { setSelPopup(null); return; }
+      if (!range) { setSelPopup(keepArea); return; }
       const node = range.startContainer;
       const textEl = node?.nodeType === 3 ? node.parentElement?.closest?.(".textLayer") : node?.closest?.(".textLayer");
       if (!textEl) return;
@@ -846,6 +873,16 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
 
   function handleSelConfirm(commentText, color, extra) {
     if (!selPopup) return;
+    if (selPopup.kind === "area") {
+      // Rect is already page-relative at capture-time render size. area: true
+      // rides inside the position, so it flows through block storage,
+      // rendering, and PDF export (/Square) without extra plumbing.
+      const { pageNumber, rect, width, height } = selPopup;
+      const r = { ...rect, width, height, pageNumber };
+      const position = { pageNumber, boundingRect: r, rects: [r], area: true };
+      onSelectionFinished(position, { text: "" }, () => setSelPopup(null), { color, commentText, ...(extra || {}) });
+      return;
+    }
     const r = selPopup.rect;
     const pageEl = document.querySelector(`[data-page="${selPopup.pageNumber}"]`);
     const pageRect = pageEl?.getBoundingClientRect();
@@ -892,7 +929,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       ) : null}
       {/* overflow-anchor off: the browser's own scroll anchoring would fight
           the zoom re-placement above with adjustments of its own. */}
-      <div ref={viewerRef} className="pdfViewer"
+      <div ref={viewerRef} className={"pdfViewer" + (areaCursor ? " areaCursor" : "")}
         style={{ height: "100%", overflowY: "auto", overflowX: "auto", overflowAnchor: "none" }}
         onScroll={(e) => {
           lastScrollRef.current = e.currentTarget.scrollTop;
@@ -903,6 +940,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
           onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
+          onAreaSelected={canAnnotate ? onAreaSelected : undefined}
+          pendingArea={selPopup?.kind === "area" && selPopup.pageNumber === i + 1 ? selPopup : null}
           reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
           findMarks={marksByPage.get(i + 1) || EMPTY_MARKS}
           onInternalLink={goToDestStable}
@@ -911,7 +950,11 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         />
       ))}
       {selPopup && onSelectionFinished && (
-        <div style={{ position: "fixed", top: selPopup.rect.bottom + 8, left: selPopup.rect.left, zIndex: 9999 }}>
+        <div style={{
+          position: "fixed", zIndex: 9999,
+          top: selPopup.kind === "area" ? selPopup.tip.top : selPopup.rect.bottom + 8,
+          left: selPopup.kind === "area" ? selPopup.tip.left : selPopup.rect.left,
+        }}>
           <PlainTip onConfirm={handleSelConfirm} onLink={() => handleSelConfirm("", null, { link: true })} />
         </div>
       )}
@@ -963,7 +1006,7 @@ function OutlineNode({ item, depth, onDest, onUrl }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1065,8 +1108,51 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
 
   const curW = pageSize ? pageSize.width * scale : 1, curH = pageSize ? pageSize.height * scale : 1;
 
+  // Ctrl+drag: draw a rectangle (screenshot-style) to make an area note.
+  // Document-level move/up listeners so the drag survives leaving the page
+  // box; rects are clamped to it. Tiny drags are Ctrl+clicks — ignored, so
+  // Ctrl+click on highlights (additive chat quote) keeps working.
+  const [marquee, setMarquee] = useState(null); // live drag rect, current-render px
+  function beginAreaDrag(e) {
+    if (readOnly || !onAreaSelected) return;
+    if (e.button !== 0 || !e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    e.preventDefault(); // keep the text layer from starting a selection
+    const box = wrap.getBoundingClientRect();
+    const sx = e.clientX, sy = e.clientY;
+    const clamp = (v, max) => Math.max(0, Math.min(max, v));
+    const toRect = (cx, cy) => ({
+      x1: clamp(Math.min(sx, cx) - box.left, box.width),
+      y1: clamp(Math.min(sy, cy) - box.top, box.height),
+      x2: clamp(Math.max(sx, cx) - box.left, box.width),
+      y2: clamp(Math.max(sy, cy) - box.top, box.height),
+    });
+    function onMove(ev) { setMarquee(toRect(ev.clientX, ev.clientY)); }
+    function onUp(ev) {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp, true);
+      setMarquee(null);
+      const r = toRect(ev.clientX, ev.clientY);
+      if (r.x2 - r.x1 < 6 || r.y2 - r.y1 < 6) return;
+      // Swallow the click this drag would otherwise deliver to whatever sits
+      // under the mouse (highlight overlays, link boxes). The timeout clears
+      // the trap if no click follows (drag released outside the window).
+      const swallow = (ce) => { ce.stopPropagation(); ce.preventDefault(); };
+      document.addEventListener("click", swallow, { capture: true, once: true });
+      setTimeout(() => document.removeEventListener("click", swallow, { capture: true }), 0);
+      onAreaSelected({
+        pageNumber, rect: r, width: box.width, height: box.height,
+        tip: { left: box.left + r.x1, top: box.top + r.y2 + 8 },
+      });
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp, true);
+  }
+
   return (
     <div ref={wrapRef} data-page={pageNumber} className="pdfPageWrap"
+      onMouseDown={beginAreaDrag}
       style={{
         margin: `0 auto ${PAGE_GAP}px`, position: "relative", background: "#fff",
         width: pageSize ? curW : undefined,
@@ -1121,6 +1207,10 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         const storedW = h.position?.boundingRect?.width || rects[0]?.width || 1;
         const storedH = h.position?.boundingRect?.height || rects[0]?.height || 1;
         const isLink = !!h.linkTarget;
+        // Area notes (Ctrl+drag rectangles) draw as an outline with a faint
+        // wash — a solid multiply fill would tint the figure underneath.
+        const isArea = !!h.position?.area;
+        const color = h.color || "rgba(255,226,143,0.65)";
         const elements = [];
         for (const r of rects) {
           elements.push(<div key={h.id + "-" + r.x1 + "-" + r.y1} data-hl-id={h.id} style={{
@@ -1128,8 +1218,15 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
             left: r.x1 * curW / storedW, top: r.y1 * curH / storedH,
             width: Math.max(1, (r.x2 - r.x1) * curW / storedW),
             height: Math.max(1, (r.y2 - r.y1) * curH / storedH),
-            background: h.color || "rgba(255,226,143,0.65)", mixBlendMode: "multiply",
-            ...(isLink ? { borderBottom: "2px solid rgba(70, 130, 255, 0.9)", borderRadius: 1 } : {}),
+            mixBlendMode: "multiply",
+            ...(isArea ? {
+              boxSizing: "border-box", borderRadius: 3,
+              border: `2px solid ${color}`,
+              background: `color-mix(in srgb, ${color} 25%, transparent)`,
+            } : { background: color }),
+            ...(isLink ? (isArea
+              ? { border: "2px solid rgba(70, 130, 255, 0.9)" }
+              : { borderBottom: "2px solid rgba(70, 130, 255, 0.9)", borderRadius: 1 }) : {}),
           }} title={isLink ? (h.linkTarget.pageId ? "Open linked paper" : h.linkTarget.url) : (h.comment?.text || "")}
             onClick={function (e) {
               e.stopPropagation();
@@ -1141,6 +1238,22 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         }
         return elements;
       })}
+      {marquee ? (
+        <div className="pdfAreaMarquee" style={{
+          left: marquee.x1, top: marquee.y1,
+          width: marquee.x2 - marquee.x1, height: marquee.y2 - marquee.y1,
+        }} />
+      ) : null}
+      {/* Drag finished, color tip still open: keep the drawn rect visible
+          (scaled — the popup survives zoom changes). */}
+      {pendingArea ? (
+        <div className="pdfAreaMarquee" style={{
+          left: pendingArea.rect.x1 * curW / pendingArea.width,
+          top: pendingArea.rect.y1 * curH / pendingArea.height,
+          width: (pendingArea.rect.x2 - pendingArea.rect.x1) * curW / pendingArea.width,
+          height: (pendingArea.rect.y2 - pendingArea.rect.y1) * curH / pendingArea.height,
+        }} />
+      ) : null}
     </div>
   );
 });

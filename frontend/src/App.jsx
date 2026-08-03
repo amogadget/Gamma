@@ -17,7 +17,7 @@ import SearchPanel from "./search";
 import { ContextMenu } from "./menus";
 import {
   ActivityIcon, AlertCircleIcon, ArrowLeftIcon, CheckIcon, CopyIcon, DownloadIcon, ExportIcon,
-  ExternalLinkIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
+  ExternalLinkIcon, EyeIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
   FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
   LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PinIcon, PlusIcon,
   SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, TrashIcon, UploadIcon,
@@ -3534,23 +3534,12 @@ export default function App() {
                       >
                         <div className="popoverTitle citeSectionRow">
                           <span>Paper metadata</span>
-                          <span style={{ display: "inline-flex", gap: 4 }}>
-                            <button
-                              className="searchToggle"
-                              title="AI: read the PDF and fill in the paper's title"
-                              aria-label="Fill in title with AI"
-                              disabled={aiTitleBusy}
-                              onClick={aiFillTitle}
-                            >{aiTitleBusy ? "…" : (
-                              <SparklesIcon size={13} />
-                            )}</button>
-                            <button
-                              className="searchToggle"
-                              title="Refresh metadata (arXiv → DOI → AI)"
-                              disabled={metaBusy}
-                              onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
-                            >{metaBusy ? "…" : "↻"}</button>
-                          </span>
+                          <button
+                            className="searchToggle"
+                            title="Refresh metadata (arXiv → DOI → AI)"
+                            disabled={metaBusy}
+                            onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
+                          >{metaBusy ? "…" : "↻"}</button>
                         </div>
                         <div className="metaTable">
                           {[
@@ -3588,6 +3577,15 @@ export default function App() {
                                     <ExternalLinkIcon size={11} />
                                   </a>
                                 ) : null}
+                                {key === "title" ? (
+                                  <button
+                                    className="searchToggle metaRowBtn"
+                                    title="AI: read the PDF and fill in the paper's title"
+                                    aria-label="Fill in title with AI"
+                                    disabled={aiTitleBusy}
+                                    onClick={aiFillTitle}
+                                  >{aiTitleBusy ? "…" : <SparklesIcon size={13} />}</button>
+                                ) : null}
                               </span>
                             </div>
                           ))}
@@ -3596,19 +3594,21 @@ export default function App() {
                           ) : null}
                           <div className="metaRow">
                             <span className="metaKey">PDF text</span>
-                            <span className="metaVal" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <span className="metaVal" style={{ flex: 1, display: "flex", alignItems: "center", gap: 6 }}>
                               {!pdfTextInfo || pdfTextInfo.checking ? "checking…"
                                 : pdfTextInfo.error ? `check failed — ${pdfTextInfo.error}`
                                 : !pdfTextInfo.found ? "file not on server"
                                 : pdfTextInfo.ok ? "✓ extracted"
                                 : "✗ none — scanned or image-only? AI can't read it"}
                               {pdfTextInfo?.ok ? (
-                                <button className="searchToggle" title="Preview the extracted text (what the AI reads)"
-                                  onClick={openPdfTextPreview}>view</button>
+                                <button className="searchToggle metaRowBtn" style={{ marginLeft: "auto" }}
+                                  title="Preview the extracted text (what the AI reads)"
+                                  onClick={openPdfTextPreview}><EyeIcon size={13} /></button>
                               ) : null}
                               {pdfTextInfo && !pdfTextInfo.checking && !pdfTextInfo.ok ? (
                                 <button
-                                  className="searchToggle"
+                                  className="searchToggle metaRowBtn"
+                                  style={{ marginLeft: "auto" }}
                                   title="Re-check text extraction (e.g. after replacing the source file) — retries the metadata lookup if text appears"
                                   onClick={() => checkPdfText(true)}
                                 >↻</button>
