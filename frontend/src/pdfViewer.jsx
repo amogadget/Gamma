@@ -573,12 +573,17 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // purpose: it fires after the swap commit but BEFORE paint, so the host can
   // apply a restored scroll position and the user never sees the document at
   // the wrong offset.
+  // Keyed on the page tree, not on pdfDoc: a skeleton laid out from
+  // /api/page-dims has boxes in the DOM before pdf.js has a document, and the
+  // host's pre-paint scroll restore has to run against those boxes — that is
+  // what puts the reader on their page, and what tells the preview images
+  // which pages to fetch.
   useLayoutEffect(() => {
-    if (pdfDoc) {
+    if (numPages > 0) {
       awaitingPaintRef.current = url;
       onLoadState?.(url, { phase: "rendered" });
     }
-  }, [pdfDoc]);
+  }, [docSeq]);
 
   // The document currently on screen. Kept visible while the next one loads —
   // swapping only when the new doc is fully measured is what prevents the
@@ -590,16 +595,38 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // The swap: heights, page tree, and document land in ONE commit, so the
   // scrollbar changes exactly once and the host's pre-paint scroll restore
   // sees a layout that is already final.
-  const commitDoc = (docUrl, doc, heights, widths, exact) => {
+  const commitDoc = (docUrl, doc, heights, widths, exact, { remount = true } = {}) => {
     displayedDocRef.current = doc;
     heightsExactRef.current = exact;
     pageHeightsRef.current = heights;
     pageWidthsRef.current = widths;
     setPageHeights(heights);
     setNumPages(doc.numPages);
-    setDocSeq((s) => s + 1);
+    // Skeleton -> real document keeps the same page keys on purpose: the
+    // components stay mounted, so the previews they already fetched stay on
+    // screen instead of being torn down and requested again.
+    if (remount) setDocSeq((s) => s + 1);
     setDisplayedUrl(docUrl);
     setPdfDoc(doc);
+  };
+
+  // Page boxes from the server's page-size list, with no document yet. Only on
+  // a cold open: when a document is already on screen, blanking it to show a
+  // skeleton would undo the atomic swap that keeps tab switches flicker-free.
+  const skeletonRef = useRef(null);   // url a skeleton is currently showing for
+  const skeletonDimsRef = useRef(null);
+  const commitSkeleton = (docUrl, dims) => {
+    const heights = dims.map((d) => d[1]);
+    const widths = dims.map((d) => d[0]);
+    heightsExactRef.current = true;    // exact from the first frame
+    pageHeightsRef.current = heights;
+    pageWidthsRef.current = widths;
+    skeletonRef.current = docUrl;
+    skeletonDimsRef.current = { heights, widths };
+    setPageHeights(heights);
+    setNumPages(dims.length);
+    setDocSeq((s) => s + 1);
+    setDisplayedUrl(docUrl);
   };
 
   useEffect(() => {
@@ -615,6 +642,21 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           onLoadState?.(url, { phase: "cached" });
           commitDoc(url, live.doc, live.heights, live.widths, true);
           return;
+        }
+        // Race the server's page-size list against pdf.js. Whichever wins, the
+        // reader gets a laid-out document; the dims almost always win, because
+        // pdf.js first has to fetch an xref, walk the page tree and then make
+        // eight serial getPage round trips before it can commit anything.
+        if (!displayedDocRef.current && supportsRanges(url)) {
+          const dimsUrl = url.replace(/^\/api\/uploads\/([A-Za-z0-9_-]+)\.pdf$/, "/api/page-dims/$1");
+          fetch(dimsUrl, { credentials: "include" })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((d) => {
+              if (cancelled || !d?.dims?.length) return;
+              if (displayedDocRef.current) return;   // pdf.js got there first
+              commitSkeleton(url, d.dims);
+            })
+            .catch(() => {});
         }
         let doc;
         let openedByRange = false;
@@ -657,6 +699,17 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         // getPage is a worker round trip and this loop blocks first paint.
         const n = doc.numPages;
         const EXACT = 8;
+        // The server already sent every page's size, so there is nothing left
+        // to measure and nothing to refine — skip both loops and the layout
+        // churn they caused under a scroll restore.
+        const skel = skeletonRef.current === url ? skeletonDimsRef.current : null;
+        if (skel && skel.heights.length === n) {
+          cacheDoc(url, { doc, heights: skel.heights, widths: skel.widths });
+          commitDoc(url, doc, skel.heights, skel.widths, true, { remount: false });
+          skeletonRef.current = null;
+          if (openedByRange) backfillLocalCopy(url);
+          return;
+        }
         const measured = Math.min(n, EXACT);
         const heights = [], widths = [];
         for (let i = 1; i <= measured; i++) {
@@ -672,7 +725,9 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         // in place, so a later reopen gets the refined values, not a snapshot
         // taken before the loop ran.
         cacheDoc(url, { doc, heights, widths });
-        commitDoc(url, doc, heights, widths, n <= EXACT);
+        commitDoc(url, doc, heights, widths, n <= EXACT,
+                  { remount: skeletonRef.current !== url });
+        skeletonRef.current = null;
         // A range open leaves nothing on disk, so without this every later
         // open would pay the round trips again and the paper would never be
         // readable offline. Fetch the whole file once the reader already has
