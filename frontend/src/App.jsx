@@ -17,7 +17,7 @@ import SearchPanel from "./search";
 import { ContextMenu } from "./menus";
 import {
   ActivityIcon, AlertCircleIcon, ArrowLeftIcon, CheckIcon, CopyIcon, DownloadIcon, ExportIcon,
-  ExternalLinkIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
+  ExternalLinkIcon, EyeIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
   FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
   LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PinIcon, PlusIcon,
   SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, TrashIcon, UploadIcon,
@@ -310,7 +310,7 @@ export default function App() {
     apiJson(`${API}/prefs/read-pos`).then((d) => {
       if (prefsUserRef.current !== u) return;
       readPosLoadedRef.current = true;
-      mergeReadPos(u, d.value);
+      if (mergeReadPos(u, d.value)) pushReadPosSoon(u);
     }).catch(() => { if (prefsUserRef.current === u) readPosLoadedRef.current = true; });
   }, [authUser?.user, readOnly]);
 
@@ -649,6 +649,23 @@ export default function App() {
       window.removeEventListener("gamma-api-log", onApi);
     };
   }, [logSys]);
+  // Debug log level (Settings → Diagnostics): when on, position-tracking and
+  // sync events go to the system log (and the console), so a lost reading
+  // position can be traced from any device — the log pane has a Copy button.
+  const [debugLog, setDebugLog] = useState(() => {
+    try { return localStorage.getItem("gamma-debug-log") === "1"; } catch { return false; }
+  });
+  const debugLogRef = useRef(debugLog);
+  useEffect(() => {
+    debugLogRef.current = debugLog;
+    try { localStorage.setItem("gamma-debug-log", debugLog ? "1" : "0"); } catch {}
+  }, [debugLog]);
+  const dbg = useCallback((...args) => {
+    if (!debugLogRef.current) return;
+    const msg = "dbg: " + args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+    console.log(msg);
+    logSys(msg);
+  }, [logSys]);
   const [pillChannels, setPillChannels] = useState({}); // channel -> entry (+ seq, fading)
   const pillSeqRef = useRef(0);
   const pillTimersRef = useRef({}); // channel -> pending linger/fade timers
@@ -808,14 +825,59 @@ export default function App() {
   const readPosRef = useRef({});
   const readPosLoadedRef = useRef(false); // first server response arrived
   const readPosPushTimerRef = useRef(null);
+  // Serialization of the copy the server is CONFIRMED to hold (successful
+  // PUT, or a pull that showed both sides equal) — lets pushes no-op when
+  // there is nothing new to say.
+  const readPosSentRef = useRef("");
+  // Merge the server copy in (per-entry newest-wins) and report whether the
+  // merged map holds anything the server doesn't — i.e. a local entry the
+  // server never received because a push was dropped while it was down or
+  // restarting. Callers push the merged map back when so: pushing a superset
+  // of what was just pulled can only add entries, never regress one, and it
+  // doubles as the retry for those silently-dropped pushes.
   function mergeReadPos(user, server) {
     const merged = { ...readPosRef.current };
-    for (const [id, e] of Object.entries(server && typeof server === "object" ? server : {})) {
+    const s = server && typeof server === "object" ? server : {};
+    for (const [id, e] of Object.entries(s)) {
       if (!e || typeof e.page !== "number") continue;
       if (!merged[id] || (e.at || "") > (merged[id].at || "")) merged[id] = e;
     }
     readPosRef.current = merged;
     try { localStorage.setItem(`gamma-read-pos:${user}`, JSON.stringify(merged)); } catch {}
+    const newer = Object.entries(merged).filter(([id, e]) => !s[id] || (e.at || "") > (s[id].at || ""));
+    dbg("read-pos merged;", Object.keys(s).length, "server entries;",
+      newer.length ? `local newer: ${newer.map(([id, e]) => `${id}=p${e.page}`).join(",")}` : "in sync");
+    // In sync means the server is confirmed to hold exactly this copy.
+    if (!newer.length) readPosSentRef.current = JSON.stringify({ value: merged });
+    return newer.length > 0;
+  }
+  // Server writes are throttled hard: the first change arms one 15s timer
+  // and every later change rides it, so steady reading costs at most four
+  // PUTs a minute instead of one per page turn. This never risks the
+  // position — localStorage gets the instant copy, and blur/pagehide flush
+  // the armed timer, so the long window only delays what OTHER devices see
+  // while this window still has focus.
+  const READ_POS_PUSH_MS = 15000;
+  function pushReadPosSoon(u) {
+    if (readPosPushTimerRef.current) return; // armed — this change rides it
+    dbg("read-pos push armed (15s)");
+    readPosPushTimerRef.current = setTimeout(async () => {
+      readPosPushTimerRef.current = null;
+      if (prefsUserRef.current !== u) return;
+      const body = JSON.stringify({ value: readPosRef.current });
+      if (body === readPosSentRef.current) { dbg("read-pos push skipped (server current)"); return; }
+      try {
+        await apiJson(`${API}/prefs/read-pos`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        readPosSentRef.current = body;
+        dbg("read-pos pushed OK");
+      } catch (err) {
+        dbg("read-pos push FAILED:", err?.message || String(err));
+      }
+    }, READ_POS_PUSH_MS);
   }
   function recordReadPos(blockId, page) {
     const u = prefsUserRef.current;
@@ -834,18 +896,8 @@ export default function App() {
     }
     readPosRef.current = next;
     try { localStorage.setItem(`gamma-read-pos:${u}`, JSON.stringify(next)); } catch {}
-    if (readPosPushTimerRef.current) clearTimeout(readPosPushTimerRef.current);
-    readPosPushTimerRef.current = setTimeout(async () => {
-      readPosPushTimerRef.current = null;
-      if (prefsUserRef.current !== u) return;
-      try {
-        await apiJson(`${API}/prefs/read-pos`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ value: readPosRef.current }),
-        });
-      } catch {}
-    }, 1000);
+    dbg("read-pos record", blockId, "→ page", page);
+    pushReadPosSoon(u);
   }
   // Multi-browser convergence: whenever this window regains focus, pull the
   // latest stored tabs. Skipped while a local push is pending (ours is newer).
@@ -866,27 +918,42 @@ export default function App() {
         const d = await apiJson(`${API}/prefs/read-pos`);
         if (prefsUserRef.current !== u) return;
         readPosLoadedRef.current = true;
-        mergeReadPos(u, d.value);
+        if (mergeReadPos(u, d.value)) pushReadPosSoon(u);
       } catch {}
     }
-    // Losing focus flushes the debounced read-pos push right away, so the
-    // window being switched TO (or a refresh moments later) pulls the fresh
-    // value — the 1s debounce otherwise loses a quick scroll-then-switch.
+    // Losing focus flushes the armed read-pos push right away, so the window
+    // being switched TO (or a refresh moments later) pulls the fresh value —
+    // the 15s throttle would otherwise delay a quick scroll-then-switch.
+    // Deliberately not marked confirmed: keepalive can't report success, and
+    // the pull-merge heal covers a flush the server never got.
     function flushReadPos() {
       if (!readPosPushTimerRef.current || !prefsUserRef.current) return;
       clearTimeout(readPosPushTimerRef.current);
       readPosPushTimerRef.current = null;
+      const body = JSON.stringify({ value: readPosRef.current });
+      if (body === readPosSentRef.current) { dbg("read-pos flush skipped (server current)"); return; }
+      dbg("read-pos flushed (blur/pagehide)");
       try {
         fetch(`${API}/prefs/read-pos`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ value: readPosRef.current }),
+          body,
           keepalive: true,
           credentials: "same-origin",
         }).catch(() => {});
       } catch {}
     }
-    const onWake = () => { pullTabs(); pullReadPos(); };
+    // Focus flaps (alt-tabbing through windows) must not hammer the server:
+    // wake pulls run at most once per 15s. Cross-window handoff still
+    // converges promptly — the leaving window's blur flush lands first, and
+    // the arriving window usually last pulled more than 15s ago.
+    let lastWakeAt = 0;
+    const onWake = () => {
+      if (Date.now() - lastWakeAt < 15000) return;
+      lastWakeAt = Date.now();
+      pullTabs();
+      pullReadPos();
+    };
     const onVisibility = () => { if (document.hidden) flushReadPos(); else onWake(); };
     window.addEventListener("focus", onWake);
     window.addEventListener("blur", flushReadPos);
@@ -1007,6 +1074,7 @@ export default function App() {
           pendingRestoreRef.current = null;
           restoreTokenRef.current++; // the fallback loop is no longer needed
           if (restoringForRef.current === p.blockId) restoringForRef.current = null;
+          dbg("exact restore: applied pre-paint, top", Math.round(targetTop));
         }
       }
       return;
@@ -1502,6 +1570,13 @@ export default function App() {
     setPdfSelections((prev) => additive
       ? (prev.includes(part) || prev.length >= 6 ? prev : [...prev, part])
       : [part]);
+  }
+  // Figures pending send in the chat (data URLs) — pasted into the chat input
+  // or captured by a Ctrl+drag area selection on the PDF. Lives here (not in
+  // ChatDock) so the viewer can attach even while the chat window is closed.
+  const [chatImages, setChatImages] = useState([]);
+  function addChatImage(dataUrl) {
+    setChatImages((prev) => prev.length >= 4 || prev.includes(dataUrl) ? prev : [...prev, dataUrl]);
   }
   // Styled in-app dialogs replacing window.confirm / link decisions.
   const [confirmBox, setConfirmBox] = useState(null); // {title, message, confirmLabel, danger, onConfirm}
@@ -2180,11 +2255,21 @@ export default function App() {
   // is in flight (the tracker reports page 1 mid-load, which must not
   // overwrite the entry).
   const recordScrollPageRef = useRef(null);
+  const trackPauseReasonRef = useRef(""); // last logged pause reason (debug log)
   useEffect(() => {
     recordScrollPageRef.current = (n) => {
-      if (readOnly || !focusedBlockId || !pdfUrl) return;
-      if (pdfRenderedUrlRef.current !== pdfUrl) return;
-      if (restoringForRef.current === focusedBlockId || coarseRestorePendingRef.current) return;
+      const reason = readOnly ? "readonly"
+        : !focusedBlockId ? "no-focused-block"
+        : !pdfUrl ? "no-pdf-url"
+        : pdfRenderedUrlRef.current !== pdfUrl ? "doc-not-rendered"
+        : restoringForRef.current === focusedBlockId ? "exact-restore-inflight"
+        : coarseRestorePendingRef.current ? "coarse-restore-pending"
+        : "";
+      if (reason !== trackPauseReasonRef.current) {
+        trackPauseReasonRef.current = reason;
+        dbg(reason ? `tracker paused (${reason}) at page ${n}` : `tracker recording from page ${n}`);
+      }
+      if (reason) return;
       recordReadPos(focusedBlockId, n);
     };
   });
@@ -2610,6 +2695,7 @@ export default function App() {
   // itself is instant, after the new document is visible.
   function restorePdfScroll(entry, blockId, targetUrl) {
     if (entry?.top == null || !targetUrl) return;
+    dbg("exact restore: pending for", blockId, "top", Math.round(entry.top));
     const token = ++restoreTokenRef.current;
     restoringForRef.current = blockId || null;
     // Preferred path: the "rendered" callback applies this pre-paint the
@@ -2620,7 +2706,7 @@ export default function App() {
     let lastH = -1;
     const finish = () => { if (restoringForRef.current === blockId) restoringForRef.current = null; };
     const tryScroll = () => {
-      if (restoreTokenRef.current !== token) return; // superseded by a newer navigation
+      if (restoreTokenRef.current !== token) { dbg("exact restore: superseded by navigation"); return; }
       if (pdfRenderedUrlRef.current === targetUrl) {
         const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
         const h = scroller ? scroller.scrollHeight : 0;
@@ -2628,13 +2714,23 @@ export default function App() {
         if (scroller && h > targetTop && h === lastH) {
           scroller.scrollTo({ top: targetTop, behavior: "instant" });
           pendingRestoreRef.current = null;
+          dbg("exact restore: applied, top", Math.round(targetTop));
           finish();
           return;
         }
         lastH = h;
+        // Only the settle-after-render window is budgeted; waiting for the
+        // document itself is uncounted (same reasoning as the coarse
+        // restore: a big PDF on a slow load outlives any fixed budget, and
+        // giving up unfreezes the tracker at the top of the document, which
+        // then records page 1 over the real reading position).
+        if (tries++ >= 80) {
+          dbg("exact restore: gave up settling; height", h, "target", Math.round(targetTop));
+          finish();
+          return;
+        }
       }
-      if (tries++ < 80) setTimeout(tryScroll, 120);
-      else finish();
+      setTimeout(tryScroll, 120);
     };
     tryScroll();
   }
@@ -3242,17 +3338,18 @@ export default function App() {
   // Jump to the last-read page when a document opens.
   // Position comes from the account-synced per-paper map (read-pos pref),
   // falling back to the legacy per-browser session slot only when it belongs
-  // to this page. Polls until the viewer is mounted and the doc is ready
-  // (scrollToRef is set and a page element exists), so it works on PDFs with
-  // no highlights and on slow loads.
+  // to this page. Waits until this document's pages are rendered (however
+  // long that takes), then scrolls and holds the target until the layout
+  // stops shifting under it.
   useEffect(() => {
     coarseRestorePendingRef.current = false;
     if (pdfHidden || !pdfUrl) return;
-    if (restoredPdfUrlRef.current === pdfUrl) return;
+    if (restoredPdfUrlRef.current === pdfUrl) { dbg("restore: already done for this doc"); return; }
     const fid = focusedBlockIdRef.current;
     // Tab switches restore an exact per-page position (tabScrollRef) — the
     // coarse last-read page is only for (re)opening a paper cold.
-    if (tabScrollRef.current[fid]) return;
+    if (tabScrollRef.current[fid]) { dbg("restore: exact tab position exists for", fid); return; }
+    dbg("restore: waiting for doc;", fid, "entry:", readPosRef.current[fid] || null);
     const sess = loadSession();
     const sessSaved = fid && sess.focusedBlockId === fid ? sess.pdfPageNumber : 0;
     coarseRestorePendingRef.current = true;
@@ -3261,59 +3358,104 @@ export default function App() {
     const done = () => { coarseRestorePendingRef.current = false; };
     const tryRestore = () => {
       if (cancelled) return;
-      if (tries++ > 50) { done(); return; } // give up after ~5s
-      if (!scrollToRef.current || !document.querySelector('[data-page]')) {
+      // Wait — uncounted — until THIS document's pages are in the DOM. No
+      // fixed budget: a big PDF on a slow load outlives any, and giving up
+      // would unfreeze the scroll tracker at the top of the document, which
+      // then records page 1 over the saved entry. Waiting is safe:
+      // navigation cancels the loop (effect cleanup), an old document's
+      // pages never match pdfUrl, and the tracker can't record anything
+      // while coarseRestorePendingRef holds it paused.
+      if (!scrollToRef.current || pdfRenderedUrlRef.current !== pdfUrl) {
         setTimeout(tryRestore, 100);
         return;
       }
       // The synced map may still be in flight (fresh browser, or a cache
-      // holding this browser's OLDER position) — wait for the first server
-      // response before trusting local state.
-      if (!readPosLoadedRef.current && tries < 30) {
+      // holding this browser's OLDER position) — give the first server
+      // response a bounded settle window (its catch sets the flag, so this
+      // only rides out a slow response, not a dead server).
+      if (!readPosLoadedRef.current && tries++ < 30) {
         setTimeout(tryRestore, 100);
         return;
       }
       const entry = fid ? readPosRef.current[fid] : null;
       const saved = entry?.page || sessSaved;
-      if (!saved || saved <= 1) { done(); return; }
+      if (!saved || saved <= 1) { dbg("restore: nothing to restore (saved page", saved, ")"); done(); return; }
+      dbg("restore: doc rendered, scrolling to page", saved);
       restoredPdfUrlRef.current = pdfUrl;
-      scrollToRef.current({
-        position: {
-          pageNumber: saved,
-          boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: saved },
-          rects: [],
-        },
-      });
-      done();
+      const pos = {
+        pageNumber: saved,
+        boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: saved },
+        rects: [],
+      };
+      // A single scrollTo cannot be trusted on a cold load — it may be
+      // computed before the fit-width scale applies, and late page-height
+      // measurements shift the layout under the set scrollTop, either of
+      // which leaves the viewport a page off. So verify against the live
+      // DOM: the target page's top must sit at the viewport top (+80px, the
+      // viewer's own jump offset), re-asserting until that holds for two
+      // ticks. Real user input (wheel/touch/scrollbar grab) hands control
+      // over instead of being fought, and the tracker stays paused until
+      // done(), so no transient position is ever recorded.
+      let stable = 0, settleTries = 0, userTookOver = false, inputEl = null;
+      const INPUT_EVS = ["wheel", "touchstart", "mousedown"];
+      const onUserInput = () => { userTookOver = true; };
+      const unhookInput = () => {
+        if (inputEl) for (const ev of INPUT_EVS) inputEl.removeEventListener(ev, onUserInput);
+        inputEl = null;
+      };
+      const settle = () => {
+        if (cancelled) { unhookInput(); return; }
+        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+        if (!scroller || settleTries++ > 60) { unhookInput(); done(); return; }
+        if (userTookOver) { dbg("restore: user took over during settle"); unhookInput(); done(); return; }
+        if (inputEl !== scroller) {
+          unhookInput();
+          inputEl = scroller;
+          for (const ev of INPUT_EVS) inputEl.addEventListener(ev, onUserInput, { passive: true });
+        }
+        const pageEl = scroller.querySelector(`[data-page="${saved}"]`);
+        const off = pageEl
+          ? pageEl.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+          : null;
+        // A page near the end of the document can't reach the viewport top —
+        // the clamped bottom-of-document position is as good as it gets.
+        const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+        const aligned = off != null && (Math.abs(off - 80) <= 150 || (atEnd && off <= 80));
+        if (aligned) {
+          if (++stable >= 2) { dbg("restore: settled at page", saved); unhookInput(); done(); return; }
+        } else {
+          stable = 0;
+          // "auto" = instant. The default smooth animation for short jumps
+          // is interruptible by cold-load render work, which would strand
+          // the viewport short of the target.
+          scrollToRef.current({ position: pos, behavior: "auto" });
+        }
+        setTimeout(settle, 150);
+      };
+      settle();
     };
     tryRestore();
     return () => { cancelled = true; done(); };
   }, [pdfUrl, pdfHidden]);
 
-  // Track PDF scroll position — poll via scrollable container
+  // Track PDF scroll position — feeds the page indicator and the synced
+  // per-paper reading position.
   useEffect(() => {
     if (!pdfUrl || pdfHidden) return;
-    let container = null;
     let ticking = false;
-    function findContainer() {
-      const p = document.querySelector('[data-page]');
-      if (!p) return null;
-      let el = p.parentElement;
-      while (el && el !== document.body) {
-        if (el.scrollHeight > el.clientHeight) return el;
-        el = el.parentElement;
-      }
-      return null;
-    }
-    function onScroll() {
+    function onScroll(e) {
+      // Fast bail without any DOM query: the notes/chat panes pass through
+      // here too, but only the PDF scroller itself matters.
+      const target = e.target;
+      if (!(target instanceof Element) || !target.classList.contains("pdfViewer")) return;
       if (ticking) return;
       ticking = true;
       requestAnimationFrame(() => {
         ticking = false;
-        if (!container) return;
-        const pages = container.querySelectorAll('[data-page]');
+        if (!target.isConnected) return;
+        const pages = target.querySelectorAll('[data-page]');
         if (pages.length === 0) return;
-        const cr = container.getBoundingClientRect();
+        const cr = target.getBoundingClientRect();
         const midY = cr.top + cr.height / 2;
         for (const el of pages) {
           const r = el.getBoundingClientRect();
@@ -3329,20 +3471,15 @@ export default function App() {
         }
       });
     }
-    // Retry finding container until pages render
-    let tries = 0;
-    const retry = setInterval(() => {
-      container = findContainer();
-      if (container) {
-        clearInterval(retry);
-        container.addEventListener('scroll', onScroll, { passive: true });
-      }
-      if (++tries > 30) clearInterval(retry);
-    }, 300);
-    return () => {
-      clearInterval(retry);
-      if (container) container.removeEventListener('scroll', onScroll);
-    };
+    // Capture-phase listener on the document: element scroll events don't
+    // bubble, but they do pass document in the capture phase, so this hears
+    // the viewer no matter how late its pages mount or how often layout
+    // changes remount the scroller. Never attach to the scroller element
+    // itself — a slow-loading document outlives any attach-retry budget,
+    // and a remount silently drops a per-element listener, ending position
+    // tracking for the rest of the session.
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    return () => document.removeEventListener('scroll', onScroll, { capture: true });
   }, [pdfUrl, pdfHidden]);
 
   // Login page state
@@ -3534,23 +3671,12 @@ export default function App() {
                       >
                         <div className="popoverTitle citeSectionRow">
                           <span>Paper metadata</span>
-                          <span style={{ display: "inline-flex", gap: 4 }}>
-                            <button
-                              className="searchToggle"
-                              title="AI: read the PDF and fill in the paper's title"
-                              aria-label="Fill in title with AI"
-                              disabled={aiTitleBusy}
-                              onClick={aiFillTitle}
-                            >{aiTitleBusy ? "…" : (
-                              <SparklesIcon size={13} />
-                            )}</button>
-                            <button
-                              className="searchToggle"
-                              title="Refresh metadata (arXiv → DOI → AI)"
-                              disabled={metaBusy}
-                              onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
-                            >{metaBusy ? "…" : "↻"}</button>
-                          </span>
+                          <button
+                            className="searchToggle"
+                            title="Refresh metadata (arXiv → DOI → AI)"
+                            disabled={metaBusy}
+                            onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
+                          >{metaBusy ? "…" : "↻"}</button>
                         </div>
                         <div className="metaTable">
                           {[
@@ -3588,6 +3714,15 @@ export default function App() {
                                     <ExternalLinkIcon size={11} />
                                   </a>
                                 ) : null}
+                                {key === "title" ? (
+                                  <button
+                                    className="searchToggle metaRowBtn"
+                                    title="AI: read the PDF and fill in the paper's title"
+                                    aria-label="Fill in title with AI"
+                                    disabled={aiTitleBusy}
+                                    onClick={aiFillTitle}
+                                  >{aiTitleBusy ? "…" : <SparklesIcon size={13} />}</button>
+                                ) : null}
                               </span>
                             </div>
                           ))}
@@ -3596,19 +3731,21 @@ export default function App() {
                           ) : null}
                           <div className="metaRow">
                             <span className="metaKey">PDF text</span>
-                            <span className="metaVal" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <span className="metaVal" style={{ flex: 1, display: "flex", alignItems: "center", gap: 6 }}>
                               {!pdfTextInfo || pdfTextInfo.checking ? "checking…"
                                 : pdfTextInfo.error ? `check failed — ${pdfTextInfo.error}`
                                 : !pdfTextInfo.found ? "file not on server"
                                 : pdfTextInfo.ok ? "✓ extracted"
                                 : "✗ none — scanned or image-only? AI can't read it"}
                               {pdfTextInfo?.ok ? (
-                                <button className="searchToggle" title="Preview the extracted text (what the AI reads)"
-                                  onClick={openPdfTextPreview}>view</button>
+                                <button className="searchToggle metaRowBtn" style={{ marginLeft: "auto" }}
+                                  title="Preview the extracted text (what the AI reads)"
+                                  onClick={openPdfTextPreview}><EyeIcon size={13} /></button>
                               ) : null}
                               {pdfTextInfo && !pdfTextInfo.checking && !pdfTextInfo.ok ? (
                                 <button
-                                  className="searchToggle"
+                                  className="searchToggle metaRowBtn"
+                                  style={{ marginLeft: "auto" }}
                                   title="Re-check text extraction (e.g. after replacing the source file) — retries the metadata lookup if text appears"
                                   onClick={() => checkPdfText(true)}
                                 >↻</button>
@@ -4499,6 +4636,7 @@ export default function App() {
           docId={docId} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pdfTitle={pdfTitle}
           openTabs={openTabs}
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
+          chatImages={chatImages} setChatImages={setChatImages}
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
           chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider}
@@ -5073,6 +5211,7 @@ export default function App() {
                 addPdfSelection(highlights.find(h => h.id === hlId)?.content?.text, additive);
               }}
               onHighlightContext={setHighlightMenu}
+              onAreaSelection={addChatImage}
               onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {
                 if (extras?.link) {
                   setLinkDialog({ position, content });
@@ -5304,7 +5443,7 @@ export default function App() {
           },
         }}
         search={{ searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper, indexTask, setStatus }}
-        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, isAdmin: !!authUser?.is_admin }}
+        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, isAdmin: !!authUser?.is_admin, debugLog, setDebugLog }}
       />
       {usersOpen ? (
         <div className="reportOverlay" onClick={() => setUsersOpen(false)}>

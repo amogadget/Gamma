@@ -1086,6 +1086,37 @@ body {
 }
 .pdfOutlineBtn.open { color: var(--accent); }
 
+/* Current-page widget — top-right, same elevated look as the TOC button.
+   The number is an input: type a page and press Enter to jump. */
+.pdfPageWidget {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.pdfPageWidget input {
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+  min-width: 1ch;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: right;
+}
+.pdfPageWidget input:focus { color: var(--accent); }
+.pdfPageTotal { margin-left: 3px; white-space: nowrap; }
+[data-theme="light"] .pdfPageWidget { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+
 /* The floating status pill — the app's single transient-message surface
    (status messages, PDF load progress, load errors), anchored top-center of
    the main pane. Fed through App's postPill() channels; only one message
@@ -2827,6 +2858,25 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   outline: 1px solid rgba(80, 140, 255, 0.55);
 }
 
+/* --- area notes (Ctrl+drag rectangle selection on the PDF) --- */
+/* Ctrl held: dragging draws a rectangle, so cue it over everything on the page. */
+.pdfViewer.areaCursor .pdfPageWrap,
+.pdfViewer.areaCursor .textLayer,
+.pdfViewer.areaCursor .textLayer span {
+  cursor: crosshair;
+}
+/* The rubber band while dragging, and the drawn rect while the color tip is open.
+   Pages are always white, so a fixed accent blue works in both themes. */
+.pdfAreaMarquee {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 1.5px dashed rgba(80, 140, 255, 0.9);
+  background: rgba(80, 140, 255, 0.08);
+  border-radius: 2px;
+}
+
 /* --- citation export (share popover) --- */
 .citeMetaLine {
   font-size: 12px;
@@ -2882,7 +2932,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border: 1px solid transparent;
   border-radius: 4px;
   padding: 1px 4px;
-  margin: -2px 0;
+  /* Pull the input left by its border+padding so its text starts flush at the
+     value column, aligned with the read-only rows below. */
+  margin: -2px 0 -2px -5px;
 }
 .metaInput:hover { border-color: var(--border); }
 .metaInput:focus {
@@ -2892,6 +2944,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-primary);
 }
 .metaLink { display: inline-flex; align-items: center; color: var(--accent); flex-shrink: 0; }
+/* Icon buttons inside metadata rows: negative vertical margins keep the 20px
+   hit target from inflating the text row's height, so keys and values stay
+   on one baseline. */
+.metaTable .metaRowBtn { width: 20px; height: 20px; margin: -4px 0; }
 
 /* --- reference-link creation --- */
 .linkTipBtn {
