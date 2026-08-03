@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from ..auth import require_user, resolve_user
 from ..db import user_uploads_dir
+from ..logbuf import log
 
 router = APIRouter(prefix="/api", tags=["pdf"])
 
@@ -66,7 +67,7 @@ def _open_access_pdf_for_doi(doi: str) -> tuple[str, str]:
             return "", ""
         return locs[0]["url_for_pdf"], locs[0].get("version") or ""
     except Exception as e:
-        print(f"[resolve-pdf] unpaywall lookup failed: {e}")
+        log.warning(f"[resolve-pdf] unpaywall lookup failed: {e}")
         return "", ""
 
 
@@ -129,7 +130,7 @@ def resolve_pdf(payload: ResolvePdfRequest, request: Request):
                     # doc id is a hash of this URL, so it must stay stable.
                     return {"source_url": pdf_url}
             except Exception as e:
-                print(f"[resolve-pdf] citation_pdf_url fetch failed: {e}")
+                log.warning(f"[resolve-pdf] citation_pdf_url fetch failed: {e}")
 
     # For DOI links (or pages that state their DOI), the publisher PDF is
     # usually paywalled or bot-blocked — look for a legal open-access copy.

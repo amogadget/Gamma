@@ -21,6 +21,7 @@ from ..blocks_store import (
     last_child_position,
 )
 from ..db import connect_data_db, page_now, user_db_path, user_uploads_dir
+from ..logbuf import log
 from ..markdown_export import build_tree
 from ..storage import cleanup_orphan_uploads
 from ..textnorm import fuzzy_pattern
@@ -340,7 +341,7 @@ def _purge_derived_data(user: str, conn, deleted_ids: list):
                 ddb.execute("DELETE FROM pdf_fts_docs WHERE doc_id = ?", (d,))
             ddb.commit()
     except Exception as e:
-        print(f"[blocks] derived-data cleanup failed: {e}")
+        log.warning(f"[blocks] derived-data cleanup failed: {e}")
 
 
 @router.delete("/blocks/{block_id}")

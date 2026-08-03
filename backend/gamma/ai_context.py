@@ -8,6 +8,7 @@ from urllib.request import Request as URLRequest, urlopen
 
 from .blocks_store import fetch_subtree
 from .db import user_db_path, user_uploads_dir
+from .logbuf import log
 from .pdf_text import PDF_EXTRACT_FAILED, extract_text
 
 
@@ -83,7 +84,7 @@ def build_messages(payload, context: str) -> list[dict]:
 
 def _download_pdf_from_source(user: str, doc_id: str, pdf_path) -> None:
     """Best-effort download of a missing PDF from its recorded source URL."""
-    print(f"[ai_chat] PDF NOT FOUND at {pdf_path}, attempting download from source_url")
+    log.info(f"[ai_chat] PDF NOT FOUND at {pdf_path}, attempting download from source_url")
     try:
         with sqlite3.connect(user_db_path(user, "pages.db")) as connection:
             row = connection.execute(
@@ -105,9 +106,9 @@ def _download_pdf_from_source(user: str, doc_id: str, pdf_path) -> None:
             pdf_data = response.read()
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
         pdf_path.write_bytes(pdf_data)
-        print(f"[ai_chat] downloaded {len(pdf_data)} bytes from {source}")
+        log.info(f"[ai_chat] downloaded {len(pdf_data)} bytes from {source}")
     except Exception as error:
-        print(f"[ai_chat] download failed: {error}")
+        log.warning(f"[ai_chat] download failed: {error}")
 
 
 def pdf_path(user: str, doc_id: str):
@@ -125,12 +126,12 @@ def truncate(text: str, limit: int) -> str:
 def extract_pdf_context(user: str, doc_id: str, limit: int = 8000) -> str:
     path = pdf_path(user, doc_id)
     if not path:
-        print("[ai_chat] PDF still not found after download attempt")
+        log.warning("[ai_chat] PDF still not found after download attempt")
         return ""
     try:
         return truncate(extract_text(str(path), limit), limit)
     except Exception as error:
-        print(f"[ai_chat] extraction error: {error}")
+        log.warning(f"[ai_chat] extraction error: {error}")
         return PDF_EXTRACT_FAILED
 
 
@@ -141,7 +142,7 @@ def load_pdf_b64(user: str, doc_id: str) -> str | None:
         return None
     data = path.read_bytes()
     if len(data) > MAX_ATTACH_PDF_BYTES:
-        print(f"[ai_chat] PDF too large to attach ({len(data)} bytes), falling back to text")
+        log.info(f"[ai_chat] PDF too large to attach ({len(data)} bytes), falling back to text")
         return None
     return base64.standard_b64encode(data).decode("ascii")
 
@@ -151,7 +152,7 @@ def pdf_text_from_b64(data: str, limit: int = 8000) -> str:
     try:
         return truncate(extract_text(base64.standard_b64decode(data), limit), limit)
     except Exception as error:
-        print(f"[ai_chat] uploaded-PDF extraction failed: {error}")
+        log.warning(f"[ai_chat] uploaded-PDF extraction failed: {error}")
         return ""
 
 

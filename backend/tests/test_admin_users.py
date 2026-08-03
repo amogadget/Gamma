@@ -167,18 +167,21 @@ def test_self_rename_keeps_the_session_working(boss):
     assert s["user"] == "bigboss" and s["is_admin"] is True
 
 
-def test_seed_hints_but_never_backdoors_an_adminless_instance(boss, capsys):
+def test_seed_hints_but_never_backdoors_an_adminless_instance(boss):
     """Accounts exist but nobody has the privilege (upgraded instance) — the
-    seed must NOT create an admin login; it only prints a hint."""
+    seed must NOT create an admin login; it only logs a hint."""
     from gamma.db import connect_users_db
+    from gamma.logbuf import tail
     from gamma.seed import ensure_admin_seed
 
     with connect_users_db() as conn:
         conn.execute("UPDATE users SET is_admin = 0")
         conn.commit()
     try:
+        seen = tail(0)
+        last_seq = seen[-1]["seq"] if seen else 0
         assert ensure_admin_seed() is None
-        assert "set-admin" in capsys.readouterr().out
+        assert any("set-admin" in e["msg"] for e in tail(last_seq))
         with connect_users_db() as conn:
             assert conn.execute("SELECT COUNT(*) FROM users WHERE is_admin = 1").fetchone()[0] == 0
     finally:  # restore for the tests below

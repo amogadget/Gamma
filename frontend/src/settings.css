@@ -102,3 +102,55 @@
   margin-top: 2px;
 }
 .promptSectionHead .chatClearBtn { font-size: 10px; }
+
+/* --- Paper metadata pane: library status table + batch retry (layout only —
+   controls are the shared uiBtn/checkbox) --- */
+.metaStatHead { margin-top: 14px; }
+.metaStatActions { display: flex; gap: 6px; }
+.metaStatSummary { font-size: 12px; color: var(--text-muted); margin: 6px 0 2px; }
+.metaStatTable {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 300px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+.metaStatRow {
+  display: grid;
+  grid-template-columns: 24px 1fr 88px 78px 78px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+.metaStatRow:last-child { border-bottom: none; }
+.metaStatRow:hover { background: var(--bg-hover); }
+.metaStatRow input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
+.metaStatHeader {
+  position: sticky;
+  top: 0;
+  background: var(--bg-surface);
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: default;
+  z-index: 1;
+}
+.metaStatTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.metaStatOk { color: var(--ok, #3a9d5d); }
+.metaStatBad { color: var(--danger, #c95555); }
+.metaStatMuted { color: var(--text-muted); }
+.metaStatBatchRow { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.metaStatProgress {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}

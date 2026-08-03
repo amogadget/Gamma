@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from ..auth import require_admin
 from ..config import USERS_DIR
 from ..db import connect_users_db, page_now
+from ..logbuf import tail as _log_tail
 from ..seed import create_user_dbs
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -52,6 +53,15 @@ def _check_password(password: str) -> str:
     if not password or len(password) > MAX_PASSWORD_LEN:
         raise HTTPException(status_code=400, detail="password must be 1-128 characters")
     return password
+
+
+@router.get("/logs")
+async def get_logs(request: Request, after: int = 0):
+    """Scrubbed in-memory server log (see gamma.logbuf) for the Settings →
+    Diagnostics panel. `after` is the last seq the client has seen, so the UI
+    polls incrementally. Admin-only: log lines reveal other users' activity."""
+    require_admin(request)
+    return {"entries": _log_tail(after)}
 
 
 @router.get("/users")

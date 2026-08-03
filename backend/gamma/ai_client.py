@@ -11,6 +11,8 @@ import urllib.error
 import urllib.request
 import uuid
 
+from .logbuf import log
+
 
 def anthropic_request(
     conf, messages, system, model, pdf_b64s=None, effort="",
@@ -241,7 +243,7 @@ def open_ai(
         return urllib.request.urlopen(request, timeout=timeout)
     except urllib.error.HTTPError as error:
         detail = upstream_detail(error)
-        print(f"[ai] {detail}")
+        log.warning(f"[ai] {detail}")
         raise UpstreamError(error.code, detail)
 
 

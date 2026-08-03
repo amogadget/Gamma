@@ -44,6 +44,8 @@ from ..ai_settings import (
 from ..auth import require_user
 from ..config import AI_PROTOCOLS
 from ..db import page_now
+from ..logbuf import log
+from ..pdf_text import extract_text
 
 router = APIRouter(prefix="/api", tags=["ai"])
 
@@ -105,7 +107,7 @@ def pdf_text_status(doc_id: str, request: Request, preview: int = 0):
             out["text"] = text[:preview]
         return out
     except Exception as e:
-        print(f"[pdf-text-status] {e}")
+        log.warning(f"[pdf-text-status] {e}")
         return {"found": True, "ok": False, "chars": 0}
 
 
@@ -335,7 +337,7 @@ def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
         models = list(dict.fromkeys(listed + hidden))
         return models or _CHATGPT_MODEL_FALLBACK
     except Exception as e:
-        print(f"[ai] chatgpt model listing failed, using fallback: {e}")
+        log.warning(f"[ai] chatgpt model listing failed, using fallback: {e}")
         return _CHATGPT_MODEL_FALLBACK
 
 
@@ -529,7 +531,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                 if not (native and pdf_b64s and _protocol(rt, entry) == "chatgpt"
                         and 400 <= e.status < 500):
                     raise
-                print(f"[ai_chat] chatgpt rejected native PDF parts, retrying as text: {e}")
+                log.warning(f"[ai_chat] chatgpt rejected native PDF parts, retrying as text: {e}")
 
     try:
         if payload.stream:
@@ -542,7 +544,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                     for text in _sse_deltas(resp, _protocol(rt, entry)):
                         yield json.dumps({"delta": text}) + "\n"
                 except Exception as e:
-                    print(f"[ai_chat] stream error: {e}")
+                    log.warning(f"[ai_chat] stream error: {e}")
                     yield json.dumps({"error": f"AI call failed: {e}"}) + "\n"
                 finally:
                     resp.close()
@@ -554,5 +556,5 @@ def ai_chat(payload: AIChatRequest, request: Request):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[ai_chat] API error: {e}")
+        log.warning(f"[ai_chat] API error: {e}")
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")

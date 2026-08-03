@@ -42,6 +42,9 @@ export const PaperIcon = (p) => (
 export const LabelIcon = (p) => (
   <Icon {...p}><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" /><circle cx="7.5" cy="7.5" r=".5" fill="currentColor" /></Icon>
 );
+export const XIcon = (p) => (
+  <Icon {...p}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></Icon>
+);
 export const SearchIcon = (p) => (
   <Icon {...p}><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></Icon>
 );
