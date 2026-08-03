@@ -379,6 +379,13 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => { el.removeEventListener("wheel", onWheel); cancelAnimationFrame(wheelRafRef.current); };
   }, []);
 
+  // Where page previews come from, or null when the document is not one of our
+  // uploads (the /api/pdf proxy has no file for the server to render).
+  const previewBase = useMemo(() => {
+    const m = /^\/api\/uploads\/([A-Za-z0-9_-]+)\.pdf$/.exec(url || "");
+    return m ? `${"/api/page-image"}/${m[1]}` : null;
+  }, [url]);
+
   // Group find marks per page once, sharing one frozen empty array so pages
   // without marks keep referentially-equal props (memo stays effective).
   const marksByPage = useMemo(() => {
@@ -1163,6 +1170,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           pendingArea={selPopup?.kind === "area" && selPopup.pageNumber === i + 1 ? selPopup : null}
           reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
           findMarks={marksByPage.get(i + 1) || EMPTY_MARKS}
+          previewBase={previewBase}
           onInternalLink={goToDestStable}
           onExternalLink={stableCbs.onExternalLink}
           onPainted={onPagePainted}
@@ -1225,7 +1233,7 @@ function OutlineNode({ item, depth, onDest, onUrl }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea, previewBase }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1235,6 +1243,18 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
   const [pageSize, setPageSize] = useState(null);
   const [visible, setVisible] = useState(false);
   const [links, setLinks] = useState([]); // link annotations, rects at scale 1
+  // Painted flips once pdf.js has drawn this page; until then a server preview
+  // may stand in for it.
+  const [painted, setPainted] = useState(false);
+  const [previewSrc, setPreviewSrc] = useState(null);
+  // Only worth a request when pdf.js is visibly slow. On a warm open it paints
+  // well inside this delay and no preview is ever fetched.
+  useEffect(() => {
+    if (!previewBase || !visible || painted) return;
+    const t = setTimeout(() => setPreviewSrc(`${previewBase}/${pageNumber}?w=1280`), 150);
+    return () => clearTimeout(t);
+  }, [previewBase, visible, painted, pageNumber]);
+  useEffect(() => { setPainted(false); }, [pdfDoc]);
 
   useEffect(() => {
     if (forceRender) { setVisible(true); return; }
@@ -1288,6 +1308,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
           throw err;
         }
         if (cancelled) return;
+        setPainted(true);
         onPainted?.();
 
         const textL = textRef.current;
@@ -1393,6 +1414,19 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         height: pageSize ? curH : (reservedHeight || undefined),
         minHeight: pageSize || reservedHeight ? undefined : 200,
       }}>
+      {/* Server-rendered stand-in until pdf.js paints this page. Stretched to
+          100%/100% of the same wrapper as the canvas, so the two occupy the
+          identical rectangle whatever their intrinsic pixel sizes.
+          It is removed on `painted` rather than layered beneath the canvas:
+          giving the canvas a z-index to cover it lifted the canvas above
+          .textLayer — which pdf.js's own CSS positions with z-index auto — and
+          silently broke text selection. Nothing here may be stacked above that
+          layer. */}
+      {previewSrc && !painted ? (
+        <img src={previewSrc} alt="" aria-hidden="true" draggable={false}
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%",
+                   pointerEvents: "none" }} />
+      ) : null}
       {/* 100% of the wrapper: on a zoom change the old bitmap stretches to the
           new size immediately (blurry for a moment) instead of sitting at its
           old size in a resized box until the sharp re-render lands. */}

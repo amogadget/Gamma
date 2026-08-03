@@ -20,6 +20,7 @@ from .routers import (
     export,
     imports,
     metadata,
+    pageimage,
     pdf,
     prefs,
     search,
@@ -99,6 +100,7 @@ def create_app() -> FastAPI:
     app.include_router(shares.router)
     app.include_router(pdf.router)
     app.include_router(uploads.router)
+    app.include_router(pageimage.router)
     app.include_router(blocks.router)
     app.include_router(imports.router)
     app.include_router(export.router)
