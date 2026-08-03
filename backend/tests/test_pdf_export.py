@@ -76,6 +76,31 @@ def test_annotate_multiline_and_skips_unusable():
     assert "/Contents" not in obj  # empty note omitted
 
 
+def test_annotate_area_as_square():
+    """An area note (position carries area: true) exports as a /Square
+    annotation over the rect, not a /Highlight with quad points."""
+    from PyPDF2 import PdfReader
+
+    pos = _position()
+    pos["area"] = True
+    out, written = annotate_pdf(
+        _blank_pdf(),
+        [{"position": pos, "color": "rgba(155, 205, 255, 0.65)", "note": "figure note"}],
+        author="tester",
+    )
+    assert written == 1
+    obj = PdfReader(io.BytesIO(out)).pages[0]["/Annots"][0].get_object()
+    assert str(obj["/Subtype"]) == "/Square"
+    assert "/QuadPoints" not in obj
+    rect = [float(v) for v in obj["/Rect"]]
+    # Viewer top-left-origin y ∈ [72, 92] on a 792pt page → PDF y ∈ [700, 720].
+    assert rect == [100, 700, 300, 720]
+    assert str(obj["/Contents"]) == "figure note"
+    assert str(obj["/T"]) == "tester"
+    assert float(obj["/CA"]) == 0.65
+    assert int(obj["/BS"]["/W"]) == 2
+
+
 def test_annotate_rotated_page():
     """On a 90°-rotated page the viewer's x axis runs along PDF y."""
     from PyPDF2 import PdfReader
