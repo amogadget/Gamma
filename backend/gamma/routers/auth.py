@@ -25,6 +25,19 @@ from ..seed import create_user_dbs, ensure_guest_user, reset_guest_data
 router = APIRouter(prefix="/api", tags=["auth"])
 
 
+# Zipping a big library takes a while and the client sees no bytes until the
+# zip is done — this side-channel lets the UI poll a percent meanwhile. Plain
+# dict keyed by user: worker thread writes, poll requests read (GIL-safe);
+# a stale entry from a crashed export is simply overwritten by the next one.
+_export_progress: dict[str, dict] = {}
+
+
+@router.get("/export-progress")
+def export_progress(request: Request):
+    user = require_user(request)
+    return _export_progress.get(user) or {"active": False, "total": 0, "done": 0}
+
+
 # Sync endpoint on purpose: zipping a large library runs in the threadpool.
 @router.get("/export")
 def export_data(request: Request, uploads: int = 1):
@@ -37,15 +50,23 @@ def export_data(request: Request, uploads: int = 1):
     if not user_dir.exists():
         raise HTTPException(status_code=404, detail="no data for this user yet")
 
+    # Input bytes to process, known up front — the basis for the percent.
+    upload_files = []
+    uploads_dir = user_dir / "uploads"
+    if uploads and uploads_dir.exists():
+        upload_files = sorted(f for f in uploads_dir.iterdir() if f.is_file())
+    db_files = [user_dir / n for n in ("pages.db", "data.db") if (user_dir / n).exists()]
+    prog = {"active": True,
+            "total": sum(f.stat().st_size for f in db_files + upload_files),
+            "done": 0}
+    _export_progress[user] = prog
+
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
     tmp.close()
     try:
         with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as z:
-            for dbname in ("pages.db", "data.db"):
-                src = user_dir / dbname
-                if not src.exists():
-                    continue
-                snap = Path(tmp.name + "." + dbname)
+            for src in db_files:
+                snap = Path(tmp.name + "." + src.name)
                 # sqlite3's context manager commits but does NOT close — on
                 # Windows the open handle would block unlink, so close explicitly.
                 src_conn = sqlite3.connect(str(src))
@@ -55,13 +76,12 @@ def export_data(request: Request, uploads: int = 1):
                 finally:
                     src_conn.close()
                     dst_conn.close()
-                z.write(snap, dbname)
+                z.write(snap, src.name)
                 snap.unlink()
-            uploads_dir = user_dir / "uploads"
-            if uploads and uploads_dir.exists():
-                for f in sorted(uploads_dir.iterdir()):
-                    if f.is_file():
-                        z.write(f, f"uploads/{f.name}")
+                prog["done"] += src.stat().st_size
+            for f in upload_files:
+                z.write(f, f"uploads/{f.name}")
+                prog["done"] += f.stat().st_size
             z.writestr("manifest.json", json.dumps({
                 "format": "gamma-backup-1",
                 "user": user,
@@ -71,6 +91,8 @@ def export_data(request: Request, uploads: int = 1):
     except Exception:
         os.unlink(tmp.name)
         raise
+    finally:
+        prog["active"] = False
     kind = "" if uploads else "-db"
     filename = f"gamma-export{kind}-{user}-{page_now()[:10]}.zip"
     return FileResponse(tmp.name, media_type="application/zip", filename=filename,

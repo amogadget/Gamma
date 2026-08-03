@@ -116,6 +116,13 @@ def test_nested_or_dotted_upload_names_are_skipped(receiver, donor):
     assert r.json()["uploads_in_backup"] == 0
 
 
+def test_export_progress_side_channel(donor):
+    assert donor.get("/api/export").status_code == 200
+    p = donor.get("/api/export-progress").json()
+    assert p["active"] is False
+    assert p["total"] > 0 and p["done"] == p["total"]
+
+
 def test_export_notes_only_skips_uploads(donor):
     donor.post("/api/uploads", files={"file": ("n.pdf", b"%PDF-1.4 notesonly", "application/pdf")})
     r = donor.get("/api/export", params={"uploads": 0})

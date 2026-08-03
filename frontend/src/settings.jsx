@@ -16,7 +16,7 @@ const NAV_ITEMS = [
   ["papers", "Paper metadata", PaperIcon],
   ["ai", "AI & API keys", KeyIcon],
   ["prompts", "Prompts", SlidersIcon],
-  ["context", "AI context", BookIcon],
+  ["context", "AI chat", BookIcon],
   ["search", "Search", SearchIcon],
   ["diagnostics", "Diagnostics", ActivityIcon],
 ];
@@ -560,8 +560,8 @@ function ContextSettings({ value }) {
   ];
   return (
     <>
-      <PaneIntro title="AI context">
-        Control how much extracted PDF text Gamma sends to the AI. Larger values can improve answers but use more tokens.
+      <PaneIntro title="AI chat">
+        Chat behavior and how much extracted PDF text Gamma sends to the AI. Larger context values can improve answers but use more tokens.
       </PaneIntro>
       <SettingToggle
         label="Clear snapshots when clicking elsewhere"

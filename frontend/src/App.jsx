@@ -168,6 +168,66 @@ export default function App() {
     } catch { setLoginError("Guest login failed"); }
   }
 
+  // Download an /api/export backup zip. Fetched by hand (not a plain link
+  // navigation) so the user sees the two slow parts: the server zipping a big
+  // library ("preparing", no byte counter) and the download itself (percent
+  // from content-length). Shows in the pill + a background-tasks row.
+  async function exportUserData(withUploads) {
+    const label = withUploads ? "Export my data" : "Export database";
+    const tid = addTransfer({ name: label, kind: "download", info: "preparing…" });
+    postPill("backup", { msg: "Preparing export — the server is zipping your data…", spinner: true });
+    // The response only starts once the server finished zipping; until then,
+    // poll the zipping percent from the export-progress side-channel.
+    const zipPoll = setInterval(async () => {
+      try {
+        const p = await apiJson(`${API}/export-progress`);
+        if (p.active && p.total) {
+          const pct = Math.min(99, Math.floor((p.done / p.total) * 100));
+          postPill("backup", { msg: `Preparing export — zipping… ${pct}% (${fmtBytes(p.done)} of ${fmtBytes(p.total)})`, spinner: true });
+          updateTransfer(tid, { info: `zipping… ${pct}%` });
+        }
+      } catch {}
+    }, 500);
+    try {
+      const res = await fetch(`${API}/export${withUploads ? "" : "?uploads=0"}`, { credentials: "include" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+      clearInterval(zipPoll);
+      const total = Number(res.headers.get("content-length")) || 0;
+      const reader = res.body.getReader();
+      const chunks = [];
+      let loaded = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        const pct = total ? Math.min(99, Math.floor((loaded / total) * 100)) : null;
+        postPill("backup", {
+          msg: total
+            ? `Downloading backup… ${pct}% (${fmtBytes(loaded)} of ${fmtBytes(total)})`
+            : `Downloading backup… ${fmtBytes(loaded)}`,
+          spinner: true,
+        });
+        updateTransfer(tid, { info: total ? `${fmtBytes(loaded)} / ${fmtBytes(total)}` : fmtBytes(loaded) });
+      }
+      const blob = new Blob(chunks, { type: "application/zip" });
+      const m = /filename="?([^";]+)/.exec(res.headers.get("content-disposition") || "");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = m ? m[1] : "gamma-export.zip";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+      updateTransfer(tid, { status: "done", info: fmtBytes(blob.size) });
+      postPill("backup", null);
+      setStatus(`Backup downloaded (${fmtBytes(blob.size)}).`);
+    } catch (err) {
+      clearInterval(zipPoll);
+      updateTransfer(tid, { status: "error", info: String(err.message || err).slice(0, 60) });
+      postPill("backup", null);
+      setStatus(`Export failed: ${err.message}`);
+    }
+  }
+
   // Restore an "Export my data" zip into this account. mode "replace": notes +
   // settings are replaced by the backup, uploaded files are merged in. mode
   // "merge": only pages/chats missing here are added, existing data wins.
@@ -177,30 +237,72 @@ export default function App() {
     const inp = document.createElement("input");
     inp.type = "file";
     inp.accept = ".zip,application/zip";
-    inp.onchange = async () => {
+    inp.onchange = () => {
       const f = inp.files?.[0];
       if (!f) return;
-      const warning = mode === "merge"
-        ? `Merge "${f.name}" into the account "${authUser.user}"?\n\n` +
-          "Pages and chats from the backup that don't exist here yet will be ADDED. " +
-          "Everything already in this account (including settings) is kept unchanged."
-        : `Restore "${f.name}" into the account "${authUser.user}"?\n\n` +
-          "ALL current notes, chats, and settings will be REPLACED by the backup. " +
-          "Uploaded PDFs are merged in (nothing is deleted). This cannot be undone.";
-      if (!window.confirm(warning)) return;
-      setStatus(mode === "merge" ? "Merging backup…" : "Importing backup…");
-      try {
-        const fd = new FormData();
-        fd.append("file", f);
-        const res = await fetch(`${API}/import-data?mode=${mode}`, { method: "POST", body: fd, credentials: "include" });
-        const d = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(d.detail || res.statusText);
-        window.location.href = window.location.pathname; // fresh state, no stale ?block=
-      } catch (err) {
-        setStatus(`Import failed: ${err.message}`);
-      }
+      setConfirmBox(mode === "merge" ? {
+        title: "Merge backup",
+        message: (
+          <>Merge "{f.name}" ({fmtBytes(f.size)}) into the account "{authUser.user}"?
+          {" "}Pages and chats from the backup that don't exist here yet will be <b>added</b>.
+          {" "}Everything already in this account (including settings) is <b>kept unchanged</b>.</>
+        ),
+        confirmLabel: "Merge",
+        onConfirm: () => runBackupImport(f, mode),
+      } : {
+        title: "Replace all data",
+        message: (
+          <>Restore "{f.name}" ({fmtBytes(f.size)}) into the account "{authUser.user}"?
+          {" "}<b>ALL current notes, chats, and settings will be REPLACED</b> by the backup.
+          {" "}Uploaded PDFs are merged in (nothing is deleted). <b>This cannot be undone.</b></>
+        ),
+        confirmLabel: "Replace",
+        danger: true,
+        onConfirm: () => runBackupImport(f, mode),
+      });
     };
     inp.click();
+  }
+
+  // XMLHttpRequest instead of fetch: it reports upload progress, so a large
+  // zip shows a percent while the bytes go up, then an indeterminate
+  // "restoring/merging" hint while the server unzips and swaps the databases.
+  function runBackupImport(f, mode) {
+    const merging = mode === "merge";
+    const tid = addTransfer({ name: `${merging ? "Merge" : "Restore"} ${f.name}`.slice(0, 60), kind: "upload", info: "uploading…" });
+    const fd = new FormData();
+    fd.append("file", f);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API}/import-data?mode=${mode}`);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (e) => {
+      const pct = e.total ? Math.min(99, Math.floor((e.loaded / e.total) * 100)) : null;
+      postPill("backup", { msg: pct == null ? "Uploading backup…" : `Uploading backup… ${pct}%`, spinner: true });
+      if (e.total) updateTransfer(tid, { info: `${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}` });
+    };
+    xhr.upload.onload = () => {
+      postPill("backup", { msg: merging ? "Merging backup into your library…" : "Restoring backup…", spinner: true });
+      updateTransfer(tid, { info: merging ? "merging…" : "restoring…" });
+    };
+    xhr.onload = () => {
+      let d = {};
+      try { d = JSON.parse(xhr.responseText); } catch {}
+      postPill("backup", null);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        updateTransfer(tid, { status: "done", info: merging ? `${d.pages_added ?? 0} pages added` : "restored" });
+        window.location.href = window.location.pathname; // fresh state, no stale ?block=
+      } else {
+        const msg = d.detail || xhr.statusText || "failed";
+        updateTransfer(tid, { status: "error", info: String(msg).slice(0, 60) });
+        setStatus(`Import failed: ${msg}`);
+      }
+    };
+    xhr.onerror = () => {
+      postPill("backup", null);
+      updateTransfer(tid, { status: "error", info: "network error" });
+      setStatus("Import failed: network error");
+    };
+    xhr.send(fd);
   }
 
   async function doLogout() {
@@ -1928,7 +2030,7 @@ export default function App() {
           if (!additive && !e.target.closest?.("[data-hl-id]")) {
             setPdfSelections([]);
             // Optionally the same gesture drops PDF snapshots pending in the
-            // chat (Settings → AI context). Pasted images are never touched.
+            // chat (Settings → AI chat). Pasted images are never touched.
             if (chatImgAutoClearRef.current && pdfImagesRef.current.size) {
               setChatImages((prev) => prev.filter((s) => !pdfImagesRef.current.has(s)));
             }
@@ -5136,7 +5238,7 @@ export default function App() {
                     </button>
                     <button
                       className="popoverItem"
-                      onClick={() => { setOpenPopover(null); window.location.href = `${API}/export`; }}
+                      onClick={() => { setOpenPopover(null); exportUserData(true); }}
                       title="Download a zip backup: your notes databases + every uploaded PDF"
                     >
                       <ExportIcon className="popoverItemIcon" size={15} />
@@ -5144,7 +5246,7 @@ export default function App() {
                     </button>
                     <button
                       className="popoverItem"
-                      onClick={() => { setOpenPopover(null); window.location.href = `${API}/export?uploads=0`; }}
+                      onClick={() => { setOpenPopover(null); exportUserData(false); }}
                       title="Download a small zip with just the databases (notes, chats, settings) — no uploaded PDFs"
                     >
                       <ExportIcon className="popoverItemIcon" size={15} />
