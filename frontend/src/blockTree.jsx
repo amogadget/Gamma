@@ -213,8 +213,9 @@ function BlockRow({
           if (e.target.closest("button, textarea, input, a")) return;
           setFocusedId(block.id);
           // Clicking anywhere on a highlight's card jumps the PDF to it —
-          // not just the little colored dot.
-          if (block.highlightId) onJump?.(block.highlightId);
+          // not just the little colored dot. Ctrl+click appends the quote to
+          // the chat selection, same as clicking the highlight on the PDF.
+          if (block.highlightId) onJump?.(block.highlightId, e.ctrlKey || e.metaKey);
           // Home page cards open on CLICK, not mousedown — mousedown may be
           // the start of a drag onto a folder, and navigating away mid-drag
           // would unmount the drop target.
@@ -250,7 +251,7 @@ function BlockRow({
           <>
             <button
               className="collapseBtn highlightDotBtn dotSlot"
-              onClick={(e) => { e.stopPropagation(); onJump(block.highlightId); }}
+              onClick={(e) => { e.stopPropagation(); onJump(block.highlightId, e.ctrlKey || e.metaKey); }}
               title={
                 block.position
                   ? "Jump to highlight"
