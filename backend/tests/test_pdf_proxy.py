@@ -77,7 +77,50 @@ def test_proxy_save_writes_complete_file_then_redirects(guest, monkeypatch):
 def test_pdf_text_status_missing_doc(guest):
     r = guest.get("/api/pdf-text-status", params={"doc_id": "deadbeefdeadbeefdeadbeef"})
     assert r.status_code == 200
-    assert r.json() == {"found": False, "ok": False, "chars": 0}
+    assert r.json() == {"found": False, "ok": False, "chars": 0,
+                        "indexed": False, "index_stale": False}
+
+
+def _text_pdf(text="Attention is all you need, and this line is long enough to count."):
+    """Minimal hand-built one-page PDF with a real text layer."""
+    stream = b"BT /F1 12 Tf 72 720 Td (" + text.encode() + b") Tj ET"
+    objs = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R"
+        b" /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = io.BytesIO()
+    out.write(b"%PDF-1.4\n")
+    offsets = []
+    for i, obj in enumerate(objs, 1):
+        offsets.append(out.tell())
+        out.write(b"%d 0 obj\n%s\nendobj\n" % (i, obj))
+    xref = out.tell()
+    out.write(b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1))
+    for off in offsets:
+        out.write(b"%010d 00000 n \n" % off)
+    out.write(b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, xref))
+    return out.getvalue()
+
+
+def test_pdf_text_status_extracts_text(guest):
+    """Regression: extract_text wasn't imported in ai.py, so every PDF —
+    text layer or not — reported ok=False ("scanned or image-only")."""
+    up = guest.post("/api/uploads", files={"file": ("t.pdf", _text_pdf(), "application/pdf")})
+    assert up.status_code == 200, up.text
+    doc_id = up.json()["doc_id"]
+    r = guest.get("/api/pdf-text-status", params={"doc_id": doc_id})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["found"] is True
+    assert body["ok"] is True, body
+    assert body["chars"] >= 50
+    # preview returns the text itself
+    r2 = guest.get("/api/pdf-text-status", params={"doc_id": doc_id, "preview": 200})
+    assert "Attention is all you need" in r2.json()["text"]
 
 
 def test_proxy_rejects_non_pdf(guest, monkeypatch):

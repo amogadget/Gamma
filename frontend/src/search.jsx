@@ -8,7 +8,9 @@
 // (see pdfViewer.jsx) — keep the three in sync.
 //
 // Results are grouped by how directly they answer the query: matching paper
-// titles first, then the open paper (its notes, then its PDF text with
+// titles first (relevance-ranked via scoreTitle — the filter-chip listing
+// sorts through the same scorer), then the open paper (its notes, then its
+// PDF text with
 // highlighted, navigable matches), then other notes, reference links, and
 // finally content hits across the rest of the library. Opening a library hit
 // keeps the search "pinned": once the paper renders, the query is re-found
@@ -64,6 +66,101 @@ export function buildSearchRegex(q, { caseSensitive = false, wholeWord = false, 
   }
 }
 
+// Damerau-Levenshtein distance (adjacent transpositions count as one edit),
+// capped: returns max+1 as soon as the budget is provably blown. Both inputs
+// are short (a query term vs. one title word). Rows are module-level scratch
+// reused across calls — this runs for every word of every non-matching title
+// on each keystroke, so per-call allocations would dominate.
+const EDIT_SCRATCH = [new Array(48), new Array(48), new Array(48)];
+function editDistanceWithin(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  const n = b.length + 1;
+  if (EDIT_SCRATCH[0].length < n) for (let k = 0; k < 3; k++) EDIT_SCRATCH[k] = new Array(n);
+  let [prev2, prev, cur] = EDIT_SCRATCH;
+  for (let j = 0; j < n; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    let rowMin = i;
+    for (let j = 1; j < n; j++) {
+      let v = Math.min(
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+        prev[j] + 1,
+        cur[j - 1] + 1,
+      );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      cur[j] = v;
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > max) return max + 1;
+    const t = prev2; prev2 = prev; prev = cur; cur = t;
+  }
+  return prev[n - 1];
+}
+
+// One title against one prepared query → relevance score (0 = no hit).
+// Quick-open-style tiered heuristic: every term must hit somewhere — as an
+// exact (separator-tolerant) substring, or failing that as a typo against a
+// title word (Meilisearch's budgets: 1 edit from 5 chars, 2 from 9; shorter
+// terms stay exact so "ion" can't blur into "in"). The exact phrase (terms
+// adjacent, in order) dominates, word-boundary hits beat mid-word ones,
+// typo hits score below both, and dense, early matches in short titles win
+// ties. Titles are scanned linearly per keystroke — no index; `prep` caches
+// the per-title lowering/tokenizing across keystrokes, and plain alphabetic
+// terms match via indexOf instead of the regex, which keeps a scan of
+// several thousand titles at a few ms (the heavy corpus, PDF text, is
+// already indexed server-side in FTS5).
+function scoreTitle(prep, phraseRe, terms, caseSensitive) {
+  const title = prep.title;
+  if (!title) return 0;
+  const hay = caseSensitive ? title : prep.lower;
+  let score = 0, matched = 0, first = Infinity;
+  let words = null; // lazily tokenized, only when some term needs the typo pass
+  for (const { re, text, plain } of terms) {
+    let idx = -1, len = 0;
+    if (plain) {
+      idx = hay.indexOf(text);
+      len = text.length;
+    } else {
+      re.lastIndex = 0;
+      const m = re.exec(title);
+      if (m) { idx = m.index; len = m[0].length; }
+    }
+    if (idx >= 0) {
+      first = Math.min(first, idx);
+      matched += len;
+      score += idx === 0 || /[^\p{L}\p{N}]/u.test(title[idx - 1]) ? 12 : 4;
+      continue;
+    }
+    const budget = text.length >= 9 ? 2 : text.length >= 5 ? 1 : 0;
+    if (!budget) return 0;
+    if (!words) {
+      const key = caseSensitive ? "wordsRaw" : "wordsLower";
+      words = prep[key] || (prep[key] = [...hay.matchAll(/[\p{L}\p{N}]+/gu)]);
+    }
+    let best = null;
+    const t0 = text[0];
+    for (const w of words) {
+      // Meilisearch's other typo rule: a first-letter typo counts double.
+      // Besides matching real typo patterns, this one-char comparison skips
+      // the DP for most words, which is what keeps big libraries fast.
+      const eff = w[0][0] === t0 ? budget : budget - 1;
+      if (eff < 1) continue;
+      const d = editDistanceWithin(text, w[0], eff);
+      if (d <= eff && (!best || d < best.d)) best = { d, w };
+      if (best?.d === 1) break; // d=0 is impossible (the substring pass would have hit)
+    }
+    if (!best) return 0;
+    first = Math.min(first, best.w.index);
+    matched += Math.max(1, best.w[0].length - best.d);
+    score += best.d === 1 ? 8 : 5;
+  }
+  phraseRe.lastIndex = 0;
+  const pm = phraseRe.exec(title);
+  if (pm) score += pm.index === 0 ? 90 : 60;
+  score += 20 * (matched / title.length); // coverage: tight titles beat incidental mentions
+  return score - Math.min(10, first / 10); // earlier first hit nudges up
+}
+
 export default function SearchPanel({
   open, onOpenChange,
   focusedBlockId, homeBlocks, allFolderPaths,
@@ -89,7 +186,6 @@ export default function SearchPanel({
   const pendingFindRef = useRef(null); // {page, sinceNonce} — jump here once the target doc renders
 
   const q = query.trim();
-  const opts = { caseSensitive, wholeWord };
 
   useEffect(() => { if (open) setPinned(false); }, [open]);
   useEffect(() => { setSugIdx(0); }, [query]);
@@ -118,9 +214,46 @@ export default function SearchPanel({
     setLabels((prev) => (prev.some((l) => l.kind === opt.kind && l.name.toLowerCase() === opt.name.toLowerCase()) ? prev : [...prev, opt]));
     setQuery("");
   }
+  // Per-title preprocessing (lowered copy, lazily tokenized words), kept
+  // across keystrokes — only a changed library invalidates it.
+  const titlePrep = useMemo(() => {
+    const cache = new Map();
+    return (b) => {
+      let p = cache.get(b.id);
+      if (!p) {
+        const t = b.content || "";
+        p = { title: t, lower: t.toLowerCase() };
+        cache.set(b.id, p);
+      }
+      return p;
+    };
+  }, [homeBlocks]);
+  // Per-query title scorer, cached by block id (null when the query box is
+  // empty or the regex is invalid). All title lists sort through this.
+  const titleScoreOf = useMemo(() => {
+    if (!q) return null;
+    const phrase = buildSearchRegex(q, { caseSensitive, wholeWord });
+    if (!phrase) return null;
+    const dashRe = new RegExp(`[${DASH_CLASS}]`);
+    const terms = normalizeQuery(q).split(/\s+/).filter(Boolean)
+      .map((t) => ({
+        re: buildSearchRegex(t, { caseSensitive, wholeWord }),
+        text: caseSensitive ? t : t.toLowerCase(),
+        // A term whose regex is just its literal chars can match via indexOf;
+        // dashes, digit pairs, and the whole-word toggle need the regex.
+        plain: !wholeWord && !dashRe.test(t) && !/\d\d/.test(t),
+      }))
+      .filter((t) => t.re);
+    const cache = new Map();
+    return (b) => {
+      let s = cache.get(b.id);
+      if (s === undefined) { s = scoreTitle(titlePrep(b), phrase, terms, caseSensitive); cache.set(b.id, s); }
+      return s;
+    };
+  }, [q, caseSensitive, wholeWord, titlePrep]);
   const labelMatches = useMemo(() => {
     if (!labels.length) return [];
-    return homeBlocks.filter((b) => {
+    const members = homeBlocks.filter((b) => {
       const cats = (b.properties?.category || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
       const folders = (b.properties?.folder || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
       return labels.every((c) => {
@@ -128,7 +261,11 @@ export default function SearchPanel({
         return c.kind === "folder" ? folders.some((t) => t === n || t.startsWith(n + "/")) : cats.includes(n);
       });
     });
-  }, [labels, homeBlocks]);
+    // With a query typed, float its matches to the top of the folder/label
+    // listing; ties (and everything at score 0) keep library order.
+    if (titleScoreOf) members.sort((a, b) => titleScoreOf(b) - titleScoreOf(a));
+    return members;
+  }, [labels, homeBlocks, titleScoreOf]);
   // With chips active, text results only count inside the matching pages.
   const labelPageIds = useMemo(() => (
     labels.length ? new Set(labelMatches.map((b) => b.id)) : null
@@ -257,10 +394,11 @@ export default function SearchPanel({
   // ---- result grouping: titles → this paper (notes, then PDF text) →
   // other notes → reference links → other papers' PDF content
   const inScope = (pageId) => !labelPageIds || labelPageIds.has(pageId);
-  const titleRe = q ? buildSearchRegex(q, { ...opts }) : null;
-  const titleTest = titleRe ? new RegExp(titleRe.source, caseSensitive ? "" : "i") : null;
-  const titleMatches = titleTest
-    ? homeBlocks.filter((b) => inScope(b.id) && titleTest.test(b.content || "")).slice(0, 8)
+  const titleMatches = titleScoreOf
+    ? homeBlocks
+      .filter((b) => inScope(b.id) && titleScoreOf(b) > 0)
+      .sort((a, b) => titleScoreOf(b) - titleScoreOf(a))
+      .slice(0, 8)
     : [];
   const titleIds = new Set(titleMatches.map((b) => b.id));
   const scopedNotes = noteHits.filter((r) => inScope(r.page_root_id || r.id) && !(r.kind === "page" && titleIds.has(r.id)));
@@ -275,11 +413,18 @@ export default function SearchPanel({
     || linkHits.length || labelMatches.length || (showPdfMatches && pdfMatches.length) || libElsewhere.length;
 
   // One switch for the whole detail area (all the result lists). Its default
-  // comes from Settings → Search (localStorage "gamma-search-details",
-  // collapsed unless set) and is re-read each time the panel opens; the
-  // toggle button then only affects the current panel session.
+  // comes from Settings → Search, with a separate key per place: on the home
+  // page the lists start expanded unless turned off ("gamma-search-details-home"
+  // — with no open PDF a compact find bar shows nothing), in a paper view the
+  // compact find bar is the default unless turned on ("gamma-search-details").
+  // Re-read each time the panel opens; the toggle button then only affects
+  // the current panel session.
   const detailsDefault = () => {
-    try { return localStorage.getItem("gamma-search-details") === "1"; } catch { return false; }
+    try {
+      return focusedBlockId
+        ? localStorage.getItem("gamma-search-details") === "1"
+        : localStorage.getItem("gamma-search-details-home") !== "0";
+    } catch { return false; }
   };
   const [showDetails, setShowDetails] = useState(detailsDefault);
   useEffect(() => { if (open) setShowDetails(detailsDefault()); }, [open]);

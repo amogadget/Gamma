@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 from . import config
 from .auth import session_middleware
 from .db import DATA_SCHEMA, connect_users_db
+from .logbuf import log, setup_logging
 from .routers import (
     admin,
     ai,
@@ -68,7 +69,7 @@ def _startup_maintenance():
             with sqlite3.connect(str(pages_db)) as conn:
                 removed = cleanup_orphan_uploads(conn, uploads_dir)
                 if removed:
-                    print(f"[startup] removed orphan uploads for {user_dir.name}: {removed}")
+                    log.info(f"[startup] removed orphan uploads for {user_dir.name}: {removed}")
         data_db = user_dir / "data.db"
         if data_db.exists():
             with sqlite3.connect(str(data_db)) as conn:
@@ -78,6 +79,7 @@ def _startup_maintenance():
 
 
 def create_app() -> FastAPI:
+    setup_logging()
     _silence_windows_connection_reset()
     app = FastAPI(title="Gamma PDF Annotator")
 

@@ -11,6 +11,7 @@ import { ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyI
 export default function ChatDock({
   docId, focusedBlockId, homeBlocks, pdfTitle, openTabs,
   pdfSelections, setPdfSelections,
+  chatImages, setChatImages,
   chatModel, setChatModel, chatEffort, setChatEffort, chatSystem, setAiProvider,
   chatContextChars, multiContextChars,
   aiInfo, aiProvider, openAiKeysEditor,
@@ -32,7 +33,8 @@ export default function ChatDock({
   // shows there, and a reply landing after a page switch is saved there).
   const [chatLoadingKey, setChatLoadingKey] = useState("");
   const chatAbortRef = useRef(null); // in-flight chat request, so Stop can cancel it
-  const [chatImages, setChatImages] = useState([]); // pasted figures (data URLs) pending send
+  // chatImages (pasted/area-selection figures pending send) lives in App —
+  // like pdfSelections — so the PDF viewer can attach into it.
   const [editingMsg, setEditingMsg] = useState(null); // {idx, text} — editing a sent user message
   const [copiedMsgIdx, flashCopiedMsg] = useCopied(1200);
   const [chatFindOpen, setChatFindOpen] = useState(false);

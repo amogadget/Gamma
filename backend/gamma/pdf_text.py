@@ -9,6 +9,8 @@ search indexer, so extraction fixes land once.
 
 import io
 
+from .logbuf import log
+
 # Sentinel the AI context builder hands to the model when extraction raised.
 # Compare against the constant, never a rewritten literal.
 PDF_EXTRACT_FAILED = "(PDF text extraction failed)"
@@ -20,7 +22,7 @@ def iter_page_texts(src, max_pages: int = 400):
         import pypdfium2 as pdfium
         pdf = pdfium.PdfDocument(src)
     except Exception as e:
-        print(f"[pdf-text] pypdfium2 open failed ({e}), falling back to PyPDF2")
+        log.warning(f"[pdf-text] pypdfium2 open failed ({e}), falling back to PyPDF2")
         from PyPDF2 import PdfReader
         reader = PdfReader(io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else str(src))
         for i, pg in enumerate(reader.pages):
