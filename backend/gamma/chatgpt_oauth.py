@@ -21,6 +21,8 @@ import time
 import urllib.parse
 import urllib.request
 
+from .logbuf import log
+
 AUTH_BASE = "https://auth.openai.com"
 CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"  # Codex CLI's public client id
 REDIRECT_URI = "http://localhost:1455/auth/callback"
@@ -155,5 +157,5 @@ def refresh(oauth: dict) -> dict | None:
         })
         return _oauth_entry(tokens, previous=oauth)
     except Exception as e:
-        print(f"[chatgpt-oauth] refresh failed: {e}")
+        log.warning(f"[chatgpt-oauth] refresh failed: {e}")
         return None

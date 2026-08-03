@@ -303,7 +303,7 @@ body {
 }
 .sysLogRow { display: flex; gap: 10px; padding: 2px 0; }
 .sysLogTime { color: var(--text-tertiary); flex: none; font-variant-numeric: tabular-nums; }
-.sysLogMsg { color: var(--text-muted); word-break: break-word; }
+.sysLogMsg { color: var(--text-muted); word-break: break-word; white-space: pre-wrap; } /* pre-wrap: server tracebacks are multi-line */
 .sysLogEmpty { color: var(--text-tertiary); padding: 4px 0; }
 
 .pdfSaveToggle {
@@ -1086,6 +1086,37 @@ body {
 }
 .pdfOutlineBtn.open { color: var(--accent); }
 
+/* Current-page widget — top-right, same elevated look as the TOC button.
+   The number is an input: type a page and press Enter to jump. */
+.pdfPageWidget {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.pdfPageWidget input {
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+  min-width: 1ch;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: right;
+}
+.pdfPageWidget input:focus { color: var(--accent); }
+.pdfPageTotal { margin-left: 3px; white-space: nowrap; }
+[data-theme="light"] .pdfPageWidget { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+
 /* The floating status pill — the app's single transient-message surface
    (status messages, PDF load progress, load errors), anchored top-center of
    the main pane. Fed through App's postPill() channels; only one message
@@ -1485,6 +1516,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   min-width: 0;
 }
 .tabClose { flex-shrink: 0; cursor: pointer; line-height: 1; }
+/* Pinned tabs: pin glyph instead of the close button (close via right-click),
+   sitting left of the unpinned tabs. */
+.tab.pinned { padding-right: 12px; min-width: 0; }
+.tabPin {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
 
 /* --- modern topbar bits --- */
 .addPopover { min-width: 300px; }
@@ -1547,7 +1587,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .popover .popoverItem:hover { background: var(--bg-hover); }
 .popover .check { display: inline-block; width: 14px; color: var(--accent-dark); font-weight: 700; }
 .topbar .iconBtn.activeIcon { background: var(--bg-hover); color: var(--text-primary); }
-.sharePopover { min-width: 320px; }
+/* Fixed width: the BibTeX pre would otherwise stretch the popover to its
+   longest line — it scrolls inside instead. */
+.sharePopover { width: 320px; }
 .shareRow { display: flex; align-items: center; gap: 6px; }
 .shareRow input {
   flex: 1;
@@ -2818,6 +2860,25 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   outline: 1px solid rgba(80, 140, 255, 0.55);
 }
 
+/* --- area notes (Ctrl+drag rectangle selection on the PDF) --- */
+/* Ctrl held: dragging draws a rectangle, so cue it over everything on the page. */
+.pdfViewer.areaCursor .pdfPageWrap,
+.pdfViewer.areaCursor .textLayer,
+.pdfViewer.areaCursor .textLayer span {
+  cursor: crosshair;
+}
+/* The rubber band while dragging, and the drawn rect while the color tip is open.
+   Pages are always white, so a fixed accent blue works in both themes. */
+.pdfAreaMarquee {
+  position: absolute;
+  z-index: 4;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 1.5px dashed rgba(80, 140, 255, 0.9);
+  background: rgba(80, 140, 255, 0.08);
+  border-radius: 2px;
+}
+
 /* --- citation export (share popover) --- */
 .citeMetaLine {
   font-size: 12px;
@@ -2841,6 +2902,19 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .pptCitePreview { flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary); }
 .pptCitePreview p { margin: 0; }
+/* Full BibTeX entry in the share popover: scrolls instead of growing. */
+.bibtexPre {
+  flex: 1;
+  min-width: 0;
+  max-height: 160px;
+  overflow: auto;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre;
+}
 /* Beat the generic ".topbar button" pill when the box renders inside the
    topbar (share popover) — keep the flat icon look it has elsewhere. */
 .pptCiteBox .chatMsgActionBtn,
@@ -2873,7 +2947,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border: 1px solid transparent;
   border-radius: 4px;
   padding: 1px 4px;
-  margin: -2px 0;
+  /* Pull the input left by its border+padding so its text starts flush at the
+     value column, aligned with the read-only rows below. */
+  margin: -2px 0 -2px -5px;
 }
 .metaInput:hover { border-color: var(--border); }
 .metaInput:focus {
@@ -2883,6 +2959,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-primary);
 }
 .metaLink { display: inline-flex; align-items: center; color: var(--accent); flex-shrink: 0; }
+/* Icon buttons inside metadata rows: negative vertical margins keep the 20px
+   hit target from inflating the text row's height, so keys and values stay
+   on one baseline. */
+.metaTable .metaRowBtn { width: 20px; height: 20px; margin: -4px 0; }
 
 /* --- reference-link creation --- */
 .linkTipBtn {
@@ -2955,6 +3035,18 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-primary);
 }
 .ctxMenuItem:hover { background: var(--bg-hover); }
+/* Menu rows with a leading glyph (e.g. the tab menu's pin/close). */
+.ctxMenuItemIconed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ctxMenuIcon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
 
 /* --- block-ref autocomplete popup (shared surface recipe) --- */
 .refPopup {

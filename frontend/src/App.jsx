@@ -17,11 +17,11 @@ import SearchPanel from "./search";
 import { ContextMenu } from "./menus";
 import {
   ActivityIcon, AlertCircleIcon, ArrowLeftIcon, CheckIcon, CopyIcon, DownloadIcon, ExportIcon,
-  ExternalLinkIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
+  ExternalLinkIcon, EyeIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
   FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
   LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PinIcon, PlusIcon,
   SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, TrashIcon, UploadIcon,
-  UserIcon, UsersIcon, ZoomInIcon, ZoomOutIcon,
+  UserIcon, UsersIcon, XIcon, ZoomInIcon, ZoomOutIcon,
 } from "./icons";
 
 
@@ -168,34 +168,141 @@ export default function App() {
     } catch { setLoginError("Guest login failed"); }
   }
 
-  // Restore an "Export my data" zip into this account: notes + settings are
-  // replaced, uploaded files are merged in. Full reload afterwards — every
-  // piece of in-memory state (home feed, tabs, chats) is stale after a restore.
-  function importUserData() {
+  // Download an /api/export backup zip. Fetched by hand (not a plain link
+  // navigation) so the user sees the two slow parts: the server zipping a big
+  // library ("preparing", no byte counter) and the download itself (percent
+  // from content-length). Shows in the pill + a background-tasks row.
+  async function exportUserData(withUploads) {
+    const label = withUploads ? "Export my data" : "Export database";
+    const tid = addTransfer({ name: label, kind: "download", info: "preparing…" });
+    postPill("backup", { msg: "Preparing export — the server is zipping your data…", spinner: true });
+    // The response only starts once the server finished zipping; until then,
+    // poll the zipping percent from the export-progress side-channel.
+    const zipPoll = setInterval(async () => {
+      try {
+        const p = await apiJson(`${API}/export-progress`);
+        if (p.active && p.total) {
+          const pct = Math.min(99, Math.floor((p.done / p.total) * 100));
+          postPill("backup", { msg: `Preparing export — zipping… ${pct}% (${fmtBytes(p.done)} of ${fmtBytes(p.total)})`, spinner: true });
+          updateTransfer(tid, { info: `zipping… ${pct}%` });
+        }
+      } catch {}
+    }, 500);
+    try {
+      const res = await fetch(`${API}/export${withUploads ? "" : "?uploads=0"}`, { credentials: "include" });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
+      clearInterval(zipPoll);
+      const total = Number(res.headers.get("content-length")) || 0;
+      const reader = res.body.getReader();
+      const chunks = [];
+      let loaded = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        loaded += value.length;
+        const pct = total ? Math.min(99, Math.floor((loaded / total) * 100)) : null;
+        postPill("backup", {
+          msg: total
+            ? `Downloading backup… ${pct}% (${fmtBytes(loaded)} of ${fmtBytes(total)})`
+            : `Downloading backup… ${fmtBytes(loaded)}`,
+          spinner: true,
+        });
+        updateTransfer(tid, { info: total ? `${fmtBytes(loaded)} / ${fmtBytes(total)}` : fmtBytes(loaded) });
+      }
+      const blob = new Blob(chunks, { type: "application/zip" });
+      const m = /filename="?([^";]+)/.exec(res.headers.get("content-disposition") || "");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = m ? m[1] : "gamma-export.zip";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000);
+      updateTransfer(tid, { status: "done", info: fmtBytes(blob.size) });
+      postPill("backup", null);
+      setStatus(`Backup downloaded (${fmtBytes(blob.size)}).`);
+    } catch (err) {
+      clearInterval(zipPoll);
+      updateTransfer(tid, { status: "error", info: String(err.message || err).slice(0, 60) });
+      postPill("backup", null);
+      setStatus(`Export failed: ${err.message}`);
+    }
+  }
+
+  // Restore an "Export my data" zip into this account. mode "replace": notes +
+  // settings are replaced by the backup, uploaded files are merged in. mode
+  // "merge": only pages/chats missing here are added, existing data wins.
+  // Full reload afterwards — every piece of in-memory state (home feed, tabs,
+  // chats) is stale after a restore.
+  function importUserData(mode = "replace") {
     const inp = document.createElement("input");
     inp.type = "file";
     inp.accept = ".zip,application/zip";
-    inp.onchange = async () => {
+    inp.onchange = () => {
       const f = inp.files?.[0];
       if (!f) return;
-      if (!window.confirm(
-        `Restore "${f.name}" into the account "${authUser.user}"?\n\n` +
-        "ALL current notes, chats, and settings will be REPLACED by the backup. " +
-        "Uploaded PDFs are merged in (nothing is deleted). This cannot be undone."
-      )) return;
-      setStatus("Importing backup…");
-      try {
-        const fd = new FormData();
-        fd.append("file", f);
-        const res = await fetch(`${API}/import-data`, { method: "POST", body: fd, credentials: "include" });
-        const d = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(d.detail || res.statusText);
-        window.location.href = window.location.pathname; // fresh state, no stale ?block=
-      } catch (err) {
-        setStatus(`Import failed: ${err.message}`);
-      }
+      setConfirmBox(mode === "merge" ? {
+        title: "Merge backup",
+        message: (
+          <>Merge "{f.name}" ({fmtBytes(f.size)}) into the account "{authUser.user}"?
+          {" "}Pages and chats from the backup that don't exist here yet will be <b>added</b>.
+          {" "}Everything already in this account (including settings) is <b>kept unchanged</b>.</>
+        ),
+        confirmLabel: "Merge",
+        onConfirm: () => runBackupImport(f, mode),
+      } : {
+        title: "Replace all data",
+        message: (
+          <>Restore "{f.name}" ({fmtBytes(f.size)}) into the account "{authUser.user}"?
+          {" "}<b>ALL current notes, chats, and settings will be REPLACED</b> by the backup.
+          {" "}Uploaded PDFs are merged in (nothing is deleted). <b>This cannot be undone.</b></>
+        ),
+        confirmLabel: "Replace",
+        danger: true,
+        onConfirm: () => runBackupImport(f, mode),
+      });
     };
     inp.click();
+  }
+
+  // XMLHttpRequest instead of fetch: it reports upload progress, so a large
+  // zip shows a percent while the bytes go up, then an indeterminate
+  // "restoring/merging" hint while the server unzips and swaps the databases.
+  function runBackupImport(f, mode) {
+    const merging = mode === "merge";
+    const tid = addTransfer({ name: `${merging ? "Merge" : "Restore"} ${f.name}`.slice(0, 60), kind: "upload", info: "uploading…" });
+    const fd = new FormData();
+    fd.append("file", f);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API}/import-data?mode=${mode}`);
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (e) => {
+      const pct = e.total ? Math.min(99, Math.floor((e.loaded / e.total) * 100)) : null;
+      postPill("backup", { msg: pct == null ? "Uploading backup…" : `Uploading backup… ${pct}%`, spinner: true });
+      if (e.total) updateTransfer(tid, { info: `${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}` });
+    };
+    xhr.upload.onload = () => {
+      postPill("backup", { msg: merging ? "Merging backup into your library…" : "Restoring backup…", spinner: true });
+      updateTransfer(tid, { info: merging ? "merging…" : "restoring…" });
+    };
+    xhr.onload = () => {
+      let d = {};
+      try { d = JSON.parse(xhr.responseText); } catch {}
+      postPill("backup", null);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        updateTransfer(tid, { status: "done", info: merging ? `${d.pages_added ?? 0} pages added` : "restored" });
+        window.location.href = window.location.pathname; // fresh state, no stale ?block=
+      } else {
+        const msg = d.detail || xhr.statusText || "failed";
+        updateTransfer(tid, { status: "error", info: String(msg).slice(0, 60) });
+        setStatus(`Import failed: ${msg}`);
+      }
+    };
+    xhr.onerror = () => {
+      postPill("backup", null);
+      updateTransfer(tid, { status: "error", info: "network error" });
+      setStatus("Import failed: network error");
+    };
+    xhr.send(fd);
   }
 
   async function doLogout() {
@@ -310,7 +417,7 @@ export default function App() {
     apiJson(`${API}/prefs/read-pos`).then((d) => {
       if (prefsUserRef.current !== u) return;
       readPosLoadedRef.current = true;
-      mergeReadPos(u, d.value);
+      if (mergeReadPos(u, d.value)) pushReadPosSoon(u);
     }).catch(() => { if (prefsUserRef.current === u) readPosLoadedRef.current = true; });
     // Which model answers is an account-level choice, not a per-browser one:
     // localStorage alone means a new browser (or cleared site data) silently
@@ -666,6 +773,23 @@ export default function App() {
       window.removeEventListener("gamma-api-log", onApi);
     };
   }, [logSys]);
+  // Debug log level (Settings → Diagnostics): when on, position-tracking and
+  // sync events go to the system log (and the console), so a lost reading
+  // position can be traced from any device — the log pane has a Copy button.
+  const [debugLog, setDebugLog] = useState(() => {
+    try { return localStorage.getItem("gamma-debug-log") === "1"; } catch { return false; }
+  });
+  const debugLogRef = useRef(debugLog);
+  useEffect(() => {
+    debugLogRef.current = debugLog;
+    try { localStorage.setItem("gamma-debug-log", debugLog ? "1" : "0"); } catch {}
+  }, [debugLog]);
+  const dbg = useCallback((...args) => {
+    if (!debugLogRef.current) return;
+    const msg = "dbg: " + args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+    console.log(msg);
+    logSys(msg);
+  }, [logSys]);
   const [pillChannels, setPillChannels] = useState({}); // channel -> entry (+ seq, fading)
   const pillSeqRef = useRef(0);
   const pillTimersRef = useRef({}); // channel -> pending linger/fade timers
@@ -785,7 +909,7 @@ export default function App() {
       tabsPushTimerRef.current = null;
     }
     setOpenTabs((prev) => {
-      let tabs = Array.isArray(value) ? value : [];
+      let tabs = orderTabs(Array.isArray(value) ? value : []);
       // The page open in THIS window keeps its tab even when the stored state
       // lacks it (just opened here and not pushed yet, or closed elsewhere
       // while it's still on screen here) — merged and pushed back.
@@ -798,9 +922,13 @@ export default function App() {
       return tabs;
     });
   }
+  // Pinned tabs always sit left of unpinned ones; the partition is stable, so
+  // pinning a tab lands it right after the existing pinned group and unpinning
+  // drops it at the front of the unpinned group — no explicit move needed.
+  const orderTabs = (tabs) => [...tabs.filter((t) => t.pinned), ...tabs.filter((t) => !t.pinned)];
   function updateTabs(updater) {
     setOpenTabs((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
+      const next = orderTabs(typeof updater === "function" ? updater(prev) : updater);
       const u = prefsUserRef.current;
       if (u) {
         try { localStorage.setItem(`gamma-tabs:${u}`, JSON.stringify(next)); } catch {}
@@ -808,6 +936,10 @@ export default function App() {
       }
       return next;
     });
+  }
+  // pinned: true | undefined (undefined keys drop out of the synced JSON).
+  function toggleTabPinned(id) {
+    updateTabs((prev) => prev.map((t) => (t.id === id ? { ...t, pinned: t.pinned ? undefined : true } : t)));
   }
   // Last-read positions, synced like tabs so "jump to last read" follows the
   // account across browsers: blockId -> {page, at}. Per-paper entries merged
@@ -819,14 +951,59 @@ export default function App() {
   const readPosPushTimerRef = useRef(null);
   const aiSelLoadedRef = useRef(false);      // server copy of the AI choice has been read
   const aiSelPushTimerRef = useRef(null);
+  // Serialization of the copy the server is CONFIRMED to hold (successful
+  // PUT, or a pull that showed both sides equal) — lets pushes no-op when
+  // there is nothing new to say.
+  const readPosSentRef = useRef("");
+  // Merge the server copy in (per-entry newest-wins) and report whether the
+  // merged map holds anything the server doesn't — i.e. a local entry the
+  // server never received because a push was dropped while it was down or
+  // restarting. Callers push the merged map back when so: pushing a superset
+  // of what was just pulled can only add entries, never regress one, and it
+  // doubles as the retry for those silently-dropped pushes.
   function mergeReadPos(user, server) {
     const merged = { ...readPosRef.current };
-    for (const [id, e] of Object.entries(server && typeof server === "object" ? server : {})) {
+    const s = server && typeof server === "object" ? server : {};
+    for (const [id, e] of Object.entries(s)) {
       if (!e || typeof e.page !== "number") continue;
       if (!merged[id] || (e.at || "") > (merged[id].at || "")) merged[id] = e;
     }
     readPosRef.current = merged;
     try { localStorage.setItem(`gamma-read-pos:${user}`, JSON.stringify(merged)); } catch {}
+    const newer = Object.entries(merged).filter(([id, e]) => !s[id] || (e.at || "") > (s[id].at || ""));
+    dbg("read-pos merged;", Object.keys(s).length, "server entries;",
+      newer.length ? `local newer: ${newer.map(([id, e]) => `${id}=p${e.page}`).join(",")}` : "in sync");
+    // In sync means the server is confirmed to hold exactly this copy.
+    if (!newer.length) readPosSentRef.current = JSON.stringify({ value: merged });
+    return newer.length > 0;
+  }
+  // Server writes are throttled hard: the first change arms one 15s timer
+  // and every later change rides it, so steady reading costs at most four
+  // PUTs a minute instead of one per page turn. This never risks the
+  // position — localStorage gets the instant copy, and blur/pagehide flush
+  // the armed timer, so the long window only delays what OTHER devices see
+  // while this window still has focus.
+  const READ_POS_PUSH_MS = 15000;
+  function pushReadPosSoon(u) {
+    if (readPosPushTimerRef.current) return; // armed — this change rides it
+    dbg("read-pos push armed (15s)");
+    readPosPushTimerRef.current = setTimeout(async () => {
+      readPosPushTimerRef.current = null;
+      if (prefsUserRef.current !== u) return;
+      const body = JSON.stringify({ value: readPosRef.current });
+      if (body === readPosSentRef.current) { dbg("read-pos push skipped (server current)"); return; }
+      try {
+        await apiJson(`${API}/prefs/read-pos`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        readPosSentRef.current = body;
+        dbg("read-pos pushed OK");
+      } catch (err) {
+        dbg("read-pos push FAILED:", err?.message || String(err));
+      }
+    }, READ_POS_PUSH_MS);
   }
   function recordReadPos(blockId, page) {
     const u = prefsUserRef.current;
@@ -845,18 +1022,8 @@ export default function App() {
     }
     readPosRef.current = next;
     try { localStorage.setItem(`gamma-read-pos:${u}`, JSON.stringify(next)); } catch {}
-    if (readPosPushTimerRef.current) clearTimeout(readPosPushTimerRef.current);
-    readPosPushTimerRef.current = setTimeout(async () => {
-      readPosPushTimerRef.current = null;
-      if (prefsUserRef.current !== u) return;
-      try {
-        await apiJson(`${API}/prefs/read-pos`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ value: readPosRef.current }),
-        });
-      } catch {}
-    }, 1000);
+    dbg("read-pos record", blockId, "→ page", page);
+    pushReadPosSoon(u);
   }
   // Multi-browser convergence: whenever this window regains focus, pull the
   // latest stored tabs. Skipped while a local push is pending (ours is newer).
@@ -877,27 +1044,42 @@ export default function App() {
         const d = await apiJson(`${API}/prefs/read-pos`);
         if (prefsUserRef.current !== u) return;
         readPosLoadedRef.current = true;
-        mergeReadPos(u, d.value);
+        if (mergeReadPos(u, d.value)) pushReadPosSoon(u);
       } catch {}
     }
-    // Losing focus flushes the debounced read-pos push right away, so the
-    // window being switched TO (or a refresh moments later) pulls the fresh
-    // value — the 1s debounce otherwise loses a quick scroll-then-switch.
+    // Losing focus flushes the armed read-pos push right away, so the window
+    // being switched TO (or a refresh moments later) pulls the fresh value —
+    // the 15s throttle would otherwise delay a quick scroll-then-switch.
+    // Deliberately not marked confirmed: keepalive can't report success, and
+    // the pull-merge heal covers a flush the server never got.
     function flushReadPos() {
       if (!readPosPushTimerRef.current || !prefsUserRef.current) return;
       clearTimeout(readPosPushTimerRef.current);
       readPosPushTimerRef.current = null;
+      const body = JSON.stringify({ value: readPosRef.current });
+      if (body === readPosSentRef.current) { dbg("read-pos flush skipped (server current)"); return; }
+      dbg("read-pos flushed (blur/pagehide)");
       try {
         fetch(`${API}/prefs/read-pos`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ value: readPosRef.current }),
+          body,
           keepalive: true,
           credentials: "same-origin",
         }).catch(() => {});
       } catch {}
     }
-    const onWake = () => { pullTabs(); pullReadPos(); };
+    // Focus flaps (alt-tabbing through windows) must not hammer the server:
+    // wake pulls run at most once per 15s. Cross-window handoff still
+    // converges promptly — the leaving window's blur flush lands first, and
+    // the arriving window usually last pulled more than 15s ago.
+    let lastWakeAt = 0;
+    const onWake = () => {
+      if (Date.now() - lastWakeAt < 15000) return;
+      lastWakeAt = Date.now();
+      pullTabs();
+      pullReadPos();
+    };
     const onVisibility = () => { if (document.hidden) flushReadPos(); else onWake(); };
     window.addEventListener("focus", onWake);
     window.addEventListener("blur", flushReadPos);
@@ -925,6 +1107,7 @@ export default function App() {
   }
   const dragTabRef = useRef(null); // tab id being drag-reordered
   const [draggingTabId, setDraggingTabId] = useState(null);
+  const [tabMenu, setTabMenu] = useState(null); // {id, pinned, x, y} — tab right-click menu
   // FLIP animation: when tab order changes, slide each tab from its old
   // position to the new one (Chrome-style), instead of snapping.
   const tabElsRef = useRef(new Map());
@@ -1020,6 +1203,7 @@ export default function App() {
           // clears the restoring state — capturing (or trusting) the scroll
           // position mid-settle is what corrupted saved entries when the user
           // flipped tabs quickly.
+          dbg("exact restore: applied pre-paint, top", Math.round(targetTop));
         }
       }
       return;
@@ -1079,6 +1263,7 @@ export default function App() {
   const [findMarks, setFindMarks] = useState([]); // [{page, rect, active}] painted by PdfViewer
   const [pdfDocNonce, setPdfDocNonce] = useState(0); // bumped when a document finishes rendering
   const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rects, pageW, pageH}]
+  const pdfCaptureRef = useRef(null); // set by PdfViewer: async (areaHighlight) => PNG data URL (re-crops the rect from the document)
 
   // Poll server-side task progress: slow heartbeat while logged in (so the
   // button appears even if the work was kicked off elsewhere), fast while
@@ -1147,9 +1332,14 @@ export default function App() {
   const [metaAutoFetch, setMetaAutoFetch] = useState(() => {
     try { return localStorage.getItem("gamma-meta-auto") !== "0"; } catch { return true; }
   });
-  // Search popover: whether the result-detail lists start expanded (SearchPanel
-  // re-reads the key each time it opens; compact find is the default).
-  const [searchDetailsDefault, setSearchDetailsDefault] = useState(() => {
+  // Search popover: whether the result-detail lists start expanded, one
+  // default per place (SearchPanel re-reads the keys each time it opens).
+  // Home page: expanded unless turned off — with no open PDF the compact
+  // find bar shows nothing. Paper view: compact find unless turned on.
+  const [searchDetailsHome, setSearchDetailsHome] = useState(() => {
+    try { return localStorage.getItem("gamma-search-details-home") !== "0"; } catch { return true; }
+  });
+  const [searchDetailsPaper, setSearchDetailsPaper] = useState(() => {
     try { return localStorage.getItem("gamma-search-details") === "1"; } catch { return false; }
   });
   // The always-on status bar under the tabs — off by default, the floating
@@ -1170,8 +1360,11 @@ export default function App() {
     try { localStorage.setItem("gamma-meta-auto", metaAutoFetch ? "1" : "0"); } catch {}
   }, [metaAutoFetch]);
   useEffect(() => {
-    try { localStorage.setItem("gamma-search-details", searchDetailsDefault ? "1" : "0"); } catch {}
-  }, [searchDetailsDefault]);
+    try { localStorage.setItem("gamma-search-details-home", searchDetailsHome ? "1" : "0"); } catch {}
+  }, [searchDetailsHome]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-search-details", searchDetailsPaper ? "1" : "0"); } catch {}
+  }, [searchDetailsPaper]);
   const pageTitleSaveTimerRef = useRef(null);
   const viewerWrapRef = useRef(null);
   const pdfRetryRef = useRef(null); // set by PdfViewer: re-runs a failed load (pill's Retry button)
@@ -1542,6 +1735,43 @@ export default function App() {
       ? (prev.includes(part) || prev.length >= 6 ? prev : [...prev, part])
       : [part]);
   }
+  // Figures pending send in the chat (data URLs) — pasted into the chat input
+  // or captured by a Ctrl+drag area selection on the PDF. Lives here (not in
+  // ChatDock) so the viewer can attach even while the chat window is closed.
+  const [chatImages, setChatImages] = useState([]);
+  // Data URLs that came from the PDF (area drags / rect-highlight clicks), as
+  // opposed to images pasted into the chat input. The auto-clear preference
+  // below only ever drops these — a pasted figure must survive PDF clicks.
+  const pdfImagesRef = useRef(new Set());
+  function addChatImage(dataUrl) {
+    const seen = pdfImagesRef.current;
+    seen.add(dataUrl);
+    while (seen.size > 16) seen.delete(seen.values().next().value);
+    setChatImages((prev) => prev.length >= 4 || prev.includes(dataUrl) ? prev : [...prev, dataUrl]);
+  }
+  // Off by default: snapshots stay attached until removed or sent. On, a
+  // plain click elsewhere in the PDF drops them — the same gesture that
+  // clears quoted text selections. Ref-mirrored for the mouseup listener.
+  const [chatImgAutoClear, setChatImgAutoClear] = useState(() => {
+    try { return localStorage.getItem("gamma-chat-img-autoclear") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-img-autoclear", chatImgAutoClear ? "1" : "0"); } catch {}
+  }, [chatImgAutoClear]);
+  const chatImgAutoClearRef = useRef(chatImgAutoClear);
+  useEffect(() => { chatImgAutoClearRef.current = chatImgAutoClear; }, [chatImgAutoClear]);
+  // Clicking a highlight — on the PDF or its card in the notes — feeds the
+  // chat: text highlights set their quote as the selection, area rectangles
+  // re-crop their region into an image attachment (the snapshot is never
+  // stored; the viewer renders it fresh from the document each time).
+  function addHighlightToChat(h, additive) {
+    if (!h) return;
+    if (h.position?.area) {
+      pdfCaptureRef.current?.(h).then((img) => { if (img) addChatImage(img); });
+    } else {
+      addPdfSelection(h.content?.text, additive);
+    }
+  }
   // Styled in-app dialogs replacing window.confirm / link decisions.
   const [confirmBox, setConfirmBox] = useState(null); // {title, message, confirmLabel, danger, onConfirm}
   const [linkPrompt, setLinkPrompt] = useState(null); // external URL clicked inside the PDF
@@ -1771,10 +2001,10 @@ export default function App() {
     }
   }
 
-  // Opening the metadata or share popover generates the slide citation
-  // automatically (cached on the page afterwards — one AI call per paper).
+  // Opening the share popover generates the slide citation automatically
+  // (cached on the page afterwards — one AI call per paper).
   useEffect(() => {
-    if ((openPopover === "meta" || openPopover === "share") && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
+    if (openPopover === "share" && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
       makePptCitation();
     }
   }, [openPopover, pageMeta]);
@@ -1873,7 +2103,14 @@ export default function App() {
         if (!text) {
           // Highlight clicks set the quote as the selection (in their own
           // click handler) — don't clear it from here.
-          if (!additive && !e.target.closest?.("[data-hl-id]")) setPdfSelections([]);
+          if (!additive && !e.target.closest?.("[data-hl-id]")) {
+            setPdfSelections([]);
+            // Optionally the same gesture drops PDF snapshots pending in the
+            // chat (Settings → AI chat). Pasted images are never touched.
+            if (chatImgAutoClearRef.current && pdfImagesRef.current.size) {
+              setChatImages((prev) => prev.filter((s) => !pdfImagesRef.current.has(s)));
+            }
+          }
           return;
         }
         const node = sel.anchorNode;
@@ -2276,11 +2513,21 @@ export default function App() {
   // is in flight (the tracker reports page 1 mid-load, which must not
   // overwrite the entry).
   const recordScrollPageRef = useRef(null);
+  const trackPauseReasonRef = useRef(""); // last logged pause reason (debug log)
   useEffect(() => {
     recordScrollPageRef.current = (n) => {
-      if (readOnly || !focusedBlockId || !pdfUrl) return;
-      if (pdfRenderedUrlRef.current !== pdfUrl) return;
-      if (restoringForRef.current === focusedBlockId || coarseRestorePendingRef.current) return;
+      const reason = readOnly ? "readonly"
+        : !focusedBlockId ? "no-focused-block"
+        : !pdfUrl ? "no-pdf-url"
+        : pdfRenderedUrlRef.current !== pdfUrl ? "doc-not-rendered"
+        : restoringForRef.current === focusedBlockId ? "exact-restore-inflight"
+        : coarseRestorePendingRef.current ? "coarse-restore-pending"
+        : "";
+      if (reason !== trackPauseReasonRef.current) {
+        trackPauseReasonRef.current = reason;
+        dbg(reason ? `tracker paused (${reason}) at page ${n}` : `tracker recording from page ${n}`);
+      }
+      if (reason) return;
       recordReadPos(focusedBlockId, n);
     };
   });
@@ -2501,6 +2748,7 @@ export default function App() {
     setStatus("Resolving share link...");
     try {
       const data = await apiJson(`${API}/share/${token}`);
+      shareOwnerRef.current = data.username || "";
       const userParam = data.username ? `?user=${encodeURIComponent(data.username)}` : "";
 
       let block = null;
@@ -2801,6 +3049,10 @@ export default function App() {
   // itself is instant, after the new document is visible.
   function restorePdfScroll(entry, blockId, targetUrl) {
     if ((entry?.top == null && entry?.page == null) || !targetUrl) return;
+    // page/frac is the scale-invariant anchor; top is the older, scale-scaled
+    // fallback, so an entry may legitimately carry only one of them.
+    dbg("exact restore: pending for", blockId,
+        entry.page != null ? `page ${entry.page}+${(entry.frac || 0).toFixed(3)}` : `top ${Math.round(entry.top)}`);
     const token = ++restoreTokenRef.current;
     restoringForRef.current = blockId || null;
     // The "rendered" callback applies a first placement pre-paint the moment
@@ -2825,8 +3077,8 @@ export default function App() {
       if (restoringForRef.current === blockId) restoringForRef.current = null;
     };
     const tick = () => {
-      if (restoreTokenRef.current !== token) { finish(); return; } // superseded by a newer navigation
-      if (userMoved) { finish(); return; } // the user took over — their position wins
+      if (restoreTokenRef.current !== token) { dbg("exact restore: superseded by navigation"); finish(); return; }
+      if (userMoved) { dbg("exact restore: user took over"); finish(); return; } // their position wins
       if (pdfRenderedUrlRef.current === targetUrl) {
         const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
         if (scroller) {
@@ -2839,13 +3091,28 @@ export default function App() {
           const scale = pdfEffScaleRef.current;
           const targetTop = Math.min(pdfRestoreTargetTop(entry, scroller), Math.max(0, h - scroller.clientHeight));
           scroller.scrollTo({ top: targetTop, behavior: "instant" });
-          if (h === lastH && scale === lastScale) { finish(); return; } // settled — this placement is final
+          if (h === lastH && scale === lastScale) { // settled — this placement is final
+            dbg("exact restore: applied, top", Math.round(targetTop));
+            finish();
+            return;
+          }
           lastH = h;
           lastScale = scale;
+          // Only the settle-after-render window is budgeted; waiting for the
+          // document itself is uncounted (same reasoning as the coarse
+          // restore: a big PDF on a slow load outlives any fixed budget, and
+          // giving up unfreezes the tracker at the top of the document, which
+          // then records page 1 over the real reading position). Range-request
+          // opens made this load-bearing — a cold open now spends seconds
+          // before the first paint, which under a shared budget ate most of it.
+          if (tries++ >= 80) {
+            dbg("exact restore: gave up settling; height", h, "target", Math.round(targetTop));
+            finish();
+            return;
+          }
         }
       }
-      if (tries++ < 80) setTimeout(tick, 120);
-      else finish();
+      setTimeout(tick, 120);
     };
     tick();
   }
@@ -3088,11 +3355,18 @@ export default function App() {
     }
   }
 
+  // Shared (read-only) views export the owner's data: the server resolves the
+  // user from ?user= when there's no session (auth.resolve_user).
+  const shareOwnerRef = useRef("");
+  const shareUserQuery = () =>
+    readOnly && shareOwnerRef.current ? `user=${encodeURIComponent(shareOwnerRef.current)}` : "";
+
   async function exportPage(mode = "readable") {
     const id = focusedBlock?.id;
     if (!id) { setStatus("Open a page first to export it."); return; }
     setOpenPopover(null);
-    await downloadExport(`/pages/${id}/export?mode=${mode}`, "page.md");
+    const userQ = shareUserQuery();
+    await downloadExport(`/pages/${id}/export?mode=${mode}${userQ ? `&${userQ}` : ""}`, "page.md");
   }
 
   // Download the PDF with the page's highlights burned in as standard PDF
@@ -3101,7 +3375,18 @@ export default function App() {
     const id = focusedBlock?.id;
     if (!id) { setStatus("Open a page first to export it."); return; }
     setOpenPopover(null);
-    await downloadExport(`/pages/${id}/export-pdf`, "annotated.pdf");
+    const userQ = shareUserQuery();
+    await downloadExport(`/pages/${id}/export-pdf${userQ ? `?${userQ}` : ""}`, "annotated.pdf");
+  }
+
+  // Download the PDF exactly as stored — no highlight annotations. Reuses the
+  // viewer's own URL (uploads route or /pdf proxy), so it works in share views.
+  async function exportRawPdf() {
+    if (!pdfUrl) { setStatus("No PDF open."); return; }
+    setOpenPopover(null);
+    const path = pdfUrl.startsWith(API) ? pdfUrl.slice(API.length) : pdfUrl;
+    const name = `${(pdfTitle || docId || "paper").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80)}.pdf`;
+    await downloadExport(path, name);
   }
 
   // Ask the AI for the document's title and fill it into the page name.
@@ -3272,7 +3557,7 @@ export default function App() {
     postPill("pdf-zoom", { msg: `Zoom ${Math.round(s * 100)}%`, final: true });
   }
 
-  function jumpToHighlightId(highlightId) {
+  function jumpToHighlightId(highlightId, additive) {
     if (pdfHidden) {
       pendingJumpRef.current = highlightId;
       setPdfHidden(false);
@@ -3286,6 +3571,8 @@ export default function App() {
       // stale internal id lookup.
       scrollToRef.current({ position: target.position });
       triggerFlash(highlightId);
+      // Same chat effect as clicking the highlight on the PDF itself.
+      addHighlightToChat(target, additive);
       return;
     }
     const block = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === highlightId);
@@ -3296,6 +3583,7 @@ export default function App() {
       if (linkedTarget) {
         scrollToRef.current({ position: linkedTarget.position });
         triggerFlash(linkedId);
+        addHighlightToChat(linkedTarget, additive);
         return;
       }
     }
@@ -3453,17 +3741,18 @@ export default function App() {
   // Jump to the last-read page when a document opens.
   // Position comes from the account-synced per-paper map (read-pos pref),
   // falling back to the legacy per-browser session slot only when it belongs
-  // to this page. Polls until the viewer is mounted and the doc is ready
-  // (scrollToRef is set and a page element exists), so it works on PDFs with
-  // no highlights and on slow loads.
+  // to this page. Waits until this document's pages are rendered (however
+  // long that takes), then scrolls and holds the target until the layout
+  // stops shifting under it.
   useEffect(() => {
     coarseRestorePendingRef.current = false;
     if (pdfHidden || !pdfUrl) return;
-    if (restoredPdfUrlRef.current === pdfUrl) return;
+    if (restoredPdfUrlRef.current === pdfUrl) { dbg("restore: already done for this doc"); return; }
     const fid = focusedBlockIdRef.current;
     // Tab switches restore an exact per-page position (tabScrollRef) — the
     // coarse last-read page is only for (re)opening a paper cold.
-    if (tabScrollRef.current[fid]) return;
+    if (tabScrollRef.current[fid]) { dbg("restore: exact tab position exists for", fid); return; }
+    dbg("restore: waiting for doc;", fid, "entry:", readPosRef.current[fid] || null);
     const sess = loadSession();
     const sessSaved = fid && sess.focusedBlockId === fid ? sess.pdfPageNumber : 0;
     coarseRestorePendingRef.current = true;
@@ -3472,59 +3761,104 @@ export default function App() {
     const done = () => { coarseRestorePendingRef.current = false; };
     const tryRestore = () => {
       if (cancelled) return;
-      if (tries++ > 50) { done(); return; } // give up after ~5s
-      if (!scrollToRef.current || !document.querySelector('[data-page]')) {
+      // Wait — uncounted — until THIS document's pages are in the DOM. No
+      // fixed budget: a big PDF on a slow load outlives any, and giving up
+      // would unfreeze the scroll tracker at the top of the document, which
+      // then records page 1 over the saved entry. Waiting is safe:
+      // navigation cancels the loop (effect cleanup), an old document's
+      // pages never match pdfUrl, and the tracker can't record anything
+      // while coarseRestorePendingRef holds it paused.
+      if (!scrollToRef.current || pdfRenderedUrlRef.current !== pdfUrl) {
         setTimeout(tryRestore, 100);
         return;
       }
       // The synced map may still be in flight (fresh browser, or a cache
-      // holding this browser's OLDER position) — wait for the first server
-      // response before trusting local state.
-      if (!readPosLoadedRef.current && tries < 30) {
+      // holding this browser's OLDER position) — give the first server
+      // response a bounded settle window (its catch sets the flag, so this
+      // only rides out a slow response, not a dead server).
+      if (!readPosLoadedRef.current && tries++ < 30) {
         setTimeout(tryRestore, 100);
         return;
       }
       const entry = fid ? readPosRef.current[fid] : null;
       const saved = entry?.page || sessSaved;
-      if (!saved || saved <= 1) { done(); return; }
+      if (!saved || saved <= 1) { dbg("restore: nothing to restore (saved page", saved, ")"); done(); return; }
+      dbg("restore: doc rendered, scrolling to page", saved);
       restoredPdfUrlRef.current = pdfUrl;
-      scrollToRef.current({
-        position: {
-          pageNumber: saved,
-          boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: saved },
-          rects: [],
-        },
-      });
-      done();
+      const pos = {
+        pageNumber: saved,
+        boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: saved },
+        rects: [],
+      };
+      // A single scrollTo cannot be trusted on a cold load — it may be
+      // computed before the fit-width scale applies, and late page-height
+      // measurements shift the layout under the set scrollTop, either of
+      // which leaves the viewport a page off. So verify against the live
+      // DOM: the target page's top must sit at the viewport top (+80px, the
+      // viewer's own jump offset), re-asserting until that holds for two
+      // ticks. Real user input (wheel/touch/scrollbar grab) hands control
+      // over instead of being fought, and the tracker stays paused until
+      // done(), so no transient position is ever recorded.
+      let stable = 0, settleTries = 0, userTookOver = false, inputEl = null;
+      const INPUT_EVS = ["wheel", "touchstart", "mousedown"];
+      const onUserInput = () => { userTookOver = true; };
+      const unhookInput = () => {
+        if (inputEl) for (const ev of INPUT_EVS) inputEl.removeEventListener(ev, onUserInput);
+        inputEl = null;
+      };
+      const settle = () => {
+        if (cancelled) { unhookInput(); return; }
+        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+        if (!scroller || settleTries++ > 60) { unhookInput(); done(); return; }
+        if (userTookOver) { dbg("restore: user took over during settle"); unhookInput(); done(); return; }
+        if (inputEl !== scroller) {
+          unhookInput();
+          inputEl = scroller;
+          for (const ev of INPUT_EVS) inputEl.addEventListener(ev, onUserInput, { passive: true });
+        }
+        const pageEl = scroller.querySelector(`[data-page="${saved}"]`);
+        const off = pageEl
+          ? pageEl.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+          : null;
+        // A page near the end of the document can't reach the viewport top —
+        // the clamped bottom-of-document position is as good as it gets.
+        const atEnd = scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2;
+        const aligned = off != null && (Math.abs(off - 80) <= 150 || (atEnd && off <= 80));
+        if (aligned) {
+          if (++stable >= 2) { dbg("restore: settled at page", saved); unhookInput(); done(); return; }
+        } else {
+          stable = 0;
+          // "auto" = instant. The default smooth animation for short jumps
+          // is interruptible by cold-load render work, which would strand
+          // the viewport short of the target.
+          scrollToRef.current({ position: pos, behavior: "auto" });
+        }
+        setTimeout(settle, 150);
+      };
+      settle();
     };
     tryRestore();
     return () => { cancelled = true; done(); };
   }, [pdfUrl, pdfHidden]);
 
-  // Track PDF scroll position — poll via scrollable container
+  // Track PDF scroll position — feeds the page indicator and the synced
+  // per-paper reading position.
   useEffect(() => {
     if (!pdfUrl || pdfHidden) return;
-    let container = null;
     let ticking = false;
-    function findContainer() {
-      const p = document.querySelector('[data-page]');
-      if (!p) return null;
-      let el = p.parentElement;
-      while (el && el !== document.body) {
-        if (el.scrollHeight > el.clientHeight) return el;
-        el = el.parentElement;
-      }
-      return null;
-    }
-    function onScroll() {
+    function onScroll(e) {
+      // Fast bail without any DOM query: the notes/chat panes pass through
+      // here too, but only the PDF scroller itself matters.
+      const target = e.target;
+      if (!(target instanceof Element) || !target.classList.contains("pdfViewer")) return;
       if (ticking) return;
       ticking = true;
       requestAnimationFrame(() => {
         ticking = false;
-        if (!container) return;
-        const pages = container.querySelectorAll('[data-page]');
+        if (!target.isConnected) return;
+        const pages = target.querySelectorAll('[data-page]');
         if (pages.length === 0) return;
-        const cr = container.getBoundingClientRect();
+        const cr = target.getBoundingClientRect();
         const midY = cr.top + cr.height / 2;
         for (const el of pages) {
           const r = el.getBoundingClientRect();
@@ -3540,20 +3874,15 @@ export default function App() {
         }
       });
     }
-    // Retry finding container until pages render
-    let tries = 0;
-    const retry = setInterval(() => {
-      container = findContainer();
-      if (container) {
-        clearInterval(retry);
-        container.addEventListener('scroll', onScroll, { passive: true });
-      }
-      if (++tries > 30) clearInterval(retry);
-    }, 300);
-    return () => {
-      clearInterval(retry);
-      if (container) container.removeEventListener('scroll', onScroll);
-    };
+    // Capture-phase listener on the document: element scroll events don't
+    // bubble, but they do pass document in the capture phase, so this hears
+    // the viewer no matter how late its pages mount or how often layout
+    // changes remount the scroller. Never attach to the scroller element
+    // itself — a slow-loading document outlives any attach-retry budget,
+    // and a remount silently drops a per-element listener, ending position
+    // tracking for the rest of the session.
+    document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+    return () => document.removeEventListener('scroll', onScroll, { capture: true });
   }, [pdfUrl, pdfHidden]);
 
   // Login page state
@@ -3745,23 +4074,12 @@ export default function App() {
                       >
                         <div className="popoverTitle citeSectionRow">
                           <span>Paper metadata</span>
-                          <span style={{ display: "inline-flex", gap: 4 }}>
-                            <button
-                              className="searchToggle"
-                              title="AI: read the PDF and fill in the paper's title"
-                              aria-label="Fill in title with AI"
-                              disabled={aiTitleBusy}
-                              onClick={aiFillTitle}
-                            >{aiTitleBusy ? "…" : (
-                              <SparklesIcon size={13} />
-                            )}</button>
-                            <button
-                              className="searchToggle"
-                              title="Refresh metadata (arXiv → DOI → AI)"
-                              disabled={metaBusy}
-                              onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
-                            >{metaBusy ? "…" : "↻"}</button>
-                          </span>
+                          <button
+                            className="searchToggle"
+                            title="Refresh metadata (arXiv → DOI → AI)"
+                            disabled={metaBusy}
+                            onClick={() => focusedBlock && fetchMetadata(focusedBlock, true)}
+                          >{metaBusy ? "…" : "↻"}</button>
                         </div>
                         <div className="metaTable">
                           {[
@@ -3799,6 +4117,15 @@ export default function App() {
                                     <ExternalLinkIcon size={11} />
                                   </a>
                                 ) : null}
+                                {key === "title" ? (
+                                  <button
+                                    className="searchToggle metaRowBtn"
+                                    title="AI: read the PDF and fill in the paper's title"
+                                    aria-label="Fill in title with AI"
+                                    disabled={aiTitleBusy}
+                                    onClick={aiFillTitle}
+                                  >{aiTitleBusy ? "…" : <SparklesIcon size={13} />}</button>
+                                ) : null}
                               </span>
                             </div>
                           ))}
@@ -3807,23 +4134,35 @@ export default function App() {
                           ) : null}
                           <div className="metaRow">
                             <span className="metaKey">PDF text</span>
-                            <span className="metaVal" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                            <span className="metaVal" style={{ flex: 1, display: "flex", alignItems: "center", gap: 6 }}>
                               {!pdfTextInfo || pdfTextInfo.checking ? "checking…"
                                 : pdfTextInfo.error ? `check failed — ${pdfTextInfo.error}`
                                 : !pdfTextInfo.found ? "file not on server"
                                 : pdfTextInfo.ok ? "✓ extracted"
                                 : "✗ none — scanned or image-only? AI can't read it"}
                               {pdfTextInfo?.ok ? (
-                                <button className="searchToggle" title="Preview the extracted text (what the AI reads)"
-                                  onClick={openPdfTextPreview}>view</button>
+                                <button className="searchToggle metaRowBtn" style={{ marginLeft: "auto" }}
+                                  title="Preview the extracted text (what the AI reads)"
+                                  onClick={openPdfTextPreview}><EyeIcon size={13} /></button>
                               ) : null}
                               {pdfTextInfo && !pdfTextInfo.checking && !pdfTextInfo.ok ? (
                                 <button
-                                  className="searchToggle"
+                                  className="searchToggle metaRowBtn"
+                                  style={{ marginLeft: "auto" }}
                                   title="Re-check text extraction (e.g. after replacing the source file) — retries the metadata lookup if text appears"
                                   onClick={() => checkPdfText(true)}
                                 >↻</button>
                               ) : null}
+                            </span>
+                          </div>
+                          <div className="metaRow">
+                            <span className="metaKey">Index</span>
+                            <span className="metaVal" title="Whether library-wide search can find text in this paper. Papers index automatically in the background; Settings → Search → Rebuild forces a full re-index.">
+                              {!pdfTextInfo || pdfTextInfo.checking ? "checking…"
+                                : pdfTextInfo.error || pdfTextInfo.indexed === undefined ? "—"
+                                : pdfTextInfo.indexed ? "✓ indexed for search"
+                                : pdfTextInfo.index_stale ? "stale — re-indexes automatically"
+                                : "not yet indexed"}
                             </span>
                           </div>
                           {pdfTextPreview ? (
@@ -3851,45 +4190,6 @@ export default function App() {
                         {metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metadataToDraft(pageMeta)) ? (
                           <div className="reportModalBtns">
                             <button className="uiBtn primary" onClick={saveMetaEdits}>Save metadata</button>
-                          </div>
-                        ) : null}
-                        {(pageMeta || pageBibtex) ? (
-                          <>
-                            <div className="popoverDivider" />
-                            <div className="popoverSection citeSectionRow">
-                              <span>Slide citation</span>
-                              <button
-                                className="searchToggle"
-                                title="Regenerate the citation"
-                                disabled={pptCiteBusy}
-                                onClick={() => makePptCitation(true)}
-                              >{pptCiteBusy ? "…" : "↻"}</button>
-                            </div>
-                            {pptCite ? (
-                              <div className="pptCiteBox">
-                                <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
-                                <button
-                                  className="chatMsgActionBtn"
-                                  onClick={() => copyCitation("ppt", pptCite)}
-                                  title="Copy — pastes with real italics/bold into PowerPoint"
-                                  aria-label="Copy slide citation"
-                                >
-                                  {citeCopied === "ppt"
-                                    ? <CheckIcon size={13} />
-                                    : <CopyIcon size={13} />}
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
-                            )}
-                          </>
-                        ) : null}
-                        {pageBibtex ? (
-                          <div className="reportModalBtns">
-                            <button className="chatClearBtn" onClick={() => copyCitation("bibtex", pageBibtex)} title="Copy the BibTeX entry">
-                              <CopyIcon size={11} style={{ marginRight: 4, verticalAlign: "-1px" }} />
-                              {citeCopied === "bibtex" ? "Copied ✓" : "BibTeX"}
-                            </button>
                           </div>
                         ) : null}
                         <div className="popoverDivider" />
@@ -4710,6 +5010,7 @@ export default function App() {
           docId={docId} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pdfTitle={pdfTitle}
           openTabs={openTabs}
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
+          chatImages={chatImages} setChatImages={setChatImages}
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
           chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider} setAiProvider={setAiProvider}
@@ -4812,7 +5113,7 @@ export default function App() {
               />
             </label>
           ) : null}
-          {!menuReadOnly && focusedBlock && !homeMode ? (
+          {focusedBlock && !homeMode ? (
             <>
               <div className="popoverDivider" />
               <button
@@ -4825,11 +5126,11 @@ export default function App() {
               </button>
               <button
                 className="popoverItem"
-                onClick={() => { exportPage("logseq"); setOpenPopover(null); }}
-                title="Download this page as Logseq-flavoured Markdown — re-importable via the Logseq importer."
+                onClick={() => { exportPage("logseq-graph"); setOpenPopover(null); }}
+                title="Download a complete Logseq graph (.zip): notes page + native PDF highlights (hls page + .edn). Unzip and open the folder in file-based Logseq, or use the DB version's 'File to DB graph' import."
               >
                 <FileTextIcon className="popoverItemIcon" size={15} />
-                Export this page (Logseq)
+                Export as Logseq graph (.zip)
               </button>
               {docId ? (
                 <button
@@ -4839,6 +5140,16 @@ export default function App() {
                 >
                   <FileHighlightIcon className="popoverItemIcon" size={15} />
                   Export PDF with highlights
+                </button>
+              ) : null}
+              {pdfUrl ? (
+                <button
+                  className="popoverItem"
+                  onClick={() => { exportRawPdf(); setOpenPopover(null); }}
+                  title="Download the PDF file as stored — no highlights or notes."
+                >
+                  <FileIcon className="popoverItemIcon" size={15} />
+                  Export raw PDF
                 </button>
               ) : null}
             </>
@@ -4908,6 +5219,8 @@ export default function App() {
                 const from = prev.findIndex((tab) => tab.id === dragged);
                 const to = prev.findIndex((tab) => tab.id === target);
                 if (from < 0 || to < 0 || from === to) return prev;
+                // Dragging never crosses the pinned/unpinned boundary.
+                if (!!prev[from].pinned !== !!prev[to].pinned) return prev;
                 const next = [...prev];
                 const [moved] = next.splice(from, 1);
                 next.splice(to, 0, moved);
@@ -4915,6 +5228,7 @@ export default function App() {
               })}
               onOpen={(id) => openBlock(id, { restoreScroll: true })}
               onClose={closeTab}
+              onContext={(tab, x, y) => setTabMenu({ id: tab.id, pinned: !!tab.pinned, x, y })}
             />
             <span data-popover="add" style={{ position: "relative", display: "inline-flex" }}>
               <button
@@ -5077,7 +5391,15 @@ export default function App() {
                     {(pageMeta || pageBibtex) ? (
                       <>
                         <div className="popoverDivider" />
-                        <div className="popoverSection">Slide citation</div>
+                        <div className="popoverSection citeSectionRow">
+                          <span>Slide citation</span>
+                          <button
+                            className="searchToggle"
+                            title="Regenerate the citation"
+                            disabled={pptCiteBusy}
+                            onClick={() => makePptCitation(true)}
+                          >{pptCiteBusy ? "…" : "↻"}</button>
+                        </div>
                         {pptCite ? (
                           <div className="pptCiteBox">
                             <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
@@ -5095,6 +5417,24 @@ export default function App() {
                         ) : (
                           <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
                         )}
+                        {pageBibtex ? (
+                          <>
+                            <div className="popoverSection">BibTeX</div>
+                            <div className="pptCiteBox">
+                              <pre className="bibtexPre">{pageBibtex}</pre>
+                              <button
+                                className="chatMsgActionBtn"
+                                onClick={() => copyCitation("bibtex", pageBibtex)}
+                                title="Copy the BibTeX entry"
+                                aria-label="Copy BibTeX"
+                              >
+                                {citeCopied === "bibtex"
+                                  ? <CheckIcon size={13} />
+                                  : <CopyIcon size={13} />}
+                              </button>
+                            </div>
+                          </>
+                        ) : null}
                       </>
                     ) : null}
                   </div>
@@ -5134,21 +5474,39 @@ export default function App() {
                     </button>
                     <button
                       className="popoverItem"
-                      onClick={() => { setOpenPopover(null); window.location.href = `${API}/export`; }}
+                      onClick={() => { setOpenPopover(null); exportUserData(true); }}
                       title="Download a zip backup: your notes databases + every uploaded PDF"
                     >
                       <ExportIcon className="popoverItemIcon" size={15} />
                       Export my data (.zip)
                     </button>
+                    <button
+                      className="popoverItem"
+                      onClick={() => { setOpenPopover(null); exportUserData(false); }}
+                      title="Download a small zip with just the databases (notes, chats, settings) — no uploaded PDFs"
+                    >
+                      <ExportIcon className="popoverItemIcon" size={15} />
+                      Export database only (.zip)
+                    </button>
                     {!authUser.is_guest ? (
-                      <button
-                        className="popoverItem"
-                        onClick={() => { setOpenPopover(null); importUserData(); }}
-                        title="Restore an exported zip: notes and settings are replaced by the backup, uploaded files are merged in"
-                      >
-                        <ImportIcon className="popoverItemIcon" size={15} />
-                        Import data (.zip)…
-                      </button>
+                      <>
+                        <button
+                          className="popoverItem"
+                          onClick={() => { setOpenPopover(null); importUserData("replace"); }}
+                          title="Restore an exported zip: notes and settings are replaced by the backup, uploaded files are merged in"
+                        >
+                          <ImportIcon className="popoverItemIcon" size={15} />
+                          Import data (.zip)…
+                        </button>
+                        <button
+                          className="popoverItem"
+                          onClick={() => { setOpenPopover(null); importUserData("merge"); }}
+                          title="Add pages from an exported zip that are missing here; everything already in this account is kept unchanged"
+                        >
+                          <ImportIcon className="popoverItemIcon" size={15} />
+                          Import &amp; merge (.zip)…
+                        </button>
+                      </>
                     ) : null}
                     {authUser.is_admin ? (
                       <button className="popoverItem" onClick={() => { openUsersManager(); setOpenPopover(null); }}>
@@ -5259,6 +5617,7 @@ export default function App() {
             <PdfViewer url={pdfUrl} highlights={highlights}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
+              captureRef={pdfCaptureRef}
               findMarks={findMarks}
               onEffectiveScale={setPdfEffScale}
               onZoomTo={zoomTo}
@@ -5276,11 +5635,12 @@ export default function App() {
               onHighlightJump={(hlId, additive) => {
                 const b = flattenBlocks(blocks).find(b => b.properties?.highlight_id === hlId);
                 if (b) { pendingBlockScrollRef.current = b.id; setBlocks(prev => expandToBlock(prev, b.id)); }
-                // Clicking a highlight also makes its quote the chat selection
-                // (Ctrl+click appends, like text selections)
-                addPdfSelection(highlights.find(h => h.id === hlId)?.content?.text, additive);
+                // Clicking a highlight also feeds the chat: quote as the
+                // selection (Ctrl+click appends), area rects as an image.
+                addHighlightToChat(highlights.find(h => h.id === hlId), additive);
               }}
               onHighlightContext={setHighlightMenu}
+              onAreaSelection={addChatImage}
               onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {
                 if (extras?.link) {
                   setLinkDialog({ position, content });
@@ -5442,6 +5802,12 @@ export default function App() {
           setMetaAutoFetch,
           pdfSaveLocal,
           setPdfSaveLocal,
+          // batch metadata retry uses the same prompt/model/context prefs as
+          // the per-paper fetch in the metadata popover
+          metaPrompt,
+          chatModel,
+          metaContextChars,
+          setStatus,
         }}
         ai={{
           aiKeysInfo,
@@ -5492,6 +5858,8 @@ export default function App() {
           },
         }}
         context={{
+          chatImgAutoClear,
+          setChatImgAutoClear,
           chatContextChars,
           setChatContextChars,
           metaContextChars,
@@ -5505,8 +5873,8 @@ export default function App() {
             setStatus("AI context limits reset.");
           },
         }}
-        search={{ searchDetailsDefault, setSearchDetailsDefault, indexTask, setStatus }}
-        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus }}
+        search={{ searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper, indexTask, setStatus }}
+        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, isAdmin: !!authUser?.is_admin, debugLog, setDebugLog }}
       />
       {usersOpen ? (
         <div className="reportOverlay" onClick={() => setUsersOpen(false)}>
@@ -5637,6 +6005,18 @@ export default function App() {
             {usersError ? <div className="reportModalHint aiKeysError">{usersError}</div> : null}
           </div>
         </div>
+      ) : null}
+      {tabMenu ? (
+        <ContextMenu x={tabMenu.x} y={tabMenu.y} onClose={() => setTabMenu(null)}>
+          <button className="ctxMenuItem ctxMenuItemIconed" onClick={() => { setTabMenu(null); toggleTabPinned(tabMenu.id); }}>
+            <span className="ctxMenuIcon"><PinIcon filled={!tabMenu.pinned} size={13} /></span>
+            {tabMenu.pinned ? "Unpin tab" : "Pin tab"}
+          </button>
+          <button className="ctxMenuItem ctxMenuItemIconed" onClick={() => { setTabMenu(null); closeTab(tabMenu.id); }}>
+            <span className="ctxMenuIcon"><XIcon size={13} /></span>
+            Close tab
+          </button>
+        </ContextMenu>
       ) : null}
       {homeMenu ? (
         <ContextMenu x={homeMenu.x} y={homeMenu.y} onClose={() => setHomeMenu(null)}>

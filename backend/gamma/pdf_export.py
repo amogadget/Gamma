@@ -1,6 +1,7 @@
-"""Burn Gamma highlight blocks into a PDF as standard /Highlight annotations,
-so the exported file shows the highlights (with notes as annotation popups) in
-Acrobat, SumatraPDF, Preview, browsers, etc.
+"""Burn Gamma highlight blocks into a PDF as standard annotations — text
+highlights as /Highlight, area notes (Ctrl+drag rectangles, position carries
+``area: true``) as /Square — so the exported file shows them (with notes as
+annotation popups) in Acrobat, SumatraPDF, Preview, browsers, etc.
 
 Coordinate round-trip: the viewer stores rects in top-left-origin page-render
 pixels together with the render size (``width``/``height``), i.e. effectively
@@ -10,7 +11,8 @@ the exact reverse of what routers/imports.py does when reading embedded
 annotations (which come straight from PDF user space).
 
 No appearance streams (/AP) are written — every mainstream viewer synthesizes
-the marker look for /Highlight annotations from /QuadPoints + /C.
+the marker look for /Highlight annotations from /QuadPoints + /C, and the
+outline for /Square from /Rect + /C + /BS.
 """
 
 import io
@@ -68,8 +70,19 @@ def _viewer_rect_to_pdf(rect, rotation, crop):
     return (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
 
 
-def _highlight_annotation(rects, color, note, author):
+def _finish_annotation(annot, color, note, author):
     r, g, b, alpha = color
+    annot[NameObject("/C")] = ArrayObject((FloatObject(r), FloatObject(g), FloatObject(b)))
+    annot[NameObject("/CA")] = FloatObject(round(alpha, 3))
+    annot[NameObject("/F")] = NumberObject(4)  # print
+    if note:
+        annot[NameObject("/Contents")] = TextStringObject(note)
+    if author:
+        annot[NameObject("/T")] = TextStringObject(author)
+    return annot
+
+
+def _highlight_annotation(rects, color, note, author):
     quads, xs, ys = [], [], []
     for x1, y1, x2, y2 in rects:
         # Quad order: upper-left, upper-right, lower-left, lower-right.
@@ -83,15 +96,27 @@ def _highlight_annotation(rects, color, note, author):
             FloatObject(v) for v in (min(xs), min(ys), max(xs), max(ys))
         ),
         NameObject("/QuadPoints"): ArrayObject(FloatObject(v) for v in quads),
-        NameObject("/C"): ArrayObject((FloatObject(r), FloatObject(g), FloatObject(b))),
-        NameObject("/CA"): FloatObject(round(alpha, 3)),
-        NameObject("/F"): NumberObject(4),  # print
     })
-    if note:
-        annot[NameObject("/Contents")] = TextStringObject(note)
-    if author:
-        annot[NameObject("/T")] = TextStringObject(author)
-    return annot
+    return _finish_annotation(annot, color, note, author)
+
+
+def _square_annotation(rects, color, note, author):
+    """Area note → /Square: a stroked rectangle (no interior fill — it would
+    obscure the figure underneath) over the bounding box of the rects."""
+    xs = [v for x1, _, x2, _ in rects for v in (x1, x2)]
+    ys = [v for _, y1, _, y2 in rects for v in (y1, y2)]
+    annot = DictionaryObject({
+        NameObject("/Type"): NameObject("/Annot"),
+        NameObject("/Subtype"): NameObject("/Square"),
+        NameObject("/Rect"): ArrayObject(
+            FloatObject(v) for v in (min(xs), min(ys), max(xs), max(ys))
+        ),
+        NameObject("/BS"): DictionaryObject({
+            NameObject("/W"): NumberObject(2),
+            NameObject("/S"): NameObject("/S"),
+        }),
+    })
+    return _finish_annotation(annot, color, note, author)
 
 
 def highlight_note_text(block, children_by_id):
@@ -144,8 +169,9 @@ def annotate_pdf(pdf_bytes: bytes, highlights, author: str = "") -> tuple[bytes,
         except Exception:
             rotation = 0
         pdf_rects = [_viewer_rect_to_pdf(r, rotation, crop) for r in viewer_rects]
-        annot = _highlight_annotation(pdf_rects, parse_css_color(h.get("color")),
-                                      h.get("note") or "", author)
+        make = _square_annotation if pos.get("area") else _highlight_annotation
+        annot = make(pdf_rects, parse_css_color(h.get("color")),
+                     h.get("note") or "", author)
         writer.add_annotation(page_number=page_num - 1, annotation=annot)
         written += 1
 

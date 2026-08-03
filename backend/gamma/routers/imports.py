@@ -15,6 +15,7 @@ from ..auth import require_user
 from ..config import MAX_UPLOAD_BYTES
 from ..db import page_now, user_db_path, user_uploads_dir
 from ..blocks_store import last_child_position
+from ..logbuf import log
 from ..logseq_import import (
     edn_highlight_position,
     edn_highlight_to_block,
@@ -235,7 +236,7 @@ def _extract_pdf_annotations(reader):
                     "position": {"pageNumber": pnum, "boundingRect": bounding, "rects": rects},
                 })
             except Exception as e:
-                print(f"[pdf-annots] skipping annotation on p.{pnum}: {e}")
+                log.warning(f"[pdf-annots] skipping annotation on p.{pnum}: {e}")
     return found
 
 

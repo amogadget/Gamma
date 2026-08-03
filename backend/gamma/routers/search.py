@@ -26,6 +26,7 @@ from ..ai_context import pdf_path as _pdf_path
 from .. import flatten_queue
 from ..auth import require_user
 from ..db import page_now, user_db_path
+from ..logbuf import log
 from ..pdf_text import extract_pages
 from ..textnorm import INDEX_VERSION, normalize_text
 
@@ -70,7 +71,7 @@ def _index_doc(user: str, doc_id: str):
                 if text:
                     rows.append((doc_id, i, text[:_MAX_PAGE_CHARS]))
     except Exception as e:
-        print(f"[pdf-search] indexing {doc_id} failed: {e}")
+        log.warning(f"[pdf-search] indexing {doc_id} failed: {e}")
     with sqlite3.connect(user_db_path(user, "data.db")) as conn:
         _ensure_schema(conn)
         conn.execute("DELETE FROM pdf_fts WHERE doc_id = ?", (doc_id,))

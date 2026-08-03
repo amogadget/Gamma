@@ -8,7 +8,7 @@
 
 **Organize papers and knowledge, in one place.** Self-hosted, multi-user, Logseq-inspired: read and annotate PDFs in your browser, keep the notes as a nested outliner, and link everything together.
 
-## 📄 Read & annotate
+## 📄 Annotate & ask
 
 ![Open a paper by URL, highlight the abstract, and ask the AI to explain it](./docs/demo-download-and-chat.gif)
 
@@ -24,8 +24,9 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 ![Follow a citation to its reference, then fetch the cited arXiv paper into Gamma with one click](./docs/demo-reference-links.gif)
 
 - **Reference links** — citations in the PDF are clickable: jump to the reference, unwind jumps across documents with a global **← Back**, and fetch a cited arXiv/DOI paper into your library in one click. You can also link a citation to a paper you already have.
-- **Folders & labels** — drag papers into folders (storage stays flat, so a paper can live in several) and tag them with labels; the home page is a file-browser with a recents feed and a *Recently viewed* row.
-- **Search everything** — `Ctrl+F` searches across notes, highlights, and the full text of every PDF at once, with match-case / whole-word / regex toggles and label chips to narrow the scope. Matching is forgiving: "3000" finds "3,000-qubit" across a line break.
+- **Labels** — flat, cross-cutting tags for facets like an author or a keyword; a paper can carry several, and each is one click to filter by.
+- **Folders** — a topic hierarchy that builds itself from the paths you use: drop a paper into `qc/neutral-atom` and you get a **qc** folder with a **neutral-atom** subfolder — add `qc/superconducting` and the sibling appears, no need to hand-create each level as its own tag. Storage stays flat, so one paper can live in several folders.
+- **Search everything** — `Ctrl+F` searches across notes, highlights, and the full text of every PDF at once, with match-case / whole-word / regex toggles. Narrow the scope with chips for **both** labels (exact match, e.g. an author) and folders (prefix match, so `qc` pulls in everything beneath it). Matching is forgiving: "3000" finds "3,000-qubit" across a line break.
 
 <!-- Demo GIF slot ➜ record: dragging a paper into a folder, then a Ctrl+F search lighting up matches. Save as docs/demo-library.gif -->
 

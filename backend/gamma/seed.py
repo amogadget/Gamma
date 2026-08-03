@@ -16,6 +16,7 @@ from fractional_indexing import generate_key_between
 
 from .config import USERS_DIR
 from .db import DATA_SCHEMA, PAGES_SCHEMA, connect_users_db, page_now
+from .logbuf import log
 
 # GitHub raw base for screenshots embedded in the guest welcome page.
 _SCREENSHOTS = "https://raw.githubusercontent.com/tim4431/Gamma/main/docs/screenshots"
@@ -116,8 +117,8 @@ def ensure_admin_seed():
     with connect_users_db() as conn:
         if conn.execute("SELECT 1 FROM users WHERE is_guest = 0").fetchone():
             if not conn.execute("SELECT 1 FROM users WHERE is_admin = 1 AND is_guest = 0").fetchone():
-                print("[startup] no account has the admin privilege - grant one with: "
-                      "python manage.py set-admin <user> on")
+                log.info("[startup] no account has the admin privilege - grant one with: "
+                         "python manage.py set-admin <user> on")
             return None
         pwhash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
         conn.execute(
@@ -128,6 +129,8 @@ def ensure_admin_seed():
     create_user_dbs(username)
     # ASCII only: this prints during startup, and a redirected Windows console
     # (GBK) raises UnicodeEncodeError on characters it can't encode.
+    # Raw print()s on purpose — the one-time password must go to the console
+    # ONLY, never through the log buffer that admins can read later.
     print(f"[startup] fresh instance - created the admin account:")
     print(f"[startup]   username: {username}")
     print(f"[startup]   password: {'(from GAMMA_ADMIN_PASSWORD)' if env_password else password}")
