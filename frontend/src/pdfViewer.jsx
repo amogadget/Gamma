@@ -166,6 +166,35 @@ async function diskCachePut(url, buf) {
   }
 }
 
+// Range reads only where the server can serve them. /api/uploads is a
+// FileResponse and answers 206; the /api/pdf proxy streams from upstream and
+// cannot, and it redirects to /api/uploads once a local copy exists anyway.
+const RANGE_CHUNK = 262144;
+function supportsRanges(url) {
+  return /^\/api\/uploads\//.test(url || "");
+}
+
+// One background fill per url per session. Deliberately quiet: no progress
+// pill, no transfer row, and failures are dropped — the reader already has the
+// document, this only decides whether the NEXT open is instant.
+const backfilling = new Set();
+function backfillLocalCopy(url) {
+  if (backfilling.has(url) || PDF_CACHE.has(url)) return;
+  backfilling.add(url);
+  setTimeout(async () => {
+    try {
+      if (await diskCacheGet(url)) return;
+      const resp = await fetch(url, { credentials: "include" });
+      if (!resp.ok) return;
+      const buf = await resp.arrayBuffer();
+      diskCachePut(url, buf);   // copies synchronously, then writes
+      cachePdf(url, buf);
+    } catch {} finally {
+      backfilling.delete(url);
+    }
+  }, 3000);
+}
+
 // Abort a download when no bytes arrive for this long — a hung server
 // otherwise leaves the fetch (and the UI) waiting forever.
 const STALL_MS = 45000;
@@ -542,11 +571,39 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           commitDoc(url, live.doc, live.heights, live.widths, true);
           return;
         }
-        const data = await fetchPdfData(url, onLoadState, () => cancelled);
-        if (!data || cancelled) return;
-        cachePdf(url, data); // insert or bump LRU position
-        onLoadState?.(url, { phase: "parsing" });
-        const doc = await pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise;
+        let doc;
+        let openedByRange = false;
+        const cachedBytes = PDF_CACHE.get(url) || await diskCacheGet(url);
+        if (cancelled) return;
+        if (cachedBytes) {
+          cachePdf(url, cachedBytes);
+          onLoadState?.(url, { phase: "cached" });
+          doc = await pdfjsLib.getDocument({ data: cachedBytes.slice(0), disableAutoFetch: true, disableRange: true }).promise;
+        } else if (supportsRanges(url)) {
+          // Nothing local yet: read it in ranges rather than waiting for all of
+          // it. pdf.js then pulls the xref, the page tree and the pages being
+          // drawn — measured on a 87 MB scan at 20 Mbps, page boxes appear in
+          // 2.5 s instead of 39 s and 2.4 MB crosses the wire instead of 91 MB.
+          onLoadState?.(url, { phase: "parsing" });
+          openedByRange = true;
+          doc = await pdfjsLib.getDocument({
+            url, withCredentials: true,
+            // disableStream is the load-bearing one. disableAutoFetch only
+            // stops pdf.js pre-fetching pages nobody has looked at; the
+            // full-file streaming reader keeps running underneath it and
+            // saturates the link the range requests are trying to beat. It
+            // cost a real user tens of seconds while the range requests it was
+            // racing looked, in the trace, like they were working.
+            disableAutoFetch: true, disableRange: false, disableStream: true,
+            rangeChunkSize: RANGE_CHUNK,
+          }).promise;
+        } else {
+          const data = await fetchPdfData(url, onLoadState, () => cancelled);
+          if (!data || cancelled) return;
+          cachePdf(url, data);
+          onLoadState?.(url, { phase: "parsing" });
+          doc = await pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise;
+        }
         if (cancelled) { doc.destroy().catch(() => {}); return; }
         // Measure pages BEFORE showing the document: exact viewports for the
         // first pages, page-1-sized estimates beyond (refined below). The
@@ -571,6 +628,11 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         // taken before the loop ran.
         cacheDoc(url, { doc, heights, widths });
         commitDoc(url, doc, heights, widths, n <= EXACT);
+        // A range open leaves nothing on disk, so without this every later
+        // open would pay the round trips again and the paper would never be
+        // readable offline. Fetch the whole file once the reader already has
+        // their page — starting it earlier would compete with the ranges.
+        if (openedByRange) backfillLocalCopy(url);
         // Refine the estimated heights in the background (long docs only).
         for (let i = EXACT; i < n; i++) {
           if (cancelled) return;
