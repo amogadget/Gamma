@@ -1086,6 +1086,37 @@ body {
 }
 .pdfOutlineBtn.open { color: var(--accent); }
 
+/* Current-page widget — top-right, same elevated look as the TOC button.
+   The number is an input: type a page and press Enter to jump. */
+.pdfPageWidget {
+  position: absolute;
+  top: 8px;
+  right: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 9px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+.pdfPageWidget input {
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 0;
+  min-width: 1ch;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: right;
+}
+.pdfPageWidget input:focus { color: var(--accent); }
+.pdfPageTotal { margin-left: 3px; white-space: nowrap; }
+[data-theme="light"] .pdfPageWidget { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+
 /* The floating status pill — the app's single transient-message surface
    (status messages, PDF load progress, load errors), anchored top-center of
    the main pane. Fed through App's postPill() channels; only one message
