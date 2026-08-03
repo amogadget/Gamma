@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import { PinIcon } from "./icons";
 
 // Shared chrome for every dockable window: one grip (drag to move/reorder,
 // double-click to collapse), the close button right beside it, then the
@@ -107,6 +108,7 @@ function OpenTabs({
   onReorder,
   onOpen,
   onClose,
+  onContext,
 }) {
   return (
     <div className="tabStrip" role="tablist">
@@ -118,7 +120,7 @@ function OpenTabs({
             if (element) tabElements.current.set(tab.id, element);
             else tabElements.current.delete(tab.id);
           }}
-          className={`tab ${tab.id === activeId ? "active" : ""} ${draggingId === tab.id ? "dragging" : ""}`}
+          className={`tab ${tab.id === activeId ? "active" : ""} ${draggingId === tab.id ? "dragging" : ""} ${tab.pinned ? "pinned" : ""}`}
           title={tab.title}
           draggable
           onDragStart={(event) => {
@@ -141,24 +143,33 @@ function OpenTabs({
             if (tab.id !== activeId) onOpen(tab.id);
           }}
           onAuxClick={(event) => {
-            if (event.button === 1) {
+            // Middle-click close skips pinned tabs — pinning is a guard
+            // against exactly this kind of accidental close.
+            if (event.button === 1 && !tab.pinned) {
               event.preventDefault();
               onClose(tab.id);
             }
           }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            onContext(tab, event.clientX, event.clientY);
+          }}
         >
+          {tab.pinned ? <span className="tabPin"><PinIcon filled size={11} /></span> : null}
           <span className="tabTitle">{tab.title}</span>
-          <button
-            className="uiClose tabClose"
-            onClick={(event) => {
-              event.stopPropagation();
-              onClose(tab.id);
-            }}
-            title="Close tab"
-            aria-label={`Close ${tab.title}`}
-          >
-            ×
-          </button>
+          {tab.pinned ? null : (
+            <button
+              className="uiClose tabClose"
+              onClick={(event) => {
+                event.stopPropagation();
+                onClose(tab.id);
+              }}
+              title="Close tab"
+              aria-label={`Close ${tab.title}`}
+            >
+              ×
+            </button>
+          )}
         </div>
       ))}
     </div>

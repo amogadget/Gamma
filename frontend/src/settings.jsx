@@ -13,7 +13,7 @@ import {
 } from "./icons";
 
 const NAV_ITEMS = [
-  ["papers", "Papers & PDFs", PaperIcon],
+  ["papers", "Paper metadata", PaperIcon],
   ["ai", "AI & API keys", KeyIcon],
   ["prompts", "Prompts", SlidersIcon],
   ["context", "AI context", BookIcon],
@@ -48,7 +48,7 @@ function SettingToggle({ label, description, checked, onChange }) {
 function PapersSettings({ value }) {
   return (
     <>
-      <PaneIntro title="Papers & PDFs">
+      <PaneIntro title="Paper metadata">
         How papers are fetched, stored, and enriched when you open them. These preferences are saved in this browser.
       </PaneIntro>
       <SettingToggle
@@ -69,6 +69,198 @@ function PapersSettings({ value }) {
         checked={value.pdfSaveLocal}
         onChange={value.setPdfSaveLocal}
       />
+      <MetaStatusSection value={value} />
+    </>
+  );
+}
+
+// Library-wide health: per paper, whether metadata resolved, whether the PDF
+// yielded extractable text, and whether the search index covers it — with
+// batch retry (selected / missing / all) for the metadata lookups. Text and
+// index state come from the FTS index, so "not indexed" means unknown, not
+// broken; the Reindex button fills those in.
+function MetaStatusSection({ value }) {
+  const [papers, setPapers] = React.useState(null); // null = loading
+  const [error, setError] = React.useState("");
+  const [selected, setSelected] = React.useState(() => new Set());
+  const [busy, setBusy] = React.useState(null); // {done, total, title} during a batch run
+  const [sortMode, setSortMode] = React.useState("meta"); // meta | text | updated
+  const stopRef = React.useRef(false);
+
+  async function refresh() {
+    try {
+      const data = await apiJson(`${API}/metadata/status`);
+      setPapers(data.papers || []);
+      setError("");
+      setSelected((prev) => new Set([...prev].filter((id) => (data.papers || []).some((p) => p.id === id))));
+    } catch (err) {
+      setError(err.message);
+      setPapers((prev) => prev || []);
+    }
+  }
+  React.useEffect(() => { refresh(); }, []);
+
+  const list = papers || [];
+  const textOk = (p) => (p.text_chars ?? 0) >= 50; // same threshold as /api/pdf-text-status
+  const missing = list.filter((p) => !p.has_meta);
+  const counts = {
+    meta: list.filter((p) => p.has_meta).length,
+    text: list.filter(textOk).length,
+    indexed: list.filter((p) => p.indexed).length,
+  };
+  // ISO timestamps compare lexicographically; unfinished-first sorts fall back
+  // to recency inside each group.
+  const sorted = React.useMemo(() => {
+    const byTime = (a, b) => (b.updated_at || "").localeCompare(a.updated_at || "");
+    const arr = [...list];
+    if (sortMode === "meta") arr.sort((a, b) => (a.has_meta ? 1 : 0) - (b.has_meta ? 1 : 0) || byTime(a, b));
+    else if (sortMode === "text") arr.sort((a, b) => (textOk(a) ? 1 : 0) - (textOk(b) ? 1 : 0) || byTime(a, b));
+    else arr.sort(byTime);
+    return arr;
+  }, [list, sortMode]);
+
+  async function retry(targets) {
+    if (!targets.length || busy) return;
+    stopRef.current = false;
+    let ok = 0, failed = 0;
+    for (let i = 0; i < targets.length; i++) {
+      if (stopRef.current) break;
+      const paper = targets[i];
+      setBusy({ done: i, total: targets.length, title: paper.title });
+      try {
+        await apiJson(`${API}/metadata/fetch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            block_id: paper.id,
+            force: true,
+            prompt: value.metaPrompt || "",
+            model: value.chatModel || "",
+            context_char_limit: value.metaContextChars || 6000,
+          }),
+        });
+        ok++;
+      } catch {
+        failed++;
+      }
+    }
+    setBusy(null);
+    value.setStatus(`Metadata: ${ok} fetched${failed ? `, ${failed} failed` : ""}${stopRef.current ? " (stopped)" : ""}.`);
+    refresh();
+  }
+
+  async function reindex() {
+    try {
+      const result = await apiJson(`${API}/search-reindex`, { method: "POST" });
+      value.setStatus(result.busy
+        ? "Indexing is already running—see the tasks popover."
+        : result.scheduled
+          ? `Re-indexing ${result.scheduled} paper${result.scheduled === 1 ? "" : "s"} — text status fills in as it runs.`
+          : "No papers with PDFs to index.");
+    } catch (err) {
+      value.setStatus(`Reindex failed: ${err.message}`);
+    }
+  }
+
+  function toggle(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  const allSelected = list.length > 0 && selected.size === list.length;
+
+  const metaCell = (p) => (
+    p.has_meta
+      ? <span className="metaStatOk">✓ {p.meta_source === "ai" ? "AI" : p.meta_source || "yes"}</span>
+      : p.meta_error
+        ? <span className="metaStatBad" title={p.meta_error}>✗ failed</span>
+        : <span className="metaStatMuted">—</span>
+  );
+  // Text and index are separate columns: extraction state is only known once
+  // the indexer has visited the doc, so an unindexed paper shows "?" here.
+  const textCell = (p) => (
+    p.text_chars === null
+      ? <span className="metaStatMuted" title="Unknown until the paper is indexed — Reindex to find out">?</span>
+      : textOk(p)
+        ? <span className="metaStatOk" title={`${p.text_chars.toLocaleString()} characters extracted`}>✓ {p.text_chars >= 1000 ? `${Math.round(p.text_chars / 1000)}k` : p.text_chars}</span>
+        : <span className="metaStatBad" title={p.has_file ? "No text layer — scanned or image-only?" : "PDF file not on the server"}>✗ no text</span>
+  );
+  const indexCell = (p) => (
+    p.indexed
+      ? <span className="metaStatOk">✓ indexed</span>
+      : p.index_stale
+        ? <span className="metaStatMuted" title="Indexed with an older extractor version — Reindex refreshes it">stale</span>
+        : <span className="metaStatMuted" title="Not in the search index yet">—</span>
+  );
+
+  return (
+    <>
+      <div className="promptSectionHead metaStatHead">
+        <span>Library status</span>
+        <span className="metaStatActions">
+          <select className="homeSortSelect" value={sortMode} onChange={(e) => setSortMode(e.target.value)} title="Sort papers">
+            <option value="meta">Metadata — unfinished first</option>
+            <option value="text">PDF text — unfinished first</option>
+            <option value="updated">Recently modified</option>
+          </select>
+          <button className="uiBtn sm" onClick={reindex} title="Re-extract every paper's text into the search index (also fills in the text column)">Reindex</button>
+          <button className="uiBtn sm" onClick={refresh} disabled={!!busy}>Refresh</button>
+        </span>
+      </div>
+      {papers === null ? <div className="reportModalHint">Loading…</div> : null}
+      {error ? <div className="reportModalHint">Status failed: {error}</div> : null}
+      {papers !== null && !list.length ? <div className="reportModalHint">No papers yet — open a PDF first.</div> : null}
+      {list.length ? (
+        <>
+          <div className="metaStatSummary">
+            Out of {list.length} paper{list.length === 1 ? "" : "s"}: <b>{counts.meta}</b> with metadata
+            · <b>{counts.text}</b> with extracted text · <b>{counts.indexed}</b> indexed for search
+          </div>
+          <div className="metaStatTable">
+            <div className="metaStatRow metaStatHeader">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={() => setSelected(allSelected ? new Set() : new Set(list.map((p) => p.id)))}
+                title={allSelected ? "Clear selection" : "Select all"}
+              />
+              <span>Paper</span>
+              <span>Metadata</span>
+              <span>PDF text</span>
+              <span>Index</span>
+            </div>
+            {sorted.map((p) => (
+              <label key={p.id} className="metaStatRow">
+                <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggle(p.id)} />
+                <span className="metaStatTitle" title={p.title}>{p.title}</span>
+                {metaCell(p)}
+                {textCell(p)}
+                {indexCell(p)}
+              </label>
+            ))}
+          </div>
+          {busy ? (
+            <div className="metaStatBatchRow">
+              <span className="metaStatProgress">Fetching {busy.done + 1}/{busy.total} — {busy.title}</span>
+              <button className="uiBtn sm" onClick={() => { stopRef.current = true; }}>Stop</button>
+            </div>
+          ) : (
+            <div className="metaStatBatchRow">
+              <button className="uiBtn sm" disabled={!selected.size}
+                onClick={() => retry(list.filter((p) => selected.has(p.id)))}>
+                Retry selected{selected.size ? ` (${selected.size})` : ""}
+              </button>
+              <button className="uiBtn sm" disabled={!missing.length}
+                onClick={() => retry(missing)}>
+                Retry missing ({missing.length})
+              </button>
+              <button className="uiBtn sm" onClick={() => retry(list)}>Retry all ({list.length})</button>
+            </div>
+          )}
+        </>
+      ) : null}
     </>
   );
 }
@@ -415,10 +607,16 @@ function SearchSettings({ value }) {
         Full-text search covers your notes and every PDF in the library. PDFs are indexed automatically in the background.
       </PaneIntro>
       <SettingToggle
-        label="Expand result details by default"
-        description="Open search with full result lists visible. When off, search starts as a compact find bar."
-        checked={value.searchDetailsDefault}
-        onChange={value.setSearchDetailsDefault}
+        label="Expand result details on the home page"
+        description="Search from the library opens with full result lists. With no PDF open, the compact find bar has nothing to show."
+        checked={value.searchDetailsHome}
+        onChange={value.setSearchDetailsHome}
+      />
+      <SettingToggle
+        label="Expand result details in a paper"
+        description="Open search with full result lists while reading a paper. When off, search starts as a compact find bar."
+        checked={value.searchDetailsPaper}
+        onChange={value.setSearchDetailsPaper}
       />
       <div className="settingRow">
         <span className="settingText">
@@ -428,6 +626,71 @@ function SearchSettings({ value }) {
         <button className="uiBtn sm" disabled={value.indexTask?.active} onClick={rebuild}>
           {value.indexTask?.active ? "Indexing…" : "Rebuild"}
         </button>
+      </div>
+    </>
+  );
+}
+
+// Admin-only view of the backend's in-memory log (GET /api/admin/logs).
+// Polls with a seq cursor while the pane is open; secrets are scrubbed
+// server-side before entries ever reach the buffer.
+function ServerLogBox({ setStatus }) {
+  const [entries, setEntries] = React.useState(null); // null = first poll pending
+  const [error, setError] = React.useState("");
+  const stateRef = React.useRef({ cursor: 0, entries: [] });
+  React.useEffect(() => {
+    let alive = true;
+    async function poll() {
+      try {
+        const data = await apiJson(`${API}/admin/logs?after=${stateRef.current.cursor}`);
+        if (!alive) return;
+        const fresh = data.entries || [];
+        if (fresh.length) {
+          stateRef.current.cursor = fresh[fresh.length - 1].seq;
+          stateRef.current.entries = [...stateRef.current.entries, ...fresh].slice(-500);
+        }
+        setEntries([...stateRef.current.entries]);
+        setError("");
+      } catch (err) {
+        if (alive) { setError(err.message); setEntries((prev) => prev || []); }
+      }
+    }
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => { alive = false; clearInterval(timer); };
+  }, []);
+  function copyServerLog() {
+    const text = stateRef.current.entries
+      .map((entry) => `${new Date(entry.t * 1000).toLocaleTimeString([], { hour12: false })} ${entry.level} ${entry.msg}`)
+      .join("\n");
+    navigator.clipboard?.writeText(text).then(
+      () => setStatus("Server log copied."),
+      () => setStatus("Copy failed—copy manually."),
+    );
+  }
+  const shown = entries || [];
+  return (
+    <>
+      <div className="settingRow">
+        <span className="settingText">
+          <span className="settingLabel">Server log</span>
+          <span className="settingDesc">Backend events since the server started, newest first. Secrets are masked; visible to admins only.</span>
+        </span>
+        <button className="uiBtn sm" disabled={!shown.length} onClick={copyServerLog}>Copy</button>
+      </div>
+      <div className="sysLogBox">
+        {shown.length ? [...shown].reverse().map((entry) => (
+          <div key={entry.seq} className="sysLogRow">
+            <span className="sysLogTime">{new Date(entry.t * 1000).toLocaleTimeString([], { hour12: false })}</span>
+            <span className="sysLogMsg">{entry.level !== "INFO" ? `[${entry.level}] ` : ""}{entry.msg}</span>
+          </div>
+        )) : (
+          <div className="sysLogEmpty">
+            {error ? `Server log unavailable: ${error}`
+              : entries ? "Nothing logged since the server started."
+                : "Loading…"}
+          </div>
+        )}
       </div>
     </>
   );
@@ -469,6 +732,7 @@ function DiagnosticsSettings({ value }) {
           </div>
         )) : <div className="sysLogEmpty">Nothing logged yet this session.</div>}
       </div>
+      {value.isAdmin ? <ServerLogBox setStatus={value.setStatus} /> : null}
     </>
   );
 }
