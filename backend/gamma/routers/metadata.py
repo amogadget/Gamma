@@ -21,9 +21,10 @@ from ..ai_client import call_ai as _call_ai
 from ..ai_context import extract_pdf_context as _extract_pdf_context
 from ..ai_settings import ai_runtime, require_ai_runtime
 from ..auth import require_user
-from ..db import page_now, user_db_path
+from ..db import page_now, user_db_path, user_uploads_dir
 from ..logbuf import log
 from ..pdf_text import PDF_EXTRACT_FAILED
+from ..textnorm import INDEX_VERSION
 from .ai import CITE_PROMPT, METADATA_PROMPT, _resolve_model
 
 router = APIRouter(prefix="/api", tags=["metadata"])
@@ -204,6 +205,54 @@ def _save_props(user: str, block_id: str, props: dict):
             (json.dumps(props), page_now(), block_id),
         )
         conn.commit()
+
+
+@router.get("/metadata/status")
+def metadata_status(request: Request):
+    """Library-wide health for the Settings "Paper metadata" pane: which papers
+    have metadata, which yielded extractable text, and whether the search index
+    covers them. Text/index state comes from the FTS index (data.db) — pages=0
+    rows are recorded extraction failures, ver != INDEX_VERSION means stale;
+    papers the index never saw report text_chars = null (unknown until indexed)."""
+    user = require_user(request)
+    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        rows = conn.execute(
+            "SELECT id, content, properties, updated_at FROM unified_blocks WHERE parent_id = 'root'"
+        ).fetchall()
+    index = {}
+    try:
+        with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+            for doc_id, ver, pages, chars in conn.execute(
+                "SELECT d.doc_id, d.ver, d.pages,"
+                " (SELECT COALESCE(SUM(LENGTH(content)), 0) FROM pdf_fts f WHERE f.doc_id = d.doc_id)"
+                " FROM pdf_fts_docs d"
+            ):
+                index[doc_id] = {"ver": ver, "pages": pages or 0, "chars": chars or 0}
+    except sqlite3.OperationalError:
+        pass  # index tables don't exist yet — search has never run
+    uploads = user_uploads_dir(user)
+    papers = []
+    for block_id, content, props_json, updated_at in rows:
+        props = json.loads(props_json or "{}")
+        doc_id = props.get("doc_id") or ""
+        if not doc_id and not (props.get("source_url") or props.get("sourceUrl")):
+            continue  # plain note page, not a paper
+        entry = index.get(doc_id)
+        meta = props.get("meta") or None
+        papers.append({
+            "id": block_id,
+            "title": (meta or {}).get("title") or content or "Untitled",
+            "updated_at": updated_at,
+            "doc_id": doc_id,
+            "has_file": bool(doc_id and (uploads / f"{doc_id}.pdf").exists()),
+            "has_meta": bool(meta),
+            "meta_source": (meta or {}).get("source", ""),
+            "meta_error": (props.get("meta_error") or {}).get("detail", ""),
+            "indexed": bool(entry and entry["ver"] == INDEX_VERSION),
+            "index_stale": bool(entry and entry["ver"] != INDEX_VERSION),
+            "text_chars": entry["chars"] if entry else None,
+        })
+    return {"papers": papers}
 
 
 class MetaFetchRequest(BaseModel):

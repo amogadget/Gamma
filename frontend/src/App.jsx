@@ -5234,6 +5234,12 @@ export default function App() {
           setMetaAutoFetch,
           pdfSaveLocal,
           setPdfSaveLocal,
+          // batch metadata retry uses the same prompt/model/context prefs as
+          // the per-paper fetch in the metadata popover
+          metaPrompt,
+          chatModel,
+          metaContextChars,
+          setStatus,
         }}
         ai={{
           aiKeysInfo,
