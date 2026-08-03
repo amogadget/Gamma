@@ -15,10 +15,18 @@ from starlette.background import BackgroundTask
 from ..auth import resolve_user
 from ..blocks_store import BLOCK_COLUMNS, block_to_dict, fetch_subtree
 from ..db import user_db_path, user_uploads_dir
+from ..logseq_graph_export import (
+    CONFIG_EDN,
+    collect_highlights,
+    render_area_images,
+    render_edn,
+    render_graph_page_md,
+    render_hls_md,
+)
 from ..markdown_export import (
     build_tree,
     collect_and_rewrite,
-    render_page,
+    render_readable,
     slugify,
 )
 from ..pdf_export import annotate_pdf, highlight_note_text
@@ -40,9 +48,10 @@ def _md_response(md: str, slug: str) -> Response:
     )
 
 
-def _zip_response(entries, assets, uploads_dir, download_name: str) -> FileResponse:
+def _zip_response(entries, assets, uploads_dir, download_name: str, files=(), blobs=()) -> FileResponse:
     """entries: list of (arcname, text). assets: set of upload filenames, written
-    once under assets/ (deduped by content-addressed name)."""
+    once under assets/ (deduped by content-addressed name). files: (arcname,
+    disk path) pairs; blobs: (arcname, bytes) pairs."""
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
     tmp.close()
     try:
@@ -53,6 +62,11 @@ def _zip_response(entries, assets, uploads_dir, download_name: str) -> FileRespo
                 path = uploads_dir / filename
                 if path.is_file():
                     z.write(path, f"assets/{filename}")
+            for arcname, path in files:
+                if path.is_file():
+                    z.write(path, arcname)
+            for arcname, data in blobs:
+                z.writestr(arcname, data)
     except Exception:
         os.unlink(tmp.name)
         raise
@@ -64,11 +78,40 @@ def _zip_response(entries, assets, uploads_dir, download_name: str) -> FileRespo
     )
 
 
+def _graph_page_parts(page, uploads_dir, include_pdf):
+    """One page in Logseq file-graph layout → (text entries, disk files,
+    blobs, image-asset names). The PDF is renamed sha → page stem so the
+    ``hls__<stem>`` page / ``<stem>.edn`` / ``<stem>.pdf`` naming convention
+    Logseq's annotation system keys on actually holds. Spaces are replaced so
+    inline ``![](../assets/<stem>.pdf)`` links stay valid Markdown."""
+    stem = slugify(page.get("content"), page["id"]).replace(" ", "_")
+    doc_id = (page.get("properties") or {}).get("doc_id")
+    pdf_path = uploads_dir / f"{doc_id}.pdf" if doc_id else None
+    has_pdf = bool(include_pdf and pdf_path and pdf_path.is_file())
+
+    md, assets = collect_and_rewrite(
+        render_graph_page_md(page, stem, has_pdf), include_pdf=False, prefix="../assets/"
+    )
+    entries = [(f"pages/{stem}.md", md)]
+    files, blobs = [], []
+    if has_pdf:
+        highlights = collect_highlights(page)
+        entries.append((f"pages/hls__{stem}.md", render_hls_md(stem, highlights)))
+        entries.append((f"assets/{stem}.edn", render_edn(highlights)))
+        files.append((f"assets/{stem}.pdf", pdf_path))
+        blobs.extend(render_area_images(pdf_path, stem, highlights))
+    return entries, files, blobs, assets
+
+
 # Sync on purpose: rendering + zipping runs in FastAPI's threadpool.
 @router.get("/pages/{block_id}/export")
 def export_page(block_id: str, request: Request, mode: str = "readable", pdf: int = 1):
-    """One page → Markdown. Bare .md when it references no local assets, else a
-    .zip of the .md plus an assets/ folder."""
+    """One page → readable Markdown: bare .md when it references no local
+    assets, else a .zip of the .md plus an assets/ folder. ``mode=logseq-graph``
+    instead returns a complete Logseq file graph (pages/ + assets/ +
+    logseq/config.edn, highlights as native hls__ page + EDN) — openable by
+    file-based Logseq directly and convertible by the DB version's "File to DB
+    graph" importer."""
     user = resolve_user(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
         rows = fetch_subtree(conn, block_id)
@@ -76,9 +119,15 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
         raise HTTPException(status_code=404, detail="page not found")
 
     page = build_tree(rows, block_id)
-    md, assets = collect_and_rewrite(render_page(page, mode), include_pdf=bool(pdf))
     slug = slugify(page.get("content"), block_id)
 
+    if mode == "logseq-graph":
+        entries, files, blobs, assets = _graph_page_parts(page, user_uploads_dir(user), bool(pdf))
+        entries.append(("logseq/config.edn", CONFIG_EDN))
+        return _zip_response(entries, assets, user_uploads_dir(user),
+                             f"{slug}-logseq.zip", files, blobs)
+
+    md, assets = collect_and_rewrite(render_readable(page), include_pdf=bool(pdf))
     if not assets:
         return _md_response(md, slug)
     return _zip_response([(f"{slug}.md", md)], assets, user_uploads_dir(user), f"{slug}.zip")
@@ -165,10 +214,19 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
             raise HTTPException(status_code=404, detail="no pages in that folder")
 
         entries, assets, used = [], set(), set()
+        files, blobs = [], []
         for root in matches:
             rows = fetch_subtree(conn, root["id"])
             page = build_tree(rows, root["id"])
-            md, page_assets = collect_and_rewrite(render_page(page, mode), include_pdf=bool(pdf))
+            if mode == "logseq-graph":
+                p_entries, p_files, p_blobs, p_assets = _graph_page_parts(
+                    page, user_uploads_dir(user), bool(pdf))
+                entries += p_entries
+                files += p_files
+                blobs += p_blobs
+                assets |= p_assets
+                continue
+            md, page_assets = collect_and_rewrite(render_readable(page), include_pdf=bool(pdf))
             assets |= page_assets
             slug = slugify(page.get("content"), root["id"])
             arcname = f"{slug}.md"
@@ -179,4 +237,8 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
             entries.append((arcname, md))
 
     folder_slug = slugify(name.replace("/", "-"), "")
+    if mode == "logseq-graph":
+        entries.append(("logseq/config.edn", CONFIG_EDN))
+        return _zip_response(entries, assets, user_uploads_dir(user),
+                             f"{folder_slug}-logseq.zip", files, blobs)
     return _zip_response(entries, assets, user_uploads_dir(user), f"{folder_slug}.zip")

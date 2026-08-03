@@ -1,30 +1,20 @@
-"""Render a page's block subtree to Markdown.
-
-Two flavours over one shared tree-walk:
-
-- ``readable``  — clean nested bullets, highlights as blockquotes with a page
-  marker, page title as an H1, scalar metadata as YAML front-matter and the
-  cached BibTeX as a fenced block. Lossy but portable; the default.
-- ``logseq``    — the inverse of ``logseq_import.parse_logseq_md``: tab-indented
-  bullets with ``key:: value`` properties, highlights carrying ``ls-type::
-  annotation`` + ``id``/``hl-color``/``hl-page``/``hl-position``. Re-importable
-  via the existing Logseq importer (positions survive as a Gamma-specific
-  ``hl-position`` extension; the stock importer ignores it and rebuilds the rest
-  from ``id``/quote). Note that this flavour joins multi-line block content onto
-  one line — the Logseq bullet format cannot represent embedded newlines.
+"""Render a page's block subtree to readable Markdown: clean nested bullets,
+highlights as blockquotes with a page marker, page title as an H1, scalar
+metadata as YAML front-matter and the cached BibTeX as a fenced block. Lossy
+but portable. (Logseq-app export lives in ``logseq_graph_export``.)
 
 Upload references (``/api/uploads/<sha>.<ext>``) are collected and rewritten to
 relative ``assets/<sha>.<ext>`` paths as a post-processing pass over the rendered
 text, so the renderers themselves stay ignorant of bundling.
 """
 
-import json
 import re
 
 from .blocks_store import block_to_dict
 
 # rgba → Logseq colour name, the inverse of logseq_import._LOGSEQ_COLORS (using
-# the canonical name for each distinct rgba we emit).
+# the canonical name for each distinct rgba we emit). Used by the Logseq graph
+# export.
 _RGBA_TO_NAME = {
     "rgba(255, 226, 143, 0.65)": "yellow",
     "rgba(170, 235, 170, 0.65)": "green",
@@ -61,13 +51,7 @@ def _is_highlight(props):
     return bool(props.get("highlight_id"))
 
 
-def _rgba_to_name(color):
-    if not color:
-        return None
-    return _RGBA_TO_NAME.get(color.strip(), color.strip())
-
-
-# --- readable flavour --------------------------------------------------------
+# --- readable rendering ------------------------------------------------------
 
 def render_readable(page):
     """Nested-bullet Markdown with a title, YAML front-matter and BibTeX block."""
@@ -141,73 +125,10 @@ def _render_readable_block(node, depth, lines):
         _render_readable_block(child, child_depth, lines)
 
 
-# --- logseq flavour ----------------------------------------------------------
+# --- asset handling ----------------------------------------------------------
 
-def render_logseq(page):
-    """Tab-indented ``key:: value`` Markdown, re-importable via the Logseq importer."""
-    props = page.get("properties") or {}
-    title = (page.get("content") or "").strip() or "Untitled"
-
-    lines = [f"title:: {title}"]
-    if props.get("doc_id"):
-        lines.append(f"doc-id:: {props['doc_id']}")
-    if props.get("source_url"):
-        lines.append(f"source:: {props['source_url']}")
-    lines.append("")
-
-    for child in page["children"]:
-        _render_logseq_block(child, 0, lines)
-
-    return "\n".join(lines).rstrip() + "\n"
-
-
-def _oneline(text):
-    return " ".join((text or "").split("\n")).strip()
-
-
-def _render_logseq_block(node, depth, lines):
-    props = node.get("properties") or {}
-    content = (node.get("content") or "").strip()
-    tabs = "\t" * depth
-
-    if _is_highlight(props):
-        lines.append(f"{tabs}- {_oneline(props.get('quote') or '')}")
-        lines.append(f"{tabs}  ls-type:: annotation")
-        lines.append(f"{tabs}  id:: {props['highlight_id']}")
-        color = _rgba_to_name(props.get("color"))
-        if color:
-            lines.append(f"{tabs}  hl-color:: {color}")
-        if props.get("pdf_page") is not None:
-            lines.append(f"{tabs}  hl-page:: {props['pdf_page']}")
-        if props.get("pdf_position"):
-            lines.append(f"{tabs}  hl-position:: {json.dumps(props['pdf_position'], separators=(',', ':'))}")
-        if props.get("link_url"):
-            lines.append(f"{tabs}  link-url:: {props['link_url']}")
-        # The highlight's own note is a plain child bullet so the importer's
-        # _collect_notes picks it up as the annotation's comment.
-        if content:
-            child_tabs = "\t" * (depth + 1)
-            lines.append(f"{child_tabs}- {_oneline(content)}")
-        for child in node["children"]:
-            _render_logseq_block(child, depth + 1, lines)
-    elif content:
-        lines.append(f"{tabs}- {_oneline(content)}")
-        for child in node["children"]:
-            _render_logseq_block(child, depth + 1, lines)
-    else:
-        # Empty container: keep children at this depth.
-        for child in node["children"]:
-            _render_logseq_block(child, depth, lines)
-
-
-# --- rendering entry point + asset handling ---------------------------------
-
-def render_page(page, mode="readable"):
-    return render_logseq(page) if mode == "logseq" else render_readable(page)
-
-
-def collect_and_rewrite(md, include_pdf=True):
-    """Rewrite ``/api/uploads/<sha>.<ext>`` refs to ``assets/<sha>.<ext>`` and
+def collect_and_rewrite(md, include_pdf=True, prefix="assets/"):
+    """Rewrite ``/api/uploads/<sha>.<ext>`` refs to ``<prefix><sha>.<ext>`` and
     return ``(new_md, {filenames})``. PDFs are left as absolute links (and not
     collected) when ``include_pdf`` is False."""
     assets = set()
@@ -217,7 +138,7 @@ def collect_and_rewrite(md, include_pdf=True):
         if filename.lower().endswith(".pdf") and not include_pdf:
             return m.group(0)
         assets.add(filename)
-        return f"assets/{filename}"
+        return f"{prefix}{filename}"
 
     return UPLOAD_RE.sub(repl, md), assets
 

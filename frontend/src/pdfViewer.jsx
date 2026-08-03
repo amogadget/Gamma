@@ -228,7 +228,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -427,6 +427,44 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     } : null;
     return () => { if (searchRef) searchRef.current = null; };
   }, [pdfDoc, searchRef]);
+
+  // Snapshot an area highlight's region as a PNG data URL. Nothing is stored
+  // with the note — clicking the rectangle later re-crops it, rendered
+  // offscreen straight from the document, so it works even while the page
+  // isn't on screen (e.g. a click in the notes window before scrolling).
+  useEffect(() => {
+    if (!captureRef) return;
+    captureRef.current = pdfDoc ? async (h) => {
+      const r = h?.position?.boundingRect;
+      const pn = r?.pageNumber || h?.position?.pageNumber;
+      if (!r || !pn) return null;
+      try {
+        const page = await pdfDoc.getPage(pn);
+        const vpBase = page.getViewport({ scale: 1 });
+        // Stored rect is page-relative at its capture-time render size — map
+        // to scale-1 page coordinates first.
+        const kx = vpBase.width / (r.width || vpBase.width);
+        const ky = vpBase.height / (r.height || vpBase.height);
+        const x1 = r.x1 * kx, y1 = r.y1 * ky;
+        const w = Math.max(1, (r.x2 - r.x1) * kx), hh = Math.max(1, (r.y2 - r.y1) * ky);
+        // Render sharp: at least 2×, more for small crops, capped so a
+        // full-page rectangle doesn't allocate a huge canvas.
+        const s = Math.min(4, Math.max(2, 1200 / w));
+        const out = document.createElement("canvas");
+        out.width = Math.round(w * s); out.height = Math.round(hh * s);
+        const ctx = out.getContext("2d");
+        // Pre-translate so the crop origin lands at the canvas origin — the
+        // render then clips to the canvas (same trick as the DPR transform in
+        // PdfPage).
+        ctx.setTransform(1, 0, 0, 1, -Math.round(x1 * s), -Math.round(y1 * s));
+        await page.render({ canvasContext: ctx, viewport: page.getViewport({ scale: s }) }).promise;
+        return out.toDataURL("image/png");
+      } catch {
+        return null;
+      }
+    } : null;
+    return () => { captureRef.current = null; };
+  }, [pdfDoc, captureRef]);
   // Resolve scale: numeric value as-is, "page-width" computes a scale that
   // fits the first page to the viewer width. Recomputed on viewer resize so
   // it adapts to sidebar drags / phone rotation.

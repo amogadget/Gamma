@@ -2,6 +2,7 @@
 validation rails (guests, non-zips, corrupt databases, zip-slip names)."""
 
 import io
+import json
 import zipfile
 
 import bcrypt
@@ -113,3 +114,97 @@ def test_nested_or_dotted_upload_names_are_skipped(receiver, donor):
     r = _import(receiver, buf.getvalue())
     assert r.status_code == 200, r.text
     assert r.json()["uploads_in_backup"] == 0
+
+
+def test_export_progress_side_channel(donor):
+    assert donor.get("/api/export").status_code == 200
+    p = donor.get("/api/export-progress").json()
+    assert p["active"] is False
+    assert p["total"] > 0 and p["done"] == p["total"]
+
+
+def test_export_notes_only_skips_uploads(donor):
+    donor.post("/api/uploads", files={"file": ("n.pdf", b"%PDF-1.4 notesonly", "application/pdf")})
+    r = donor.get("/api/export", params={"uploads": 0})
+    assert r.status_code == 200
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    names = z.namelist()
+    assert "pages.db" in names
+    assert not any(n.startswith("uploads/") for n in names)
+    assert json.loads(z.read("manifest.json"))["uploads"] is False
+
+
+# --- merge mode: fresh accounts so the replace tests above can't interfere ---
+
+@pytest.fixture(scope="module")
+def mdonor(client):
+    _make_user("mdonor", "mdonorpw")
+    return _login("mdonor", "mdonorpw")
+
+
+@pytest.fixture(scope="module")
+def mreceiver(client):
+    _make_user("mreceiver", "mreceiverpw")
+    return _login("mreceiver", "mreceiverpw")
+
+
+def _root_titles(c):
+    return [b["content"] for b in c.get("/api/blocks/root/children").json()["children"]]
+
+
+def test_merge_adds_missing_pages_and_keeps_existing(mdonor, mreceiver):
+    up = mdonor.post("/api/uploads", files={"file": ("m.pdf", b"%PDF-1.4 merge", "application/pdf")})
+    assert up.status_code == 200, up.text
+    page = make_page(mdonor, "Merge donor paper", properties={"source_url": up.json()["source_url"]})
+    child = mdonor.post("/api/blocks", json={"parent_id": page["id"], "content": "donor note"}).json()
+    mdonor.put(f"/api/chats/{page['id']}", json={"messages": [{"role": "user", "content": "hi"}]})
+    make_page(mreceiver, "Receiver keeps this")
+
+    backup = mdonor.get("/api/export")
+    r = mreceiver.post("/api/import-data?mode=merge",
+                       files={"file": ("b.zip", backup.content, "application/zip")})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["mode"] == "merge" and d["pages_added"] == 1 and d["uploads_added"] == 1
+
+    titles = _root_titles(mreceiver)
+    assert "Receiver keeps this" in titles and "Merge donor paper" in titles
+    # the whole subtree and the page's chat came along
+    assert mreceiver.get(f"/api/blocks/{child['id']}").status_code == 200
+    assert mreceiver.get(f"/api/chats/{page['id']}").json()["messages"]
+    assert mreceiver.get(up.json()["source_url"]).content == b"%PDF-1.4 merge"
+
+
+def test_merge_is_idempotent(mdonor, mreceiver):
+    before = _root_titles(mreceiver)
+    backup = mdonor.get("/api/export")
+    r = mreceiver.post("/api/import-data?mode=merge",
+                       files={"file": ("b.zip", backup.content, "application/zip")})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["pages_added"] == 0 and d["pages_skipped"] >= 1 and d["uploads_added"] == 0
+    assert _root_titles(mreceiver) == before
+
+
+def test_merge_skips_pages_with_same_doc_id(mdonor, mreceiver):
+    make_page(mdonor, "Donor copy of paper X", properties={"doc_id": "docx-shared"})
+    make_page(mreceiver, "Receiver copy of paper X", properties={"doc_id": "docx-shared"})
+    backup = mdonor.get("/api/export")
+    r = mreceiver.post("/api/import-data?mode=merge",
+                       files={"file": ("b.zip", backup.content, "application/zip")})
+    assert r.status_code == 200, r.text
+    titles = _root_titles(mreceiver)
+    assert "Receiver copy of paper X" in titles
+    assert "Donor copy of paper X" not in titles
+
+
+def test_merge_never_touches_prefs(mdonor, mreceiver):
+    from gamma.db import get_pref, set_pref
+
+    set_pref("mdonor", "open-tabs", ["donor-tab"])
+    set_pref("mreceiver", "open-tabs", ["receiver-tab"])
+    backup = mdonor.get("/api/export")
+    r = mreceiver.post("/api/import-data?mode=merge",
+                       files={"file": ("b.zip", backup.content, "application/zip")})
+    assert r.status_code == 200, r.text
+    assert get_pref("mreceiver", "open-tabs")[0] == ["receiver-tab"]
