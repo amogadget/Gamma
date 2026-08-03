@@ -1587,7 +1587,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .popover .popoverItem:hover { background: var(--bg-hover); }
 .popover .check { display: inline-block; width: 14px; color: var(--accent-dark); font-weight: 700; }
 .topbar .iconBtn.activeIcon { background: var(--bg-hover); color: var(--text-primary); }
-.sharePopover { min-width: 320px; }
+/* Fixed width: the BibTeX pre would otherwise stretch the popover to its
+   longest line — it scrolls inside instead. */
+.sharePopover { width: 320px; }
 .shareRow { display: flex; align-items: center; gap: 6px; }
 .shareRow input {
   flex: 1;
@@ -2900,6 +2902,19 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .pptCitePreview { flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary); }
 .pptCitePreview p { margin: 0; }
+/* Full BibTeX entry in the share popover: scrolls instead of growing. */
+.bibtexPre {
+  flex: 1;
+  min-width: 0;
+  max-height: 160px;
+  overflow: auto;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre;
+}
 /* Beat the generic ".topbar button" pill when the box renders inside the
    topbar (share popover) — keep the flat icon look it has elsewhere. */
 .pptCiteBox .chatMsgActionBtn,

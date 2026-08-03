@@ -2,6 +2,7 @@
 
 import json
 import re
+import sqlite3
 import time
 import urllib.error
 from urllib.request import Request as URLRequest, urlopen
@@ -43,9 +44,10 @@ from ..ai_settings import (
 )
 from ..auth import require_user
 from ..config import AI_PROTOCOLS
-from ..db import page_now
+from ..db import page_now, user_db_path
 from ..logbuf import log
 from ..pdf_text import extract_text
+from ..textnorm import INDEX_VERSION
 
 router = APIRouter(prefix="/api", tags=["ai"])
 
@@ -87,28 +89,44 @@ def _resolve_effort(requested: str) -> str:
     return requested if requested in EFFORT_LEVELS else ""
 
 
+def _search_index_status(user: str, doc_id: str) -> dict:
+    """Whether the search index covers this doc — same rules as
+    /api/metadata/status (ver mismatch = stale, re-indexed lazily)."""
+    try:
+        with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+            row = conn.execute(
+                "SELECT ver FROM pdf_fts_docs WHERE doc_id = ?", (doc_id,)
+            ).fetchone()
+    except sqlite3.OperationalError:
+        row = None  # index tables don't exist yet — search has never run
+    return {"indexed": bool(row and row[0] == INDEX_VERSION),
+            "index_stale": bool(row and row[0] != INDEX_VERSION)}
+
+
 # Sync def: extraction runs in the threadpool (pdfium stops at the sample cap).
 @router.get("/pdf-text-status")
 def pdf_text_status(doc_id: str, request: Request, preview: int = 0):
-    """Whether a doc's PDF yields extractable text. Feeds the metadata
-    popover's health row — a scanned/image-only PDF is why AI answers blind
-    and metadata lookups come up empty. `preview` > 0 additionally returns
-    that many characters of the text itself (capped)."""
+    """Whether a doc's PDF yields extractable text and whether the search
+    index covers it. Feeds the metadata popover's health rows — a
+    scanned/image-only PDF is why AI answers blind and metadata lookups come
+    up empty. `preview` > 0 additionally returns that many characters of the
+    text itself (capped)."""
     user = require_user(request)
     preview = min(max(preview, 0), 20000)
+    index = _search_index_status(user, doc_id)
     pdf_path = _pdf_path(user, doc_id)
     if not pdf_path:
-        return {"found": False, "ok": False, "chars": 0}
+        return {"found": False, "ok": False, "chars": 0, **index}
     try:
         text = extract_text(str(pdf_path), preview or 4000)
         stripped = text.strip()
-        out = {"found": True, "ok": len(stripped) >= 50, "chars": len(stripped)}
+        out = {"found": True, "ok": len(stripped) >= 50, "chars": len(stripped), **index}
         if preview:
             out["text"] = text[:preview]
         return out
     except Exception as e:
         log.warning(f"[pdf-text-status] {e}")
-        return {"found": True, "ok": False, "chars": 0}
+        return {"found": True, "ok": False, "chars": 0, **index}
 
 
 _SYSTEM_PROMPT = ("You are a research assistant helping the user understand a PDF they are reading. "

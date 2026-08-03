@@ -168,26 +168,31 @@ export default function App() {
     } catch { setLoginError("Guest login failed"); }
   }
 
-  // Restore an "Export my data" zip into this account: notes + settings are
-  // replaced, uploaded files are merged in. Full reload afterwards — every
-  // piece of in-memory state (home feed, tabs, chats) is stale after a restore.
-  function importUserData() {
+  // Restore an "Export my data" zip into this account. mode "replace": notes +
+  // settings are replaced by the backup, uploaded files are merged in. mode
+  // "merge": only pages/chats missing here are added, existing data wins.
+  // Full reload afterwards — every piece of in-memory state (home feed, tabs,
+  // chats) is stale after a restore.
+  function importUserData(mode = "replace") {
     const inp = document.createElement("input");
     inp.type = "file";
     inp.accept = ".zip,application/zip";
     inp.onchange = async () => {
       const f = inp.files?.[0];
       if (!f) return;
-      if (!window.confirm(
-        `Restore "${f.name}" into the account "${authUser.user}"?\n\n` +
-        "ALL current notes, chats, and settings will be REPLACED by the backup. " +
-        "Uploaded PDFs are merged in (nothing is deleted). This cannot be undone."
-      )) return;
-      setStatus("Importing backup…");
+      const warning = mode === "merge"
+        ? `Merge "${f.name}" into the account "${authUser.user}"?\n\n` +
+          "Pages and chats from the backup that don't exist here yet will be ADDED. " +
+          "Everything already in this account (including settings) is kept unchanged."
+        : `Restore "${f.name}" into the account "${authUser.user}"?\n\n` +
+          "ALL current notes, chats, and settings will be REPLACED by the backup. " +
+          "Uploaded PDFs are merged in (nothing is deleted). This cannot be undone.";
+      if (!window.confirm(warning)) return;
+      setStatus(mode === "merge" ? "Merging backup…" : "Importing backup…");
       try {
         const fd = new FormData();
         fd.append("file", f);
-        const res = await fetch(`${API}/import-data`, { method: "POST", body: fd, credentials: "include" });
+        const res = await fetch(`${API}/import-data?mode=${mode}`, { method: "POST", body: fd, credentials: "include" });
         const d = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(d.detail || res.statusText);
         window.location.href = window.location.pathname; // fresh state, no stale ?block=
@@ -1134,6 +1139,7 @@ export default function App() {
   const [findMarks, setFindMarks] = useState([]); // [{page, rect, active}] painted by PdfViewer
   const [pdfDocNonce, setPdfDocNonce] = useState(0); // bumped when a document finishes rendering
   const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rects, pageW, pageH}]
+  const pdfCaptureRef = useRef(null); // set by PdfViewer: async (areaHighlight) => PNG data URL (re-crops the rect from the document)
 
   // Poll server-side task progress: slow heartbeat while logged in (so the
   // button appears even if the work was kicked off elsewhere), fast while
@@ -1575,8 +1581,38 @@ export default function App() {
   // or captured by a Ctrl+drag area selection on the PDF. Lives here (not in
   // ChatDock) so the viewer can attach even while the chat window is closed.
   const [chatImages, setChatImages] = useState([]);
+  // Data URLs that came from the PDF (area drags / rect-highlight clicks), as
+  // opposed to images pasted into the chat input. The auto-clear preference
+  // below only ever drops these — a pasted figure must survive PDF clicks.
+  const pdfImagesRef = useRef(new Set());
   function addChatImage(dataUrl) {
+    const seen = pdfImagesRef.current;
+    seen.add(dataUrl);
+    while (seen.size > 16) seen.delete(seen.values().next().value);
     setChatImages((prev) => prev.length >= 4 || prev.includes(dataUrl) ? prev : [...prev, dataUrl]);
+  }
+  // Off by default: snapshots stay attached until removed or sent. On, a
+  // plain click elsewhere in the PDF drops them — the same gesture that
+  // clears quoted text selections. Ref-mirrored for the mouseup listener.
+  const [chatImgAutoClear, setChatImgAutoClear] = useState(() => {
+    try { return localStorage.getItem("gamma-chat-img-autoclear") === "1"; } catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-chat-img-autoclear", chatImgAutoClear ? "1" : "0"); } catch {}
+  }, [chatImgAutoClear]);
+  const chatImgAutoClearRef = useRef(chatImgAutoClear);
+  useEffect(() => { chatImgAutoClearRef.current = chatImgAutoClear; }, [chatImgAutoClear]);
+  // Clicking a highlight — on the PDF or its card in the notes — feeds the
+  // chat: text highlights set their quote as the selection, area rectangles
+  // re-crop their region into an image attachment (the snapshot is never
+  // stored; the viewer renders it fresh from the document each time).
+  function addHighlightToChat(h, additive) {
+    if (!h) return;
+    if (h.position?.area) {
+      pdfCaptureRef.current?.(h).then((img) => { if (img) addChatImage(img); });
+    } else {
+      addPdfSelection(h.content?.text, additive);
+    }
   }
   // Styled in-app dialogs replacing window.confirm / link decisions.
   const [confirmBox, setConfirmBox] = useState(null); // {title, message, confirmLabel, danger, onConfirm}
@@ -1807,10 +1843,10 @@ export default function App() {
     }
   }
 
-  // Opening the metadata or share popover generates the slide citation
-  // automatically (cached on the page afterwards — one AI call per paper).
+  // Opening the share popover generates the slide citation automatically
+  // (cached on the page afterwards — one AI call per paper).
   useEffect(() => {
-    if ((openPopover === "meta" || openPopover === "share") && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
+    if (openPopover === "share" && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
       makePptCitation();
     }
   }, [openPopover, pageMeta]);
@@ -1889,7 +1925,14 @@ export default function App() {
         if (!text) {
           // Highlight clicks set the quote as the selection (in their own
           // click handler) — don't clear it from here.
-          if (!additive && !e.target.closest?.("[data-hl-id]")) setPdfSelections([]);
+          if (!additive && !e.target.closest?.("[data-hl-id]")) {
+            setPdfSelections([]);
+            // Optionally the same gesture drops PDF snapshots pending in the
+            // chat (Settings → AI context). Pasted images are never touched.
+            if (chatImgAutoClearRef.current && pdfImagesRef.current.size) {
+              setChatImages((prev) => prev.filter((s) => !pdfImagesRef.current.has(s)));
+            }
+          }
           return;
         }
         const node = sel.anchorNode;
@@ -2490,6 +2533,7 @@ export default function App() {
     setStatus("Resolving share link...");
     try {
       const data = await apiJson(`${API}/share/${token}`);
+      shareOwnerRef.current = data.username || "";
       const userParam = data.username ? `?user=${encodeURIComponent(data.username)}` : "";
 
       let block = null;
@@ -2973,11 +3017,18 @@ export default function App() {
     }
   }
 
+  // Shared (read-only) views export the owner's data: the server resolves the
+  // user from ?user= when there's no session (auth.resolve_user).
+  const shareOwnerRef = useRef("");
+  const shareUserQuery = () =>
+    readOnly && shareOwnerRef.current ? `user=${encodeURIComponent(shareOwnerRef.current)}` : "";
+
   async function exportPage(mode = "readable") {
     const id = focusedBlock?.id;
     if (!id) { setStatus("Open a page first to export it."); return; }
     setOpenPopover(null);
-    await downloadExport(`/pages/${id}/export?mode=${mode}`, "page.md");
+    const userQ = shareUserQuery();
+    await downloadExport(`/pages/${id}/export?mode=${mode}${userQ ? `&${userQ}` : ""}`, "page.md");
   }
 
   // Download the PDF with the page's highlights burned in as standard PDF
@@ -2986,7 +3037,18 @@ export default function App() {
     const id = focusedBlock?.id;
     if (!id) { setStatus("Open a page first to export it."); return; }
     setOpenPopover(null);
-    await downloadExport(`/pages/${id}/export-pdf`, "annotated.pdf");
+    const userQ = shareUserQuery();
+    await downloadExport(`/pages/${id}/export-pdf${userQ ? `?${userQ}` : ""}`, "annotated.pdf");
+  }
+
+  // Download the PDF exactly as stored — no highlight annotations. Reuses the
+  // viewer's own URL (uploads route or /pdf proxy), so it works in share views.
+  async function exportRawPdf() {
+    if (!pdfUrl) { setStatus("No PDF open."); return; }
+    setOpenPopover(null);
+    const path = pdfUrl.startsWith(API) ? pdfUrl.slice(API.length) : pdfUrl;
+    const name = `${(pdfTitle || docId || "paper").replace(/[\\/:*?"<>|]/g, "_").slice(0, 80)}.pdf`;
+    await downloadExport(path, name);
   }
 
   // Ask the AI for the document's title and fill it into the page name.
@@ -3157,7 +3219,7 @@ export default function App() {
     postPill("pdf-zoom", { msg: `Zoom ${Math.round(s * 100)}%`, final: true });
   }
 
-  function jumpToHighlightId(highlightId) {
+  function jumpToHighlightId(highlightId, additive) {
     if (pdfHidden) {
       pendingJumpRef.current = highlightId;
       setPdfHidden(false);
@@ -3171,6 +3233,8 @@ export default function App() {
       // stale internal id lookup.
       scrollToRef.current({ position: target.position });
       triggerFlash(highlightId);
+      // Same chat effect as clicking the highlight on the PDF itself.
+      addHighlightToChat(target, additive);
       return;
     }
     const block = flattenBlocks(blocks).find((b) => b.properties?.highlight_id === highlightId);
@@ -3181,6 +3245,7 @@ export default function App() {
       if (linkedTarget) {
         scrollToRef.current({ position: linkedTarget.position });
         triggerFlash(linkedId);
+        addHighlightToChat(linkedTarget, additive);
         return;
       }
     }
@@ -3752,6 +3817,16 @@ export default function App() {
                               ) : null}
                             </span>
                           </div>
+                          <div className="metaRow">
+                            <span className="metaKey">Index</span>
+                            <span className="metaVal" title="Whether library-wide search can find text in this paper. Papers index automatically in the background; Settings → Search → Rebuild forces a full re-index.">
+                              {!pdfTextInfo || pdfTextInfo.checking ? "checking…"
+                                : pdfTextInfo.error || pdfTextInfo.indexed === undefined ? "—"
+                                : pdfTextInfo.indexed ? "✓ indexed for search"
+                                : pdfTextInfo.index_stale ? "stale — re-indexes automatically"
+                                : "not yet indexed"}
+                            </span>
+                          </div>
                           {pdfTextPreview ? (
                             <div className="reportOverlay" onClick={() => setPdfTextPreview(null)}>
                               <div className="reportModal" style={{ width: "min(640px, calc(100vw - 32px))" }} onClick={(e) => e.stopPropagation()}>
@@ -3777,45 +3852,6 @@ export default function App() {
                         {metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metadataToDraft(pageMeta)) ? (
                           <div className="reportModalBtns">
                             <button className="uiBtn primary" onClick={saveMetaEdits}>Save metadata</button>
-                          </div>
-                        ) : null}
-                        {(pageMeta || pageBibtex) ? (
-                          <>
-                            <div className="popoverDivider" />
-                            <div className="popoverSection citeSectionRow">
-                              <span>Slide citation</span>
-                              <button
-                                className="searchToggle"
-                                title="Regenerate the citation"
-                                disabled={pptCiteBusy}
-                                onClick={() => makePptCitation(true)}
-                              >{pptCiteBusy ? "…" : "↻"}</button>
-                            </div>
-                            {pptCite ? (
-                              <div className="pptCiteBox">
-                                <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
-                                <button
-                                  className="chatMsgActionBtn"
-                                  onClick={() => copyCitation("ppt", pptCite)}
-                                  title="Copy — pastes with real italics/bold into PowerPoint"
-                                  aria-label="Copy slide citation"
-                                >
-                                  {citeCopied === "ppt"
-                                    ? <CheckIcon size={13} />
-                                    : <CopyIcon size={13} />}
-                                </button>
-                              </div>
-                            ) : (
-                              <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
-                            )}
-                          </>
-                        ) : null}
-                        {pageBibtex ? (
-                          <div className="reportModalBtns">
-                            <button className="chatClearBtn" onClick={() => copyCitation("bibtex", pageBibtex)} title="Copy the BibTeX entry">
-                              <CopyIcon size={11} style={{ marginRight: 4, verticalAlign: "-1px" }} />
-                              {citeCopied === "bibtex" ? "Copied ✓" : "BibTeX"}
-                            </button>
                           </div>
                         ) : null}
                         <div className="popoverDivider" />
@@ -4739,7 +4775,7 @@ export default function App() {
               />
             </label>
           ) : null}
-          {!menuReadOnly && focusedBlock && !homeMode ? (
+          {focusedBlock && !homeMode ? (
             <>
               <div className="popoverDivider" />
               <button
@@ -4752,11 +4788,11 @@ export default function App() {
               </button>
               <button
                 className="popoverItem"
-                onClick={() => { exportPage("logseq"); setOpenPopover(null); }}
-                title="Download this page as Logseq-flavoured Markdown — re-importable via the Logseq importer."
+                onClick={() => { exportPage("logseq-graph"); setOpenPopover(null); }}
+                title="Download a complete Logseq graph (.zip): notes page + native PDF highlights (hls page + .edn). Unzip and open the folder in file-based Logseq, or use the DB version's 'File to DB graph' import."
               >
                 <FileTextIcon className="popoverItemIcon" size={15} />
-                Export this page (Logseq)
+                Export as Logseq graph (.zip)
               </button>
               {docId ? (
                 <button
@@ -4766,6 +4802,16 @@ export default function App() {
                 >
                   <FileHighlightIcon className="popoverItemIcon" size={15} />
                   Export PDF with highlights
+                </button>
+              ) : null}
+              {pdfUrl ? (
+                <button
+                  className="popoverItem"
+                  onClick={() => { exportRawPdf(); setOpenPopover(null); }}
+                  title="Download the PDF file as stored — no highlights or notes."
+                >
+                  <FileIcon className="popoverItemIcon" size={15} />
+                  Export raw PDF
                 </button>
               ) : null}
             </>
@@ -5007,7 +5053,15 @@ export default function App() {
                     {(pageMeta || pageBibtex) ? (
                       <>
                         <div className="popoverDivider" />
-                        <div className="popoverSection">Slide citation</div>
+                        <div className="popoverSection citeSectionRow">
+                          <span>Slide citation</span>
+                          <button
+                            className="searchToggle"
+                            title="Regenerate the citation"
+                            disabled={pptCiteBusy}
+                            onClick={() => makePptCitation(true)}
+                          >{pptCiteBusy ? "…" : "↻"}</button>
+                        </div>
                         {pptCite ? (
                           <div className="pptCiteBox">
                             <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
@@ -5025,6 +5079,24 @@ export default function App() {
                         ) : (
                           <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
                         )}
+                        {pageBibtex ? (
+                          <>
+                            <div className="popoverSection">BibTeX</div>
+                            <div className="pptCiteBox">
+                              <pre className="bibtexPre">{pageBibtex}</pre>
+                              <button
+                                className="chatMsgActionBtn"
+                                onClick={() => copyCitation("bibtex", pageBibtex)}
+                                title="Copy the BibTeX entry"
+                                aria-label="Copy BibTeX"
+                              >
+                                {citeCopied === "bibtex"
+                                  ? <CheckIcon size={13} />
+                                  : <CopyIcon size={13} />}
+                              </button>
+                            </div>
+                          </>
+                        ) : null}
                       </>
                     ) : null}
                   </div>
@@ -5070,15 +5142,33 @@ export default function App() {
                       <ExportIcon className="popoverItemIcon" size={15} />
                       Export my data (.zip)
                     </button>
+                    <button
+                      className="popoverItem"
+                      onClick={() => { setOpenPopover(null); window.location.href = `${API}/export?uploads=0`; }}
+                      title="Download a small zip with just the databases (notes, chats, settings) — no uploaded PDFs"
+                    >
+                      <ExportIcon className="popoverItemIcon" size={15} />
+                      Export database only (.zip)
+                    </button>
                     {!authUser.is_guest ? (
-                      <button
-                        className="popoverItem"
-                        onClick={() => { setOpenPopover(null); importUserData(); }}
-                        title="Restore an exported zip: notes and settings are replaced by the backup, uploaded files are merged in"
-                      >
-                        <ImportIcon className="popoverItemIcon" size={15} />
-                        Import data (.zip)…
-                      </button>
+                      <>
+                        <button
+                          className="popoverItem"
+                          onClick={() => { setOpenPopover(null); importUserData("replace"); }}
+                          title="Restore an exported zip: notes and settings are replaced by the backup, uploaded files are merged in"
+                        >
+                          <ImportIcon className="popoverItemIcon" size={15} />
+                          Import data (.zip)…
+                        </button>
+                        <button
+                          className="popoverItem"
+                          onClick={() => { setOpenPopover(null); importUserData("merge"); }}
+                          title="Add pages from an exported zip that are missing here; everything already in this account is kept unchanged"
+                        >
+                          <ImportIcon className="popoverItemIcon" size={15} />
+                          Import &amp; merge (.zip)…
+                        </button>
+                      </>
                     ) : null}
                     {authUser.is_admin ? (
                       <button className="popoverItem" onClick={() => { openUsersManager(); setOpenPopover(null); }}>
@@ -5189,6 +5279,7 @@ export default function App() {
             <PdfViewer url={pdfUrl} highlights={highlights}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
+              captureRef={pdfCaptureRef}
               findMarks={findMarks}
               onEffectiveScale={setPdfEffScale}
               onZoomTo={zoomTo}
@@ -5206,9 +5297,9 @@ export default function App() {
               onHighlightJump={(hlId, additive) => {
                 const b = flattenBlocks(blocks).find(b => b.properties?.highlight_id === hlId);
                 if (b) { pendingBlockScrollRef.current = b.id; setBlocks(prev => expandToBlock(prev, b.id)); }
-                // Clicking a highlight also makes its quote the chat selection
-                // (Ctrl+click appends, like text selections)
-                addPdfSelection(highlights.find(h => h.id === hlId)?.content?.text, additive);
+                // Clicking a highlight also feeds the chat: quote as the
+                // selection (Ctrl+click appends), area rects as an image.
+                addHighlightToChat(highlights.find(h => h.id === hlId), additive);
               }}
               onHighlightContext={setHighlightMenu}
               onAreaSelection={addChatImage}
@@ -5429,6 +5520,8 @@ export default function App() {
           },
         }}
         context={{
+          chatImgAutoClear,
+          setChatImgAutoClear,
           chatContextChars,
           setChatContextChars,
           metaContextChars,

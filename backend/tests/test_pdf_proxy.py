@@ -77,7 +77,8 @@ def test_proxy_save_writes_complete_file_then_redirects(guest, monkeypatch):
 def test_pdf_text_status_missing_doc(guest):
     r = guest.get("/api/pdf-text-status", params={"doc_id": "deadbeefdeadbeefdeadbeef"})
     assert r.status_code == 200
-    assert r.json() == {"found": False, "ok": False, "chars": 0}
+    assert r.json() == {"found": False, "ok": False, "chars": 0,
+                        "indexed": False, "index_stale": False}
 
 
 def _text_pdf(text="Attention is all you need, and this line is long enough to count."):

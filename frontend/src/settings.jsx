@@ -563,6 +563,12 @@ function ContextSettings({ value }) {
       <PaneIntro title="AI context">
         Control how much extracted PDF text Gamma sends to the AI. Larger values can improve answers but use more tokens.
       </PaneIntro>
+      <SettingToggle
+        label="Clear snapshots when clicking elsewhere"
+        description="A plain click in the PDF clears the quoted text selections under the chat. Turn this on to also drop pending rectangle snapshots with that click — images pasted into the chat are never touched."
+        checked={value.chatImgAutoClear}
+        onChange={value.setChatImgAutoClear}
+      />
       {limits.map(([label, description, current, setCurrent]) => (
         <label className="settingRow" key={label}>
           <span className="settingText">
