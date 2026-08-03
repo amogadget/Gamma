@@ -310,7 +310,7 @@ export default function App() {
     apiJson(`${API}/prefs/read-pos`).then((d) => {
       if (prefsUserRef.current !== u) return;
       readPosLoadedRef.current = true;
-      mergeReadPos(u, d.value);
+      if (mergeReadPos(u, d.value)) pushReadPosSoon(u);
     }).catch(() => { if (prefsUserRef.current === u) readPosLoadedRef.current = true; });
   }, [authUser?.user, readOnly]);
 
@@ -808,14 +808,36 @@ export default function App() {
   const readPosRef = useRef({});
   const readPosLoadedRef = useRef(false); // first server response arrived
   const readPosPushTimerRef = useRef(null);
+  // Merge the server copy in (per-entry newest-wins) and report whether the
+  // merged map holds anything the server doesn't — i.e. a local entry the
+  // server never received because a push was dropped while it was down or
+  // restarting. Callers push the merged map back when so: pushing a superset
+  // of what was just pulled can only add entries, never regress one, and it
+  // doubles as the retry for those silently-dropped pushes.
   function mergeReadPos(user, server) {
     const merged = { ...readPosRef.current };
-    for (const [id, e] of Object.entries(server && typeof server === "object" ? server : {})) {
+    const s = server && typeof server === "object" ? server : {};
+    for (const [id, e] of Object.entries(s)) {
       if (!e || typeof e.page !== "number") continue;
       if (!merged[id] || (e.at || "") > (merged[id].at || "")) merged[id] = e;
     }
     readPosRef.current = merged;
     try { localStorage.setItem(`gamma-read-pos:${user}`, JSON.stringify(merged)); } catch {}
+    return Object.entries(merged).some(([id, e]) => !s[id] || (e.at || "") > (s[id].at || ""));
+  }
+  function pushReadPosSoon(u) {
+    if (readPosPushTimerRef.current) clearTimeout(readPosPushTimerRef.current);
+    readPosPushTimerRef.current = setTimeout(async () => {
+      readPosPushTimerRef.current = null;
+      if (prefsUserRef.current !== u) return;
+      try {
+        await apiJson(`${API}/prefs/read-pos`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: readPosRef.current }),
+        });
+      } catch {}
+    }, 1000);
   }
   function recordReadPos(blockId, page) {
     const u = prefsUserRef.current;
@@ -834,18 +856,7 @@ export default function App() {
     }
     readPosRef.current = next;
     try { localStorage.setItem(`gamma-read-pos:${u}`, JSON.stringify(next)); } catch {}
-    if (readPosPushTimerRef.current) clearTimeout(readPosPushTimerRef.current);
-    readPosPushTimerRef.current = setTimeout(async () => {
-      readPosPushTimerRef.current = null;
-      if (prefsUserRef.current !== u) return;
-      try {
-        await apiJson(`${API}/prefs/read-pos`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ value: readPosRef.current }),
-        });
-      } catch {}
-    }, 1000);
+    pushReadPosSoon(u);
   }
   // Multi-browser convergence: whenever this window regains focus, pull the
   // latest stored tabs. Skipped while a local push is pending (ours is newer).
@@ -866,7 +877,7 @@ export default function App() {
         const d = await apiJson(`${API}/prefs/read-pos`);
         if (prefsUserRef.current !== u) return;
         readPosLoadedRef.current = true;
-        mergeReadPos(u, d.value);
+        if (mergeReadPos(u, d.value)) pushReadPosSoon(u);
       } catch {}
     }
     // Losing focus flushes the debounced read-pos push right away, so the
@@ -1502,6 +1513,13 @@ export default function App() {
     setPdfSelections((prev) => additive
       ? (prev.includes(part) || prev.length >= 6 ? prev : [...prev, part])
       : [part]);
+  }
+  // Figures pending send in the chat (data URLs) — pasted into the chat input
+  // or captured by a Ctrl+drag area selection on the PDF. Lives here (not in
+  // ChatDock) so the viewer can attach even while the chat window is closed.
+  const [chatImages, setChatImages] = useState([]);
+  function addChatImage(dataUrl) {
+    setChatImages((prev) => prev.length >= 4 || prev.includes(dataUrl) ? prev : [...prev, dataUrl]);
   }
   // Styled in-app dialogs replacing window.confirm / link decisions.
   const [confirmBox, setConfirmBox] = useState(null); // {title, message, confirmLabel, danger, onConfirm}
@@ -4499,6 +4517,7 @@ export default function App() {
           docId={docId} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pdfTitle={pdfTitle}
           openTabs={openTabs}
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
+          chatImages={chatImages} setChatImages={setChatImages}
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
           chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider}
@@ -5073,6 +5092,7 @@ export default function App() {
                 addPdfSelection(highlights.find(h => h.id === hlId)?.content?.text, additive);
               }}
               onHighlightContext={setHighlightMenu}
+              onAreaSelection={addChatImage}
               onSelectionFinished={readOnly ? undefined : (position, content, hideTip, extras) => {
                 if (extras?.link) {
                   setLinkDialog({ position, content });
