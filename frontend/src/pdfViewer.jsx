@@ -228,7 +228,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onHighlightContext, searchRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -251,7 +251,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // parent state change recreates the handler closures. The wrappers always
   // dispatch to the latest handlers via the ref.
   const cbRef = useRef({});
-  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLoadState, onZoomTo };
+  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLoadState, onZoomTo, onAreaSelection };
   const stableCbs = useMemo(() => ({
     onJump: (...a) => cbRef.current.onJump?.(...a),
     onHighlightJump: (...a) => cbRef.current.onHighlightJump?.(...a),
@@ -787,8 +787,14 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   }, [canAnnotate]);
 
   // A finished Ctrl+drag on a page: hold the rect (drawn by that page while
-  // the popup is up) and offer the same color tip as a text selection.
-  const onAreaSelected = useCallback((sel) => setSelPopup({ kind: "area", ...sel }), []);
+  // the popup is up) and offer the same color tip as a text selection. The
+  // drawn region also acts as a chat selection — its snapshot goes to the
+  // host right away (like text selections attach on mouseup), whether or not
+  // a note is then created.
+  const onAreaSelected = useCallback(({ image, ...sel }) => {
+    setSelPopup({ kind: "area", ...sel });
+    if (image) cbRef.current.onAreaSelection?.(image);
+  }, []);
 
   // Dismiss the color popup when the user mouses down anywhere outside it
   // (without that, removing the textarea/Cancel leaves no way to back out).
@@ -1141,9 +1147,24 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       const swallow = (ce) => { ce.stopPropagation(); ce.preventDefault(); };
       document.addEventListener("click", swallow, { capture: true, once: true });
       setTimeout(() => document.removeEventListener("click", swallow, { capture: true }), 0);
+      // Crop the region out of the rendered canvas (backing resolution, so
+      // the snapshot stays sharp) — it doubles as a chat attachment.
+      let image = null;
+      const canvas = canvasRef.current;
+      if (canvas && canvas.width) {
+        try {
+          const kx = canvas.width / box.width, ky = canvas.height / box.height;
+          const w = Math.round((r.x2 - r.x1) * kx), h = Math.round((r.y2 - r.y1) * ky);
+          const out = document.createElement("canvas");
+          out.width = w; out.height = h;
+          out.getContext("2d").drawImage(canvas, Math.round(r.x1 * kx), Math.round(r.y1 * ky), w, h, 0, 0, w, h);
+          image = out.toDataURL("image/png");
+        } catch { /* tainted/zero canvas — note creation still works */ }
+      }
       onAreaSelected({
         pageNumber, rect: r, width: box.width, height: box.height,
         tip: { left: box.left + r.x1, top: box.top + r.y2 + 8 },
+        image,
       });
     }
     document.addEventListener("mousemove", onMove);
