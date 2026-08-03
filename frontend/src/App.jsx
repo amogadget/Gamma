@@ -21,7 +21,7 @@ import {
   FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
   LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PinIcon, PlusIcon,
   SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, TrashIcon, UploadIcon,
-  UserIcon, UsersIcon, ZoomInIcon, ZoomOutIcon,
+  UserIcon, UsersIcon, XIcon, ZoomInIcon, ZoomOutIcon,
 } from "./icons";
 
 
@@ -768,7 +768,7 @@ export default function App() {
       tabsPushTimerRef.current = null;
     }
     setOpenTabs((prev) => {
-      let tabs = Array.isArray(value) ? value : [];
+      let tabs = orderTabs(Array.isArray(value) ? value : []);
       // The page open in THIS window keeps its tab even when the stored state
       // lacks it (just opened here and not pushed yet, or closed elsewhere
       // while it's still on screen here) — merged and pushed back.
@@ -781,9 +781,13 @@ export default function App() {
       return tabs;
     });
   }
+  // Pinned tabs always sit left of unpinned ones; the partition is stable, so
+  // pinning a tab lands it right after the existing pinned group and unpinning
+  // drops it at the front of the unpinned group — no explicit move needed.
+  const orderTabs = (tabs) => [...tabs.filter((t) => t.pinned), ...tabs.filter((t) => !t.pinned)];
   function updateTabs(updater) {
     setOpenTabs((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
+      const next = orderTabs(typeof updater === "function" ? updater(prev) : updater);
       const u = prefsUserRef.current;
       if (u) {
         try { localStorage.setItem(`gamma-tabs:${u}`, JSON.stringify(next)); } catch {}
@@ -791,6 +795,10 @@ export default function App() {
       }
       return next;
     });
+  }
+  // pinned: true | undefined (undefined keys drop out of the synced JSON).
+  function toggleTabPinned(id) {
+    updateTabs((prev) => prev.map((t) => (t.id === id ? { ...t, pinned: t.pinned ? undefined : true } : t)));
   }
   // Last-read positions, synced like tabs so "jump to last read" follows the
   // account across browsers: blockId -> {page, at}. Per-paper entries merged
@@ -906,6 +914,7 @@ export default function App() {
   }
   const dragTabRef = useRef(null); // tab id being drag-reordered
   const [draggingTabId, setDraggingTabId] = useState(null);
+  const [tabMenu, setTabMenu] = useState(null); // {id, pinned, x, y} — tab right-click menu
   // FLIP animation: when tab order changes, slide each tab from its old
   // position to the new one (Chrome-style), instead of snapping.
   const tabElsRef = useRef(new Map());
@@ -1125,9 +1134,14 @@ export default function App() {
   const [metaAutoFetch, setMetaAutoFetch] = useState(() => {
     try { return localStorage.getItem("gamma-meta-auto") !== "0"; } catch { return true; }
   });
-  // Search popover: whether the result-detail lists start expanded (SearchPanel
-  // re-reads the key each time it opens; compact find is the default).
-  const [searchDetailsDefault, setSearchDetailsDefault] = useState(() => {
+  // Search popover: whether the result-detail lists start expanded, one
+  // default per place (SearchPanel re-reads the keys each time it opens).
+  // Home page: expanded unless turned off — with no open PDF the compact
+  // find bar shows nothing. Paper view: compact find unless turned on.
+  const [searchDetailsHome, setSearchDetailsHome] = useState(() => {
+    try { return localStorage.getItem("gamma-search-details-home") !== "0"; } catch { return true; }
+  });
+  const [searchDetailsPaper, setSearchDetailsPaper] = useState(() => {
     try { return localStorage.getItem("gamma-search-details") === "1"; } catch { return false; }
   });
   // The always-on status bar under the tabs — off by default, the floating
@@ -1148,8 +1162,11 @@ export default function App() {
     try { localStorage.setItem("gamma-meta-auto", metaAutoFetch ? "1" : "0"); } catch {}
   }, [metaAutoFetch]);
   useEffect(() => {
-    try { localStorage.setItem("gamma-search-details", searchDetailsDefault ? "1" : "0"); } catch {}
-  }, [searchDetailsDefault]);
+    try { localStorage.setItem("gamma-search-details-home", searchDetailsHome ? "1" : "0"); } catch {}
+  }, [searchDetailsHome]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-search-details", searchDetailsPaper ? "1" : "0"); } catch {}
+  }, [searchDetailsPaper]);
   const pageTitleSaveTimerRef = useRef(null);
   const viewerWrapRef = useRef(null);
   const pdfRetryRef = useRef(null); // set by PdfViewer: re-runs a failed load (pill's Retry button)
@@ -4680,6 +4697,8 @@ export default function App() {
                 const from = prev.findIndex((tab) => tab.id === dragged);
                 const to = prev.findIndex((tab) => tab.id === target);
                 if (from < 0 || to < 0 || from === to) return prev;
+                // Dragging never crosses the pinned/unpinned boundary.
+                if (!!prev[from].pinned !== !!prev[to].pinned) return prev;
                 const next = [...prev];
                 const [moved] = next.splice(from, 1);
                 next.splice(to, 0, moved);
@@ -4687,6 +4706,7 @@ export default function App() {
               })}
               onOpen={(id) => openBlock(id, { restoreScroll: true })}
               onClose={closeTab}
+              onContext={(tab, x, y) => setTabMenu({ id: tab.id, pinned: !!tab.pinned, x, y })}
             />
             <span data-popover="add" style={{ position: "relative", display: "inline-flex" }}>
               <button
@@ -5277,7 +5297,7 @@ export default function App() {
             setStatus("AI context limits reset.");
           },
         }}
-        search={{ searchDetailsDefault, setSearchDetailsDefault, indexTask, setStatus }}
+        search={{ searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper, indexTask, setStatus }}
         diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, isAdmin: !!authUser?.is_admin }}
       />
       {usersOpen ? (
@@ -5409,6 +5429,18 @@ export default function App() {
             {usersError ? <div className="reportModalHint aiKeysError">{usersError}</div> : null}
           </div>
         </div>
+      ) : null}
+      {tabMenu ? (
+        <ContextMenu x={tabMenu.x} y={tabMenu.y} onClose={() => setTabMenu(null)}>
+          <button className="ctxMenuItem ctxMenuItemIconed" onClick={() => { setTabMenu(null); toggleTabPinned(tabMenu.id); }}>
+            <span className="ctxMenuIcon"><PinIcon filled={!tabMenu.pinned} size={13} /></span>
+            {tabMenu.pinned ? "Unpin tab" : "Pin tab"}
+          </button>
+          <button className="ctxMenuItem ctxMenuItemIconed" onClick={() => { setTabMenu(null); closeTab(tabMenu.id); }}>
+            <span className="ctxMenuIcon"><XIcon size={13} /></span>
+            Close tab
+          </button>
+        </ContextMenu>
       ) : null}
       {homeMenu ? (
         <ContextMenu x={homeMenu.x} y={homeMenu.y} onClose={() => setHomeMenu(null)}>

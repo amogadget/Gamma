@@ -415,10 +415,16 @@ function SearchSettings({ value }) {
         Full-text search covers your notes and every PDF in the library. PDFs are indexed automatically in the background.
       </PaneIntro>
       <SettingToggle
-        label="Expand result details by default"
-        description="Open search with full result lists visible. When off, search starts as a compact find bar."
-        checked={value.searchDetailsDefault}
-        onChange={value.setSearchDetailsDefault}
+        label="Expand result details on the home page"
+        description="Search from the library opens with full result lists. With no PDF open, the compact find bar has nothing to show."
+        checked={value.searchDetailsHome}
+        onChange={value.setSearchDetailsHome}
+      />
+      <SettingToggle
+        label="Expand result details in a paper"
+        description="Open search with full result lists while reading a paper. When off, search starts as a compact find bar."
+        checked={value.searchDetailsPaper}
+        onChange={value.setSearchDetailsPaper}
       />
       <div className="settingRow">
         <span className="settingText">

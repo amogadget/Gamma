@@ -1485,6 +1485,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   min-width: 0;
 }
 .tabClose { flex-shrink: 0; cursor: pointer; line-height: 1; }
+/* Pinned tabs: pin glyph instead of the close button (close via right-click),
+   sitting left of the unpinned tabs. */
+.tab.pinned { padding-right: 12px; min-width: 0; }
+.tabPin {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
 
 /* --- modern topbar bits --- */
 .addPopover { min-width: 300px; }
@@ -2955,6 +2964,18 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-primary);
 }
 .ctxMenuItem:hover { background: var(--bg-hover); }
+/* Menu rows with a leading glyph (e.g. the tab menu's pin/close). */
+.ctxMenuItemIconed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ctxMenuIcon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
 
 /* --- block-ref autocomplete popup (shared surface recipe) --- */
 .refPopup {

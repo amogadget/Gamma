@@ -275,11 +275,18 @@ export default function SearchPanel({
     || linkHits.length || labelMatches.length || (showPdfMatches && pdfMatches.length) || libElsewhere.length;
 
   // One switch for the whole detail area (all the result lists). Its default
-  // comes from Settings → Search (localStorage "gamma-search-details",
-  // collapsed unless set) and is re-read each time the panel opens; the
-  // toggle button then only affects the current panel session.
+  // comes from Settings → Search, with a separate key per place: on the home
+  // page the lists start expanded unless turned off ("gamma-search-details-home"
+  // — with no open PDF a compact find bar shows nothing), in a paper view the
+  // compact find bar is the default unless turned on ("gamma-search-details").
+  // Re-read each time the panel opens; the toggle button then only affects
+  // the current panel session.
   const detailsDefault = () => {
-    try { return localStorage.getItem("gamma-search-details") === "1"; } catch { return false; }
+    try {
+      return focusedBlockId
+        ? localStorage.getItem("gamma-search-details") === "1"
+        : localStorage.getItem("gamma-search-details-home") !== "0";
+    } catch { return false; }
   };
   const [showDetails, setShowDetails] = useState(detailsDefault);
   useEffect(() => { if (open) setShowDetails(detailsDefault()); }, [open]);

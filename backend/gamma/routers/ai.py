@@ -45,6 +45,7 @@ from ..auth import require_user
 from ..config import AI_PROTOCOLS
 from ..db import page_now
 from ..logbuf import log
+from ..pdf_text import extract_text
 
 router = APIRouter(prefix="/api", tags=["ai"])
 
