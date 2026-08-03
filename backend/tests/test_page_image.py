@@ -61,3 +61,23 @@ def test_cache_lives_outside_uploads(guest):
     uploads = Path(os.environ["GAMMA_DATA_DIR"]) / "users" / "guest" / "uploads"
     assert not list(uploads.rglob("*.jpg"))
     assert list((uploads.parent / "pagecache").rglob("*.jpg"))
+
+
+def test_dims_match_the_pages(guest):
+    """Page sizes are what the client lays the document out from, so they must
+    be the same /MediaBox pdf.js measures its own viewport from."""
+    doc_id = guest.post("/api/uploads",
+                        files={"file": ("t.pdf", _make_pdf(4, 500, 800), "application/pdf")}).json()["doc_id"]
+    r = guest.get(f"/api/page-dims/{doc_id}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["pages"] == 4
+    assert all(abs(w - 500) < 0.1 and abs(h - 800) < 0.1 for w, h in body["dims"])
+    assert "immutable" in r.headers.get("cache-control", "")
+    # Cached: identical on a second read.
+    assert guest.get(f"/api/page-dims/{doc_id}").json() == body
+
+
+def test_dims_reject_bad_input(guest):
+    assert guest.get("/api/page-dims/notahexid").status_code == 400
+    assert guest.get("/api/page-dims/deadbeefdeadbeefdeadbeef").status_code == 404

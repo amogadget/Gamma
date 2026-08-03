@@ -71,13 +71,29 @@ def _point_blocks_at(user: str, doc_id: str):
         print(f"[flatten] could not repoint blocks for {doc_id}: {e}", flush=True)
 
 
+def _prepare_dims(user: str, doc_id: str):
+    """Precompute the page-size list readers need to lay the document out.
+
+    Walking a 332-page scan takes ~1.2 s; doing it here means the first person
+    to open the paper does not wait for it.
+    """
+    from .routers.pageimage import ensure_dims   # local: routers import upward
+    path = source_path(user, doc_id)
+    if path.exists():
+        ensure_dims(user, doc_id, path)
+
+
 def _run_one(user: str, doc_id: str):
     src = source_path(user, doc_id)
     dst = flat_path(user, doc_id)
     if dst.exists():
         _point_blocks_at(user, doc_id)
+        _prepare_dims(user, f"{doc_id}{FLAT_SUFFIX}")
         return
-    if not src.exists() or not needs_flattening(src):
+    if not src.exists():
+        return
+    if not needs_flattening(src):
+        _prepare_dims(user, doc_id)   # served as-is, so it needs its own dims
         return
     tmp = dst.with_suffix(".part")
     print(f"[flatten] {user}/{doc_id}: flattening", flush=True)
@@ -90,6 +106,9 @@ def _run_one(user: str, doc_id: str):
         with _lock:
             _state["flattened"] += 1
         _point_blocks_at(user, doc_id)
+        # Readers will be sent to the flattened copy, so that is the one whose
+        # page sizes need to be ready.
+        _prepare_dims(user, f"{doc_id}{FLAT_SUFFIX}")
         print(f"[flatten] {user}/{doc_id}: done ({dst.stat().st_size // (1024*1024)} MB)", flush=True)
     except Exception as e:
         tmp.unlink(missing_ok=True)

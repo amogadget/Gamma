@@ -89,6 +89,71 @@ def _render(pdf_path: Path, page: int, width: int) -> bytes:
             pass
 
 
+def dims_path(user: str, doc_id: str) -> Path:
+    return _cache_path(user, doc_id, 0, 0).with_name("dims.json")
+
+
+def ensure_dims(user: str, doc_id: str, pdf_path) -> bool:
+    """Compute and cache a document's page sizes. Safe to call repeatedly.
+
+    Walking 332 pages costs ~1.2 s, which the first reader should not have to
+    pay — the upload/flatten worker calls this so the file is ready before
+    anyone opens it.
+    """
+    import json as _json
+    import pypdfium2 as pdfium
+    out = dims_path(user, doc_id)
+    if out.exists():
+        return True
+    try:
+        doc = pdfium.PdfDocument(str(pdf_path))
+        try:
+            dims = [[round(v, 2) for v in doc[i].get_size()] for i in range(len(doc))]
+        finally:
+            try:
+                doc.close()
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning(f"[page-dims] {doc_id} failed: {e}")
+        return False
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".part")
+    tmp.write_text(_json.dumps({"pages": len(dims), "dims": dims}, separators=(",", ":")))
+    tmp.replace(out)
+    return True
+
+
+@router.get("/page-dims/{doc_id}")
+def page_dims(doc_id: str, request: Request):
+    """Every page's size in PDF points, so the client can lay the document out
+    before pdf.js has parsed anything.
+
+    Otherwise the page boxes wait on the xref, the page tree, and eight serial
+    getPage round trips — 2.5 s of blank screen on a cold open, and nowhere to
+    put a preview until it finishes. This is one 0.4 KB gzipped response.
+
+    It also makes every height exact from the first frame, which retires the
+    estimate-then-refine loop and the layout churn it caused underneath a
+    scroll restore.
+    """
+    user = resolve_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="not signed in")
+    if not doc_id or not all(c in "0123456789abcdef-" for c in doc_id.replace("-flat", "")):
+        raise HTTPException(status_code=400, detail="bad doc id")
+
+    cached = dims_path(user, doc_id)
+    if not cached.exists():
+        pdf_path = find_upload_file(f"{doc_id}.pdf", request)
+        if not pdf_path:
+            raise HTTPException(status_code=404, detail="not found")
+        if not ensure_dims(user, doc_id, pdf_path):
+            raise HTTPException(status_code=500, detail="could not read page sizes")
+    return FileResponse(cached, media_type="application/json",
+                        headers={"Cache-Control": "public, max-age=2592000, immutable"})
+
+
 # Sync def on purpose: rendering is CPU-bound, and FastAPI runs sync endpoints
 # in its threadpool so a slow page cannot stall the event loop.
 @router.get("/page-image/{doc_id}/{page}")
