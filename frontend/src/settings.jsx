@@ -717,6 +717,12 @@ function DiagnosticsSettings({ value }) {
         checked={value.statusBarVisible}
         onChange={value.setStatusBarVisible}
       />
+      <SettingToggle
+        label="Debug logging"
+        description="Trace reading-position tracking, restore, and sync events into the system log below (and the browser console)."
+        checked={value.debugLog}
+        onChange={value.setDebugLog}
+      />
       <div className="settingRow">
         <span className="settingText">
           <span className="settingLabel">System log</span>
