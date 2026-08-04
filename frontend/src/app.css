@@ -287,10 +287,13 @@ body {
 }
 
 /* Settings → Diagnostics: session system log — scrolls in place, text is
-   selectable for copying into bug reports. */
+   selectable for copying into bug reports. Fixed height (not max-height):
+   the boxes are flex children of the scrolling settingsPane column, and a
+   shrinkable box gets squished to a sliver when the other log is long. */
 .sysLogBox {
   margin-top: 4px;
-  max-height: 280px;
+  height: 200px;
+  flex-shrink: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid var(--border-subtle);

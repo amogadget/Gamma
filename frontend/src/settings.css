@@ -112,6 +112,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   max-height: 300px;
+  flex-shrink: 0; /* don't get squished by other pane content; the pane scrolls */
   overflow-y: auto;
   font-size: 12px;
 }
