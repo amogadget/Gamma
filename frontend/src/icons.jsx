@@ -178,6 +178,15 @@ export const MaximizeIcon = (p) => (
   <Icon {...p}><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></Icon>
 );
 
+// Selection-mode glyphs (phone PDF toolbar): I-beam = text selection,
+// dashed marquee = rectangle drawing.
+export const TextCursorIcon = (p) => (
+  <Icon {...p}><path d="M17 22h-1a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4h1" /><path d="M7 22h1a4 4 0 0 0 4-4v-1" /><path d="M7 2h1a4 4 0 0 1 4 4v1" /></Icon>
+);
+export const RectSelectIcon = (p) => (
+  <Icon {...p}><path d="M5 3a2 2 0 0 0-2 2" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M5 21a2 2 0 0 1-2-2" /><path d="M9 3h1" /><path d="M9 21h1" /><path d="M14 3h1" /><path d="M14 21h1" /><path d="M3 9v1" /><path d="M21 9v1" /><path d="M3 14v1" /><path d="M21 14v1" /></Icon>
+);
+
 // Filled glyphs — bespoke markup, not the stroke wrapper.
 export const SparklesIcon = ({ size = 15, ...rest }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" {...rest}><path d="M12 2l1.9 5.7 5.6 1.8-5.6 1.8L12 17l-1.9-5.7L4.5 9.5l5.6-1.8L12 2z" /><path d="M19 14l.9 2.6 2.6.9-2.6.9L19 21l-.9-2.6-2.6-.9 2.6-.9L19 14z" /></svg>

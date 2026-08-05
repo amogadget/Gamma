@@ -20,7 +20,7 @@ import {
   ExternalLinkIcon, EyeIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
   FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
   LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PinIcon, PlusIcon,
-  SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, TrashIcon, UploadIcon,
+  RectSelectIcon, SearchIcon, SettingsIcon, SparklesIcon, TextCursorIcon, Trash2Icon, TrashIcon, UploadIcon,
   UserIcon, UsersIcon, XIcon, ZoomInIcon, ZoomOutIcon,
 } from "./icons";
 
@@ -69,18 +69,27 @@ import {
 // fail closed (ignored) rather than show a spurious error row.
 const TRANSFER_PHASES = new Set(["start", "progress", "done", "cached", "error", "cancelled"]);
 
-// Phone-width detection: below this the desktop dock system is unusable, so
-// the workspace switches to a single full-width panel with a bottom tab bar.
-const PHONE_MQ = "(max-width: 700px)";
+// Phone detection: below 700px the desktop dock system is unusable, so the
+// workspace switches to a single full-width panel with a bottom tab bar. The
+// second clause keeps a rotated (landscape) phone in the phone layout — the
+// width crosses 700px but a touch device that short is still a phone, and
+// flipping to the desktop docks mid-rotation is jarring.
+const PHONE_MQ = "(max-width: 700px), (pointer: coarse) and (max-height: 500px)";
+// A browser that declares itself mobile gets the phone layout regardless of
+// the viewport numbers. "Request desktop site" flips this flag along with the
+// UA, so it stays the escape hatch back to the desktop docks. Android tablets
+// ("Android" without "Mobile") and iPads (desktop-class UA) are not phones.
+const UA_MOBILE = navigator.userAgentData?.mobile
+  ?? /iPhone|iPod|Android.+Mobile|Mobile.+Android/i.test(navigator.userAgent);
 function useIsPhone() {
-  const [isPhone, setIsPhone] = useState(() => window.matchMedia(PHONE_MQ).matches);
+  const [mqPhone, setMqPhone] = useState(() => window.matchMedia(PHONE_MQ).matches);
   useEffect(() => {
     const mq = window.matchMedia(PHONE_MQ);
-    const apply = () => setIsPhone(mq.matches);
+    const apply = () => setMqPhone(mq.matches);
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
-  return isPhone;
+  return UA_MOBILE || mqPhone;
 }
 
 export default function App() {
@@ -725,7 +734,14 @@ export default function App() {
       document.removeEventListener("webkitfullscreenchange", onFs);
     };
   }, []);
+  // iPhone Safari (and thus every iOS browser) has no element Fullscreen API
+  // at all — fall back to a CSS pseudo-fullscreen that hides the app chrome.
+  const [pseudoFullscreen, setPseudoFullscreen] = useState(false);
   function toggleFullscreen() {
+    if (!(document.fullscreenEnabled || document.webkitFullscreenEnabled)) {
+      setPseudoFullscreen((v) => !v);
+      return;
+    }
     if (document.fullscreenElement || document.webkitFullscreenElement) {
       (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
     } else {
@@ -1428,9 +1444,6 @@ export default function App() {
   }
   // Keep the selected model inside the active key's model list: switching to
   // a key restores its remembered model, or falls back to its first one.
-  // AI calls (chat, citations, titles — and metadata unless a dedicated
-  // metadata model is picked) send chatModel, so this is what actually
-  // routes requests to the chosen key.
   useEffect(() => {
     const all = aiInfo?.models || [];
     if (!all.length) return;
@@ -1442,6 +1455,22 @@ export default function App() {
       setChatModel(scoped.some((m) => m.id === remembered) ? remembered : scoped[0].id);
     }
   }, [aiProvider, aiInfo, chatModel]);
+  // Models the active key (Settings → AI & API keys) offers — all models only
+  // when no key is selected or the selected one is gone. Model registry ids
+  // are "<entryId>:<model>", so the id ROUTES the request to a key server-side;
+  // every model this client sends must come from this list or an unselected
+  // key would serve the call.
+  const scopedAiModels = aiProvider && (aiInfo?.models || []).some((m) => m.provider === aiProvider)
+    ? aiInfo.models.filter((m) => m.provider === aiProvider)
+    : aiInfo?.models || [];
+  // The model AI calls (chat, citations, titles) actually send: chatModel
+  // snapped into scope at render time — the effect above fixes the state, but
+  // a request fired in the same render (or before /ai/models loads after a
+  // key switch elsewhere) must not trust it. Empty list = registry not loaded
+  // yet; nothing to validate against, so the stored pick passes through.
+  const chatSendModel = scopedAiModels.length && !scopedAiModels.some((m) => m.id === chatModel)
+    ? scopedAiModels[0].id
+    : chatModel;
 
   async function loadAiKeys() {
     setAiKeysError("");
@@ -1853,11 +1882,11 @@ export default function App() {
   const attemptedMetaRef = useRef(new Set()); // pages we already tried this session
 
   // Model actually sent with metadata lookups (per-paper fetch AND the
-  // Settings batch retry): the dedicated pick when it still exists, else the
-  // chat model.
-  const metaFetchModel = metaModel && (aiInfo?.models || []).some((m) => m.id === metaModel)
+  // Settings batch retry): the dedicated pick while it's inside the active
+  // key's scope, else the (already-scoped) chat model.
+  const metaFetchModel = metaModel && scopedAiModels.some((m) => m.id === metaModel)
     ? metaModel
-    : chatModel;
+    : chatSendModel;
 
   async function fetchMetadata(block, force) {
     if (!block?.id) return;
@@ -1971,7 +2000,7 @@ export default function App() {
       const data = await apiJson(`${API}/metadata/cite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ block_id: targetId, prompt: citePrompt || "", model: chatModel || "", force }),
+        body: JSON.stringify({ block_id: targetId, prompt: citePrompt || "", model: chatSendModel || "", force }),
       });
       updateTransfer(taskId, { status: "done", info: "" });
       if (focusedBlockIdRef.current === targetId) setPptCite(data.citation || "");
@@ -2153,6 +2182,10 @@ export default function App() {
   // null = the main view). Reset on navigation so a new page opens on its content.
   const isPhone = useIsPhone();
   const [phonePanel, setPhonePanel] = useState(null);
+  // Phone: drag-on-PDF mode — text selection (default) or rectangle drawing.
+  // Desktop expresses this by holding Ctrl; a phone has no Ctrl, so it gets a
+  // sticky toggle button in the viewer's zoom column instead.
+  const [areaSelectMode, setAreaSelectMode] = useState(false);
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
   const [focusedId, setFocusedId] = useState(null);
@@ -3217,7 +3250,7 @@ export default function App() {
           prompt: "Extract the exact title of this document. Reply with ONLY the title text — no quotes, no authors, no extra words.",
           doc_id: docId,
           history: [],
-          model: chatModel || "",
+          model: chatSendModel || "",
         }),
       });
       const title = (data.response || "").trim().replace(/^["'\s]+|["'\s]+$/g, "").split("\n")[0].slice(0, 200);
@@ -4827,7 +4860,7 @@ export default function App() {
           openTabs={openTabs}
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
           chatImages={chatImages} setChatImages={setChatImages}
-          chatModel={chatModel} setChatModel={setChatModel}
+          chatModel={chatSendModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
           dictationModel={dictationModel} dictationLang={dictationLang}
           chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider}
@@ -4980,7 +5013,7 @@ export default function App() {
   return (
     <div
       ref={appRef}
-      className={`app layout-horizontal ${readOnly ? "readOnlyMode" : ""}`}
+      className={`app layout-horizontal ${readOnly ? "readOnlyMode" : ""} ${pseudoFullscreen ? "pseudoFullscreen" : ""}`}
       onDragOver={readOnly ? undefined : (e) => {
         if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes("Files")) return;
         e.preventDefault();
@@ -5415,16 +5448,26 @@ export default function App() {
               <button className="pdfFitWidthBtn" onClick={() => zoomTo("page-width")} title="Fit to width" aria-label="Fit to width">
                 <FitWidthIcon size={15} />
               </button>
+              {isPhone && !readOnly ? (
+                <button
+                  className={areaSelectMode ? "modeActive" : ""}
+                  onClick={() => setAreaSelectMode((v) => !v)}
+                  title={areaSelectMode ? "Rectangle mode — drag draws an area note (tap to switch to text selection)" : "Text mode — drag selects text (tap to switch to rectangle drawing)"}
+                  aria-label="Toggle selection mode"
+                >
+                  {areaSelectMode ? <RectSelectIcon size={15} /> : <TextCursorIcon size={15} />}
+                </button>
+              ) : null}
             </div>
           ) : null}
           {pdfUrl && !pdfHidden ? (
             <button
               className="pdfFullscreenBtn"
               onClick={toggleFullscreen}
-              title={isFullscreen ? "Exit full screen" : "Full screen"}
-              aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+              title={isFullscreen || pseudoFullscreen ? "Exit full screen" : "Full screen"}
+              aria-label={isFullscreen || pseudoFullscreen ? "Exit full screen" : "Full screen"}
             >
-              {isFullscreen ? (
+              {isFullscreen || pseudoFullscreen ? (
                 <MinimizeIcon size={15} />
               ) : (
                 <MaximizeIcon size={15} />
@@ -5433,6 +5476,7 @@ export default function App() {
           ) : null}
           {pdfUrl ? (
             <PdfViewer url={pdfUrl} highlights={highlights}
+              areaMode={areaSelectMode && isPhone && !readOnly}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
               captureRef={pdfCaptureRef}
@@ -5657,7 +5701,7 @@ export default function App() {
           setPdfSaveLocal,
           metaModel,
           setMetaModel,
-          aiModels: aiInfo?.models || [],
+          aiModels: scopedAiModels,
         }}
         library={{
           // batch metadata retry uses the same prompt/model/context prefs as

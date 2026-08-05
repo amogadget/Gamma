@@ -228,7 +228,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef, areaMode }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -312,41 +312,76 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => { el.removeEventListener("wheel", onWheel); cancelAnimationFrame(wheelRafRef.current); };
   }, []);
 
-  // Two-finger pinch zooms on touch devices, sharing the wheel path's refs:
-  // the gesture compounds from the scale at pinch start and commits at most
-  // one zoom per frame, anchored at the fingers' midpoint. preventDefault on
-  // the two-finger move blocks the browser's own page zoom over the viewer.
+  // Two-finger pinch zoom. Committing a real zoom per move event (the wheel
+  // path) is hopelessly janky on phones — every commit re-lays-out and
+  // re-renders every page. Instead the gesture only moves a CSS transform on
+  // the page stack (compositing, no layout; blurry while the fingers are
+  // down, like every native PDF app), and the real zoom is committed ONCE on
+  // finger-lift: scroll is re-based so the content under the fingers' final
+  // midpoint is what the zoom-anchor effect (keyed on that midpoint) holds
+  // in place through the re-layout. preventDefault on the two-finger move
+  // blocks both native scrolling and the browser's own page zoom.
+  const zoomLayerRef = useRef(null);
   useEffect(() => {
     const el = viewerRef.current;
     if (!el) return;
-    let startDist = 0, startScale = 1, pinching = false;
+    let start = null; // gesture-start snapshot: finger distance/midpoint, committed scale, scroll
+    let cur = null; // latest preview: effective ratio + midpoint
     const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const mid = (t, r) => ({
+      x: (t[0].clientX + t[1].clientX) / 2 - r.left,
+      y: (t[0].clientY + t[1].clientY) / 2 - r.top,
+    });
     const onTouchStart = (e) => {
       if (e.touches.length !== 2) return;
-      pinching = true;
-      startDist = dist(e.touches);
-      startScale = wheelScaleRef.current;
+      const m = mid(e.touches, el.getBoundingClientRect());
+      start = {
+        dist: dist(e.touches), scale: wheelScaleRef.current,
+        m0x: m.x, m0y: m.y, sl: el.scrollLeft, st: el.scrollTop,
+      };
+      cur = null;
+      if (zoomLayerRef.current) zoomLayerRef.current.style.willChange = "transform";
     };
     const onTouchMove = (e) => {
-      if (!pinching || e.touches.length !== 2) return;
+      if (!start || e.touches.length !== 2) return;
       e.preventDefault();
-      const next = clampZoom(startScale * (dist(e.touches) / startDist));
-      if (next === wheelScaleRef.current) return;
-      const r = el.getBoundingClientRect();
-      zoomAnchorRef.current = {
-        x: (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left,
-        y: (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top,
-      };
-      wheelScaleRef.current = next;
-      docSwapPendingRef.current = false;
-      if (!wheelRafRef.current) {
-        wheelRafRef.current = requestAnimationFrame(() => {
-          wheelRafRef.current = 0;
-          cbRef.current.onZoomTo?.(wheelScaleRef.current);
-        });
-      }
+      const m = mid(e.touches, el.getBoundingClientRect());
+      // Clamp the previewed scale too, so the preview never shows a zoom the
+      // commit would refuse.
+      const k = clampZoom(start.scale * (dist(e.touches) / start.dist)) / start.scale;
+      cur = { k, m1x: m.x, m1y: m.y };
+      // origin 0 0: keep the content that started under the midpoint glued to
+      // the (moving) midpoint — visual = t + k·content − scroll, solve for t.
+      const tx = m.x + start.sl - k * (start.sl + start.m0x);
+      const ty = m.y + start.st - k * (start.st + start.m0y);
+      const l = zoomLayerRef.current;
+      if (l) l.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
     };
-    const onTouchEnd = (e) => { if (e.touches.length < 2) pinching = false; };
+    const finish = () => {
+      if (!start) return;
+      const l = zoomLayerRef.current;
+      if (l) { l.style.transform = ""; l.style.willChange = ""; }
+      if (cur) {
+        // Re-base scroll by the midpoint's travel: afterwards the content at
+        // the final midpoint (at the old scale) is the pinched content, which
+        // the anchor effect then re-places there at the committed scale. The
+        // refs get the unclamped values on purpose — the anchor effect reads
+        // them instead of live scroll to survive pre-layout clamping.
+        const sl = start.sl + start.m0x - cur.m1x;
+        const st = start.st + start.m0y - cur.m1y;
+        el.scrollLeft = sl; el.scrollTop = st;
+        lastScrollLeftRef.current = sl; lastScrollRef.current = st;
+        const next = clampZoom(start.scale * cur.k);
+        if (next !== wheelScaleRef.current) {
+          zoomAnchorRef.current = { x: cur.m1x, y: cur.m1y };
+          wheelScaleRef.current = next;
+          docSwapPendingRef.current = false;
+          cbRef.current.onZoomTo?.(next);
+        }
+      }
+      start = null; cur = null;
+    };
+    const onTouchEnd = (e) => { if (e.touches.length < 2) finish(); };
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
@@ -1077,18 +1112,22 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       ) : null}
       {/* overflow-anchor off: the browser's own scroll anchoring would fight
           the zoom re-placement above with adjustments of its own. */}
-      <div ref={viewerRef} className={"pdfViewer" + (areaCursor ? " areaCursor" : "")}
+      <div ref={viewerRef} className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "")}
         style={{ height: "100%", overflowY: "auto", overflowX: "auto", overflowAnchor: "none" }}
         onScroll={(e) => {
           lastScrollRef.current = e.currentTarget.scrollTop;
           lastScrollLeftRef.current = e.currentTarget.scrollLeft;
           syncCurPage();
         }}>
+      {/* pdfZoomLayer: the pinch preview's transform target — spans the full
+          scroll content so transform-origin 0 0 coincides with content (0,0) */}
+      <div ref={zoomLayerRef} className="pdfZoomLayer">
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={`${docSeq}-${i + 1}`} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
           onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
+          areaMode={canAnnotate ? !!areaMode : false}
           onAreaSelected={canAnnotate ? onAreaSelected : undefined}
           pendingArea={selPopup?.kind === "area" && selPopup.pageNumber === i + 1 ? selPopup : null}
           reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
@@ -1098,6 +1137,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           onPainted={onPagePainted}
         />
       ))}
+      </div>
       {selPopup && onSelectionFinished && (
         <div style={{
           position: "fixed", zIndex: 9999,
@@ -1155,7 +1195,7 @@ function OutlineNode({ item, depth, onDest, onUrl }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea, areaMode }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1257,17 +1297,22 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
 
   const curW = pageSize ? pageSize.width * scale : 1, curH = pageSize ? pageSize.height * scale : 1;
 
-  // Ctrl+drag: draw a rectangle (screenshot-style) to make an area note.
-  // Document-level move/up listeners so the drag survives leaving the page
-  // box; rects are clamped to it. Tiny drags are Ctrl+clicks — ignored, so
-  // Ctrl+click on highlights (additive chat quote) keeps working.
+  // Rectangle drag (screenshot-style area note): Ctrl+drag with a mouse, or
+  // any drag while the phone's rectangle mode (areaMode) is on. Pointer
+  // events cover mouse and touch with one path; document-level move/up
+  // listeners so the drag survives leaving the page box; rects are clamped
+  // to it. Tiny drags are clicks — ignored, so Ctrl+click on highlights
+  // (additive chat quote) keeps working.
   const [marquee, setMarquee] = useState(null); // live drag rect, current-render px
   function beginAreaDrag(e) {
     if (readOnly || !onAreaSelected) return;
-    if (e.button !== 0 || !e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    if (e.button !== 0) return;
+    const viaCtrl = e.pointerType === "mouse" && e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
+    if (!areaMode && !viaCtrl) return;
     const wrap = wrapRef.current;
     if (!wrap) return;
     e.preventDefault(); // keep the text layer from starting a selection
+    const pointerId = e.pointerId;
     const box = wrap.getBoundingClientRect();
     const sx = e.clientX, sy = e.clientY;
     const clamp = (v, max) => Math.max(0, Math.min(max, v));
@@ -1277,10 +1322,20 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       x2: clamp(Math.max(sx, cx) - box.left, box.width),
       y2: clamp(Math.max(sy, cy) - box.top, box.height),
     });
-    function onMove(ev) { setMarquee(toRect(ev.clientX, ev.clientY)); }
+    const detach = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointercancel", onCancel);
+    };
+    function onMove(ev) { if (ev.pointerId === pointerId) setMarquee(toRect(ev.clientX, ev.clientY)); }
+    function onCancel(ev) {
+      if (ev.pointerId !== pointerId) return;
+      detach();
+      setMarquee(null);
+    }
     function onUp(ev) {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp, true);
+      if (ev.pointerId !== pointerId) return;
+      detach();
       setMarquee(null);
       const r = toRect(ev.clientX, ev.clientY);
       if (r.x2 - r.x1 < 6 || r.y2 - r.y1 < 6) return;
@@ -1310,13 +1365,14 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         image,
       });
     }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp, true);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onCancel);
   }
 
   return (
     <div ref={wrapRef} data-page={pageNumber} className="pdfPageWrap"
-      onMouseDown={beginAreaDrag}
+      onPointerDown={beginAreaDrag}
       style={{
         margin: `0 auto ${PAGE_GAP}px`, position: "relative", background: "#fff",
         width: pageSize ? curW : undefined,

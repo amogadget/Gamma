@@ -1977,6 +1977,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .phoneTab.active { color: var(--accent); }
 
+/* pseudo-fullscreen (iOS has no Fullscreen API): hide the app chrome and let
+   the work area take the whole screen; the viewer's own ⛶ button exits */
+.app.pseudoFullscreen .topbar,
+.app.pseudoFullscreen .phoneTabBar,
+.app.pseudoFullscreen .status { display: none !important; }
+
 /* chat attach picker + zoom input */
 .popover.popUp { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
 .attachPopover { min-width: 300px; max-width: 380px; }
@@ -2929,11 +2935,34 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 
 /* --- area notes (Ctrl+drag rectangle selection on the PDF) --- */
+/* pinch-preview transform target: must span the full scroll content so its
+   top-left corner is content (0,0) — the transform math assumes that origin */
+.pdfZoomLayer {
+  width: max-content;
+  min-width: 100%;
+  transform-origin: 0 0;
+}
+
 /* Ctrl held: dragging draws a rectangle, so cue it over everything on the page. */
 .pdfViewer.areaCursor .pdfPageWrap,
 .pdfViewer.areaCursor .textLayer,
 .pdfViewer.areaCursor .textLayer span {
   cursor: crosshair;
+}
+/* Phone rectangle mode: one-finger drags must reach the pointer handlers
+   (not scroll the page), and a long-press must not start a text selection.
+   Two-finger pinch zoom still works — the viewer's own touch handlers run. */
+.pdfViewer.areaMode .pdfPageWrap {
+  touch-action: none;
+}
+.pdfViewer.areaMode .textLayer,
+.pdfViewer.areaMode .textLayer span {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+.pdfZoomOverlay button.modeActive {
+  color: var(--accent);
+  background: var(--bg-active);
 }
 /* The rubber band while dragging, and the drawn rect while the color tip is open.
    Pages are always white, so a fixed accent blue works in both themes. */
