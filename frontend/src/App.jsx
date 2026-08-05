@@ -69,6 +69,20 @@ import {
 // fail closed (ignored) rather than show a spurious error row.
 const TRANSFER_PHASES = new Set(["start", "progress", "done", "cached", "error", "cancelled"]);
 
+// Phone-width detection: below this the desktop dock system is unusable, so
+// the workspace switches to a single full-width panel with a bottom tab bar.
+const PHONE_MQ = "(max-width: 700px)";
+function useIsPhone() {
+  const [isPhone, setIsPhone] = useState(() => window.matchMedia(PHONE_MQ).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(PHONE_MQ);
+    const apply = () => setIsPhone(mq.matches);
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+  return isPhone;
+}
+
 export default function App() {
   const params = new URLSearchParams(window.location.search);
   const initialUrl = params.get("src") || params.get("url") || "";
@@ -1356,6 +1370,22 @@ export default function App() {
   const [chatEffort, setChatEffort] = useState(() => {
     try { return localStorage.getItem("gamma-chat-effort") || ""; } catch { return ""; }
   });
+  // Model for AI metadata extraction (Settings → Paper metadata). "" = follow
+  // the chat model; a stale pick (provider/model removed) also falls back.
+  const [metaModel, setMetaModel] = useState(() => {
+    try { return localStorage.getItem("gamma-meta-model") || ""; } catch { return ""; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("gamma-meta-model", metaModel); } catch {}
+  }, [metaModel]);
+  // Voice dictation (mic button): transcription model + spoken language
+  // ("" = auto-detect), configured in Settings → AI chat.
+  const [dictationModel, setDictationModel] = useState(() => {
+    try { return localStorage.getItem("gamma-dictation-model") || "gpt-4o-transcribe"; } catch { return "gpt-4o-transcribe"; }
+  });
+  const [dictationLang, setDictationLang] = useState(() => {
+    try { return localStorage.getItem("gamma-dictation-lang") || ""; } catch { return ""; }
+  });
   const [chatSystem, setChatSystem] = useState(() => {
     try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
   });
@@ -1380,7 +1410,7 @@ export default function App() {
 
   // The settings page (account popover → Settings…): two-column modal,
   // categories on the left, the selected pane on the right.
-  const [settingsOpen, setSettingsOpen] = useState(null); // null | "papers" | "ai" | "prompts" | "search" | "account"
+  const [settingsOpen, setSettingsOpen] = useState(null); // null | "papers" | "library" | "ai" | "prompts" | "search" | "account"
   // Which provider entry (API key) AI requests use. Only the key is chosen
   // here — the model itself is picked in the chat panel, scoped to this key.
   const [aiProvider, setAiProvider] = useState(() => {
@@ -1398,8 +1428,9 @@ export default function App() {
   }
   // Keep the selected model inside the active key's model list: switching to
   // a key restores its remembered model, or falls back to its first one.
-  // Every AI call (chat, metadata, citations, titles) sends chatModel, so
-  // this is what actually routes requests to the chosen key.
+  // AI calls (chat, citations, titles — and metadata unless a dedicated
+  // metadata model is picked) send chatModel, so this is what actually
+  // routes requests to the chosen key.
   useEffect(() => {
     const all = aiInfo?.models || [];
     if (!all.length) return;
@@ -1821,6 +1852,13 @@ export default function App() {
   useEffect(() => { focusedBlockIdRef.current = focusedBlockId || ""; }, [focusedBlockId]);
   const attemptedMetaRef = useRef(new Set()); // pages we already tried this session
 
+  // Model actually sent with metadata lookups (per-paper fetch AND the
+  // Settings batch retry): the dedicated pick when it still exists, else the
+  // chat model.
+  const metaFetchModel = metaModel && (aiInfo?.models || []).some((m) => m.id === metaModel)
+    ? metaModel
+    : chatModel;
+
   async function fetchMetadata(block, force) {
     if (!block?.id) return;
     setMetaBusy(true);
@@ -1833,7 +1871,7 @@ export default function App() {
         body: JSON.stringify({
           block_id: block.id,
           prompt: metaPrompt || "",
-          model: chatModel || "",
+          model: metaFetchModel || "",
           force: !!force,
           context_char_limit: metaContextChars,
         }),
@@ -2001,6 +2039,12 @@ export default function App() {
     try { localStorage.setItem("gamma-chat-effort", chatEffort); } catch {}
   }, [chatEffort]);
   useEffect(() => {
+    try { localStorage.setItem("gamma-dictation-model", dictationModel); } catch {}
+  }, [dictationModel]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-dictation-lang", dictationLang); } catch {}
+  }, [dictationLang]);
+  useEffect(() => {
     try { localStorage.setItem("gamma-chat-system", chatSystem); } catch {}
   }, [chatSystem]);
   useEffect(() => {
@@ -2105,6 +2149,10 @@ export default function App() {
 
 
   const [notesVisible, setNotesVisible] = useState(true);
+  // Phone layout: which overlay panel covers the center ('notes' | 'chat' |
+  // null = the main view). Reset on navigation so a new page opens on its content.
+  const isPhone = useIsPhone();
+  const [phonePanel, setPhonePanel] = useState(null);
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
   const [focusedId, setFocusedId] = useState(null);
@@ -3369,6 +3417,8 @@ export default function App() {
   // Leaving home or changing folders drops the file-manager selection.
   useEffect(() => { setSelectedPages(new Set()); setSelectedFolders(new Set()); setMovePicker(false); setHomeMenu(null); }, [folderFilter, homeMode]);
   const pageOnly = !pdfUrl && !!focusedBlockId && !readOnly;
+  // Phone: navigating to another page (or home) closes any overlay panel.
+  useEffect(() => { setPhonePanel(null); }, [focusedBlockId, homeMode]);
   const pageBlocks = useMemo(() => {
     return homeBlocks.map((b) => ({
       id: b.id,
@@ -4754,14 +4804,16 @@ export default function App() {
     chat: !readOnly && !chatHidden,
   };
   function renderWindow(id) {
+    // Phone: windows are full-screen overlays — no dock dragging or collapsing,
+    // and closing just returns to the main view.
     const common = {
-      onGrip: (e) => startWindowDock(e, id),
-      onGripDoubleClick: () => setCollapsedWins((prev) => ({ ...prev, [id]: !prev[id] })),
-      collapsed: !!collapsedWins[id],
+      onGrip: isPhone ? undefined : (e) => startWindowDock(e, id),
+      onGripDoubleClick: isPhone ? undefined : () => setCollapsedWins((prev) => ({ ...prev, [id]: !prev[id] })),
+      collapsed: isPhone ? false : !!collapsedWins[id],
     };
     if (id === "notes") {
       return (
-        <DockWindow title="Notes" {...common} onClose={() => setNotesVisible(false)}>
+        <DockWindow title="Notes" {...common} onClose={() => (isPhone ? setPhonePanel(null) : setNotesVisible(false))}>
           {notesWindow}
         </DockWindow>
       );
@@ -4770,13 +4822,14 @@ export default function App() {
       return (
         <ChatDock
           {...common}
-          onClose={() => setChatHidden(true)}
+          onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pdfTitle={pdfTitle}
           openTabs={openTabs}
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
           chatImages={chatImages} setChatImages={setChatImages}
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
+          dictationModel={dictationModel} dictationLang={dictationLang}
           chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider}
           chatContextChars={chatContextChars} multiContextChars={multiContextChars}
           openAiKeysEditor={openAiKeysEditor}
@@ -4787,8 +4840,9 @@ export default function App() {
     }
     return null;
   }
-  // Windows per slot, in stored order, visibility-filtered.
-  const slotWins = (side) => layout[side].filter((w) => winVisible[w]);
+  // Windows per slot, in stored order, visibility-filtered. On a phone the
+  // dock slots are empty — windows render as full-screen overlays instead.
+  const slotWins = (side) => (isPhone ? [] : layout[side].filter((w) => winVisible[w]));
   function renderSlotGroup(side, direction) {
     const wins = slotWins(side);
     // Collapsed windows live OUTSIDE the panel group as fixed header bars —
@@ -5449,7 +5503,42 @@ export default function App() {
         </>
       ) : null}
       </PanelGroup>
+      {isPhone && phonePanel === "notes" && winVisible.notes ? (
+        <div className="phonePanel">{renderWindow("notes")}</div>
+      ) : null}
+      {isPhone && phonePanel === "chat" && !readOnly ? (
+        <div className="phonePanel">{renderWindow("chat")}</div>
+      ) : null}
       </div>
+      {isPhone && (!centerNotes || !readOnly) ? (
+        <div className="phoneTabBar">
+          <button
+            className={`phoneTab ${phonePanel === null || (phonePanel === "notes" && centerNotes) ? "active" : ""}`}
+            onClick={() => setPhonePanel(null)}
+          >
+            {homeMode ? <HomeIcon size={16} /> : centerNotes ? <FileTextIcon size={16} /> : <FileIcon size={16} />}
+            <span>{homeMode ? "Library" : centerNotes ? "Notes" : "PDF"}</span>
+          </button>
+          {!centerNotes ? (
+            <button
+              className={`phoneTab ${phonePanel === "notes" ? "active" : ""}`}
+              onClick={() => { setNotesVisible(true); setPhonePanel((p) => (p === "notes" ? null : "notes")); }}
+            >
+              <FileTextIcon size={16} />
+              <span>Notes</span>
+            </button>
+          ) : null}
+          {!readOnly ? (
+            <button
+              className={`phoneTab ${phonePanel === "chat" ? "active" : ""}`}
+              onClick={() => setPhonePanel((p) => (p === "chat" ? null : "chat"))}
+            >
+              <SparklesIcon size={16} />
+              <span>Chat</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {dockPreview ? (
         <div className="dockPreview" style={dockPreview} />
       ) : null}
@@ -5566,10 +5655,15 @@ export default function App() {
           setMetaAutoFetch,
           pdfSaveLocal,
           setPdfSaveLocal,
+          metaModel,
+          setMetaModel,
+          aiModels: aiInfo?.models || [],
+        }}
+        library={{
           // batch metadata retry uses the same prompt/model/context prefs as
           // the per-paper fetch in the metadata popover
           metaPrompt,
-          chatModel,
+          metaFetchModel,
           metaContextChars,
           setStatus,
         }}
@@ -5624,6 +5718,10 @@ export default function App() {
         context={{
           chatImgAutoClear,
           setChatImgAutoClear,
+          dictationModel,
+          setDictationModel,
+          dictationLang,
+          setDictationLang,
           chatContextChars,
           setChatContextChars,
           metaContextChars,

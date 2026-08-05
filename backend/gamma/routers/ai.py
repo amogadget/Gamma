@@ -2,12 +2,13 @@
 
 import json
 import re
+import secrets
 import sqlite3
 import time
 import urllib.error
 from urllib.request import Request as URLRequest, urlopen
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -416,6 +417,90 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
                if re.match(r"^(gpt-|o\d|chatgpt-)", i)
                and not re.search(r"embed|whisper|tts|audio|image|dall-e|moderation|transcribe|realtime|search", i)]
     return {"models": sorted(set(ids))}
+
+
+# --- Voice dictation ----------------------------------------------------------
+
+# Default = ChatGPT's dictation model (user-overridable per request); whisper-1
+# is the retry for OpenAI-compatible servers (proxies, local gateways) that
+# only expose the older Whisper API.
+_TRANSCRIBE_DEFAULT = "gpt-4o-transcribe"
+_TRANSCRIBE_FALLBACK = "whisper-1"
+_TRANSCRIBE_MAX_BYTES = 25 * 1024 * 1024  # OpenAI's audio upload limit
+
+
+def _multipart_body(fields: dict, filename: str, content_type: str, data: bytes):
+    """Encode fields + one file as multipart/form-data (urllib has no helper)."""
+    boundary = secrets.token_hex(16)
+    parts = []
+    for name, value in fields.items():
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+    parts.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n".encode() + data + b"\r\n"
+    )
+    parts.append(f"--{boundary}--\r\n".encode())
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+# Sync def: the provider upload runs in the threadpool.
+@router.post("/ai/transcribe")
+def ai_transcribe(request: Request, file: UploadFile = File(...),
+                  model_hint: str = Form(""), model: str = Form(""), language: str = Form("")):
+    """Speech-to-text for the chat composer's mic button. Audio goes to the
+    OpenAI transcriptions API with the user's own key — `model_hint` is the
+    chat's current model-registry id, so dictation billing follows the chat's
+    provider when that entry speaks the OpenAI protocol. `model` and
+    `language` (ISO-639-1, "" = auto-detect) come from Settings → AI chat."""
+    user = require_user(request)
+    rt = require_ai_runtime(user)
+    hinted = rt["providers"].get((model_hint or "").split(":", 1)[0])
+    conf = hinted if hinted and hinted["protocol"] == "openai" else next(
+        (c for c in rt["providers"].values() if c["protocol"] == "openai"), None)
+    if not conf:
+        raise HTTPException(status_code=503,
+                            detail="Voice input needs an OpenAI API-key provider (Settings → AI providers) — "
+                                   "Anthropic and ChatGPT sign-in entries don't offer transcription.")
+    audio = file.file.read(_TRANSCRIBE_MAX_BYTES + 1)
+    if not audio:
+        raise HTTPException(status_code=400, detail="empty recording")
+    if len(audio) > _TRANSCRIBE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="recording too long to transcribe (max 25 MB)")
+    filename = re.sub(r"[^A-Za-z0-9._-]", "_", file.filename or "") or "dictation.webm"
+    requested = (model or "").strip()
+    if requested and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}", requested):
+        raise HTTPException(status_code=400, detail="invalid transcription model")
+    language = (language or "").strip().lower()
+    if language and not re.fullmatch(r"[a-z]{2,3}(-[a-z0-9]{2,8})?", language):
+        raise HTTPException(status_code=400, detail="invalid language code")
+    candidates = [requested or _TRANSCRIBE_DEFAULT]
+    if _TRANSCRIBE_FALLBACK not in candidates:
+        candidates.append(_TRANSCRIBE_FALLBACK)
+    detail = ""
+    for model in candidates:
+        fields = {"model": model, **({"language": language} if language else {})}
+        body, content_type = _multipart_body(
+            fields, filename, file.content_type or "application/octet-stream", audio)
+        req = URLRequest(f"{conf['base_url']}/v1/audio/transcriptions", data=body, headers={
+            "Authorization": f"Bearer {conf['api_key']}",
+            "Content-Type": content_type,
+        })
+        try:
+            with urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read())
+            return {"text": (data.get("text") or "").strip(), "model": model}
+        except urllib.error.HTTPError as error:
+            detail = _upstream_detail(error)
+            log.warning(f"[transcribe] {model}: {detail}")
+            # 400/403/404 are model-availability shaped — worth the whisper-1
+            # retry; auth/rate-limit failures would just fail again.
+            if error.code not in (400, 403, 404):
+                break
+        except Exception as error:
+            detail = str(error)
+            log.warning(f"[transcribe] {model}: {error}")
+            break
+    raise HTTPException(status_code=502, detail=f"transcription failed — {detail}")
 
 
 # --- ChatGPT subscription sign-in (OAuth PKCE, Codex CLI's flow) --------------

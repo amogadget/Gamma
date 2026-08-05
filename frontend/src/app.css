@@ -182,6 +182,8 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* mobile browsers: exclude the collapsing URL bar so nothing hides behind it */
+  height: 100dvh;
 }
 
 .topbar {
@@ -287,10 +289,13 @@ body {
 }
 
 /* Settings → Diagnostics: session system log — scrolls in place, text is
-   selectable for copying into bug reports. */
+   selectable for copying into bug reports. Fixed height (not max-height):
+   the boxes are flex children of the scrolling settingsPane column, and a
+   shrinkable box gets squished to a sliver when the other log is long. */
 .sysLogBox {
   margin-top: 4px;
-  max-height: 280px;
+  height: 200px;
+  flex-shrink: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid var(--border-subtle);
@@ -1851,7 +1856,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 
 /* --- dockable windows (notes + chat share the same slot system) --- */
-.workArea { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.workArea { display: flex; flex: 1; min-height: 0; min-width: 0; position: relative; }
 .workArea > [data-panel-group] { flex: 1; }
 [data-panel] { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 [data-panel] > .main { flex: 1; min-height: 0; }
@@ -1937,6 +1942,40 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-left: none !important;
 }
 .chatPanel.chatWindow { padding: 0 6px 6px; display: flex; flex-direction: column; overflow: hidden; }
+
+/* --- phone layout (≤700px): dock slots collapse, windows become full-screen
+   overlays over the work area, switched from a bottom tab bar --- */
+.phonePanel {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  background: var(--bg-surface);
+}
+.phonePanel .dockWindow { border-left: none; }
+.phonePanel .dockGrip { cursor: default; }
+.phoneTabBar {
+  display: flex;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-deeper);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.phoneTab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 11px 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.phoneTab.active { color: var(--accent); }
 
 /* chat attach picker + zoom input */
 .popover.popUp { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
@@ -2763,6 +2802,35 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .uiBtn.chatCircleBtn.chatStopBtn { background: var(--bg-subtle); color: var(--text-primary); }
 .uiBtn.chatCircleBtn.chatStopBtn:hover:not(:disabled) { background: var(--bg-hover); }
+/* Voice dictation: mic / cancel / stop share the muted circle look; while
+   recording the row becomes × + live waveform + timer + ■/↑ (ChatGPT-style). */
+.uiBtn.chatCircleBtn.chatMicBtn { background: var(--bg-subtle); color: var(--text-primary); }
+.uiBtn.chatCircleBtn.chatMicBtn:hover:not(:disabled) { background: var(--bg-hover); }
+.chatWaveCanvas {
+  flex: 1;
+  min-width: 40px;
+  height: 30px;
+  align-self: center;
+  color: var(--text-secondary); /* bar color — read by the canvas draw loop */
+}
+.chatRecTimer {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chatRecDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e5484d;
+  animation: chatRecPulse 1.3s ease-in-out infinite;
+}
+@keyframes chatRecPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* --- downloads & uploads (Chrome-style transfer list) --- */
 .topbar .transferBtn { position: relative; }
