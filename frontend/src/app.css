@@ -182,6 +182,8 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* mobile browsers: exclude the collapsing URL bar so nothing hides behind it */
+  height: 100dvh;
 }
 
 .topbar {
@@ -1854,7 +1856,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 
 /* --- dockable windows (notes + chat share the same slot system) --- */
-.workArea { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.workArea { display: flex; flex: 1; min-height: 0; min-width: 0; position: relative; }
 .workArea > [data-panel-group] { flex: 1; }
 [data-panel] { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 [data-panel] > .main { flex: 1; min-height: 0; }
@@ -1940,6 +1942,40 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-left: none !important;
 }
 .chatPanel.chatWindow { padding: 0 6px 6px; display: flex; flex-direction: column; overflow: hidden; }
+
+/* --- phone layout (≤700px): dock slots collapse, windows become full-screen
+   overlays over the work area, switched from a bottom tab bar --- */
+.phonePanel {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  background: var(--bg-surface);
+}
+.phonePanel .dockWindow { border-left: none; }
+.phonePanel .dockGrip { cursor: default; }
+.phoneTabBar {
+  display: flex;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-deeper);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.phoneTab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 11px 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.phoneTab.active { color: var(--accent); }
 
 /* chat attach picker + zoom input */
 .popover.popUp { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }

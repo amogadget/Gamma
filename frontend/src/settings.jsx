@@ -5,6 +5,7 @@ import {
   ActivityIcon,
   BookIcon,
   KeyIcon,
+  ListIcon,
   PaperIcon,
   PenIcon,
   SearchIcon,
@@ -14,6 +15,7 @@ import {
 
 const NAV_ITEMS = [
   ["papers", "Paper metadata", PaperIcon],
+  ["library", "Library status", ListIcon],
   ["ai", "AI & API keys", KeyIcon],
   ["prompts", "Prompts", SlidersIcon],
   ["context", "AI chat", BookIcon],
@@ -69,8 +71,46 @@ function PapersSettings({ value }) {
         checked={value.pdfSaveLocal}
         onChange={value.setPdfSaveLocal}
       />
+      <MetaModelRow value={value} />
+    </>
+  );
+}
+
+function LibrarySettings({ value }) {
+  return (
+    <>
+      <PaneIntro title="Library status">
+        Per-paper health of your library: metadata, extracted PDF text, and the search index —
+        with batch retry for failed or missing metadata lookups.
+      </PaneIntro>
       <MetaStatusSection value={value} />
     </>
+  );
+}
+
+// Which model runs the AI step of metadata lookups (identifier detection +
+// extraction from the first pages). Default follows whatever the chat panel
+// has selected; a cheap model is usually plenty here.
+function MetaModelRow({ value }) {
+  const models = value.aiModels || [];
+  const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
+  const current = value.metaModel && models.some((m) => m.id === value.metaModel) ? value.metaModel : "";
+  return (
+    <label className="settingRow">
+      <span className="settingText">
+        <span className="settingLabel">Metadata model</span>
+        <span className="settingDesc">Model used when metadata has to be AI-extracted from the PDF text (no arXiv id or DOI found). A fast, cheap model works well for this.</span>
+      </span>
+      <select className="aiKeyInput settingSelect" value={current}
+        onChange={(e) => value.setMetaModel(e.target.value)}>
+        <option value="">Same as chat model</option>
+        {models.map((m) => (
+          <option key={m.id} value={m.id}>
+            {multiProvider ? `${m.model} · ${m.provider_name || m.provider}` : m.model}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -135,7 +175,7 @@ function MetaStatusSection({ value }) {
             block_id: paper.id,
             force: true,
             prompt: value.metaPrompt || "",
-            model: value.chatModel || "",
+            model: value.metaFetchModel || "",
             context_char_limit: value.metaContextChars || 6000,
           }),
         });
@@ -198,7 +238,7 @@ function MetaStatusSection({ value }) {
   return (
     <>
       <div className="promptSectionHead metaStatHead">
-        <span>Library status</span>
+        <span>Papers</span>
         <span className="metaStatActions">
           <select className="homeSortSelect" value={sortMode} onChange={(e) => setSortMode(e.target.value)} title="Sort papers">
             <option value="meta">Metadata — unfinished first</option>
@@ -788,6 +828,7 @@ export default function SettingsDialog({
   onPaneChange,
   onClose,
   papers,
+  library,
   ai,
   prompts,
   context,
@@ -809,6 +850,7 @@ export default function SettingsDialog({
         <div className="settingsPane">
           <button className="uiClose uiCloseLg settingsClose" onClick={onClose} title="Close settings" aria-label="Close settings">×</button>
           {activePane === "papers" ? <PapersSettings value={papers} /> : null}
+          {activePane === "library" ? <LibrarySettings value={library} /> : null}
           {activePane === "ai" ? <AiSettings value={ai} /> : null}
           {activePane === "prompts" ? <PromptSettings value={prompts} /> : null}
           {activePane === "context" ? <ContextSettings value={context} /> : null}

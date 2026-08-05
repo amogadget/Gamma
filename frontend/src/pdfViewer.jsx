@@ -312,6 +312,53 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => { el.removeEventListener("wheel", onWheel); cancelAnimationFrame(wheelRafRef.current); };
   }, []);
 
+  // Two-finger pinch zooms on touch devices, sharing the wheel path's refs:
+  // the gesture compounds from the scale at pinch start and commits at most
+  // one zoom per frame, anchored at the fingers' midpoint. preventDefault on
+  // the two-finger move blocks the browser's own page zoom over the viewer.
+  useEffect(() => {
+    const el = viewerRef.current;
+    if (!el) return;
+    let startDist = 0, startScale = 1, pinching = false;
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const onTouchStart = (e) => {
+      if (e.touches.length !== 2) return;
+      pinching = true;
+      startDist = dist(e.touches);
+      startScale = wheelScaleRef.current;
+    };
+    const onTouchMove = (e) => {
+      if (!pinching || e.touches.length !== 2) return;
+      e.preventDefault();
+      const next = clampZoom(startScale * (dist(e.touches) / startDist));
+      if (next === wheelScaleRef.current) return;
+      const r = el.getBoundingClientRect();
+      zoomAnchorRef.current = {
+        x: (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left,
+        y: (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top,
+      };
+      wheelScaleRef.current = next;
+      docSwapPendingRef.current = false;
+      if (!wheelRafRef.current) {
+        wheelRafRef.current = requestAnimationFrame(() => {
+          wheelRafRef.current = 0;
+          cbRef.current.onZoomTo?.(wheelScaleRef.current);
+        });
+      }
+    };
+    const onTouchEnd = (e) => { if (e.touches.length < 2) pinching = false; };
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, []);
+
   // Group find marks per page once, sharing one frozen empty array so pages
   // without marks keep referentially-equal props (memo stays effective).
   const marksByPage = useMemo(() => {
