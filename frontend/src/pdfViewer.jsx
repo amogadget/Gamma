@@ -312,41 +312,76 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return () => { el.removeEventListener("wheel", onWheel); cancelAnimationFrame(wheelRafRef.current); };
   }, []);
 
-  // Two-finger pinch zooms on touch devices, sharing the wheel path's refs:
-  // the gesture compounds from the scale at pinch start and commits at most
-  // one zoom per frame, anchored at the fingers' midpoint. preventDefault on
-  // the two-finger move blocks the browser's own page zoom over the viewer.
+  // Two-finger pinch zoom. Committing a real zoom per move event (the wheel
+  // path) is hopelessly janky on phones — every commit re-lays-out and
+  // re-renders every page. Instead the gesture only moves a CSS transform on
+  // the page stack (compositing, no layout; blurry while the fingers are
+  // down, like every native PDF app), and the real zoom is committed ONCE on
+  // finger-lift: scroll is re-based so the content under the fingers' final
+  // midpoint is what the zoom-anchor effect (keyed on that midpoint) holds
+  // in place through the re-layout. preventDefault on the two-finger move
+  // blocks both native scrolling and the browser's own page zoom.
+  const zoomLayerRef = useRef(null);
   useEffect(() => {
     const el = viewerRef.current;
     if (!el) return;
-    let startDist = 0, startScale = 1, pinching = false;
+    let start = null; // gesture-start snapshot: finger distance/midpoint, committed scale, scroll
+    let cur = null; // latest preview: effective ratio + midpoint
     const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const mid = (t, r) => ({
+      x: (t[0].clientX + t[1].clientX) / 2 - r.left,
+      y: (t[0].clientY + t[1].clientY) / 2 - r.top,
+    });
     const onTouchStart = (e) => {
       if (e.touches.length !== 2) return;
-      pinching = true;
-      startDist = dist(e.touches);
-      startScale = wheelScaleRef.current;
+      const m = mid(e.touches, el.getBoundingClientRect());
+      start = {
+        dist: dist(e.touches), scale: wheelScaleRef.current,
+        m0x: m.x, m0y: m.y, sl: el.scrollLeft, st: el.scrollTop,
+      };
+      cur = null;
+      if (zoomLayerRef.current) zoomLayerRef.current.style.willChange = "transform";
     };
     const onTouchMove = (e) => {
-      if (!pinching || e.touches.length !== 2) return;
+      if (!start || e.touches.length !== 2) return;
       e.preventDefault();
-      const next = clampZoom(startScale * (dist(e.touches) / startDist));
-      if (next === wheelScaleRef.current) return;
-      const r = el.getBoundingClientRect();
-      zoomAnchorRef.current = {
-        x: (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left,
-        y: (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top,
-      };
-      wheelScaleRef.current = next;
-      docSwapPendingRef.current = false;
-      if (!wheelRafRef.current) {
-        wheelRafRef.current = requestAnimationFrame(() => {
-          wheelRafRef.current = 0;
-          cbRef.current.onZoomTo?.(wheelScaleRef.current);
-        });
-      }
+      const m = mid(e.touches, el.getBoundingClientRect());
+      // Clamp the previewed scale too, so the preview never shows a zoom the
+      // commit would refuse.
+      const k = clampZoom(start.scale * (dist(e.touches) / start.dist)) / start.scale;
+      cur = { k, m1x: m.x, m1y: m.y };
+      // origin 0 0: keep the content that started under the midpoint glued to
+      // the (moving) midpoint — visual = t + k·content − scroll, solve for t.
+      const tx = m.x + start.sl - k * (start.sl + start.m0x);
+      const ty = m.y + start.st - k * (start.st + start.m0y);
+      const l = zoomLayerRef.current;
+      if (l) l.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
     };
-    const onTouchEnd = (e) => { if (e.touches.length < 2) pinching = false; };
+    const finish = () => {
+      if (!start) return;
+      const l = zoomLayerRef.current;
+      if (l) { l.style.transform = ""; l.style.willChange = ""; }
+      if (cur) {
+        // Re-base scroll by the midpoint's travel: afterwards the content at
+        // the final midpoint (at the old scale) is the pinched content, which
+        // the anchor effect then re-places there at the committed scale. The
+        // refs get the unclamped values on purpose — the anchor effect reads
+        // them instead of live scroll to survive pre-layout clamping.
+        const sl = start.sl + start.m0x - cur.m1x;
+        const st = start.st + start.m0y - cur.m1y;
+        el.scrollLeft = sl; el.scrollTop = st;
+        lastScrollLeftRef.current = sl; lastScrollRef.current = st;
+        const next = clampZoom(start.scale * cur.k);
+        if (next !== wheelScaleRef.current) {
+          zoomAnchorRef.current = { x: cur.m1x, y: cur.m1y };
+          wheelScaleRef.current = next;
+          docSwapPendingRef.current = false;
+          cbRef.current.onZoomTo?.(next);
+        }
+      }
+      start = null; cur = null;
+    };
+    const onTouchEnd = (e) => { if (e.touches.length < 2) finish(); };
     el.addEventListener("touchstart", onTouchStart, { passive: true });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: true });
@@ -1084,6 +1119,9 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           lastScrollLeftRef.current = e.currentTarget.scrollLeft;
           syncCurPage();
         }}>
+      {/* pdfZoomLayer: the pinch preview's transform target — spans the full
+          scroll content so transform-origin 0 0 coincides with content (0,0) */}
+      <div ref={zoomLayerRef} className="pdfZoomLayer">
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={`${docSeq}-${i + 1}`} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
@@ -1098,6 +1136,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           onPainted={onPagePainted}
         />
       ))}
+      </div>
       {selPopup && onSelectionFinished && (
         <div style={{
           position: "fixed", zIndex: 9999,

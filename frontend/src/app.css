@@ -1977,6 +1977,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .phoneTab.active { color: var(--accent); }
 
+/* pseudo-fullscreen (iOS has no Fullscreen API): hide the app chrome and let
+   the work area take the whole screen; the viewer's own ⛶ button exits */
+.app.pseudoFullscreen .topbar,
+.app.pseudoFullscreen .phoneTabBar,
+.app.pseudoFullscreen .status { display: none !important; }
+
 /* chat attach picker + zoom input */
 .popover.popUp { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
 .attachPopover { min-width: 300px; max-width: 380px; }
@@ -2930,6 +2936,14 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 
 /* --- area notes (Ctrl+drag rectangle selection on the PDF) --- */
 /* Ctrl held: dragging draws a rectangle, so cue it over everything on the page. */
+/* pinch-preview transform target: must span the full scroll content so its
+   top-left corner is content (0,0) — the transform math assumes that origin */
+.pdfZoomLayer {
+  width: max-content;
+  min-width: 100%;
+  transform-origin: 0 0;
+}
+
 .pdfViewer.areaCursor .pdfPageWrap,
 .pdfViewer.areaCursor .textLayer,
 .pdfViewer.areaCursor .textLayer span {
