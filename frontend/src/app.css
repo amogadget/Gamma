@@ -2935,11 +2935,14 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 
 /* --- area notes (Ctrl+drag rectangle selection on the PDF) --- */
-/* pinch-preview transform target: must span the full scroll content so its
-   top-left corner is content (0,0) — the transform math assumes that origin */
+/* pinch-preview transform target. Origin 0 0 = the layer's top-left, which
+   sits at content (0,0) as the scroller's first in-flow child — the pinch
+   math assumes exactly that. No width rules on purpose: width:auto keeps
+   pages laid out against the viewer width like they always were (max-content
+   ballooned the layer to the widest placeholder page — fit-width looked
+   broken on desktop, page adrift in white space); zoomed-in pages simply
+   overflow, as they did before the wrapper existed. */
 .pdfZoomLayer {
-  width: max-content;
-  min-width: 100%;
   transform-origin: 0 0;
 }
 
