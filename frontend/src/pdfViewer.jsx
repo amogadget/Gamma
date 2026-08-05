@@ -228,7 +228,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef, areaMode }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -1112,7 +1112,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       ) : null}
       {/* overflow-anchor off: the browser's own scroll anchoring would fight
           the zoom re-placement above with adjustments of its own. */}
-      <div ref={viewerRef} className={"pdfViewer" + (areaCursor ? " areaCursor" : "")}
+      <div ref={viewerRef} className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "")}
         style={{ height: "100%", overflowY: "auto", overflowX: "auto", overflowAnchor: "none" }}
         onScroll={(e) => {
           lastScrollRef.current = e.currentTarget.scrollTop;
@@ -1127,6 +1127,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
           onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
+          areaMode={canAnnotate ? !!areaMode : false}
           onAreaSelected={canAnnotate ? onAreaSelected : undefined}
           pendingArea={selPopup?.kind === "area" && selPopup.pageNumber === i + 1 ? selPopup : null}
           reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
@@ -1194,7 +1195,7 @@ function OutlineNode({ item, depth, onDest, onUrl }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea, areaMode }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1296,17 +1297,22 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
 
   const curW = pageSize ? pageSize.width * scale : 1, curH = pageSize ? pageSize.height * scale : 1;
 
-  // Ctrl+drag: draw a rectangle (screenshot-style) to make an area note.
-  // Document-level move/up listeners so the drag survives leaving the page
-  // box; rects are clamped to it. Tiny drags are Ctrl+clicks — ignored, so
-  // Ctrl+click on highlights (additive chat quote) keeps working.
+  // Rectangle drag (screenshot-style area note): Ctrl+drag with a mouse, or
+  // any drag while the phone's rectangle mode (areaMode) is on. Pointer
+  // events cover mouse and touch with one path; document-level move/up
+  // listeners so the drag survives leaving the page box; rects are clamped
+  // to it. Tiny drags are clicks — ignored, so Ctrl+click on highlights
+  // (additive chat quote) keeps working.
   const [marquee, setMarquee] = useState(null); // live drag rect, current-render px
   function beginAreaDrag(e) {
     if (readOnly || !onAreaSelected) return;
-    if (e.button !== 0 || !e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    if (e.button !== 0) return;
+    const viaCtrl = e.pointerType === "mouse" && e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
+    if (!areaMode && !viaCtrl) return;
     const wrap = wrapRef.current;
     if (!wrap) return;
     e.preventDefault(); // keep the text layer from starting a selection
+    const pointerId = e.pointerId;
     const box = wrap.getBoundingClientRect();
     const sx = e.clientX, sy = e.clientY;
     const clamp = (v, max) => Math.max(0, Math.min(max, v));
@@ -1316,10 +1322,20 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       x2: clamp(Math.max(sx, cx) - box.left, box.width),
       y2: clamp(Math.max(sy, cy) - box.top, box.height),
     });
-    function onMove(ev) { setMarquee(toRect(ev.clientX, ev.clientY)); }
+    const detach = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointercancel", onCancel);
+    };
+    function onMove(ev) { if (ev.pointerId === pointerId) setMarquee(toRect(ev.clientX, ev.clientY)); }
+    function onCancel(ev) {
+      if (ev.pointerId !== pointerId) return;
+      detach();
+      setMarquee(null);
+    }
     function onUp(ev) {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp, true);
+      if (ev.pointerId !== pointerId) return;
+      detach();
       setMarquee(null);
       const r = toRect(ev.clientX, ev.clientY);
       if (r.x2 - r.x1 < 6 || r.y2 - r.y1 < 6) return;
@@ -1349,13 +1365,14 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         image,
       });
     }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp, true);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onCancel);
   }
 
   return (
     <div ref={wrapRef} data-page={pageNumber} className="pdfPageWrap"
-      onMouseDown={beginAreaDrag}
+      onPointerDown={beginAreaDrag}
       style={{
         margin: `0 auto ${PAGE_GAP}px`, position: "relative", background: "#fff",
         width: pageSize ? curW : undefined,

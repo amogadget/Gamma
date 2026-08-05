@@ -20,7 +20,7 @@ import {
   ExternalLinkIcon, EyeIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
   FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
   LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PinIcon, PlusIcon,
-  SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, TrashIcon, UploadIcon,
+  RectSelectIcon, SearchIcon, SettingsIcon, SparklesIcon, TextCursorIcon, Trash2Icon, TrashIcon, UploadIcon,
   UserIcon, UsersIcon, XIcon, ZoomInIcon, ZoomOutIcon,
 } from "./icons";
 
@@ -75,15 +75,21 @@ const TRANSFER_PHASES = new Set(["start", "progress", "done", "cached", "error",
 // width crosses 700px but a touch device that short is still a phone, and
 // flipping to the desktop docks mid-rotation is jarring.
 const PHONE_MQ = "(max-width: 700px), (pointer: coarse) and (max-height: 500px)";
+// A browser that declares itself mobile gets the phone layout regardless of
+// the viewport numbers. "Request desktop site" flips this flag along with the
+// UA, so it stays the escape hatch back to the desktop docks. Android tablets
+// ("Android" without "Mobile") and iPads (desktop-class UA) are not phones.
+const UA_MOBILE = navigator.userAgentData?.mobile
+  ?? /iPhone|iPod|Android.+Mobile|Mobile.+Android/i.test(navigator.userAgent);
 function useIsPhone() {
-  const [isPhone, setIsPhone] = useState(() => window.matchMedia(PHONE_MQ).matches);
+  const [mqPhone, setMqPhone] = useState(() => window.matchMedia(PHONE_MQ).matches);
   useEffect(() => {
     const mq = window.matchMedia(PHONE_MQ);
-    const apply = () => setIsPhone(mq.matches);
+    const apply = () => setMqPhone(mq.matches);
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
-  return isPhone;
+  return UA_MOBILE || mqPhone;
 }
 
 export default function App() {
@@ -2176,6 +2182,10 @@ export default function App() {
   // null = the main view). Reset on navigation so a new page opens on its content.
   const isPhone = useIsPhone();
   const [phonePanel, setPhonePanel] = useState(null);
+  // Phone: drag-on-PDF mode — text selection (default) or rectangle drawing.
+  // Desktop expresses this by holding Ctrl; a phone has no Ctrl, so it gets a
+  // sticky toggle button in the viewer's zoom column instead.
+  const [areaSelectMode, setAreaSelectMode] = useState(false);
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
   const [focusedId, setFocusedId] = useState(null);
@@ -5438,6 +5448,16 @@ export default function App() {
               <button className="pdfFitWidthBtn" onClick={() => zoomTo("page-width")} title="Fit to width" aria-label="Fit to width">
                 <FitWidthIcon size={15} />
               </button>
+              {isPhone && !readOnly ? (
+                <button
+                  className={areaSelectMode ? "modeActive" : ""}
+                  onClick={() => setAreaSelectMode((v) => !v)}
+                  title={areaSelectMode ? "Rectangle mode — drag draws an area note (tap to switch to text selection)" : "Text mode — drag selects text (tap to switch to rectangle drawing)"}
+                  aria-label="Toggle selection mode"
+                >
+                  {areaSelectMode ? <RectSelectIcon size={15} /> : <TextCursorIcon size={15} />}
+                </button>
+              ) : null}
             </div>
           ) : null}
           {pdfUrl && !pdfHidden ? (
@@ -5456,6 +5476,7 @@ export default function App() {
           ) : null}
           {pdfUrl ? (
             <PdfViewer url={pdfUrl} highlights={highlights}
+              areaMode={areaSelectMode && isPhone && !readOnly}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
               captureRef={pdfCaptureRef}
