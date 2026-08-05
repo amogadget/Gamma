@@ -2766,6 +2766,35 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .uiBtn.chatCircleBtn.chatStopBtn { background: var(--bg-subtle); color: var(--text-primary); }
 .uiBtn.chatCircleBtn.chatStopBtn:hover:not(:disabled) { background: var(--bg-hover); }
+/* Voice dictation: mic / cancel / stop share the muted circle look; while
+   recording the row becomes × + live waveform + timer + ■/↑ (ChatGPT-style). */
+.uiBtn.chatCircleBtn.chatMicBtn { background: var(--bg-subtle); color: var(--text-primary); }
+.uiBtn.chatCircleBtn.chatMicBtn:hover:not(:disabled) { background: var(--bg-hover); }
+.chatWaveCanvas {
+  flex: 1;
+  min-width: 40px;
+  height: 30px;
+  align-self: center;
+  color: var(--text-secondary); /* bar color — read by the canvas draw loop */
+}
+.chatRecTimer {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: center;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chatRecDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e5484d;
+  animation: chatRecPulse 1.3s ease-in-out infinite;
+}
+@keyframes chatRecPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
 /* --- downloads & uploads (Chrome-style transfer list) --- */
 .topbar .transferBtn { position: relative; }

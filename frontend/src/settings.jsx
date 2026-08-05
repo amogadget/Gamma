@@ -569,6 +569,40 @@ function ContextSettings({ value }) {
         checked={value.chatImgAutoClear}
         onChange={value.setChatImgAutoClear}
       />
+      <label className="settingRow">
+        <span className="settingText">
+          <span className="settingLabel">Voice dictation model</span>
+          <span className="settingDesc">Speech-to-text for the chat's mic button. gpt-4o-transcribe is what ChatGPT's dictation uses; needs an OpenAI-protocol provider key.</span>
+        </span>
+        <select className="aiKeyInput settingSelect" value={value.dictationModel}
+          onChange={(e) => value.setDictationModel(e.target.value)}>
+          <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
+          <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</option>
+          <option value="whisper-1">whisper-1</option>
+        </select>
+      </label>
+      <label className="settingRow">
+        <span className="settingText">
+          <span className="settingLabel">Voice dictation language</span>
+          <span className="settingDesc">Telling the model the spoken language improves accuracy; auto-detect handles mixed or unlisted languages.</span>
+        </span>
+        <select className="aiKeyInput settingSelect" value={value.dictationLang}
+          onChange={(e) => value.setDictationLang(e.target.value)}>
+          <option value="">Auto-detect</option>
+          <option value="en">English</option>
+          <option value="zh">中文 (Chinese)</option>
+          <option value="ja">日本語 (Japanese)</option>
+          <option value="ko">한국어 (Korean)</option>
+          <option value="de">Deutsch (German)</option>
+          <option value="fr">Français (French)</option>
+          <option value="es">Español (Spanish)</option>
+          <option value="pt">Português (Portuguese)</option>
+          <option value="it">Italiano (Italian)</option>
+          <option value="ru">Русский (Russian)</option>
+          <option value="hi">हिन्दी (Hindi)</option>
+          <option value="ar">العربية (Arabic)</option>
+        </select>
+      </label>
       {limits.map(([label, description, current, setCurrent]) => (
         <label className="settingRow" key={label}>
           <span className="settingText">

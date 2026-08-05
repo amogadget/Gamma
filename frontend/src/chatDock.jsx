@@ -6,13 +6,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson } from "./utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied } from "./widgets";
-import { ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FileIcon, PaperclipIcon, PencilIcon, StopIcon } from "./icons";
+import { ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FileIcon, MicIcon, PaperclipIcon, PencilIcon, StopIcon, XIcon } from "./icons";
 
 export default function ChatDock({
   docId, focusedBlockId, homeBlocks, pdfTitle, openTabs,
   pdfSelections, setPdfSelections,
   chatImages, setChatImages,
   chatModel, setChatModel, chatEffort, setChatEffort, chatSystem,
+  dictationModel, dictationLang,
   chatContextChars, multiContextChars,
   aiInfo, aiProvider, openAiKeysEditor,
   openPopover, setOpenPopover,
@@ -52,6 +53,16 @@ export default function ChatDock({
   const [docPickerQuery, setDocPickerQuery] = useState("");
   const fileInputRef = useRef(null);
   const chatScrollRef = useRef(null);
+  // Voice dictation (ChatGPT-style): mic records (live waveform), ■ transcribes
+  // into the input via /api/ai/transcribe, ↑ transcribes and sends, × discards.
+  const [dictation, setDictation] = useState(""); // "" | "rec" | "busy"
+  const [recSecs, setRecSecs] = useState(0);
+  const recRef = useRef(null); // {recorder, stream, chunks, canceled, autoSend, baseText, analyser, audioCtx, amps}
+  const waveCanvasRef = useRef(null);
+  // Latest sendChat for the record-view ↑ button — the recorder's onstop fires
+  // from the render that started it, and a page switch mid-recording would
+  // otherwise send through a stale conversation closure.
+  const sendChatRef = useRef(null);
 
   // Load chat from backend whenever the chat bucket changes.
   useEffect(() => {
@@ -308,6 +319,8 @@ export default function ChatDock({
     }
   }
 
+  sendChatRef.current = sendChat;
+
   function sendChatMessage() {
     const text = chatInput;
     if (!text.trim() || chatLoading) return;
@@ -318,6 +331,157 @@ export default function ChatDock({
   function stopChat() {
     chatAbortRef.current?.abort();
   }
+
+  async function startDictation() {
+    if (dictation) return;
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      setStatus("Voice input needs HTTPS or localhost — the browser blocks the microphone on plain HTTP.");
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      setStatus("Microphone access was denied.");
+      return;
+    }
+    // Chrome/Firefox record webm/opus; Safari only mp4 (m4a to OpenAI).
+    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
+    const rec = {
+      recorder: new MediaRecorder(stream, mime ? { mimeType: mime } : undefined),
+      stream, chunks: [], canceled: false, autoSend: false,
+      baseText: chatInput, // composer text at record start (the input is hidden while recording)
+      amps: [], peak: 0,
+    };
+    // Analyser feeds the live waveform; recording works fine without it.
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 1024;
+      audioCtx.createMediaStreamSource(stream).connect(analyser);
+      rec.audioCtx = audioCtx;
+      rec.analyser = analyser;
+    } catch {}
+    recRef.current = rec;
+    rec.recorder.ondataavailable = (e) => { if (e.data?.size) rec.chunks.push(e.data); };
+    rec.recorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      rec.audioCtx?.close().catch(() => {});
+      if (rec.canceled) return;
+      transcribeDictation(new Blob(rec.chunks, { type: rec.recorder.mimeType || mime || "audio/webm" }), rec);
+    };
+    rec.recorder.start();
+    setRecSecs(0);
+    setDictation("rec");
+  }
+
+  // mode: "cancel" discards, "insert" transcribes into the input (■),
+  // "send" transcribes and sends immediately (↑) — ChatGPT's dictation pair.
+  function finishDictation(mode) {
+    const rec = recRef.current;
+    if (!rec || dictation !== "rec") return;
+    rec.canceled = mode === "cancel";
+    rec.autoSend = mode === "send";
+    setDictation(rec.canceled ? "" : "busy");
+    try { rec.recorder.stop(); } catch { setDictation(""); }
+    if (rec.canceled) recRef.current = null;
+  }
+
+  async function transcribeDictation(blob, rec) {
+    try {
+      if (blob.size > 24 * 1024 * 1024) throw new Error("recording too long (max ~25 MB)");
+      const form = new FormData();
+      form.append("file", blob, blob.type.includes("mp4") ? "dictation.m4a" : "dictation.webm");
+      if (dictationModel) form.append("model", dictationModel);
+      if (dictationLang) form.append("language", dictationLang);
+      if (chatModel) form.append("model_hint", chatModel);
+      const r = await fetch(`${API}/ai/transcribe`, { method: "POST", credentials: "include", body: form });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data.detail || `transcription failed (${r.status})`);
+      const text = (data.text || "").trim();
+      if (text && rec.autoSend) {
+        setChatInput("");
+        sendChatRef.current?.([rec.baseText.trim(), text].filter(Boolean).join(" "));
+      } else if (text) {
+        setChatInput((prev) => (prev.trim() ? `${prev.replace(/\s+$/, "")} ${text}` : text));
+      }
+    } catch (e) {
+      setStatus(`Voice input: ${e.message}`);
+    } finally {
+      setDictation("");
+      recRef.current = null;
+    }
+  }
+
+  // Live waveform, drawn ChatGPT-style: newest audio as bars at the right
+  // edge next to a cursor line, history scrolling left, silence as dots.
+  useEffect(() => {
+    if (dictation !== "rec") return;
+    const canvas = waveCanvasRef.current;
+    const rec = recRef.current;
+    if (!canvas || !rec?.analyser) return;
+    const ctx = canvas.getContext("2d");
+    const data = new Uint8Array(rec.analyser.fftSize);
+    let raf, lastPush = 0;
+    const draw = (now) => {
+      raf = requestAnimationFrame(draw);
+      rec.analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+      rec.peak = Math.max(rec.peak, Math.sqrt(sum / data.length));
+      if (now - lastPush >= 50) { // one slot ≈ 50 ms of audio
+        rec.amps.push(rec.peak);
+        rec.peak = 0;
+        lastPush = now;
+      }
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      if (!w || !h) return;
+      if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+      ctx.strokeStyle = getComputedStyle(canvas).color;
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
+      const cursorX = w - 3;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath(); ctx.moveTo(cursorX, h * 0.12); ctx.lineTo(cursorX, h * 0.88); ctx.stroke();
+      const pitch = 5;
+      for (let i = 0; i < Math.floor((cursorX - 4) / pitch); i++) {
+        const amp = rec.amps[rec.amps.length - 1 - i];
+        if (amp === undefined) break;
+        const x = cursorX - (i + 1) * pitch;
+        // sqrt lifts normal speech into view; the floor keeps a dotted
+        // baseline running through silence.
+        const len = Math.max(2, Math.min(1, Math.sqrt(amp) * 2.2) * h * 0.78);
+        ctx.globalAlpha = len <= 2.5 ? 0.3 : 0.7;
+        ctx.beginPath();
+        ctx.moveTo(x, (h - len) / 2);
+        ctx.lineTo(x, (h + len) / 2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    };
+    raf = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(raf);
+  }, [dictation]);
+
+  // Recording timer + drop the mic on unmount (stops the tracks so the
+  // browser's recording indicator doesn't linger).
+  useEffect(() => {
+    if (dictation !== "rec") return;
+    const timer = setInterval(() => setRecSecs((s) => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, [dictation]);
+  useEffect(() => () => {
+    const rec = recRef.current;
+    if (rec) {
+      rec.canceled = true;
+      try { rec.recorder.stop(); } catch {}
+      rec.stream.getTracks().forEach((t) => t.stop());
+      rec.audioCtx?.close().catch(() => {});
+    }
+  }, []);
 
   async function copyChatMessage(idx, text) {
     try {
@@ -567,6 +731,25 @@ export default function ChatDock({
         className="chatInputRow"
         onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
       >
+        {dictation === "rec" ? (
+          <>
+            <button className="uiBtn chatCircleBtn chatMicBtn" type="button" onClick={() => finishDictation("cancel")} title="Cancel recording" aria-label="Cancel recording">
+              <XIcon size={13} />
+            </button>
+            <canvas ref={waveCanvasRef} className="chatWaveCanvas" />
+            <span className="chatRecTimer" aria-live="polite">
+              <span className="chatRecDot" />
+              {Math.floor(recSecs / 60)}:{String(recSecs % 60).padStart(2, "0")}
+            </span>
+            <button className="uiBtn chatCircleBtn chatMicBtn" type="button" onClick={() => finishDictation("insert")} title="Stop — put the transcript in the input" aria-label="Stop and transcribe">
+              <StopIcon size={11} />
+            </button>
+            <button className="uiBtn primary chatCircleBtn" type="button" onClick={() => finishDictation("send")} title="Stop and send" aria-label="Stop, transcribe and send">
+              <ArrowUpIcon size={14} strokeWidth={2.4} />
+            </button>
+          </>
+        ) : (
+        <>
         <span data-popover="chatdocs" style={{ position: "relative", display: "inline-flex" }}>
           <button
             type="button"
@@ -627,16 +810,27 @@ export default function ChatDock({
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
           }}
-          placeholder={chatFiles.length ? `Ask about the attached file${chatFiles.length > 1 ? "s" : ""}…` : chatImages.length ? "Ask about the pasted figure…" : (pdfSelections.length ? (pdfSelections.length > 1 ? `Ask about the ${pdfSelections.length} selected passages…` : "Ask about the selection… (Ctrl+select adds more)") : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : (focusedBlockId ? "Ask about this page… (Shift+Enter for a new line)" : "Ask AI… (paste images to attach)")))}
+          placeholder={chatFiles.length ? `Ask about the attached file${chatFiles.length > 1 ? "s" : ""}…` : chatImages.length ? "Ask about the pasted figure…" : (pdfSelections.length ? (pdfSelections.length > 1 ? `Ask about the ${pdfSelections.length} selected passages…` : "Ask about the selection…") : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : "Ask…"))}
         />
         {chatLoading ? (
           <button className="uiBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
             <StopIcon size={11} />
           </button>
-        ) : (
-          <button className="uiBtn primary chatCircleBtn" type="submit" disabled={!chatInput.trim()} title="Send" aria-label="Send">
-            <ArrowUpIcon size={14} strokeWidth={2.4} />
+        ) : dictation === "busy" ? (
+          <button className="uiBtn chatCircleBtn chatMicBtn" type="button" disabled title="Transcribing…" aria-label="Transcribing">
+            <span className="transferSpin inline" />
           </button>
+        ) : (
+          <>
+            <button className="uiBtn chatCircleBtn chatMicBtn" type="button" onClick={startDictation} title="Dictate — transcribed with your OpenAI key" aria-label="Start dictation">
+              <MicIcon size={13} />
+            </button>
+            <button className="uiBtn primary chatCircleBtn" type="submit" disabled={!chatInput.trim()} title="Send" aria-label="Send">
+              <ArrowUpIcon size={14} strokeWidth={2.4} />
+            </button>
+          </>
+        )}
+        </>
         )}
       </form>
       {docPicker ? (

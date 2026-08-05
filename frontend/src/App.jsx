@@ -1356,6 +1356,14 @@ export default function App() {
   const [chatEffort, setChatEffort] = useState(() => {
     try { return localStorage.getItem("gamma-chat-effort") || ""; } catch { return ""; }
   });
+  // Voice dictation (mic button): transcription model + spoken language
+  // ("" = auto-detect), configured in Settings → AI chat.
+  const [dictationModel, setDictationModel] = useState(() => {
+    try { return localStorage.getItem("gamma-dictation-model") || "gpt-4o-transcribe"; } catch { return "gpt-4o-transcribe"; }
+  });
+  const [dictationLang, setDictationLang] = useState(() => {
+    try { return localStorage.getItem("gamma-dictation-lang") || ""; } catch { return ""; }
+  });
   const [chatSystem, setChatSystem] = useState(() => {
     try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
   });
@@ -2000,6 +2008,12 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem("gamma-chat-effort", chatEffort); } catch {}
   }, [chatEffort]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-dictation-model", dictationModel); } catch {}
+  }, [dictationModel]);
+  useEffect(() => {
+    try { localStorage.setItem("gamma-dictation-lang", dictationLang); } catch {}
+  }, [dictationLang]);
   useEffect(() => {
     try { localStorage.setItem("gamma-chat-system", chatSystem); } catch {}
   }, [chatSystem]);
@@ -4777,6 +4791,7 @@ export default function App() {
           chatImages={chatImages} setChatImages={setChatImages}
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
+          dictationModel={dictationModel} dictationLang={dictationLang}
           chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider}
           chatContextChars={chatContextChars} multiContextChars={multiContextChars}
           openAiKeysEditor={openAiKeysEditor}
@@ -5624,6 +5639,10 @@ export default function App() {
         context={{
           chatImgAutoClear,
           setChatImgAutoClear,
+          dictationModel,
+          setDictationModel,
+          dictationLang,
+          setDictationLang,
           chatContextChars,
           setChatContextChars,
           metaContextChars,
