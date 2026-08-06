@@ -3,8 +3,10 @@
 import json
 import re
 import sqlite3
+import threading
 import time
 import urllib.error
+from datetime import datetime
 from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import APIRouter, HTTPException, Request
@@ -41,9 +43,10 @@ from ..ai_settings import (
     new_provider_id,
     require_ai_runtime,
     save_provider_entries,
+    set_entry_catalog,
 )
 from ..auth import require_user
-from ..config import AI_PROTOCOLS
+from ..config import AI_MODEL_CATALOG_TTL, AI_PROTOCOLS, USERS_DIR
 from ..db import page_now, user_db_path
 from ..logbuf import log
 from ..pdf_text import extract_text
@@ -167,6 +170,7 @@ async def ai_models(request: Request):
         "models": rt["models"],             # [{id: "<pid>:<model>", provider, provider_name, model}, ...]
         "default": rt["default"]["id"] if rt["default"] else "",
         "efforts": ["low", "medium", "high"],  # offered in the UI; omitted unless picked
+        "refreshed_at": _max_catalog_at(user),  # newest auto-fetched catalog time, "" = never
         "default_prompt": _SYSTEM_PROMPT,   # shown in the prompt editor
         "metadata_prompt": METADATA_PROMPT,  # AI metadata-extraction fallback
         "cite_prompt": CITE_PROMPT,          # PPT-style citation generator
@@ -321,14 +325,18 @@ def _model_catalog_json(req: URLRequest) -> dict:
         return json.loads(resp.read())
 
 
-def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
+def _chatgpt_model_catalog(user: str, provider_id: str = "", with_fallback: bool = True) -> list:
     """Live model list from the ChatGPT (codex) backend, Codex CLI's own
     listing call: GET {base}/models?client_version=… with the OAuth bearer.
     Needs a connected entry — the list is account-gated; falls back to the
     known-good list only when the fetch itself fails."""
     providers = ai_runtime(user)["providers"]
-    conf = providers.get(provider_id)
+    conf = providers.get(provider_id) if provider_id else None
     if not conf or conf.get("protocol") != "chatgpt":
+        if provider_id:
+            # Background refresh / saved-entry listing: the named entry is not
+            # connected — never silently list a different account's models.
+            raise ModelListError("ChatGPT entry is not connected — sign in again")
         # Pre-connect "Add key" form has no entry yet — any connected one will do.
         conf = next((c for c in providers.values() if c.get("protocol") == "chatgpt"), None)
     if not conf:
@@ -353,9 +361,15 @@ def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
         # `hide` marks picker-hidden but usable slugs — offer them after the
         # listed ones rather than dropping them.
         models = list(dict.fromkeys(listed + hidden))
-        return models or _CHATGPT_MODEL_FALLBACK
+        if not models:
+            raise ModelListError("the account returned an empty model list")
+        return models
+    except ModelListError:
+        raise
     except Exception as e:
         log.warning(f"[ai] chatgpt model listing failed, using fallback: {e}")
+        if not with_fallback:
+            raise ModelListError(f"model list failed: {e}") from e
         return _CHATGPT_MODEL_FALLBACK
 
 
@@ -364,6 +378,58 @@ class ModelCatalogRequest(BaseModel):
     protocol: str = ""
     api_key: str = ""
     base_url: str = ""
+
+
+class ModelListError(Exception):
+    """A provider refused or failed a model-list request; carries a UI message."""
+
+
+def _filter_chat_models(ids: list, require_chat_prefix: bool = True) -> list:
+    """Drop the non-conversational families from an account listing (OpenAI's
+    includes embeddings/audio/image models the chat endpoint can't use).
+    Anthropic-wire gateways (DeepSeek, …) may serve models without a gpt-*/o*
+    prefix, so the prefix whitelist is only applied to OpenAI listings."""
+    out = []
+    for i in ids:
+        if re.search(r"embed|whisper|tts|audio|image|dall-e|moderation|transcribe|realtime|search", i, re.I):
+            continue
+        if require_chat_prefix and not re.match(r"^(gpt-|o\d|chatgpt-)", i):
+            continue
+        out.append(i)
+    return out
+
+
+def _fetch_key_protocol_models(protocol: str, base: str, api_key: str) -> list:
+    """Live model names for a key-based protocol entry. Tries the provider's
+    listing endpoint in wire order and raises ModelListError when none
+    answers. Anthropic-wire gateways that don't list under the anthropic path
+    (DeepSeek's /anthropic base is one) usually answer their OpenAI-compatible
+    listing with the same key, so the parent base is tried as a fallback."""
+    candidates = []
+    if protocol == "openai":
+        candidates.append((f"{base}/v1/models", {"Authorization": f"Bearer {api_key}"}, True))
+    else:  # anthropic
+        candidates.append((f"{base}/v1/models?limit=100",
+                           {"x-api-key": api_key, "anthropic-version": "2023-06-01"}, False))
+        parent = base[: -len("/anthropic")] if base.endswith("/anthropic") else base
+        if parent != base:
+            candidates.append((f"{parent}/v1/models", {"Authorization": f"Bearer {api_key}"}, False))
+        candidates.append((f"{base}/v1/models", {"Authorization": f"Bearer {api_key}"}, False))
+    last = None
+    for url, headers, chat_prefix in candidates:
+        try:
+            req = URLRequest(url, headers={**headers, "Accept": "application/json",
+                                          "User-Agent": "Gamma/model-catalog"})
+            data = _model_catalog_json(req)
+            ids = [str(m.get("id") or "") for m in (data.get("data") or []) if m.get("id")]
+            ids = _filter_chat_models(ids, chat_prefix)
+            if ids:
+                return sorted(set(ids))
+        except urllib.error.HTTPError as e:
+            last = _upstream_detail(e, 200)
+        except Exception as e:
+            last = str(e)
+    raise ModelListError(f"model list failed: {last or 'no listing endpoint'}")
 
 
 # Sync def: the upstream /v1/models fetch runs in the threadpool.
@@ -380,7 +446,10 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
         entry = next((e for e in load_provider_entries(user) if e.get("id") == payload.provider_id), None) or {}
         protocol = entry.get("protocol") or protocol
     if protocol == "chatgpt":
-        return {"models": _chatgpt_model_catalog(user, payload.provider_id)}
+        try:
+            return {"models": _chatgpt_model_catalog(user, payload.provider_id)}
+        except ModelListError as e:
+            raise HTTPException(status_code=400, detail=str(e))
     if protocol not in AI_PROTOCOLS:
         raise HTTPException(status_code=400, detail="unknown protocol")
     key = (payload.api_key or "").strip() or (entry.get("api_key") or "").strip()
@@ -389,33 +458,141 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     base = ((payload.base_url or "").strip() or (entry.get("base_url") or "").strip()
             or AI_PROTOCOLS[protocol]["base_url"]).rstrip("/")
     try:
-        if protocol == "anthropic":
-            req = URLRequest(f"{base}/v1/models?limit=100",
-                             headers={
-                                 "x-api-key": key,
-                                 "anthropic-version": "2023-06-01",
-                                 "Accept": "application/json",
-                                 "User-Agent": "Gamma/model-catalog",
-                             })
-        else:
-            req = URLRequest(f"{base}/v1/models", headers={
-                "Authorization": f"Bearer {key}",
-                "Accept": "application/json",
-                "User-Agent": "Gamma/model-catalog",
-            })
-        data = _model_catalog_json(req)
-    except urllib.error.HTTPError as e:
-        raise HTTPException(status_code=400, detail=f"model list failed: {_upstream_detail(e, 200)}")
+        models = _fetch_key_protocol_models(protocol, base, key)
+    except ModelListError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"models": models}
+
+
+# --- Periodic model-catalog refresh ------------------------------------------
+# Each provider entry caches the live model list from its account
+# (`catalog_models` + `catalog_at`, managed in gamma/ai_settings.py);
+# ai_runtime() merges it after the user's hand-edited `models`, so newly
+# released models appear in the chat selector without touching what the user
+# pinned. The daemon thread below refreshes stale catalogs in the background;
+# POST /api/ai/models/refresh (the chat header's ↻) forces it immediately.
+CATALOG_CHECK_SECONDS = 600
+_catalog_watcher_started = False
+
+
+def _max_catalog_at(user: str) -> str:
+    """Newest catalog_at across the user's entries ("" when none yet)."""
+    ats = [e.get("catalog_at") or "" for e in load_provider_entries(user) if e.get("catalog_at")]
+    return max(ats) if ats else ""
+
+
+def _catalog_age_seconds(entry: dict) -> float:
+    at = entry.get("catalog_at") or ""
+    try:
+        parsed = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        return time.time() - parsed.timestamp()
+    except Exception:
+        return float("inf")
+
+
+def _live_models_for_entry(user: str, entry: dict) -> list:
+    """Live model names for one provider entry; raises ModelListError on
+    failure so callers keep the previous cached catalog."""
+    protocol = entry.get("protocol")
+    if protocol == "chatgpt":
+        # No fallback list here: a failed refetch must keep the previous
+        # catalog, never cache the hardcoded fallback as if it were live.
+        return _chatgpt_model_catalog(user, str(entry.get("id") or ""), with_fallback=False)
+    if protocol not in AI_PROTOCOLS:
+        raise ModelListError(f"unknown protocol: {protocol}")
+    api_key = (entry.get("api_key") or "").strip()
+    if not api_key:
+        raise ModelListError("no API key stored")
+    base = ((entry.get("base_url") or "").strip() or AI_PROTOCOLS[protocol]["base_url"]).rstrip("/")
+    return _fetch_key_protocol_models(protocol, base, api_key)
+
+
+def refresh_entry_catalog(user: str, provider_id: str, force: bool = False) -> bool:
+    """Fetch one entry's live model list and cache it. True when a fresh
+    catalog was stored; stale-yet-fresh entries and failed fetches leave the
+    previous catalog untouched and return False."""
+    entries = load_provider_entries(user)
+    entry = next((e for e in entries if e.get("id") == provider_id), None)
+    if not entry:
+        return False
+    if not force and _catalog_age_seconds(entry) < AI_MODEL_CATALOG_TTL:
+        return False
+    try:
+        models = _live_models_for_entry(user, entry)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"model list failed: {e}")
-    ids = [str(m.get("id") or "") for m in (data.get("data") or []) if m.get("id")]
-    if protocol == "openai":
-        # The account listing includes embeddings/audio/image models the chat
-        # endpoint can't use — keep the conversational families.
-        ids = [i for i in ids
-               if re.match(r"^(gpt-|o\d|chatgpt-)", i)
-               and not re.search(r"embed|whisper|tts|audio|image|dall-e|moderation|transcribe|realtime|search", i)]
-    return {"models": sorted(set(ids))}
+        log.warning(f"[ai] model catalog refresh failed for {user}/{entry.get('name') or entry.get('protocol')}: {e}")
+        return False
+    if not models:
+        return False
+    set_entry_catalog(entry, models, page_now())
+    save_provider_entries(user, entries)
+    log.info(f"[ai] refreshed model catalog for {user} "
+             f"'{entry.get('name') or entry.get('protocol')}': {len(models)} models")
+    return True
+
+
+def refresh_all_catalogs(force: bool = False) -> dict:
+    """Refresh stale catalogs for every user's provider entries. Used by the
+    background watcher; returns a summary for logging."""
+    users = [d.name for d in USERS_DIR.iterdir()
+             if d.is_dir() and (d / "data.db").exists()]
+    refreshed = 0
+    for user in users:
+        for entry in load_provider_entries(user):
+            if refresh_entry_catalog(user, str(entry.get("id") or ""), force):
+                refreshed += 1
+    return {"users": len(users), "refreshed": refreshed}
+
+
+@router.post("/ai/models/refresh")
+def ai_models_refresh(request: Request):
+    """Force a live refresh of every provider's cached catalog now (bounded by
+    the per-provider listing timeout) and return the fresh /ai/models payload.
+    This powers the chat header's ↻; the background watcher does the same once
+    a day on its own."""
+    user = _require_editor(request)
+    refreshed = 0
+    for entry in load_provider_entries(user):
+        if refresh_entry_catalog(user, str(entry.get("id") or ""), force=True):
+            refreshed += 1
+    rt = ai_runtime(user)
+    return {
+        "refreshed": refreshed,
+        "enabled": rt["enabled"],
+        "models": rt["models"],
+        "default": rt["default"]["id"] if rt["default"] else "",
+        "efforts": ["low", "medium", "high"],
+        "refreshed_at": _max_catalog_at(user),
+        "default_prompt": _SYSTEM_PROMPT,
+        "metadata_prompt": METADATA_PROMPT,
+        "cite_prompt": CITE_PROMPT,
+    }
+
+
+def _catalog_watcher_loop():
+    """Daemon loop: check every 10 minutes, refresh entries whose cached
+    catalog is older than the TTL (fetches are the exception, not the rule)."""
+    time.sleep(60)  # let startup settle before the first sweep
+    while True:
+        try:
+            summary = refresh_all_catalogs()
+            if summary["refreshed"]:
+                log.info(f"[ai] model catalog sweep: {summary}")
+        except Exception as e:
+            log.warning(f"[ai] model catalog sweep failed: {e}")
+        time.sleep(CATALOG_CHECK_SECONDS)
+
+
+def start_model_catalog_watcher():
+    """Idempotent. Called from app assembly; one daemon thread per process
+    (uvicorn --workers spawns one app instance per worker, each with its own
+    thread — fine, refresh_entry_catalog is guarded by the TTL)."""
+    global _catalog_watcher_started
+    if _catalog_watcher_started:
+        return
+    _catalog_watcher_started = True
+    threading.Thread(target=_catalog_watcher_loop,
+                     name="model-catalog-watcher", daemon=True).start()
 
 
 # --- ChatGPT subscription sign-in (OAuth PKCE, Codex CLI's flow) --------------
@@ -497,10 +674,13 @@ async def chatgpt_auth_complete(payload: ChatGPTAuthComplete, request: Request):
             # the listing call reads them back through ai_runtime.
             save_provider_entries(user, entries)
             try:
-                live = _chatgpt_model_catalog(user, entry["id"])
+                live = _chatgpt_model_catalog(user, entry["id"], with_fallback=False)
+                entry["models"] = ", ".join(live[:2])[:MAX_MODELS_LEN] or _CHATGPT_DEFAULT_MODELS
+                # The live list doubles as the entry's auto-refreshed catalog —
+                # no need for the background watcher to re-fetch immediately.
+                set_entry_catalog(entry, live, page_now())
             except Exception:
-                live = []
-            entry["models"] = ", ".join(live[:2])[:MAX_MODELS_LEN] or _CHATGPT_DEFAULT_MODELS
+                entry["models"] = _CHATGPT_DEFAULT_MODELS
     save_provider_entries(user, entries)
     return _masked_settings(user, request.state.is_guest)
 

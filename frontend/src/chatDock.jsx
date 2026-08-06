@@ -14,7 +14,7 @@ export default function ChatDock({
   chatImages, setChatImages,
   chatModel, setChatModel, chatEffort, setChatEffort, chatSystem, setAiProvider,
   chatContextChars, multiContextChars,
-  aiInfo, aiProvider, openAiKeysEditor,
+  aiInfo, aiProvider, openAiKeysEditor, refreshAiModels,
   openPopover, setOpenPopover,
   setStatus,
   onGrip, onGripDoubleClick, collapsed, onClose,
@@ -22,6 +22,7 @@ export default function ChatDock({
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatModelRefreshing, setChatModelRefreshing] = useState(false);
   // Tracks which block we've finished loading from the server, so the save
   // effect doesn't fire (and clobber the stored chat) before the load lands.
   const chatLoadedForRef = useRef("");
@@ -343,6 +344,7 @@ export default function ChatDock({
         const models = aiInfo.models;
         const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
         const currentId = models.some((m) => m.id === chatModel) ? chatModel : models[0].id;
+        const lastRefresh = aiInfo.refreshed_at ? new Date(aiInfo.refreshed_at) : null;
         return (
           <span className="chatHeaderSelects">
             <select className="chatModelSelect" value={currentId}
@@ -358,6 +360,14 @@ export default function ChatDock({
                 </option>
               ))}
             </select>
+            <button className="chatModelRefreshBtn" onClick={refreshModelList}
+              disabled={chatModelRefreshing}
+              title={`Fetch the latest model lists from your providers`
+                + (lastRefresh && !Number.isNaN(lastRefresh.getTime())
+                   ? ` — last auto-refresh ${lastRefresh.toLocaleString()}`
+                   : " — refreshed automatically about once a day")}>
+              {chatModelRefreshing ? "…" : "↻"}
+            </button>
             <select className="chatModelSelect" value={chatEffort}
               onChange={(e) => setChatEffort(e.target.value)}
               title="Reasoning effort — leave on 'effort: default' unless the model supports it">
@@ -377,6 +387,20 @@ export default function ChatDock({
       </div>
     </>
   );
+
+  async function refreshModelList() {
+    if (chatModelRefreshing) return;
+    setChatModelRefreshing(true);
+    try {
+      await apiJson(`${API}/ai/models/refresh`, { method: "POST" });
+      await refreshAiModels?.();
+      setStatus?.("Model list refreshed from providers");
+    } catch (e) {
+      setStatus?.(e.message || "Model refresh failed");
+    } finally {
+      setChatModelRefreshing(false);
+    }
+  }
 
   return (
     <DockWindow title="Chat" onGrip={onGrip} onGripDoubleClick={onGripDoubleClick}
