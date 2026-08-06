@@ -43,6 +43,7 @@
   --shadow-surface: 0 8px 24px rgba(0, 0, 0, 0.28);
   /* Floating-layer stacking scale — keep menus/tips ordered consistently. */
   --z-dock: 20;
+  --z-phone-overlay: 80;
   --z-popover: 1100;
   --z-ctxmenu: 1600;
   --z-refpopup: 2000;
@@ -677,6 +678,23 @@ body {
   white-space: pre-wrap;
   line-height: 1.45;
   font-size: 13px;
+}
+
+/* Area-selection crop on a note card — quote-style left border in the
+   highlight's color; clicking anywhere on the card already jumps the PDF. */
+.blockAreaSnap {
+  display: block;
+  margin-top: 8px;
+  max-width: min(100%, 340px);
+  height: auto;
+  border-left: 3px solid var(--border);
+  background: var(--bg-block);
+  border-radius: 0 4px 4px 0;
+}
+.blockAreaSnapPending {
+  width: min(100%, 340px);
+  min-height: 24px;
+  opacity: 0.5;
 }
 
 .sidebarFooter {
@@ -1948,7 +1966,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .phonePanel {
   position: absolute;
   inset: 0;
-  z-index: 80;
+  z-index: var(--z-phone-overlay);
   display: flex;
   background: var(--bg-surface);
 }
@@ -2806,12 +2824,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   flex-shrink: 0;
   align-self: center;
 }
-.uiBtn.chatCircleBtn.chatStopBtn { background: var(--bg-subtle); color: var(--text-primary); }
-.uiBtn.chatCircleBtn.chatStopBtn:hover:not(:disabled) { background: var(--bg-hover); }
-/* Voice dictation: mic / cancel / stop share the muted circle look; while
-   recording the row becomes × + live waveform + timer + ■/↑ (ChatGPT-style). */
-.uiBtn.chatCircleBtn.chatMicBtn { background: var(--bg-subtle); color: var(--text-primary); }
-.uiBtn.chatCircleBtn.chatMicBtn:hover:not(:disabled) { background: var(--bg-hover); }
+/* Stop + voice dictation (mic / cancel / stop) share the muted circle look;
+   while recording the row becomes × + live waveform + timer + ■/↑
+   (ChatGPT-style). */
+.uiBtn.chatCircleBtn:is(.chatStopBtn, .chatMicBtn) { background: var(--bg-subtle); color: var(--text-primary); }
+.uiBtn.chatCircleBtn:is(.chatStopBtn, .chatMicBtn):hover:not(:disabled) { background: var(--bg-hover); }
 .chatWaveCanvas {
   flex: 1;
   min-width: 40px;
@@ -2932,6 +2949,30 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .pdfLinkBox:hover {
   background: rgba(80, 140, 255, 0.14);
   outline: 1px solid rgba(80, 140, 255, 0.55);
+}
+
+/* Speech-bubble badge marking a highlight that carries a typed note.
+   Positioned inline (end of the last highlight rect); the PDF page is always
+   white, so fixed light colors — theme variables would go invisible on it. */
+.pdfNoteBadge {
+  position: absolute;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 50%;
+  background: #fff;
+  color: rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.pdfNoteBadge:hover {
+  color: #2563eb;
+  border-color: rgba(37, 99, 235, 0.6);
 }
 
 /* --- area notes (Ctrl+drag rectangle selection on the PDF) --- */

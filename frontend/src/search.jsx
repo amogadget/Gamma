@@ -166,7 +166,7 @@ export default function SearchPanel({
   focusedBlockId, homeBlocks, allFolderPaths,
   openBlock, pendingBlockScrollRef,
   pdfSearchRef, scrollToRef, setPdfHidden, docNonce,
-  onFindMarks,
+  onFindMarks, detailsDefault,
 }) {
   const [query, setQuery] = useState("");
   const [labels, setLabels] = useState([]); // confirmed filter chips
@@ -413,21 +413,13 @@ export default function SearchPanel({
     || linkHits.length || labelMatches.length || (showPdfMatches && pdfMatches.length) || libElsewhere.length;
 
   // One switch for the whole detail area (all the result lists). Its default
-  // comes from Settings → Search, with a separate key per place: on the home
-  // page the lists start expanded unless turned off ("gamma-search-details-home"
-  // — with no open PDF a compact find bar shows nothing), in a paper view the
-  // compact find bar is the default unless turned on ("gamma-search-details").
-  // Re-read each time the panel opens; the toggle button then only affects
+  // comes from Settings → Search via the detailsDefault prop (App owns the
+  // per-place preference: home expanded unless turned off — with no open PDF
+  // a compact find bar shows nothing — paper view compact unless turned on).
+  // Re-applied each time the panel opens; the toggle button then only affects
   // the current panel session.
-  const detailsDefault = () => {
-    try {
-      return focusedBlockId
-        ? localStorage.getItem("gamma-search-details") === "1"
-        : localStorage.getItem("gamma-search-details-home") !== "0";
-    } catch { return false; }
-  };
   const [showDetails, setShowDetails] = useState(detailsDefault);
-  useEffect(() => { if (open) setShowDetails(detailsDefault()); }, [open]);
+  useEffect(() => { if (open) setShowDetails(detailsDefault); }, [open]);
 
   const kindBadge = (r) => (
     r.kind === "highlight" ? <span className="searchKindBadge">highlight</span>

@@ -9,7 +9,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 // public/pdf.worker.min.mjs is the matching legacy worker — keep both legacy.
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
-import { ChevronRightIcon, LinkIcon, OutlineIcon } from "./icons";
+import { ChevronRightIcon, LinkIcon, MessageSquareIcon, OutlineIcon } from "./icons";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 // Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
 // Guarded: a throw at module scope takes down every route, PDF or not.
@@ -228,7 +228,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef, areaMode }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -1127,6 +1127,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
           onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
+          noteBadges={!!noteBadges}
           areaMode={canAnnotate ? !!areaMode : false}
           onAreaSelected={canAnnotate ? onAreaSelected : undefined}
           pendingArea={selPopup?.kind === "area" && selPopup.pageNumber === i + 1 ? selPopup : null}
@@ -1195,7 +1196,7 @@ function OutlineNode({ item, depth, onDest, onUrl }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea, areaMode }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1323,11 +1324,24 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       y2: clamp(Math.max(sy, cy) - box.top, box.height),
     });
     const detach = () => {
+      cancelAnimationFrame(moveRaf);
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp, true);
       document.removeEventListener("pointercancel", onCancel);
     };
-    function onMove(ev) { if (ev.pointerId === pointerId) setMarquee(toRect(ev.clientX, ev.clientY)); }
+    // High-rate pointers outpace frames, and each setMarquee re-renders the
+    // whole page (highlight rects, link boxes) — coalesce to one per frame.
+    let moveRaf = 0, moveX = 0, moveY = 0;
+    function onMove(ev) {
+      if (ev.pointerId !== pointerId) return;
+      moveX = ev.clientX;
+      moveY = ev.clientY;
+      if (moveRaf) return;
+      moveRaf = requestAnimationFrame(() => {
+        moveRaf = 0;
+        setMarquee(toRect(moveX, moveY));
+      });
+    }
     function onCancel(ev) {
       if (ev.pointerId !== pointerId) return;
       detach();
@@ -1455,6 +1469,24 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
             }}
             onContextMenu={function (e) { e.preventDefault(); if (onHighlightContext) onHighlightContext({ id: h.id, x: e.clientX, y: e.clientY }); }}
           />);
+        }
+        // Speech-bubble badge at the end of the passage when the user typed a
+        // note on the highlight — click behaves like clicking the highlight.
+        if (noteBadges && h.hasNote && rects.length) {
+          const r = rects[rects.length - 1];
+          elements.push(
+            <button key={h.id + "-note"} type="button" className="pdfNoteBadge" data-hl-id={h.id}
+              style={{
+                left: r.x2 * curW / storedW + 2,
+                top: r.y1 * curH / storedH - 8,
+              }}
+              title={h.comment?.text?.trim() || "This highlight has a note"}
+              onClick={(e) => { e.stopPropagation(); onHighlightJump?.(h.id, e.ctrlKey || e.metaKey); }}
+              onContextMenu={(e) => { e.preventDefault(); onHighlightContext?.({ id: h.id, x: e.clientX, y: e.clientY }); }}
+            >
+              <MessageSquareIcon size={10} strokeWidth={2.2} />
+            </button>
+          );
         }
         return elements;
       })}

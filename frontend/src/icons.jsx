@@ -45,6 +45,9 @@ export const LabelIcon = (p) => (
 export const XIcon = (p) => (
   <Icon {...p}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></Icon>
 );
+export const MessageSquareIcon = (p) => (
+  <Icon {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></Icon>
+);
 export const SearchIcon = (p) => (
   <Icon {...p}><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></Icon>
 );

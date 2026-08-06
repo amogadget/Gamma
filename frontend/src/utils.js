@@ -1,5 +1,7 @@
 // Small shared helpers: API base, fetch wrapper, ids, hashing, formatting.
 
+import { useEffect, useState } from "react";
+
 const API = "/api";
 
 // ---- Session identity guard -------------------------------------------------
@@ -15,6 +17,12 @@ let expectedUser = null;
 
 function setExpectedUser(user) {
   expectedUser = user || null;
+}
+
+// For the rare non-fetch transport (the backup-import XHR) that must carry
+// the same identity guard the fetch wrapper injects.
+function getExpectedUser() {
+  return expectedUser;
 }
 
 // Auth endpoints legitimately inspect or change the session — never guard them.
@@ -108,6 +116,32 @@ async function getDocIdForUrl(sourceUrl) {
   return (await sha256(sourceUrl)).slice(0, 24);
 }
 
+// A localStorage-persisted preference: reads the key once, writes on change.
+// `parse` maps the stored string to the state value (return undefined to fall
+// back to `initial`); `serialize` maps state back to a string. Plain strings
+// need neither.
+function usePersistedState(key, initial, { parse, serialize } = {}) {
+  const [value, setValue] = useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw == null) return initial;
+      const parsed = parse ? parse(raw) : raw;
+      return parsed === undefined ? initial : parsed;
+    } catch { return initial; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(key, serialize ? serialize(value) : String(value)); } catch {}
+  }, [key, value]);
+  return [value, setValue];
+}
+
+const FLAG_CODEC = { parse: (raw) => raw === "1", serialize: (v) => (v ? "1" : "0") };
+
+// Boolean variant, stored as "1"/"0".
+function usePersistedFlag(key, initial) {
+  return usePersistedState(key, initial, FLAG_CODEC);
+}
+
 async function apiJson(url, options = {}) {
   const r = await fetch(url, { ...options, credentials: "include" });
   if (r.status === 401) {
@@ -140,4 +174,4 @@ async function resolvePdfUrl(rawUrl, allowOa = true) {
   });
 }
 
-export { API, makeId, fmtBytes, sha256, getDocIdForUrl, apiJson, resolvePdfUrl, setExpectedUser };
+export { API, makeId, fmtBytes, sha256, getDocIdForUrl, apiJson, resolvePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag };

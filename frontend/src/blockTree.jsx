@@ -1,6 +1,6 @@
 // The Logseq-style outliner: block rows (markdown rendering, inline
 // editing, [[refs]], link chips, image drop), drag handles, and the tree.
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -13,6 +13,91 @@ import { FolderIcon, LinkIcon } from "./icons";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
+
+// A block's rendered markdown, memoized: any edit re-renders the whole tree
+// (setBlocks replaces it), and without the memo one keystroke re-ran
+// ReactMarkdown + KaTeX for every rendered block on the page. Re-parses only
+// when the content or a resolved [[ref]] chip label actually changes; ref
+// labels are resolved by the caller so the comparison here stays a string
+// check. onBlockRefClick is deliberately excluded from the comparison — the
+// caller passes an identity-stable wrapper.
+const BlockMarkdown = React.memo(function BlockMarkdown({ content, refLabels, onBlockRefClick }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeRaw, rehypeKatex]}
+      urlTransform={(url) => url.startsWith("blockref:") ? url : defaultUrlTransform(url)}
+      components={{
+        a: ({ href, children }) => {
+          if (href?.startsWith("blockref:")) {
+            const refId = href.slice(9);
+            const ref = refLabels?.[refId];
+            return (
+              <a
+                href={`?block=${refId}`}
+                className="blockRefChip"
+                title={ref?.page_title ? `From: ${ref.page_title}` : undefined}
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onBlockRefClick?.(refId);
+                }}
+              >
+                {ref?.content || String(children)}
+              </a>
+            );
+          }
+          return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+        }
+      }}
+    >
+      {content
+        .replace(/!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g, '<img src="$2" alt="$1" width="$3" />')
+        .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
+    </ReactMarkdown>
+  );
+}, (prev, next) =>
+  prev.content === next.content
+  && Object.keys(prev.refLabels).length === Object.keys(next.refLabels).length
+  && Object.entries(next.refLabels).every(([id, r]) =>
+    prev.refLabels[id]?.content === r.content && prev.refLabels[id]?.page_title === r.page_title)
+);
+
+// Area-highlight crops shown on note cards. Nothing is stored with the block —
+// the region is re-cropped from the loaded document (App's pdfCaptureRef) and
+// cached here per session, keyed by the rect, so scrolling the notes doesn't
+// re-render the same crop and an edited rect gets a fresh one.
+const _areaSnapCache = new Map();
+function AreaSnapshot({ block, captureArea, docNonce }) {
+  const r = block.position?.boundingRect;
+  const key = `${block.highlightId}:${r?.pageNumber}:${r?.x1},${r?.y1},${r?.x2},${r?.y2}`;
+  const [src, setSrc] = useState(() => _areaSnapCache.get(key) || null);
+  useEffect(() => {
+    const cached = _areaSnapCache.get(key);
+    if (cached) { setSrc(cached); return; }
+    setSrc(null);
+    let cancelled = false;
+    // docNonce re-runs this once the PDF finishes loading — the first attempt
+    // can land before the viewer has a document and resolve to null.
+    Promise.resolve(captureArea?.(block)).then((img) => {
+      if (cancelled || !img) return;
+      _areaSnapCache.set(key, img);
+      while (_areaSnapCache.size > 60) _areaSnapCache.delete(_areaSnapCache.keys().next().value);
+      setSrc(img);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [key, captureArea, docNonce]);
+  // Reserve the crop's aspect ratio while it renders so the card doesn't jump.
+  const ratio = r && r.y2 > r.y1 ? (r.x2 - r.x1) / (r.y2 - r.y1) : null;
+  return src ? (
+    <img className="blockAreaSnap" src={src} alt="Area selection" draggable={false}
+      style={{ borderLeftColor: block.color || undefined }} />
+  ) : (
+    <div className="blockAreaSnap blockAreaSnapPending"
+      style={{ aspectRatio: ratio || undefined, borderLeftColor: block.color || undefined }} />
+  );
+}
 
 function BlockRow({
   block,
@@ -46,9 +131,28 @@ function BlockRow({
   onBlockDragOver,
   onBlockDragLeave,
   onBlockDrop,
+  captureArea,
+  docNonce,
 }) {
   const ref = useRef(null);
   const clickPosRef = useRef(null);
+  // Identity-stable wrapper so the memoized BlockMarkdown never sees a fresh
+  // callback (rowProps closures are rebuilt every App render) yet always
+  // calls the latest one — same idiom as pdfViewer's stableCbs.
+  const refClickRef = useRef(null);
+  refClickRef.current = onBlockRefClick;
+  const stableRefClick = useRef((id) => refClickRef.current?.(id)).current;
+  // Resolve [[ref]] chip labels here (cheap per render) so BlockMarkdown's
+  // memo can compare them as strings instead of depending on allBlocks,
+  // whose identity changes on every edit.
+  const refLabels = useMemo(() => {
+    const out = {};
+    for (const [, id] of (block.content || "").matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)) {
+      const rb = allBlocks?.find((b) => b.id === id) || refCache?.[id];
+      if (rb) out[id] = { content: rb.content, page_title: rb.page_title };
+    }
+    return out;
+  }, [block.content, allBlocks, refCache]);
   const [refPopup, setRefPopup] = useState(null); // { query, rect }
   const [refSelectedIdx, setRefSelectedIdx] = useState(0);
   const [searchResults, setSearchResults] = useState([]);
@@ -359,39 +463,7 @@ function BlockRow({
           ) : (
             <div className="blockRendered">
               {(block.content || "").trim() ? (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[rehypeRaw, rehypeKatex]}
-                  urlTransform={(url) => url.startsWith("blockref:") ? url : defaultUrlTransform(url)}
-                  components={{
-                    a: ({ href, children }) => {
-                      if (href?.startsWith("blockref:")) {
-                        const refId = href.slice(9);
-                        const refBlock = allBlocks?.find((b) => b.id === refId) || refCache?.[refId];
-                        return (
-                          <a
-                            href={`?block=${refId}`}
-                            className="blockRefChip"
-                            title={refBlock?.page_title ? `From: ${refBlock.page_title}` : undefined}
-                            onClick={(e) => {
-                              if (e.metaKey || e.ctrlKey) return;
-                              e.preventDefault();
-                              e.stopPropagation();
-                              onBlockRefClick?.(refId);
-                            }}
-                          >
-                            {refBlock?.content || String(children)}
-                          </a>
-                        );
-                      }
-                      return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
-                    }
-                  }}
-                >
-                  {(block.content || "")
-                    .replace(/!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g, '<img src="$2" alt="$1" width="$3" />')
-                    .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
-                </ReactMarkdown>
+                <BlockMarkdown content={block.content || ""} refLabels={refLabels} onBlockRefClick={stableRefClick} />
               ) : (
                 <div className="blockPlaceholder">(empty)</div>
               )}
@@ -402,6 +474,9 @@ function BlockRow({
             <div className="blockQuote">
               {block.quote}
             </div>
+          ) : null}
+          {block.position?.area && captureArea ? (
+            <AreaSnapshot block={block} captureArea={captureArea} docNonce={docNonce} />
           ) : null}
           {(block.properties?.link_url || block.properties?.link_page_id) ? (
             <button
