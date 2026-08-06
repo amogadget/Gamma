@@ -1272,6 +1272,13 @@ export default function App() {
   const [pdfDocNonce, setPdfDocNonce] = useState(0); // bumped when a document finishes rendering
   const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rects, pageW, pageH}]
   const pdfCaptureRef = useRef(null); // set by PdfViewer: async (areaHighlight) => PNG data URL (re-crops the rect from the document)
+  // Stable wrapper for the notes tree's area-snapshot cards (a fresh function
+  // every render would re-fire each card's crop effect). Resolves null until
+  // the viewer has a document.
+  const capturePdfArea = useCallback(
+    (b) => pdfCaptureRef.current ? pdfCaptureRef.current({ position: b.position }) : Promise.resolve(null),
+    [],
+  );
 
   // Poll server-side task progress: slow heartbeat while logged in (so the
   // button appears even if the work was kicked off elsewhere), fast while
@@ -4599,6 +4606,11 @@ export default function App() {
                   },
                   registerRef,
                   readOnly,
+                  // Area-highlight cards show their crop, re-rendered from the
+                  // loaded document each session (never stored, same as the
+                  // chat attach); docNonce retries crops once the PDF is up.
+                  captureArea: capturePdfArea,
+                  docNonce: pdfDocNonce,
                   allBlocks: flattenBlocks(blocks),
                   highlightColors: Object.fromEntries(highlights.map(h => [h.id, h.color])),
                   refCache,

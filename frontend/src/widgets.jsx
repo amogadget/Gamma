@@ -37,7 +37,10 @@ function DockWindow({ title, onGrip, onGripDoubleClick, onClose, headerContent, 
 // deliberately omits rehypeRaw: model output is untrusted, so raw HTML stays inert.
 // Models often emit \( \) / \[ \] LaTeX delimiters, which remark-math doesn't
 // recognize — normalize them to $ / $$ so math always renders.
-function ChatMarkdown({ text }) {
+// Memoized: the chat input re-renders all of ChatDock on every keystroke,
+// and without the memo each keypress re-ran ReactMarkdown + KaTeX over every
+// AI message in the conversation — visible typing lag on long chats.
+const ChatMarkdown = React.memo(function ChatMarkdown({ text }) {
   const normalized = useMemo(() => (text || "")
     .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `\n$$\n${m}\n$$\n`)
     .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`), [text]);
@@ -52,7 +55,7 @@ function ChatMarkdown({ text }) {
       {normalized}
     </ReactMarkdown>
   );
-}
+});
 
 const AutoGrowTextarea = React.forwardRef(function AutoGrowTextarea(props, forwardedRef) {
   const innerRef = useRef(null);

@@ -679,6 +679,23 @@ body {
   font-size: 13px;
 }
 
+/* Area-selection crop on a note card — quote-style left border in the
+   highlight's color; clicking anywhere on the card already jumps the PDF. */
+.blockAreaSnap {
+  display: block;
+  margin-top: 8px;
+  max-width: min(100%, 340px);
+  height: auto;
+  border-left: 3px solid var(--border);
+  background: var(--bg-block);
+  border-radius: 0 4px 4px 0;
+}
+.blockAreaSnapPending {
+  width: min(100%, 340px);
+  min-height: 24px;
+  opacity: 0.5;
+}
+
 .sidebarFooter {
   position: sticky;
   bottom: 0;

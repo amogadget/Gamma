@@ -14,6 +14,41 @@ import { FolderIcon, LinkIcon } from "./icons";
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
 
+// Area-highlight crops shown on note cards. Nothing is stored with the block —
+// the region is re-cropped from the loaded document (App's pdfCaptureRef) and
+// cached here per session, keyed by the rect, so scrolling the notes doesn't
+// re-render the same crop and an edited rect gets a fresh one.
+const _areaSnapCache = new Map();
+function AreaSnapshot({ block, captureArea, docNonce }) {
+  const r = block.position?.boundingRect;
+  const key = `${block.highlightId}:${r?.pageNumber}:${r?.x1},${r?.y1},${r?.x2},${r?.y2}`;
+  const [src, setSrc] = useState(() => _areaSnapCache.get(key) || null);
+  useEffect(() => {
+    const cached = _areaSnapCache.get(key);
+    if (cached) { setSrc(cached); return; }
+    setSrc(null);
+    let cancelled = false;
+    // docNonce re-runs this once the PDF finishes loading — the first attempt
+    // can land before the viewer has a document and resolve to null.
+    Promise.resolve(captureArea?.(block)).then((img) => {
+      if (cancelled || !img) return;
+      _areaSnapCache.set(key, img);
+      while (_areaSnapCache.size > 60) _areaSnapCache.delete(_areaSnapCache.keys().next().value);
+      setSrc(img);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [key, captureArea, docNonce]);
+  // Reserve the crop's aspect ratio while it renders so the card doesn't jump.
+  const ratio = r && r.y2 > r.y1 ? (r.x2 - r.x1) / (r.y2 - r.y1) : null;
+  return src ? (
+    <img className="blockAreaSnap" src={src} alt="Area selection" draggable={false}
+      style={{ borderLeftColor: block.color || undefined }} />
+  ) : (
+    <div className="blockAreaSnap blockAreaSnapPending"
+      style={{ aspectRatio: ratio || undefined, borderLeftColor: block.color || undefined }} />
+  );
+}
+
 function BlockRow({
   block,
   depth,
@@ -46,6 +81,8 @@ function BlockRow({
   onBlockDragOver,
   onBlockDragLeave,
   onBlockDrop,
+  captureArea,
+  docNonce,
 }) {
   const ref = useRef(null);
   const clickPosRef = useRef(null);
@@ -402,6 +439,9 @@ function BlockRow({
             <div className="blockQuote">
               {block.quote}
             </div>
+          ) : null}
+          {block.position?.area && captureArea ? (
+            <AreaSnapshot block={block} captureArea={captureArea} docNonce={docNonce} />
           ) : null}
           {(block.properties?.link_url || block.properties?.link_page_id) ? (
             <button
