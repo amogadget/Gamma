@@ -114,6 +114,21 @@ function MetaModelRow({ value }) {
   );
 }
 
+// Kick off a full search-index rebuild. Shared by the library-status pane and
+// the Search pane — only the phrasing after the scheduled count differs.
+async function requestReindex(setStatus, scheduledSuffix) {
+  try {
+    const result = await apiJson(`${API}/search-reindex`, { method: "POST" });
+    setStatus(result.busy
+      ? "Indexing is already running—see the tasks popover."
+      : result.scheduled
+        ? `Re-indexing ${result.scheduled} paper${result.scheduled === 1 ? "" : "s"} ${scheduledSuffix}`
+        : "No papers with PDFs to index.");
+  } catch (err) {
+    setStatus(`Reindex failed: ${err.message}`);
+  }
+}
+
 // Library-wide health: per paper, whether metadata resolved, whether the PDF
 // yielded extractable text, and whether the search index covers it — with
 // batch retry (selected / missing / all) for the metadata lookups. Text and
@@ -189,18 +204,7 @@ function MetaStatusSection({ value }) {
     refresh();
   }
 
-  async function reindex() {
-    try {
-      const result = await apiJson(`${API}/search-reindex`, { method: "POST" });
-      value.setStatus(result.busy
-        ? "Indexing is already running—see the tasks popover."
-        : result.scheduled
-          ? `Re-indexing ${result.scheduled} paper${result.scheduled === 1 ? "" : "s"} — text status fills in as it runs.`
-          : "No papers with PDFs to index.");
-    } catch (err) {
-      value.setStatus(`Reindex failed: ${err.message}`);
-    }
-  }
+  const reindex = () => requestReindex(value.setStatus, "— text status fills in as it runs.");
 
   function toggle(id) {
     setSelected((prev) => {
@@ -669,18 +673,7 @@ function ContextSettings({ value }) {
 }
 
 function SearchSettings({ value }) {
-  async function rebuild() {
-    try {
-      const result = await apiJson(`${API}/search-reindex`, { method: "POST" });
-      value.setStatus(result.busy
-        ? "Indexing is already running—see the tasks popover."
-        : result.scheduled
-          ? `Re-indexing ${result.scheduled} paper${result.scheduled === 1 ? "" : "s"} in the background.`
-          : "No papers with PDFs to index.");
-    } catch (error) {
-      value.setStatus(`Reindex failed: ${error.message}`);
-    }
-  }
+  const rebuild = () => requestReindex(value.setStatus, "in the background.");
   return (
     <>
       <PaneIntro title="Search">
@@ -706,6 +699,39 @@ function SearchSettings({ value }) {
         <button className="uiBtn sm" disabled={value.indexTask?.active} onClick={rebuild}>
           {value.indexTask?.active ? "Indexing…" : "Rebuild"}
         </button>
+      </div>
+    </>
+  );
+}
+
+// Newest-first log list with a Copy button — one rendering for the session
+// log and the admin server log. Entries are normalized to {key, timeMs, text}.
+function LogBox({ label, description, entries, emptyText, copyStatus, setStatus }) {
+  function copy() {
+    const text = entries
+      .map((entry) => `${new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })} ${entry.text}`)
+      .join("\n");
+    navigator.clipboard?.writeText(text).then(
+      () => setStatus(copyStatus),
+      () => setStatus("Copy failed—copy manually."),
+    );
+  }
+  return (
+    <>
+      <div className="settingRow">
+        <span className="settingText">
+          <span className="settingLabel">{label}</span>
+          <span className="settingDesc">{description}</span>
+        </span>
+        <button className="uiBtn sm" disabled={!entries.length} onClick={copy}>Copy</button>
+      </div>
+      <div className="sysLogBox">
+        {entries.length ? [...entries].reverse().map((entry) => (
+          <div key={entry.key} className="sysLogRow">
+            <span className="sysLogTime">{new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })}</span>
+            <span className="sysLogMsg">{entry.text}</span>
+          </div>
+        )) : <div className="sysLogEmpty">{emptyText}</div>}
       </div>
     </>
   );
@@ -739,53 +765,26 @@ function ServerLogBox({ setStatus }) {
     const timer = setInterval(poll, 2000);
     return () => { alive = false; clearInterval(timer); };
   }, []);
-  function copyServerLog() {
-    const text = stateRef.current.entries
-      .map((entry) => `${new Date(entry.t * 1000).toLocaleTimeString([], { hour12: false })} ${entry.level} ${entry.msg}`)
-      .join("\n");
-    navigator.clipboard?.writeText(text).then(
-      () => setStatus("Server log copied."),
-      () => setStatus("Copy failed—copy manually."),
-    );
-  }
-  const shown = entries || [];
+  const shown = (entries || []).map((entry) => ({
+    key: entry.seq,
+    timeMs: entry.t * 1000,
+    text: `${entry.level !== "INFO" ? `[${entry.level}] ` : ""}${entry.msg}`,
+  }));
   return (
-    <>
-      <div className="settingRow">
-        <span className="settingText">
-          <span className="settingLabel">Server log</span>
-          <span className="settingDesc">Backend events since the server started, newest first. Secrets are masked; visible to admins only.</span>
-        </span>
-        <button className="uiBtn sm" disabled={!shown.length} onClick={copyServerLog}>Copy</button>
-      </div>
-      <div className="sysLogBox">
-        {shown.length ? [...shown].reverse().map((entry) => (
-          <div key={entry.seq} className="sysLogRow">
-            <span className="sysLogTime">{new Date(entry.t * 1000).toLocaleTimeString([], { hour12: false })}</span>
-            <span className="sysLogMsg">{entry.level !== "INFO" ? `[${entry.level}] ` : ""}{entry.msg}</span>
-          </div>
-        )) : (
-          <div className="sysLogEmpty">
-            {error ? `Server log unavailable: ${error}`
-              : entries ? "Nothing logged since the server started."
-                : "Loading…"}
-          </div>
-        )}
-      </div>
-    </>
+    <LogBox
+      label="Server log"
+      description="Backend events since the server started, newest first. Secrets are masked; visible to admins only."
+      entries={shown}
+      emptyText={error ? `Server log unavailable: ${error}`
+        : entries ? "Nothing logged since the server started."
+          : "Loading…"}
+      copyStatus="Server log copied."
+      setStatus={setStatus}
+    />
   );
 }
 
 function DiagnosticsSettings({ value }) {
-  function copyLog() {
-    const text = value.sysLog
-      .map((entry) => `${new Date(entry.t).toLocaleTimeString([], { hour12: false })} ${entry.msg}`)
-      .join("\n");
-    navigator.clipboard?.writeText(text).then(
-      () => value.setStatus("Log copied."),
-      () => value.setStatus("Copy failed—copy manually."),
-    );
-  }
   return (
     <>
       <PaneIntro title="Diagnostics">
@@ -803,21 +802,14 @@ function DiagnosticsSettings({ value }) {
         checked={value.debugLog}
         onChange={value.setDebugLog}
       />
-      <div className="settingRow">
-        <span className="settingText">
-          <span className="settingLabel">System log</span>
-          <span className="settingDesc">Application events from this session, newest first.</span>
-        </span>
-        <button className="uiBtn sm" disabled={!value.sysLog.length} onClick={copyLog}>Copy</button>
-      </div>
-      <div className="sysLogBox">
-        {value.sysLog.length ? [...value.sysLog].reverse().map((entry, index) => (
-          <div key={value.sysLog.length - index} className="sysLogRow">
-            <span className="sysLogTime">{new Date(entry.t).toLocaleTimeString([], { hour12: false })}</span>
-            <span className="sysLogMsg">{entry.msg}</span>
-          </div>
-        )) : <div className="sysLogEmpty">Nothing logged yet this session.</div>}
-      </div>
+      <LogBox
+        label="System log"
+        description="Application events from this session, newest first."
+        entries={value.sysLog.map((entry, index) => ({ key: index, timeMs: entry.t, text: entry.msg }))}
+        emptyText="Nothing logged yet this session."
+        copyStatus="Log copied."
+        setStatus={value.setStatus}
+      />
       {value.isAdmin ? <ServerLogBox setStatus={value.setStatus} /> : null}
     </>
   );

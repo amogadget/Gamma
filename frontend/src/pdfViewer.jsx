@@ -1323,11 +1323,24 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       y2: clamp(Math.max(sy, cy) - box.top, box.height),
     });
     const detach = () => {
+      cancelAnimationFrame(moveRaf);
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp, true);
       document.removeEventListener("pointercancel", onCancel);
     };
-    function onMove(ev) { if (ev.pointerId === pointerId) setMarquee(toRect(ev.clientX, ev.clientY)); }
+    // High-rate pointers outpace frames, and each setMarquee re-renders the
+    // whole page (highlight rects, link boxes) — coalesce to one per frame.
+    let moveRaf = 0, moveX = 0, moveY = 0;
+    function onMove(ev) {
+      if (ev.pointerId !== pointerId) return;
+      moveX = ev.clientX;
+      moveY = ev.clientY;
+      if (moveRaf) return;
+      moveRaf = requestAnimationFrame(() => {
+        moveRaf = 0;
+        setMarquee(toRect(moveX, moveY));
+      });
+    }
     function onCancel(ev) {
       if (ev.pointerId !== pointerId) return;
       detach();

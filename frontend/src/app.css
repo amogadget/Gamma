@@ -43,6 +43,7 @@
   --shadow-surface: 0 8px 24px rgba(0, 0, 0, 0.28);
   /* Floating-layer stacking scale — keep menus/tips ordered consistently. */
   --z-dock: 20;
+  --z-phone-overlay: 80;
   --z-popover: 1100;
   --z-ctxmenu: 1600;
   --z-refpopup: 2000;
@@ -1965,7 +1966,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .phonePanel {
   position: absolute;
   inset: 0;
-  z-index: 80;
+  z-index: var(--z-phone-overlay);
   display: flex;
   background: var(--bg-surface);
 }
@@ -2823,12 +2824,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   flex-shrink: 0;
   align-self: center;
 }
-.uiBtn.chatCircleBtn.chatStopBtn { background: var(--bg-subtle); color: var(--text-primary); }
-.uiBtn.chatCircleBtn.chatStopBtn:hover:not(:disabled) { background: var(--bg-hover); }
-/* Voice dictation: mic / cancel / stop share the muted circle look; while
-   recording the row becomes × + live waveform + timer + ■/↑ (ChatGPT-style). */
-.uiBtn.chatCircleBtn.chatMicBtn { background: var(--bg-subtle); color: var(--text-primary); }
-.uiBtn.chatCircleBtn.chatMicBtn:hover:not(:disabled) { background: var(--bg-hover); }
+/* Stop + voice dictation (mic / cancel / stop) share the muted circle look;
+   while recording the row becomes × + live waveform + timer + ■/↑
+   (ChatGPT-style). */
+.uiBtn.chatCircleBtn:is(.chatStopBtn, .chatMicBtn) { background: var(--bg-subtle); color: var(--text-primary); }
+.uiBtn.chatCircleBtn:is(.chatStopBtn, .chatMicBtn):hover:not(:disabled) { background: var(--bg-hover); }
 .chatWaveCanvas {
   flex: 1;
   min-width: 40px;

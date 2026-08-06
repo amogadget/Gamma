@@ -395,9 +395,7 @@ export default function ChatDock({
       if (dictationModel) form.append("model", dictationModel);
       if (dictationLang) form.append("language", dictationLang);
       if (chatModel) form.append("model_hint", chatModel);
-      const r = await fetch(`${API}/ai/transcribe`, { method: "POST", credentials: "include", body: form });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(data.detail || `transcription failed (${r.status})`);
+      const data = await apiJson(`${API}/ai/transcribe`, { method: "POST", body: form });
       const text = (data.text || "").trim();
       if (text && rec.autoSend) {
         setChatInput("");
@@ -422,6 +420,7 @@ export default function ChatDock({
     if (!canvas || !rec?.analyser) return;
     const ctx = canvas.getContext("2d");
     const data = new Uint8Array(rec.analyser.fftSize);
+    const barColor = getComputedStyle(canvas).color; // fixed for the recording
     let raf, lastPush = 0;
     const draw = (now) => {
       raf = requestAnimationFrame(draw);
@@ -440,7 +439,7 @@ export default function ChatDock({
       if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
-      ctx.strokeStyle = getComputedStyle(canvas).color;
+      ctx.strokeStyle = barColor;
       ctx.lineWidth = 2;
       ctx.lineCap = "round";
       const cursorX = w - 3;

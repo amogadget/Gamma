@@ -104,15 +104,16 @@ function PopoverAnchor({ name, children, className = "" }) {
 function OpenTabs({
   tabs,
   activeId,
-  draggingId,
   tabElements,
-  dragTab,
-  onDraggingChange,
   onReorder,
   onOpen,
   onClose,
   onContext,
 }) {
+  // Drag-reorder bookkeeping is private to the strip: the dragged tab id as a
+  // ref (read during dragover) with a state twin for the .dragging style.
+  const dragTab = useRef(null);
+  const [draggingId, setDraggingId] = useState(null);
   return (
     <div className="tabStrip" role="tablist">
       {tabs.map((tab) => (
@@ -128,12 +129,12 @@ function OpenTabs({
           draggable
           onDragStart={(event) => {
             dragTab.current = tab.id;
-            onDraggingChange(tab.id);
+            setDraggingId(tab.id);
             event.dataTransfer.effectAllowed = "move";
           }}
           onDragEnd={() => {
             dragTab.current = null;
-            onDraggingChange(null);
+            setDraggingId(null);
           }}
           onDragOver={(event) => {
             const draggedId = dragTab.current;

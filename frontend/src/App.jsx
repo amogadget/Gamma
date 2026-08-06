@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS, clampZoom } from "./pdfViewer";
-import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl, setExpectedUser } from "./utils";
+import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag } from "./utils";
 import {
   BlockDropIndicator,
   ChatMarkdown,
@@ -69,6 +69,15 @@ import {
 // fail closed (ignored) rather than show a spurious error row.
 const TRANSFER_PHASES = new Set(["start", "progress", "done", "cached", "error", "cancelled"]);
 
+// Codec for the AI context-size preferences (chars of extracted PDF text):
+// clamp stored values to a sane range, fall back to the default otherwise.
+const CONTEXT_CHARS_CODEC = {
+  parse: (raw) => {
+    const value = Number.parseInt(raw, 10);
+    return Number.isFinite(value) && value >= 100 && value <= 1000000 ? value : undefined;
+  },
+};
+
 // Phone detection: below 700px the desktop dock system is unusable, so the
 // workspace switches to a single full-width panel with a bottom tab bar. The
 // second clause keeps a rotated (landscape) phone in the phone layout — the
@@ -111,32 +120,38 @@ export default function App() {
   // tab behind SessionConflictPage until reload.
   const [sessionConflict, setSessionConflict] = useState(null);
 
+  // This tab's real signed-in user — null while loading, logged out, or in a
+  // public share view.
+  const sessionUser = authUser && authUser.user && authUser.user !== "_public" ? authUser.user : null;
+
   // Publish this tab's identity: the X-Gamma-User guard header on API calls
   // (utils.js fetch wrapper) plus a localStorage beacon other tabs listen to.
   useEffect(() => {
-    const me = authUser && authUser.user && authUser.user !== "_public" ? authUser.user : null;
-    setExpectedUser(me);
-    if (me) {
-      try { localStorage.setItem("gamma-active-user", me); } catch {}
+    setExpectedUser(sessionUser);
+    if (sessionUser) {
+      try { localStorage.setItem("gamma-active-user", sessionUser); } catch {}
     }
-  }, [authUser]);
+  }, [sessionUser]);
 
   // Detect the session being taken over by another account. Three signals:
   // the backend's 409 on a guarded API call, the localStorage beacon from the
-  // tab that logged in, and a session re-check when this tab regains focus.
+  // tab that logged in, and a session re-check when this tab regains focus
+  // (throttled — alt-tab flapping must not hammer the server).
   useEffect(() => {
-    if (readOnly) return;
-    const me = authUser && authUser.user && authUser.user !== "_public" ? authUser.user : null;
-    if (!me) return;
+    if (readOnly || !sessionUser) return;
     function conflict(who) {
-      if (who && who !== me) setSessionConflict(who);
+      if (who && who !== sessionUser) setSessionConflict(who);
       else if (!who) setAuthUser(false); // logged out elsewhere → login page
     }
     function onMismatch(e) { conflict(e.detail?.user || ""); }
     function onStorage(e) {
       if (e.key === "gamma-active-user" && e.newValue !== null) conflict(e.newValue);
     }
+    let lastCheck = 0;
     function onFocus() {
+      const now = Date.now();
+      if (now - lastCheck < 15000) return;
+      lastCheck = now;
       apiJson(`${API}/session`).then((d) => conflict(d.user || "")).catch(() => {});
     }
     window.addEventListener("gamma-user-mismatch", onMismatch);
@@ -147,7 +162,7 @@ export default function App() {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("focus", onFocus);
     };
-  }, [authUser, readOnly]);
+  }, [sessionUser, readOnly]);
 
   async function checkSession() {
     try {
@@ -219,12 +234,19 @@ export default function App() {
       const reader = res.body.getReader();
       const chunks = [];
       let loaded = 0;
+      // Progress lands per ~64 KB network chunk and each pill/transfer update
+      // re-renders the whole app — coalesce to visible changes (1% / 200 ms).
+      let lastPct = -1, lastUiAt = 0;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         chunks.push(value);
         loaded += value.length;
         const pct = total ? Math.min(99, Math.floor((loaded / total) * 100)) : null;
+        const now = performance.now();
+        if (pct === lastPct && now - lastUiAt < 200) continue;
+        lastPct = pct;
+        lastUiAt = now;
         postPill("backup", {
           msg: total
             ? `Downloading backup… ${pct}% (${fmtBytes(loaded)} of ${fmtBytes(total)})`
@@ -298,8 +320,15 @@ export default function App() {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API}/import-data?mode=${mode}`);
     xhr.withCredentials = true;
+    // XHR bypasses the window.fetch wrapper, so the tab-identity guard header
+    // must be set by hand — this is the most destructive endpoint in the app.
+    const expected = getExpectedUser();
+    if (expected) xhr.setRequestHeader("X-Gamma-User", expected);
+    let lastPct = -1;
     xhr.upload.onprogress = (e) => {
       const pct = e.total ? Math.min(99, Math.floor((e.loaded / e.total) * 100)) : null;
+      if (pct === lastPct) return; // only re-render on a visible change
+      lastPct = pct;
       postPill("backup", { msg: pct == null ? "Uploading backup…" : `Uploading backup… ${pct}%`, spinner: true });
       if (e.total) updateTransfer(tid, { info: `${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}` });
     };
@@ -368,21 +397,9 @@ export default function App() {
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   // Home feed: sort criterion + how many rows are rendered (grows on scroll).
-  const [homeSort, setHomeSort] = useState(() => {
-    try { return localStorage.getItem("gamma-home-sort") || "updated"; } catch { return "updated"; }
-  });
-  function changeHomeSort(v) {
-    setHomeSort(v);
-    try { localStorage.setItem("gamma-home-sort", v); } catch {}
-  }
+  const [homeSort, changeHomeSort] = usePersistedState("gamma-home-sort", "updated");
   // Home layout: "list" (block-style rows) or "grid" (icon tiles).
-  const [homeView, setHomeView] = useState(() => {
-    try { return localStorage.getItem("gamma-home-view") || "list"; } catch { return "list"; }
-  });
-  function changeHomeView(v) {
-    setHomeView(v);
-    try { localStorage.setItem("gamma-home-view", v); } catch {}
-  }
+  const [homeView, changeHomeView] = usePersistedState("gamma-home-view", "list");
   const HOME_PAGE_CHUNK = 30;
   const [homeShowCount, setHomeShowCount] = useState(HOME_PAGE_CHUNK);
   useEffect(() => { setHomeShowCount(HOME_PAGE_CHUNK); }, [folderFilter, homeSort]);
@@ -469,9 +486,8 @@ export default function App() {
   const lastPageClickRef = useRef(null); // anchor for shift-range selection
   const [homeMenu, setHomeMenu] = useState(null); // {kind:"page"|"folder", id?, name, x, y}
   const [folderRenaming, setFolderRenaming] = useState(null); // {name, draft}
-  const [movePicker, setMovePicker] = useState(false);
 
-  function clearSelection() { setSelectedPages(new Set()); setSelectedFolders(new Set()); setMovePicker(false); }
+  function clearSelection() { setSelectedPages(new Set()); setSelectedFolders(new Set()); }
 
   // Modern file-manager semantics: plain click SELECTS, double-click opens.
   // Ctrl/Cmd toggles a single item; Shift extends a range from the last click.
@@ -505,7 +521,6 @@ export default function App() {
     }
     // Plain click: select just this page (replacing any prior selection).
     lastPageClickRef.current = id;
-    setMovePicker(false);
     setSelectedFolders(new Set());
     setSelectedPages(new Set([id]));
   }
@@ -529,7 +544,6 @@ export default function App() {
       });
       return;
     }
-    setMovePicker(false);
     setSelectedPages(new Set());
     setSelectedFolders(new Set([path]));
   }
@@ -789,14 +803,9 @@ export default function App() {
   // Debug log level (Settings → Diagnostics): when on, position-tracking and
   // sync events go to the system log (and the console), so a lost reading
   // position can be traced from any device — the log pane has a Copy button.
-  const [debugLog, setDebugLog] = useState(() => {
-    try { return localStorage.getItem("gamma-debug-log") === "1"; } catch { return false; }
-  });
+  const [debugLog, setDebugLog] = usePersistedFlag("gamma-debug-log", false);
   const debugLogRef = useRef(debugLog);
-  useEffect(() => {
-    debugLogRef.current = debugLog;
-    try { localStorage.setItem("gamma-debug-log", debugLog ? "1" : "0"); } catch {}
-  }, [debugLog]);
+  useEffect(() => { debugLogRef.current = debugLog; }, [debugLog]);
   const dbg = useCallback((...args) => {
     if (!debugLogRef.current) return;
     const msg = "dbg: " + args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
@@ -1116,8 +1125,6 @@ export default function App() {
       return next;
     });
   }
-  const dragTabRef = useRef(null); // tab id being drag-reordered
-  const [draggingTabId, setDraggingTabId] = useState(null);
   const [tabMenu, setTabMenu] = useState(null); // {id, pinned, x, y} — tab right-click menu
   // FLIP animation: when tab order changes, slide each tab from its old
   // position to the new one (Chrome-style), instead of snapping.
@@ -1337,49 +1344,19 @@ export default function App() {
   }, []);
   const [pdfHidden, setPdfHidden] = useState(false);
   const [pdfScale, setPdfScale] = useState("page-width");
-  const [pdfSaveLocal, setPdfSaveLocal] = useState(() => {
-    try { return localStorage.getItem("gamma-pdf-save") !== "0"; } catch { return true; }
-  });
+  const [pdfSaveLocal, setPdfSaveLocal] = usePersistedFlag("gamma-pdf-save", true);
   // User preferences (Settings in the account popover)
-  const [oaFallback, setOaFallback] = useState(() => {
-    try { return localStorage.getItem("gamma-oa-fallback") !== "0"; } catch { return true; }
-  });
-  const [metaAutoFetch, setMetaAutoFetch] = useState(() => {
-    try { return localStorage.getItem("gamma-meta-auto") !== "0"; } catch { return true; }
-  });
+  const [oaFallback, setOaFallback] = usePersistedFlag("gamma-oa-fallback", true);
+  const [metaAutoFetch, setMetaAutoFetch] = usePersistedFlag("gamma-meta-auto", true);
   // Search popover: whether the result-detail lists start expanded, one
-  // default per place (SearchPanel re-reads the keys each time it opens).
+  // default per place (SearchPanel receives them each time it opens).
   // Home page: expanded unless turned off — with no open PDF the compact
   // find bar shows nothing. Paper view: compact find unless turned on.
-  const [searchDetailsHome, setSearchDetailsHome] = useState(() => {
-    try { return localStorage.getItem("gamma-search-details-home") !== "0"; } catch { return true; }
-  });
-  const [searchDetailsPaper, setSearchDetailsPaper] = useState(() => {
-    try { return localStorage.getItem("gamma-search-details") === "1"; } catch { return false; }
-  });
+  const [searchDetailsHome, setSearchDetailsHome] = usePersistedFlag("gamma-search-details-home", true);
+  const [searchDetailsPaper, setSearchDetailsPaper] = usePersistedFlag("gamma-search-details", false);
   // The always-on status bar under the tabs — off by default, the floating
   // pill carries user-facing messages; the bar is a debugging aid.
-  const [statusBarVisible, setStatusBarVisible] = useState(() => {
-    try { return localStorage.getItem("gamma-status-bar") === "1"; } catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-status-bar", statusBarVisible ? "1" : "0"); } catch {}
-  }, [statusBarVisible]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-pdf-save", pdfSaveLocal ? "1" : "0"); } catch {}
-  }, [pdfSaveLocal]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-oa-fallback", oaFallback ? "1" : "0"); } catch {}
-  }, [oaFallback]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-meta-auto", metaAutoFetch ? "1" : "0"); } catch {}
-  }, [metaAutoFetch]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-search-details-home", searchDetailsHome ? "1" : "0"); } catch {}
-  }, [searchDetailsHome]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-search-details", searchDetailsPaper ? "1" : "0"); } catch {}
-  }, [searchDetailsPaper]);
+  const [statusBarVisible, setStatusBarVisible] = usePersistedFlag("gamma-status-bar", false);
   const pageTitleSaveTimerRef = useRef(null);
   const viewerWrapRef = useRef(null);
   const pdfRetryRef = useRef(null); // set by PdfViewer: re-runs a failed load (pill's Retry button)
@@ -1390,37 +1367,18 @@ export default function App() {
   const [chatModel, setChatModel] = useState(() => {
     try { return localStorage.getItem("gamma-chat-model") || ""; } catch { return ""; }
   });
-  const [chatEffort, setChatEffort] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-effort") || ""; } catch { return ""; }
-  });
+  const [chatEffort, setChatEffort] = usePersistedState("gamma-chat-effort", "");
   // Model for AI metadata extraction (Settings → Paper metadata). "" = follow
   // the chat model; a stale pick (provider/model removed) also falls back.
-  const [metaModel, setMetaModel] = useState(() => {
-    try { return localStorage.getItem("gamma-meta-model") || ""; } catch { return ""; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-meta-model", metaModel); } catch {}
-  }, [metaModel]);
+  const [metaModel, setMetaModel] = usePersistedState("gamma-meta-model", "");
   // Voice dictation (mic button): transcription model + spoken language
   // ("" = auto-detect), configured in Settings → AI chat.
-  const [dictationModel, setDictationModel] = useState(() => {
-    try { return localStorage.getItem("gamma-dictation-model") || "gpt-4o-transcribe"; } catch { return "gpt-4o-transcribe"; }
-  });
-  const [dictationLang, setDictationLang] = useState(() => {
-    try { return localStorage.getItem("gamma-dictation-lang") || ""; } catch { return ""; }
-  });
-  const [chatSystem, setChatSystem] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
-  });
-  const readContextChars = (key, fallback) => {
-    try {
-      const value = Number.parseInt(localStorage.getItem(key) || "", 10);
-      return Number.isFinite(value) && value >= 100 && value <= 1000000 ? value : fallback;
-    } catch { return fallback; }
-  };
-  const [chatContextChars, setChatContextChars] = useState(() => readContextChars("gamma-chat-context-chars", 8000));
-  const [metaContextChars, setMetaContextChars] = useState(() => readContextChars("gamma-meta-context-chars", 6000));
-  const [multiContextChars, setMultiContextChars] = useState(() => readContextChars("gamma-multi-context-chars", 18000));
+  const [dictationModel, setDictationModel] = usePersistedState("gamma-dictation-model", "gpt-4o-transcribe");
+  const [dictationLang, setDictationLang] = usePersistedState("gamma-dictation-lang", "");
+  const [chatSystem, setChatSystem] = usePersistedState("gamma-chat-system", "");
+  const [chatContextChars, setChatContextChars] = usePersistedState("gamma-chat-context-chars", 8000, CONTEXT_CHARS_CODEC);
+  const [metaContextChars, setMetaContextChars] = usePersistedState("gamma-meta-context-chars", 6000, CONTEXT_CHARS_CODEC);
+  const [multiContextChars, setMultiContextChars] = usePersistedState("gamma-multi-context-chars", 18000, CONTEXT_CHARS_CODEC);
   const [promptDraft, setPromptDraft] = useState("");
   // AI providers (Settings → AI providers): a user-managed list of API keys,
   // OpenAI-platform style. Keys are stored server-side per user; the server
@@ -1436,12 +1394,45 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(null); // null | "papers" | "library" | "ai" | "prompts" | "search" | "account"
   // Which provider entry (API key) AI requests use. Only the key is chosen
   // here — the model itself is picked in the chat panel, scoped to this key.
-  const [aiProvider, setAiProvider] = useState(() => {
-    try { return localStorage.getItem("gamma-ai-provider") || ""; } catch { return ""; }
-  });
+  const [aiProvider, setAiProvider] = usePersistedState("gamma-ai-provider", "");
+  // The pick follows the account (/api/prefs/ai-provider): the server copy
+  // wins on login, so it survives restarts and other browsers/origins;
+  // localStorage is just the instant-paint cache. Without this, each origin
+  // (localhost / LAN / Tailscale) silently reverted to the first key.
+  const aiProviderSyncRef = useRef(null); // last server-synced value; null = not loaded yet
   useEffect(() => {
-    try { localStorage.setItem("gamma-ai-provider", aiProvider); } catch {}
-  }, [aiProvider]);
+    aiProviderSyncRef.current = null;
+    const u = authUser?.user;
+    if (!u || readOnly) return;
+    const local = aiProvider;
+    apiJson(`${API}/prefs/ai-provider`).then((d) => {
+      if (prefsUserRef.current !== u) return;
+      if (d.updated_at) {
+        const server = typeof d.value === "string" ? d.value : "";
+        aiProviderSyncRef.current = server;
+        setAiProvider(server);
+      } else if (local) {
+        // Account has never synced: seed the server with this browser's pick.
+        aiProviderSyncRef.current = local;
+        apiJson(`${API}/prefs/ai-provider`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: local }),
+        }).catch(() => {});
+      } else {
+        aiProviderSyncRef.current = "";
+      }
+    }).catch(() => {});
+  }, [authUser?.user, readOnly]);
+  useEffect(() => {
+    if (aiProviderSyncRef.current === null || aiProviderSyncRef.current === aiProvider || readOnly) return;
+    aiProviderSyncRef.current = aiProvider;
+    apiJson(`${API}/prefs/ai-provider`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: aiProvider }),
+    }).catch(() => {});
+  }, [aiProvider, readOnly]);
   // Last model picked per key, so switching keys and back restores the pick
   // (a workspace-wide memory — the chat model is never per-PDF).
   const chatModelMemRef = useRef(null);
@@ -1763,12 +1754,7 @@ export default function App() {
   // Off by default: snapshots stay attached until removed or sent. On, a
   // plain click elsewhere in the PDF drops them — the same gesture that
   // clears quoted text selections. Ref-mirrored for the mouseup listener.
-  const [chatImgAutoClear, setChatImgAutoClear] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-img-autoclear") === "1"; } catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-img-autoclear", chatImgAutoClear ? "1" : "0"); } catch {}
-  }, [chatImgAutoClear]);
+  const [chatImgAutoClear, setChatImgAutoClear] = usePersistedFlag("gamma-chat-img-autoclear", false);
   const chatImgAutoClearRef = useRef(chatImgAutoClear);
   useEffect(() => { chatImgAutoClearRef.current = chatImgAutoClear; }, [chatImgAutoClear]);
   // Clicking a highlight — on the PDF or its card in the notes — feeds the
@@ -1807,6 +1793,8 @@ export default function App() {
   useEffect(() => {
     if (openPopover === "meta") setMetaDraft(metadataToDraft(pageMeta));
   }, [openPopover, pageMeta]);
+  // Unsaved edits in the popover — gates the Save button and Enter-to-save.
+  const metaDirty = metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metadataToDraft(pageMeta));
 
   // PDF-text health shown in the metadata popover: a scanned/image-only PDF is
   // why metadata lookups fail and AI chat answers blind — surface it. One
@@ -1869,20 +1857,10 @@ export default function App() {
     }
   }
   // Editable prompts for metadata extraction and PPT citations (empty = server default)
-  const [metaPrompt, setMetaPrompt] = useState(() => {
-    try { return localStorage.getItem("gamma-meta-prompt") || ""; } catch { return ""; }
-  });
-  const [citePrompt, setCitePrompt] = useState(() => {
-    try { return localStorage.getItem("gamma-cite-prompt") || ""; } catch { return ""; }
-  });
+  const [metaPrompt, setMetaPrompt] = usePersistedState("gamma-meta-prompt", "");
+  const [citePrompt, setCitePrompt] = usePersistedState("gamma-cite-prompt", "");
   const [metaPromptDraft, setMetaPromptDraft] = useState("");
   const [citePromptDraft, setCitePromptDraft] = useState("");
-  useEffect(() => {
-    try { localStorage.setItem("gamma-meta-prompt", metaPrompt); } catch {}
-  }, [metaPrompt]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-cite-prompt", citePrompt); } catch {}
-  }, [citePrompt]);
 
   const focusedBlockIdRef = useRef("");
   useEffect(() => { focusedBlockIdRef.current = focusedBlockId || ""; }, [focusedBlockId]);
@@ -2071,27 +2049,6 @@ export default function App() {
       }
     } catch {}
   }, [chatModel]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-effort", chatEffort); } catch {}
-  }, [chatEffort]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-dictation-model", dictationModel); } catch {}
-  }, [dictationModel]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-dictation-lang", dictationLang); } catch {}
-  }, [dictationLang]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-system", chatSystem); } catch {}
-  }, [chatSystem]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-context-chars", String(chatContextChars)); } catch {}
-  }, [chatContextChars]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-meta-context-chars", String(metaContextChars)); } catch {}
-  }, [metaContextChars]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-multi-context-chars", String(multiContextChars)); } catch {}
-  }, [multiContextChars]);
 
   // Capture text selected inside the PDF viewer so chat can focus on it.
   // Committed on mouseup (not selectionchange) so the modifier key is known:
@@ -3178,6 +3135,10 @@ export default function App() {
   // instead of silently swapping the SPA for an error page.
   async function downloadExport(path, fallbackName) {
     setStatus("Exporting page…");
+    // Shared (read-only) views: every export resolves the owner's data from
+    // ?user= (auth.resolve_user) — applied here so no call site can forget it.
+    const userQ = shareUserQuery();
+    if (userQ && !path.includes("user=")) path += (path.includes("?") ? "&" : "?") + userQ;
     try {
       const res = await fetch(`${API}${path}`, { credentials: "include" });
       if (!res.ok) {
@@ -3207,8 +3168,7 @@ export default function App() {
     }
   }
 
-  // Shared (read-only) views export the owner's data: the server resolves the
-  // user from ?user= when there's no session (auth.resolve_user).
+  // Owner of a shared (read-only) view — downloadExport appends it as ?user=.
   const shareOwnerRef = useRef("");
   const shareUserQuery = () =>
     readOnly && shareOwnerRef.current ? `user=${encodeURIComponent(shareOwnerRef.current)}` : "";
@@ -3217,8 +3177,7 @@ export default function App() {
     const id = focusedBlock?.id;
     if (!id) { setStatus("Open a page first to export it."); return; }
     setOpenPopover(null);
-    const userQ = shareUserQuery();
-    await downloadExport(`/pages/${id}/export?mode=${mode}${userQ ? `&${userQ}` : ""}`, "page.md");
+    await downloadExport(`/pages/${id}/export?mode=${mode}`, "page.md");
   }
 
   // Download the PDF with the page's highlights burned in as standard PDF
@@ -3227,8 +3186,7 @@ export default function App() {
     const id = focusedBlock?.id;
     if (!id) { setStatus("Open a page first to export it."); return; }
     setOpenPopover(null);
-    const userQ = shareUserQuery();
-    await downloadExport(`/pages/${id}/export-pdf${userQ ? `?${userQ}` : ""}`, "annotated.pdf");
+    await downloadExport(`/pages/${id}/export-pdf`, "annotated.pdf");
   }
 
   // Download the PDF exactly as stored — no highlight annotations. Reuses the
@@ -3455,7 +3413,7 @@ export default function App() {
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
   const homeMode = !pdfUrl && !focusedBlockId && !readOnly;
   // Leaving home or changing folders drops the file-manager selection.
-  useEffect(() => { setSelectedPages(new Set()); setSelectedFolders(new Set()); setMovePicker(false); setHomeMenu(null); }, [folderFilter, homeMode]);
+  useEffect(() => { setSelectedPages(new Set()); setSelectedFolders(new Set()); setHomeMenu(null); }, [folderFilter, homeMode]);
   const pageOnly = !pdfUrl && !!focusedBlockId && !readOnly;
   // Phone: navigating to another page (or home) closes any overlay panel.
   useEffect(() => { setPhonePanel(null); }, [focusedBlockId, homeMode]);
@@ -3970,7 +3928,7 @@ export default function App() {
                                     if (e.key !== "Enter") return;
                                     e.preventDefault();
                                     // Enter = Save (only when something actually changed)
-                                    if (metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metadataToDraft(pageMeta))) saveMetaEdits();
+                                    if (metaDirty) saveMetaEdits();
                                   }}
                                   placeholder="—"
                                 />
@@ -4054,7 +4012,7 @@ export default function App() {
                               ? "A previous lookup found nothing — it won't retry automatically. Fill the fields in by hand, or hit ↻ to retry."
                               : "No metadata found — fill the fields in by hand, or hit ↻ to retry."}</div>
                         ) : null}
-                        {metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metadataToDraft(pageMeta)) ? (
+                        {metaDirty ? (
                           <div className="reportModalBtns">
                             <button className="uiBtn primary" onClick={saveMetaEdits}>Save metadata</button>
                           </div>
@@ -5087,10 +5045,7 @@ export default function App() {
             <OpenTabs
               tabs={openTabs}
               activeId={focusedBlockId}
-              draggingId={draggingTabId}
               tabElements={tabElsRef}
-              dragTab={dragTabRef}
-              onDraggingChange={setDraggingTabId}
               onReorder={(dragged, target) => updateTabs((prev) => {
                 const from = prev.findIndex((tab) => tab.id === dragged);
                 const to = prev.findIndex((tab) => tab.id === target);
@@ -5219,6 +5174,7 @@ export default function App() {
             <SearchPanel
               open={openPopover === "search"}
               onOpenChange={(v) => setOpenPopover(v ? "search" : null)}
+              detailsDefault={focusedBlockId ? searchDetailsPaper : searchDetailsHome}
               focusedBlockId={focusedBlockId}
               homeBlocks={homeBlocks}
               allFolderPaths={allFolderPaths}
