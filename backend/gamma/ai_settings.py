@@ -5,6 +5,11 @@ Users manage a LIST of provider entries (Settings → AI providers), each one:
    "base_url": "" = protocol default, "models": "a, b" = comma list ("" =
    protocol default model), "created_at"}
 
+Entries may also carry "catalog_models" + "catalog_at" — the live model list
+auto-fetched from the account by the periodic watcher (routers/ai.py). It is
+merged AFTER the hand-edited "models" list, so curated picks stay pinned and
+newly released models still reach the chat selector.
+
 Entries live in the user's data.db under the reserved `ai-settings` prefs key,
 which the generic /api/prefs endpoints refuse to serve: the only read path is
 the masked GET /api/ai/settings (last 4 characters, never the key itself).
@@ -28,6 +33,9 @@ MAX_URL_LEN = 300
 MAX_MODELS_LEN = 1000
 MAX_NAME_LEN = 60
 MAX_PROVIDERS = 20
+# Cap on the auto-fetched catalog kept per entry — enough to cover every model
+# a major provider offers while keeping the chat dropdown usable.
+CATALOG_MAX = 120
 
 
 def load_provider_entries(user: str) -> list:
@@ -50,11 +58,44 @@ def entry_models(entry: dict) -> list:
     return models or [AI_PROTOCOLS[entry["protocol"]]["default_model"]]
 
 
+def entry_catalog(entry: dict) -> list:
+    """The auto-fetched model catalog cached on the entry (list of names)."""
+    catalog = entry.get("catalog_models")
+    if not isinstance(catalog, list):
+        return []
+    seen, out = set(), []
+    for m in catalog:
+        name = str(m).strip() if m is not None else ""
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out[:CATALOG_MAX]
+
+
+def set_entry_catalog(entry: dict, models: list, at: str) -> dict:
+    """Persist a fetched catalog + fetch time on the entry (in place)."""
+    seen, names = set(), []
+    for m in models:
+        name = str(m).strip() if m is not None else ""
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    entry["catalog_models"] = names[:CATALOG_MAX]
+    entry["catalog_at"] = at
+    return entry
+
+
 def ai_runtime(user: str) -> dict:
     """The effective AI config for a request, built from the user's provider
     entries: {"providers": {id: {api_key, base_url, protocol, name}},
     "models": [{"id": "<pid>:<model>", "provider": pid, "provider_name",
-    "model"}], "default": first model or None, "enabled": bool}."""
+    "model"}], "default": first model or None, "enabled": bool}.
+
+    Each entry contributes its hand-edited `models` list first, then the
+    auto-fetched `catalog_models` (periodically refreshed by the background
+    watcher) — deduped so a curated model never appears twice. The catalog is
+    additive: it keeps newly released models visible in the chat selector
+    without ever overwriting what the user pinned."""
     entries = load_provider_entries(user) if user else []
     providers, models = {}, []
     dirty = False
@@ -96,7 +137,11 @@ def ai_runtime(user: str) -> dict:
                 continue
             conf["api_key"] = key
         providers[pid] = conf
-        for model in entry_models(e):
+        seen_names = set()
+        for model in entry_models(e) + entry_catalog(e):
+            if model in seen_names:
+                continue
+            seen_names.add(model)
             mid = f"{pid}:{model}"
             if mid not in [m["id"] for m in models]:
                 models.append({"id": mid, "provider": pid, "provider_name": name, "model": model})

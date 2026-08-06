@@ -2224,6 +2224,21 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-primary);
   border-color: var(--border);
 }
+.chatModelRefreshBtn {
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 5px;
+  cursor: pointer;
+}
+.chatModelRefreshBtn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border);
+}
+.chatModelRefreshBtn:disabled { cursor: default; opacity: 0.6; }
 /* prompt editor */
 .promptTextarea {
   width: 100%;

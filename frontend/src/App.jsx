@@ -5014,6 +5014,7 @@ export default function App() {
           chatModel={chatModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
           chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider} setAiProvider={setAiProvider}
+          refreshAiModels={refreshAiModels}
           chatContextChars={chatContextChars} multiContextChars={multiContextChars}
           openAiKeysEditor={openAiKeysEditor}
           openPopover={openPopover} setOpenPopover={setOpenPopover}

@@ -484,7 +484,9 @@ function AiSettings({ value }) {
     <>
       <PaneIntro title="AI & API keys">
         Bring your own API keys. They are stored on the server and never returned to the browser. The selected
-        credential is used for AI requests; its configured models appear in the chat model menu.
+        credential is used for AI requests; its configured models appear in the chat model menu. The menu is also
+        refreshed automatically (about once a day) with the latest models each account lists — hit ↻ in the chat
+        header to fetch right now.
       </PaneIntro>
       {!value.aiKeysInfo && !value.aiKeysError ? <div className="settingsPaneHint">Loading…</div> : null}
       {value.aiKeysInfo ? (

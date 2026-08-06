@@ -127,6 +127,10 @@ def create_app() -> FastAPI:
             return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
 
     _startup_maintenance()
+    # Background model-catalog refresher: keeps each provider entry's
+    # auto-fetched model list current (daily TTL) so the chat selector shows
+    # newly released models without any manual step.
+    ai.start_model_catalog_watcher()
     return app
 
 

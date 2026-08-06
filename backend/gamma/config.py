@@ -57,3 +57,9 @@ AI_PROTOCOLS = {
         "auth": "oauth",
     },
 }
+
+# How long a provider's auto-fetched model catalog stays fresh before the
+# background watcher asks the provider again (hours; 24h default). The user's
+# hand-edited `models` list is never overwritten — the catalog is merged into
+# the chat selector as an extra set of choices.
+AI_MODEL_CATALOG_TTL = float(os.environ.get("GAMMA_AI_MODEL_CATALOG_TTL_HOURS", 24)) * 3600
