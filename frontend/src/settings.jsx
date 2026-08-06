@@ -71,6 +71,12 @@ function PapersSettings({ value }) {
         checked={value.pdfSaveLocal}
         onChange={value.setPdfSaveLocal}
       />
+      <SettingToggle
+        label="Note badges on highlights"
+        description="Show a small speech-bubble next to a highlight in the PDF when you've typed a note on it. Click the bubble to jump to the note."
+        checked={value.hlNoteBadges}
+        onChange={value.setHlNoteBadges}
+      />
       <MetaModelRow value={value} />
     </>
   );

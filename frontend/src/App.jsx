@@ -1345,6 +1345,8 @@ export default function App() {
   const [pdfHidden, setPdfHidden] = useState(false);
   const [pdfScale, setPdfScale] = useState("page-width");
   const [pdfSaveLocal, setPdfSaveLocal] = usePersistedFlag("gamma-pdf-save", true);
+  // Speech-bubble badge on PDF highlights that carry a typed note.
+  const [hlNoteBadges, setHlNoteBadges] = usePersistedFlag("gamma-hl-note-badge", true);
   // User preferences (Settings in the account popover)
   const [oaFallback, setOaFallback] = usePersistedFlag("gamma-oa-fallback", true);
   const [metaAutoFetch, setMetaAutoFetch] = usePersistedFlag("gamma-meta-auto", true);
@@ -5457,6 +5459,7 @@ export default function App() {
           ) : null}
           {pdfUrl ? (
             <PdfViewer url={pdfUrl} highlights={highlights}
+              noteBadges={hlNoteBadges}
               areaMode={areaSelectMode && isPhone && !readOnly}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
@@ -5680,6 +5683,8 @@ export default function App() {
           setMetaAutoFetch,
           pdfSaveLocal,
           setPdfSaveLocal,
+          hlNoteBadges,
+          setHlNoteBadges,
           metaModel,
           setMetaModel,
           aiModels: scopedAiModels,

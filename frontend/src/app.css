@@ -2951,6 +2951,30 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   outline: 1px solid rgba(80, 140, 255, 0.55);
 }
 
+/* Speech-bubble badge marking a highlight that carries a typed note.
+   Positioned inline (end of the last highlight rect); the PDF page is always
+   white, so fixed light colors — theme variables would go invisible on it. */
+.pdfNoteBadge {
+  position: absolute;
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 50%;
+  background: #fff;
+  color: rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
+.pdfNoteBadge:hover {
+  color: #2563eb;
+  border-color: rgba(37, 99, 235, 0.6);
+}
+
 /* --- area notes (Ctrl+drag rectangle selection on the PDF) --- */
 /* pinch-preview transform target. Origin 0 0 = the layer's top-left, which
    sits at content (0,0) as the scroller's first in-flow child — the pinch
