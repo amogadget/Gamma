@@ -3550,18 +3550,31 @@ export default function App() {
     obs.observe(el);
     return () => obs.disconnect();
   }, [homeVisiblePages.length, homeSortedPages.length, homeMode]);
+  // Identity-stable: every keystroke in a note replaces `blocks`, but the
+  // derived highlights rarely change — returning the previous array when the
+  // content is identical keeps the viewer's per-page memo effective (otherwise
+  // each keystroke re-rendered every PdfPage's overlays).
+  const prevHighlightsRef = useRef({ json: "", value: [] });
   const highlights = useMemo(() => {
     const byHlId = new Map();
-    for (const b of flattenBlocks(blocks)) {
+    for (const b of visibleBlocks) {
       if (b.properties?.highlight_id) byHlId.set(b.properties.highlight_id, b);
     }
-    return blocksToHighlights(blocks).map((h) => {
+    const next = blocksToHighlights(blocks).map((h) => {
       const p = byHlId.get(h.id)?.properties || {};
       const url = p.link_url || "";
       const pageId = p.link_page_id || "";
       return (url || pageId) ? { ...h, linkTarget: { url, pageId, highlightId: p.link_highlight_id || "" } } : h;
     });
-  }, [blocks]);
+    const json = JSON.stringify(next);
+    if (json === prevHighlightsRef.current.json) return prevHighlightsRef.current.value;
+    prevHighlightsRef.current = { json, value: next };
+    return next;
+  }, [blocks, visibleBlocks]);
+  const highlightColors = useMemo(
+    () => Object.fromEntries(highlights.map((h) => [h.id, h.color])),
+    [highlights]
+  );
   useEffect(() => {
     if (pdfHidden) return;
     const id = pendingJumpRef.current;
@@ -4611,8 +4624,8 @@ export default function App() {
                   // chat attach); docNonce retries crops once the PDF is up.
                   captureArea: capturePdfArea,
                   docNonce: pdfDocNonce,
-                  allBlocks: flattenBlocks(blocks),
-                  highlightColors: Object.fromEntries(highlights.map(h => [h.id, h.color])),
+                  allBlocks: visibleBlocks,
+                  highlightColors,
                   refCache,
                   onFetchRefs,
                   onCacheRef,

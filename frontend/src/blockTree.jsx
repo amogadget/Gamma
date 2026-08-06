@@ -1,6 +1,6 @@
 // The Logseq-style outliner: block rows (markdown rendering, inline
 // editing, [[refs]], link chips, image drop), drag handles, and the tree.
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -13,6 +13,56 @@ import { FolderIcon, LinkIcon } from "./icons";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
+
+// A block's rendered markdown, memoized: any edit re-renders the whole tree
+// (setBlocks replaces it), and without the memo one keystroke re-ran
+// ReactMarkdown + KaTeX for every rendered block on the page. Re-parses only
+// when the content or a resolved [[ref]] chip label actually changes; ref
+// labels are resolved by the caller so the comparison here stays a string
+// check. onBlockRefClick is deliberately excluded from the comparison — the
+// caller passes an identity-stable wrapper.
+const BlockMarkdown = React.memo(function BlockMarkdown({ content, refLabels, onBlockRefClick }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeRaw, rehypeKatex]}
+      urlTransform={(url) => url.startsWith("blockref:") ? url : defaultUrlTransform(url)}
+      components={{
+        a: ({ href, children }) => {
+          if (href?.startsWith("blockref:")) {
+            const refId = href.slice(9);
+            const ref = refLabels?.[refId];
+            return (
+              <a
+                href={`?block=${refId}`}
+                className="blockRefChip"
+                title={ref?.page_title ? `From: ${ref.page_title}` : undefined}
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onBlockRefClick?.(refId);
+                }}
+              >
+                {ref?.content || String(children)}
+              </a>
+            );
+          }
+          return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+        }
+      }}
+    >
+      {content
+        .replace(/!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g, '<img src="$2" alt="$1" width="$3" />')
+        .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
+    </ReactMarkdown>
+  );
+}, (prev, next) =>
+  prev.content === next.content
+  && Object.keys(prev.refLabels).length === Object.keys(next.refLabels).length
+  && Object.entries(next.refLabels).every(([id, r]) =>
+    prev.refLabels[id]?.content === r.content && prev.refLabels[id]?.page_title === r.page_title)
+);
 
 // Area-highlight crops shown on note cards. Nothing is stored with the block —
 // the region is re-cropped from the loaded document (App's pdfCaptureRef) and
@@ -86,6 +136,23 @@ function BlockRow({
 }) {
   const ref = useRef(null);
   const clickPosRef = useRef(null);
+  // Identity-stable wrapper so the memoized BlockMarkdown never sees a fresh
+  // callback (rowProps closures are rebuilt every App render) yet always
+  // calls the latest one — same idiom as pdfViewer's stableCbs.
+  const refClickRef = useRef(null);
+  refClickRef.current = onBlockRefClick;
+  const stableRefClick = useRef((id) => refClickRef.current?.(id)).current;
+  // Resolve [[ref]] chip labels here (cheap per render) so BlockMarkdown's
+  // memo can compare them as strings instead of depending on allBlocks,
+  // whose identity changes on every edit.
+  const refLabels = useMemo(() => {
+    const out = {};
+    for (const [, id] of (block.content || "").matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)) {
+      const rb = allBlocks?.find((b) => b.id === id) || refCache?.[id];
+      if (rb) out[id] = { content: rb.content, page_title: rb.page_title };
+    }
+    return out;
+  }, [block.content, allBlocks, refCache]);
   const [refPopup, setRefPopup] = useState(null); // { query, rect }
   const [refSelectedIdx, setRefSelectedIdx] = useState(0);
   const [searchResults, setSearchResults] = useState([]);
@@ -396,39 +463,7 @@ function BlockRow({
           ) : (
             <div className="blockRendered">
               {(block.content || "").trim() ? (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[rehypeRaw, rehypeKatex]}
-                  urlTransform={(url) => url.startsWith("blockref:") ? url : defaultUrlTransform(url)}
-                  components={{
-                    a: ({ href, children }) => {
-                      if (href?.startsWith("blockref:")) {
-                        const refId = href.slice(9);
-                        const refBlock = allBlocks?.find((b) => b.id === refId) || refCache?.[refId];
-                        return (
-                          <a
-                            href={`?block=${refId}`}
-                            className="blockRefChip"
-                            title={refBlock?.page_title ? `From: ${refBlock.page_title}` : undefined}
-                            onClick={(e) => {
-                              if (e.metaKey || e.ctrlKey) return;
-                              e.preventDefault();
-                              e.stopPropagation();
-                              onBlockRefClick?.(refId);
-                            }}
-                          >
-                            {refBlock?.content || String(children)}
-                          </a>
-                        );
-                      }
-                      return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
-                    }
-                  }}
-                >
-                  {(block.content || "")
-                    .replace(/!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g, '<img src="$2" alt="$1" width="$3" />')
-                    .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
-                </ReactMarkdown>
+                <BlockMarkdown content={block.content || ""} refLabels={refLabels} onBlockRefClick={stableRefClick} />
               ) : (
                 <div className="blockPlaceholder">(empty)</div>
               )}
