@@ -87,7 +87,7 @@
 
 /* Shared visual primitives. Components keep their layout and sizing rules,
    while these groups own the recurring surface, field, and hover language. */
-:is(.plainTip, .popover, .ctxMenu, .refPopup, .pdfNoteTip) {
+:is(.plainTip, .popover, .ctxMenu, .refPopup, .pdfNoteTip, .mathPreviewTip, .latexAcPopup) {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-surface);
@@ -3242,6 +3242,56 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* --- LaTeX editing aids in the block editor (see latexEditor.jsx) --- */
+/* Caret-anchored live KaTeX preview of the math span being typed. */
+.mathPreviewTip {
+  position: fixed;
+  z-index: var(--z-refpopup);
+  max-width: 432px;
+  padding: 6px 12px;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+.mathPreviewTip .katex-display { margin: 0; }
+/* \command completion list: rendered glyph + command name per row. */
+.latexAcPopup {
+  position: fixed;
+  z-index: var(--z-refpopup);
+  min-width: 190px;
+  max-height: 264px;
+  overflow-y: auto;
+  padding: 3px;
+}
+.latexAcItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 3px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+.latexAcItem:hover { background: var(--bg-hover); }
+.latexAcItem.selected { background: var(--accent-bg); }
+.latexAcGlyph {
+  min-width: 36px;
+  text-align: center;
+  font-size: 13px;
+  overflow: hidden;
+}
+.latexAcName {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 /* --- confirm / link dialogs --- */

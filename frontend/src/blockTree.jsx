@@ -10,6 +10,10 @@ import { withLegacyAccessors } from "./logseqPdfModel";
 import { COLORS } from "./pdfViewer";
 import { AutoGrowTextarea } from "./widgets";
 import { FolderIcon, LinkIcon } from "./icons";
+import {
+  caretClientPos, findMathAtCursor, insertionFor, latexCompletions,
+  LatexAcPopup, MathLivePreview,
+} from "./latexEditor";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
@@ -155,6 +159,11 @@ function BlockRow({
   }, [block.content, allBlocks, refCache]);
   const [refPopup, setRefPopup] = useState(null); // { query, rect }
   const [refSelectedIdx, setRefSelectedIdx] = useState(0);
+  // Live LaTeX aids while the caret sits inside $...$ / $$...$$:
+  // { tex, display, anchor, ac: { start, items } | null }. Recomputed on every
+  // edit AND caret move (onSelect) — the preview must track the caret.
+  const [mathUi, setMathUi] = useState(null);
+  const [mathAcIdx, setMathAcIdx] = useState(0);
   const [searchResults, setSearchResults] = useState([]);
   const [imageDragOver, setImageDragOver] = useState(false);
   const uploadingRef = useRef(false);
@@ -197,6 +206,39 @@ function BlockRow({
       const newCursor = triggerStart + `[[${b.id}]]`.length;
       ta.setSelectionRange(newCursor, newCursor);
       ta.focus();
+    });
+  }
+
+  function updateMathUi(ta) {
+    const cursor = ta.selectionStart;
+    if (cursor !== ta.selectionEnd) { setMathUi(null); return; }
+    const seg = findMathAtCursor(ta.value, cursor);
+    if (!seg) { setMathUi(null); return; }
+    // \command autocomplete: a backslash-word ending at the caret, only
+    // inside math (a bare "\" in prose — file paths — must not trigger it).
+    const m = ta.value.slice(seg.start, cursor).match(/\\([a-zA-Z]+)$/);
+    const items = m ? latexCompletions(m[1]) : [];
+    setMathUi({
+      tex: ta.value.slice(seg.start, seg.end),
+      display: seg.display,
+      anchor: caretClientPos(ta, cursor),
+      ac: items.length ? { start: cursor - m[0].length, items } : null,
+    });
+    setMathAcIdx(0);
+  }
+
+  function acceptLatexAc(c) {
+    const ta = ref.current;
+    if (!ta || !mathUi?.ac) return;
+    const { start } = mathUi.ac;
+    const { text, caret } = insertionFor(c);
+    const newVal = ta.value.slice(0, start) + text + ta.value.slice(ta.selectionStart);
+    onChangeText(block.id, newVal);
+    setMathUi(null);
+    requestAnimationFrame(() => {
+      try { ta.setSelectionRange(start + caret, start + caret); } catch (_) {}
+      ta.focus();
+      updateMathUi(ta);
     });
   }
 
@@ -456,9 +498,12 @@ function BlockRow({
                 } else {
                   setRefPopup(null);
                 }
+                updateMathUi(e.target);
               }}
+              onSelect={(e) => updateMathUi(e.target)}
               onBlur={() => {
                 onStartEdit(block.id, false);
+                setMathUi(null);
                 setTimeout(() => setRefPopup(null), 120);
               }}
               onPaste={handleEditorPaste}
@@ -468,6 +513,13 @@ function BlockRow({
                   if (e.key === "ArrowUp") { e.preventDefault(); setRefSelectedIdx((i) => Math.max(i - 1, 0)); return; }
                   if (e.key === "Enter") { e.preventDefault(); insertRef(searchResults[refSelectedIdx]); return; }
                   if (e.key === "Escape") { e.preventDefault(); setRefPopup(null); return; }
+                }
+                if (mathUi?.ac) {
+                  const n = mathUi.ac.items.length;
+                  if (e.key === "ArrowDown") { e.preventDefault(); setMathAcIdx((i) => Math.min(i + 1, n - 1)); return; }
+                  if (e.key === "ArrowUp") { e.preventDefault(); setMathAcIdx((i) => Math.max(i - 1, 0)); return; }
+                  if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); acceptLatexAc(mathUi.ac.items[mathAcIdx]); return; }
+                  if (e.key === "Escape") { e.preventDefault(); setMathUi((u) => u ? { ...u, ac: null } : null); return; }
                 }
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
@@ -531,6 +583,14 @@ function BlockRow({
           >×</button>
         ) : null}
       </div>
+      {!readOnly && block.editMode && mathUi ? (
+        <>
+          <MathLivePreview tex={mathUi.tex} display={mathUi.display} anchor={mathUi.anchor} />
+          {mathUi.ac ? (
+            <LatexAcPopup items={mathUi.ac.items} selected={mathAcIdx} anchor={mathUi.anchor} onPick={acceptLatexAc} />
+          ) : null}
+        </>
+      ) : null}
       {refPopup && searchResults.length > 0 && (
         <div
           className="refPopup"
