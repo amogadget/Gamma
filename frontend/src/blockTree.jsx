@@ -209,22 +209,33 @@ function BlockRow({
     });
   }
 
-  function updateMathUi(ta) {
+  function updateMathUi(ta, typing) {
     const cursor = ta.selectionStart;
     if (cursor !== ta.selectionEnd) { setMathUi(null); return; }
     const seg = findMathAtCursor(ta.value, cursor);
     if (!seg) { setMathUi(null); return; }
     // \command autocomplete: a backslash-word ending at the caret, only
-    // inside math (a bare "\" in prose — file paths — must not trigger it).
+    // inside math (a bare "\" in prose — file paths — must not trigger it),
+    // and only opened by TYPING — clicking into an existing formula must not
+    // pop the menu. Caret moves (typing=false) keep an already-open popup
+    // only while the caret stays on the same trigger; React fires onSelect
+    // right after onChange for a keystroke, so this must not wipe it.
     const m = ta.value.slice(seg.start, cursor).match(/\\([a-zA-Z]+)$/);
-    const items = m ? latexCompletions(m[1]) : [];
-    setMathUi({
+    const next = {
       tex: ta.value.slice(seg.start, seg.end),
       display: seg.display,
       anchor: caretClientPos(ta, cursor),
-      ac: items.length ? { start: cursor - m[0].length, items } : null,
+      ac: null,
+    };
+    setMathUi((prev) => {
+      const start = m ? cursor - m[0].length : -1;
+      if (m && (typing || prev?.ac?.start === start)) {
+        const items = latexCompletions(m[1]);
+        if (items.length) next.ac = { start, items };
+      }
+      return next;
     });
-    setMathAcIdx(0);
+    if (typing) setMathAcIdx(0);
   }
 
   function acceptLatexAc(c) {
@@ -498,9 +509,9 @@ function BlockRow({
                 } else {
                   setRefPopup(null);
                 }
-                updateMathUi(e.target);
+                updateMathUi(e.target, true);
               }}
-              onSelect={(e) => updateMathUi(e.target)}
+              onSelect={(e) => updateMathUi(e.target, false)}
               onBlur={() => {
                 onStartEdit(block.id, false);
                 setMathUi(null);

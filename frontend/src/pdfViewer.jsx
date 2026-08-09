@@ -1008,7 +1008,16 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           }
           lineRects.push({ ...cr });
         }
-        setSelPopup({ text, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom }, lineRects, pageNumber });
+        // Snapshot the page's offset/size NOW: the confirm click may come after
+        // a scroll or zoom, when re-measuring the page would no longer agree
+        // with these viewport-space selection rects.
+        const pageRect = pageEl.getBoundingClientRect();
+        const pageW = parseFloat(pageEl.style.width) || pageEl.offsetWidth || 1;
+        const pageH = parseFloat(pageEl.style.height) || pageEl.offsetHeight || 1;
+        setSelPopup({
+          text, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom }, lineRects, pageNumber,
+          pageLeft: pageRect.left, pageTop: pageRect.top, pageW, pageH,
+        });
       }
     }
     // iPadOS/iOS never fires mouseup for a long-press selection or for a drag
@@ -1044,11 +1053,10 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       return;
     }
     const r = selPopup.rect;
-    const pageEl = document.querySelector(`[data-page="${selPopup.pageNumber}"]`);
-    const pageRect = pageEl?.getBoundingClientRect();
-    const curW = pageEl ? parseFloat(pageEl.style.width) || pageEl.offsetWidth : 1;
-    const curH = pageEl ? parseFloat(pageEl.style.height) || pageEl.offsetHeight : 1;
-    const px = pageRect?.left || 0, py = pageRect?.top || 0;
+    // Use the page offset/size snapshotted with the selection — the current
+    // page position may have drifted (scroll/zoom) since the rects were taken.
+    const curW = selPopup.pageW, curH = selPopup.pageH;
+    const px = selPopup.pageLeft, py = selPopup.pageTop;
     const x1 = r.left - px, y1 = r.top - py;
     const x2 = r.left + r.width - px, y2 = r.bottom - py;
     const lineRects = (selPopup.lineRects && selPopup.lineRects.length)
