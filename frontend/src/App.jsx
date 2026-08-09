@@ -1347,6 +1347,13 @@ export default function App() {
   const [pdfSaveLocal, setPdfSaveLocal] = usePersistedFlag("gamma-pdf-save", true);
   // Speech-bubble badge on PDF highlights that carry a typed note.
   const [hlNoteBadges, setHlNoteBadges] = usePersistedFlag("gamma-hl-note-badge", true);
+  // Embedded PDF annotations (burned in by a Gamma export or another viewer)
+  // would render twice once imported as blocks — canvas + overlay. "hide"
+  // keeps them out of the canvas; "strip" removes them from the stored file
+  // at import time.
+  const [embAnnots, setEmbAnnots] = usePersistedState("gamma-embedded-annots", "hide", {
+    parse: (raw) => (raw === "hide" || raw === "strip" ? raw : undefined),
+  });
   // User preferences (Settings in the account popover)
   const [oaFallback, setOaFallback] = usePersistedFlag("gamma-oa-fallback", true);
   const [metaAutoFetch, setMetaAutoFetch] = usePersistedFlag("gamma-meta-auto", true);
@@ -1957,7 +1964,7 @@ export default function App() {
       const res = await apiJson(`${API}/import/pdf-annotations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ block_id: blockId, doc_id: targetDocId }),
+        body: JSON.stringify({ block_id: blockId, doc_id: targetDocId, strip: embAnnots === "strip" }),
       });
       updateTransfer(taskId, {
         status: "done",
@@ -1966,7 +1973,13 @@ export default function App() {
       if (res.imported > 0) {
         if (focusedBlockIdRef.current === blockId) await loadBlocksForBlock(blockId);
         setStatus(`Imported ${res.imported} annotation${res.imported === 1 ? "" : "s"} embedded in the PDF.`);
-      } else if (!silent) {
+      }
+      if (res.stripped > 0 && focusedBlockIdRef.current === blockId) {
+        // The stored file changed — cache-bust so the open viewer re-renders
+        // the page without the now-stripped annotations baked in.
+        setPdfUrl((u) => (u ? u + (u.includes("?") ? "&" : "?") + "annots=" + Date.now() : u));
+      }
+      if (res.imported === 0 && !silent) {
         setStatus(res.found > 0
           ? "All embedded annotations were already imported."
           : "No annotations embedded in this PDF.");
@@ -5460,6 +5473,7 @@ export default function App() {
           {pdfUrl ? (
             <PdfViewer url={pdfUrl} highlights={highlights}
               noteBadges={hlNoteBadges}
+              hideEmbeddedAnnots={embAnnots === "hide"}
               areaMode={areaSelectMode && isPhone && !readOnly}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
@@ -5685,6 +5699,8 @@ export default function App() {
           setPdfSaveLocal,
           hlNoteBadges,
           setHlNoteBadges,
+          embAnnots,
+          setEmbAnnots,
           metaModel,
           setMetaModel,
           aiModels: scopedAiModels,

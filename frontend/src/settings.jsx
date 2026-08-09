@@ -77,6 +77,22 @@ function PapersSettings({ value }) {
         checked={value.hlNoteBadges}
         onChange={value.setHlNoteBadges}
       />
+      <label className="settingRow">
+        <span className="settingText">
+          <span className="settingLabel">Embedded PDF annotations</span>
+          <span className="settingDesc">
+            Highlights, notes, and rectangle annotations saved inside a PDF file (a Gamma export,
+            SumatraPDF, Acrobat…) are imported as regular highlights — this controls what happens to
+            the embedded originals so they don't render twice. "Hide in viewer" leaves the file untouched; "Strip from file" removes them
+            from the stored PDF when they're imported.
+          </span>
+        </span>
+        <select className="aiKeyInput settingSelect" value={value.embAnnots}
+          onChange={(e) => value.setEmbAnnots(e.target.value)}>
+          <option value="hide">Hide in viewer</option>
+          <option value="strip">Strip from file</option>
+        </select>
+      </label>
       <MetaModelRow value={value} />
     </>
   );
