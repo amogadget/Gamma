@@ -9,7 +9,9 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 // public/pdf.worker.min.mjs is the matching legacy worker — keep both legacy.
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
+import { createPortal } from "react-dom";
 import { ChevronRightIcon, LinkIcon, MessageSquareIcon, OutlineIcon } from "./icons";
+import { ChatMarkdown } from "./widgets";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 // Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
 // Guarded: a throw at module scope takes down every route, PDF or not.
@@ -1196,6 +1198,48 @@ function OutlineNode({ item, depth, onDest, onUrl }) {
   );
 }
 
+// Speech-bubble badge on a highlight that carries a typed note. The hover
+// tooltip renders the note's markdown + KaTeX — a native title attribute is
+// plain-text only. Portaled to <body> with fixed coordinates so the pinch
+// transform on .pdfZoomLayer (an ancestor transform makes position:fixed
+// resolve against it, not the viewport) can never misplace it.
+function NoteBadge({ hlId, text, style, onClick, onContextMenu }) {
+  const [tip, setTip] = useState(null);
+  const btnRef = useRef(null);
+  const timerRef = useRef(0);
+  const show = () => {
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const below = r.top < window.innerHeight * 0.45;
+      setTip({
+        left: Math.max(8, Math.min(r.left - 12, window.innerWidth - 396)),
+        ...(below ? { top: r.bottom + 6 } : { bottom: window.innerHeight - r.top + 6 }),
+      });
+    }, 120);
+  };
+  const hide = () => { clearTimeout(timerRef.current); setTip(null); };
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+  return (
+    <>
+      <button ref={btnRef} type="button" className="pdfNoteBadge" data-hl-id={hlId} style={style}
+        onMouseEnter={show} onMouseLeave={hide}
+        onClick={(e) => { hide(); onClick(e); }}
+        onContextMenu={(e) => { hide(); onContextMenu(e); }}
+      >
+        <MessageSquareIcon size={10} strokeWidth={2.2} />
+      </button>
+      {tip ? createPortal(
+        <div className="pdfNoteTip" style={tip}>
+          {text ? <ChatMarkdown text={text} /> : "This highlight has a note"}
+        </div>,
+        document.body
+      ) : null}
+    </>
+  );
+}
+
 const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
@@ -1475,17 +1519,15 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         if (noteBadges && h.hasNote && rects.length) {
           const r = rects[rects.length - 1];
           elements.push(
-            <button key={h.id + "-note"} type="button" className="pdfNoteBadge" data-hl-id={h.id}
+            <NoteBadge key={h.id + "-note"} hlId={h.id}
+              text={h.comment?.text?.trim() || ""}
               style={{
                 left: r.x2 * curW / storedW + 2,
                 top: r.y1 * curH / storedH - 8,
               }}
-              title={h.comment?.text?.trim() || "This highlight has a note"}
               onClick={(e) => { e.stopPropagation(); onHighlightJump?.(h.id, e.ctrlKey || e.metaKey); }}
               onContextMenu={(e) => { e.preventDefault(); onHighlightContext?.({ id: h.id, x: e.clientX, y: e.clientY }); }}
-            >
-              <MessageSquareIcon size={10} strokeWidth={2.2} />
-            </button>
+            />
           );
         }
         return elements;

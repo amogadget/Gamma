@@ -87,7 +87,7 @@
 
 /* Shared visual primitives. Components keep their layout and sizing rules,
    while these groups own the recurring surface, field, and hover language. */
-:is(.plainTip, .popover, .ctxMenu, .refPopup) {
+:is(.plainTip, .popover, .ctxMenu, .refPopup, .pdfNoteTip) {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-surface);
@@ -2974,6 +2974,24 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: #2563eb;
   border-color: rgba(37, 99, 235, 0.6);
 }
+/* Hover tooltip for the note badge: renders the note's markdown + LaTeX
+   (a native title attribute is plain-text only). Portaled to <body> with
+   fixed positioning so PDF zoom transforms can't misplace it. */
+.pdfNoteTip {
+  position: fixed;
+  z-index: var(--z-popover);
+  max-width: 380px;
+  max-height: 40vh;
+  overflow: hidden;
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  pointer-events: none;
+}
+.pdfNoteTip > *:first-child { margin-top: 0; }
+.pdfNoteTip > *:last-child { margin-bottom: 0; }
+.pdfNoteTip p { margin: 4px 0; }
 
 /* --- area notes (Ctrl+drag rectangle selection on the PDF) --- */
 /* pinch-preview transform target. Origin 0 0 = the layer's top-left, which

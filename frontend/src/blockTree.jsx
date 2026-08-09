@@ -1,5 +1,5 @@
 // The Logseq-style outliner: block rows (markdown rendering, inline
-// editing, [[refs]], link chips, image drop), drag handles, and the tree.
+// editing, [[refs]], link chips, image drop/paste), drag handles, and the tree.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -266,22 +266,52 @@ function BlockRow({
     if (!e.currentTarget.contains(e.relatedTarget)) setImageDragOver(false);
   }
 
-  async function handleImageDrop(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    setImageDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (!file || !file.type.startsWith("image/")) return;
-    if (uploadingRef.current) return;
+  async function uploadImage(file) {
+    if (!file || !file.type.startsWith("image/")) return null;
+    if (uploadingRef.current) return null;
     uploadingRef.current = true;
     try {
       const form = new FormData();
       form.append("file", file);
       const res = await fetch("/api/upload-image", { method: "POST", body: form, credentials: "include" });
-      if (!res.ok) { uploadingRef.current = false; return; }
-      const data = await res.json();
-      onChangeText(block.id, (block.content || "") + "\n" + `![](${data.url})`);
+      if (!res.ok) return null;
+      return (await res.json()).url;
+    } catch (_) {
+      return null;
     } finally { uploadingRef.current = false; }
+  }
+
+  async function handleImageDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    setImageDragOver(false);
+    const url = await uploadImage(e.dataTransfer.files?.[0]);
+    if (url) onChangeText(block.id, (block.content || "") + "\n" + `![](${url})`);
+  }
+
+  // Paste an image (screenshot) while editing → upload it and insert the
+  // markdown at the cursor. Text pastes fall through to the browser default.
+  async function handleEditorPaste(e) {
+    const file = Array.from(e.clipboardData?.items || [])
+      .find((it) => it.type?.startsWith("image/"))?.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    const ta = ref.current;
+    // Capture the cursor now — the upload takes a beat and focus may move.
+    const start = ta ? ta.selectionStart : null;
+    const end = ta ? ta.selectionEnd : null;
+    const url = await uploadImage(file);
+    if (!url) return;
+    const md = `![](${url})`;
+    const val = (ta ? ta.value : block.content) || "";
+    if (start != null) {
+      onChangeText(block.id, val.slice(0, start) + md + val.slice(end));
+      requestAnimationFrame(() => {
+        try { ta.setSelectionRange(start + md.length, start + md.length); } catch (_) {}
+      });
+    } else {
+      onChangeText(block.id, val + "\n" + md);
+    }
   }
 
   return (
@@ -431,6 +461,7 @@ function BlockRow({
                 onStartEdit(block.id, false);
                 setTimeout(() => setRefPopup(null), 120);
               }}
+              onPaste={handleEditorPaste}
               onKeyDown={(e) => {
                 if (refPopup && searchResults.length > 0) {
                   if (e.key === "ArrowDown") { e.preventDefault(); setRefSelectedIdx((i) => Math.min(i + 1, searchResults.length - 1)); return; }
