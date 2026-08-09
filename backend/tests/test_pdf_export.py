@@ -101,6 +101,20 @@ def test_annotate_area_as_square():
     assert float(obj["/CA"]) == 0.65
     assert int(obj["/BS"]["/W"]) == 2
 
+    # And it round-trips: the importer reads the /Square back as an area
+    # highlight (position carries area: true) with the exact color.
+    from gamma.routers.imports import _extract_pdf_annotations
+
+    found = _extract_pdf_annotations(PdfReader(io.BytesIO(out)))
+    assert len(found) == 1
+    a = found[0]
+    assert a["position"]["area"] is True
+    assert a["content"] == "figure note"
+    assert a["color"] == "rgba(155, 205, 255, 0.65)"
+    br = a["position"]["boundingRect"]
+    assert abs(br["x1"] - 100) < 0.01 and abs(br["y1"] - 72) < 0.01
+    assert abs(br["x2"] - 300) < 0.01 and abs(br["y2"] - 92) < 0.01
+
 
 def test_annotate_rotated_page():
     """On a 90°-rotated page the viewer's x axis runs along PDF y."""
@@ -160,16 +174,19 @@ def test_export_pdf_endpoint(guest):
 
 
 def test_import_annotations_strip_rewrites_pdf(guest):
-    """strip: true removes the embedded markup annotations from the stored
-    file after importing them as blocks, so they can't render twice. Link
-    annotations survive; the import stays idempotent afterwards."""
+    """strip: true removes the embedded annotations (highlights AND area
+    squares) from the stored file after importing them as blocks, so they
+    can't render twice — and marks the blocks annot_stripped so a later PDF
+    export writes them again instead of assuming they're still embedded."""
     from PyPDF2 import PdfReader
 
-    annotated, written = annotate_pdf(
-        _blank_pdf(),
-        [{"position": _position(), "color": "rgba(170, 235, 170, 0.65)", "note": "kept as block"}],
-    )
-    assert written == 1
+    area_pos = _position(x1=50, y1=300, x2=250, y2=400)
+    area_pos["area"] = True
+    annotated, written = annotate_pdf(_blank_pdf(), [
+        {"position": _position(), "color": "rgba(170, 235, 170, 0.65)", "note": "kept as block"},
+        {"position": area_pos, "color": "rgba(155, 205, 255, 0.65)", "note": "figure"},
+    ])
+    assert written == 2
 
     up = guest.post("/api/uploads", files={"file": ("a.pdf", annotated, "application/pdf")})
     assert up.status_code == 200, up.text
@@ -179,25 +196,37 @@ def test_import_annotations_strip_rewrites_pdf(guest):
     r = guest.post("/api/import/pdf-annotations",
                    json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
     assert r.status_code == 200, r.text
-    assert r.json() == {"ok": True, "found": 1, "imported": 1, "stripped": 1}
+    assert r.json() == {"ok": True, "found": 2, "imported": 2, "stripped": 2}
 
-    # The stored file no longer carries the highlight annotation…
+    # The stored file no longer carries any annotations…
     stored = guest.get(source_url).content
     for pdf_page in PdfReader(io.BytesIO(stored)).pages:
-        annots = pdf_page.get("/Annots")
-        assert not annots or all(
-            str(a.get_object().get("/Subtype")) not in ("/Highlight", "/Text") for a in annots)
+        assert not pdf_page.get("/Annots")
 
-    # …but the imported block exists, with the exported color intact.
+    # …but the imported blocks exist: the highlight with its exact color, the
+    # square as an area highlight, both marked annot_stripped.
     kids = guest.get(f"/api/blocks/{page['id']}/children").json()["children"]
     hl = [b for b in kids if b["properties"].get("highlight_id")]
-    assert len(hl) == 1
-    assert hl[0]["properties"]["color"] == "rgba(170, 235, 170, 0.65)"
+    assert len(hl) == 2
+    assert all(b["properties"].get("annot_stripped") for b in hl)
+    colors = {b["properties"]["color"] for b in hl}
+    assert colors == {"rgba(170, 235, 170, 0.65)", "rgba(155, 205, 255, 0.65)"}
+    areas = [b for b in hl if b["properties"]["pdf_position"].get("area")]
+    assert len(areas) == 1 and areas[0]["content"] == "figure"
 
     # Re-running finds nothing left to import or strip.
     r = guest.post("/api/import/pdf-annotations",
                    json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
     assert r.json() == {"ok": True, "found": 0, "imported": 0, "stripped": 0}
+
+    # A fresh PDF export re-writes both annotations — without annot_stripped
+    # they'd be skipped as "still embedded" and silently lost.
+    r = guest.get(f"/api/pages/{page['id']}/export-pdf")
+    assert r.status_code == 200, r.text
+    assert r.headers["x-annotations-written"] == "2"
+    subtypes = sorted(str(a.get_object()["/Subtype"])
+                      for a in PdfReader(io.BytesIO(r.content)).pages[0]["/Annots"])
+    assert subtypes == ["/Highlight", "/Square"]
 
 
 def test_export_pdf_endpoint_rejects_pageless(guest):

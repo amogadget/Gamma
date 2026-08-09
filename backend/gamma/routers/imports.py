@@ -151,6 +151,10 @@ async def import_logseq(
 
 _MARKUP_TYPES = {"/Highlight", "/Underline", "/Squiggly", "/StrikeOut"}
 _NOTE_TYPES = {"/Text", "/FreeText"}
+# Rectangle/ellipse drawings → area highlights (position carries area: true),
+# the inverse of what pdf_export.py writes for Gamma's own area notes.
+_AREA_TYPES = {"/Square", "/Circle"}
+_IMPORT_TYPES = _MARKUP_TYPES | _NOTE_TYPES | _AREA_TYPES
 
 
 def _page_text_chunks(page):
@@ -191,7 +195,7 @@ def _extract_pdf_annotations(reader):
             try:
                 obj = ref.get_object()
                 subtype = str(obj.get("/Subtype", ""))
-                if subtype not in _MARKUP_TYPES | _NOTE_TYPES:
+                if subtype not in _IMPORT_TYPES:
                     continue
                 contents = str(_resolve(obj.get("/Contents")) or "").strip()
                 # Quad rects in PDF space (origin bottom-left)
@@ -239,9 +243,12 @@ def _extract_pdf_annotations(reader):
                 except Exception:
                     pass
                 key = f"{pnum}:{subtype}:{round(quads[0][0])}:{round(quads[0][1])}:{round(quads[0][2])}"
+                position = {"pageNumber": pnum, "boundingRect": bounding, "rects": rects}
+                if subtype in _AREA_TYPES:
+                    position["area"] = True
                 found.append({
                     "key": key, "page": pnum, "content": contents, "quote": quote, "color": color,
-                    "position": {"pageNumber": pnum, "boundingRect": bounding, "rects": rects},
+                    "position": position,
                 })
             except Exception as e:
                 log.warning(f"[pdf-annots] skipping annotation on p.{pnum}: {e}")
@@ -251,15 +258,15 @@ def _extract_pdf_annotations(reader):
 def _strip_embedded_annotations(pdf_path) -> int:
     """Rewrite the stored PDF with the annotation types we import (plus their
     /Popup companions) removed, so the viewer's canvas doesn't paint them under
-    Gamma's own highlight overlays. Link annotations, /Square area notes, and
-    anything else stay untouched. Returns the number of annotations removed.
+    Gamma's own highlight overlays. Link annotations and anything else stay
+    untouched. Returns the number of annotations removed.
 
     Note the file keeps its content-hash name even though its bytes change —
     the name is only a key (``doc_id`` property), never re-derived."""
     from PyPDF2 import PdfReader, PdfWriter
     from PyPDF2.generic import ArrayObject, NameObject
 
-    strip_types = _MARKUP_TYPES | _NOTE_TYPES | {"/Popup"}
+    strip_types = _IMPORT_TYPES | {"/Popup"}
     reader = PdfReader(str(pdf_path))
     writer = PdfWriter()
     writer.append(reader)
@@ -358,4 +365,19 @@ def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
             stripped = _strip_embedded_annotations(pdf_path)
         except Exception as e:
             log.warning(f"[pdf-annots] could not strip annotations from {payload.doc_id}: {e}")
+        if stripped:
+            # The embedded originals are gone from the file, so PDF export must
+            # start writing these blocks again (it skips imported ones only
+            # while the original annotation still lives in the PDF).
+            with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+                rows = conn.execute(
+                    "SELECT id, properties FROM unified_blocks WHERE parent_id=? "
+                    "AND json_extract(properties,'$.imported_annot') IS NOT NULL",
+                    (payload.block_id,)).fetchall()
+                for bid, props_json in rows:
+                    props = json.loads(props_json or "{}")
+                    props["annot_stripped"] = True
+                    conn.execute("UPDATE unified_blocks SET properties=? WHERE id=?",
+                                 (json.dumps(props), bid))
+                conn.commit()
     return {"ok": True, "found": len(found), "imported": inserted, "stripped": stripped}

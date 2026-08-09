@@ -81,9 +81,9 @@ function PapersSettings({ value }) {
         <span className="settingText">
           <span className="settingLabel">Embedded PDF annotations</span>
           <span className="settingDesc">
-            Highlights saved inside a PDF file (a Gamma export, SumatraPDF, Acrobat…) are imported as
-            regular highlights — this controls what happens to the embedded originals so they don't
-            render twice. "Hide in viewer" leaves the file untouched; "Strip from file" removes them
+            Highlights, notes, and rectangle annotations saved inside a PDF file (a Gamma export,
+            SumatraPDF, Acrobat…) are imported as regular highlights — this controls what happens to
+            the embedded originals so they don't render twice. "Hide in viewer" leaves the file untouched; "Strip from file" removes them
             from the stored PDF when they're imported.
           </span>
         </span>
