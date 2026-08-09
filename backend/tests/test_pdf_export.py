@@ -54,7 +54,8 @@ def test_annotate_roundtrips_through_import_extractor():
     # Importer reports top-left-origin PDF points: 200/2=100 … 184/2=92.
     assert abs(br["x1"] - 100) < 0.01 and abs(br["y1"] - 72) < 0.01
     assert abs(br["x2"] - 300) < 0.01 and abs(br["y2"] - 92) < 0.01
-    assert a["color"].startswith("rgba(170, 235, 170")
+    # /CA round-trips too: re-import gives back the exact exported shade.
+    assert a["color"] == "rgba(170, 235, 170, 0.65)"
 
 
 def test_annotate_multiline_and_skips_unusable():
@@ -156,6 +157,47 @@ def test_export_pdf_endpoint(guest):
     assert str(obj["/Subtype"]) == "/Highlight"
     assert str(obj["/Contents"]) == "top comment\n- nested note"
     assert str(obj["/T"]) == "guest"
+
+
+def test_import_annotations_strip_rewrites_pdf(guest):
+    """strip: true removes the embedded markup annotations from the stored
+    file after importing them as blocks, so they can't render twice. Link
+    annotations survive; the import stays idempotent afterwards."""
+    from PyPDF2 import PdfReader
+
+    annotated, written = annotate_pdf(
+        _blank_pdf(),
+        [{"position": _position(), "color": "rgba(170, 235, 170, 0.65)", "note": "kept as block"}],
+    )
+    assert written == 1
+
+    up = guest.post("/api/uploads", files={"file": ("a.pdf", annotated, "application/pdf")})
+    assert up.status_code == 200, up.text
+    doc_id, source_url = up.json()["doc_id"], up.json()["source_url"]
+    page = make_page(guest, "Strip me", properties={"doc_id": doc_id, "source_url": source_url})
+
+    r = guest.post("/api/import/pdf-annotations",
+                   json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True, "found": 1, "imported": 1, "stripped": 1}
+
+    # The stored file no longer carries the highlight annotation…
+    stored = guest.get(source_url).content
+    for pdf_page in PdfReader(io.BytesIO(stored)).pages:
+        annots = pdf_page.get("/Annots")
+        assert not annots or all(
+            str(a.get_object().get("/Subtype")) not in ("/Highlight", "/Text") for a in annots)
+
+    # …but the imported block exists, with the exported color intact.
+    kids = guest.get(f"/api/blocks/{page['id']}/children").json()["children"]
+    hl = [b for b in kids if b["properties"].get("highlight_id")]
+    assert len(hl) == 1
+    assert hl[0]["properties"]["color"] == "rgba(170, 235, 170, 0.65)"
+
+    # Re-running finds nothing left to import or strip.
+    r = guest.post("/api/import/pdf-annotations",
+                   json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
+    assert r.json() == {"ok": True, "found": 0, "imported": 0, "stripped": 0}
 
 
 def test_export_pdf_endpoint_rejects_pageless(guest):

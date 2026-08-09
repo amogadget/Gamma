@@ -3,9 +3,11 @@ annotations embedded in the PDF itself (e.g. saved by SumatraPDF/Acrobat)."""
 
 import hashlib
 import json
+import os
 import re
 import secrets
 import sqlite3
+import tempfile
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
@@ -225,9 +227,15 @@ def _extract_pdf_annotations(reader):
                 color = "rgba(255, 226, 143, 0.65)"
                 c = _resolve(obj.get("/C"))
                 try:
+                    # /CA is the annotation's own opacity — honoring it makes a
+                    # Gamma export → re-import round-trip the exact shade.
+                    alpha = 0.45
+                    ca = _resolve(obj.get("/CA"))
+                    if ca is not None:
+                        alpha = min(max(float(ca), 0.05), 1.0)
                     if c is not None and len(c) == 3:
                         color = (f"rgba({int(float(_resolve(c[0])) * 255)}, {int(float(_resolve(c[1])) * 255)}, "
-                                 f"{int(float(_resolve(c[2])) * 255)}, 0.45)")
+                                 f"{int(float(_resolve(c[2])) * 255)}, {round(alpha, 3)})")
                 except Exception:
                     pass
                 key = f"{pnum}:{subtype}:{round(quads[0][0])}:{round(quads[0][1])}:{round(quads[0][2])}"
@@ -240,9 +248,60 @@ def _extract_pdf_annotations(reader):
     return found
 
 
+def _strip_embedded_annotations(pdf_path) -> int:
+    """Rewrite the stored PDF with the annotation types we import (plus their
+    /Popup companions) removed, so the viewer's canvas doesn't paint them under
+    Gamma's own highlight overlays. Link annotations, /Square area notes, and
+    anything else stay untouched. Returns the number of annotations removed.
+
+    Note the file keeps its content-hash name even though its bytes change —
+    the name is only a key (``doc_id`` property), never re-derived."""
+    from PyPDF2 import PdfReader, PdfWriter
+    from PyPDF2.generic import ArrayObject, NameObject
+
+    strip_types = _MARKUP_TYPES | _NOTE_TYPES | {"/Popup"}
+    reader = PdfReader(str(pdf_path))
+    writer = PdfWriter()
+    writer.append(reader)
+    removed = 0
+    for page in writer.pages:
+        annots = _resolve(page.get("/Annots"))
+        if not annots:
+            continue
+        kept = ArrayObject()
+        for ref in annots:
+            try:
+                subtype = str(_resolve(ref).get("/Subtype", ""))
+            except Exception:
+                subtype = ""
+            if subtype in strip_types:
+                removed += 1
+            else:
+                kept.append(ref)
+        page[NameObject("/Annots")] = kept
+    if not removed:
+        return 0
+    # Atomic swap so a concurrent download never sees a half-written file.
+    fd, tmp_name = tempfile.mkstemp(suffix=".pdf", dir=str(pdf_path.parent))
+    try:
+        with os.fdopen(fd, "wb") as f:
+            writer.write(f)
+        os.replace(tmp_name, str(pdf_path))
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return removed
+
+
 class PdfAnnotsRequest(BaseModel):
     block_id: str
     doc_id: str
+    # Settings → "Embedded PDF annotations": strip them from the stored file
+    # after importing (the alternative is hiding them viewer-side).
+    strip: bool = False
 
 
 # Sync endpoint: PyPDF2 parsing is CPU-bound; the threadpool keeps the loop free.
@@ -261,7 +320,7 @@ def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"could not read PDF annotations: {e}")
     if not found:
-        return {"ok": True, "found": 0, "imported": 0}
+        return {"ok": True, "found": 0, "imported": 0, "stripped": 0}
 
     now = page_now()
     inserted = 0
@@ -290,4 +349,13 @@ def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
                 inserted += 1
             conn.execute("UPDATE unified_blocks SET updated_at=? WHERE id=?", (now, payload.block_id))
             conn.commit()
-    return {"ok": True, "found": len(found), "imported": inserted}
+
+    # Strip AFTER the blocks are committed: if the rewrite fails the file is
+    # untouched and the import still stands; a re-run can strip again.
+    stripped = 0
+    if payload.strip:
+        try:
+            stripped = _strip_embedded_annotations(pdf_path)
+        except Exception as e:
+            log.warning(f"[pdf-annots] could not strip annotations from {payload.doc_id}: {e}")
+    return {"ok": True, "found": len(found), "imported": inserted, "stripped": stripped}
