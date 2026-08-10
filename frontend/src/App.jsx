@@ -5485,6 +5485,7 @@ export default function App() {
               onLoadState={handlePdfLoadState}
               retryRef={pdfRetryRef}
               onExternalLink={handleDocLink}
+              onLinkContext={setLinkPrompt}
               onLinkHighlight={(h) => {
                 if (h.linkTarget?.pageId) {
                   if (h.linkTarget.highlightId) pendingJumpRef.current = h.linkTarget.highlightId;
@@ -5607,11 +5608,24 @@ export default function App() {
             <div className="reportModalHint confirmMessage linkPromptUrl">{linkPrompt}</div>
             <div className="reportModalBtns">
               <button className="chatClearBtn" onClick={() => setLinkPrompt(null)}>Cancel</button>
-              <button
-                className="chatClearBtn"
-                onClick={() => { const url = linkPrompt; setLinkPrompt(null); pushNav(); openPdf(url); }}
-                title="Resolve this link as a PDF and open it as a new paper in Gamma"
-              >Fetch into Gamma</button>
+              {(() => {
+                // Right-click always lands here, even for links whose paper is
+                // already in the library — offer that copy instead of a re-fetch.
+                const pid = findPageForUrl(linkPrompt, homeBlocks);
+                return pid ? (
+                  <button
+                    className="chatClearBtn"
+                    onClick={() => { setLinkPrompt(null); openBlock(pid, { pushNav: true }); }}
+                    title="This paper is already in your library"
+                  >Open in Gamma</button>
+                ) : (
+                  <button
+                    className="chatClearBtn"
+                    onClick={() => { const url = linkPrompt; setLinkPrompt(null); pushNav(); openPdf(url); }}
+                    title="Resolve this link as a PDF and open it as a new paper in Gamma"
+                  >Fetch into Gamma</button>
+                );
+              })()}
               <button
                 className="uiBtn primary"
                 onClick={() => { window.open(linkPrompt, "_blank", "noopener"); setLinkPrompt(null); }}
@@ -5999,6 +6013,17 @@ export default function App() {
             >
               {highlights.find((x) => x.id === highlightMenu.id)?.linkTarget ? "Change link…" : "Link to paper…"}
             </button>
+            {highlights.find((x) => x.id === highlightMenu.id)?.linkTarget?.url ? (
+              <button
+                className="ctxMenuItem"
+                onClick={() => {
+                  setLinkPrompt(highlights.find((x) => x.id === highlightMenu.id).linkTarget.url);
+                  setHighlightMenu(null);
+                }}
+              >
+                Open link in browser…
+              </button>
+            ) : null}
             <button
               className="ctxMenuItem"
               onClick={() => {

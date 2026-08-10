@@ -230,7 +230,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -253,13 +253,14 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // parent state change recreates the handler closures. The wrappers always
   // dispatch to the latest handlers via the ref.
   const cbRef = useRef({});
-  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLoadState, onZoomTo, onAreaSelection };
+  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLinkContext, onLoadState, onZoomTo, onAreaSelection };
   const stableCbs = useMemo(() => ({
     onJump: (...a) => cbRef.current.onJump?.(...a),
     onHighlightJump: (...a) => cbRef.current.onHighlightJump?.(...a),
     onLinkHighlight: (...a) => cbRef.current.onLinkHighlight?.(...a),
     onHighlightContext: (...a) => cbRef.current.onHighlightContext?.(...a),
     onExternalLink: (...a) => cbRef.current.onExternalLink?.(...a),
+    onLinkContext: (...a) => cbRef.current.onLinkContext?.(...a),
   }), []);
 
   // "rendered" only means blank page boxes committed to the DOM — each canvas
@@ -1146,6 +1147,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           findMarks={marksByPage.get(i + 1) || EMPTY_MARKS}
           onInternalLink={goToDestStable}
           onExternalLink={stableCbs.onExternalLink}
+          onLinkContext={stableCbs.onLinkContext}
           onPainted={onPagePainted}
         />
       ))}
@@ -1249,7 +1251,7 @@ function NoteBadge({ hlId, text, style, onClick, onContextMenu }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges, hideEmbeddedAnnots }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges, hideEmbeddedAnnots }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1476,6 +1478,11 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
             if (l.url) onExternalLink?.(l.url);
             else onInternalLink?.(l.dest);
           }}
+          onContextMenu={l.url ? (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onLinkContext?.(l.url);
+          } : undefined}
         />
       ))}
       {(findMarks || []).map((m, i) => (
