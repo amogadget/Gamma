@@ -471,6 +471,14 @@ export default function App() {
     });
   }
 
+  async function writePageLabels(pageId, tags) {
+    await apiJson(`${API}/blocks/${pageId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ properties: { category: tags.join(", ") } }),
+    });
+  }
+
   function commitNewFolder() {
     const name = cleanFolderSegment(newFolderName);
     setNewFolderOpen(false);
@@ -486,6 +494,7 @@ export default function App() {
   const lastPageClickRef = useRef(null); // anchor for shift-range selection
   const [homeMenu, setHomeMenu] = useState(null); // {kind:"page"|"folder", id?, name, x, y}
   const [folderRenaming, setFolderRenaming] = useState(null); // {name, draft}
+  const [labelRenaming, setLabelRenaming] = useState(null); // {name, draft}
 
   function clearSelection() { setSelectedPages(new Set()); setSelectedFolders(new Set()); }
 
@@ -731,6 +740,55 @@ export default function App() {
         }
         await fetchHomeBlocks();
         setStatus(`Folder “${path}” deleted.`);
+      },
+    });
+  }
+
+  // Rename a label everywhere: rewrites properties.category on every page
+  // that carries it (labels are flat — no prefix logic, unlike folders).
+  async function renameLabel(oldName, newNameRaw) {
+    const newName = (newNameRaw || "").replace(/,/g, " ").replace(/\s+/g, " ").trim();
+    setLabelRenaming(null);
+    if (!newName || newName === oldName) return;
+    let changed = 0;
+    for (const b of homeBlocks) {
+      const tags = parseFolderTags(b.properties?.category);
+      if (!tags.includes(oldName)) continue;
+      const next = [...new Set(tags.map((t) => (t === oldName ? newName : t)))];
+      try { await writePageLabels(b.id, next); changed++; } catch {}
+    }
+    if (categoryFilter === oldName) {
+      setCategoryFilter(newName);
+      window.history.replaceState(null, "", `/?category=${encodeURIComponent(newName)}`);
+    }
+    // Keep the open page's frontmatter chips in sync (server already updated by the sweep)
+    setCategory((prev) => {
+      const tags = parseFolderTags(prev);
+      return tags.includes(oldName) ? [...new Set(tags.map((t) => (t === oldName ? newName : t)))].join(", ") : prev;
+    });
+    await fetchHomeBlocks();
+    setStatus(`Label renamed to “${newName}” on ${changed} page${changed === 1 ? "" : "s"}.`);
+  }
+
+  function deleteLabelByName(name) {
+    const members = homeBlocks.filter((b) => parseFolderTags(b.properties?.category).includes(name));
+    setConfirmBox({
+      title: "Delete label",
+      message: members.length
+        ? `Delete “${name}”? The label is removed from its ${members.length} page${members.length === 1 ? "" : "s"} — no pages are deleted.`
+        : `Delete the label “${name}”?`,
+      confirmLabel: "Delete label",
+      onConfirm: async () => {
+        for (const b of members) {
+          try { await writePageLabels(b.id, parseFolderTags(b.properties?.category).filter((t) => t !== name)); } catch {}
+        }
+        if (categoryFilter === name) { setCategoryFilter(""); window.history.replaceState(null, "", "/"); }
+        setCategory((prev) => {
+          const tags = parseFolderTags(prev);
+          return tags.includes(name) ? tags.filter((t) => t !== name).join(", ") : prev;
+        });
+        await fetchHomeBlocks();
+        setStatus(`Label “${name}” deleted.`);
       },
     });
   }
@@ -3869,7 +3927,18 @@ export default function App() {
                       title="Click to edit"
                     >
                       {category ? (
-                        category.split(",").map((t, i) => t.trim() ? <span key={i} className="categoryBadge">{t.trim()}</span> : null)
+                        category.split(",").map((t, i) => t.trim() ? (
+                          <span
+                            key={i}
+                            className="categoryBadge"
+                            title={`Label: ${t.trim()} — right-click to rename or delete`}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setHomeMenu({ kind: "label", name: t.trim(), x: e.clientX, y: e.clientY });
+                            }}
+                          >{t.trim()}</span>
+                        ) : null)
                       ) : "Add labels..."}
                     </span>
                   )}
@@ -4173,7 +4242,14 @@ export default function App() {
                     <button className="categoryBackBtn" onClick={() => { setCategoryFilter(""); window.history.replaceState(null, "", "/"); }}>
                       ← All pages
                     </button>
-                    <div className="categoryFilterHeading">{categoryFilter}</div>
+                    <div
+                      className="categoryFilterHeading"
+                      title="Right-click to rename or delete this label"
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setHomeMenu({ kind: "label", name: categoryFilter, x: e.clientX, y: e.clientY });
+                      }}
+                    >{categoryFilter}</div>
                     <div className="carouselRow">
                       <div className="carouselTrackWrap">
                         <div className="carouselTrack">
@@ -4545,7 +4621,16 @@ export default function App() {
                                 </span>
                               ))}
                               {b._labels?.map((l) => (
-                                <span key={`l:${l}`} className="labelTagBadge" title={`Label: ${l}`}>
+                                <span
+                                  key={`l:${l}`}
+                                  className="labelTagBadge"
+                                  title={`Label: ${l} — right-click to rename or delete`}
+                                  onContextMenu={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setHomeMenu({ kind: "label", name: l, x: e.clientX, y: e.clientY });
+                                  }}
+                                >
                                   <LabelIcon size={10} />
                                   {l}
                                 </span>
@@ -5601,6 +5686,31 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      {labelRenaming ? (
+        <div className="reportOverlay" onClick={() => setLabelRenaming(null)}>
+          <div className="reportModal confirmModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">Rename label</div>
+            <div className="reportModalHint confirmMessage">Renames “{labelRenaming.name}” on every page that carries it.</div>
+            <div className="shareRow">
+              <input
+                autoFocus
+                value={labelRenaming.draft}
+                onFocus={(e) => e.currentTarget.select()}
+                onChange={(e) => setLabelRenaming((s) => ({ ...s, draft: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") renameLabel(labelRenaming.name, labelRenaming.draft);
+                  else if (e.key === "Escape") setLabelRenaming(null);
+                }}
+              />
+              <button
+                className="uiBtn primary"
+                disabled={!labelRenaming.draft.trim()}
+                onClick={() => renameLabel(labelRenaming.name, labelRenaming.draft)}
+              >Rename</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {linkPrompt ? (
         <div className="reportOverlay" onClick={() => setLinkPrompt(null)}>
           <div className="reportModal confirmModal" onClick={(e) => e.stopPropagation()}>
@@ -5971,7 +6081,13 @@ export default function App() {
                   <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); removePagesFromFolder(ids, ""); }}>Clear folder tags</button>
                 </>
               );
-            })() : (
+            })() : homeMenu.kind === "label" ? (
+              <>
+                <button className="ctxMenuItem" onClick={() => { const name = homeMenu.name; setHomeMenu(null); if (!homeMode) goHome(); setCategoryFilter(name); window.history.replaceState(null, "", `/?category=${encodeURIComponent(name)}`); }}>Open</button>
+                <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setLabelRenaming({ name: homeMenu.name, draft: homeMenu.name }); }}>Rename</button>
+                <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deleteLabelByName(homeMenu.name); }}>Delete</button>
+              </>
+            ) : (
               <>
                 <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setFolderFilter(homeMenu.name); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(homeMenu.name)}`); }}>Open</button>
                 <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setFolderRenaming({ name: homeMenu.name, draft: homeMenu.name }); }}>Rename</button>
