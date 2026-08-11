@@ -45,6 +45,9 @@ export const LabelIcon = (p) => (
 export const XIcon = (p) => (
   <Icon {...p}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></Icon>
 );
+export const MessageSquareIcon = (p) => (
+  <Icon {...p}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></Icon>
+);
 export const SearchIcon = (p) => (
   <Icon {...p}><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></Icon>
 );
@@ -134,6 +137,9 @@ export const TrashIcon = (p) => (
 export const Trash2Icon = (p) => (
   <Icon {...p}><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></Icon>
 );
+export const MicIcon = (p) => (
+  <Icon {...p}><path d="M12 19v3" /><path d="M19 10v2a7 7 0 0 1-14 0v-2" /><rect x="9" y="2" width="6" height="12" rx="3" /></Icon>
+);
 export const PaperclipIcon = (p) => (
   <Icon {...p}><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></Icon>
 );
@@ -173,6 +179,15 @@ export const MinimizeIcon = (p) => (
 );
 export const MaximizeIcon = (p) => (
   <Icon {...p}><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></Icon>
+);
+
+// Selection-mode glyphs (phone PDF toolbar): I-beam = text selection,
+// dashed marquee = rectangle drawing.
+export const TextCursorIcon = (p) => (
+  <Icon {...p}><path d="M17 22h-1a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4h1" /><path d="M7 22h1a4 4 0 0 0 4-4v-1" /><path d="M7 2h1a4 4 0 0 1 4 4v1" /></Icon>
+);
+export const RectSelectIcon = (p) => (
+  <Icon {...p}><path d="M5 3a2 2 0 0 0-2 2" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M5 21a2 2 0 0 1-2-2" /><path d="M9 3h1" /><path d="M9 21h1" /><path d="M14 3h1" /><path d="M14 21h1" /><path d="M3 9v1" /><path d="M21 9v1" /><path d="M3 14v1" /><path d="M21 14v1" /></Icon>
 );
 
 // Filled glyphs — bespoke markup, not the stroke wrapper.

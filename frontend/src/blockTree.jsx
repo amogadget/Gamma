@@ -1,6 +1,6 @@
 // The Logseq-style outliner: block rows (markdown rendering, inline
-// editing, [[refs]], link chips, image drop), drag handles, and the tree.
-import React, { useEffect, useRef, useState } from "react";
+// editing, [[refs]], link chips, image drop/paste), drag handles, and the tree.
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -11,9 +11,98 @@ import { COLORS } from "./pdfViewer";
 import { AutoGrowTextarea } from "./widgets";
 import { isEnterCommit } from "./utils";
 import { FolderIcon, LinkIcon } from "./icons";
+import {
+  caretClientPos, findMathAtCursor, insertionFor, latexCompletions,
+  LatexAcPopup, MathLivePreview,
+} from "./latexEditor";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
+
+// A block's rendered markdown, memoized: any edit re-renders the whole tree
+// (setBlocks replaces it), and without the memo one keystroke re-ran
+// ReactMarkdown + KaTeX for every rendered block on the page. Re-parses only
+// when the content or a resolved [[ref]] chip label actually changes; ref
+// labels are resolved by the caller so the comparison here stays a string
+// check. onBlockRefClick is deliberately excluded from the comparison — the
+// caller passes an identity-stable wrapper.
+const BlockMarkdown = React.memo(function BlockMarkdown({ content, refLabels, onBlockRefClick }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeRaw, rehypeKatex]}
+      urlTransform={(url) => url.startsWith("blockref:") ? url : defaultUrlTransform(url)}
+      components={{
+        a: ({ href, children }) => {
+          if (href?.startsWith("blockref:")) {
+            const refId = href.slice(9);
+            const ref = refLabels?.[refId];
+            return (
+              <a
+                href={`?block=${refId}`}
+                className="blockRefChip"
+                title={ref?.page_title ? `From: ${ref.page_title}` : undefined}
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onBlockRefClick?.(refId);
+                }}
+              >
+                {ref?.content || String(children)}
+              </a>
+            );
+          }
+          return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+        }
+      }}
+    >
+      {content
+        .replace(/!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g, '<img src="$2" alt="$1" width="$3" />')
+        .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
+    </ReactMarkdown>
+  );
+}, (prev, next) =>
+  prev.content === next.content
+  && Object.keys(prev.refLabels).length === Object.keys(next.refLabels).length
+  && Object.entries(next.refLabels).every(([id, r]) =>
+    prev.refLabels[id]?.content === r.content && prev.refLabels[id]?.page_title === r.page_title)
+);
+
+// Area-highlight crops shown on note cards. Nothing is stored with the block —
+// the region is re-cropped from the loaded document (App's pdfCaptureRef) and
+// cached here per session, keyed by the rect, so scrolling the notes doesn't
+// re-render the same crop and an edited rect gets a fresh one.
+const _areaSnapCache = new Map();
+function AreaSnapshot({ block, captureArea, docNonce }) {
+  const r = block.position?.boundingRect;
+  const key = `${block.highlightId}:${r?.pageNumber}:${r?.x1},${r?.y1},${r?.x2},${r?.y2}`;
+  const [src, setSrc] = useState(() => _areaSnapCache.get(key) || null);
+  useEffect(() => {
+    const cached = _areaSnapCache.get(key);
+    if (cached) { setSrc(cached); return; }
+    setSrc(null);
+    let cancelled = false;
+    // docNonce re-runs this once the PDF finishes loading — the first attempt
+    // can land before the viewer has a document and resolve to null.
+    Promise.resolve(captureArea?.(block)).then((img) => {
+      if (cancelled || !img) return;
+      _areaSnapCache.set(key, img);
+      while (_areaSnapCache.size > 60) _areaSnapCache.delete(_areaSnapCache.keys().next().value);
+      setSrc(img);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [key, captureArea, docNonce]);
+  // Reserve the crop's aspect ratio while it renders so the card doesn't jump.
+  const ratio = r && r.y2 > r.y1 ? (r.x2 - r.x1) / (r.y2 - r.y1) : null;
+  return src ? (
+    <img className="blockAreaSnap" src={src} alt="Area selection" draggable={false}
+      style={{ borderLeftColor: block.color || undefined }} />
+  ) : (
+    <div className="blockAreaSnap blockAreaSnapPending"
+      style={{ aspectRatio: ratio || undefined, borderLeftColor: block.color || undefined }} />
+  );
+}
 
 function BlockRow({
   block,
@@ -47,11 +136,35 @@ function BlockRow({
   onBlockDragOver,
   onBlockDragLeave,
   onBlockDrop,
+  captureArea,
+  docNonce,
 }) {
   const ref = useRef(null);
   const clickPosRef = useRef(null);
+  // Identity-stable wrapper so the memoized BlockMarkdown never sees a fresh
+  // callback (rowProps closures are rebuilt every App render) yet always
+  // calls the latest one — same idiom as pdfViewer's stableCbs.
+  const refClickRef = useRef(null);
+  refClickRef.current = onBlockRefClick;
+  const stableRefClick = useRef((id) => refClickRef.current?.(id)).current;
+  // Resolve [[ref]] chip labels here (cheap per render) so BlockMarkdown's
+  // memo can compare them as strings instead of depending on allBlocks,
+  // whose identity changes on every edit.
+  const refLabels = useMemo(() => {
+    const out = {};
+    for (const [, id] of (block.content || "").matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)) {
+      const rb = allBlocks?.find((b) => b.id === id) || refCache?.[id];
+      if (rb) out[id] = { content: rb.content, page_title: rb.page_title };
+    }
+    return out;
+  }, [block.content, allBlocks, refCache]);
   const [refPopup, setRefPopup] = useState(null); // { query, rect }
   const [refSelectedIdx, setRefSelectedIdx] = useState(0);
+  // Live LaTeX aids while the caret sits inside $...$ / $$...$$:
+  // { tex, display, anchor, ac: { start, items } | null }. Recomputed on every
+  // edit AND caret move (onSelect) — the preview must track the caret.
+  const [mathUi, setMathUi] = useState(null);
+  const [mathAcIdx, setMathAcIdx] = useState(0);
   const [searchResults, setSearchResults] = useState([]);
   const [imageDragOver, setImageDragOver] = useState(false);
   const uploadingRef = useRef(false);
@@ -94,6 +207,50 @@ function BlockRow({
       const newCursor = triggerStart + `[[${b.id}]]`.length;
       ta.setSelectionRange(newCursor, newCursor);
       ta.focus();
+    });
+  }
+
+  function updateMathUi(ta, typing) {
+    const cursor = ta.selectionStart;
+    if (cursor !== ta.selectionEnd) { setMathUi(null); return; }
+    const seg = findMathAtCursor(ta.value, cursor);
+    if (!seg) { setMathUi(null); return; }
+    // \command autocomplete: a backslash-word ending at the caret, only
+    // inside math (a bare "\" in prose — file paths — must not trigger it),
+    // and only opened by TYPING — clicking into an existing formula must not
+    // pop the menu. Caret moves (typing=false) keep an already-open popup
+    // only while the caret stays on the same trigger; React fires onSelect
+    // right after onChange for a keystroke, so this must not wipe it.
+    const m = ta.value.slice(seg.start, cursor).match(/\\([a-zA-Z]+)$/);
+    const next = {
+      tex: ta.value.slice(seg.start, seg.end),
+      display: seg.display,
+      anchor: caretClientPos(ta, cursor),
+      ac: null,
+    };
+    setMathUi((prev) => {
+      const start = m ? cursor - m[0].length : -1;
+      if (m && (typing || prev?.ac?.start === start)) {
+        const items = latexCompletions(m[1]);
+        if (items.length) next.ac = { start, items };
+      }
+      return next;
+    });
+    if (typing) setMathAcIdx(0);
+  }
+
+  function acceptLatexAc(c) {
+    const ta = ref.current;
+    if (!ta || !mathUi?.ac) return;
+    const { start } = mathUi.ac;
+    const { text, caret } = insertionFor(c);
+    const newVal = ta.value.slice(0, start) + text + ta.value.slice(ta.selectionStart);
+    onChangeText(block.id, newVal);
+    setMathUi(null);
+    requestAnimationFrame(() => {
+      try { ta.setSelectionRange(start + caret, start + caret); } catch (_) {}
+      ta.focus();
+      updateMathUi(ta);
     });
   }
 
@@ -163,22 +320,52 @@ function BlockRow({
     if (!e.currentTarget.contains(e.relatedTarget)) setImageDragOver(false);
   }
 
-  async function handleImageDrop(e) {
-    e.preventDefault();
-    e.stopPropagation();
-    setImageDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (!file || !file.type.startsWith("image/")) return;
-    if (uploadingRef.current) return;
+  async function uploadImage(file) {
+    if (!file || !file.type.startsWith("image/")) return null;
+    if (uploadingRef.current) return null;
     uploadingRef.current = true;
     try {
       const form = new FormData();
       form.append("file", file);
       const res = await fetch("/api/upload-image", { method: "POST", body: form, credentials: "include" });
-      if (!res.ok) { uploadingRef.current = false; return; }
-      const data = await res.json();
-      onChangeText(block.id, (block.content || "") + "\n" + `![](${data.url})`);
+      if (!res.ok) return null;
+      return (await res.json()).url;
+    } catch (_) {
+      return null;
     } finally { uploadingRef.current = false; }
+  }
+
+  async function handleImageDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    setImageDragOver(false);
+    const url = await uploadImage(e.dataTransfer.files?.[0]);
+    if (url) onChangeText(block.id, (block.content || "") + "\n" + `![](${url})`);
+  }
+
+  // Paste an image (screenshot) while editing → upload it and insert the
+  // markdown at the cursor. Text pastes fall through to the browser default.
+  async function handleEditorPaste(e) {
+    const file = Array.from(e.clipboardData?.items || [])
+      .find((it) => it.type?.startsWith("image/"))?.getAsFile();
+    if (!file) return;
+    e.preventDefault();
+    const ta = ref.current;
+    // Capture the cursor now — the upload takes a beat and focus may move.
+    const start = ta ? ta.selectionStart : null;
+    const end = ta ? ta.selectionEnd : null;
+    const url = await uploadImage(file);
+    if (!url) return;
+    const md = `![](${url})`;
+    const val = (ta ? ta.value : block.content) || "";
+    if (start != null) {
+      onChangeText(block.id, val.slice(0, start) + md + val.slice(end));
+      requestAnimationFrame(() => {
+        try { ta.setSelectionRange(start + md.length, start + md.length); } catch (_) {}
+      });
+    } else {
+      onChangeText(block.id, val + "\n" + md);
+    }
   }
 
   return (
@@ -323,17 +510,28 @@ function BlockRow({
                 } else {
                   setRefPopup(null);
                 }
+                updateMathUi(e.target, true);
               }}
+              onSelect={(e) => updateMathUi(e.target, false)}
               onBlur={() => {
                 onStartEdit(block.id, false);
+                setMathUi(null);
                 setTimeout(() => setRefPopup(null), 120);
               }}
+              onPaste={handleEditorPaste}
               onKeyDown={(e) => {
                 if (refPopup && searchResults.length > 0) {
                   if (e.key === "ArrowDown") { e.preventDefault(); setRefSelectedIdx((i) => Math.min(i + 1, searchResults.length - 1)); return; }
                   if (e.key === "ArrowUp") { e.preventDefault(); setRefSelectedIdx((i) => Math.max(i - 1, 0)); return; }
                   if (isEnterCommit(e)) { e.preventDefault(); insertRef(searchResults[refSelectedIdx]); return; }
                   if (e.key === "Escape") { e.preventDefault(); setRefPopup(null); return; }
+                }
+                if (mathUi?.ac) {
+                  const n = mathUi.ac.items.length;
+                  if (e.key === "ArrowDown") { e.preventDefault(); setMathAcIdx((i) => Math.min(i + 1, n - 1)); return; }
+                  if (e.key === "ArrowUp") { e.preventDefault(); setMathAcIdx((i) => Math.max(i - 1, 0)); return; }
+                  if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); acceptLatexAc(mathUi.ac.items[mathAcIdx]); return; }
+                  if (e.key === "Escape") { e.preventDefault(); setMathUi((u) => u ? { ...u, ac: null } : null); return; }
                 }
                 if (isEnterCommit(e) && !e.shiftKey) {
                   e.preventDefault();
@@ -360,39 +558,7 @@ function BlockRow({
           ) : (
             <div className="blockRendered">
               {(block.content || "").trim() ? (
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm, remarkMath]}
-                  rehypePlugins={[rehypeRaw, rehypeKatex]}
-                  urlTransform={(url) => url.startsWith("blockref:") ? url : defaultUrlTransform(url)}
-                  components={{
-                    a: ({ href, children }) => {
-                      if (href?.startsWith("blockref:")) {
-                        const refId = href.slice(9);
-                        const refBlock = allBlocks?.find((b) => b.id === refId) || refCache?.[refId];
-                        return (
-                          <a
-                            href={`?block=${refId}`}
-                            className="blockRefChip"
-                            title={refBlock?.page_title ? `From: ${refBlock.page_title}` : undefined}
-                            onClick={(e) => {
-                              if (e.metaKey || e.ctrlKey) return;
-                              e.preventDefault();
-                              e.stopPropagation();
-                              onBlockRefClick?.(refId);
-                            }}
-                          >
-                            {refBlock?.content || String(children)}
-                          </a>
-                        );
-                      }
-                      return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
-                    }
-                  }}
-                >
-                  {(block.content || "")
-                    .replace(/!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g, '<img src="$2" alt="$1" width="$3" />')
-                    .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
-                </ReactMarkdown>
+                <BlockMarkdown content={block.content || ""} refLabels={refLabels} onBlockRefClick={stableRefClick} />
               ) : (
                 <div className="blockPlaceholder">(empty)</div>
               )}
@@ -403,6 +569,9 @@ function BlockRow({
             <div className="blockQuote">
               {block.quote}
             </div>
+          ) : null}
+          {block.position?.area && captureArea ? (
+            <AreaSnapshot block={block} captureArea={captureArea} docNonce={docNonce} />
           ) : null}
           {(block.properties?.link_url || block.properties?.link_page_id) ? (
             <button
@@ -426,6 +595,14 @@ function BlockRow({
           >×</button>
         ) : null}
       </div>
+      {!readOnly && block.editMode && mathUi ? (
+        <>
+          <MathLivePreview tex={mathUi.tex} display={mathUi.display} anchor={mathUi.anchor} />
+          {mathUi.ac ? (
+            <LatexAcPopup items={mathUi.ac.items} selected={mathAcIdx} anchor={mathUi.anchor} onPick={acceptLatexAc} />
+          ) : null}
+        </>
+      ) : null}
       {refPopup && searchResults.length > 0 && (
         <div
           className="refPopup"

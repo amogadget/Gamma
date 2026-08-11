@@ -176,8 +176,6 @@
   border-top: 1px solid var(--border-subtle);
   margin-top: 4px;
 }
-.movePicker { max-height: 45vh; overflow-y: auto; top: calc(100% + 4px); z-index: 1400; }
-
 .folderRow.dragOver {
   background: var(--accent-bg);
   border-color: var(--accent-dark);
@@ -396,23 +394,6 @@
   white-space: nowrap;
 }
 /* line the folder-row icon up with the file-row icon column */
-
-/* hover pin button on list rows */
-.rowPinBtn {
-  display: inline-flex;
-  align-items: center;
-  margin-left: 8px;
-  padding: 1px;
-  border: none;
-  background: none;
-  color: var(--text-dim);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s, color 0.12s;
-}
-.blockRow:hover .rowPinBtn { opacity: 0.6; }
-.rowPinBtn:hover { opacity: 1 !important; color: var(--accent); }
-.rowPinBtn.pinned { opacity: 1; color: var(--accent); }
 
 /* pinned favorites strip */
 .pinnedSection { padding: 0 4px 4px; margin-bottom: 6px; }

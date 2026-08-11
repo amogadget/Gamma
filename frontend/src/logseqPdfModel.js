@@ -276,6 +276,11 @@ export function addHighlightAsBlock(blocks, highlight) {
 
 export function blocksToHighlights(blocks) {
   const out = [];
+  // A highlight "has a note" when the user typed anything on it: the block's
+  // own content (the comment) or any non-empty block nested under it.
+  function hasChildNote(b) {
+    return (b.children || []).some((c) => (c.content || "").trim() !== "" || hasChildNote(c));
+  }
   function walk(list) {
     for (const b of list || []) {
       if (isHighlightBlock(b) && blockPosition(b)) {
@@ -283,6 +288,7 @@ export function blocksToHighlights(blocks) {
           id: blockHighlightId(b),
           content: { text: blockQuote(b) },
           comment: { text: b.content || "" },
+          hasNote: (b.content || "").trim() !== "" || hasChildNote(b),
           color: blockColor(b),
           position: blockPosition(b),
         });

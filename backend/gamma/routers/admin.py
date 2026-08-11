@@ -23,6 +23,18 @@ from ..config import USERS_DIR
 from ..db import connect_users_db, page_now
 from ..logbuf import tail as _log_tail
 from ..seed import create_user_dbs
+from ..server_settings import (
+    QUOTA_MB_MAX,
+    QUOTA_MB_MIN,
+    UPLOAD_MB_MAX,
+    UPLOAD_MB_MIN,
+    get_defaults,
+    set_default_max_upload_mb,
+    set_default_quota_mb,
+    usage_bytes,
+    validate_quota_mb,
+    validate_upload_mb,
+)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -32,10 +44,13 @@ MAX_PASSWORD_LEN = 128
 
 def _user_list(conn: sqlite3.Connection) -> list:
     rows = conn.execute(
-        "SELECT username, is_guest, is_admin, created_at FROM users ORDER BY created_at"
+        "SELECT username, is_guest, is_admin, created_at, max_upload_mb, quota_mb "
+        "FROM users ORDER BY created_at"
     ).fetchall()
-    return [{"username": u, "is_guest": bool(g), "is_admin": bool(a), "created_at": c}
-            for u, g, a, c in rows]
+    return [{"username": u, "is_guest": bool(g), "is_admin": bool(a), "created_at": c,
+             "max_upload_mb": mu, "quota_mb": q,  # overrides; null = server default
+             "used_bytes": usage_bytes(u)}
+            for u, g, a, c, mu, q in rows]
 
 
 def _get_user(conn: sqlite3.Connection, username: str):
@@ -62,6 +77,34 @@ async def get_logs(request: Request, after: int = 0):
     polls incrementally. Admin-only: log lines reveal other users' activity."""
     require_admin(request)
     return {"entries": _log_tail(after)}
+
+
+@router.get("/settings")
+async def get_settings(request: Request):
+    """Server-wide default storage limits (per-user overrides live on the
+    users list) for the admin rows in the Settings dialog."""
+    require_admin(request)
+    return {**get_defaults(),
+            "max_upload_mb_range": [UPLOAD_MB_MIN, UPLOAD_MB_MAX],
+            "quota_mb_range": [QUOTA_MB_MIN, QUOTA_MB_MAX]}
+
+
+class SettingsUpdateRequest(BaseModel):
+    max_upload_mb: int | None = None
+    quota_mb: int | None = None  # 0 = unlimited
+
+
+@router.put("/settings")
+async def update_settings(payload: SettingsUpdateRequest, request: Request):
+    require_admin(request)
+    try:
+        if payload.max_upload_mb is not None:
+            set_default_max_upload_mb(payload.max_upload_mb)
+        if payload.quota_mb is not None:
+            set_default_quota_mb(payload.quota_mb)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return get_defaults()
 
 
 @router.get("/users")
@@ -102,6 +145,10 @@ async def create_user(payload: UserCreateRequest, request: Request):
 class UserUpdateRequest(BaseModel):
     password: str | None = None   # set a new password (never invalidates sessions)
     is_admin: bool | None = None  # grant/revoke the admin privilege
+    # storage-limit overrides: omitted = unchanged, explicit null = inherit the
+    # server default again (model_fields_set tells the two apart)
+    max_upload_mb: int | None = None
+    quota_mb: int | None = None   # 0 = unlimited
 
 
 @router.put("/users/{username}")
@@ -111,7 +158,9 @@ async def update_user(username: str, payload: UserUpdateRequest, request: Reques
         row = _get_user(conn, username)
         if not row:
             raise HTTPException(status_code=404, detail="user not found")
-        if row[1]:  # guest
+        if row[1] and (payload.password is not None or payload.is_admin is not None):
+            # storage limits ARE settable on the guest (a public account is
+            # exactly where a quota matters); credentials/privileges are not
             raise HTTPException(status_code=400, detail="the guest account has no password or privileges")
         if payload.password is not None:
             password = _check_password(payload.password)
@@ -122,6 +171,15 @@ async def update_user(username: str, payload: UserUpdateRequest, request: Reques
                 raise HTTPException(status_code=400, detail="cannot demote the last admin")
             conn.execute("UPDATE users SET is_admin = ? WHERE username = ?",
                          (1 if payload.is_admin else 0, username))
+        try:
+            if "max_upload_mb" in payload.model_fields_set:
+                value = None if payload.max_upload_mb is None else validate_upload_mb(payload.max_upload_mb)
+                conn.execute("UPDATE users SET max_upload_mb = ? WHERE username = ?", (value, username))
+            if "quota_mb" in payload.model_fields_set:
+                value = None if payload.quota_mb is None else validate_quota_mb(payload.quota_mb)
+                conn.execute("UPDATE users SET quota_mb = ? WHERE username = ?", (value, username))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         conn.commit()
         return {"users": _user_list(conn)}
 

@@ -9,7 +9,9 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 // public/pdf.worker.min.mjs is the matching legacy worker — keep both legacy.
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
-import { ChevronRightIcon, LinkIcon, OutlineIcon } from "./icons";
+import { createPortal } from "react-dom";
+import { ChevronRightIcon, LinkIcon, MessageSquareIcon, OutlineIcon } from "./icons";
+import { ChatMarkdown } from "./widgets";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 // Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
 // Guarded: a throw at module scope takes down every route, PDF or not.
@@ -295,7 +297,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onBeforeLinkJump, onLoadState, retryRef }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -318,13 +320,14 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // parent state change recreates the handler closures. The wrappers always
   // dispatch to the latest handlers via the ref.
   const cbRef = useRef({});
-  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLoadState, onZoomTo, onAreaSelection };
+  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLinkContext, onLoadState, onZoomTo, onAreaSelection };
   const stableCbs = useMemo(() => ({
     onJump: (...a) => cbRef.current.onJump?.(...a),
     onHighlightJump: (...a) => cbRef.current.onHighlightJump?.(...a),
     onLinkHighlight: (...a) => cbRef.current.onLinkHighlight?.(...a),
     onHighlightContext: (...a) => cbRef.current.onHighlightContext?.(...a),
     onExternalLink: (...a) => cbRef.current.onExternalLink?.(...a),
+    onLinkContext: (...a) => cbRef.current.onLinkContext?.(...a),
   }), []);
 
   // "rendered" only means blank page boxes committed to the DOM — each canvas
@@ -385,6 +388,87 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     const m = /^\/api\/uploads\/([A-Za-z0-9_-]+)\.pdf$/.exec(url || "");
     return m ? `${"/api/page-image"}/${m[1]}` : null;
   }, [url]);
+  // Two-finger pinch zoom. Committing a real zoom per move event (the wheel
+  // path) is hopelessly janky on phones — every commit re-lays-out and
+  // re-renders every page. Instead the gesture only moves a CSS transform on
+  // the page stack (compositing, no layout; blurry while the fingers are
+  // down, like every native PDF app), and the real zoom is committed ONCE on
+  // finger-lift: scroll is re-based so the content under the fingers' final
+  // midpoint is what the zoom-anchor effect (keyed on that midpoint) holds
+  // in place through the re-layout. preventDefault on the two-finger move
+  // blocks both native scrolling and the browser's own page zoom.
+  const zoomLayerRef = useRef(null);
+  useEffect(() => {
+    const el = viewerRef.current;
+    if (!el) return;
+    let start = null; // gesture-start snapshot: finger distance/midpoint, committed scale, scroll
+    let cur = null; // latest preview: effective ratio + midpoint
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+    const mid = (t, r) => ({
+      x: (t[0].clientX + t[1].clientX) / 2 - r.left,
+      y: (t[0].clientY + t[1].clientY) / 2 - r.top,
+    });
+    const onTouchStart = (e) => {
+      if (e.touches.length !== 2) return;
+      const m = mid(e.touches, el.getBoundingClientRect());
+      start = {
+        dist: dist(e.touches), scale: wheelScaleRef.current,
+        m0x: m.x, m0y: m.y, sl: el.scrollLeft, st: el.scrollTop,
+      };
+      cur = null;
+      if (zoomLayerRef.current) zoomLayerRef.current.style.willChange = "transform";
+    };
+    const onTouchMove = (e) => {
+      if (!start || e.touches.length !== 2) return;
+      e.preventDefault();
+      const m = mid(e.touches, el.getBoundingClientRect());
+      // Clamp the previewed scale too, so the preview never shows a zoom the
+      // commit would refuse.
+      const k = clampZoom(start.scale * (dist(e.touches) / start.dist)) / start.scale;
+      cur = { k, m1x: m.x, m1y: m.y };
+      // origin 0 0: keep the content that started under the midpoint glued to
+      // the (moving) midpoint — visual = t + k·content − scroll, solve for t.
+      const tx = m.x + start.sl - k * (start.sl + start.m0x);
+      const ty = m.y + start.st - k * (start.st + start.m0y);
+      const l = zoomLayerRef.current;
+      if (l) l.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
+    };
+    const finish = () => {
+      if (!start) return;
+      const l = zoomLayerRef.current;
+      if (l) { l.style.transform = ""; l.style.willChange = ""; }
+      if (cur) {
+        // Re-base scroll by the midpoint's travel: afterwards the content at
+        // the final midpoint (at the old scale) is the pinched content, which
+        // the anchor effect then re-places there at the committed scale. The
+        // refs get the unclamped values on purpose — the anchor effect reads
+        // them instead of live scroll to survive pre-layout clamping.
+        const sl = start.sl + start.m0x - cur.m1x;
+        const st = start.st + start.m0y - cur.m1y;
+        el.scrollLeft = sl; el.scrollTop = st;
+        lastScrollLeftRef.current = sl; lastScrollRef.current = st;
+        const next = clampZoom(start.scale * cur.k);
+        if (next !== wheelScaleRef.current) {
+          zoomAnchorRef.current = { x: cur.m1x, y: cur.m1y };
+          wheelScaleRef.current = next;
+          docSwapPendingRef.current = false;
+          cbRef.current.onZoomTo?.(next);
+        }
+      }
+      start = null; cur = null;
+    };
+    const onTouchEnd = (e) => { if (e.touches.length < 2) finish(); };
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, []);
 
   // Group find marks per page once, sharing one frozen empty array so pages
   // without marks keep referentially-equal props (memo stays effective).
@@ -1103,7 +1187,16 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           }
           lineRects.push({ ...cr });
         }
-        setSelPopup({ text, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom }, lineRects, pageNumber });
+        // Snapshot the page's offset/size NOW: the confirm click may come after
+        // a scroll or zoom, when re-measuring the page would no longer agree
+        // with these viewport-space selection rects.
+        const pageRect = pageEl.getBoundingClientRect();
+        const pageW = parseFloat(pageEl.style.width) || pageEl.offsetWidth || 1;
+        const pageH = parseFloat(pageEl.style.height) || pageEl.offsetHeight || 1;
+        setSelPopup({
+          text, rect: { top: r.top, left: r.left, width: r.width, bottom: r.bottom }, lineRects, pageNumber,
+          pageLeft: pageRect.left, pageTop: pageRect.top, pageW, pageH,
+        });
       }
     }
     // iPadOS/iOS never fires mouseup for a long-press selection or for a drag
@@ -1139,11 +1232,10 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       return;
     }
     const r = selPopup.rect;
-    const pageEl = document.querySelector(`[data-page="${selPopup.pageNumber}"]`);
-    const pageRect = pageEl?.getBoundingClientRect();
-    const curW = pageEl ? parseFloat(pageEl.style.width) || pageEl.offsetWidth : 1;
-    const curH = pageEl ? parseFloat(pageEl.style.height) || pageEl.offsetHeight : 1;
-    const px = pageRect?.left || 0, py = pageRect?.top || 0;
+    // Use the page offset/size snapshotted with the selection — the current
+    // page position may have drifted (scroll/zoom) since the rects were taken.
+    const curW = selPopup.pageW, curH = selPopup.pageH;
+    const px = selPopup.pageLeft, py = selPopup.pageTop;
     const x1 = r.left - px, y1 = r.top - py;
     const x2 = r.left + r.width - px, y2 = r.bottom - py;
     const lineRects = (selPopup.lineRects && selPopup.lineRects.length)
@@ -1209,18 +1301,24 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       ) : null}
       {/* overflow-anchor off: the browser's own scroll anchoring would fight
           the zoom re-placement above with adjustments of its own. */}
-      <div ref={viewerRef} className={"pdfViewer" + (areaCursor ? " areaCursor" : "")}
+      <div ref={viewerRef} className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "")}
         style={{ height: "100%", overflowY: "auto", overflowX: "auto", overflowAnchor: "none" }}
         onScroll={(e) => {
           lastScrollRef.current = e.currentTarget.scrollTop;
           lastScrollLeftRef.current = e.currentTarget.scrollLeft;
           syncCurPage();
         }}>
+      {/* pdfZoomLayer: the pinch preview's transform target — spans the full
+          scroll content so transform-origin 0 0 coincides with content (0,0) */}
+      <div ref={zoomLayerRef} className="pdfZoomLayer">
       {Array.from({ length: numPages }, (_, i) => (
         <PdfPage key={`${docSeq}-${i + 1}`} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
           onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
+          noteBadges={!!noteBadges}
+          hideEmbeddedAnnots={!!hideEmbeddedAnnots}
+          areaMode={canAnnotate ? !!areaMode : false}
           onAreaSelected={canAnnotate ? onAreaSelected : undefined}
           pendingArea={selPopup?.kind === "area" && selPopup.pageNumber === i + 1 ? selPopup : null}
           reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
@@ -1228,9 +1326,11 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           previewBase={previewBase}
           onInternalLink={goToDestStable}
           onExternalLink={stableCbs.onExternalLink}
+          onLinkContext={stableCbs.onLinkContext}
           onPainted={onPagePainted}
         />
       ))}
+      </div>
       {selPopup && onSelectionFinished && (
         <div style={{
           position: "fixed", zIndex: 9999,
@@ -1288,7 +1388,49 @@ function OutlineNode({ item, depth, onDest, onUrl }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onPainted, onAreaSelected, pendingArea, previewBase }) {
+// Speech-bubble badge on a highlight that carries a typed note. The hover
+// tooltip renders the note's markdown + KaTeX — a native title attribute is
+// plain-text only. Portaled to <body> with fixed coordinates so the pinch
+// transform on .pdfZoomLayer (an ancestor transform makes position:fixed
+// resolve against it, not the viewport) can never misplace it.
+function NoteBadge({ hlId, text, style, onClick, onContextMenu }) {
+  const [tip, setTip] = useState(null);
+  const btnRef = useRef(null);
+  const timerRef = useRef(0);
+  const show = () => {
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const below = r.top < window.innerHeight * 0.45;
+      setTip({
+        left: Math.max(8, Math.min(r.left - 12, window.innerWidth - 396)),
+        ...(below ? { top: r.bottom + 6 } : { bottom: window.innerHeight - r.top + 6 }),
+      });
+    }, 120);
+  };
+  const hide = () => { clearTimeout(timerRef.current); setTip(null); };
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+  return (
+    <>
+      <button ref={btnRef} type="button" className="pdfNoteBadge" data-hl-id={hlId} style={style}
+        onMouseEnter={show} onMouseLeave={hide}
+        onClick={(e) => { hide(); onClick(e); }}
+        onContextMenu={(e) => { hide(); onContextMenu(e); }}
+      >
+        <MessageSquareIcon size={10} strokeWidth={2.2} />
+      </button>
+      {tip ? createPortal(
+        <div className="pdfNoteTip" style={tip}>
+          {text ? <ChatMarkdown text={text} /> : "This highlight has a note"}
+        </div>,
+        document.body
+      ) : null}
+    </>
+  );
+}
+
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, previewBase, areaMode, noteBadges, hideEmbeddedAnnots }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1353,7 +1495,14 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         const ctx = canvas.getContext("2d"); ctx.setTransform(pr, 0, 0, pr, 0, 0);
         // Cancel any in-flight render (rapid zoom changes) instead of stacking them
         try { renderTaskRef.current?.cancel(); } catch {}
-        const task = page.render({ canvasContext: ctx, viewport: vp });
+        // DISABLE keeps embedded markup annotations (e.g. highlights burned in
+        // by a Gamma export, or SumatraPDF/Acrobat ones) out of the canvas so
+        // they don't stack under Gamma's own overlay after an import. Link
+        // regions are unaffected — they're DOM overlays from getAnnotations().
+        const task = page.render({
+          canvasContext: ctx, viewport: vp,
+          annotationMode: hideEmbeddedAnnots ? pdfjsLib.AnnotationMode.DISABLE : pdfjsLib.AnnotationMode.ENABLE,
+        });
         renderTaskRef.current = task;
         try {
           await task.promise;
@@ -1399,21 +1548,26 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       }
     })();
     return () => { cancelled = true; };
-  }, [pdfDoc, pageNumber, scale, visible]);
+  }, [pdfDoc, pageNumber, scale, visible, hideEmbeddedAnnots]);
 
   const curW = pageSize ? pageSize.width * scale : 1, curH = pageSize ? pageSize.height * scale : 1;
 
-  // Ctrl+drag: draw a rectangle (screenshot-style) to make an area note.
-  // Document-level move/up listeners so the drag survives leaving the page
-  // box; rects are clamped to it. Tiny drags are Ctrl+clicks — ignored, so
-  // Ctrl+click on highlights (additive chat quote) keeps working.
+  // Rectangle drag (screenshot-style area note): Ctrl+drag with a mouse, or
+  // any drag while the phone's rectangle mode (areaMode) is on. Pointer
+  // events cover mouse and touch with one path; document-level move/up
+  // listeners so the drag survives leaving the page box; rects are clamped
+  // to it. Tiny drags are clicks — ignored, so Ctrl+click on highlights
+  // (additive chat quote) keeps working.
   const [marquee, setMarquee] = useState(null); // live drag rect, current-render px
   function beginAreaDrag(e) {
     if (readOnly || !onAreaSelected) return;
-    if (e.button !== 0 || !e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    if (e.button !== 0) return;
+    const viaCtrl = e.pointerType === "mouse" && e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
+    if (!areaMode && !viaCtrl) return;
     const wrap = wrapRef.current;
     if (!wrap) return;
     e.preventDefault(); // keep the text layer from starting a selection
+    const pointerId = e.pointerId;
     const box = wrap.getBoundingClientRect();
     const sx = e.clientX, sy = e.clientY;
     const clamp = (v, max) => Math.max(0, Math.min(max, v));
@@ -1423,10 +1577,33 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       x2: clamp(Math.max(sx, cx) - box.left, box.width),
       y2: clamp(Math.max(sy, cy) - box.top, box.height),
     });
-    function onMove(ev) { setMarquee(toRect(ev.clientX, ev.clientY)); }
+    const detach = () => {
+      cancelAnimationFrame(moveRaf);
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointercancel", onCancel);
+    };
+    // High-rate pointers outpace frames, and each setMarquee re-renders the
+    // whole page (highlight rects, link boxes) — coalesce to one per frame.
+    let moveRaf = 0, moveX = 0, moveY = 0;
+    function onMove(ev) {
+      if (ev.pointerId !== pointerId) return;
+      moveX = ev.clientX;
+      moveY = ev.clientY;
+      if (moveRaf) return;
+      moveRaf = requestAnimationFrame(() => {
+        moveRaf = 0;
+        setMarquee(toRect(moveX, moveY));
+      });
+    }
+    function onCancel(ev) {
+      if (ev.pointerId !== pointerId) return;
+      detach();
+      setMarquee(null);
+    }
     function onUp(ev) {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp, true);
+      if (ev.pointerId !== pointerId) return;
+      detach();
       setMarquee(null);
       const r = toRect(ev.clientX, ev.clientY);
       if (r.x2 - r.x1 < 6 || r.y2 - r.y1 < 6) return;
@@ -1456,13 +1633,14 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         image,
       });
     }
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp, true);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp, true);
+    document.addEventListener("pointercancel", onCancel);
   }
 
   return (
     <div ref={wrapRef} data-page={pageNumber} className="pdfPageWrap"
-      onMouseDown={beginAreaDrag}
+      onPointerDown={beginAreaDrag}
       style={{
         margin: `0 auto ${PAGE_GAP}px`, position: "relative", background: "#fff",
         width: pageSize ? curW : undefined,
@@ -1505,6 +1683,11 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
             if (l.url) onExternalLink?.(l.url);
             else onInternalLink?.(l.dest);
           }}
+          onContextMenu={l.url ? (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onLinkContext?.(l.url);
+          } : undefined}
         />
       ))}
       {(findMarks || []).map((m, i) => (
@@ -1558,6 +1741,22 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
             }}
             onContextMenu={function (e) { e.preventDefault(); if (onHighlightContext) onHighlightContext({ id: h.id, x: e.clientX, y: e.clientY }); }}
           />);
+        }
+        // Speech-bubble badge at the end of the passage when the user typed a
+        // note on the highlight — click behaves like clicking the highlight.
+        if (noteBadges && h.hasNote && rects.length) {
+          const r = rects[rects.length - 1];
+          elements.push(
+            <NoteBadge key={h.id + "-note"} hlId={h.id}
+              text={h.comment?.text?.trim() || ""}
+              style={{
+                left: r.x2 * curW / storedW + 2,
+                top: r.y1 * curH / storedH - 8,
+              }}
+              onClick={(e) => { e.stopPropagation(); onHighlightJump?.(h.id, e.ctrlKey || e.metaKey); }}
+              onContextMenu={(e) => { e.preventDefault(); onHighlightContext?.({ id: h.id, x: e.clientX, y: e.clientY }); }}
+            />
+          );
         }
         return elements;
       })}

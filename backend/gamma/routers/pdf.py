@@ -22,6 +22,7 @@ from .. import flatten_queue
 from ..auth import require_user, resolve_user
 from ..db import user_uploads_dir
 from ..logbuf import log
+from ..server_settings import can_store
 
 router = APIRouter(prefix="/api", tags=["pdf"])
 
@@ -240,11 +241,17 @@ def proxy_pdf(source_url: str, request: Request):
         finally:
             resp.close()
             if chunks is not None and complete:
-                uploads.mkdir(parents=True, exist_ok=True)
-                local_path.write_bytes(b"".join(chunks))
-                # Same treatment as a direct upload: MRC scans fetched from the
-                # web get a flattened copy in the background.
-                flatten_queue.schedule(user, local_path.stem)
+                data = b"".join(chunks)
+                # best-effort cache: over the user's storage limits, just skip
+                # the save — the PDF still streamed through fine
+                if can_store(user, len(data)):
+                    uploads.mkdir(parents=True, exist_ok=True)
+                    local_path.write_bytes(data)
+                    # Same treatment as a direct upload: MRC scans fetched from
+                    # the web get a flattened copy in the background.
+                    flatten_queue.schedule(user, local_path.stem)
+                else:
+                    log.info(f"[pdf] not caching {pdf_doc_id} ({len(data)} bytes): over storage limits")
 
     headers = {"Cache-Control": "public, max-age=3600", "X-Source-Url": final_url}
     if length.isdigit():

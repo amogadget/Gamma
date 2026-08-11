@@ -162,9 +162,12 @@ def export_page_pdf(block_id: str, request: Request):
         props = b["properties"]
         if not props.get("highlight_id") or not props.get("pdf_position"):
             continue
-        # Skip annotations that came from the PDF itself (still embedded in it)
+        # Skip annotations that came from the PDF itself and are STILL embedded
+        # in it (annot_stripped marks ones the import removed from the file),
         # and link regions (Gamma navigation aids, not annotations).
-        if props.get("imported_annot") or props.get("link_url") or props.get("link_page_id"):
+        if props.get("imported_annot") and not props.get("annot_stripped"):
+            continue
+        if props.get("link_url") or props.get("link_page_id"):
             continue
         highlights.append({
             "position": props["pdf_position"],

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS, clampZoom } from "./pdfViewer";
-import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl, setExpectedUser, isEnterCommit } from "./utils";
+import { API, apiJson, makeId, fmtBytes, getDocIdForUrl, resolvePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, isEnterCommit } from "./utils";
 import {
   BlockDropIndicator,
   ChatMarkdown,
@@ -20,7 +20,7 @@ import {
   ExternalLinkIcon, EyeIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
   FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
   LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PinIcon, PlusIcon,
-  SearchIcon, SettingsIcon, SparklesIcon, Trash2Icon, TrashIcon, UploadIcon,
+  RectSelectIcon, SearchIcon, SettingsIcon, SparklesIcon, TextCursorIcon, TrashIcon, UploadIcon,
   UserIcon, UsersIcon, XIcon, ZoomInIcon, ZoomOutIcon,
 } from "./icons";
 
@@ -50,7 +50,7 @@ import {
 } from "./logseqPdfModel";
 import { loadSession, saveSession, clearSession } from "./sessionState";
 import { AuthLoading, LoginPage, SessionConflictPage } from "./LoginPage";
-import SettingsDialog from "./settings";
+import SettingsDialog, { QuotaMeter } from "./settings";
 import {
   cleanFolderSegment,
   findPageForUrl,
@@ -68,6 +68,38 @@ import {
 // catch-all marks unrecognized phases as failed, so a new local phase must
 // fail closed (ignored) rather than show a spurious error row.
 const TRANSFER_PHASES = new Set(["start", "progress", "done", "cached", "error", "cancelled"]);
+
+// Codec for the AI context-size preferences (chars of extracted PDF text):
+// clamp stored values to a sane range, fall back to the default otherwise.
+const CONTEXT_CHARS_CODEC = {
+  parse: (raw) => {
+    const value = Number.parseInt(raw, 10);
+    return Number.isFinite(value) && value >= 100 && value <= 1000000 ? value : undefined;
+  },
+};
+
+// Phone detection: below 700px the desktop dock system is unusable, so the
+// workspace switches to a single full-width panel with a bottom tab bar. The
+// second clause keeps a rotated (landscape) phone in the phone layout — the
+// width crosses 700px but a touch device that short is still a phone, and
+// flipping to the desktop docks mid-rotation is jarring.
+const PHONE_MQ = "(max-width: 700px), (pointer: coarse) and (max-height: 500px)";
+// A browser that declares itself mobile gets the phone layout regardless of
+// the viewport numbers. "Request desktop site" flips this flag along with the
+// UA, so it stays the escape hatch back to the desktop docks. Android tablets
+// ("Android" without "Mobile") and iPads (desktop-class UA) are not phones.
+const UA_MOBILE = navigator.userAgentData?.mobile
+  ?? /iPhone|iPod|Android.+Mobile|Mobile.+Android/i.test(navigator.userAgent);
+function useIsPhone() {
+  const [mqPhone, setMqPhone] = useState(() => window.matchMedia(PHONE_MQ).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(PHONE_MQ);
+    const apply = () => setMqPhone(mq.matches);
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
+  return UA_MOBILE || mqPhone;
+}
 
 export default function App() {
   const params = new URLSearchParams(window.location.search);
@@ -88,32 +120,38 @@ export default function App() {
   // tab behind SessionConflictPage until reload.
   const [sessionConflict, setSessionConflict] = useState(null);
 
+  // This tab's real signed-in user — null while loading, logged out, or in a
+  // public share view.
+  const sessionUser = authUser && authUser.user && authUser.user !== "_public" ? authUser.user : null;
+
   // Publish this tab's identity: the X-Gamma-User guard header on API calls
   // (utils.js fetch wrapper) plus a localStorage beacon other tabs listen to.
   useEffect(() => {
-    const me = authUser && authUser.user && authUser.user !== "_public" ? authUser.user : null;
-    setExpectedUser(me);
-    if (me) {
-      try { localStorage.setItem("gamma-active-user", me); } catch {}
+    setExpectedUser(sessionUser);
+    if (sessionUser) {
+      try { localStorage.setItem("gamma-active-user", sessionUser); } catch {}
     }
-  }, [authUser]);
+  }, [sessionUser]);
 
   // Detect the session being taken over by another account. Three signals:
   // the backend's 409 on a guarded API call, the localStorage beacon from the
-  // tab that logged in, and a session re-check when this tab regains focus.
+  // tab that logged in, and a session re-check when this tab regains focus
+  // (throttled — alt-tab flapping must not hammer the server).
   useEffect(() => {
-    if (readOnly) return;
-    const me = authUser && authUser.user && authUser.user !== "_public" ? authUser.user : null;
-    if (!me) return;
+    if (readOnly || !sessionUser) return;
     function conflict(who) {
-      if (who && who !== me) setSessionConflict(who);
+      if (who && who !== sessionUser) setSessionConflict(who);
       else if (!who) setAuthUser(false); // logged out elsewhere → login page
     }
     function onMismatch(e) { conflict(e.detail?.user || ""); }
     function onStorage(e) {
       if (e.key === "gamma-active-user" && e.newValue !== null) conflict(e.newValue);
     }
+    let lastCheck = 0;
     function onFocus() {
+      const now = Date.now();
+      if (now - lastCheck < 15000) return;
+      lastCheck = now;
       apiJson(`${API}/session`).then((d) => conflict(d.user || "")).catch(() => {});
     }
     window.addEventListener("gamma-user-mismatch", onMismatch);
@@ -124,7 +162,7 @@ export default function App() {
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("focus", onFocus);
     };
-  }, [authUser, readOnly]);
+  }, [sessionUser, readOnly]);
 
   async function checkSession() {
     try {
@@ -138,6 +176,19 @@ export default function App() {
       setAuthUser(false);
     }
   }
+
+  // Effective storage limits + usage for the session user (GET /api/quota):
+  // feeds the client-side pre-upload size check. Refreshed on login and after
+  // uploads; the Settings displays fetch their own fresh copy.
+  const [quotaInfo, setQuotaInfo] = useState(null); // {max_upload_mb, quota_mb, used_bytes}
+  const refreshQuota = useCallback(() => {
+    if (readOnly) return;
+    apiJson(`${API}/quota`).then(setQuotaInfo).catch(() => {});
+  }, [readOnly]);
+  useEffect(() => {
+    if (authUser?.user && !readOnly) refreshQuota();
+    else setQuotaInfo(null);
+  }, [authUser?.user, readOnly, refreshQuota]);
 
   async function doLogin(e) {
     e?.preventDefault();
@@ -196,12 +247,19 @@ export default function App() {
       const reader = res.body.getReader();
       const chunks = [];
       let loaded = 0;
+      // Progress lands per ~64 KB network chunk and each pill/transfer update
+      // re-renders the whole app — coalesce to visible changes (1% / 200 ms).
+      let lastPct = -1, lastUiAt = 0;
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         chunks.push(value);
         loaded += value.length;
         const pct = total ? Math.min(99, Math.floor((loaded / total) * 100)) : null;
+        const now = performance.now();
+        if (pct === lastPct && now - lastUiAt < 200) continue;
+        lastPct = pct;
+        lastUiAt = now;
         postPill("backup", {
           msg: total
             ? `Downloading backup… ${pct}% (${fmtBytes(loaded)} of ${fmtBytes(total)})`
@@ -275,8 +333,15 @@ export default function App() {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API}/import-data?mode=${mode}`);
     xhr.withCredentials = true;
+    // XHR bypasses the window.fetch wrapper, so the tab-identity guard header
+    // must be set by hand — this is the most destructive endpoint in the app.
+    const expected = getExpectedUser();
+    if (expected) xhr.setRequestHeader("X-Gamma-User", expected);
+    let lastPct = -1;
     xhr.upload.onprogress = (e) => {
       const pct = e.total ? Math.min(99, Math.floor((e.loaded / e.total) * 100)) : null;
+      if (pct === lastPct) return; // only re-render on a visible change
+      lastPct = pct;
       postPill("backup", { msg: pct == null ? "Uploading backup…" : `Uploading backup… ${pct}%`, spinner: true });
       if (e.total) updateTransfer(tid, { info: `${fmtBytes(e.loaded)} / ${fmtBytes(e.total)}` });
     };
@@ -345,21 +410,9 @@ export default function App() {
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   // Home feed: sort criterion + how many rows are rendered (grows on scroll).
-  const [homeSort, setHomeSort] = useState(() => {
-    try { return localStorage.getItem("gamma-home-sort") || "updated"; } catch { return "updated"; }
-  });
-  function changeHomeSort(v) {
-    setHomeSort(v);
-    try { localStorage.setItem("gamma-home-sort", v); } catch {}
-  }
+  const [homeSort, changeHomeSort] = usePersistedState("gamma-home-sort", "updated");
   // Home layout: "list" (block-style rows) or "grid" (icon tiles).
-  const [homeView, setHomeView] = useState(() => {
-    try { return localStorage.getItem("gamma-home-view") || "list"; } catch { return "list"; }
-  });
-  function changeHomeView(v) {
-    setHomeView(v);
-    try { localStorage.setItem("gamma-home-view", v); } catch {}
-  }
+  const [homeView, changeHomeView] = usePersistedState("gamma-home-view", "list");
   const HOME_PAGE_CHUNK = 30;
   const [homeShowCount, setHomeShowCount] = useState(HOME_PAGE_CHUNK);
   useEffect(() => { setHomeShowCount(HOME_PAGE_CHUNK); }, [folderFilter, homeSort]);
@@ -448,6 +501,14 @@ export default function App() {
     });
   }
 
+  async function writePageLabels(pageId, tags) {
+    await apiJson(`${API}/blocks/${pageId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ properties: { category: tags.join(", ") } }),
+    });
+  }
+
   function commitNewFolder() {
     const name = cleanFolderSegment(newFolderName);
     setNewFolderOpen(false);
@@ -463,9 +524,9 @@ export default function App() {
   const lastPageClickRef = useRef(null); // anchor for shift-range selection
   const [homeMenu, setHomeMenu] = useState(null); // {kind:"page"|"folder", id?, name, x, y}
   const [folderRenaming, setFolderRenaming] = useState(null); // {name, draft}
-  const [movePicker, setMovePicker] = useState(false);
+  const [labelRenaming, setLabelRenaming] = useState(null); // {name, draft}
 
-  function clearSelection() { setSelectedPages(new Set()); setSelectedFolders(new Set()); setMovePicker(false); }
+  function clearSelection() { setSelectedPages(new Set()); setSelectedFolders(new Set()); }
 
   // Modern file-manager semantics: plain click SELECTS, double-click opens.
   // Ctrl/Cmd toggles a single item; Shift extends a range from the last click.
@@ -499,7 +560,6 @@ export default function App() {
     }
     // Plain click: select just this page (replacing any prior selection).
     lastPageClickRef.current = id;
-    setMovePicker(false);
     setSelectedFolders(new Set());
     setSelectedPages(new Set([id]));
   }
@@ -523,7 +583,6 @@ export default function App() {
       });
       return;
     }
-    setMovePicker(false);
     setSelectedPages(new Set());
     setSelectedFolders(new Set([path]));
   }
@@ -714,6 +773,55 @@ export default function App() {
       },
     });
   }
+
+  // Rename a label everywhere: rewrites properties.category on every page
+  // that carries it (labels are flat — no prefix logic, unlike folders).
+  async function renameLabel(oldName, newNameRaw) {
+    const newName = (newNameRaw || "").replace(/,/g, " ").replace(/\s+/g, " ").trim();
+    setLabelRenaming(null);
+    if (!newName || newName === oldName) return;
+    let changed = 0;
+    for (const b of homeBlocks) {
+      const tags = parseFolderTags(b.properties?.category);
+      if (!tags.includes(oldName)) continue;
+      const next = [...new Set(tags.map((t) => (t === oldName ? newName : t)))];
+      try { await writePageLabels(b.id, next); changed++; } catch {}
+    }
+    if (categoryFilter === oldName) {
+      setCategoryFilter(newName);
+      window.history.replaceState(null, "", `/?category=${encodeURIComponent(newName)}`);
+    }
+    // Keep the open page's frontmatter chips in sync (server already updated by the sweep)
+    setCategory((prev) => {
+      const tags = parseFolderTags(prev);
+      return tags.includes(oldName) ? [...new Set(tags.map((t) => (t === oldName ? newName : t)))].join(", ") : prev;
+    });
+    await fetchHomeBlocks();
+    setStatus(`Label renamed to “${newName}” on ${changed} page${changed === 1 ? "" : "s"}.`);
+  }
+
+  function deleteLabelByName(name) {
+    const members = homeBlocks.filter((b) => parseFolderTags(b.properties?.category).includes(name));
+    setConfirmBox({
+      title: "Delete label",
+      message: members.length
+        ? `Delete “${name}”? The label is removed from its ${members.length} page${members.length === 1 ? "" : "s"} — no pages are deleted.`
+        : `Delete the label “${name}”?`,
+      confirmLabel: "Delete label",
+      onConfirm: async () => {
+        for (const b of members) {
+          try { await writePageLabels(b.id, parseFolderTags(b.properties?.category).filter((t) => t !== name)); } catch {}
+        }
+        if (categoryFilter === name) { setCategoryFilter(""); window.history.replaceState(null, "", "/"); }
+        setCategory((prev) => {
+          const tags = parseFolderTags(prev);
+          return tags.includes(name) ? tags.filter((t) => t !== name).join(", ") : prev;
+        });
+        await fetchHomeBlocks();
+        setStatus(`Label “${name}” deleted.`);
+      },
+    });
+  }
   const [pdfPageNumber, setPdfPageNumber] = useState(() => loadSession().pdfPageNumber || 1);
   const [pdfEffScale, setPdfEffScale] = useState(1); // actual render scale (incl. fit-width)
   // Browser fullscreen (whole app, like F11). webkit-prefixed fallbacks are
@@ -728,7 +836,14 @@ export default function App() {
       document.removeEventListener("webkitfullscreenchange", onFs);
     };
   }, []);
+  // iPhone Safari (and thus every iOS browser) has no element Fullscreen API
+  // at all — fall back to a CSS pseudo-fullscreen that hides the app chrome.
+  const [pseudoFullscreen, setPseudoFullscreen] = useState(false);
   function toggleFullscreen() {
+    if (!(document.fullscreenEnabled || document.webkitFullscreenEnabled)) {
+      setPseudoFullscreen((v) => !v);
+      return;
+    }
     if (document.fullscreenElement || document.webkitFullscreenElement) {
       (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
     } else {
@@ -776,14 +891,9 @@ export default function App() {
   // Debug log level (Settings → Diagnostics): when on, position-tracking and
   // sync events go to the system log (and the console), so a lost reading
   // position can be traced from any device — the log pane has a Copy button.
-  const [debugLog, setDebugLog] = useState(() => {
-    try { return localStorage.getItem("gamma-debug-log") === "1"; } catch { return false; }
-  });
+  const [debugLog, setDebugLog] = usePersistedFlag("gamma-debug-log", false);
   const debugLogRef = useRef(debugLog);
-  useEffect(() => {
-    debugLogRef.current = debugLog;
-    try { localStorage.setItem("gamma-debug-log", debugLog ? "1" : "0"); } catch {}
-  }, [debugLog]);
+  useEffect(() => { debugLogRef.current = debugLog; }, [debugLog]);
   const dbg = useCallback((...args) => {
     if (!debugLogRef.current) return;
     const msg = "dbg: " + args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
@@ -1105,8 +1215,6 @@ export default function App() {
       return next;
     });
   }
-  const dragTabRef = useRef(null); // tab id being drag-reordered
-  const [draggingTabId, setDraggingTabId] = useState(null);
   const [tabMenu, setTabMenu] = useState(null); // {id, pinned, x, y} — tab right-click menu
   // FLIP animation: when tab order changes, slide each tab from its old
   // position to the new one (Chrome-style), instead of snapping.
@@ -1264,6 +1372,13 @@ export default function App() {
   const [pdfDocNonce, setPdfDocNonce] = useState(0); // bumped when a document finishes rendering
   const pdfSearchRef = useRef(null); // set by PdfViewer: async (RegExp) => [{page, snippet, rects, pageW, pageH}]
   const pdfCaptureRef = useRef(null); // set by PdfViewer: async (areaHighlight) => PNG data URL (re-crops the rect from the document)
+  // Stable wrapper for the notes tree's area-snapshot cards (a fresh function
+  // every render would re-fire each card's crop effect). Resolves null until
+  // the viewer has a document.
+  const capturePdfArea = useCallback(
+    (b) => pdfCaptureRef.current ? pdfCaptureRef.current({ position: b.position }) : Promise.resolve(null),
+    [],
+  );
 
   // Poll server-side task progress: slow heartbeat while logged in (so the
   // button appears even if the work was kicked off elsewhere), fast while
@@ -1322,49 +1437,28 @@ export default function App() {
   }, []);
   const [pdfHidden, setPdfHidden] = useState(false);
   const [pdfScale, setPdfScale] = useState("page-width");
-  const [pdfSaveLocal, setPdfSaveLocal] = useState(() => {
-    try { return localStorage.getItem("gamma-pdf-save") !== "0"; } catch { return true; }
+  const [pdfSaveLocal, setPdfSaveLocal] = usePersistedFlag("gamma-pdf-save", true);
+  // Speech-bubble badge on PDF highlights that carry a typed note.
+  const [hlNoteBadges, setHlNoteBadges] = usePersistedFlag("gamma-hl-note-badge", true);
+  // Embedded PDF annotations (burned in by a Gamma export or another viewer)
+  // would render twice once imported as blocks — canvas + overlay. "hide"
+  // keeps them out of the canvas; "strip" removes them from the stored file
+  // at import time.
+  const [embAnnots, setEmbAnnots] = usePersistedState("gamma-embedded-annots", "hide", {
+    parse: (raw) => (raw === "hide" || raw === "strip" ? raw : undefined),
   });
   // User preferences (Settings in the account popover)
-  const [oaFallback, setOaFallback] = useState(() => {
-    try { return localStorage.getItem("gamma-oa-fallback") !== "0"; } catch { return true; }
-  });
-  const [metaAutoFetch, setMetaAutoFetch] = useState(() => {
-    try { return localStorage.getItem("gamma-meta-auto") !== "0"; } catch { return true; }
-  });
+  const [oaFallback, setOaFallback] = usePersistedFlag("gamma-oa-fallback", true);
+  const [metaAutoFetch, setMetaAutoFetch] = usePersistedFlag("gamma-meta-auto", true);
   // Search popover: whether the result-detail lists start expanded, one
-  // default per place (SearchPanel re-reads the keys each time it opens).
+  // default per place (SearchPanel receives them each time it opens).
   // Home page: expanded unless turned off — with no open PDF the compact
   // find bar shows nothing. Paper view: compact find unless turned on.
-  const [searchDetailsHome, setSearchDetailsHome] = useState(() => {
-    try { return localStorage.getItem("gamma-search-details-home") !== "0"; } catch { return true; }
-  });
-  const [searchDetailsPaper, setSearchDetailsPaper] = useState(() => {
-    try { return localStorage.getItem("gamma-search-details") === "1"; } catch { return false; }
-  });
+  const [searchDetailsHome, setSearchDetailsHome] = usePersistedFlag("gamma-search-details-home", true);
+  const [searchDetailsPaper, setSearchDetailsPaper] = usePersistedFlag("gamma-search-details", false);
   // The always-on status bar under the tabs — off by default, the floating
   // pill carries user-facing messages; the bar is a debugging aid.
-  const [statusBarVisible, setStatusBarVisible] = useState(() => {
-    try { return localStorage.getItem("gamma-status-bar") === "1"; } catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-status-bar", statusBarVisible ? "1" : "0"); } catch {}
-  }, [statusBarVisible]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-pdf-save", pdfSaveLocal ? "1" : "0"); } catch {}
-  }, [pdfSaveLocal]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-oa-fallback", oaFallback ? "1" : "0"); } catch {}
-  }, [oaFallback]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-meta-auto", metaAutoFetch ? "1" : "0"); } catch {}
-  }, [metaAutoFetch]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-search-details-home", searchDetailsHome ? "1" : "0"); } catch {}
-  }, [searchDetailsHome]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-search-details", searchDetailsPaper ? "1" : "0"); } catch {}
-  }, [searchDetailsPaper]);
+  const [statusBarVisible, setStatusBarVisible] = usePersistedFlag("gamma-status-bar", false);
   const pageTitleSaveTimerRef = useRef(null);
   const viewerWrapRef = useRef(null);
   const pdfRetryRef = useRef(null); // set by PdfViewer: re-runs a failed load (pill's Retry button)
@@ -1375,21 +1469,18 @@ export default function App() {
   const [chatModel, setChatModel] = useState(() => {
     try { return localStorage.getItem("gamma-chat-model") || ""; } catch { return ""; }
   });
-  const [chatEffort, setChatEffort] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-effort") || ""; } catch { return ""; }
-  });
-  const [chatSystem, setChatSystem] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-system") || ""; } catch { return ""; }
-  });
-  const readContextChars = (key, fallback) => {
-    try {
-      const value = Number.parseInt(localStorage.getItem(key) || "", 10);
-      return Number.isFinite(value) && value >= 100 && value <= 1000000 ? value : fallback;
-    } catch { return fallback; }
-  };
-  const [chatContextChars, setChatContextChars] = useState(() => readContextChars("gamma-chat-context-chars", 8000));
-  const [metaContextChars, setMetaContextChars] = useState(() => readContextChars("gamma-meta-context-chars", 6000));
-  const [multiContextChars, setMultiContextChars] = useState(() => readContextChars("gamma-multi-context-chars", 18000));
+  const [chatEffort, setChatEffort] = usePersistedState("gamma-chat-effort", "");
+  // Model for AI metadata extraction (Settings → Paper metadata). "" = follow
+  // the chat model; a stale pick (provider/model removed) also falls back.
+  const [metaModel, setMetaModel] = usePersistedState("gamma-meta-model", "");
+  // Voice dictation (mic button): transcription model + spoken language
+  // ("" = auto-detect), configured in Settings → AI chat.
+  const [dictationModel, setDictationModel] = usePersistedState("gamma-dictation-model", "gpt-4o-transcribe");
+  const [dictationLang, setDictationLang] = usePersistedState("gamma-dictation-lang", "");
+  const [chatSystem, setChatSystem] = usePersistedState("gamma-chat-system", "");
+  const [chatContextChars, setChatContextChars] = usePersistedState("gamma-chat-context-chars", 8000, CONTEXT_CHARS_CODEC);
+  const [metaContextChars, setMetaContextChars] = usePersistedState("gamma-meta-context-chars", 6000, CONTEXT_CHARS_CODEC);
+  const [multiContextChars, setMultiContextChars] = usePersistedState("gamma-multi-context-chars", 18000, CONTEXT_CHARS_CODEC);
   const [promptDraft, setPromptDraft] = useState("");
   // AI providers (Settings → AI providers): a user-managed list of API keys,
   // OpenAI-platform style. Keys are stored server-side per user; the server
@@ -1402,15 +1493,48 @@ export default function App() {
 
   // The settings page (account popover → Settings…): two-column modal,
   // categories on the left, the selected pane on the right.
-  const [settingsOpen, setSettingsOpen] = useState(null); // null | "papers" | "ai" | "prompts" | "search" | "account"
+  const [settingsOpen, setSettingsOpen] = useState(null); // null | "papers" | "library" | "ai" | "prompts" | "search" | "account"
   // Which provider entry (API key) AI requests use. Only the key is chosen
   // here — the model itself is picked in the chat panel, scoped to this key.
-  const [aiProvider, setAiProvider] = useState(() => {
-    try { return localStorage.getItem("gamma-ai-provider") || ""; } catch { return ""; }
-  });
+  const [aiProvider, setAiProvider] = usePersistedState("gamma-ai-provider", "");
+  // The pick follows the account (/api/prefs/ai-provider): the server copy
+  // wins on login, so it survives restarts and other browsers/origins;
+  // localStorage is just the instant-paint cache. Without this, each origin
+  // (localhost / LAN / Tailscale) silently reverted to the first key.
+  const aiProviderSyncRef = useRef(null); // last server-synced value; null = not loaded yet
   useEffect(() => {
-    try { localStorage.setItem("gamma-ai-provider", aiProvider); } catch {}
-  }, [aiProvider]);
+    aiProviderSyncRef.current = null;
+    const u = authUser?.user;
+    if (!u || readOnly) return;
+    const local = aiProvider;
+    apiJson(`${API}/prefs/ai-provider`).then((d) => {
+      if (prefsUserRef.current !== u) return;
+      if (d.updated_at) {
+        const server = typeof d.value === "string" ? d.value : "";
+        aiProviderSyncRef.current = server;
+        setAiProvider(server);
+      } else if (local) {
+        // Account has never synced: seed the server with this browser's pick.
+        aiProviderSyncRef.current = local;
+        apiJson(`${API}/prefs/ai-provider`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: local }),
+        }).catch(() => {});
+      } else {
+        aiProviderSyncRef.current = "";
+      }
+    }).catch(() => {});
+  }, [authUser?.user, readOnly]);
+  useEffect(() => {
+    if (aiProviderSyncRef.current === null || aiProviderSyncRef.current === aiProvider || readOnly) return;
+    aiProviderSyncRef.current = aiProvider;
+    apiJson(`${API}/prefs/ai-provider`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: aiProvider }),
+    }).catch(() => {});
+  }, [aiProvider, readOnly]);
   // Last model picked per key, so switching keys and back restores the pick
   // (a workspace-wide memory — the chat model is never per-PDF).
   const chatModelMemRef = useRef(null);
@@ -1420,8 +1544,6 @@ export default function App() {
   }
   // Keep the selected model inside the active key's model list: switching to
   // a key restores its remembered model, or falls back to its first one.
-  // Every AI call (chat, metadata, citations, titles) sends chatModel, so
-  // this is what actually routes requests to the chosen key.
   useEffect(() => {
     const all = aiInfo?.models || [];
     if (!all.length) return;
@@ -1433,6 +1555,22 @@ export default function App() {
       setChatModel(scoped.some((m) => m.id === remembered) ? remembered : scoped[0].id);
     }
   }, [aiProvider, aiInfo, chatModel]);
+  // Models the active key (Settings → AI & API keys) offers — all models only
+  // when no key is selected or the selected one is gone. Model registry ids
+  // are "<entryId>:<model>", so the id ROUTES the request to a key server-side;
+  // every model this client sends must come from this list or an unselected
+  // key would serve the call.
+  const scopedAiModels = aiProvider && (aiInfo?.models || []).some((m) => m.provider === aiProvider)
+    ? aiInfo.models.filter((m) => m.provider === aiProvider)
+    : aiInfo?.models || [];
+  // The model AI calls (chat, citations, titles) actually send: chatModel
+  // snapped into scope at render time — the effect above fixes the state, but
+  // a request fired in the same render (or before /ai/models loads after a
+  // key switch elsewhere) must not trust it. Empty list = registry not loaded
+  // yet; nothing to validate against, so the stored pick passes through.
+  const chatSendModel = scopedAiModels.length && !scopedAiModels.some((m) => m.id === chatModel)
+    ? scopedAiModels[0].id
+    : chatModel;
 
   async function loadAiKeys() {
     setAiKeysError("");
@@ -1629,102 +1767,9 @@ export default function App() {
     }
   }
 
-  // User management (admins only — admin is a privilege flag, not a name).
-  const [usersOpen, setUsersOpen] = useState(false);
-  const [usersInfo, setUsersInfo] = useState(null); // {users: [{username, is_guest, is_admin, created_at}], me}
-  const [usersForm, setUsersForm] = useState(null); // {username, password, is_admin} — the add-user form
-  const [userPwEdit, setUserPwEdit] = useState(null); // {username, password} — inline set-password form
-  const [userRenameEdit, setUserRenameEdit] = useState(null); // {username, value} — inline rename form
-  const [usersBusy, setUsersBusy] = useState(false);
-  const [usersError, setUsersError] = useState("");
-
-  async function openUsersManager() {
-    setUsersError("");
-    setUsersInfo(null);
-    setUsersForm(null);
-    setUserPwEdit(null);
-    setUserRenameEdit(null);
-    setUsersOpen(true);
-    try {
-      setUsersInfo(await apiJson(`${API}/admin/users`));
-    } catch (err) {
-      setUsersError(err.message);
-    }
-  }
-
-  async function usersCall(path, method, body) {
-    setUsersBusy(true);
-    setUsersError("");
-    try {
-      const d = await apiJson(`${API}/admin${path}`, {
-        method,
-        ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
-      });
-      setUsersInfo((prev) => ({ ...prev, users: d.users }));
-      if (d.warning) setStatus(d.warning);
-      return true;
-    } catch (err) {
-      setUsersError(err.message);
-      return false;
-    } finally {
-      setUsersBusy(false);
-    }
-  }
-
-  async function submitNewUser() {
-    const f = usersForm;
-    if (!f?.username.trim() || !f?.password) { setUsersError("Username and password are required."); return; }
-    if (await usersCall("/users", "POST", { username: f.username.trim(), password: f.password, is_admin: !!f.is_admin })) {
-      setUsersForm(null);
-    }
-  }
-
-  async function submitUserPassword() {
-    const f = userPwEdit;
-    if (!f?.password) { setUsersError("Password cannot be empty."); return; }
-    if (await usersCall(`/users/${encodeURIComponent(f.username)}`, "PUT", { password: f.password })) {
-      setUserPwEdit(null);
-      setStatus(`Password updated for ${f.username}.`);
-    }
-  }
-
-  async function submitUserRename() {
-    const f = userRenameEdit;
-    if (!f?.value.trim()) { setUsersError("New username required."); return; }
-    setUsersBusy(true);
-    setUsersError("");
-    try {
-      const d = await apiJson(`${API}/admin/users/${encodeURIComponent(f.username)}/rename`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ new_username: f.value.trim() }),
-      });
-      setUsersInfo((prev) => ({
-        ...prev,
-        users: d.users,
-        me: d.renamed?.from === prev.me ? d.renamed.to : prev.me,
-      }));
-      setUserRenameEdit(null);
-      if (d.renamed) setStatus(`Renamed ${d.renamed.from} → ${d.renamed.to}. Sessions keep working.`);
-      // Renamed yourself? Re-read the session so the whole app re-keys
-      // (avatar, per-user prefs, synced tabs all follow the new name).
-      if (d.renamed && d.renamed.from === authUser?.user) await checkSession();
-    } catch (err) {
-      setUsersError(err.message);
-    } finally {
-      setUsersBusy(false);
-    }
-  }
-
-  function deleteUserAccount(u) {
-    setConfirmBox({
-      title: "Delete user",
-      message: `Delete "${u.username}" and ALL their data (notes, PDFs, settings)? This can't be undone.`,
-      confirmLabel: "Delete",
-      danger: true,
-      onConfirm: () => usersCall(`/users/${encodeURIComponent(u.username)}`, "DELETE"),
-    });
-  }
+  // User management moved into Settings → Users (settings.jsx UsersSettings,
+  // admins only) — App just opens that pane and lends it the shared pieces
+  // (confirm dialog, status pill, session re-key after a self-rename).
   // PDF passages the next chat question focuses on. Ctrl (additive) appends
   // — whether from text selection or highlight clicks; plain replaces.
   const [pdfSelections, setPdfSelections] = useState([]);
@@ -1752,12 +1797,7 @@ export default function App() {
   // Off by default: snapshots stay attached until removed or sent. On, a
   // plain click elsewhere in the PDF drops them — the same gesture that
   // clears quoted text selections. Ref-mirrored for the mouseup listener.
-  const [chatImgAutoClear, setChatImgAutoClear] = useState(() => {
-    try { return localStorage.getItem("gamma-chat-img-autoclear") === "1"; } catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-img-autoclear", chatImgAutoClear ? "1" : "0"); } catch {}
-  }, [chatImgAutoClear]);
+  const [chatImgAutoClear, setChatImgAutoClear] = usePersistedFlag("gamma-chat-img-autoclear", false);
   const chatImgAutoClearRef = useRef(chatImgAutoClear);
   useEffect(() => { chatImgAutoClearRef.current = chatImgAutoClear; }, [chatImgAutoClear]);
   // Clicking a highlight — on the PDF or its card in the notes — feeds the
@@ -1796,6 +1836,8 @@ export default function App() {
   useEffect(() => {
     if (openPopover === "meta") setMetaDraft(metadataToDraft(pageMeta));
   }, [openPopover, pageMeta]);
+  // Unsaved edits in the popover — gates the Save button and Enter-to-save.
+  const metaDirty = metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metadataToDraft(pageMeta));
 
   // PDF-text health shown in the metadata popover: a scanned/image-only PDF is
   // why metadata lookups fail and AI chat answers blind — surface it. One
@@ -1858,24 +1900,21 @@ export default function App() {
     }
   }
   // Editable prompts for metadata extraction and PPT citations (empty = server default)
-  const [metaPrompt, setMetaPrompt] = useState(() => {
-    try { return localStorage.getItem("gamma-meta-prompt") || ""; } catch { return ""; }
-  });
-  const [citePrompt, setCitePrompt] = useState(() => {
-    try { return localStorage.getItem("gamma-cite-prompt") || ""; } catch { return ""; }
-  });
+  const [metaPrompt, setMetaPrompt] = usePersistedState("gamma-meta-prompt", "");
+  const [citePrompt, setCitePrompt] = usePersistedState("gamma-cite-prompt", "");
   const [metaPromptDraft, setMetaPromptDraft] = useState("");
   const [citePromptDraft, setCitePromptDraft] = useState("");
-  useEffect(() => {
-    try { localStorage.setItem("gamma-meta-prompt", metaPrompt); } catch {}
-  }, [metaPrompt]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-cite-prompt", citePrompt); } catch {}
-  }, [citePrompt]);
 
   const focusedBlockIdRef = useRef("");
   useEffect(() => { focusedBlockIdRef.current = focusedBlockId || ""; }, [focusedBlockId]);
   const attemptedMetaRef = useRef(new Set()); // pages we already tried this session
+
+  // Model actually sent with metadata lookups (per-paper fetch AND the
+  // Settings batch retry): the dedicated pick while it's inside the active
+  // key's scope, else the (already-scoped) chat model.
+  const metaFetchModel = metaModel && scopedAiModels.some((m) => m.id === metaModel)
+    ? metaModel
+    : chatSendModel;
 
   async function fetchMetadata(block, force) {
     if (!block?.id) return;
@@ -1889,7 +1928,7 @@ export default function App() {
         body: JSON.stringify({
           block_id: block.id,
           prompt: metaPrompt || "",
-          model: chatModel || "",
+          model: metaFetchModel || "",
           force: !!force,
           context_char_limit: metaContextChars,
         }),
@@ -1959,7 +1998,7 @@ export default function App() {
       const res = await apiJson(`${API}/import/pdf-annotations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ block_id: blockId, doc_id: targetDocId }),
+        body: JSON.stringify({ block_id: blockId, doc_id: targetDocId, strip: embAnnots === "strip" }),
       });
       updateTransfer(taskId, {
         status: "done",
@@ -1968,7 +2007,13 @@ export default function App() {
       if (res.imported > 0) {
         if (focusedBlockIdRef.current === blockId) await loadBlocksForBlock(blockId);
         setStatus(`Imported ${res.imported} annotation${res.imported === 1 ? "" : "s"} embedded in the PDF.`);
-      } else if (!silent) {
+      }
+      if (res.stripped > 0 && focusedBlockIdRef.current === blockId) {
+        // The stored file changed — cache-bust so the open viewer re-renders
+        // the page without the now-stripped annotations baked in.
+        setPdfUrl((u) => (u ? u + (u.includes("?") ? "&" : "?") + "annots=" + Date.now() : u));
+      }
+      if (res.imported === 0 && !silent) {
         setStatus(res.found > 0
           ? "All embedded annotations were already imported."
           : "No annotations embedded in this PDF.");
@@ -1989,7 +2034,7 @@ export default function App() {
       const data = await apiJson(`${API}/metadata/cite`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ block_id: targetId, prompt: citePrompt || "", model: chatModel || "", force }),
+        body: JSON.stringify({ block_id: targetId, prompt: citePrompt || "", model: chatSendModel || "", force }),
       });
       updateTransfer(taskId, { status: "done", info: "" });
       if (focusedBlockIdRef.current === targetId) setPptCite(data.citation || "");
@@ -2073,21 +2118,6 @@ export default function App() {
       }
     } catch {}
   }, [chatModel]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-effort", chatEffort); } catch {}
-  }, [chatEffort]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-system", chatSystem); } catch {}
-  }, [chatSystem]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-chat-context-chars", String(chatContextChars)); } catch {}
-  }, [chatContextChars]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-meta-context-chars", String(metaContextChars)); } catch {}
-  }, [metaContextChars]);
-  useEffect(() => {
-    try { localStorage.setItem("gamma-multi-context-chars", String(multiContextChars)); } catch {}
-  }, [multiContextChars]);
 
   // Capture text selected inside the PDF viewer so chat can focus on it.
   // Committed on mouseup (not selectionchange) so the modifier key is known:
@@ -2181,6 +2211,14 @@ export default function App() {
 
 
   const [notesVisible, setNotesVisible] = useState(true);
+  // Phone layout: which overlay panel covers the center ('notes' | 'chat' |
+  // null = the main view). Reset on navigation so a new page opens on its content.
+  const isPhone = useIsPhone();
+  const [phonePanel, setPhonePanel] = useState(null);
+  // Phone: drag-on-PDF mode — text selection (default) or rectangle drawing.
+  // Desktop expresses this by holding Ctrl; a phone has no Ctrl, so it gets a
+  // sticky toggle button in the viewer's zoom column instead.
+  const [areaSelectMode, setAreaSelectMode] = useState(false);
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
   const [focusedId, setFocusedId] = useState(null);
@@ -2589,8 +2627,9 @@ export default function App() {
       setStatus("Not a PDF file.");
       return;
     }
-    if (file.size > 55 * 1024 * 1024) {
-      setStatus("File too large (max 55 MB).");
+    const maxUploadMb = quotaInfo?.max_upload_mb || 55;
+    if (file.size > maxUploadMb * 1024 * 1024) {
+      setStatus(`File too large (max ${maxUploadMb} MB).`);
       return;
     }
     setLoading(true);
@@ -2601,12 +2640,15 @@ export default function App() {
       form.append("file", file);
       const resp = await fetch(`${API}/uploads`, { method: "POST", body: form, credentials: "include" });
       if (!resp.ok) {
-        const msg = await resp.text();
+        const text = await resp.text();
+        let msg = text; // FastAPI errors come as {"detail": "..."} — show the human message
+        try { const j = JSON.parse(text); if (typeof j.detail === "string") msg = j.detail; } catch {}
         updateTransfer(transferId, { status: "error", info: "failed" });
         throw new Error(msg || `upload failed (${resp.status})`);
       }
       const data = await resp.json();
       updateTransfer(transferId, { status: "done", info: fmtBytes(file.size) });
+      refreshQuota();
       // Open the uploaded PDF directly (bypass openPdf's URL-resolution path)
       const sourceUrl = data.source_url;
       const defaultTitle = getPdfPageTitle(data.doc_id, sourceUrl);
@@ -3326,6 +3368,10 @@ export default function App() {
   // instead of silently swapping the SPA for an error page.
   async function downloadExport(path, fallbackName) {
     setStatus("Exporting page…");
+    // Shared (read-only) views: every export resolves the owner's data from
+    // ?user= (auth.resolve_user) — applied here so no call site can forget it.
+    const userQ = shareUserQuery();
+    if (userQ && !path.includes("user=")) path += (path.includes("?") ? "&" : "?") + userQ;
     try {
       const res = await fetch(`${API}${path}`, { credentials: "include" });
       if (!res.ok) {
@@ -3355,8 +3401,7 @@ export default function App() {
     }
   }
 
-  // Shared (read-only) views export the owner's data: the server resolves the
-  // user from ?user= when there's no session (auth.resolve_user).
+  // Owner of a shared (read-only) view — downloadExport appends it as ?user=.
   const shareOwnerRef = useRef("");
   const shareUserQuery = () =>
     readOnly && shareOwnerRef.current ? `user=${encodeURIComponent(shareOwnerRef.current)}` : "";
@@ -3365,8 +3410,7 @@ export default function App() {
     const id = focusedBlock?.id;
     if (!id) { setStatus("Open a page first to export it."); return; }
     setOpenPopover(null);
-    const userQ = shareUserQuery();
-    await downloadExport(`/pages/${id}/export?mode=${mode}${userQ ? `&${userQ}` : ""}`, "page.md");
+    await downloadExport(`/pages/${id}/export?mode=${mode}`, "page.md");
   }
 
   // Download the PDF with the page's highlights burned in as standard PDF
@@ -3375,8 +3419,7 @@ export default function App() {
     const id = focusedBlock?.id;
     if (!id) { setStatus("Open a page first to export it."); return; }
     setOpenPopover(null);
-    const userQ = shareUserQuery();
-    await downloadExport(`/pages/${id}/export-pdf${userQ ? `?${userQ}` : ""}`, "annotated.pdf");
+    await downloadExport(`/pages/${id}/export-pdf`, "annotated.pdf");
   }
 
   // Download the PDF exactly as stored — no highlight annotations. Reuses the
@@ -3405,7 +3448,7 @@ export default function App() {
           prompt: "Extract the exact title of this document. Reply with ONLY the title text — no quotes, no authors, no extra words.",
           doc_id: docId,
           history: [],
-          model: chatModel || "",
+          model: chatSendModel || "",
         }),
       });
       const title = (data.response || "").trim().replace(/^["'\s]+|["'\s]+$/g, "").split("\n")[0].slice(0, 200);
@@ -3603,8 +3646,10 @@ export default function App() {
   const visibleBlocks = useMemo(() => flattenBlocks(blocks), [blocks]);
   const homeMode = !pdfUrl && !focusedBlockId && !readOnly;
   // Leaving home or changing folders drops the file-manager selection.
-  useEffect(() => { setSelectedPages(new Set()); setSelectedFolders(new Set()); setMovePicker(false); setHomeMenu(null); }, [folderFilter, homeMode]);
+  useEffect(() => { setSelectedPages(new Set()); setSelectedFolders(new Set()); setHomeMenu(null); }, [folderFilter, homeMode]);
   const pageOnly = !pdfUrl && !!focusedBlockId && !readOnly;
+  // Phone: navigating to another page (or home) closes any overlay panel.
+  useEffect(() => { setPhonePanel(null); }, [focusedBlockId, homeMode]);
   const pageBlocks = useMemo(() => {
     return homeBlocks.map((b) => ({
       id: b.id,
@@ -3696,18 +3741,31 @@ export default function App() {
     obs.observe(el);
     return () => obs.disconnect();
   }, [homeVisiblePages.length, homeSortedPages.length, homeMode]);
+  // Identity-stable: every keystroke in a note replaces `blocks`, but the
+  // derived highlights rarely change — returning the previous array when the
+  // content is identical keeps the viewer's per-page memo effective (otherwise
+  // each keystroke re-rendered every PdfPage's overlays).
+  const prevHighlightsRef = useRef({ json: "", value: [] });
   const highlights = useMemo(() => {
     const byHlId = new Map();
-    for (const b of flattenBlocks(blocks)) {
+    for (const b of visibleBlocks) {
       if (b.properties?.highlight_id) byHlId.set(b.properties.highlight_id, b);
     }
-    return blocksToHighlights(blocks).map((h) => {
+    const next = blocksToHighlights(blocks).map((h) => {
       const p = byHlId.get(h.id)?.properties || {};
       const url = p.link_url || "";
       const pageId = p.link_page_id || "";
       return (url || pageId) ? { ...h, linkTarget: { url, pageId, highlightId: p.link_highlight_id || "" } } : h;
     });
-  }, [blocks]);
+    const json = JSON.stringify(next);
+    if (json === prevHighlightsRef.current.json) return prevHighlightsRef.current.value;
+    prevHighlightsRef.current = { json, value: next };
+    return next;
+  }, [blocks, visibleBlocks]);
+  const highlightColors = useMemo(
+    () => Object.fromEntries(highlights.map((h) => [h.id, h.color])),
+    [highlights]
+  );
   useEffect(() => {
     if (pdfHidden) return;
     const id = pendingJumpRef.current;
@@ -4029,7 +4087,18 @@ export default function App() {
                       title="Click to edit"
                     >
                       {category ? (
-                        category.split(",").map((t, i) => t.trim() ? <span key={i} className="categoryBadge">{t.trim()}</span> : null)
+                        category.split(",").map((t, i) => t.trim() ? (
+                          <span
+                            key={i}
+                            className="categoryBadge"
+                            title={`Label: ${t.trim()} — right-click to rename or delete`}
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setHomeMenu({ kind: "label", name: t.trim(), x: e.clientX, y: e.clientY });
+                            }}
+                          >{t.trim()}</span>
+                        ) : null)
                       ) : "Add labels..."}
                     </span>
                   )}
@@ -4103,7 +4172,7 @@ export default function App() {
                                     if (e.key !== "Enter") return;
                                     e.preventDefault();
                                     // Enter = Save (only when something actually changed)
-                                    if (metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metadataToDraft(pageMeta))) saveMetaEdits();
+                                    if (metaDirty) saveMetaEdits();
                                   }}
                                   placeholder="—"
                                 />
@@ -4187,7 +4256,7 @@ export default function App() {
                               ? "A previous lookup found nothing — it won't retry automatically. Fill the fields in by hand, or hit ↻ to retry."
                               : "No metadata found — fill the fields in by hand, or hit ↻ to retry."}</div>
                         ) : null}
-                        {metaDraft && JSON.stringify(metaDraft) !== JSON.stringify(metadataToDraft(pageMeta)) ? (
+                        {metaDirty ? (
                           <div className="reportModalBtns">
                             <button className="uiBtn primary" onClick={saveMetaEdits}>Save metadata</button>
                           </div>
@@ -4333,7 +4402,14 @@ export default function App() {
                     <button className="categoryBackBtn" onClick={() => { setCategoryFilter(""); window.history.replaceState(null, "", "/"); }}>
                       ← All pages
                     </button>
-                    <div className="categoryFilterHeading">{categoryFilter}</div>
+                    <div
+                      className="categoryFilterHeading"
+                      title="Right-click to rename or delete this label"
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setHomeMenu({ kind: "label", name: categoryFilter, x: e.clientX, y: e.clientY });
+                      }}
+                    >{categoryFilter}</div>
                     <div className="carouselRow">
                       <div className="carouselTrackWrap">
                         <div className="carouselTrack">
@@ -4705,7 +4781,16 @@ export default function App() {
                                 </span>
                               ))}
                               {b._labels?.map((l) => (
-                                <span key={`l:${l}`} className="labelTagBadge" title={`Label: ${l}`}>
+                                <span
+                                  key={`l:${l}`}
+                                  className="labelTagBadge"
+                                  title={`Label: ${l} — right-click to rename or delete`}
+                                  onContextMenu={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    setHomeMenu({ kind: "label", name: l, x: e.clientX, y: e.clientY });
+                                  }}
+                                >
                                   <LabelIcon size={10} />
                                   {l}
                                 </span>
@@ -4752,8 +4837,13 @@ export default function App() {
                   },
                   registerRef,
                   readOnly,
-                  allBlocks: flattenBlocks(blocks),
-                  highlightColors: Object.fromEntries(highlights.map(h => [h.id, h.color])),
+                  // Area-highlight cards show their crop, re-rendered from the
+                  // loaded document each session (never stored, same as the
+                  // chat attach); docNonce retries crops once the PDF is up.
+                  captureArea: capturePdfArea,
+                  docNonce: pdfDocNonce,
+                  allBlocks: visibleBlocks,
+                  highlightColors,
                   refCache,
                   onFetchRefs,
                   onCacheRef,
@@ -4990,14 +5080,16 @@ export default function App() {
     chat: !readOnly && !chatHidden,
   };
   function renderWindow(id) {
+    // Phone: windows are full-screen overlays — no dock dragging or collapsing,
+    // and closing just returns to the main view.
     const common = {
-      onGrip: (e) => startWindowDock(e, id),
-      onGripDoubleClick: () => setCollapsedWins((prev) => ({ ...prev, [id]: !prev[id] })),
-      collapsed: !!collapsedWins[id],
+      onGrip: isPhone ? undefined : (e) => startWindowDock(e, id),
+      onGripDoubleClick: isPhone ? undefined : () => setCollapsedWins((prev) => ({ ...prev, [id]: !prev[id] })),
+      collapsed: isPhone ? false : !!collapsedWins[id],
     };
     if (id === "notes") {
       return (
-        <DockWindow title="Notes" {...common} onClose={() => setNotesVisible(false)}>
+        <DockWindow title="Notes" {...common} onClose={() => (isPhone ? setPhonePanel(null) : setNotesVisible(false))}>
           {notesWindow}
         </DockWindow>
       );
@@ -5006,13 +5098,14 @@ export default function App() {
       return (
         <ChatDock
           {...common}
-          onClose={() => setChatHidden(true)}
+          onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pdfTitle={pdfTitle}
           openTabs={openTabs}
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
           chatImages={chatImages} setChatImages={setChatImages}
-          chatModel={chatModel} setChatModel={setChatModel}
+          chatModel={chatSendModel} setChatModel={setChatModel}
           chatEffort={chatEffort} setChatEffort={setChatEffort}
+          dictationModel={dictationModel} dictationLang={dictationLang}
           chatSystem={chatSystem} aiInfo={aiInfo} aiProvider={aiProvider} setAiProvider={setAiProvider}
           refreshAiModels={refreshAiModels}
           chatContextChars={chatContextChars} multiContextChars={multiContextChars}
@@ -5024,8 +5117,9 @@ export default function App() {
     }
     return null;
   }
-  // Windows per slot, in stored order, visibility-filtered.
-  const slotWins = (side) => layout[side].filter((w) => winVisible[w]);
+  // Windows per slot, in stored order, visibility-filtered. On a phone the
+  // dock slots are empty — windows render as full-screen overlays instead.
+  const slotWins = (side) => (isPhone ? [] : layout[side].filter((w) => winVisible[w]));
   function renderSlotGroup(side, direction) {
     const wins = slotWins(side);
     // Collapsed windows live OUTSIDE the panel group as fixed header bars —
@@ -5163,7 +5257,7 @@ export default function App() {
   return (
     <div
       ref={appRef}
-      className={`app layout-horizontal ${readOnly ? "readOnlyMode" : ""}`}
+      className={`app layout-horizontal ${readOnly ? "readOnlyMode" : ""} ${pseudoFullscreen ? "pseudoFullscreen" : ""}`}
       onDragOver={readOnly ? undefined : (e) => {
         if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes("Files")) return;
         e.preventDefault();
@@ -5212,10 +5306,7 @@ export default function App() {
             <OpenTabs
               tabs={openTabs}
               activeId={focusedBlockId}
-              draggingId={draggingTabId}
               tabElements={tabElsRef}
-              dragTab={dragTabRef}
-              onDraggingChange={setDraggingTabId}
               onReorder={(dragged, target) => updateTabs((prev) => {
                 const from = prev.findIndex((tab) => tab.id === dragged);
                 const to = prev.findIndex((tab) => tab.id === target);
@@ -5344,6 +5435,7 @@ export default function App() {
             <SearchPanel
               open={openPopover === "search"}
               onOpenChange={(v) => setOpenPopover(v ? "search" : null)}
+              detailsDefault={focusedBlockId ? searchDetailsPaper : searchDetailsHome}
               focusedBlockId={focusedBlockId}
               homeBlocks={homeBlocks}
               allFolderPaths={allFolderPaths}
@@ -5446,7 +5538,11 @@ export default function App() {
               <span data-popover="user" style={{ position: "relative", display: "inline-flex" }}>
                 <button
                   className={`iconBtn ${openPopover === "user" ? "activeIcon" : ""}`}
-                  onClick={() => setOpenPopover((p) => (p === "user" ? null : "user"))}
+                  onClick={() => {
+                    const opening = openPopover !== "user";
+                    if (opening) refreshQuota(); // fresh storage meter on open
+                    setOpenPopover(opening ? "user" : null);
+                  }}
                   title="Account & settings"
                   aria-label="Account & settings"
                 >
@@ -5464,9 +5560,20 @@ export default function App() {
                         <span className="userCardName">{authUser.is_guest ? "Guest" : authUser.user}</span>
                         <span className="userCardRole">{authUser.is_guest ? "Temporary workspace" : "Signed in"}</span>
                       </span>
+                      {quotaInfo ? (
+                        <span className="userCardQuota" title="Storage used by your uploaded PDFs and images">
+                          {fmtBytes(quotaInfo.used_bytes)}
+                          {quotaInfo.quota_mb ? ` / ${fmtBytes(quotaInfo.quota_mb * 1024 * 1024)}` : ""}
+                        </span>
+                      ) : null}
                     </div>
                     {authUser.is_guest ? (
                       <div className="popoverHint">Guest data resets daily. Ask the admin for an account to keep your work.</div>
+                    ) : null}
+                    {quotaInfo?.quota_mb ? (
+                      <div className="popoverQuota">
+                        <QuotaMeter usedBytes={quotaInfo.used_bytes} quotaMb={quotaInfo.quota_mb} barOnly />
+                      </div>
                     ) : null}
                     <div className="popoverDivider" />
                     <button className="popoverItem" onClick={() => { setSettingsOpen("papers"); setOpenPopover(null); }}>
@@ -5510,7 +5617,7 @@ export default function App() {
                       </>
                     ) : null}
                     {authUser.is_admin ? (
-                      <button className="popoverItem" onClick={() => { openUsersManager(); setOpenPopover(null); }}>
+                      <button className="popoverItem" onClick={() => { setSettingsOpen("users"); setOpenPopover(null); }}>
                         <UsersIcon className="popoverItemIcon" size={15} />
                         Manage users…
                       </button>
@@ -5598,16 +5705,26 @@ export default function App() {
               <button className="pdfFitWidthBtn" onClick={() => zoomTo("page-width")} title="Fit to width" aria-label="Fit to width">
                 <FitWidthIcon size={15} />
               </button>
+              {isPhone && !readOnly ? (
+                <button
+                  className={areaSelectMode ? "modeActive" : ""}
+                  onClick={() => setAreaSelectMode((v) => !v)}
+                  title={areaSelectMode ? "Rectangle mode — drag draws an area note (tap to switch to text selection)" : "Text mode — drag selects text (tap to switch to rectangle drawing)"}
+                  aria-label="Toggle selection mode"
+                >
+                  {areaSelectMode ? <RectSelectIcon size={15} /> : <TextCursorIcon size={15} />}
+                </button>
+              ) : null}
             </div>
           ) : null}
           {pdfUrl && !pdfHidden ? (
             <button
               className="pdfFullscreenBtn"
               onClick={toggleFullscreen}
-              title={isFullscreen ? "Exit full screen" : "Full screen"}
-              aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+              title={isFullscreen || pseudoFullscreen ? "Exit full screen" : "Full screen"}
+              aria-label={isFullscreen || pseudoFullscreen ? "Exit full screen" : "Full screen"}
             >
-              {isFullscreen ? (
+              {isFullscreen || pseudoFullscreen ? (
                 <MinimizeIcon size={15} />
               ) : (
                 <MaximizeIcon size={15} />
@@ -5616,6 +5733,9 @@ export default function App() {
           ) : null}
           {pdfUrl ? (
             <PdfViewer url={pdfUrl} highlights={highlights}
+              noteBadges={hlNoteBadges}
+              hideEmbeddedAnnots={embAnnots === "hide"}
+              areaMode={areaSelectMode && isPhone && !readOnly}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
               captureRef={pdfCaptureRef}
@@ -5626,6 +5746,7 @@ export default function App() {
               onLoadState={handlePdfLoadState}
               retryRef={pdfRetryRef}
               onExternalLink={handleDocLink}
+              onLinkContext={setLinkPrompt}
               onLinkHighlight={(h) => {
                 if (h.linkTarget?.pageId) {
                   if (h.linkTarget.highlightId) pendingJumpRef.current = h.linkTarget.highlightId;
@@ -5686,7 +5807,42 @@ export default function App() {
         </>
       ) : null}
       </PanelGroup>
+      {isPhone && phonePanel === "notes" && winVisible.notes ? (
+        <div className="phonePanel">{renderWindow("notes")}</div>
+      ) : null}
+      {isPhone && phonePanel === "chat" && !readOnly ? (
+        <div className="phonePanel">{renderWindow("chat")}</div>
+      ) : null}
       </div>
+      {isPhone && (!centerNotes || !readOnly) ? (
+        <div className="phoneTabBar">
+          <button
+            className={`phoneTab ${phonePanel === null || (phonePanel === "notes" && centerNotes) ? "active" : ""}`}
+            onClick={() => setPhonePanel(null)}
+          >
+            {homeMode ? <HomeIcon size={16} /> : centerNotes ? <FileTextIcon size={16} /> : <FileIcon size={16} />}
+            <span>{homeMode ? "Library" : centerNotes ? "Notes" : "PDF"}</span>
+          </button>
+          {!centerNotes ? (
+            <button
+              className={`phoneTab ${phonePanel === "notes" ? "active" : ""}`}
+              onClick={() => { setNotesVisible(true); setPhonePanel((p) => (p === "notes" ? null : "notes")); }}
+            >
+              <FileTextIcon size={16} />
+              <span>Notes</span>
+            </button>
+          ) : null}
+          {!readOnly ? (
+            <button
+              className={`phoneTab ${phonePanel === "chat" ? "active" : ""}`}
+              onClick={() => setPhonePanel((p) => (p === "chat" ? null : "chat"))}
+            >
+              <SparklesIcon size={16} />
+              <span>Chat</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {dockPreview ? (
         <div className="dockPreview" style={dockPreview} />
       ) : null}
@@ -5706,6 +5862,31 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      {labelRenaming ? (
+        <div className="reportOverlay" onClick={() => setLabelRenaming(null)}>
+          <div className="reportModal confirmModal" onClick={(e) => e.stopPropagation()}>
+            <div className="reportModalTitle">Rename label</div>
+            <div className="reportModalHint confirmMessage">Renames “{labelRenaming.name}” on every page that carries it.</div>
+            <div className="shareRow">
+              <input
+                autoFocus
+                value={labelRenaming.draft}
+                onFocus={(e) => e.currentTarget.select()}
+                onChange={(e) => setLabelRenaming((s) => ({ ...s, draft: e.target.value }))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") renameLabel(labelRenaming.name, labelRenaming.draft);
+                  else if (e.key === "Escape") setLabelRenaming(null);
+                }}
+              />
+              <button
+                className="uiBtn primary"
+                disabled={!labelRenaming.draft.trim()}
+                onClick={() => renameLabel(labelRenaming.name, labelRenaming.draft)}
+              >Rename</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {linkPrompt ? (
         <div className="reportOverlay" onClick={() => setLinkPrompt(null)}>
           <div className="reportModal confirmModal" onClick={(e) => e.stopPropagation()}>
@@ -5713,11 +5894,24 @@ export default function App() {
             <div className="reportModalHint confirmMessage linkPromptUrl">{linkPrompt}</div>
             <div className="reportModalBtns">
               <button className="chatClearBtn" onClick={() => setLinkPrompt(null)}>Cancel</button>
-              <button
-                className="chatClearBtn"
-                onClick={() => { const url = linkPrompt; setLinkPrompt(null); pushNav(); openPdf(url); }}
-                title="Resolve this link as a PDF and open it as a new paper in Gamma"
-              >Fetch into Gamma</button>
+              {(() => {
+                // Right-click always lands here, even for links whose paper is
+                // already in the library — offer that copy instead of a re-fetch.
+                const pid = findPageForUrl(linkPrompt, homeBlocks);
+                return pid ? (
+                  <button
+                    className="chatClearBtn"
+                    onClick={() => { setLinkPrompt(null); openBlock(pid, { pushNav: true }); }}
+                    title="This paper is already in your library"
+                  >Open in Gamma</button>
+                ) : (
+                  <button
+                    className="chatClearBtn"
+                    onClick={() => { const url = linkPrompt; setLinkPrompt(null); pushNav(); openPdf(url); }}
+                    title="Resolve this link as a PDF and open it as a new paper in Gamma"
+                  >Fetch into Gamma</button>
+                );
+              })()}
               <button
                 className="uiBtn primary"
                 onClick={() => { window.open(linkPrompt, "_blank", "noopener"); setLinkPrompt(null); }}
@@ -5803,10 +5997,22 @@ export default function App() {
           setMetaAutoFetch,
           pdfSaveLocal,
           setPdfSaveLocal,
+          hlNoteBadges,
+          setHlNoteBadges,
+          embAnnots,
+          setEmbAnnots,
+          metaModel,
+          setMetaModel,
+          aiModels: scopedAiModels,
+          isAdmin: !!authUser?.is_admin,
+          setStatus,
+          refreshQuota, // keep the client-side pre-upload size check in sync without a re-login
+        }}
+        library={{
           // batch metadata retry uses the same prompt/model/context prefs as
           // the per-paper fetch in the metadata popover
           metaPrompt,
-          chatModel,
+          metaFetchModel,
           metaContextChars,
           setStatus,
         }}
@@ -5861,6 +6067,10 @@ export default function App() {
         context={{
           chatImgAutoClear,
           setChatImgAutoClear,
+          dictationModel,
+          setDictationModel,
+          dictationLang,
+          setDictationLang,
           chatContextChars,
           setChatContextChars,
           metaContextChars,
@@ -5875,138 +6085,15 @@ export default function App() {
           },
         }}
         search={{ searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper, indexTask, setStatus }}
+        users={authUser?.is_admin ? {
+          me: authUser?.user,
+          setStatus,
+          confirm: setConfirmBox,
+          onSelfRenamed: checkSession, // self-rename re-keys the whole app
+          refreshQuota,
+        } : null}
         diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, isAdmin: !!authUser?.is_admin, debugLog, setDebugLog }}
       />
-      {usersOpen ? (
-        <div className="reportOverlay" onClick={() => setUsersOpen(false)}>
-          <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
-            <div className="reportModalTitle">Users</div>
-            <div className="reportModalHint">
-              Admin is a privilege, not a name — any account can be granted it. Admins can create
-              and delete accounts, reset passwords, and grant or revoke the privilege. The last
-              admin can never be demoted or deleted.
-            </div>
-            {!usersInfo && !usersError ? <div className="reportModalHint">Loading…</div> : null}
-            {usersInfo ? (
-              <>
-                {usersInfo.users.map((u) => {
-                  // Mirrors the backend rail (admin.py counts non-guest admins):
-                  // the last admin can't be demoted, so don't offer the button.
-                  const lastAdmin = u.is_admin &&
-                    usersInfo.users.filter((x) => x.is_admin && !x.is_guest).length <= 1;
-                  return (
-                  <div key={u.username} className="aiProvRow">
-                    <span className="aiProvMeta">
-                      <span className="aiProvName">
-                        {u.username}
-                        {u.username === usersInfo.me ? <span className="uiTag">you</span> : null}
-                        {u.is_admin ? <span className="uiTag admin">admin</span> : null}
-                        {u.is_guest ? <span className="uiTag">guest</span> : null}
-                      </span>
-                      <span className="aiProvDesc">
-                        {u.is_guest ? "shared demo workspace, resets daily" : `created ${new Date(u.created_at).toLocaleDateString()}`}
-                      </span>
-                      {userPwEdit?.username === u.username ? (
-                        <span className="aiProvPwForm">
-                          <input
-                            className="aiKeyInput" type="password" autoComplete="new-password" autoFocus
-                            placeholder="New password"
-                            value={userPwEdit.password}
-                            onChange={(e) => setUserPwEdit((f) => ({ ...f, password: e.target.value }))}
-                            onKeyDown={(e) => { if (isEnterCommit(e)) submitUserPassword(); }}
-                          />
-                          <button className="uiBtn sm" onClick={() => setUserPwEdit(null)}>Cancel</button>
-                          <button className="uiBtn sm primary" disabled={usersBusy} onClick={submitUserPassword}>Set</button>
-                        </span>
-                      ) : null}
-                      {userRenameEdit?.username === u.username ? (
-                        <span className="aiProvPwForm">
-                          <input
-                            className="aiKeyInput" type="text" spellCheck={false} autoFocus
-                            placeholder="New username"
-                            value={userRenameEdit.value}
-                            onChange={(e) => setUserRenameEdit((f) => ({ ...f, value: e.target.value }))}
-                            onKeyDown={(e) => { if (isEnterCommit(e)) submitUserRename(); }}
-                          />
-                          <button className="uiBtn sm" onClick={() => setUserRenameEdit(null)}>Cancel</button>
-                          <button className="uiBtn sm primary" disabled={usersBusy} onClick={submitUserRename}>Rename</button>
-                        </span>
-                      ) : null}
-                    </span>
-                    {!u.is_guest ? (
-                      <span className="aiProvActions">
-                        <button className="uiBtn sm uMgrBtn" disabled={usersBusy}
-                          title="Rename the account — sessions and share links keep working"
-                          onClick={() => { setUsersError(""); setUserPwEdit(null); setUserRenameEdit({ username: u.username, value: u.username }); }}>
-                          Rename…
-                        </button>
-                        <button className="uiBtn sm uMgrBtn" disabled={usersBusy}
-                          onClick={() => { setUsersError(""); setUserRenameEdit(null); setUserPwEdit({ username: u.username, password: "" }); }}>
-                          Password…
-                        </button>
-                        <button className="uiBtn sm uMgrBtnWide" disabled={usersBusy || lastAdmin}
-                          title={lastAdmin ? "The last admin can't be demoted"
-                            : u.is_admin ? "Revoke the admin privilege" : "Grant the admin privilege"}
-                          onClick={() => usersCall(`/users/${encodeURIComponent(u.username)}`, "PUT", { is_admin: !u.is_admin })}>
-                          {u.is_admin ? "Revoke admin" : "Make admin"}
-                        </button>
-                        {u.username !== usersInfo.me ? (
-                          <button className="uiBtn sm iconSq danger" disabled={usersBusy}
-                            title="Delete this account and all its data"
-                            aria-label={`Delete ${u.username}`}
-                            onClick={() => deleteUserAccount(u)}>
-                            <Trash2Icon size={13} />
-                          </button>
-                        ) : (
-                          <span className="iconSqSlot" aria-hidden="true" />
-                        )}
-                      </span>
-                    ) : null}
-                  </div>
-                  );
-                })}
-                {usersForm ? (
-                  <div className="aiProvForm">
-                    <div className="promptSectionHead"><span>Add user</span></div>
-                    <input
-                      className="aiKeyInput" type="text" spellCheck={false} autoFocus
-                      placeholder="Username (letters, digits, _ . -)"
-                      value={usersForm.username}
-                      onChange={(e) => setUsersForm((f) => ({ ...f, username: e.target.value }))}
-                    />
-                    <input
-                      className="aiKeyInput" type="password" autoComplete="new-password"
-                      placeholder="Password"
-                      value={usersForm.password}
-                      onChange={(e) => setUsersForm((f) => ({ ...f, password: e.target.value }))}
-                      onKeyDown={(e) => { if (isEnterCommit(e)) submitNewUser(); }}
-                    />
-                    <label className="uiCheckRow">
-                      <input type="checkbox" checked={!!usersForm.is_admin}
-                        onChange={(e) => setUsersForm((f) => ({ ...f, is_admin: e.target.checked }))} />
-                      Grant the admin privilege
-                    </label>
-                    <div className="reportModalBtns">
-                      <button className="uiBtn" onClick={() => { setUsersForm(null); setUsersError(""); }}>Cancel</button>
-                      <button className="uiBtn primary" disabled={usersBusy} onClick={submitNewUser}>
-                        {usersBusy ? "Creating…" : "Create user"}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="reportModalBtns">
-                    <button className="uiBtn" onClick={() => setUsersOpen(false)}>Close</button>
-                    <button className="uiBtn primary" onClick={() => { setUsersError(""); setUserPwEdit(null); setUsersForm({ username: "", password: "", is_admin: false }); }}>
-                      + Add user
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : null}
-            {usersError ? <div className="reportModalHint aiKeysError">{usersError}</div> : null}
-          </div>
-        </div>
-      ) : null}
       {tabMenu ? (
         <ContextMenu x={tabMenu.x} y={tabMenu.y} onClose={() => setTabMenu(null)}>
           <button className="ctxMenuItem ctxMenuItemIconed" onClick={() => { setTabMenu(null); toggleTabPinned(tabMenu.id); }}>
@@ -6050,7 +6137,13 @@ export default function App() {
                   <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); removePagesFromFolder(ids, ""); }}>Clear folder tags</button>
                 </>
               );
-            })() : (
+            })() : homeMenu.kind === "label" ? (
+              <>
+                <button className="ctxMenuItem" onClick={() => { const name = homeMenu.name; setHomeMenu(null); if (!homeMode) goHome(); setCategoryFilter(name); window.history.replaceState(null, "", `/?category=${encodeURIComponent(name)}`); }}>Open</button>
+                <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setLabelRenaming({ name: homeMenu.name, draft: homeMenu.name }); }}>Rename</button>
+                <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deleteLabelByName(homeMenu.name); }}>Delete</button>
+              </>
+            ) : (
               <>
                 <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setFolderFilter(homeMenu.name); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(homeMenu.name)}`); }}>Open</button>
                 <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setFolderRenaming({ name: homeMenu.name, draft: homeMenu.name }); }}>Rename</button>
@@ -6092,6 +6185,17 @@ export default function App() {
             >
               {highlights.find((x) => x.id === highlightMenu.id)?.linkTarget ? "Change link…" : "Link to paper…"}
             </button>
+            {highlights.find((x) => x.id === highlightMenu.id)?.linkTarget?.url ? (
+              <button
+                className="ctxMenuItem"
+                onClick={() => {
+                  setLinkPrompt(highlights.find((x) => x.id === highlightMenu.id).linkTarget.url);
+                  setHighlightMenu(null);
+                }}
+              >
+                Open link in browser…
+              </button>
+            ) : null}
             <button
               className="ctxMenuItem"
               onClick={() => {

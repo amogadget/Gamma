@@ -78,6 +78,9 @@
 /* Look comes from .aiKeyInput (the standard settings text field); this only
    sizes the number box inside its settingRow. */
 .contextLimitInput { width: 112px; flex: 0 0 auto; margin-bottom: 0; text-align: right; }
+/* Selects in setting rows: the Add-key form's native select look, sized to
+   the options instead of the number-input's fixed 112px. */
+.settingSelect { width: auto; flex: 0 0 auto; margin-bottom: 0; cursor: pointer; }
 /* Provider rows double as the active-key picker in the AI pane. */
 .aiProvSelectable { cursor: pointer; }
 .aiProvSelectable .aiProvMeta { flex: 1; }
@@ -112,6 +115,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   max-height: 300px;
+  flex-shrink: 0; /* don't get squished by other pane content; the pane scrolls */
   overflow-y: auto;
   font-size: 12px;
 }
