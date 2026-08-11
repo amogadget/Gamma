@@ -6,11 +6,22 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from ..auth import require_user
-from ..config import MAX_UPLOAD_BYTES
 from ..db import user_uploads_dir
+from ..server_settings import check_upload_allowed, usage_bytes, user_limits
 from ..storage import ALLOWED_IMAGE_TYPES, IMAGE_EXTENSIONS, IMAGE_MEDIA_TYPES, find_upload_file
 
 router = APIRouter(prefix="/api", tags=["uploads"])
+
+
+@router.get("/quota")
+async def get_quota(request: Request):
+    """The session user's effective storage limits and current usage — feeds
+    the client-side pre-upload size check and the Settings usage display.
+    (Deliberately its own endpoint: limits/usage change on admin edits and
+    uploads, /api/session only at login.)"""
+    user = require_user(request)
+    limits = user_limits(user)
+    return {**limits, "used_bytes": usage_bytes(user)}
 
 
 @router.post("/uploads")
@@ -19,8 +30,6 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
     uploads = user_uploads_dir(user)
     uploads.mkdir(parents=True, exist_ok=True)
     contents = await file.read()
-    if len(contents) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"file too large (max {MAX_UPLOAD_BYTES // (1024*1024)} MB)")
     if len(contents) < 4 or contents[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="not a valid PDF (missing %PDF header)")
 
@@ -28,6 +37,9 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
     target = uploads / f"{digest}.pdf"
     already_existed = target.exists()
     if not already_existed:
+        # dedup first: a re-upload of a stored file costs nothing, so limits
+        # only gate genuinely new bytes
+        check_upload_allowed(user, len(contents))
         target.write_bytes(contents)
 
     return {
@@ -46,13 +58,12 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"unsupported image type: {file.content_type}")
     contents = await file.read()
-    if len(contents) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"file too large (max {MAX_UPLOAD_BYTES // (1024*1024)} MB)")
     digest = hashlib.sha256(contents).hexdigest()[:24]
     ext = IMAGE_EXTENSIONS[file.content_type]
     target = uploads / f"{digest}{ext}"
     already_existed = target.exists()
     if not already_existed:
+        check_upload_allowed(user, len(contents))
         target.write_bytes(contents)
     return {
         "url": f"/api/uploads/{digest}{ext}",

@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from ..auth import require_user, resolve_user
 from ..db import user_uploads_dir
 from ..logbuf import log
+from ..server_settings import can_store
 
 router = APIRouter(prefix="/api", tags=["pdf"])
 
@@ -239,8 +240,14 @@ def proxy_pdf(source_url: str, request: Request):
         finally:
             resp.close()
             if chunks is not None and complete:
-                uploads.mkdir(parents=True, exist_ok=True)
-                local_path.write_bytes(b"".join(chunks))
+                data = b"".join(chunks)
+                # best-effort cache: over the user's storage limits, just skip
+                # the save — the PDF still streamed through fine
+                if can_store(user, len(data)):
+                    uploads.mkdir(parents=True, exist_ok=True)
+                    local_path.write_bytes(data)
+                else:
+                    log.info(f"[pdf] not caching {pdf_doc_id} ({len(data)} bytes): over storage limits")
 
     headers = {"Cache-Control": "public, max-age=3600", "X-Source-Url": final_url}
     if length.isdigit():

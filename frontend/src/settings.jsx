@@ -1,5 +1,5 @@
 import React from "react";
-import { API, apiJson } from "./utils";
+import { API, apiJson, fmtBytes } from "./utils";
 import { parseFolderTags } from "./libraryUtils";
 import {
   ActivityIcon,
@@ -11,6 +11,7 @@ import {
   SearchIcon,
   SlidersIcon,
   Trash2Icon,
+  UsersIcon,
 } from "./icons";
 
 const NAV_ITEMS = [
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   ["prompts", "Prompts", SlidersIcon],
   ["context", "AI chat", BookIcon],
   ["search", "Search", SearchIcon],
+  ["users", "Users", UsersIcon], // admin-only, filtered in SettingsDialog
   ["diagnostics", "Diagnostics", ActivityIcon],
 ];
 
@@ -29,6 +31,33 @@ function PaneIntro({ title, children }) {
       <div className="settingsPaneTitle">{title}</div>
       <div className="settingsPaneHint">{children}</div>
     </>
+  );
+}
+
+// Cloud-drive-style storage meter: thin bar + "used of total" caption.
+// quotaMb 0/undefined = unlimited → caption only, no bar (no denominator).
+// barOnly renders just the bar (the account popover puts the numbers next to
+// the user card instead). Shared by the popover, Users pane, Library status.
+export function QuotaMeter({ usedBytes, quotaMb, barOnly }) {
+  if (usedBytes == null) return null;
+  const quotaBytes = (quotaMb || 0) * 1024 * 1024;
+  const pct = quotaBytes ? Math.min(100, (usedBytes / quotaBytes) * 100) : 0;
+  const state = pct >= 95 ? " full" : pct >= 80 ? " warn" : "";
+  return (
+    <span className="quotaMeter">
+      {quotaBytes ? (
+        <span className="quotaBar">
+          <span className={`quotaBarFill${state}`} style={{ width: `${usedBytes ? Math.max(pct, 2) : 0}%` }} />
+        </span>
+      ) : null}
+      {barOnly ? null : (
+        <span className="settingDesc">
+          {quotaBytes
+            ? `${fmtBytes(usedBytes)} of ${fmtBytes(quotaBytes)} used (${Math.round(pct)}%)`
+            : `${fmtBytes(usedBytes)} used — no quota`}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -94,7 +123,100 @@ function PapersSettings({ value }) {
         </select>
       </label>
       <MetaModelRow value={value} />
+      {value.isAdmin ? <ServerLimitRows setStatus={value.setStatus} refreshQuota={value.refreshQuota} /> : null}
     </>
+  );
+}
+
+// Admin-only server-wide default storage limits (users.db via
+// /api/admin/settings). Per-account overrides live in the Users dialog.
+function ServerLimitRows({ setStatus, refreshQuota }) {
+  const [saved, setSaved] = React.useState(null); // {max_upload_mb, quota_mb}
+  const [draft, setDraft] = React.useState({ max_upload_mb: "", quota_mb: "" });
+  const [error, setError] = React.useState("");
+  React.useEffect(() => {
+    apiJson(`${API}/admin/settings`)
+      .then((d) => {
+        setSaved(d);
+        setDraft({ max_upload_mb: String(d.max_upload_mb), quota_mb: String(d.quota_mb) });
+      })
+      .catch((err) => setError(err.message));
+  }, []);
+  async function save(key, label) {
+    try {
+      const d = await apiJson(`${API}/admin/settings`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [key]: parseInt(draft[key], 10) }),
+      });
+      setSaved((prev) => ({ ...prev, ...d }));
+      setDraft({ max_upload_mb: String(d.max_upload_mb), quota_mb: String(d.quota_mb) });
+      refreshQuota?.();
+      setStatus(`${label} saved.`);
+    } catch (err) {
+      setStatus(`Could not save: ${err.message}`);
+    }
+  }
+  function row(key, label, desc, min, saveLabel) {
+    const parsed = parseInt(draft[key], 10);
+    const valid = Number.isFinite(parsed) && parsed >= min;
+    const dirty = saved && valid && parsed !== saved[key];
+    return (
+      <div className="settingRow">
+        <span className="settingText">
+          <span className="settingLabel">{label}</span>
+          <span className="settingDesc">{desc}</span>
+        </span>
+        {error ? (
+          <span className="settingDesc">{error}</span>
+        ) : (
+          <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              className="aiKeyInput" style={{ width: 84, textAlign: "right" }}
+              type="number" min={min}
+              value={draft[key]}
+              disabled={!saved}
+              onChange={(e) => setDraft((f) => ({ ...f, [key]: e.target.value }))}
+              onKeyDown={(e) => { if (e.key === "Enter" && dirty) save(key, saveLabel); }}
+            />
+            <button className="uiBtn sm" disabled={!dirty} onClick={() => save(key, saveLabel)}>Save</button>
+          </span>
+        )}
+      </div>
+    );
+  }
+  return (
+    <>
+      {row("max_upload_mb", "Default maximum upload size (MB)",
+        "Server-wide cap on a single uploaded PDF or image. Override per account from Manage users. Admins only.",
+        1, "Upload limit")}
+      {row("quota_mb", "Default storage quota (MB)",
+        "Total uploads storage per account; 0 = unlimited. Override per account from Manage users. Admins only.",
+        0, "Storage quota")}
+    </>
+  );
+}
+
+// Everyone sees their own usage against their effective limits (GET /api/quota).
+function StorageUsageRow() {
+  const [q, setQ] = React.useState(null);
+  React.useEffect(() => {
+    apiJson(`${API}/quota`).then(setQ).catch(() => {});
+  }, []);
+  if (!q) return null;
+  return (
+    <div className="settingRow">
+      <span className="settingText">
+        <span className="settingLabel">Storage used</span>
+        <span className="settingDesc">
+          Uploaded PDFs and images on the server. Files up to {q.max_upload_mb} MB each
+          {q.quota_mb ? `, ${q.quota_mb} MB total.` : ", no total quota."}
+        </span>
+      </span>
+      <span className="settingQuotaCell">
+        <QuotaMeter usedBytes={q.used_bytes} quotaMb={q.quota_mb} />
+      </span>
+    </div>
   );
 }
 
@@ -105,6 +227,7 @@ function LibrarySettings({ value }) {
         Per-paper health of your library: metadata, extracted PDF text, and the search index —
         with batch retry for failed or missing metadata lookups.
       </PaneIntro>
+      <StorageUsageRow />
       <MetaStatusSection value={value} />
     </>
   );
@@ -837,6 +960,278 @@ function DiagnosticsSettings({ value }) {
   );
 }
 
+// Settings → Users (admins only): the GUI for /api/admin/users*. One combined
+// editor per account — name, password, privilege, storage limits, delete —
+// instead of scattered per-action forms.
+function UsersSettings({ value }) {
+  const { me, setStatus, confirm, onSelfRenamed, refreshQuota } = value;
+  const [info, setInfo] = React.useState(null); // {users, me}
+  const [error, setError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [edit, setEdit] = React.useState(null); // {original, username, password, is_admin, max_upload_mb, quota_mb}
+  const [addForm, setAddForm] = React.useState(null); // {username, password, is_admin}
+
+  const [defaults, setDefaults] = React.useState(null); // {max_upload_mb, quota_mb} server-wide
+  React.useEffect(() => {
+    apiJson(`${API}/admin/users`).then((d) => setInfo(d)).catch((err) => setError(err.message));
+    apiJson(`${API}/admin/settings`).then(setDefaults).catch(() => {});
+  }, []);
+
+  const myName = info?.me || me;
+  const lastAdmin = (u) => u.is_admin && (info?.users || []).filter((x) => x.is_admin && !x.is_guest).length <= 1;
+
+  function openEdit(u) {
+    setError("");
+    setAddForm(null);
+    setEdit({
+      original: u,
+      username: u.username,
+      password: "",
+      is_admin: !!u.is_admin,
+      max_upload_mb: u.max_upload_mb ?? "",
+      quota_mb: u.quota_mb ?? "",
+    });
+  }
+
+  // "" = inherit the server default (sent as explicit null), digits = override
+  function parseLimit(s) {
+    const t = String(s ?? "").trim();
+    if (!t) return null;
+    const n = parseInt(t, 10);
+    return Number.isFinite(n) ? n : NaN;
+  }
+
+  async function saveEdit() {
+    const u = edit.original;
+    const maxMb = parseLimit(edit.max_upload_mb);
+    const quotaMb = parseLimit(edit.quota_mb);
+    if (Number.isNaN(maxMb) || Number.isNaN(quotaMb)) {
+      setError("Storage limits must be whole numbers of MB, or blank for the server default.");
+      return;
+    }
+    const payload = {};
+    if (edit.password) payload.password = edit.password;
+    if (!u.is_guest && edit.is_admin !== !!u.is_admin) payload.is_admin = edit.is_admin;
+    if (maxMb !== (u.max_upload_mb ?? null)) payload.max_upload_mb = maxMb;
+    if (quotaMb !== (u.quota_mb ?? null)) payload.quota_mb = quotaMb;
+    const newName = u.is_guest ? u.username : (edit.username || "").trim();
+    const renaming = newName && newName !== u.username;
+    if (!Object.keys(payload).length && !renaming) { setEdit(null); return; }
+    setBusy(true);
+    setError("");
+    try {
+      if (Object.keys(payload).length) {
+        const d = await apiJson(`${API}/admin/users/${encodeURIComponent(u.username)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        setInfo((prev) => ({ ...prev, users: d.users }));
+      }
+      if (renaming) {
+        const d = await apiJson(`${API}/admin/users/${encodeURIComponent(u.username)}/rename`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ new_username: newName }),
+        });
+        setInfo((prev) => ({
+          ...prev,
+          users: d.users,
+          me: d.renamed?.from === prev.me ? d.renamed.to : prev.me,
+        }));
+        if (d.renamed) setStatus(`Renamed ${d.renamed.from} → ${d.renamed.to}. Sessions keep working.`);
+        // Renamed yourself? Re-read the session so the whole app re-keys
+        // (avatar, per-user prefs, synced tabs all follow the new name).
+        if (d.renamed?.from === myName) onSelfRenamed?.();
+      } else {
+        setStatus(`Updated ${u.username}.`);
+      }
+      if (u.username === myName) refreshQuota?.();
+      setEdit(null);
+    } catch (err) {
+      setError(err.message);
+    }
+    setBusy(false);
+  }
+
+  function deleteAccount(u) {
+    confirm({
+      title: "Delete user",
+      message: `Delete "${u.username}" and ALL their data (notes, PDFs, settings)? This can't be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: async () => {
+        setBusy(true);
+        setError("");
+        try {
+          const d = await apiJson(`${API}/admin/users/${encodeURIComponent(u.username)}`, { method: "DELETE" });
+          setInfo((prev) => ({ ...prev, users: d.users }));
+          setStatus(d.warning || `Deleted ${u.username}.`);
+          setEdit(null);
+        } catch (err) {
+          setError(err.message);
+        }
+        setBusy(false);
+      },
+    });
+  }
+
+  async function submitAdd() {
+    const f = addForm;
+    if (!f?.username.trim() || !f?.password) { setError("Username and password are required."); return; }
+    setBusy(true);
+    setError("");
+    try {
+      const d = await apiJson(`${API}/admin/users`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: f.username.trim(), password: f.password, is_admin: !!f.is_admin }),
+      });
+      setInfo((prev) => ({ ...prev, users: d.users }));
+      setStatus(`Created ${f.username.trim()}.`);
+      setAddForm(null);
+    } catch (err) {
+      setError(err.message);
+    }
+    setBusy(false);
+  }
+
+  function editForm(u) {
+    // effective quota = this account's override, else the server default
+    const effQuota = u.quota_mb ?? defaults?.quota_mb;
+    const defUpload = defaults ? `server default (${defaults.max_upload_mb} MB)` : "server default";
+    const defQuota = defaults
+      ? `server default (${defaults.quota_mb ? `${defaults.quota_mb} MB` : "unlimited"})`
+      : "server default";
+    return (
+      <div className="aiProvForm" key={u.username}>
+        <div className="promptSectionHead"><span>{u.is_guest ? "Guest storage limits" : `Edit ${u.username}`}</span></div>
+        <QuotaMeter usedBytes={u.used_bytes} quotaMb={effQuota} />
+        {!u.is_guest ? (
+          <>
+            <span className="settingDesc formFieldLabel">Username — change it to rename the account (sessions and share links keep working)</span>
+            <input
+              className="aiKeyInput" type="text" spellCheck={false}
+              value={edit.username}
+              onChange={(e) => setEdit((f) => ({ ...f, username: e.target.value }))}
+            />
+            <input
+              className="aiKeyInput" type="password" autoComplete="new-password"
+              placeholder="New password — blank keeps the current one"
+              value={edit.password}
+              onChange={(e) => setEdit((f) => ({ ...f, password: e.target.value }))}
+            />
+            <label className="uiCheckRow" title={lastAdmin(u) ? "The last admin can't be demoted" : ""}>
+              <input
+                type="checkbox" checked={edit.is_admin} disabled={lastAdmin(u)}
+                onChange={(e) => setEdit((f) => ({ ...f, is_admin: e.target.checked }))}
+              />
+              Admin privilege
+            </label>
+          </>
+        ) : null}
+        <span className="settingDesc formFieldLabel">Max upload size (MB) — largest single PDF/image; blank = server default</span>
+        <input
+          className="aiKeyInput" type="number" min={1}
+          placeholder={defUpload}
+          value={edit.max_upload_mb}
+          onChange={(e) => setEdit((f) => ({ ...f, max_upload_mb: e.target.value }))}
+        />
+        <span className="settingDesc formFieldLabel">Storage quota (MB) — total for all uploads; blank = server default, 0 = unlimited</span>
+        <input
+          className="aiKeyInput" type="number" min={0}
+          placeholder={defQuota}
+          value={edit.quota_mb}
+          onChange={(e) => setEdit((f) => ({ ...f, quota_mb: e.target.value }))}
+        />
+        <div className="reportModalBtns">
+          {!u.is_guest && u.username !== myName ? (
+            <button className="uiBtn danger" disabled={busy} onClick={() => deleteAccount(u)}>
+              <Trash2Icon size={13} /> Delete…
+            </button>
+          ) : null}
+          <button className="uiBtn" onClick={() => { setEdit(null); setError(""); }}>Cancel</button>
+          <button className="uiBtn primary" disabled={busy} onClick={saveEdit}>Save</button>
+        </div>
+      </div>
+    );
+  }
+
+  function userRow(u) {
+    return (
+      <div key={u.username} className="aiProvRow">
+        <span className="aiProvMeta">
+          <span className="aiProvName">
+            {u.username}
+            {u.username === myName ? <span className="uiTag">you</span> : null}
+            {u.is_admin ? <span className="uiTag admin">admin</span> : null}
+            {u.is_guest ? <span className="uiTag">guest</span> : null}
+          </span>
+          <span className="aiProvDesc">
+            {u.is_guest ? "shared demo workspace, resets daily" : `created ${new Date(u.created_at).toLocaleDateString()}`}
+            {u.max_upload_mb != null ? ` · max file ${u.max_upload_mb} MB` : ""}
+            {u.quota_mb != null ? (u.quota_mb ? ` · quota ${u.quota_mb} MB` : " · quota unlimited") : ""}
+          </span>
+          <QuotaMeter usedBytes={u.used_bytes} quotaMb={u.quota_mb ?? defaults?.quota_mb} />
+        </span>
+        <span className="aiProvActions">
+          <button className="uiBtn sm" disabled={busy} onClick={() => openEdit(u)}>Edit…</button>
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <PaneIntro title="Users">
+        Accounts on this server. Admin is a privilege, not a name — any account can be granted it,
+        and the last admin can never be demoted or deleted. Storage limits left blank inherit the
+        server defaults from the Paper metadata pane.
+      </PaneIntro>
+      {!info && !error ? <div className="reportModalHint">Loading…</div> : null}
+      {(info?.users || []).map((u) => (edit?.original.username === u.username ? editForm(u) : userRow(u)))}
+      {addForm ? (
+        <div className="aiProvForm">
+          <div className="promptSectionHead"><span>Add user</span></div>
+          <input
+            className="aiKeyInput" type="text" spellCheck={false} autoFocus
+            placeholder="Username (letters, digits, _ . -)"
+            value={addForm.username}
+            onChange={(e) => setAddForm((f) => ({ ...f, username: e.target.value }))}
+          />
+          <input
+            className="aiKeyInput" type="password" autoComplete="new-password"
+            placeholder="Password"
+            value={addForm.password}
+            onChange={(e) => setAddForm((f) => ({ ...f, password: e.target.value }))}
+            onKeyDown={(e) => { if (e.key === "Enter") submitAdd(); }}
+          />
+          <label className="uiCheckRow">
+            <input
+              type="checkbox" checked={!!addForm.is_admin}
+              onChange={(e) => setAddForm((f) => ({ ...f, is_admin: e.target.checked }))}
+            />
+            Grant the admin privilege
+          </label>
+          <div className="reportModalBtns">
+            <button className="uiBtn" onClick={() => { setAddForm(null); setError(""); }}>Cancel</button>
+            <button className="uiBtn primary" disabled={busy} onClick={submitAdd}>
+              {busy ? "Creating…" : "Create user"}
+            </button>
+          </div>
+        </div>
+      ) : info ? (
+        <div className="reportModalBtns settingsAlignStart">
+          <button className="uiBtn" onClick={() => { setError(""); setEdit(null); setAddForm({ username: "", password: "", is_admin: false }); }}>
+            + Add user
+          </button>
+        </div>
+      ) : null}
+      {error ? <div className="reportModalHint aiKeysError">{error}</div> : null}
+    </>
+  );
+}
+
 export default function SettingsDialog({
   activePane,
   onPaneChange,
@@ -847,15 +1242,17 @@ export default function SettingsDialog({
   prompts,
   context,
   search,
+  users,
   diagnostics,
 }) {
   if (!activePane) return null;
+  const navItems = NAV_ITEMS.filter(([id]) => id !== "users" || users);
   return (
     <div className="reportOverlay" onClick={onClose}>
       <div className="settingsModal" onClick={(event) => event.stopPropagation()}>
         <div className="settingsSidebar">
           <div className="settingsSideTitle">Settings</div>
-          {NAV_ITEMS.map(([id, label, Icon]) => (
+          {navItems.map(([id, label, Icon]) => (
             <button key={id} className={`settingsNavBtn ${activePane === id ? "active" : ""}`} onClick={() => onPaneChange(id)}>
               <Icon size={15} />{label}
             </button>
@@ -869,6 +1266,7 @@ export default function SettingsDialog({
           {activePane === "prompts" ? <PromptSettings value={prompts} /> : null}
           {activePane === "context" ? <ContextSettings value={context} /> : null}
           {activePane === "search" ? <SearchSettings value={search} /> : null}
+          {activePane === "users" && users ? <UsersSettings value={users} /> : null}
           {activePane === "diagnostics" ? <DiagnosticsSettings value={diagnostics} /> : null}
         </div>
       </div>

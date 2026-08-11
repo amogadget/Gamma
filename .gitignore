@@ -23,3 +23,5 @@ HANDOFF.md.bak
 /data
 docker-compose.yml
 run-local.bat
+
+CLAUDE.md
