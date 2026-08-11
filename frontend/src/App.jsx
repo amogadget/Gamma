@@ -50,7 +50,7 @@ import {
 } from "./logseqPdfModel";
 import { loadSession, saveSession, clearSession } from "./sessionState";
 import { AuthLoading, LoginPage, SessionConflictPage } from "./LoginPage";
-import SettingsDialog from "./settings";
+import SettingsDialog, { QuotaMeter } from "./settings";
 import {
   cleanFolderSegment,
   findPageForUrl,
@@ -5301,7 +5301,11 @@ export default function App() {
               <span data-popover="user" style={{ position: "relative", display: "inline-flex" }}>
                 <button
                   className={`iconBtn ${openPopover === "user" ? "activeIcon" : ""}`}
-                  onClick={() => setOpenPopover((p) => (p === "user" ? null : "user"))}
+                  onClick={() => {
+                    const opening = openPopover !== "user";
+                    if (opening) refreshQuota(); // fresh storage meter on open
+                    setOpenPopover(opening ? "user" : null);
+                  }}
                   title="Account & settings"
                   aria-label="Account & settings"
                 >
@@ -5319,9 +5323,20 @@ export default function App() {
                         <span className="userCardName">{authUser.is_guest ? "Guest" : authUser.user}</span>
                         <span className="userCardRole">{authUser.is_guest ? "Temporary workspace" : "Signed in"}</span>
                       </span>
+                      {quotaInfo ? (
+                        <span className="userCardQuota" title="Storage used by your uploaded PDFs and images">
+                          {fmtBytes(quotaInfo.used_bytes)}
+                          {quotaInfo.quota_mb ? ` / ${fmtBytes(quotaInfo.quota_mb * 1024 * 1024)}` : ""}
+                        </span>
+                      ) : null}
                     </div>
                     {authUser.is_guest ? (
                       <div className="popoverHint">Guest data resets daily. Ask the admin for an account to keep your work.</div>
+                    ) : null}
+                    {quotaInfo?.quota_mb ? (
+                      <div className="popoverQuota">
+                        <QuotaMeter usedBytes={quotaInfo.used_bytes} quotaMb={quotaInfo.quota_mb} barOnly />
+                      </div>
                     ) : null}
                     <div className="popoverDivider" />
                     <button className="popoverItem" onClick={() => { setSettingsOpen("papers"); setOpenPopover(null); }}>

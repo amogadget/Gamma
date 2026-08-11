@@ -34,6 +34,33 @@ function PaneIntro({ title, children }) {
   );
 }
 
+// Cloud-drive-style storage meter: thin bar + "used of total" caption.
+// quotaMb 0/undefined = unlimited → caption only, no bar (no denominator).
+// barOnly renders just the bar (the account popover puts the numbers next to
+// the user card instead). Shared by the popover, Users pane, Library status.
+export function QuotaMeter({ usedBytes, quotaMb, barOnly }) {
+  if (usedBytes == null) return null;
+  const quotaBytes = (quotaMb || 0) * 1024 * 1024;
+  const pct = quotaBytes ? Math.min(100, (usedBytes / quotaBytes) * 100) : 0;
+  const state = pct >= 95 ? " full" : pct >= 80 ? " warn" : "";
+  return (
+    <span className="quotaMeter">
+      {quotaBytes ? (
+        <span className="quotaBar">
+          <span className={`quotaBarFill${state}`} style={{ width: `${usedBytes ? Math.max(pct, 2) : 0}%` }} />
+        </span>
+      ) : null}
+      {barOnly ? null : (
+        <span className="settingDesc">
+          {quotaBytes
+            ? `${fmtBytes(usedBytes)} of ${fmtBytes(quotaBytes)} used (${Math.round(pct)}%)`
+            : `${fmtBytes(usedBytes)} used — no quota`}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function SettingToggle({ label, description, checked, onChange }) {
   return (
     <label className="settingRow">
@@ -177,8 +204,6 @@ function StorageUsageRow() {
     apiJson(`${API}/quota`).then(setQ).catch(() => {});
   }, []);
   if (!q) return null;
-  const quotaBytes = q.quota_mb * 1024 * 1024;
-  const pct = quotaBytes ? Math.min(100, Math.round((q.used_bytes / quotaBytes) * 100)) : 0;
   return (
     <div className="settingRow">
       <span className="settingText">
@@ -188,8 +213,8 @@ function StorageUsageRow() {
           {q.quota_mb ? `, ${q.quota_mb} MB total.` : ", no total quota."}
         </span>
       </span>
-      <span className="settingDesc">
-        {fmtBytes(q.used_bytes)}{q.quota_mb ? ` of ${fmtBytes(quotaBytes)} (${pct}%)` : ""}
+      <span className="settingQuotaCell">
+        <QuotaMeter usedBytes={q.used_bytes} quotaMb={q.quota_mb} />
       </span>
     </div>
   );
@@ -1074,12 +1099,6 @@ function UsersSettings({ value }) {
   function editForm(u) {
     // effective quota = this account's override, else the server default
     const effQuota = u.quota_mb ?? defaults?.quota_mb;
-    const quotaBytes = effQuota ? effQuota * 1024 * 1024 : 0;
-    const usage = u.used_bytes != null
-      ? `${fmtBytes(u.used_bytes)} used${quotaBytes
-        ? ` of ${fmtBytes(quotaBytes)} (${Math.min(100, Math.round((u.used_bytes / quotaBytes) * 100))}%)`
-        : " — no quota"}`
-      : "";
     const defUpload = defaults ? `server default (${defaults.max_upload_mb} MB)` : "server default";
     const defQuota = defaults
       ? `server default (${defaults.quota_mb ? `${defaults.quota_mb} MB` : "unlimited"})`
@@ -1087,7 +1106,7 @@ function UsersSettings({ value }) {
     return (
       <div className="aiProvForm" key={u.username}>
         <div className="promptSectionHead"><span>{u.is_guest ? "Guest storage limits" : `Edit ${u.username}`}</span></div>
-        {usage ? <span className="settingDesc formFieldLabel">{usage}</span> : null}
+        <QuotaMeter usedBytes={u.used_bytes} quotaMb={effQuota} />
         {!u.is_guest ? (
           <>
             <span className="settingDesc formFieldLabel">Username — change it to rename the account (sessions and share links keep working)</span>
@@ -1150,10 +1169,10 @@ function UsersSettings({ value }) {
           </span>
           <span className="aiProvDesc">
             {u.is_guest ? "shared demo workspace, resets daily" : `created ${new Date(u.created_at).toLocaleDateString()}`}
-            {u.used_bytes != null ? ` · ${fmtBytes(u.used_bytes)} used` : ""}
             {u.max_upload_mb != null ? ` · max file ${u.max_upload_mb} MB` : ""}
             {u.quota_mb != null ? (u.quota_mb ? ` · quota ${u.quota_mb} MB` : " · quota unlimited") : ""}
           </span>
+          <QuotaMeter usedBytes={u.used_bytes} quotaMb={u.quota_mb ?? defaults?.quota_mb} />
         </span>
         <span className="aiProvActions">
           <button className="uiBtn sm" disabled={busy} onClick={() => openEdit(u)}>Edit…</button>

@@ -2366,6 +2366,30 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .aiProvForm { margin-top: 8px; }
 /* layout only: field caption sitting above an input inside a form */
 .formFieldLabel { display: block; margin: 2px 0 4px; }
+/* Storage meter (QuotaMeter): thin cloud-drive-style usage bar. */
+.quotaMeter { display: block; min-width: 0; }
+.quotaBar {
+  display: block; height: 4px; border-radius: 2px;
+  background: var(--bg-active); overflow: hidden; margin: 5px 0 4px;
+}
+.quotaBarFill {
+  display: block; height: 100%; border-radius: 2px;
+  background: var(--accent-dark); transition: width 0.3s ease;
+}
+.quotaBarFill.warn { background: #d9822b; }
+.quotaBarFill.full { background: #e5534b; }
+/* meters inside user-list rows stay compact */
+.aiProvMeta .quotaMeter { max-width: 260px; }
+/* right-hand cell of a settings row holding a meter */
+.settingQuotaCell { width: 200px; flex-shrink: 0; text-align: right; }
+.settingQuotaCell .settingDesc { white-space: nowrap; }
+/* storage meter in the account popover: numbers ride in the user card row,
+   the bar (quota only) sits as a thin strip beneath it */
+.popoverQuota { padding: 0 14px 8px; }
+.userCardQuota {
+  margin-left: auto; align-self: center; flex-shrink: 0;
+  font-size: 11px; color: var(--text-muted); white-space: nowrap;
+}
 .aiProvPwForm { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 .aiProvPwForm .aiKeyInput { margin-bottom: 0; width: auto; flex: 1; }
 /* small badge chips (admin / guest / you) */
