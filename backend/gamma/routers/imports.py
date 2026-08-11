@@ -14,8 +14,8 @@ from pydantic import BaseModel
 from fractional_indexing import generate_key_between, generate_n_keys_between
 
 from ..auth import require_user
-from ..config import MAX_UPLOAD_BYTES
 from ..db import page_now, user_db_path, user_uploads_dir
+from ..server_settings import check_upload_allowed
 from ..blocks_store import last_child_position
 from ..logbuf import log
 from ..logseq_import import (
@@ -42,13 +42,12 @@ async def import_logseq(
     uploads = user_uploads_dir(user)
     uploads.mkdir(parents=True, exist_ok=True)
     pdf_bytes = await pdf.read()
-    if len(pdf_bytes) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="PDF too large")
     if len(pdf_bytes) < 4 or pdf_bytes[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="not a valid PDF")
     digest = hashlib.sha256(pdf_bytes).hexdigest()[:24]
     target = uploads / f"{digest}.pdf"
     if not target.exists():
+        check_upload_allowed(user, len(pdf_bytes))
         target.write_bytes(pdf_bytes)
     source_url = f"/api/uploads/{digest}.pdf"
 

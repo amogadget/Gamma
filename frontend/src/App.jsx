@@ -20,7 +20,7 @@ import {
   ExternalLinkIcon, EyeIcon, FileGlyph, FileHighlightIcon, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
   FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
   LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PinIcon, PlusIcon,
-  RectSelectIcon, SearchIcon, SettingsIcon, SparklesIcon, TextCursorIcon, Trash2Icon, TrashIcon, UploadIcon,
+  RectSelectIcon, SearchIcon, SettingsIcon, SparklesIcon, TextCursorIcon, TrashIcon, UploadIcon,
   UserIcon, UsersIcon, XIcon, ZoomInIcon, ZoomOutIcon,
 } from "./icons";
 
@@ -176,6 +176,19 @@ export default function App() {
       setAuthUser(false);
     }
   }
+
+  // Effective storage limits + usage for the session user (GET /api/quota):
+  // feeds the client-side pre-upload size check. Refreshed on login and after
+  // uploads; the Settings displays fetch their own fresh copy.
+  const [quotaInfo, setQuotaInfo] = useState(null); // {max_upload_mb, quota_mb, used_bytes}
+  const refreshQuota = useCallback(() => {
+    if (readOnly) return;
+    apiJson(`${API}/quota`).then(setQuotaInfo).catch(() => {});
+  }, [readOnly]);
+  useEffect(() => {
+    if (authUser?.user && !readOnly) refreshQuota();
+    else setQuotaInfo(null);
+  }, [authUser?.user, readOnly, refreshQuota]);
 
   async function doLogin(e) {
     e?.preventDefault();
@@ -1698,102 +1711,9 @@ export default function App() {
     }
   }
 
-  // User management (admins only — admin is a privilege flag, not a name).
-  const [usersOpen, setUsersOpen] = useState(false);
-  const [usersInfo, setUsersInfo] = useState(null); // {users: [{username, is_guest, is_admin, created_at}], me}
-  const [usersForm, setUsersForm] = useState(null); // {username, password, is_admin} — the add-user form
-  const [userPwEdit, setUserPwEdit] = useState(null); // {username, password} — inline set-password form
-  const [userRenameEdit, setUserRenameEdit] = useState(null); // {username, value} — inline rename form
-  const [usersBusy, setUsersBusy] = useState(false);
-  const [usersError, setUsersError] = useState("");
-
-  async function openUsersManager() {
-    setUsersError("");
-    setUsersInfo(null);
-    setUsersForm(null);
-    setUserPwEdit(null);
-    setUserRenameEdit(null);
-    setUsersOpen(true);
-    try {
-      setUsersInfo(await apiJson(`${API}/admin/users`));
-    } catch (err) {
-      setUsersError(err.message);
-    }
-  }
-
-  async function usersCall(path, method, body) {
-    setUsersBusy(true);
-    setUsersError("");
-    try {
-      const d = await apiJson(`${API}/admin${path}`, {
-        method,
-        ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
-      });
-      setUsersInfo((prev) => ({ ...prev, users: d.users }));
-      if (d.warning) setStatus(d.warning);
-      return true;
-    } catch (err) {
-      setUsersError(err.message);
-      return false;
-    } finally {
-      setUsersBusy(false);
-    }
-  }
-
-  async function submitNewUser() {
-    const f = usersForm;
-    if (!f?.username.trim() || !f?.password) { setUsersError("Username and password are required."); return; }
-    if (await usersCall("/users", "POST", { username: f.username.trim(), password: f.password, is_admin: !!f.is_admin })) {
-      setUsersForm(null);
-    }
-  }
-
-  async function submitUserPassword() {
-    const f = userPwEdit;
-    if (!f?.password) { setUsersError("Password cannot be empty."); return; }
-    if (await usersCall(`/users/${encodeURIComponent(f.username)}`, "PUT", { password: f.password })) {
-      setUserPwEdit(null);
-      setStatus(`Password updated for ${f.username}.`);
-    }
-  }
-
-  async function submitUserRename() {
-    const f = userRenameEdit;
-    if (!f?.value.trim()) { setUsersError("New username required."); return; }
-    setUsersBusy(true);
-    setUsersError("");
-    try {
-      const d = await apiJson(`${API}/admin/users/${encodeURIComponent(f.username)}/rename`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ new_username: f.value.trim() }),
-      });
-      setUsersInfo((prev) => ({
-        ...prev,
-        users: d.users,
-        me: d.renamed?.from === prev.me ? d.renamed.to : prev.me,
-      }));
-      setUserRenameEdit(null);
-      if (d.renamed) setStatus(`Renamed ${d.renamed.from} → ${d.renamed.to}. Sessions keep working.`);
-      // Renamed yourself? Re-read the session so the whole app re-keys
-      // (avatar, per-user prefs, synced tabs all follow the new name).
-      if (d.renamed && d.renamed.from === authUser?.user) await checkSession();
-    } catch (err) {
-      setUsersError(err.message);
-    } finally {
-      setUsersBusy(false);
-    }
-  }
-
-  function deleteUserAccount(u) {
-    setConfirmBox({
-      title: "Delete user",
-      message: `Delete "${u.username}" and ALL their data (notes, PDFs, settings)? This can't be undone.`,
-      confirmLabel: "Delete",
-      danger: true,
-      onConfirm: () => usersCall(`/users/${encodeURIComponent(u.username)}`, "DELETE"),
-    });
-  }
+  // User management moved into Settings → Users (settings.jsx UsersSettings,
+  // admins only) — App just opens that pane and lends it the shared pieces
+  // (confirm dialog, status pill, session re-key after a self-rename).
   // PDF passages the next chat question focuses on. Ctrl (additive) appends
   // — whether from text selection or highlight clicks; plain replaces.
   const [pdfSelections, setPdfSelections] = useState([]);
@@ -2594,8 +2514,9 @@ export default function App() {
       setStatus("Not a PDF file.");
       return;
     }
-    if (file.size > 50 * 1024 * 1024) {
-      setStatus("File too large (max 50 MB).");
+    const maxUploadMb = quotaInfo?.max_upload_mb || 50;
+    if (file.size > maxUploadMb * 1024 * 1024) {
+      setStatus(`File too large (max ${maxUploadMb} MB).`);
       return;
     }
     setLoading(true);
@@ -2606,12 +2527,15 @@ export default function App() {
       form.append("file", file);
       const resp = await fetch(`${API}/uploads`, { method: "POST", body: form, credentials: "include" });
       if (!resp.ok) {
-        const msg = await resp.text();
+        const text = await resp.text();
+        let msg = text; // FastAPI errors come as {"detail": "..."} — show the human message
+        try { const j = JSON.parse(text); if (typeof j.detail === "string") msg = j.detail; } catch {}
         updateTransfer(transferId, { status: "error", info: "failed" });
         throw new Error(msg || `upload failed (${resp.status})`);
       }
       const data = await resp.json();
       updateTransfer(transferId, { status: "done", info: fmtBytes(file.size) });
+      refreshQuota();
       // Open the uploaded PDF directly (bypass openPdf's URL-resolution path)
       const sourceUrl = data.source_url;
       const defaultTitle = getPdfPageTitle(data.doc_id, sourceUrl);
@@ -5441,7 +5365,7 @@ export default function App() {
                       </>
                     ) : null}
                     {authUser.is_admin ? (
-                      <button className="popoverItem" onClick={() => { openUsersManager(); setOpenPopover(null); }}>
+                      <button className="popoverItem" onClick={() => { setSettingsOpen("users"); setOpenPopover(null); }}>
                         <UsersIcon className="popoverItemIcon" size={15} />
                         Manage users…
                       </button>
@@ -5828,6 +5752,9 @@ export default function App() {
           metaModel,
           setMetaModel,
           aiModels: scopedAiModels,
+          isAdmin: !!authUser?.is_admin,
+          setStatus,
+          refreshQuota, // keep the client-side pre-upload size check in sync without a re-login
         }}
         library={{
           // batch metadata retry uses the same prompt/model/context prefs as
@@ -5906,138 +5833,15 @@ export default function App() {
           },
         }}
         search={{ searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper, indexTask, setStatus }}
+        users={authUser?.is_admin ? {
+          me: authUser?.user,
+          setStatus,
+          confirm: setConfirmBox,
+          onSelfRenamed: checkSession, // self-rename re-keys the whole app
+          refreshQuota,
+        } : null}
         diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, isAdmin: !!authUser?.is_admin, debugLog, setDebugLog }}
       />
-      {usersOpen ? (
-        <div className="reportOverlay" onClick={() => setUsersOpen(false)}>
-          <div className="reportModal promptModal" onClick={(e) => e.stopPropagation()}>
-            <div className="reportModalTitle">Users</div>
-            <div className="reportModalHint">
-              Admin is a privilege, not a name — any account can be granted it. Admins can create
-              and delete accounts, reset passwords, and grant or revoke the privilege. The last
-              admin can never be demoted or deleted.
-            </div>
-            {!usersInfo && !usersError ? <div className="reportModalHint">Loading…</div> : null}
-            {usersInfo ? (
-              <>
-                {usersInfo.users.map((u) => {
-                  // Mirrors the backend rail (admin.py counts non-guest admins):
-                  // the last admin can't be demoted, so don't offer the button.
-                  const lastAdmin = u.is_admin &&
-                    usersInfo.users.filter((x) => x.is_admin && !x.is_guest).length <= 1;
-                  return (
-                  <div key={u.username} className="aiProvRow">
-                    <span className="aiProvMeta">
-                      <span className="aiProvName">
-                        {u.username}
-                        {u.username === usersInfo.me ? <span className="uiTag">you</span> : null}
-                        {u.is_admin ? <span className="uiTag admin">admin</span> : null}
-                        {u.is_guest ? <span className="uiTag">guest</span> : null}
-                      </span>
-                      <span className="aiProvDesc">
-                        {u.is_guest ? "shared demo workspace, resets daily" : `created ${new Date(u.created_at).toLocaleDateString()}`}
-                      </span>
-                      {userPwEdit?.username === u.username ? (
-                        <span className="aiProvPwForm">
-                          <input
-                            className="aiKeyInput" type="password" autoComplete="new-password" autoFocus
-                            placeholder="New password"
-                            value={userPwEdit.password}
-                            onChange={(e) => setUserPwEdit((f) => ({ ...f, password: e.target.value }))}
-                            onKeyDown={(e) => { if (e.key === "Enter") submitUserPassword(); }}
-                          />
-                          <button className="uiBtn sm" onClick={() => setUserPwEdit(null)}>Cancel</button>
-                          <button className="uiBtn sm primary" disabled={usersBusy} onClick={submitUserPassword}>Set</button>
-                        </span>
-                      ) : null}
-                      {userRenameEdit?.username === u.username ? (
-                        <span className="aiProvPwForm">
-                          <input
-                            className="aiKeyInput" type="text" spellCheck={false} autoFocus
-                            placeholder="New username"
-                            value={userRenameEdit.value}
-                            onChange={(e) => setUserRenameEdit((f) => ({ ...f, value: e.target.value }))}
-                            onKeyDown={(e) => { if (e.key === "Enter") submitUserRename(); }}
-                          />
-                          <button className="uiBtn sm" onClick={() => setUserRenameEdit(null)}>Cancel</button>
-                          <button className="uiBtn sm primary" disabled={usersBusy} onClick={submitUserRename}>Rename</button>
-                        </span>
-                      ) : null}
-                    </span>
-                    {!u.is_guest ? (
-                      <span className="aiProvActions">
-                        <button className="uiBtn sm uMgrBtn" disabled={usersBusy}
-                          title="Rename the account — sessions and share links keep working"
-                          onClick={() => { setUsersError(""); setUserPwEdit(null); setUserRenameEdit({ username: u.username, value: u.username }); }}>
-                          Rename…
-                        </button>
-                        <button className="uiBtn sm uMgrBtn" disabled={usersBusy}
-                          onClick={() => { setUsersError(""); setUserRenameEdit(null); setUserPwEdit({ username: u.username, password: "" }); }}>
-                          Password…
-                        </button>
-                        <button className="uiBtn sm uMgrBtnWide" disabled={usersBusy || lastAdmin}
-                          title={lastAdmin ? "The last admin can't be demoted"
-                            : u.is_admin ? "Revoke the admin privilege" : "Grant the admin privilege"}
-                          onClick={() => usersCall(`/users/${encodeURIComponent(u.username)}`, "PUT", { is_admin: !u.is_admin })}>
-                          {u.is_admin ? "Revoke admin" : "Make admin"}
-                        </button>
-                        {u.username !== usersInfo.me ? (
-                          <button className="uiBtn sm iconSq danger" disabled={usersBusy}
-                            title="Delete this account and all its data"
-                            aria-label={`Delete ${u.username}`}
-                            onClick={() => deleteUserAccount(u)}>
-                            <Trash2Icon size={13} />
-                          </button>
-                        ) : (
-                          <span className="iconSqSlot" aria-hidden="true" />
-                        )}
-                      </span>
-                    ) : null}
-                  </div>
-                  );
-                })}
-                {usersForm ? (
-                  <div className="aiProvForm">
-                    <div className="promptSectionHead"><span>Add user</span></div>
-                    <input
-                      className="aiKeyInput" type="text" spellCheck={false} autoFocus
-                      placeholder="Username (letters, digits, _ . -)"
-                      value={usersForm.username}
-                      onChange={(e) => setUsersForm((f) => ({ ...f, username: e.target.value }))}
-                    />
-                    <input
-                      className="aiKeyInput" type="password" autoComplete="new-password"
-                      placeholder="Password"
-                      value={usersForm.password}
-                      onChange={(e) => setUsersForm((f) => ({ ...f, password: e.target.value }))}
-                      onKeyDown={(e) => { if (e.key === "Enter") submitNewUser(); }}
-                    />
-                    <label className="uiCheckRow">
-                      <input type="checkbox" checked={!!usersForm.is_admin}
-                        onChange={(e) => setUsersForm((f) => ({ ...f, is_admin: e.target.checked }))} />
-                      Grant the admin privilege
-                    </label>
-                    <div className="reportModalBtns">
-                      <button className="uiBtn" onClick={() => { setUsersForm(null); setUsersError(""); }}>Cancel</button>
-                      <button className="uiBtn primary" disabled={usersBusy} onClick={submitNewUser}>
-                        {usersBusy ? "Creating…" : "Create user"}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="reportModalBtns">
-                    <button className="uiBtn" onClick={() => setUsersOpen(false)}>Close</button>
-                    <button className="uiBtn primary" onClick={() => { setUsersError(""); setUserPwEdit(null); setUsersForm({ username: "", password: "", is_admin: false }); }}>
-                      + Add user
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : null}
-            {usersError ? <div className="reportModalHint aiKeysError">{usersError}</div> : null}
-          </div>
-        </div>
-      ) : null}
       {tabMenu ? (
         <ContextMenu x={tabMenu.x} y={tabMenu.y} onClose={() => setTabMenu(null)}>
           <button className="ctxMenuItem ctxMenuItemIconed" onClick={() => { setTabMenu(null); toggleTabPinned(tabMenu.id); }}>
