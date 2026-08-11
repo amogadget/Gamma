@@ -1972,6 +1972,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .phonePanel .dockWindow { border-left: none; }
 .phonePanel .dockGrip { cursor: default; }
+/* Phone: the notes panel is a full-screen overlay — fill the whole width
+   instead of inheriting the desktop sidebar sizing (420px / 75vw caps),
+   and never scale it like a PDF page. */
+.phonePanel .dockWindowBody .sidebar {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  max-width: 100vw !important;
+  min-width: 0 !important;
+}
 .phoneTabBar {
   display: flex;
   flex-shrink: 0;

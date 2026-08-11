@@ -460,6 +460,8 @@ export default function App() {
     try { setRecentViews(JSON.parse(localStorage.getItem(`gamma-recent-views:${u}`) || "[]")); } catch { setRecentViews([]); }
     readPosLoadedRef.current = false;
     try { readPosRef.current = JSON.parse(localStorage.getItem(`gamma-read-pos:${u}`) || "{}"); } catch { readPosRef.current = {}; }
+    notesPosLoadedRef.current = false;
+    try { notesPosRef.current = JSON.parse(localStorage.getItem(`gamma-notes-pos:${u}`) || "{}"); } catch { notesPosRef.current = {}; }
     // …then the server copy, which wins (tabs sync across browsers). An
     // account that has never synced seeds the server with this browser's tabs.
     apiJson(`${API}/prefs/open-tabs`).then((d) => {
@@ -472,6 +474,11 @@ export default function App() {
       readPosLoadedRef.current = true;
       if (mergeReadPos(u, d.value)) pushReadPosSoon(u);
     }).catch(() => { if (prefsUserRef.current === u) readPosLoadedRef.current = true; });
+    apiJson(`${API}/prefs/notes-pos`).then((d) => {
+      if (prefsUserRef.current !== u) return;
+      notesPosLoadedRef.current = true;
+      if (mergeNotesPos(u, d.value)) pushNotesPosSoon(u);
+    }).catch(() => { if (prefsUserRef.current === u) notesPosLoadedRef.current = true; });
     // Which model answers is an account-level choice, not a per-browser one:
     // localStorage alone means a new browser (or cleared site data) silently
     // drops the user onto whichever provider happens to be first.
@@ -1059,6 +1066,16 @@ export default function App() {
   const readPosRef = useRef({});
   const readPosLoadedRef = useRef(false); // first server response arrived
   const readPosPushTimerRef = useRef(null);
+  // Notes-panel positions, synced across browsers like read-pos: blockId ->
+  // {block, frac, at}. The anchor (which block sits at the viewport top and
+  // how far into it) is layout-independent — a phone window restores the same
+  // content position as the desktop even though row wrapping differs.
+  const notesPosRef = useRef({});
+  const notesPosLoadedRef = useRef(false);
+  const notesPosPushTimerRef = useRef(null);
+  const notesPosSentRef = useRef("");
+  const [notesPosTick, setNotesPosTick] = useState(0); // re-run notes restore after a server merge
+  const notesScrollTimerRef = useRef(null);
   const aiSelLoadedRef = useRef(false);      // server copy of the AI choice has been read
   const aiSelPushTimerRef = useRef(null);
   // Serialization of the copy the server is CONFIRMED to hold (successful
@@ -1085,6 +1102,29 @@ export default function App() {
       newer.length ? `local newer: ${newer.map(([id, e]) => `${id}=p${e.page}`).join(",")}` : "in sync");
     // In sync means the server is confirmed to hold exactly this copy.
     if (!newer.length) readPosSentRef.current = JSON.stringify({ value: merged });
+    return newer.length > 0;
+  }
+  // Server copy of the notes anchors, newest-wins per page. Merged anchors
+  // are also written into tabScrollRef so the notes-restore effect (which
+  // reads that ref) lands on the same content the other device was viewing.
+  function mergeNotesPos(user, server) {
+    const merged = { ...notesPosRef.current };
+    const s = server && typeof server === "object" ? server : {};
+    let applied = false;
+    for (const [id, e] of Object.entries(s)) {
+      if (!e || typeof e.block !== "string" || !e.block) continue;
+      if (!merged[id] || (e.at || "") > (merged[id].at || "")) {
+        merged[id] = e;
+        const prev = tabScrollRef.current[id] || {};
+        tabScrollRef.current[id] = { ...prev, notesBlock: e.block, notesFrac: e.frac ?? 0 };
+        applied = true;
+      }
+    }
+    notesPosRef.current = merged;
+    try { localStorage.setItem(`gamma-notes-pos:${user}`, JSON.stringify(merged)); } catch {}
+    const newer = Object.entries(merged).filter(([id, e]) => !s[id] || (e.at || "") > (s[id].at || ""));
+    if (!newer.length) notesPosSentRef.current = JSON.stringify({ value: merged });
+    if (applied) setNotesPosTick((t) => t + 1);
     return newer.length > 0;
   }
   // Server writes are throttled hard: the first change arms one 15s timer
@@ -1115,6 +1155,27 @@ export default function App() {
       }
     }, READ_POS_PUSH_MS);
   }
+  const NOTES_POS_PUSH_MS = 15000;
+  function pushNotesPosSoon(u) {
+    if (notesPosPushTimerRef.current) return; // armed — this change rides it
+    notesPosPushTimerRef.current = setTimeout(async () => {
+      notesPosPushTimerRef.current = null;
+      if (prefsUserRef.current !== u) return;
+      const body = JSON.stringify({ value: notesPosRef.current });
+      if (body === notesPosSentRef.current) { dbg("notes-pos push skipped (server current)"); return; }
+      try {
+        await apiJson(`${API}/prefs/notes-pos`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+        notesPosSentRef.current = body;
+        dbg("notes-pos pushed OK");
+      } catch (err) {
+        dbg("notes-pos push FAILED:", err?.message || String(err));
+      }
+    }, NOTES_POS_PUSH_MS);
+  }
   function recordReadPos(blockId, page) {
     const u = prefsUserRef.current;
     if (!u || !blockId || !(page > 0)) return;
@@ -1135,6 +1196,58 @@ export default function App() {
     dbg("read-pos record", blockId, "→ page", page);
     pushReadPosSoon(u);
   }
+  function recordNotesPos(blockId, block, frac) {
+    const u = prefsUserRef.current;
+    if (!u || !blockId || !block) return;
+    const prev = notesPosRef.current[blockId];
+    if (prev?.block === block && Math.abs((prev.frac ?? 0) - frac) < 0.01) return;
+    let at = new Date().toISOString();
+    if (prev?.at && prev.at >= at) at = new Date(new Date(prev.at).getTime() + 1).toISOString();
+    const next = { ...notesPosRef.current, [blockId]: { block, frac, at } };
+    const ids = Object.keys(next);
+    if (ids.length > 200) {
+      ids.sort((a, b) => (next[a].at || "").localeCompare(next[b].at || ""));
+      for (const id of ids.slice(0, ids.length - 200)) delete next[id];
+    }
+    notesPosRef.current = next;
+    try { localStorage.setItem(`gamma-notes-pos:${u}`, JSON.stringify(next)); } catch {}
+    dbg("notes-pos record", blockId, "→ block", block, "@", frac);
+    pushNotesPosSoon(u);
+  }
+  // Scroll-end capture: the anchor is normally recorded on page switches /
+  // unload, but a user who scrolls notes and just keeps the window open would
+  // never trigger one — the other device then never sees the position. When
+  // the notes list stops scrolling for a beat, record the anchor now (the
+  // 15s push throttle still applies). Scroll doesn't bubble, so capture at
+  // the document level with capture:true.
+  useEffect(() => {
+    const onScroll = (e) => {
+      const el = e.target && e.target.closest ? e.target.closest(".blockList") : null;
+      if (!el) return;
+      clearTimeout(notesScrollTimerRef.current);
+      notesScrollTimerRef.current = setTimeout(() => {
+        notesScrollTimerRef.current = null;
+        const id = focusedBlockIdRef.current;
+        if (!id || !prefsUserRef.current) return;
+        const nRect = el.getBoundingClientRect();
+        const st = el.scrollTop;
+        for (const row of el.querySelectorAll(".blockRowWrap")) {
+          const r = row.getBoundingClientRect();
+          const rowTop = r.top - nRect.top + st;
+          if (rowTop + r.height > st) {
+            recordNotesPos(id, row.getAttribute("data-block-id") || "",
+              Math.max(0, Math.min(1, (st - rowTop) / Math.max(1, r.height))));
+            break;
+          }
+        }
+      }, 600);
+    };
+    document.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("scroll", onScroll, true);
+      clearTimeout(notesScrollTimerRef.current);
+    };
+  }, []);
   // Multi-browser convergence: whenever this window regains focus, pull the
   // latest stored tabs. Skipped while a local push is pending (ours is newer).
   useEffect(() => {
@@ -1155,6 +1268,16 @@ export default function App() {
         if (prefsUserRef.current !== u) return;
         readPosLoadedRef.current = true;
         if (mergeReadPos(u, d.value)) pushReadPosSoon(u);
+      } catch {}
+    }
+    async function pullNotesPos() {
+      const u = prefsUserRef.current;
+      if (!u || document.hidden || notesPosPushTimerRef.current) return;
+      try {
+        const d = await apiJson(`${API}/prefs/notes-pos`);
+        if (prefsUserRef.current !== u) return;
+        notesPosLoadedRef.current = true;
+        if (mergeNotesPos(u, d.value)) pushNotesPosSoon(u);
       } catch {}
     }
     // Losing focus flushes the armed read-pos push right away, so the window
@@ -1179,6 +1302,22 @@ export default function App() {
         }).catch(() => {});
       } catch {}
     }
+    function flushNotesPos() {
+      if (!notesPosPushTimerRef.current || !prefsUserRef.current) return;
+      clearTimeout(notesPosPushTimerRef.current);
+      notesPosPushTimerRef.current = null;
+      const body = JSON.stringify({ value: notesPosRef.current });
+      if (body === notesPosSentRef.current) return;
+      try {
+        fetch(`${API}/prefs/notes-pos`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body,
+          keepalive: true,
+          credentials: "same-origin",
+        }).catch(() => {});
+      } catch {}
+    }
     // Focus flaps (alt-tabbing through windows) must not hammer the server:
     // wake pulls run at most once per 15s. Cross-window handoff still
     // converges promptly — the leaving window's blur flush lands first, and
@@ -1189,16 +1328,21 @@ export default function App() {
       lastWakeAt = Date.now();
       pullTabs();
       pullReadPos();
+      pullNotesPos();
     };
-    const onVisibility = () => { if (document.hidden) flushReadPos(); else onWake(); };
+    const onVisibility = () => { if (document.hidden) { flushReadPos(); flushNotesPos(); } else onWake(); };
     window.addEventListener("focus", onWake);
     window.addEventListener("blur", flushReadPos);
     window.addEventListener("pagehide", flushReadPos);
+    window.addEventListener("blur", flushNotesPos);
+    window.addEventListener("pagehide", flushNotesPos);
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.removeEventListener("focus", onWake);
       window.removeEventListener("blur", flushReadPos);
       window.removeEventListener("pagehide", flushReadPos);
+      window.removeEventListener("blur", flushNotesPos);
+      window.removeEventListener("pagehide", flushNotesPos);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
@@ -2270,8 +2414,6 @@ export default function App() {
   // short retry loop.
   useEffect(() => {
     if (pendingBlockScrollRef.current) return;
-    const saved = focusedBlockId ? tabScrollRef.current[focusedBlockId]?.notesTop : null;
-    const target = saved != null ? saved : 0;
     let cancelled = false;
     let tries = 0;
     let lastH = -1;
@@ -2280,6 +2422,28 @@ export default function App() {
       const el = document.querySelector(".sidebar .blockList");
       if (el) {
         const h = el.scrollHeight;
+        // Re-read the saved entry on every attempt: a server-side notes-pos
+        // merge from another device can land after this effect started, and
+        // it must win over a stale local position.
+        const saved = focusedBlockId ? tabScrollRef.current[focusedBlockId] : null;
+        const anchorId = saved?.notesBlock || "";
+        const anchorFrac = saved?.notesFrac ?? 0;
+        const pxTarget = saved?.notesTop != null ? saved.notesTop : 0;
+        // Preferred: put the anchored block back at the same fraction of the
+        // viewport (width-independent — a phone window restores the same
+        // content position as the desktop). Fall back to the raw saved px
+        // when the anchor block isn't (yet) in the tree.
+        let target = pxTarget;
+        if (anchorId) {
+          const row = el.querySelector(`[data-block-id="${CSS.escape(anchorId)}"]`);
+          if (row) {
+            const r = row.getBoundingClientRect();
+            const er = el.getBoundingClientRect();
+            // Capture stored "frac into the anchored row"; restore the top to
+            // that same fraction INTO the row (sign is +, not -).
+            target = r.top - er.top + el.scrollTop + r.height * anchorFrac;
+          }
+        }
         if (h === lastH) {
           // Row heights settled (fonts and markdown rendered) — without this
           // gate, scroll anchoring drags an early-applied position along as
@@ -2294,7 +2458,7 @@ export default function App() {
     };
     apply();
     return () => { cancelled = true; };
-  }, [focusedBlockId]);
+  }, [focusedBlockId, notesPosTick]);
 
   useEffect(() => {
     if (!pendingBlockScrollRef.current) return;
@@ -3004,7 +3168,27 @@ export default function App() {
     const notesScroller = document.querySelector(".sidebar .blockList");
     if (focusedBlockId && notesScroller) {
       const prev = tabScrollRef.current[focusedBlockId] || {};
-      tabScrollRef.current[focusedBlockId] = { ...prev, notesTop: notesScroller.scrollTop };
+      const entry = { ...prev, notesTop: notesScroller.scrollTop };
+      // Layout-independent anchor, same idea as the PDF's page+frac: which
+      // block sits under the viewport top and how far into it. Raw scrollTop
+      // is pixels — a narrower window (phone) wraps rows differently, so the
+      // same saved px lands on different content. The anchor restores the
+      // same block at the same screen position on any width.
+      const nRect = notesScroller.getBoundingClientRect();
+      const st = notesScroller.scrollTop;
+      for (const row of notesScroller.querySelectorAll(".blockRowWrap")) {
+        const r = row.getBoundingClientRect();
+        const rowTop = r.top - nRect.top + st;
+        if (rowTop + r.height > st) {
+          entry.notesBlock = row.getAttribute("data-block-id") || "";
+          entry.notesFrac = Math.max(0, Math.min(1, (st - rowTop) / Math.max(1, r.height)));
+          break;
+        }
+      }
+      tabScrollRef.current[focusedBlockId] = entry;
+      // Cross-browser sync: the anchor (block + fraction) follows the account,
+      // so a phone lands on the same content position as the desktop.
+      if (entry.notesBlock) recordNotesPos(focusedBlockId, entry.notesBlock, entry.notesFrac);
     }
     // Only record a PDF position when the viewer is actually showing THIS
     // page's document: mid-load the scroller still holds the previous document
@@ -3650,6 +3834,13 @@ export default function App() {
   const pageOnly = !pdfUrl && !!focusedBlockId && !readOnly;
   // Phone: navigating to another page (or home) closes any overlay panel.
   useEffect(() => { setPhonePanel(null); }, [focusedBlockId, homeMode]);
+  // Phone: leaving the notes overlay records the panel position right away
+  // (the panel stays mounted, so the scroll values are still readable), so
+  // the cross-device sync push starts immediately instead of waiting for the
+  // next page switch or unload.
+  useEffect(() => {
+    if (isPhone && phonePanel !== "notes") captureScrollPosRef.current();
+  }, [isPhone, phonePanel]);
   const pageBlocks = useMemo(() => {
     return homeBlocks.map((b) => ({
       id: b.id,
@@ -5807,8 +5998,16 @@ export default function App() {
         </>
       ) : null}
       </PanelGroup>
-      {isPhone && phonePanel === "notes" && winVisible.notes ? (
-        <div className="phonePanel">{renderWindow("notes")}</div>
+      {/* Phone: the notes overlay stays mounted like the desktop sidebar —
+          hidden via visibility (not display) so the blockList keeps real
+          layout and scrollTop, and the shared capture/restore logic works
+          unchanged. */}
+      {isPhone && winVisible.notes ? (
+        <div className="phonePanel"
+          style={{ visibility: phonePanel === "notes" ? "visible" : "hidden",
+                   pointerEvents: phonePanel === "notes" ? "auto" : "none" }}>
+          {renderWindow("notes")}
+        </div>
       ) : null}
       {isPhone && phonePanel === "chat" && !readOnly ? (
         <div className="phonePanel">{renderWindow("chat")}</div>
