@@ -10,7 +10,50 @@ env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/gamma
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint backend (Ruff)
+        run: |
+          cd backend
+          ruff check gamma tests manage.py app.py
+
+      - name: Backend tests
+        # test_page_image and test_pdf_proxy segfault when run in the same
+        # process in that order (a PIL/pdfium native-library conflict), so
+        # each is run in its own pytest process.
+        run: |
+          cd backend
+          python -m pytest tests -q --ignore=tests/test_page_image.py --ignore=tests/test_pdf_proxy.py
+          python -m pytest tests/test_page_image.py -q
+          python -m pytest tests/test_pdf_proxy.py -q
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Lint frontend (ESLint)
+        run: |
+          cd frontend
+          npm ci
+          npm run lint
+
   build-and-push:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
