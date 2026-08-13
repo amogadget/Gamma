@@ -28,6 +28,7 @@ def _make_user(username, password):
 
 def _login(username, password):
     from gamma.app import app
+
     c = TestClient(app)
     r = c.post("/api/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
@@ -136,6 +137,7 @@ def test_export_notes_only_skips_uploads(donor):
 
 # --- merge mode: fresh accounts so the replace tests above can't interfere ---
 
+
 @pytest.fixture(scope="module")
 def mdonor(client):
     _make_user("mdonor", "mdonorpw")
@@ -161,8 +163,7 @@ def test_merge_adds_missing_pages_and_keeps_existing(mdonor, mreceiver):
     make_page(mreceiver, "Receiver keeps this")
 
     backup = mdonor.get("/api/export")
-    r = mreceiver.post("/api/import-data?mode=merge",
-                       files={"file": ("b.zip", backup.content, "application/zip")})
+    r = mreceiver.post("/api/import-data?mode=merge", files={"file": ("b.zip", backup.content, "application/zip")})
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["mode"] == "merge" and d["pages_added"] == 1 and d["uploads_added"] == 1
@@ -178,8 +179,7 @@ def test_merge_adds_missing_pages_and_keeps_existing(mdonor, mreceiver):
 def test_merge_is_idempotent(mdonor, mreceiver):
     before = _root_titles(mreceiver)
     backup = mdonor.get("/api/export")
-    r = mreceiver.post("/api/import-data?mode=merge",
-                       files={"file": ("b.zip", backup.content, "application/zip")})
+    r = mreceiver.post("/api/import-data?mode=merge", files={"file": ("b.zip", backup.content, "application/zip")})
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["pages_added"] == 0 and d["pages_skipped"] >= 1 and d["uploads_added"] == 0
@@ -190,8 +190,7 @@ def test_merge_skips_pages_with_same_doc_id(mdonor, mreceiver):
     make_page(mdonor, "Donor copy of paper X", properties={"doc_id": "docx-shared"})
     make_page(mreceiver, "Receiver copy of paper X", properties={"doc_id": "docx-shared"})
     backup = mdonor.get("/api/export")
-    r = mreceiver.post("/api/import-data?mode=merge",
-                       files={"file": ("b.zip", backup.content, "application/zip")})
+    r = mreceiver.post("/api/import-data?mode=merge", files={"file": ("b.zip", backup.content, "application/zip")})
     assert r.status_code == 200, r.text
     titles = _root_titles(mreceiver)
     assert "Receiver copy of paper X" in titles
@@ -204,7 +203,6 @@ def test_merge_never_touches_prefs(mdonor, mreceiver):
     set_pref("mdonor", "open-tabs", ["donor-tab"])
     set_pref("mreceiver", "open-tabs", ["receiver-tab"])
     backup = mdonor.get("/api/export")
-    r = mreceiver.post("/api/import-data?mode=merge",
-                       files={"file": ("b.zip", backup.content, "application/zip")})
+    r = mreceiver.post("/api/import-data?mode=merge", files={"file": ("b.zip", backup.content, "application/zip")})
     assert r.status_code == 200, r.text
     assert get_pref("mreceiver", "open-tabs")[0] == ["receiver-tab"]

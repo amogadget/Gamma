@@ -26,7 +26,12 @@ function getExpectedUser() {
 }
 
 // Auth endpoints legitimately inspect or change the session — never guard them.
-const AUTH_PATHS = new Set([`${API}/login`, `${API}/login-guest`, `${API}/logout`, `${API}/session`]);
+const AUTH_PATHS = new Set([
+  `${API}/login`,
+  `${API}/login-guest`,
+  `${API}/logout`,
+  `${API}/session`,
+]);
 
 const rawFetch = window.fetch.bind(window);
 window.fetch = function (input, options) {
@@ -46,49 +51,57 @@ window.fetch = function (input, options) {
     }
   }
   const promise = rawFetch(input, options);
-  promise.then((r) => {
-    if (r.status === 409 && r.headers.has("X-Gamma-Session-User")) {
-      const who = r.headers.get("X-Gamma-Session-User");
-      window.dispatchEvent(new CustomEvent(
-        who ? "gamma-user-mismatch" : "gamma-auth-expired",
-        { detail: { user: who } },
-      ));
-    }
-    if (!isApi) return;
-    const elapsed = Math.round(performance.now() - started);
-    if (r.ok && !AUTH_PATHS.has(path) && elapsed < 2000) return;
-    const requestId = r.headers.get("X-Gamma-Request-ID") || "";
-    const timing = `${elapsed} ms${requestId ? `, request ${requestId}` : ""}`;
-    const emit = (detail = "") => {
-      let explanation = detail;
+  promise
+    .then((r) => {
       if (r.status === 409 && r.headers.has("X-Gamma-Session-User")) {
-        const actual = r.headers.get("X-Gamma-Session-User") || "signed out";
-        explanation = `session changed from ${expectedAtStart || "unknown"} to ${actual}`;
-      } else if (r.status === 401 && !explanation) {
-        explanation = "authentication required or session expired";
+        const who = r.headers.get("X-Gamma-Session-User");
+        window.dispatchEvent(
+          new CustomEvent(who ? "gamma-user-mismatch" : "gamma-auth-expired", {
+            detail: { user: who },
+          }),
+        );
       }
-      window.dispatchEvent(new CustomEvent("gamma-api-log", {
-        detail: {
-          message: `API ${method} ${path} → ${r.status} in ${timing}${explanation ? ` — ${explanation}` : ""}`,
-        },
-      }));
-    };
-    if (r.ok) {
-      emit("");
-    } else {
-      r.clone().json()
-        .then((body) => emit(typeof body?.detail === "string" ? body.detail : ""))
-        .catch(() => emit(""));
-    }
-  }).catch((error) => {
-    if (!isApi) return;
-    const elapsed = Math.round(performance.now() - started);
-    window.dispatchEvent(new CustomEvent("gamma-api-log", {
-      detail: {
-        message: `API ${method} ${path} failed after ${elapsed} ms — ${error?.message || "network error"}`,
-      },
-    }));
-  });
+      if (!isApi) return;
+      const elapsed = Math.round(performance.now() - started);
+      if (r.ok && !AUTH_PATHS.has(path) && elapsed < 2000) return;
+      const requestId = r.headers.get("X-Gamma-Request-ID") || "";
+      const timing = `${elapsed} ms${requestId ? `, request ${requestId}` : ""}`;
+      const emit = (detail = "") => {
+        let explanation = detail;
+        if (r.status === 409 && r.headers.has("X-Gamma-Session-User")) {
+          const actual = r.headers.get("X-Gamma-Session-User") || "signed out";
+          explanation = `session changed from ${expectedAtStart || "unknown"} to ${actual}`;
+        } else if (r.status === 401 && !explanation) {
+          explanation = "authentication required or session expired";
+        }
+        window.dispatchEvent(
+          new CustomEvent("gamma-api-log", {
+            detail: {
+              message: `API ${method} ${path} → ${r.status} in ${timing}${explanation ? ` — ${explanation}` : ""}`,
+            },
+          }),
+        );
+      };
+      if (r.ok) {
+        emit("");
+      } else {
+        r.clone()
+          .json()
+          .then((body) => emit(typeof body?.detail === "string" ? body.detail : ""))
+          .catch(() => emit(""));
+      }
+    })
+    .catch((error) => {
+      if (!isApi) return;
+      const elapsed = Math.round(performance.now() - started);
+      window.dispatchEvent(
+        new CustomEvent("gamma-api-log", {
+          detail: {
+            message: `API ${method} ${path} failed after ${elapsed} ms — ${error?.message || "network error"}`,
+          },
+        }),
+      );
+    });
   return promise;
 };
 // -----------------------------------------------------------------------------
@@ -127,10 +140,14 @@ function usePersistedState(key, initial, { parse, serialize } = {}) {
       if (raw == null) return initial;
       const parsed = parse ? parse(raw) : raw;
       return parsed === undefined ? initial : parsed;
-    } catch { return initial; }
+    } catch {
+      return initial;
+    }
   });
   useEffect(() => {
-    try { localStorage.setItem(key, serialize ? serialize(value) : String(value)); } catch {}
+    try {
+      localStorage.setItem(key, serialize ? serialize(value) : String(value));
+    } catch {}
   }, [key, value, serialize]);
   return [value, setValue];
 }
@@ -170,7 +187,7 @@ async function resolvePdfUrl(rawUrl, allowOa = true) {
   return apiJson(`${API}/resolve-pdf`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ source_url: rawUrl, allow_oa: allowOa })
+    body: JSON.stringify({ source_url: rawUrl, allow_oa: allowOa }),
   });
 }
 
@@ -182,4 +199,17 @@ function isEnterCommit(e) {
   return e.key === "Enter" && !e.nativeEvent?.isComposing && e.keyCode !== 229;
 }
 
-export { API, makeId, fmtBytes, sha256, getDocIdForUrl, apiJson, resolvePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, isEnterCommit };
+export {
+  API,
+  makeId,
+  fmtBytes,
+  sha256,
+  getDocIdForUrl,
+  apiJson,
+  resolvePdfUrl,
+  setExpectedUser,
+  getExpectedUser,
+  usePersistedState,
+  usePersistedFlag,
+  isEnterCommit,
+};

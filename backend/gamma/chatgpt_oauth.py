@@ -105,10 +105,8 @@ def _oauth_entry(tokens: dict, previous: dict | None = None) -> dict:
     id_token = tokens.get("id_token") or ""
     id_claims = _jwt_claims(id_token)
     access_claims = _jwt_claims(access)
-    auth_claims = (access_claims.get("https://api.openai.com/auth")
-                   or id_claims.get("https://api.openai.com/auth") or {})
-    account_id = (auth_claims.get("chatgpt_account_id")
-                  or prev.get("account_id") or "")
+    auth_claims = access_claims.get("https://api.openai.com/auth") or id_claims.get("https://api.openai.com/auth") or {}
+    account_id = auth_claims.get("chatgpt_account_id") or prev.get("account_id") or ""
     exp = access_claims.get("exp")
     expires_at = int(exp) if isinstance(exp, (int, float)) else int(time.time()) + 3600
     return {
@@ -122,13 +120,15 @@ def _oauth_entry(tokens: dict, previous: dict | None = None) -> dict:
 
 def exchange_code(code: str, verifier: str) -> dict:
     """Redeem an authorization code; returns the dict stored on the entry."""
-    tokens = _token_request({
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": REDIRECT_URI,
-        "client_id": CLIENT_ID,
-        "code_verifier": verifier,
-    })
+    tokens = _token_request(
+        {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT_URI,
+            "client_id": CLIENT_ID,
+            "code_verifier": verifier,
+        }
+    )
     oauth = _oauth_entry(tokens)
     if not oauth["access_token"]:
         raise ValueError("token exchange returned no access token")
@@ -149,12 +149,14 @@ def refresh(oauth: dict) -> dict | None:
     if not token:
         return None
     try:
-        tokens = _token_request({
-            "grant_type": "refresh_token",
-            "refresh_token": token,
-            "client_id": CLIENT_ID,
-            "scope": "openid profile email",
-        })
+        tokens = _token_request(
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": token,
+                "client_id": CLIENT_ID,
+                "scope": "openid profile email",
+            }
+        )
         return _oauth_entry(tokens, previous=oauth)
     except Exception as e:
         log.warning(f"[chatgpt-oauth] refresh failed: {e}")

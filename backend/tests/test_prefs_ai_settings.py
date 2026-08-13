@@ -31,6 +31,7 @@ def alice(client):
 
 # --- prefs -------------------------------------------------------------------
 
+
 def test_prefs_unset_key_reads_empty(guest):
     r = guest.get("/api/prefs/open-tabs")
     assert r.status_code == 200
@@ -71,12 +72,14 @@ def test_prefs_never_serve_the_reserved_ai_settings_key(guest):
 
 def test_prefs_require_session(client):
     from gamma.app import app
+
     anon = TestClient(app)
     assert anon.get("/api/prefs/open-tabs").status_code == 401
     assert anon.put("/api/prefs/open-tabs", json={"value": []}).status_code == 401
 
 
 # --- AI provider entries (GUI key management) ---------------------------------
+
 
 def test_guest_cannot_store_keys(guest):
     r = guest.get("/api/ai/settings")
@@ -92,10 +95,16 @@ def test_added_provider_is_masked_and_enables_ai(alice):
     assert alice.get("/api/ai/models").json()["enabled"] is False
 
     key = "sk-ant-api03-test-key-12345678"
-    r = alice.post("/api/ai/providers", json={
-        "protocol": "anthropic", "name": "My DeepSeek", "api_key": key,
-        "base_url": "https://example.com/v1x", "models": "claude-test-model, claude-other",
-    })
+    r = alice.post(
+        "/api/ai/providers",
+        json={
+            "protocol": "anthropic",
+            "name": "My DeepSeek",
+            "api_key": key,
+            "base_url": "https://example.com/v1x",
+            "models": "claude-test-model, claude-other",
+        },
+    )
     assert r.status_code == 200, r.text
     provs = r.json()["providers"]
     assert len(provs) == 1
@@ -131,9 +140,13 @@ def test_edit_without_key_keeps_the_stored_one(alice):
 
 
 def test_second_provider_adds_its_models(alice):
-    r = alice.post("/api/ai/providers", json={
-        "protocol": "openai", "api_key": "sk-openai-test-key-9876",
-    })
+    r = alice.post(
+        "/api/ai/providers",
+        json={
+            "protocol": "openai",
+            "api_key": "sk-openai-test-key-9876",
+        },
+    )
     assert r.status_code == 200, r.text
     assert len(r.json()["providers"]) == 2
     models = alice.get("/api/ai/models").json()["models"]
@@ -144,8 +157,12 @@ def test_second_provider_adds_its_models(alice):
 def test_provider_validation(alice):
     assert alice.post("/api/ai/providers", json={"protocol": "nope", "api_key": "k" * 20}).status_code == 400
     assert alice.post("/api/ai/providers", json={"protocol": "openai"}).status_code == 400  # no key
-    assert alice.post("/api/ai/providers",
-                      json={"protocol": "openai", "api_key": "sk-ok-key-123", "base_url": "ftp://x"}).status_code == 400
+    assert (
+        alice.post(
+            "/api/ai/providers", json={"protocol": "openai", "api_key": "sk-ok-key-123", "base_url": "ftp://x"}
+        ).status_code
+        == 400
+    )
     assert alice.post("/api/ai/providers", json={"protocol": "openai", "api_key": "has space"}).status_code == 400
     assert alice.put("/api/ai/providers/does-not-exist", json={"name": "x"}).status_code == 404
 
@@ -154,6 +171,7 @@ def test_export_stays_owner_only(alice):
     # Keys ride along inside data.db in the owner's backup — which is fine
     # exactly because only the owner's session can request it.
     from gamma.app import app
+
     anon = TestClient(app)
     assert anon.get("/api/export").status_code == 401
     r = alice.get("/api/export")
@@ -170,6 +188,7 @@ def test_deleting_all_providers_disables_ai(alice):
 
 
 # --- manage.py rename-user ----------------------------------------------------
+
 
 def test_rename_user_moves_rows_and_directory(client):
     import manage
@@ -190,6 +209,7 @@ def test_rename_user_moves_rows_and_directory(client):
 
 def test_rename_user_refuses_guest_and_collisions(client, capsys):
     import manage
+
     manage.rename_user("guest", "someone")
     assert "cannot be renamed" in capsys.readouterr().out
     manage.create_user("carol", "pw3")

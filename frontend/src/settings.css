@@ -39,9 +39,18 @@
   border-radius: 7px;
   cursor: pointer;
 }
-.settingsNavBtn svg { flex-shrink: 0; color: var(--text-muted); }
-.settingsNavBtn.active { background: var(--bg-active); color: var(--text-primary); font-weight: 600; }
-.settingsNavBtn.active svg { color: var(--text-primary); }
+.settingsNavBtn svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.settingsNavBtn.active {
+  background: var(--bg-active);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.settingsNavBtn.active svg {
+  color: var(--text-primary);
+}
 .settingsPane {
   flex: 1;
   min-width: 0;
@@ -57,34 +66,92 @@
   color: var(--text-primary);
   padding-right: 28px; /* room for the close button */
 }
-.settingsPaneHint { font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
-.oauthInstructions { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; }
-.settingsAlignStart { justify-content: flex-start; }
-.settingsNoMargin { margin: 0; }
+.settingsPaneHint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.oauthInstructions {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+}
+.settingsAlignStart {
+  justify-content: flex-start;
+}
+.settingsNoMargin {
+  margin: 0;
+}
 /* A 28px (Lg) button tucked into the modal's 12px-radius corner, its circle
    concentric with the corner arc. */
-.settingsClose { position: absolute; top: 12px; right: 12px; }
+.settingsClose {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
 
 /* Model list in the AI-provider form — chips are .categoryTag (same look as
    the page label chips). */
-.aiModelChips { display: flex; flex-wrap: wrap; gap: 5px; }
+.aiModelChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
 /* "Models" header row in the form: hint text left, fetch-models button right. */
-.aiModelsHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.aiModelsHead .searchToggle { flex-shrink: 0; gap: 5px; }
-.aiModelsHead .searchToggle:disabled { opacity: 0.45; cursor: default; background: none; }
+.aiModelsHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.aiModelsHead .searchToggle {
+  flex-shrink: 0;
+  gap: 5px;
+}
+.aiModelsHead .searchToggle:disabled {
+  opacity: 0.45;
+  cursor: default;
+  background: none;
+}
 /* …and the same chips on the saved-provider rows. */
-.aiProvModels { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
-.settingsPane .settingRow { flex-shrink: 0; }
+.aiProvModels {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.settingsPane .settingRow {
+  flex-shrink: 0;
+}
 /* Look comes from .aiKeyInput (the standard settings text field); this only
    sizes the number box inside its settingRow. */
-.contextLimitInput { width: 112px; flex: 0 0 auto; margin-bottom: 0; text-align: right; }
+.contextLimitInput {
+  width: 112px;
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  text-align: right;
+}
 /* Selects in setting rows: the Add-key form's native select look, sized to
    the options instead of the number-input's fixed 112px. */
-.settingSelect { width: auto; flex: 0 0 auto; margin-bottom: 0; cursor: pointer; }
+.settingSelect {
+  width: auto;
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  cursor: pointer;
+}
 /* Provider rows double as the active-key picker in the AI pane. */
-.aiProvSelectable { cursor: pointer; }
-.aiProvSelectable .aiProvMeta { flex: 1; }
-.aiProvRadio { margin: 3px 8px 0 0; flex-shrink: 0; accent-color: var(--accent); }
+.aiProvSelectable {
+  cursor: pointer;
+}
+.aiProvSelectable .aiProvMeta {
+  flex: 1;
+}
+.aiProvRadio {
+  margin: 3px 8px 0 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
 .aiProvActiveBadge {
   font-size: 10px;
   font-weight: 600;
@@ -104,13 +171,24 @@
   color: var(--text-primary);
   margin-top: 2px;
 }
-.promptSectionHead .chatClearBtn { font-size: 10px; }
+.promptSectionHead .chatClearBtn {
+  font-size: 10px;
+}
 
 /* --- Paper metadata pane: library status table + batch retry (layout only —
    controls are the shared uiBtn/checkbox) --- */
-.metaStatHead { margin-top: 14px; }
-.metaStatActions { display: flex; gap: 6px; }
-.metaStatSummary { font-size: 12px; color: var(--text-muted); margin: 6px 0 2px; }
+.metaStatHead {
+  margin-top: 14px;
+}
+.metaStatActions {
+  display: flex;
+  gap: 6px;
+}
+.metaStatSummary {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 6px 0 2px;
+}
 .metaStatTable {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -128,9 +206,16 @@
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
 }
-.metaStatRow:last-child { border-bottom: none; }
-.metaStatRow:hover { background: var(--bg-hover); }
-.metaStatRow input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
+.metaStatRow:last-child {
+  border-bottom: none;
+}
+.metaStatRow:hover {
+  background: var(--bg-hover);
+}
+.metaStatRow input[type="checkbox"] {
+  accent-color: var(--accent);
+  margin: 0;
+}
 .metaStatHeader {
   position: sticky;
   top: 0;
@@ -146,10 +231,21 @@
   white-space: nowrap;
   color: var(--text-primary);
 }
-.metaStatOk { color: var(--ok, #3a9d5d); }
-.metaStatBad { color: var(--danger, #c95555); }
-.metaStatMuted { color: var(--text-muted); }
-.metaStatBatchRow { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.metaStatOk {
+  color: var(--ok, #3a9d5d);
+}
+.metaStatBad {
+  color: var(--danger, #c95555);
+}
+.metaStatMuted {
+  color: var(--text-muted);
+}
+.metaStatBatchRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
 .metaStatProgress {
   font-size: 12px;
   color: var(--text-muted);

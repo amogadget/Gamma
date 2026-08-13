@@ -21,6 +21,7 @@ def _make_user(username, password, is_admin=0):
 
 def _login(username, password):
     from gamma.app import app
+
     c = TestClient(app)
     r = c.post("/api/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
@@ -65,15 +66,20 @@ def test_seed_password_is_random_and_works(tmp_path):
         "from gamma.db import connect_users_db\n"
         "user, pw = ensure_admin_seed()\n"
         "with connect_users_db() as c:\n"
-        "    h = c.execute(\"SELECT password_hash FROM users WHERE username = ?\", (user,)).fetchone()[0]\n"
+        '    h = c.execute("SELECT password_hash FROM users WHERE username = ?", (user,)).fetchone()[0]\n'
         "print('PW:' + pw)\n"
         "print('MATCH' if bcrypt.checkpw(pw.encode(), h.encode()) else 'MISMATCH')\n"
     )
     env = {**os.environ, "GAMMA_DATA_DIR": str(tmp_path)}
     env.pop("GAMMA_ADMIN_USER", None)
     env.pop("GAMMA_ADMIN_PASSWORD", None)
-    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                         env=env, cwd=str(Path(__file__).resolve().parent.parent)).stdout
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    ).stdout
     assert "MATCH" in out, out
     pw = next(line for line in out.splitlines() if line.startswith("PW:"))[3:]
     assert len(pw) >= 12
@@ -90,6 +96,7 @@ def test_non_admins_are_locked_out(client):
     # A guest session of its own (not the shared `guest` fixture — that would
     # log the session-scoped client in before test_auth asserts it is anonymous)
     from gamma.app import app
+
     g = TestClient(app)
     assert g.post("/api/login-guest").status_code == 200
     assert g.get("/api/admin/users").status_code == 403
@@ -112,6 +119,7 @@ def test_set_password(boss):
     r = boss.put("/api/admin/users/newbie", json={"password": "rotated"})
     assert r.status_code == 200
     from gamma.app import app
+
     c = TestClient(app)
     assert c.post("/api/login", json={"username": "newbie", "password": "npw"}).status_code == 401
     _login("newbie", "rotated")
@@ -192,11 +200,13 @@ def test_seed_hints_but_never_backdoors_an_adminless_instance(boss):
 
 def test_delete_user_removes_account_and_data(boss):
     from gamma.config import USERS_DIR
+
     assert (USERS_DIR / "newbie" / "pages.db").exists()
     r = boss.delete("/api/admin/users/newbie")
     assert r.status_code == 200, r.text
     assert "newbie" not in [u["username"] for u in r.json()["users"]]
     from gamma.app import app
+
     c = TestClient(app)
     assert c.post("/api/login", json={"username": "newbie", "password": "rotated"}).status_code == 401
     if not r.json()["warning"]:  # Windows file locks may defer the dir removal

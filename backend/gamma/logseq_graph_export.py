@@ -53,6 +53,7 @@ def color_name(rgba):
 
 # --- highlight collection ----------------------------------------------------
 
+
 def collect_highlights(page):
     """Walk the page tree in document order and describe every annotation-able
     highlight (link regions are navigation aids, not annotations)."""
@@ -65,15 +66,17 @@ def collect_highlights(page):
             pos = props.get("pdf_position")
             area = bool(pos and (pos.get("area") or (pos.get("boundingRect") or {}).get("area")))
             quote = (props.get("quote") or "").strip()
-            out.append({
-                "uuid": u,
-                "quote": quote,
-                "color": color_name(props.get("color")),
-                "page": props.get("pdf_page") or (pos or {}).get("pageNumber") or 1,
-                "position": pos,
-                "area": area or (not quote and bool(pos)),
-                "stamp": hl_stamp(u),
-            })
+            out.append(
+                {
+                    "uuid": u,
+                    "quote": quote,
+                    "color": color_name(props.get("color")),
+                    "page": props.get("pdf_page") or (pos or {}).get("pageNumber") or 1,
+                    "position": pos,
+                    "area": area or (not quote and bool(pos)),
+                    "stamp": hl_stamp(u),
+                }
+            )
         for child in node.get("children", []):
             walk(child)
 
@@ -83,11 +86,14 @@ def collect_highlights(page):
 
 # --- hls__ page + EDN --------------------------------------------------------
 
+
 def render_hls_md(stem, highlights):
     lines = [f"file-path:: ../assets/{stem}.pdf", ""]
+
     def top(h):
-        br = ((h["position"] or {}).get("boundingRect") or {})
+        br = (h["position"] or {}).get("boundingRect") or {}
         return br.get("y1") or 0
+
     for h in sorted(highlights, key=lambda h: (h["page"], top(h))):
         lines.append(f"- {' '.join(h['quote'].split()) if h['quote'] else '[:span]'}")
         lines.append("  ls-type:: annotation")
@@ -125,14 +131,14 @@ def render_edn(highlights):
         if not pos or not pos.get("boundingRect"):
             continue  # geometry unknown (e.g. imported without EDN) — md-only
         rects = " ".join(_edn_rect(r) for r in (pos.get("rects") or [pos["boundingRect"]]))
-        content = f':text {_edn_scalar(h["quote"])}'
+        content = f":text {_edn_scalar(h['quote'])}"
         if h["area"]:
             content = f':text "[:span]" :image {h["stamp"]}'
         entries.append(
             "{"
             f':id #uuid "{h["uuid"]}" '
-            f':page {h["page"]} '
-            f':position {{:bounding {_edn_rect(pos["boundingRect"])} :rects [{rects}] :page {h["page"]}}} '
+            f":page {h['page']} "
+            f":position {{:bounding {_edn_rect(pos['boundingRect'])} :rects [{rects}] :page {h['page']}}} "
             f":content {{{content}}} "
             f':properties {{:color "{h["color"]}"}}'
             "}"
@@ -141,6 +147,7 @@ def render_edn(highlights):
 
 
 # --- user page ---------------------------------------------------------------
+
 
 def render_graph_page_md(page, stem, has_pdf):
     """Logseq-dialect page whose highlight blocks are ``((uuid))`` refs into the
@@ -200,8 +207,10 @@ def _render_block(node, depth, lines, has_pdf):
 
 # --- area-highlight images ---------------------------------------------------
 
+
 def _encode_png(width, height, rgb_rows):
     """Minimal PNG writer (8-bit RGB, filter 0) — avoids a Pillow dependency."""
+
     def chunk(tag, data):
         body = tag + data
         return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))

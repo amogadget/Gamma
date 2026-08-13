@@ -11,80 +11,262 @@ import katex from "katex";
 // alias (extra prefix that matches, e.g. "begin" for environments), sample
 // (LaTeX rendered as the popup glyph when the default construction won't do).
 const GREEK = [
-  "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta",
-  "theta", "vartheta", "iota", "kappa", "lambda", "mu", "nu", "xi", "pi",
-  "rho", "sigma", "varsigma", "tau", "upsilon", "phi", "varphi", "chi",
-  "psi", "omega",
-  "Gamma", "Delta", "Theta", "Lambda", "Xi", "Pi", "Sigma", "Upsilon",
-  "Phi", "Psi", "Omega",
+  "alpha",
+  "beta",
+  "gamma",
+  "delta",
+  "epsilon",
+  "varepsilon",
+  "zeta",
+  "eta",
+  "theta",
+  "vartheta",
+  "iota",
+  "kappa",
+  "lambda",
+  "mu",
+  "nu",
+  "xi",
+  "pi",
+  "rho",
+  "sigma",
+  "varsigma",
+  "tau",
+  "upsilon",
+  "phi",
+  "varphi",
+  "chi",
+  "psi",
+  "omega",
+  "Gamma",
+  "Delta",
+  "Theta",
+  "Lambda",
+  "Xi",
+  "Pi",
+  "Sigma",
+  "Upsilon",
+  "Phi",
+  "Psi",
+  "Omega",
 ];
 const FUNCTIONS = [
-  "sin", "cos", "tan", "cot", "sec", "csc", "arcsin", "arccos", "arctan",
-  "sinh", "cosh", "tanh", "coth", "log", "ln", "lg", "exp", "lim", "limsup",
-  "liminf", "max", "min", "sup", "inf", "det", "gcd", "deg", "dim", "ker",
-  "arg", "Pr", "tr",
+  "sin",
+  "cos",
+  "tan",
+  "cot",
+  "sec",
+  "csc",
+  "arcsin",
+  "arccos",
+  "arctan",
+  "sinh",
+  "cosh",
+  "tanh",
+  "coth",
+  "log",
+  "ln",
+  "lg",
+  "exp",
+  "lim",
+  "limsup",
+  "liminf",
+  "max",
+  "min",
+  "sup",
+  "inf",
+  "det",
+  "gcd",
+  "deg",
+  "dim",
+  "ker",
+  "arg",
+  "Pr",
+  "tr",
 ];
 const SYMBOLS = [
-  "infty", "partial", "nabla", "hbar", "ell", "imath", "jmath", "Re", "Im",
-  "aleph", "wp", "angle", "perp", "parallel", "prime", "emptyset",
-  "varnothing", "top", "bot", "degree",
+  "infty",
+  "partial",
+  "nabla",
+  "hbar",
+  "ell",
+  "imath",
+  "jmath",
+  "Re",
+  "Im",
+  "aleph",
+  "wp",
+  "angle",
+  "perp",
+  "parallel",
+  "prime",
+  "emptyset",
+  "varnothing",
+  "top",
+  "bot",
+  "degree",
 ];
 const OPERATORS = [
-  "pm", "mp", "times", "cdot", "div", "ast", "star", "circ", "bullet",
-  "oplus", "ominus", "otimes", "oslash", "odot", "dagger", "ddagger",
-  "wedge", "vee", "sqcup", "sqcap", "setminus", "amalg",
+  "pm",
+  "mp",
+  "times",
+  "cdot",
+  "div",
+  "ast",
+  "star",
+  "circ",
+  "bullet",
+  "oplus",
+  "ominus",
+  "otimes",
+  "oslash",
+  "odot",
+  "dagger",
+  "ddagger",
+  "wedge",
+  "vee",
+  "sqcup",
+  "sqcap",
+  "setminus",
+  "amalg",
 ];
 const RELATIONS = [
-  "leq", "geq", "neq", "approx", "sim", "simeq", "equiv", "propto", "ll",
-  "gg", "subset", "supset", "subseteq", "supseteq", "in", "notin", "ni",
-  "cup", "cap", "forall", "exists", "nexists", "neg", "land", "lor", "mid",
-  "vdash", "models",
+  "leq",
+  "geq",
+  "neq",
+  "approx",
+  "sim",
+  "simeq",
+  "equiv",
+  "propto",
+  "ll",
+  "gg",
+  "subset",
+  "supset",
+  "subseteq",
+  "supseteq",
+  "in",
+  "notin",
+  "ni",
+  "cup",
+  "cap",
+  "forall",
+  "exists",
+  "nexists",
+  "neg",
+  "land",
+  "lor",
+  "mid",
+  "vdash",
+  "models",
 ];
 const ARROWS = [
-  "to", "gets", "mapsto", "implies", "iff", "leftarrow", "rightarrow",
-  "Leftarrow", "Rightarrow", "leftrightarrow", "Leftrightarrow",
-  "longrightarrow", "longleftarrow", "uparrow", "downarrow", "nearrow",
-  "searrow", "hookrightarrow", "rightharpoonup",
+  "to",
+  "gets",
+  "mapsto",
+  "implies",
+  "iff",
+  "leftarrow",
+  "rightarrow",
+  "Leftarrow",
+  "Rightarrow",
+  "leftrightarrow",
+  "Leftrightarrow",
+  "longrightarrow",
+  "longleftarrow",
+  "uparrow",
+  "downarrow",
+  "nearrow",
+  "searrow",
+  "hookrightarrow",
+  "rightharpoonup",
 ];
 const BIG_OPS = [
-  "sum", "prod", "int", "iint", "iiint", "oint", "coprod", "bigcup",
-  "bigcap", "bigoplus", "bigotimes", "bigodot", "bigsqcup", "bigvee",
+  "sum",
+  "prod",
+  "int",
+  "iint",
+  "iiint",
+  "oint",
+  "coprod",
+  "bigcup",
+  "bigcap",
+  "bigoplus",
+  "bigotimes",
+  "bigodot",
+  "bigsqcup",
+  "bigvee",
   "bigwedge",
 ];
 const DOTS = ["dots", "cdots", "ldots", "vdots", "ddots"];
 const DELIMS = [
-  "langle", "rangle", "lvert", "rvert", "lVert", "rVert", "lfloor",
-  "rfloor", "lceil", "rceil",
+  "langle",
+  "rangle",
+  "lvert",
+  "rvert",
+  "lVert",
+  "rVert",
+  "lfloor",
+  "rfloor",
+  "lceil",
+  "rceil",
 ];
 const SPACING = ["quad", "qquad"];
 
 const CATALOG = [];
 // Structures first: highest-value completions when they match.
 for (const [name, args] of [
-  ["frac", 2], ["sqrt", 1], ["binom", 2], ["cfrac", 2], ["dfrac", 2],
+  ["frac", 2],
+  ["sqrt", 1],
+  ["binom", 2],
+  ["cfrac", 2],
+  ["dfrac", 2],
   ["tfrac", 2],
-]) CATALOG.push({ name, args });
+])
+  CATALOG.push({ name, args });
 // Quantum notation (KaTeX ships braket support natively).
 for (const [name, args, sample] of [
-  ["ket", 1, "\\ket{\\psi}"], ["bra", 1, "\\bra{\\phi}"],
-  ["braket", 1, "\\braket{\\phi|\\psi}"], ["Ket", 1, "\\Ket{\\psi}"],
+  ["ket", 1, "\\ket{\\psi}"],
+  ["bra", 1, "\\bra{\\phi}"],
+  ["braket", 1, "\\braket{\\phi|\\psi}"],
+  ["Ket", 1, "\\Ket{\\psi}"],
   ["Bra", 1, "\\Bra{\\phi}"],
-]) CATALOG.push({ name, args, sample });
+])
+  CATALOG.push({ name, args, sample });
 for (const name of GREEK) CATALOG.push({ name });
 // Accents / decorations.
 for (const [name, args] of [
-  ["hat", 1], ["bar", 1], ["vec", 1], ["tilde", 1], ["dot", 1], ["ddot", 1],
-  ["widehat", 1], ["widetilde", 1], ["overline", 1], ["underline", 1],
-  ["overbrace", 1], ["underbrace", 1], ["boxed", 1], ["not", 1],
-]) CATALOG.push({ name, args });
+  ["hat", 1],
+  ["bar", 1],
+  ["vec", 1],
+  ["tilde", 1],
+  ["dot", 1],
+  ["ddot", 1],
+  ["widehat", 1],
+  ["widetilde", 1],
+  ["overline", 1],
+  ["underline", 1],
+  ["overbrace", 1],
+  ["underbrace", 1],
+  ["boxed", 1],
+  ["not", 1],
+])
+  CATALOG.push({ name, args });
 // Fonts.
 for (const [name, args, sample] of [
-  ["mathbb", 1, "\\mathbb{R}"], ["mathbf", 1, "\\mathbf{x}"],
-  ["mathcal", 1, "\\mathcal{H}"], ["mathrm", 1, "\\mathrm{d}"],
-  ["mathit", 1], ["mathsf", 1], ["mathtt", 1],
-  ["mathfrak", 1, "\\mathfrak{g}"], ["boldsymbol", 1, "\\boldsymbol{\\alpha}"],
-  ["text", 1, "\\text{a}"], ["operatorname", 1, "\\operatorname{Tr}"],
-]) CATALOG.push({ name, args, sample });
+  ["mathbb", 1, "\\mathbb{R}"],
+  ["mathbf", 1, "\\mathbf{x}"],
+  ["mathcal", 1, "\\mathcal{H}"],
+  ["mathrm", 1, "\\mathrm{d}"],
+  ["mathit", 1],
+  ["mathsf", 1],
+  ["mathtt", 1],
+  ["mathfrak", 1, "\\mathfrak{g}"],
+  ["boldsymbol", 1, "\\boldsymbol{\\alpha}"],
+  ["text", 1, "\\text{a}"],
+  ["operatorname", 1, "\\operatorname{Tr}"],
+])
+  CATALOG.push({ name, args, sample });
 for (const name of BIG_OPS) CATALOG.push({ name });
 for (const name of FUNCTIONS) CATALOG.push({ name });
 for (const name of SYMBOLS) CATALOG.push({ name });
@@ -96,9 +278,15 @@ for (const name of DELIMS) CATALOG.push({ name });
 for (const name of SPACING) CATALOG.push({ name, sample: "\\square" });
 // Stacked constructions.
 for (const [name, args] of [
-  ["overset", 2], ["underset", 2], ["stackrel", 2], ["xrightarrow", 1],
-  ["xleftarrow", 1], ["pmod", 1], ["substack", 1],
-]) CATALOG.push({ name, args });
+  ["overset", 2],
+  ["underset", 2],
+  ["stackrel", 2],
+  ["xrightarrow", 1],
+  ["xleftarrow", 1],
+  ["pmod", 1],
+  ["substack", 1],
+])
+  CATALOG.push({ name, args });
 // \left...\right pairs: snippet inserts, caret lands between the delimiters.
 for (const [name, ins, sample] of [
   ["left(", "\\left(  \\right)", "\\left(\\,\\right)"],
@@ -106,21 +294,32 @@ for (const [name, ins, sample] of [
   ["left\\{", "\\left\\{  \\right\\}", "\\left\\{\\,\\right\\}"],
   ["left|", "\\left|  \\right|", "\\left|\\,\\right|"],
   ["left\\langle", "\\left\\langle  \\right\\rangle", "\\left\\langle\\,\\right\\rangle"],
-]) CATALOG.push({ name, ins, sample, alias: "left" });
+])
+  CATALOG.push({ name, ins, sample, alias: "left" });
 // Environments: full \begin/\end snippet, caret inside. "begin" also matches.
 for (const name of [
-  "pmatrix", "bmatrix", "vmatrix", "Vmatrix", "Bmatrix", "matrix",
-  "cases", "aligned", "gathered", "array",
-]) CATALOG.push({
-  name,
-  ins: `\\begin{${name}}  \\end{${name}}`,
-  alias: "begin",
-  sample: name === "cases"
-    ? "\\begin{cases}a\\\\b\\end{cases}"
-    : name.endsWith("matrix")
-      ? `\\begin{${name}}a&b\\\\c&d\\end{${name}}`
-      : "\\square",
-});
+  "pmatrix",
+  "bmatrix",
+  "vmatrix",
+  "Vmatrix",
+  "Bmatrix",
+  "matrix",
+  "cases",
+  "aligned",
+  "gathered",
+  "array",
+])
+  CATALOG.push({
+    name,
+    ins: `\\begin{${name}}  \\end{${name}}`,
+    alias: "begin",
+    sample:
+      name === "cases"
+        ? "\\begin{cases}a\\\\b\\end{cases}"
+        : name.endsWith("matrix")
+          ? `\\begin{${name}}a&b\\\\c&d\\end{${name}}`
+          : "\\square",
+  });
 
 // --- matching / insertion --------------------------------------------------
 
@@ -129,10 +328,16 @@ export function latexCompletions(query, limit = 8) {
   const q = query.toLowerCase();
   const out = [];
   for (const c of CATALOG) {
-    const tier = c.name === query ? 0
-      : c.name.startsWith(query) ? 1
-        : c.name.toLowerCase().startsWith(q) ? 2
-          : c.alias && c.alias.startsWith(q) ? 3 : -1;
+    const tier =
+      c.name === query
+        ? 0
+        : c.name.startsWith(query)
+          ? 1
+          : c.name.toLowerCase().startsWith(q)
+            ? 2
+            : c.alias && c.alias.startsWith(q)
+              ? 3
+              : -1;
     if (tier >= 0) out.push([tier, out.length, c]);
   }
   out.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -155,7 +360,8 @@ export function insertionFor(c) {
 // previewing to end-of-line for $ and end-of-text for $$.
 export function findMathAtCursor(value, cursor) {
   const re = /\$\$?/g;
-  let m, open = null;
+  let m,
+    open = null;
   while ((m = re.exec(value))) {
     if (value[m.index - 1] === "\\") continue; // escaped \$
     const tok = { i: m.index, len: m[0].length };
@@ -163,7 +369,8 @@ export function findMathAtCursor(value, cursor) {
       if (tok.i >= cursor) return null;
       open = tok;
     } else {
-      const start = open.i + open.len, end = tok.i;
+      const start = open.i + open.len,
+        end = tok.i;
       if (cursor >= start && cursor <= end) {
         return { start, end, display: open.len === 2 };
       }
@@ -197,10 +404,20 @@ export function caretClientPos(ta, index) {
   }
   const cs = getComputedStyle(ta);
   for (const p of [
-    "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing",
-    "paddingTop", "paddingRight", "paddingBottom", "paddingLeft",
-    "borderLeftWidth", "borderTopWidth", "boxSizing",
-  ]) _mirror.style[p] = cs[p];
+    "fontFamily",
+    "fontSize",
+    "fontWeight",
+    "lineHeight",
+    "letterSpacing",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "borderLeftWidth",
+    "borderTopWidth",
+    "boxSizing",
+  ])
+    _mirror.style[p] = cs[p];
   const taRect = ta.getBoundingClientRect();
   _mirror.style.width = taRect.width + "px";
   _mirror.textContent = ta.value.slice(0, index);
@@ -236,8 +453,9 @@ function renderKatex(tex, displayMode) {
   return html;
 }
 
-const sampleFor = (c) => c.sample
-  || (c.args === 2 ? `\\${c.name}{a}{b}` : c.args === 1 ? `\\${c.name}{a}` : `\\${c.name}`);
+const sampleFor = (c) =>
+  c.sample ||
+  (c.args === 2 ? `\\${c.name}{a}{b}` : c.args === 1 ? `\\${c.name}{a}` : `\\${c.name}`);
 
 // Caret-hugging placement: measure the tip's ACTUAL size after render (a
 // worst-case clamp against max-width shoved narrow tips far left of the
@@ -249,12 +467,17 @@ function useCaretAnchored(anchor, preferAbove, deps) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const w = el.offsetWidth, h = el.offsetHeight;
+    const w = el.offsetWidth,
+      h = el.offsetHeight;
     const left = Math.max(8, Math.min(anchor.left, window.innerWidth - w - 8));
     const above = anchor.top - h - 6;
     const top = preferAbove
-      ? (above >= 8 ? above : anchor.bottom + 6)
-      : (anchor.bottom + 6 + h <= window.innerHeight - 8 ? anchor.bottom + 6 : above);
+      ? above >= 8
+        ? above
+        : anchor.bottom + 6
+      : anchor.bottom + 6 + h <= window.innerHeight - 8
+        ? anchor.bottom + 6
+        : above;
     setStyle({ left, top });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anchor.left, anchor.top, anchor.bottom, ...deps]);
@@ -281,15 +504,10 @@ export function MathLivePreview({ tex, display, anchor }) {
 export function LatexAcPopup({ items, selected, anchor, onPick }) {
   const [listRef, style] = useCaretAnchored(anchor, false, [items]);
   useEffect(() => {
-    listRef.current?.querySelector(".latexAcItem.selected")
-      ?.scrollIntoView({ block: "nearest" });
+    listRef.current?.querySelector(".latexAcItem.selected")?.scrollIntoView({ block: "nearest" });
   }, [selected, listRef]);
   return (
-    <div
-      ref={listRef}
-      className="latexAcPopup"
-      style={style}
-    >
+    <div ref={listRef} className="latexAcPopup" style={style}>
       {items.map((c, i) => {
         const glyph = renderKatex(sampleFor(c), false);
         return (
@@ -301,7 +519,10 @@ export function LatexAcPopup({ items, selected, anchor, onPick }) {
             onClick={() => onPick(c)}
           >
             <span className="latexAcGlyph" dangerouslySetInnerHTML={{ __html: glyph || "" }} />
-            <span className="latexAcName">\{c.name}{"{}".repeat(c.args || 0)}</span>
+            <span className="latexAcName">
+              \{c.name}
+              {"{}".repeat(c.args || 0)}
+            </span>
           </button>
         );
       })}

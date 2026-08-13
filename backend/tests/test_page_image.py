@@ -7,6 +7,7 @@ from PIL import Image
 
 def _make_pdf(pages=3, w=612, h=792):
     import pikepdf
+
     pdf = pikepdf.new()
     for _ in range(pages):
         pdf.add_blank_page(page_size=(w, h))
@@ -39,17 +40,15 @@ def test_renders_and_caches(guest):
 def test_width_is_snapped_to_the_allowed_set(guest):
     doc_id = guest.post("/api/uploads", files={"file": ("t.pdf", _make_pdf(), "application/pdf")}).json()["doc_id"]
     img = Image.open(io.BytesIO(guest.get(f"/api/page-image/{doc_id}/1?w=9999").content))
-    assert img.width == 1600   # nearest allowed, not 9999
+    assert img.width == 1600  # nearest allowed, not 9999
 
 
 def test_rejects_bad_input(guest):
     doc_id = guest.post("/api/uploads", files={"file": ("t.pdf", _make_pdf(2), "application/pdf")}).json()["doc_id"]
-    assert guest.get(f"/api/page-image/{doc_id}/99").status_code == 404      # past the end
-    assert guest.get(f"/api/page-image/{doc_id}/0").status_code == 400       # not 1-based
+    assert guest.get(f"/api/page-image/{doc_id}/99").status_code == 404  # past the end
+    assert guest.get(f"/api/page-image/{doc_id}/0").status_code == 400  # not 1-based
     assert guest.get("/api/page-image/..%2f..%2fetc/1").status_code in (400, 404)
     assert guest.get("/api/page-image/notahexid/1").status_code == 400
-
-
 
 
 def test_cache_lives_outside_uploads(guest):
@@ -58,6 +57,7 @@ def test_cache_lives_outside_uploads(guest):
     guest.get(f"/api/page-image/{doc_id}/1")
     import os
     from pathlib import Path
+
     uploads = Path(os.environ["GAMMA_DATA_DIR"]) / "users" / "guest" / "uploads"
     assert not list(uploads.rglob("*.jpg"))
     assert list((uploads.parent / "pagecache").rglob("*.jpg"))
@@ -66,8 +66,9 @@ def test_cache_lives_outside_uploads(guest):
 def test_dims_match_the_pages(guest):
     """Page sizes are what the client lays the document out from, so they must
     be the same /MediaBox pdf.js measures its own viewport from."""
-    doc_id = guest.post("/api/uploads",
-                        files={"file": ("t.pdf", _make_pdf(4, 500, 800), "application/pdf")}).json()["doc_id"]
+    doc_id = guest.post("/api/uploads", files={"file": ("t.pdf", _make_pdf(4, 500, 800), "application/pdf")}).json()[
+        "doc_id"
+    ]
     r = guest.get(f"/api/page-dims/{doc_id}")
     assert r.status_code == 200
     body = r.json()

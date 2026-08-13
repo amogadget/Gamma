@@ -7,9 +7,14 @@ from conftest import make_page
 def test_create_and_subtree(guest):
     page = make_page(guest, "Tree page")
     tree = [
-        {"id": "n1", "content": "parent note", "properties": {}, "children": [
-            {"id": "n2", "content": "child note", "properties": {}, "children": []},
-        ]},
+        {
+            "id": "n1",
+            "content": "parent note",
+            "properties": {},
+            "children": [
+                {"id": "n2", "content": "child note", "properties": {}, "children": []},
+            ],
+        },
     ]
     r = guest.put(f"/api/blocks/{page['id']}/children", json={"blocks": tree})
     assert r.status_code == 200
@@ -23,15 +28,25 @@ def test_create_and_subtree(guest):
 def test_sibling_order_is_lexicographic_on_position(guest):
     page = make_page(guest, "Order page")
     first = guest.post("/api/blocks", json={"parent_id": page["id"], "content": "first"}).json()
-    second = guest.post("/api/blocks", json={
-        "parent_id": page["id"], "content": "second", "before": first["position"],
-    }).json()
+    second = guest.post(
+        "/api/blocks",
+        json={
+            "parent_id": page["id"],
+            "content": "second",
+            "before": first["position"],
+        },
+    ).json()
     assert first["position"] < second["position"]
     # insert BETWEEN first and second
-    middle = guest.post("/api/blocks", json={
-        "parent_id": page["id"], "content": "middle",
-        "before": first["position"], "after": second["position"],
-    }).json()
+    middle = guest.post(
+        "/api/blocks",
+        json={
+            "parent_id": page["id"],
+            "content": "middle",
+            "before": first["position"],
+            "after": second["position"],
+        },
+    ).json()
     assert first["position"] < middle["position"] < second["position"]
     r = guest.get(f"/api/blocks/{page['id']}/children")
     contents = [b["content"] for b in r.json()["children"]]
@@ -62,12 +77,14 @@ def test_block_search_reports_kinds(guest):
     r = guest.post("/api/blocks", json={"parent_id": page["id"], "content": "a hilite quote"})
     guest.put(f"/api/blocks/{r.json()['id']}", json={"properties": {"highlight_id": "h1"}})
     r = guest.post("/api/blocks", json={"parent_id": page["id"], "content": "a linky region"})
-    guest.put(f"/api/blocks/{r.json()['id']}",
-              json={"properties": {"highlight_id": "h2", "link_page_id": page["id"]}})
+    guest.put(f"/api/blocks/{r.json()['id']}", json={"properties": {"highlight_id": "h2", "link_page_id": page["id"]}})
 
-    kinds = {b["content"]: b["kind"]
-             for b in guest.get("/api/block-search", params={"q": "plaino|hilite|linky",
-                                                             "regex": 1, "limit": 50}).json()["blocks"]}
+    kinds = {
+        b["content"]: b["kind"]
+        for b in guest.get("/api/block-search", params={"q": "plaino|hilite|linky", "regex": 1, "limit": 50}).json()[
+            "blocks"
+        ]
+    }
     assert kinds["a plaino note"] == "note"
     assert kinds["a hilite quote"] == "highlight"
     assert kinds["a linky region"] == "link"

@@ -5,19 +5,22 @@ from conftest import make_page
 
 def test_update_saves_meta_and_rebuilds_bibtex(guest):
     page = make_page(guest, "Manual meta page")
-    r = guest.post("/api/metadata/update", json={
-        "block_id": page["id"],
-        "meta": {
-            "title": "A Hand-Entered Title",
-            "authors": "Ada Lovelace, Charles Babbage",
-            "venue": "Journal of Testing",
-            "year": "2026",
-            "volume": "7",
-            "pages": "1-10",
-            "doi": "10.1234/test.5678",
-            "arxiv_id": "",
+    r = guest.post(
+        "/api/metadata/update",
+        json={
+            "block_id": page["id"],
+            "meta": {
+                "title": "A Hand-Entered Title",
+                "authors": "Ada Lovelace, Charles Babbage",
+                "venue": "Journal of Testing",
+                "year": "2026",
+                "volume": "7",
+                "pages": "1-10",
+                "doi": "10.1234/test.5678",
+                "arxiv_id": "",
+            },
         },
-    })
+    )
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["meta"]["title"] == "A Hand-Entered Title"
@@ -34,12 +37,14 @@ def test_update_saves_meta_and_rebuilds_bibtex(guest):
 
 
 def test_update_invalidates_cached_citation(guest):
-    page = make_page(guest, "Cite invalidation page",
-                     properties={"meta": {"title": "Old"}, "ppt_cite": "Old cite"})
-    r = guest.post("/api/metadata/update", json={
-        "block_id": page["id"],
-        "meta": {"title": "New title", "authors": [], "year": "2026"},
-    })
+    page = make_page(guest, "Cite invalidation page", properties={"meta": {"title": "Old"}, "ppt_cite": "Old cite"})
+    r = guest.post(
+        "/api/metadata/update",
+        json={
+            "block_id": page["id"],
+            "meta": {"title": "New title", "authors": [], "year": "2026"},
+        },
+    )
     assert r.status_code == 200
     r = guest.get(f"/api/blocks/{page['id']}")
     props = r.json()["properties"]
@@ -48,8 +53,7 @@ def test_update_invalidates_cached_citation(guest):
 
 
 def test_update_all_blank_clears_meta(guest):
-    page = make_page(guest, "Clear meta page",
-                     properties={"meta": {"title": "Old"}, "bibtex": "@article{x}"})
+    page = make_page(guest, "Clear meta page", properties={"meta": {"title": "Old"}, "bibtex": "@article{x}"})
     r = guest.post("/api/metadata/update", json={"block_id": page["id"], "meta": {}})
     assert r.status_code == 200
     assert r.json()["meta"] is None
@@ -73,9 +77,13 @@ def test_failed_fetch_is_negative_cached_and_cleared_by_update(guest):
     assert props["meta_error"]["at"]  # marker clients use to skip auto-retry
 
     # Hand-editing the metadata settles the failure: the marker is removed.
-    r = guest.post("/api/metadata/update", json={
-        "block_id": page["id"], "meta": {"title": "Filled by hand", "year": "2026"},
-    })
+    r = guest.post(
+        "/api/metadata/update",
+        json={
+            "block_id": page["id"],
+            "meta": {"title": "Filled by hand", "year": "2026"},
+        },
+    )
     assert r.status_code == 200
     props = guest.get(f"/api/blocks/{page['id']}").json()["properties"]
     assert "meta_error" not in props

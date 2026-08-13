@@ -49,7 +49,9 @@
   align-items: center;
   justify-content: center;
   opacity: 0.85;
-  transition: opacity 120ms ease, background 120ms ease;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease;
 }
 .carouselArrow:hover {
   opacity: 1;
@@ -77,7 +79,9 @@
   color: var(--text-primary);
   font: inherit;
   scroll-snap-align: start;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
   min-height: 58px;
 }
 .recentCard:hover {
@@ -108,8 +112,16 @@
   -webkit-line-clamp: 5;
   -webkit-box-orient: vertical;
 }
-.recentCardTime { color: var(--text-dim); }
-.recentCardKind { font-size: 9.5px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.recentCardTime {
+  color: var(--text-dim);
+}
+.recentCardKind {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
 
 .categoryBackBtn {
   display: inline-block;
@@ -122,7 +134,9 @@
   font: inherit;
   font-size: 13px;
   margin-bottom: 12px;
-  transition: background 120ms ease, color 120ms ease;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
 }
 .categoryBackBtn:hover {
   background: var(--bg-elevated);
@@ -159,8 +173,13 @@
   width: 100%;
   user-select: none;
 }
-.folderRow svg { color: var(--accent); flex-shrink: 0; }
-.folderRow:hover { background: var(--bg-block); }
+.folderRow svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.folderRow:hover {
+  background: var(--bg-block);
+}
 /* --- home file-manager: selection + context menu --- */
 .blockRow.pageSelected {
   background: var(--accent-bg-light);
@@ -195,8 +214,14 @@
   padding: 1px 8px;
   flex-shrink: 0;
 }
-.folderHint { font-size: 11px; color: var(--text-dim); flex-shrink: 0; }
-.folderBackRow svg { color: var(--text-muted); }
+.folderHint {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.folderBackRow svg {
+  color: var(--text-muted);
+}
 .folderCurrent {
   display: flex;
   align-items: center;
@@ -206,17 +231,27 @@
   color: var(--text-primary);
   padding: 4px 10px 8px;
 }
-.folderCurrent svg { color: var(--accent); }
-.folderNewBtn { color: var(--text-muted); }
-.folderNewBtn svg { color: var(--text-muted); }
-.folderNewBtn:hover { color: var(--text-primary); }
+.folderCurrent svg {
+  color: var(--accent);
+}
+.folderNewBtn {
+  color: var(--text-muted);
+}
+.folderNewBtn svg {
+  color: var(--text-muted);
+}
+.folderNewBtn:hover {
+  color: var(--text-primary);
+}
 .folderNewInput {
   flex: 1;
   min-width: 0;
   font-size: 13px;
   padding: 3px 8px;
 }
-.folderNewInput:focus { border-color: var(--accent-dark); }
+.folderNewInput:focus {
+  border-color: var(--accent-dark);
+}
 /* breadcrumb segments in the folder header */
 .crumbBtn {
   background: none;
@@ -226,8 +261,14 @@
   color: var(--text-primary);
   cursor: pointer;
 }
-.crumbBtn:hover { color: var(--accent); text-decoration: underline; }
-.crumbSep { color: var(--text-dim); padding: 0 1px; }
+.crumbBtn:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.crumbSep {
+  color: var(--text-dim);
+  padding: 0 1px;
+}
 /* sort bar above the home file feed */
 .homeListBar {
   display: flex;
@@ -268,7 +309,9 @@
 }
 
 /* --- modern file-manager home: view toggle, grid tiles, pinned, pins --- */
-.homeListSpacer { flex: 1; }
+.homeListSpacer {
+  flex: 1;
+}
 .homeViewToggle {
   display: inline-flex;
   gap: 2px;
@@ -289,8 +332,14 @@
   color: var(--text-muted);
   cursor: pointer;
 }
-.homeViewBtn:hover { color: var(--text-primary); }
-.homeViewBtn.active { background: var(--bg-input); color: var(--accent); box-shadow: 0 1px 2px rgba(0,0,0,0.15); }
+.homeViewBtn:hover {
+  color: var(--text-primary);
+}
+.homeViewBtn.active {
+  background: var(--bg-input);
+  color: var(--accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+}
 
 /* selected state — a solid border (not outline) so it never clips at the
    scroll-container edge */
@@ -321,7 +370,9 @@
   user-select: none;
   position: relative;
 }
-.fileRow:hover { background: var(--bg-block); }
+.fileRow:hover {
+  background: var(--bg-block);
+}
 .fileRow.selected,
 .fileTile.selected,
 .folderTile.selected {
@@ -340,7 +391,10 @@
   width: 20px;
   height: 20px;
 }
-.fileRow:hover .fileGlyph, .fileRow.selected .fileGlyph { color: var(--accent); }
+.fileRow:hover .fileGlyph,
+.fileRow.selected .fileGlyph {
+  color: var(--accent);
+}
 .fileRowName {
   flex: 1;
   min-width: 0;
@@ -365,9 +419,18 @@
   text-transform: uppercase;
   color: var(--text-dim);
 }
-.fileRowPin { flex: 0 0 auto; opacity: 0; transition: opacity 0.12s; }
-.fileRow:hover .fileRowPin { opacity: 0.6; }
-.fileRowPin:hover, .fileRowPin.pinned { opacity: 1; }
+.fileRowPin {
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.fileRow:hover .fileRowPin {
+  opacity: 0.6;
+}
+.fileRowPin:hover,
+.fileRowPin.pinned {
+  opacity: 1;
+}
 /* Folder + label chips, capped to a width and clipped so they never push the
    kind/pin off the row. Order in the row: name … [labels] PDF pin. */
 .fileRowLabels {
@@ -381,7 +444,10 @@
   margin-left: 8px;
 }
 .fileRowLabels .folderTagBadge,
-.fileRowLabels .labelTagBadge { margin-left: 0; flex: 0 0 auto; }
+.fileRowLabels .labelTagBadge {
+  margin-left: 0;
+  flex: 0 0 auto;
+}
 .labelTagBadge {
   display: inline-flex;
   align-items: center;
@@ -396,7 +462,10 @@
 /* line the folder-row icon up with the file-row icon column */
 
 /* pinned favorites strip */
-.pinnedSection { padding: 0 4px 4px; margin-bottom: 6px; }
+.pinnedSection {
+  padding: 0 4px 4px;
+  margin-bottom: 6px;
+}
 .pinnedLabel {
   display: flex;
   align-items: center;
@@ -408,7 +477,9 @@
   color: var(--text-dim);
   padding: 2px 6px 6px;
 }
-.pinnedLabel svg { color: var(--accent); }
+.pinnedLabel svg {
+  color: var(--accent);
+}
 .pinnedStrip {
   display: flex;
   gap: 8px;
@@ -430,8 +501,14 @@
   cursor: pointer;
   user-select: none;
 }
-.pinnedTile:hover { border-color: var(--border); background: var(--bg-raised); }
-.pinnedTile.selected { border-color: var(--accent-dark); background: var(--accent-bg-light); }
+.pinnedTile:hover {
+  border-color: var(--border);
+  background: var(--bg-raised);
+}
+.pinnedTile.selected {
+  border-color: var(--accent-dark);
+  background: var(--accent-bg-light);
+}
 .pinnedTileName {
   font-size: 12px;
   color: var(--text-secondary);
@@ -451,7 +528,8 @@
   padding: 4px;
   align-content: start;
 }
-.fileTile, .folderTile {
+.fileTile,
+.folderTile {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -466,13 +544,36 @@
   text-align: center;
   font: inherit;
 }
-.fileTile:hover, .folderTile:hover { background: var(--bg-block); }
-.folderTile.dragOver { background: var(--accent-bg); border-color: var(--accent-dark); border-style: dashed; }
-.tileGlyph { width: 52px; height: 52px; flex-shrink: 0; }
-.folderGlyph { color: var(--accent); }
-.fileGlyph { color: var(--text-muted); }
-.fileTile:hover .fileGlyph, .fileTile.selected .fileGlyph { color: var(--accent); }
-.folderTileAdd .tileGlyph, .folderTileNew .tileGlyph { color: var(--text-dim); width: 46px; height: 46px; }
+.fileTile:hover,
+.folderTile:hover {
+  background: var(--bg-block);
+}
+.folderTile.dragOver {
+  background: var(--accent-bg);
+  border-color: var(--accent-dark);
+  border-style: dashed;
+}
+.tileGlyph {
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+}
+.folderGlyph {
+  color: var(--accent);
+}
+.fileGlyph {
+  color: var(--text-muted);
+}
+.fileTile:hover .fileGlyph,
+.fileTile.selected .fileGlyph {
+  color: var(--accent);
+}
+.folderTileAdd .tileGlyph,
+.folderTileNew .tileGlyph {
+  color: var(--text-dim);
+  width: 46px;
+  height: 46px;
+}
 .tileName {
   font-size: 12.5px;
   color: var(--text-secondary);
@@ -517,8 +618,13 @@
   padding: 2px;
   border-radius: 6px;
 }
-.pinBtn:hover { color: var(--accent); background: var(--bg-raised); }
-.pinBtn.pinned { color: var(--accent); }
+.pinBtn:hover {
+  color: var(--accent);
+  background: var(--bg-raised);
+}
+.pinBtn.pinned {
+  color: var(--accent);
+}
 .tilePinBtn {
   position: absolute;
   top: 4px;
@@ -526,9 +632,18 @@
   opacity: 0;
   transition: opacity 0.12s;
 }
-.fileTile:hover .tilePinBtn { opacity: 0.7; }
-.tilePinBtn:hover, .tilePinBtn.pinned { opacity: 1; }
-.pinnedTile .pinBtn { position: absolute; top: 4px; right: 4px; }
+.fileTile:hover .tilePinBtn {
+  opacity: 0.7;
+}
+.tilePinBtn:hover,
+.tilePinBtn.pinned {
+  opacity: 1;
+}
+.pinnedTile .pinBtn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
 
 /* folder tags on file rows */
 .folderTagBadge {

@@ -25,11 +25,11 @@ export default [
       // useState setter destructure, catch bindings) — don't flag those.
       "no-unused-vars": [
         "warn",
-        { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_", "caughtErrorsIgnorePattern": "^_" },
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
       ],
       // Intentional `catch {}` guards are everywhere; still flag empty
       // if/for/function bodies as real errors.
-      "no-empty": ["error", { "allowEmptyCatch": true }],
+      "no-empty": ["error", { allowEmptyCatch: true }],
     },
   },
   prettier,

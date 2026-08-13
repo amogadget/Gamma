@@ -33,12 +33,15 @@ def user(client):
 
 
 def _add_provider(user, protocol="openai", models="gpt-5.6"):
-    r = user.post("/api/ai/providers", json={
-        "protocol": protocol,
-        "name": "Test provider",
-        "api_key": "sk-test-1234567890",
-        "models": models,
-    })
+    r = user.post(
+        "/api/ai/providers",
+        json={
+            "protocol": protocol,
+            "name": "Test provider",
+            "api_key": "sk-test-1234567890",
+            "models": models,
+        },
+    )
     assert r.status_code == 200, r.text
     return r.json()["providers"][-1]["id"]
 
@@ -58,8 +61,9 @@ def test_models_starts_with_no_catalog(user):
 def test_refresh_merges_catalog_after_curated_models(user, monkeypatch):
     c, _ = user
     _add_provider(c, models="gpt-5.6")
-    monkeypatch.setattr("gamma.routers.ai._live_models_for_entry",
-                        _live_fake(["gpt-5.6", "gpt-5.7-new", "gpt-5.8-new"]))
+    monkeypatch.setattr(
+        "gamma.routers.ai._live_models_for_entry", _live_fake(["gpt-5.6", "gpt-5.7-new", "gpt-5.8-new"])
+    )
 
     r = c.post("/api/ai/models/refresh")
     assert r.status_code == 200, r.text
@@ -79,8 +83,7 @@ def body_models(body):
 def test_refresh_failure_keeps_previous_catalog(user, monkeypatch):
     c, _ = user
     _add_provider(c, models="gpt-5.6")
-    monkeypatch.setattr("gamma.routers.ai._live_models_for_entry",
-                        _live_fake(["gpt-5.6", "gpt-5.7-new"]))
+    monkeypatch.setattr("gamma.routers.ai._live_models_for_entry", _live_fake(["gpt-5.6", "gpt-5.7-new"]))
     first = c.post("/api/ai/models/refresh").json()
     assert first["refreshed"] == 1
 

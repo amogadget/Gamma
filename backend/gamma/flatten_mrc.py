@@ -84,6 +84,7 @@ def needs_flattening(path) -> bool:
     """True when this PDF carries oversized stencil masks."""
     try:
         import pikepdf
+
         with pikepdf.open(str(path)) as pdf:
             return mask_burden(pdf) >= MASK_PIXELS_TRIGGER
     except Exception as e:
@@ -118,14 +119,12 @@ def _form_to_replace(page):
     imgs = _images_in(form.get("/Resources"))
     if not imgs:
         return None
-    if not any(img.get("/Mask") is not None or img.get("/SMask") is not None
-               for _, img in imgs):
+    if not any(img.get("/Mask") is not None or img.get("/SMask") is not None for _, img in imgs):
         return None
     return form
 
 
-def flatten(src_path, dst_path, width=DEFAULT_WIDTH, quality=DEFAULT_QUALITY,
-            progress=None) -> bool:
+def flatten(src_path, dst_path, width=DEFAULT_WIDTH, quality=DEFAULT_QUALITY, progress=None) -> bool:
     """Write a flattened copy of src_path. False when nothing was rewritten."""
     import pikepdf
     import pypdfium2 as pdfium
@@ -165,12 +164,9 @@ def flatten(src_path, dst_path, width=DEFAULT_WIDTH, quality=DEFAULT_QUALITY,
                 stream.Filter = pikepdf.Name("/DCTDecode")
 
                 form.write(
-                    f"q {bw:.4f} 0 0 {bh:.4f} {float(bbox[0]):.4f} "
-                    f"{float(bbox[1]):.4f} cm /ImFlat Do Q".encode()
+                    f"q {bw:.4f} 0 0 {bh:.4f} {float(bbox[0]):.4f} {float(bbox[1]):.4f} cm /ImFlat Do Q".encode()
                 )
-                form.Resources = pikepdf.Dictionary(
-                    XObject=pikepdf.Dictionary(ImFlat=stream)
-                )
+                form.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(ImFlat=stream))
                 rewritten += 1
             except Exception as e:
                 log.warning("flatten: page %d left as-is (%s)", i + 1, e)

@@ -20,9 +20,7 @@ class ChatSaveRequest(BaseModel):
 async def get_chat(block_id: str, request: Request):
     user = require_user(request)
     with connect_data_db(user) as database:
-        row = database.execute(
-            "SELECT messages FROM chats WHERE block_id = ?", (block_id,)
-        ).fetchone()
+        row = database.execute("SELECT messages FROM chats WHERE block_id = ?", (block_id,)).fetchone()
     return {"messages": json.loads(row[0]) if row else []}
 
 

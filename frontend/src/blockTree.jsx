@@ -12,8 +12,12 @@ import { AutoGrowTextarea } from "./widgets";
 import { isEnterCommit } from "./utils";
 import { FolderIcon, LinkIcon } from "./icons";
 import {
-  caretClientPos, findMathAtCursor, insertionFor, latexCompletions,
-  LatexAcPopup, MathLivePreview,
+  caretClientPos,
+  findMathAtCursor,
+  insertionFor,
+  latexCompletions,
+  LatexAcPopup,
+  MathLivePreview,
 } from "./latexEditor";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
@@ -26,47 +30,59 @@ const _dragState = { draggingId: null, dropTarget: null };
 // labels are resolved by the caller so the comparison here stays a string
 // check. onBlockRefClick is deliberately excluded from the comparison — the
 // caller passes an identity-stable wrapper.
-const BlockMarkdown = React.memo(function BlockMarkdown({ content, refLabels, onBlockRefClick }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[rehypeRaw, rehypeKatex]}
-      urlTransform={(url) => url.startsWith("blockref:") ? url : defaultUrlTransform(url)}
-      components={{
-        a: ({ href, children }) => {
-          if (href?.startsWith("blockref:")) {
-            const refId = href.slice(9);
-            const ref = refLabels?.[refId];
+const BlockMarkdown = React.memo(
+  function BlockMarkdown({ content, refLabels, onBlockRefClick }) {
+    return (
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeRaw, rehypeKatex]}
+        urlTransform={(url) => (url.startsWith("blockref:") ? url : defaultUrlTransform(url))}
+        components={{
+          a: ({ href, children }) => {
+            if (href?.startsWith("blockref:")) {
+              const refId = href.slice(9);
+              const ref = refLabels?.[refId];
+              return (
+                <a
+                  href={`?block=${refId}`}
+                  className="blockRefChip"
+                  title={ref?.page_title ? `From: ${ref.page_title}` : undefined}
+                  onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onBlockRefClick?.(refId);
+                  }}
+                >
+                  {ref?.content || String(children)}
+                </a>
+              );
+            }
             return (
-              <a
-                href={`?block=${refId}`}
-                className="blockRefChip"
-                title={ref?.page_title ? `From: ${ref.page_title}` : undefined}
-                onClick={(e) => {
-                  if (e.metaKey || e.ctrlKey) return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onBlockRefClick?.(refId);
-                }}
-              >
-                {ref?.content || String(children)}
+              <a href={href} target="_blank" rel="noreferrer">
+                {children}
               </a>
             );
-          }
-          return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
-        }
-      }}
-    >
-      {content
-        .replace(/!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g, '<img src="$2" alt="$1" width="$3" />')
-        .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
-    </ReactMarkdown>
-  );
-}, (prev, next) =>
-  prev.content === next.content
-  && Object.keys(prev.refLabels).length === Object.keys(next.refLabels).length
-  && Object.entries(next.refLabels).every(([id, r]) =>
-    prev.refLabels[id]?.content === r.content && prev.refLabels[id]?.page_title === r.page_title)
+          },
+        }}
+      >
+        {content
+          .replace(
+            /!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g,
+            '<img src="$2" alt="$1" width="$3" />',
+          )
+          .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
+      </ReactMarkdown>
+    );
+  },
+  (prev, next) =>
+    prev.content === next.content &&
+    Object.keys(prev.refLabels).length === Object.keys(next.refLabels).length &&
+    Object.entries(next.refLabels).every(
+      ([id, r]) =>
+        prev.refLabels[id]?.content === r.content &&
+        prev.refLabels[id]?.page_title === r.page_title,
+    ),
 );
 
 // Area-highlight crops shown on note cards. Nothing is stored with the block —
@@ -80,18 +96,25 @@ function AreaSnapshot({ block, captureArea, docNonce }) {
   const [src, setSrc] = useState(() => _areaSnapCache.get(key) || null);
   useEffect(() => {
     const cached = _areaSnapCache.get(key);
-    if (cached) { setSrc(cached); return; }
+    if (cached) {
+      setSrc(cached);
+      return;
+    }
     setSrc(null);
     let cancelled = false;
     // docNonce re-runs this once the PDF finishes loading — the first attempt
     // can land before the viewer has a document and resolve to null.
-    Promise.resolve(captureArea?.(block)).then((img) => {
-      if (cancelled || !img) return;
-      _areaSnapCache.set(key, img);
-      while (_areaSnapCache.size > 60) _areaSnapCache.delete(_areaSnapCache.keys().next().value);
-      setSrc(img);
-    }).catch(() => {});
-    return () => { cancelled = true; };
+    Promise.resolve(captureArea?.(block))
+      .then((img) => {
+        if (cancelled || !img) return;
+        _areaSnapCache.set(key, img);
+        while (_areaSnapCache.size > 60) _areaSnapCache.delete(_areaSnapCache.keys().next().value);
+        setSrc(img);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
     // `block` is captured via `key` (id+position), not object identity — the
     // block object changes every render, but the crop only changes with key/doc.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -99,11 +122,18 @@ function AreaSnapshot({ block, captureArea, docNonce }) {
   // Reserve the crop's aspect ratio while it renders so the card doesn't jump.
   const ratio = r && r.y2 > r.y1 ? (r.x2 - r.x1) / (r.y2 - r.y1) : null;
   return src ? (
-    <img className="blockAreaSnap" src={src} alt="Area selection" draggable={false}
-      style={{ borderLeftColor: block.color || undefined }} />
+    <img
+      className="blockAreaSnap"
+      src={src}
+      alt="Area selection"
+      draggable={false}
+      style={{ borderLeftColor: block.color || undefined }}
+    />
   ) : (
-    <div className="blockAreaSnap blockAreaSnapPending"
-      style={{ aspectRatio: ratio || undefined, borderLeftColor: block.color || undefined }} />
+    <div
+      className="blockAreaSnap blockAreaSnapPending"
+      style={{ aspectRatio: ratio || undefined, borderLeftColor: block.color || undefined }}
+    />
   );
 }
 
@@ -173,14 +203,19 @@ function BlockRow({
   const uploadingRef = useRef(false);
 
   useEffect(() => {
-    if (!refPopup) { setSearchResults([]); return; }
+    if (!refPopup) {
+      setSearchResults([]);
+      return;
+    }
     const q = refPopup.query;
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(`/api/block-search?q=${encodeURIComponent(q)}&limit=8`);
         const data = await res.json();
         setSearchResults((data.blocks || []).filter((b) => b.id !== block.id));
-      } catch (_) { setSearchResults([]); }
+      } catch (_) {
+        setSearchResults([]);
+      }
     }, 120);
     return () => clearTimeout(timer);
     // refPopup is a prop object; query text + block id are the intended trigger.
@@ -220,9 +255,15 @@ function BlockRow({
 
   function updateMathUi(ta, typing) {
     const cursor = ta.selectionStart;
-    if (cursor !== ta.selectionEnd) { setMathUi(null); return; }
+    if (cursor !== ta.selectionEnd) {
+      setMathUi(null);
+      return;
+    }
     const seg = findMathAtCursor(ta.value, cursor);
-    if (!seg) { setMathUi(null); return; }
+    if (!seg) {
+      setMathUi(null);
+      return;
+    }
     // \command autocomplete: a backslash-word ending at the caret, only
     // inside math (a bare "\" in prose — file paths — must not trigger it),
     // and only opened by TYPING — clicking into an existing formula must not
@@ -256,7 +297,9 @@ function BlockRow({
     onChangeText(block.id, newVal);
     setMathUi(null);
     requestAnimationFrame(() => {
-      try { ta.setSelectionRange(start + caret, start + caret); } catch (_) {}
+      try {
+        ta.setSelectionRange(start + caret, start + caret);
+      } catch (_) {}
       ta.focus();
       updateMathUi(ta);
     });
@@ -293,13 +336,19 @@ function BlockRow({
     if (offset == null) {
       // Fallback: estimate from vertical line + horizontal fraction using the textarea's metrics
       const rect = el.getBoundingClientRect();
-      const relY = Math.max(0, pos.y - rect.top - parseFloat(getComputedStyle(el).paddingTop || "0"));
+      const relY = Math.max(
+        0,
+        pos.y - rect.top - parseFloat(getComputedStyle(el).paddingTop || "0"),
+      );
       const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 20;
       const lineIndex = Math.floor(relY / lineHeight);
       const lines = (el.value || "").split("\n");
       const targetLine = Math.min(lines.length - 1, Math.max(0, lineIndex));
       const lineStart = lines.slice(0, targetLine).reduce((n, l) => n + l.length + 1, 0);
-      const relX = Math.max(0, pos.x - rect.left - parseFloat(getComputedStyle(el).paddingLeft || "0"));
+      const relX = Math.max(
+        0,
+        pos.x - rect.left - parseFloat(getComputedStyle(el).paddingLeft || "0"),
+      );
       // Approximate char width from font size
       const fontSize = parseFloat(getComputedStyle(el).fontSize) || 14;
       const charW = fontSize * 0.55;
@@ -317,7 +366,9 @@ function BlockRow({
   function handleImageDragOver(e) {
     if (!e.dataTransfer?.types || !Array.from(e.dataTransfer.types).includes("Files")) return;
     if (!e.dataTransfer?.items) return;
-    const hasImage = Array.from(e.dataTransfer.items).some((item) => item.type?.startsWith("image/"));
+    const hasImage = Array.from(e.dataTransfer.items).some((item) =>
+      item.type?.startsWith("image/"),
+    );
     if (!hasImage) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
@@ -335,12 +386,18 @@ function BlockRow({
     try {
       const form = new FormData();
       form.append("file", file);
-      const res = await fetch("/api/upload-image", { method: "POST", body: form, credentials: "include" });
+      const res = await fetch("/api/upload-image", {
+        method: "POST",
+        body: form,
+        credentials: "include",
+      });
       if (!res.ok) return null;
       return (await res.json()).url;
     } catch (_) {
       return null;
-    } finally { uploadingRef.current = false; }
+    } finally {
+      uploadingRef.current = false;
+    }
   }
 
   async function handleImageDrop(e) {
@@ -355,7 +412,8 @@ function BlockRow({
   // markdown at the cursor. Text pastes fall through to the browser default.
   async function handleEditorPaste(e) {
     const file = Array.from(e.clipboardData?.items || [])
-      .find((it) => it.type?.startsWith("image/"))?.getAsFile();
+      .find((it) => it.type?.startsWith("image/"))
+      ?.getAsFile();
     if (!file) return;
     e.preventDefault();
     const ta = ref.current;
@@ -369,7 +427,9 @@ function BlockRow({
     if (start != null) {
       onChangeText(block.id, val.slice(0, start) + md + val.slice(end));
       requestAnimationFrame(() => {
-        try { ta.setSelectionRange(start + md.length, start + md.length); } catch (_) {}
+        try {
+          ta.setSelectionRange(start + md.length, start + md.length);
+        } catch (_) {}
       });
     } else {
       onChangeText(block.id, val + "\n" + md);
@@ -377,7 +437,9 @@ function BlockRow({
   }
 
   return (
-    <div className={`blockRowWrap${imageDragOver ? " imageDragOver" : ""}`} data-block-id={block.id}
+    <div
+      className={`blockRowWrap${imageDragOver ? " imageDragOver" : ""}`}
+      data-block-id={block.id}
       onDragOver={(e) => {
         if (Array.from(e.dataTransfer?.types || []).includes("Files")) {
           handleImageDragOver(e);
@@ -400,10 +462,14 @@ function BlockRow({
     >
       <div
         className={`blockRow ${focusedId === block.id ? "focused" : ""} ${homeMode && selectedPageIds?.has(block._pageId) ? "pageSelected" : ""}`}
-        onContextMenu={homeMode && block._pageId && onPageContext ? (e) => {
-          e.preventDefault();
-          onPageContext(block, e);
-        } : undefined}
+        onContextMenu={
+          homeMode && block._pageId && onPageContext
+            ? (e) => {
+                e.preventDefault();
+                onPageContext(block, e);
+              }
+            : undefined
+        }
         onMouseDown={(e) => {
           if (e.button !== 0) return; // right-click is the context menu's
           if (e.target.closest("button, textarea, input, a")) return;
@@ -425,10 +491,14 @@ function BlockRow({
             onStartEdit(block.id, true);
           }
         }}
-        onClick={homeMode && block._pageId && typeof onPageOpen === "function" ? (e) => {
-          if (e.target.closest("button, textarea, input, a")) return;
-          if (!block.editMode) onPageOpen(block, e);
-        } : undefined}
+        onClick={
+          homeMode && block._pageId && typeof onPageOpen === "function"
+            ? (e) => {
+                if (e.target.closest("button, textarea, input, a")) return;
+                if (!block.editMode) onPageOpen(block, e);
+              }
+            : undefined
+        }
       >
         {hasChildren ? (
           <button
@@ -447,7 +517,10 @@ function BlockRow({
           <>
             <button
               className="collapseBtn highlightDotBtn dotSlot"
-              onClick={(e) => { e.stopPropagation(); onJump(block.highlightId, e.ctrlKey || e.metaKey); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onJump(block.highlightId, e.ctrlKey || e.metaKey);
+              }}
               title={
                 block.position
                   ? "Jump to highlight"
@@ -456,42 +529,66 @@ function BlockRow({
                     : "Jump to page (no exact position)"
               }
             >
-              <span className="highlightDot" style={{
-                background: block.position
-                  ? (block.color || COLORS[0])
-                  : block.properties?.linked_highlight_id
-                    ? (highlightColors?.[block.properties.linked_highlight_id] || COLORS[0])
-                    : 'rgba(140,140,140,0.5)'
-              }} />
+              <span
+                className="highlightDot"
+                style={{
+                  background: block.position
+                    ? block.color || COLORS[0]
+                    : block.properties?.linked_highlight_id
+                      ? highlightColors?.[block.properties.linked_highlight_id] || COLORS[0]
+                      : "rgba(140,140,140,0.5)",
+                }}
+              />
             </button>
             {!block.position && block.properties?.linked_highlight_id && onUnlinkHighlight ? (
               <button
                 className="collapseBtn attachModeBtn"
                 title="Unlink highlight"
-                onClick={(e) => { e.stopPropagation(); onUnlinkHighlight(block.id); }}
-              >⊘</button>
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onUnlinkHighlight(block.id);
+                }}
+              >
+                ⊘
+              </button>
             ) : null}
             {!block.position && !block.properties?.linked_highlight_id && onEnterAttachMode ? (
               <button
                 className="collapseBtn attachModeBtn"
                 title="Attach to a PDF highlight"
-                onClick={(e) => { e.stopPropagation(); onEnterAttachMode(block.id); }}
-              >⊕</button>
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEnterAttachMode(block.id);
+                }}
+              >
+                ⊕
+              </button>
             ) : null}
           </>
         ) : block._pageId && typeof onPageOpen === "function" ? (
           <button
             className="collapseBtn dotSlot pageBulletBtn"
-            onClick={(e) => { e.stopPropagation(); onPageOpen(block); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPageOpen(block);
+            }}
             title="Open page"
-          ><span className="pageBulletDot" /></button>
+          >
+            <span className="pageBulletDot" />
+          </button>
         ) : (
           <span className="dotSlot dotSlotEmpty" />
         )}
 
         <div className="blockBody">
           <div className="blockMeta">
-            {block._pageId ? (block._sourceUrl ? "PDF annotation" : "regular note") : block.page ? `p.${block.page}` : "note"}
+            {block._pageId
+              ? block._sourceUrl
+                ? "PDF annotation"
+                : "regular note"
+              : block.page
+                ? `p.${block.page}`
+                : "note"}
             {block._folders?.map((f) => (
               <span key={f} className="folderTagBadge" title={`In folder ${f}`}>
                 <FolderIcon size={10} />
@@ -529,17 +626,49 @@ function BlockRow({
               onPaste={handleEditorPaste}
               onKeyDown={(e) => {
                 if (refPopup && searchResults.length > 0) {
-                  if (e.key === "ArrowDown") { e.preventDefault(); setRefSelectedIdx((i) => Math.min(i + 1, searchResults.length - 1)); return; }
-                  if (e.key === "ArrowUp") { e.preventDefault(); setRefSelectedIdx((i) => Math.max(i - 1, 0)); return; }
-                  if (isEnterCommit(e)) { e.preventDefault(); insertRef(searchResults[refSelectedIdx]); return; }
-                  if (e.key === "Escape") { e.preventDefault(); setRefPopup(null); return; }
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setRefSelectedIdx((i) => Math.min(i + 1, searchResults.length - 1));
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setRefSelectedIdx((i) => Math.max(i - 1, 0));
+                    return;
+                  }
+                  if (isEnterCommit(e)) {
+                    e.preventDefault();
+                    insertRef(searchResults[refSelectedIdx]);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setRefPopup(null);
+                    return;
+                  }
                 }
                 if (mathUi?.ac) {
                   const n = mathUi.ac.items.length;
-                  if (e.key === "ArrowDown") { e.preventDefault(); setMathAcIdx((i) => Math.min(i + 1, n - 1)); return; }
-                  if (e.key === "ArrowUp") { e.preventDefault(); setMathAcIdx((i) => Math.max(i - 1, 0)); return; }
-                  if (e.key === "Tab" || e.key === "Enter") { e.preventDefault(); acceptLatexAc(mathUi.ac.items[mathAcIdx]); return; }
-                  if (e.key === "Escape") { e.preventDefault(); setMathUi((u) => u ? { ...u, ac: null } : null); return; }
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setMathAcIdx((i) => Math.min(i + 1, n - 1));
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setMathAcIdx((i) => Math.max(i - 1, 0));
+                    return;
+                  }
+                  if (e.key === "Tab" || e.key === "Enter") {
+                    e.preventDefault();
+                    acceptLatexAc(mathUi.ac.items[mathAcIdx]);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setMathUi((u) => (u ? { ...u, ac: null } : null));
+                    return;
+                  }
                 }
                 if (isEnterCommit(e) && !e.shiftKey) {
                   e.preventDefault();
@@ -550,13 +679,25 @@ function BlockRow({
                 } else if (e.key === "Tab" && e.shiftKey) {
                   e.preventDefault();
                   onOutdent(block.id);
-                } else if (e.key === "ArrowRight" && (block.children?.length || 0) > 0 && block.collapsed) {
+                } else if (
+                  e.key === "ArrowRight" &&
+                  (block.children?.length || 0) > 0 &&
+                  block.collapsed
+                ) {
                   e.preventDefault();
                   onToggle(block.id);
-                } else if (e.key === "ArrowLeft" && (block.children?.length || 0) > 0 && !block.collapsed) {
+                } else if (
+                  e.key === "ArrowLeft" &&
+                  (block.children?.length || 0) > 0 &&
+                  !block.collapsed
+                ) {
                   e.preventDefault();
                   onToggle(block.id);
-                } else if (e.key === "Backspace" && (block._isEmpty || !(block.content || "").trim()) && !(block.quote || "").trim()) {
+                } else if (
+                  e.key === "Backspace" &&
+                  (block._isEmpty || !(block.content || "").trim()) &&
+                  !(block.quote || "").trim()
+                ) {
                   e.preventDefault();
                   onDelete(block.id);
                 }
@@ -566,27 +707,30 @@ function BlockRow({
           ) : (
             <div className="blockRendered">
               {(block.content || "").trim() ? (
-                <BlockMarkdown content={block.content || ""} refLabels={refLabels} onBlockRefClick={stableRefClick} />
+                <BlockMarkdown
+                  content={block.content || ""}
+                  refLabels={refLabels}
+                  onBlockRefClick={stableRefClick}
+                />
               ) : (
                 <div className="blockPlaceholder">(empty)</div>
               )}
             </div>
           )}
 
-          {block.quote?.trim() ? (
-            <div className="blockQuote">
-              {block.quote}
-            </div>
-          ) : null}
+          {block.quote?.trim() ? <div className="blockQuote">{block.quote}</div> : null}
           {block.position?.area && captureArea ? (
             <AreaSnapshot block={block} captureArea={captureArea} docNonce={docNonce} />
           ) : null}
-          {(block.properties?.link_url || block.properties?.link_page_id) ? (
+          {block.properties?.link_url || block.properties?.link_page_id ? (
             <button
               type="button"
               className="blockLinkChip"
               title={block.properties.link_url || "Open linked paper"}
-              onClick={(e) => { e.stopPropagation(); onOpenLinkTarget?.(block); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenLinkTarget?.(block);
+              }}
             >
               <LinkIcon size={11} strokeWidth={2.4} />
               {block.properties.link_page_id
@@ -599,15 +743,25 @@ function BlockRow({
           <button
             className="uiClose uiCloseSm uiCloseDanger blockDeleteBtn"
             title="Delete block"
-            onClick={(e) => { e.stopPropagation(); onDelete(block.id); }}
-          >×</button>
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(block.id);
+            }}
+          >
+            ×
+          </button>
         ) : null}
       </div>
       {!readOnly && block.editMode && mathUi ? (
         <>
           <MathLivePreview tex={mathUi.tex} display={mathUi.display} anchor={mathUi.anchor} />
           {mathUi.ac ? (
-            <LatexAcPopup items={mathUi.ac.items} selected={mathAcIdx} anchor={mathUi.anchor} onPick={acceptLatexAc} />
+            <LatexAcPopup
+              items={mathUi.ac.items}
+              selected={mathAcIdx}
+              anchor={mathUi.anchor}
+              onPick={acceptLatexAc}
+            />
           ) : null}
         </>
       ) : null}
@@ -667,7 +821,9 @@ function SortableBlockRow({ block, ...rowProps }) {
         onDragEnd={onDragEnd}
         aria-label="Drag to reorder"
         title="Drag to reorder"
-      >⋮⋮</span>
+      >
+        ⋮⋮
+      </span>
       <BlockRow block={block} {...rowProps} />
     </div>
   );
@@ -677,20 +833,28 @@ function BlockTree({ blocks, readOnly, rowProps, depth = 0 }) {
   if (!blocks || blocks.length === 0) return null;
   return (
     <>
-      {blocks.map((rawBlock) => { const block = withLegacyAccessors(rawBlock); return (
-        <React.Fragment key={block.id}>
-          {!readOnly ? (
-            <SortableBlockRow block={block} depth={depth} {...rowProps} />
-          ) : (
-            <BlockRow block={block} depth={depth} {...rowProps} />
-          )}
-          {!block.collapsed && block.children && block.children.length > 0 ? (
-            <div className="blockChildren">
-              <BlockTree blocks={block.children} readOnly={readOnly} rowProps={rowProps} depth={depth + 1} />
-            </div>
-          ) : null}
-        </React.Fragment>
-      );})}
+      {blocks.map((rawBlock) => {
+        const block = withLegacyAccessors(rawBlock);
+        return (
+          <React.Fragment key={block.id}>
+            {!readOnly ? (
+              <SortableBlockRow block={block} depth={depth} {...rowProps} />
+            ) : (
+              <BlockRow block={block} depth={depth} {...rowProps} />
+            )}
+            {!block.collapsed && block.children && block.children.length > 0 ? (
+              <div className="blockChildren">
+                <BlockTree
+                  blocks={block.children}
+                  readOnly={readOnly}
+                  rowProps={rowProps}
+                  depth={depth + 1}
+                />
+              </div>
+            ) : null}
+          </React.Fragment>
+        );
+      })}
     </>
   );
 }

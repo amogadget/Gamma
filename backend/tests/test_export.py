@@ -16,9 +16,14 @@ def _put_children(guest, page_id, tree):
 
 def _highlight(hid, quote, note="", page=1, color="rgba(255, 226, 143, 0.65)", children=None):
     return {
-        "id": hid, "content": note, "children": children or [],
+        "id": hid,
+        "content": note,
+        "children": children or [],
         "properties": {
-            "highlight_id": hid, "quote": quote, "pdf_page": page, "color": color,
+            "highlight_id": hid,
+            "quote": quote,
+            "pdf_page": page,
+            "color": color,
             "pdf_position": {"pageNumber": page, "boundingRect": {}, "rects": []},
         },
     }
@@ -26,11 +31,20 @@ def _highlight(hid, quote, note="", page=1, color="rgba(255, 226, 143, 0.65)", c
 
 def test_readable_export_is_bare_md(guest):
     page = make_page(guest, "Readable page")
-    _put_children(guest, page["id"], [
-        {"id": "a", "content": "top note", "properties": {}, "children": [
-            _highlight("h1", "an important quote", note="my comment", page=3),
-        ]},
-    ])
+    _put_children(
+        guest,
+        page["id"],
+        [
+            {
+                "id": "a",
+                "content": "top note",
+                "properties": {},
+                "children": [
+                    _highlight("h1", "an important quote", note="my comment", page=3),
+                ],
+            },
+        ],
+    )
     r = guest.get(f"/api/pages/{page['id']}/export")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"].startswith("text/markdown")
@@ -84,6 +98,7 @@ def test_folder_export_zips_matching_pages(guest):
 
 def _blank_pdf_bytes():
     from PyPDF2 import PdfWriter
+
     w = PdfWriter()
     w.add_blank_page(width=612, height=792)
     buf = io.BytesIO()
@@ -97,10 +112,15 @@ def _positioned(hid, quote, page=1, area=False, note=""):
     if area:
         pos["area"] = True
     return {
-        "id": hid, "content": note, "children": [],
+        "id": hid,
+        "content": note,
+        "children": [],
         "properties": {
-            "highlight_id": hid, "quote": quote, "pdf_page": page,
-            "color": "rgba(170, 235, 170, 0.65)", "pdf_position": pos,
+            "highlight_id": hid,
+            "quote": quote,
+            "pdf_page": page,
+            "color": "rgba(170, 235, 170, 0.65)",
+            "pdf_position": pos,
         },
     }
 
@@ -108,13 +128,18 @@ def _positioned(hid, quote, page=1, area=False, note=""):
 def test_logseq_graph_export(guest):
     up = guest.post("/api/uploads", files={"file": ("g.pdf", _blank_pdf_bytes(), "application/pdf")})
     assert up.status_code == 200, up.text
-    page = make_page(guest, "Graph paper",
-                     properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]})
-    _put_children(guest, page["id"], [
-        _positioned("th", "a text quote", note="my thought"),
-        _positioned("ah", "", area=True),
-        {"id": "free", "content": "a free note", "properties": {}, "children": []},
-    ])
+    page = make_page(
+        guest, "Graph paper", properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]}
+    )
+    _put_children(
+        guest,
+        page["id"],
+        [
+            _positioned("th", "a text quote", note="my thought"),
+            _positioned("ah", "", area=True),
+            {"id": "free", "content": "a free note", "properties": {}, "children": []},
+        ],
+    )
 
     r = guest.get(f"/api/pages/{page['id']}/export", params={"mode": "logseq-graph"})
     assert r.status_code == 200, r.text
@@ -124,12 +149,13 @@ def test_logseq_graph_export(guest):
 
     assert "logseq/config.edn" in names
     page_md_name = next(n for n in names if n.startswith("pages/") and "hls__" not in n)
-    stem = page_md_name[len("pages/"):-len(".md")]
+    stem = page_md_name[len("pages/") : -len(".md")]
     assert f"pages/hls__{stem}.md" in names
     assert f"assets/{stem}.pdf" in names
     assert f"assets/{stem}.edn" in names
 
     from gamma.logseq_graph_export import hl_uuid
+
     text_uuid, area_uuid = str(hl_uuid("th")), str(hl_uuid("ah"))
 
     page_md = z.read(page_md_name).decode()
@@ -157,6 +183,7 @@ def test_logseq_graph_export(guest):
 
     # Round-trip the Logseq EDN back through Gamma's own importer parser.
     from gamma.logseq_import import parse_edn
+
     parsed = parse_edn(edn)
     assert len(parsed["highlights"]) == 2
     assert parsed["highlights"][0]["position"]["bounding"]["x1"] == 50.0
@@ -182,7 +209,7 @@ def test_missing_page_404(guest):
 
 
 def test_slugify_and_rewrite_units():
-    assert slugify('a/b:c*?', "xyz123") == "abc-xyz123"
+    assert slugify("a/b:c*?", "xyz123") == "abc-xyz123"
     assert slugify("", "id") == "Untitled-id"
     md, assets = collect_and_rewrite("see /api/uploads/abc123.pdf here")
     assert "assets/abc123.pdf" in md and assets == {"abc123.pdf"}

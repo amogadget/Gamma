@@ -2,7 +2,10 @@
 // usable by dialogs, home views, and future tests without coupling them to React.
 
 export function parseFolderTags(raw) {
-  return (raw || "").split(",").map((value) => value.trim()).filter(Boolean);
+  return (raw || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 export function cleanFolderSegment(name) {
@@ -55,7 +58,11 @@ export function friendlyApiError(error) {
 
 export function findPageForUrl(url, pages) {
   const doiMatch = (url || "").match(/10\.\d{4,9}\/[^\s?#]+/);
-  const doi = doiMatch ? decodeURIComponent(doiMatch[0]).replace(/[.,;)\]]+$/, "").toLowerCase() : "";
+  const doi = doiMatch
+    ? decodeURIComponent(doiMatch[0])
+        .replace(/[.,;)\]]+$/, "")
+        .toLowerCase()
+    : "";
   const arxivMatch = (url || "").match(/arxiv(?:\.org\/(?:abs|pdf)\/|[:.])(\d{4}\.\d{4,5})/i);
   const arxivId = arxivMatch ? arxivMatch[1] : "";
   if (!doi && !arxivId) return null;
@@ -64,7 +71,11 @@ export function findPageForUrl(url, pages) {
     const properties = page.properties || {};
     const metadata = properties.meta || {};
     if (doi && (metadata.doi || "").toLowerCase() === doi) return page.id;
-    if (arxivId && (metadata.arxiv_id === arxivId || (properties.source_url || "").includes(arxivId))) return page.id;
+    if (
+      arxivId &&
+      (metadata.arxiv_id === arxivId || (properties.source_url || "").includes(arxivId))
+    )
+      return page.id;
     if (doi && (properties.source_url || "").toLowerCase().includes(doi)) return page.id;
   }
   return null;
@@ -78,16 +89,21 @@ export function scorePaperMatch(text, page) {
   let score = 0;
   if (metadata.doi && normalizedText.includes(String(metadata.doi).toLowerCase())) score += 20;
   if (metadata.arxiv_id && normalizedText.includes(metadata.arxiv_id)) score += 20;
-  for (const author of (metadata.authors || [])) {
+  for (const author of metadata.authors || []) {
     const lastName = String(author).trim().split(/\s+/).pop().toLowerCase();
     if (lastName.length > 2 && normalizedText.includes(lastName)) score += 4;
   }
-  for (const word of String(metadata.title || page.content || "").toLowerCase().split(/[^a-z0-9]+/)) {
+  for (const word of String(metadata.title || page.content || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)) {
     if (word.length > 3 && words.has(word)) score += 2;
   }
   if (metadata.year && normalizedText.includes(String(metadata.year))) score += 2;
   if (metadata.volume && new RegExp(`\\b${metadata.volume}\\b`).test(normalizedText)) score += 2;
-  for (const word of String(metadata.venue || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/)) {
+  for (const word of String(metadata.venue || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, " ")
+    .split(/\s+/)) {
     if (word.length > 2 && normalizedText.includes(word)) score += 1;
   }
   return score;

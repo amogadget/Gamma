@@ -37,8 +37,7 @@ def normalize_text(s: str) -> str:
     return _WS_RE.sub(" ", s).strip()
 
 
-def fuzzy_pattern(q: str, case: bool = False, whole: bool = False,
-                  regex: bool = False) -> re.Pattern | None:
+def fuzzy_pattern(q: str, case: bool = False, whole: bool = False, regex: bool = False) -> re.Pattern | None:
     """Compile a search query into a regex (None = invalid/empty).
 
     regex=True compiles the query as-is (VSCode-style). Otherwise the match is

@@ -82,8 +82,7 @@ async def import_logseq(
         }
         import_blocks, used_quotes = md_to_ordered_blocks(md_blocks_parsed, edn_by_quote, edn_by_uuid)
         # Append EDN highlights not referenced in MD, sorted by page number
-        edn_only = [h for h in edn_highlights
-                    if (h.get("content") or {}).get("text", "").strip() not in used_quotes]
+        edn_only = [h for h in edn_highlights if (h.get("content") or {}).get("text", "").strip() not in used_quotes]
         edn_only.sort(key=lambda h: h.get("page") or (h.get("position") or {}).get("page") or 0)
         for h in edn_only:
             import_blocks.append(edn_highlight_to_block(h))
@@ -113,7 +112,8 @@ async def import_logseq(
 
         # 5. Append blocks, skip already-imported quotes
         existing_quotes = {
-            r[0] for r in conn.execute(
+            r[0]
+            for r in conn.execute(
                 "SELECT json_extract(properties,'$.quote') FROM unified_blocks WHERE parent_id=?",
                 (block_id,),
             ).fetchall()
@@ -130,10 +130,15 @@ async def import_logseq(
             conn.execute(
                 "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
                 "VALUES (?,?,?,?,?,?,?)",
-                (b["id"], block_id, pos_key,
-                 b.get("content", ""),
-                 b["properties"] if isinstance(b["properties"], str) else json.dumps(b.get("properties", {})),
-                 now, now),
+                (
+                    b["id"],
+                    block_id,
+                    pos_key,
+                    b.get("content", ""),
+                    b["properties"] if isinstance(b["properties"], str) else json.dumps(b.get("properties", {})),
+                    now,
+                    now,
+                ),
             )
             if quote:
                 existing_quotes.add(quote)
@@ -204,7 +209,7 @@ def _extract_pdf_annotations(reader):
                 if qp:
                     nums = [float(_resolve(v)) for v in qp]
                     for i in range(0, len(nums) - 7, 8):
-                        xs, ys = nums[i:i + 8:2], nums[i + 1:i + 8:2]
+                        xs, ys = nums[i : i + 8 : 2], nums[i + 1 : i + 8 : 2]
                         quads.append((min(xs), min(ys), max(xs), max(ys)))
                 elif rect:
                     r = [float(_resolve(v)) for v in rect]
@@ -215,17 +220,33 @@ def _extract_pdf_annotations(reader):
                 if subtype in _MARKUP_TYPES:
                     if chunks is None:
                         chunks = _page_text_chunks(page)
-                    picked = [t for (x, y, t) in chunks
-                              if any(qx1 - 2 <= x <= qx2 + 2 and qy1 - 3 <= y <= qy2 + 3
-                                     for (qx1, qy1, qx2, qy2) in quads)]
+                    picked = [
+                        t
+                        for (x, y, t) in chunks
+                        if any(qx1 - 2 <= x <= qx2 + 2 and qy1 - 3 <= y <= qy2 + 3 for (qx1, qy1, qx2, qy2) in quads)
+                    ]
                     quote = re.sub(r"\s+", " ", " ".join(picked)).strip()[:1000]
                 # Flip to top-left origin (what the viewer stores)
-                rects = [{"x1": q[0], "y1": ph - q[3], "x2": q[2], "y2": ph - q[1],
-                          "width": pw, "height": ph, "pageNumber": pnum} for q in quads]
+                rects = [
+                    {
+                        "x1": q[0],
+                        "y1": ph - q[3],
+                        "x2": q[2],
+                        "y2": ph - q[1],
+                        "width": pw,
+                        "height": ph,
+                        "pageNumber": pnum,
+                    }
+                    for q in quads
+                ]
                 bounding = {
-                    "x1": min(r["x1"] for r in rects), "y1": min(r["y1"] for r in rects),
-                    "x2": max(r["x2"] for r in rects), "y2": max(r["y2"] for r in rects),
-                    "width": pw, "height": ph, "pageNumber": pnum,
+                    "x1": min(r["x1"] for r in rects),
+                    "y1": min(r["y1"] for r in rects),
+                    "x2": max(r["x2"] for r in rects),
+                    "y2": max(r["y2"] for r in rects),
+                    "width": pw,
+                    "height": ph,
+                    "pageNumber": pnum,
                 }
                 color = "rgba(255, 226, 143, 0.65)"
                 c = _resolve(obj.get("/C"))
@@ -237,18 +258,26 @@ def _extract_pdf_annotations(reader):
                     if ca is not None:
                         alpha = min(max(float(ca), 0.05), 1.0)
                     if c is not None and len(c) == 3:
-                        color = (f"rgba({int(float(_resolve(c[0])) * 255)}, {int(float(_resolve(c[1])) * 255)}, "
-                                 f"{int(float(_resolve(c[2])) * 255)}, {round(alpha, 3)})")
+                        color = (
+                            f"rgba({int(float(_resolve(c[0])) * 255)}, {int(float(_resolve(c[1])) * 255)}, "
+                            f"{int(float(_resolve(c[2])) * 255)}, {round(alpha, 3)})"
+                        )
                 except Exception:
                     pass
                 key = f"{pnum}:{subtype}:{round(quads[0][0])}:{round(quads[0][1])}:{round(quads[0][2])}"
                 position = {"pageNumber": pnum, "boundingRect": bounding, "rects": rects}
                 if subtype in _AREA_TYPES:
                     position["area"] = True
-                found.append({
-                    "key": key, "page": pnum, "content": contents, "quote": quote, "color": color,
-                    "position": position,
-                })
+                found.append(
+                    {
+                        "key": key,
+                        "page": pnum,
+                        "content": contents,
+                        "quote": quote,
+                        "color": color,
+                        "position": position,
+                    }
+                )
             except Exception as e:
                 log.warning(f"[pdf-annots] skipping annotation on p.{pnum}: {e}")
     return found
@@ -319,6 +348,7 @@ def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
         raise HTTPException(status_code=404, detail="PDF not stored on the server")
     try:
         from PyPDF2 import PdfReader
+
         reader = PdfReader(str(pdf_path))
         found = _extract_pdf_annotations(reader)
     except HTTPException:
@@ -334,17 +364,25 @@ def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id=?", (payload.block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="page block not found")
         # Idempotent: each embedded annotation carries a stable key
-        existing = {r[0] for r in conn.execute(
-            "SELECT json_extract(properties,'$.imported_annot') FROM unified_blocks WHERE parent_id=?",
-            (payload.block_id,)).fetchall() if r[0]}
+        existing = {
+            r[0]
+            for r in conn.execute(
+                "SELECT json_extract(properties,'$.imported_annot') FROM unified_blocks WHERE parent_id=?",
+                (payload.block_id,),
+            ).fetchall()
+            if r[0]
+        }
         todo = [f for f in found if f["key"] not in existing]
         if todo:
             positions = generate_n_keys_between(last_child_position(conn, payload.block_id), None, n=len(todo))
             for f, pos in zip(todo, positions):
                 bid = secrets.token_urlsafe(9)
                 props = {
-                    "highlight_id": bid, "color": f["color"], "quote": f["quote"],
-                    "pdf_page": f["page"], "pdf_position": f["position"],
+                    "highlight_id": bid,
+                    "color": f["color"],
+                    "quote": f["quote"],
+                    "pdf_page": f["page"],
+                    "pdf_position": f["position"],
                     "imported_annot": f["key"],
                 }
                 conn.execute(
@@ -372,11 +410,11 @@ def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
                 rows = conn.execute(
                     "SELECT id, properties FROM unified_blocks WHERE parent_id=? "
                     "AND json_extract(properties,'$.imported_annot') IS NOT NULL",
-                    (payload.block_id,)).fetchall()
+                    (payload.block_id,),
+                ).fetchall()
                 for bid, props_json in rows:
                     props = json.loads(props_json or "{}")
                     props["annot_stripped"] = True
-                    conn.execute("UPDATE unified_blocks SET properties=? WHERE id=?",
-                                 (json.dumps(props), bid))
+                    conn.execute("UPDATE unified_blocks SET properties=? WHERE id=?", (json.dumps(props), bid))
                 conn.commit()
     return {"ok": True, "found": len(found), "imported": inserted, "stripped": stripped}

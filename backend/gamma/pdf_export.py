@@ -43,7 +43,7 @@ def parse_css_color(value):
     m = _HEX_RE.match((value or "").strip())
     if m:
         h = m.group(1)
-        return tuple(int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)) + (1.0,)
+        return tuple(int(h[i : i + 2], 16) / 255 for i in (0, 2, 4)) + (1.0,)
     return DEFAULT_COLOR
 
 
@@ -89,14 +89,14 @@ def _highlight_annotation(rects, color, note, author):
         quads.extend((x1, y2, x2, y2, x1, y1, x2, y1))
         xs.extend((x1, x2))
         ys.extend((y1, y2))
-    annot = DictionaryObject({
-        NameObject("/Type"): NameObject("/Annot"),
-        NameObject("/Subtype"): NameObject("/Highlight"),
-        NameObject("/Rect"): ArrayObject(
-            FloatObject(v) for v in (min(xs), min(ys), max(xs), max(ys))
-        ),
-        NameObject("/QuadPoints"): ArrayObject(FloatObject(v) for v in quads),
-    })
+    annot = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Highlight"),
+            NameObject("/Rect"): ArrayObject(FloatObject(v) for v in (min(xs), min(ys), max(xs), max(ys))),
+            NameObject("/QuadPoints"): ArrayObject(FloatObject(v) for v in quads),
+        }
+    )
     return _finish_annotation(annot, color, note, author)
 
 
@@ -105,17 +105,19 @@ def _square_annotation(rects, color, note, author):
     obscure the figure underneath) over the bounding box of the rects."""
     xs = [v for x1, _, x2, _ in rects for v in (x1, x2)]
     ys = [v for _, y1, _, y2 in rects for v in (y1, y2)]
-    annot = DictionaryObject({
-        NameObject("/Type"): NameObject("/Annot"),
-        NameObject("/Subtype"): NameObject("/Square"),
-        NameObject("/Rect"): ArrayObject(
-            FloatObject(v) for v in (min(xs), min(ys), max(xs), max(ys))
-        ),
-        NameObject("/BS"): DictionaryObject({
-            NameObject("/W"): NumberObject(2),
-            NameObject("/S"): NameObject("/S"),
-        }),
-    })
+    annot = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Square"),
+            NameObject("/Rect"): ArrayObject(FloatObject(v) for v in (min(xs), min(ys), max(xs), max(ys))),
+            NameObject("/BS"): DictionaryObject(
+                {
+                    NameObject("/W"): NumberObject(2),
+                    NameObject("/S"): NameObject("/S"),
+                }
+            ),
+        }
+    )
     return _finish_annotation(annot, color, note, author)
 
 
@@ -162,16 +164,14 @@ def annotate_pdf(pdf_bytes: bytes, highlights, author: str = "") -> tuple[bytes,
         if not viewer_rects:
             continue
         page = writer.pages[page_num - 1]
-        crop = tuple(float(v) for v in (page.cropbox.left, page.cropbox.bottom,
-                                        page.cropbox.right, page.cropbox.top))
+        crop = tuple(float(v) for v in (page.cropbox.left, page.cropbox.bottom, page.cropbox.right, page.cropbox.top))
         try:
             rotation = int(page.rotation) % 360
         except Exception:
             rotation = 0
         pdf_rects = [_viewer_rect_to_pdf(r, rotation, crop) for r in viewer_rects]
         make = _square_annotation if pos.get("area") else _highlight_annotation
-        annot = make(pdf_rects, parse_css_color(h.get("color")),
-                     h.get("note") or "", author)
+        annot = make(pdf_rects, parse_css_color(h.get("color")), h.get("note") or "", author)
         writer.add_annotation(page_number=page_num - 1, annotation=annot)
         written += 1
 

@@ -25,6 +25,7 @@ def _make_user(username, password, is_admin=0):
 
 def _login(username, password):
     from gamma.app import app
+
     c = TestClient(app)
     r = c.post("/api/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
@@ -62,15 +63,20 @@ def restore_defaults():
     no quota, no per-user overrides) and empty uploads dirs so order doesn't
     matter."""
     from gamma.db import connect_users_db, user_uploads_dir
-    from gamma.server_settings import (DEFAULT_MAX_UPLOAD_MB, DEFAULT_QUOTA_MB,
-                                       set_default_max_upload_mb, set_default_quota_mb)
+    from gamma.server_settings import (
+        DEFAULT_MAX_UPLOAD_MB,
+        DEFAULT_QUOTA_MB,
+        set_default_max_upload_mb,
+        set_default_quota_mb,
+    )
 
     def reset():
         set_default_max_upload_mb(DEFAULT_MAX_UPLOAD_MB)
         set_default_quota_mb(DEFAULT_QUOTA_MB)
         with connect_users_db() as conn:
-            conn.execute("UPDATE users SET max_upload_mb = NULL, quota_mb = NULL "
-                         "WHERE username IN ('sizeadmin', 'sizeuser')")
+            conn.execute(
+                "UPDATE users SET max_upload_mb = NULL, quota_mb = NULL WHERE username IN ('sizeadmin', 'sizeuser')"
+            )
             conn.commit()
         for username in ("sizeadmin", "sizeuser"):
             uploads = user_uploads_dir(username)
@@ -186,6 +192,7 @@ def test_guest_quota_settable_but_not_credentials(sizeadmin, guest_account):
 @pytest.fixture()
 def guest_account():
     from gamma.seed import ensure_guest_user
+
     ensure_guest_user()
 
 

@@ -56,9 +56,7 @@ def export_data(request: Request, uploads: int = 1):
     if uploads and uploads_dir.exists():
         upload_files = sorted(f for f in uploads_dir.iterdir() if f.is_file())
     db_files = [user_dir / n for n in ("pages.db", "data.db") if (user_dir / n).exists()]
-    prog = {"active": True,
-            "total": sum(f.stat().st_size for f in db_files + upload_files),
-            "done": 0}
+    prog = {"active": True, "total": sum(f.stat().st_size for f in db_files + upload_files), "done": 0}
     _export_progress[user] = prog
 
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
@@ -82,12 +80,18 @@ def export_data(request: Request, uploads: int = 1):
             for f in upload_files:
                 z.write(f, f"uploads/{f.name}")
                 prog["done"] += f.stat().st_size
-            z.writestr("manifest.json", json.dumps({
-                "format": "gamma-backup-1",
-                "user": user,
-                "exported_at": page_now(),
-                "uploads": bool(uploads),
-            }, indent=2))
+            z.writestr(
+                "manifest.json",
+                json.dumps(
+                    {
+                        "format": "gamma-backup-1",
+                        "user": user,
+                        "exported_at": page_now(),
+                        "uploads": bool(uploads),
+                    },
+                    indent=2,
+                ),
+            )
     except Exception:
         os.unlink(tmp.name)
         raise
@@ -95,8 +99,9 @@ def export_data(request: Request, uploads: int = 1):
         prog["active"] = False
     kind = "" if uploads else "-db"
     filename = f"gamma-export{kind}-{user}-{page_now()[:10]}.zip"
-    return FileResponse(tmp.name, media_type="application/zip", filename=filename,
-                        background=BackgroundTask(os.unlink, tmp.name))
+    return FileResponse(
+        tmp.name, media_type="application/zip", filename=filename, background=BackgroundTask(os.unlink, tmp.name)
+    )
 
 
 def _merge_backup(user_dir: Path, tdir: Path) -> dict:
@@ -111,13 +116,17 @@ def _merge_backup(user_dir: Path, tdir: Path) -> dict:
         dst = sqlite3.connect(str(user_dir / "pages.db"))
         try:
             live_ids = {r[0] for r in dst.execute("SELECT id FROM unified_blocks")}
-            live_docs = {r[0] for r in dst.execute(
-                "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks "
-                "WHERE parent_id = 'root' AND json_extract(properties, '$.doc_id') IS NOT NULL")}
+            live_docs = {
+                r[0]
+                for r in dst.execute(
+                    "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks "
+                    "WHERE parent_id = 'root' AND json_extract(properties, '$.doc_id') IS NOT NULL"
+                )
+            }
             new_roots = []
             for row in src.execute(
-                f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = 'root' "
-                "ORDER BY position ASC").fetchall():
+                f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = 'root' ORDER BY position ASC"
+            ).fetchall():
                 doc_id = json.loads(row[4] or "{}").get("doc_id")
                 if row[0] in live_ids or (doc_id and doc_id in live_docs):
                     pages_skipped += 1
@@ -133,8 +142,8 @@ def _merge_backup(user_dir: Path, tdir: Path) -> dict:
                         # Ids are random tokens: a collision means the very same
                         # block came in twice (e.g. re-importing a backup) — keep ours.
                         dst.execute(
-                            f"INSERT OR IGNORE INTO unified_blocks ({BLOCK_COLUMNS}) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?)", vals)
+                            f"INSERT OR IGNORE INTO unified_blocks ({BLOCK_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)", vals
+                        )
                     pages_added += 1
                 dst.commit()
         finally:
@@ -146,14 +155,16 @@ def _merge_backup(user_dir: Path, tdir: Path) -> dict:
         src = sqlite3.connect(str(snap))
         dst = sqlite3.connect(str(user_dir / "data.db"))
         try:
-            src_tables = {r[0] for r in src.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'")}
+            src_tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
             if "chats" in src_tables:
-                dst.execute("CREATE TABLE IF NOT EXISTS chats "
-                            "(block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)")
+                dst.execute(
+                    "CREATE TABLE IF NOT EXISTS chats "
+                    "(block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                )
                 for row in src.execute("SELECT block_id, messages, updated_at FROM chats"):
                     cur = dst.execute(
-                        "INSERT OR IGNORE INTO chats (block_id, messages, updated_at) VALUES (?, ?, ?)", row)
+                        "INSERT OR IGNORE INTO chats (block_id, messages, updated_at) VALUES (?, ?, ?)", row
+                    )
                     chats_added += cur.rowcount
                 dst.commit()
         finally:
@@ -226,16 +237,13 @@ def import_data(request: Request, file: UploadFile = File(...), mode: str = "rep
             try:
                 conn = sqlite3.connect(str(snap))
                 try:
-                    tables = {r[0] for r in conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'table'")}
+                    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
                 finally:
                     conn.close()
             except sqlite3.DatabaseError:
-                raise HTTPException(status_code=400,
-                                    detail=f"{dbname} in the zip is not a valid SQLite database")
+                raise HTTPException(status_code=400, detail=f"{dbname} in the zip is not a valid SQLite database")
             if required_table and required_table not in tables:
-                raise HTTPException(status_code=400,
-                                    detail=f"{dbname} in the zip has no {required_table} table")
+                raise HTTPException(status_code=400, detail=f"{dbname} in the zip has no {required_table} table")
 
         user_dir = Path(USERS_DIR) / user
         if not (user_dir / "pages.db").exists():
@@ -268,8 +276,7 @@ def import_data(request: Request, file: UploadFile = File(...), mode: str = "rep
                 shutil.copyfile(tdir / "uploads" / base, target)
                 uploads_added += 1
 
-    return {"ok": True, "mode": mode, **result,
-            "uploads_in_backup": len(upload_names), "uploads_added": uploads_added}
+    return {"ok": True, "mode": mode, **result, "uploads_in_backup": len(upload_names), "uploads_added": uploads_added}
 
 
 class LoginRequest(BaseModel):

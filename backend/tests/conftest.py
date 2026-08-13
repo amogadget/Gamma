@@ -9,9 +9,17 @@ from pathlib import Path
 
 # Must happen BEFORE importing gamma — config reads the environment at import.
 os.environ["GAMMA_DATA_DIR"] = tempfile.mkdtemp(prefix="gamma-test-")
-for var in ("GAMMA_STATIC_DIR", "GAMMA_AI_ANTHROPIC_API_KEY", "GAMMA_AI_OPENAI_API_KEY",
-            "GAMMA_AI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GAMMA_AI_MODELS", "GAMMA_AI_MODEL",
-            "GAMMA_ADMIN_USER", "GAMMA_ADMIN_PASSWORD"):
+for var in (
+    "GAMMA_STATIC_DIR",
+    "GAMMA_AI_ANTHROPIC_API_KEY",
+    "GAMMA_AI_OPENAI_API_KEY",
+    "GAMMA_AI_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "GAMMA_AI_MODELS",
+    "GAMMA_AI_MODEL",
+    "GAMMA_ADMIN_USER",
+    "GAMMA_ADMIN_PASSWORD",
+):
     os.environ.pop(var, None)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -23,6 +31,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 @pytest.fixture(scope="session")
 def client():
     from gamma.app import app
+
     with TestClient(app) as c:
         yield c
 

@@ -11,6 +11,6 @@ export default defineConfig({
   preview: {
     host: "127.0.0.1",
     port: 4173,
-    allowedHosts: ["annotation.amogadgetlab.com"]
-  }
+    allowedHosts: ["annotation.amogadgetlab.com"],
+  },
 });

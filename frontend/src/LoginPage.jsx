@@ -12,7 +12,11 @@ function AuthShell({ children }) {
 }
 
 export function AuthLoading() {
-  return <AuthShell><p className="loginLoading">Loading...</p></AuthShell>;
+  return (
+    <AuthShell>
+      <p className="loginLoading">Loading...</p>
+    </AuthShell>
+  );
 }
 
 // Shown when another tab of the same browser signed into a different account:
@@ -24,16 +28,16 @@ export function SessionConflictPage({ tabUser, activeUser, onReload }) {
     <AuthShell>
       <p className="loginSubtitle">Signed in elsewhere</p>
       <p className="loginConflictText">
-        This tab was open as <b>{tabUser}</b>, but this browser is now signed in
-        as <b>{activeUser}</b> (from another tab). This tab has been paused so the
-        two accounts&apos; data can&apos;t mix.
+        This tab was open as <b>{tabUser}</b>, but this browser is now signed in as{" "}
+        <b>{activeUser}</b> (from another tab). This tab has been paused so the two accounts&apos;
+        data can&apos;t mix.
       </p>
       <button type="button" className="loginBtn" onClick={onReload}>
         Continue as {activeUser}
       </button>
       <p className="loginConflictHint">
-        To use both accounts at the same time, open one of them in a private
-        window or a separate browser profile.
+        To use both accounts at the same time, open one of them in a private window or a separate
+        browser profile.
       </p>
     </AuthShell>
   );

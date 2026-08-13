@@ -96,12 +96,13 @@ async def session_middleware(request: Request, call_next):
     # instead of reading/writing the wrong account's data. Requests without
     # the header (share views, pdf.js range requests) behave as before.
     expected = request.headers.get("x-gamma-user")
-    if expected is not None and request.url.path.startswith("/api/") \
-            and expected != (request.state.user or ""):
+    if expected is not None and request.url.path.startswith("/api/") and expected != (request.state.user or ""):
         now_who = f'"{request.state.user}"' if request.state.user else "signed out"
         resp = JSONResponse(
-            {"detail": f'This tab is signed in as "{expected}", but the browser '
-                       f"session is now {now_who}. Reload the tab to continue."},
+            {
+                "detail": f'This tab is signed in as "{expected}", but the browser '
+                f"session is now {now_who}. Reload the tab to continue."
+            },
             status_code=409,
         )
         resp.headers["X-Gamma-Session-User"] = request.state.user or ""

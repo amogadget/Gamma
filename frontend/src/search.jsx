@@ -19,7 +19,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson, isEnterCommit } from "./utils";
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, LabelIcon, SearchIcon } from "./icons";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+  FolderIcon,
+  LabelIcon,
+  SearchIcon,
+} from "./icons";
 
 const DASH_CLASS = "\\-\\u2010-\\u2015";
 const DIGIT_SEP_CLASS = ",\\u00A0\\u202F\\u2009";
@@ -37,7 +44,10 @@ export function normalizeQuery(s) {
 
 // Query → RegExp (null = empty/invalid). Non-regex queries are fuzzy: digits
 // tolerate grouping separators, spaces and hyphens are interchangeable.
-export function buildSearchRegex(q, { caseSensitive = false, wholeWord = false, regex = false } = {}) {
+export function buildSearchRegex(
+  q,
+  { caseSensitive = false, wholeWord = false, regex = false } = {},
+) {
   let body;
   if (regex) {
     body = q;
@@ -82,17 +92,17 @@ function editDistanceWithin(a, b, max) {
     cur[0] = i;
     let rowMin = i;
     for (let j = 1; j < n; j++) {
-      let v = Math.min(
-        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
-        prev[j] + 1,
-        cur[j - 1] + 1,
-      );
-      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+      let v = Math.min(prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1), prev[j] + 1, cur[j - 1] + 1);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1])
+        v = Math.min(v, prev2[j - 2] + 1);
       cur[j] = v;
       if (v < rowMin) rowMin = v;
     }
     if (rowMin > max) return max + 1;
-    const t = prev2; prev2 = prev; prev = cur; cur = t;
+    const t = prev2;
+    prev2 = prev;
+    prev = cur;
+    cur = t;
   }
   return prev[n - 1];
 }
@@ -113,17 +123,23 @@ function scoreTitle(prep, phraseRe, terms, caseSensitive) {
   const title = prep.title;
   if (!title) return 0;
   const hay = caseSensitive ? title : prep.lower;
-  let score = 0, matched = 0, first = Infinity;
+  let score = 0,
+    matched = 0,
+    first = Infinity;
   let words = null; // lazily tokenized, only when some term needs the typo pass
   for (const { re, text, plain } of terms) {
-    let idx = -1, len = 0;
+    let idx = -1,
+      len = 0;
     if (plain) {
       idx = hay.indexOf(text);
       len = text.length;
     } else {
       re.lastIndex = 0;
       const m = re.exec(title);
-      if (m) { idx = m.index; len = m[0].length; }
+      if (m) {
+        idx = m.index;
+        len = m[0].length;
+      }
     }
     if (idx >= 0) {
       first = Math.min(first, idx);
@@ -162,17 +178,25 @@ function scoreTitle(prep, phraseRe, terms, caseSensitive) {
 }
 
 export default function SearchPanel({
-  open, onOpenChange,
-  focusedBlockId, homeBlocks, allFolderPaths,
-  openBlock, pendingBlockScrollRef,
-  pdfSearchRef, scrollToRef, setPdfHidden, docNonce,
-  onFindMarks, detailsDefault,
+  open,
+  onOpenChange,
+  focusedBlockId,
+  homeBlocks,
+  allFolderPaths,
+  openBlock,
+  pendingBlockScrollRef,
+  pdfSearchRef,
+  scrollToRef,
+  setPdfHidden,
+  docNonce,
+  onFindMarks,
+  detailsDefault,
 }) {
   const [query, setQuery] = useState("");
   const [labels, setLabels] = useState([]); // confirmed filter chips
   const [sugIdx, setSugIdx] = useState(0);
   const [noteHits, setNoteHits] = useState([]); // /api/block-search
-  const [libHits, setLibHits] = useState([]);   // /api/pdf-search (FTS over all papers)
+  const [libHits, setLibHits] = useState([]); // /api/pdf-search (FTS over all papers)
   const [libIndexing, setLibIndexing] = useState(0);
   const [pdfMatches, setPdfMatches] = useState([]); // pdf.js matches in the open document
   const [findIndex, setFindIndex] = useState(0);
@@ -187,20 +211,31 @@ export default function SearchPanel({
 
   const q = query.trim();
 
-  useEffect(() => { if (open) setPinned(false); }, [open]);
-  useEffect(() => { setSugIdx(0); }, [query]);
-  useEffect(() => { setFindIndex(0); }, [pdfMatches]);
+  useEffect(() => {
+    if (open) setPinned(false);
+  }, [open]);
+  useEffect(() => {
+    setSugIdx(0);
+  }, [query]);
+  useEffect(() => {
+    setFindIndex(0);
+  }, [pdfMatches]);
 
   // ---- filter chips (standard labels = exact match, folder labels = prefix)
   const chipOptions = useMemo(() => {
     const seen = new Map(); // kind:lowercase → option
     for (const b of homeBlocks) {
-      for (const t of (b.properties?.category || "").split(",").map((s) => s.trim()).filter(Boolean)) {
-        if (!seen.has(`l:${t.toLowerCase()}`)) seen.set(`l:${t.toLowerCase()}`, { name: t, kind: "label" });
+      for (const t of (b.properties?.category || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)) {
+        if (!seen.has(`l:${t.toLowerCase()}`))
+          seen.set(`l:${t.toLowerCase()}`, { name: t, kind: "label" });
       }
     }
     for (const f of allFolderPaths) {
-      if (!seen.has(`f:${f.toLowerCase()}`)) seen.set(`f:${f.toLowerCase()}`, { name: f, kind: "folder" });
+      if (!seen.has(`f:${f.toLowerCase()}`))
+        seen.set(`f:${f.toLowerCase()}`, { name: f, kind: "folder" });
     }
     return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [homeBlocks, allFolderPaths]);
@@ -208,10 +243,19 @@ export default function SearchPanel({
     const qq = q.toLowerCase();
     if (!qq) return [];
     const picked = new Set(labels.map((l) => `${l.kind}:${l.name.toLowerCase()}`));
-    return chipOptions.filter((o) => !picked.has(`${o.kind}:${o.name.toLowerCase()}`) && o.name.toLowerCase().includes(qq)).slice(0, 6);
+    return chipOptions
+      .filter(
+        (o) =>
+          !picked.has(`${o.kind}:${o.name.toLowerCase()}`) && o.name.toLowerCase().includes(qq),
+      )
+      .slice(0, 6);
   }, [q, chipOptions, labels]);
   function confirmLabel(opt) {
-    setLabels((prev) => (prev.some((l) => l.kind === opt.kind && l.name.toLowerCase() === opt.name.toLowerCase()) ? prev : [...prev, opt]));
+    setLabels((prev) =>
+      prev.some((l) => l.kind === opt.kind && l.name.toLowerCase() === opt.name.toLowerCase())
+        ? prev
+        : [...prev, opt],
+    );
     setQuery("");
   }
   // Per-title preprocessing (lowered copy, lazily tokenized words), kept
@@ -239,7 +283,9 @@ export default function SearchPanel({
     const phrase = buildSearchRegex(q, { caseSensitive, wholeWord });
     if (!phrase) return null;
     const dashRe = new RegExp(`[${DASH_CLASS}]`);
-    const terms = normalizeQuery(q).split(/\s+/).filter(Boolean)
+    const terms = normalizeQuery(q)
+      .split(/\s+/)
+      .filter(Boolean)
       .map((t) => ({
         re: buildSearchRegex(t, { caseSensitive, wholeWord }),
         text: caseSensitive ? t : t.toLowerCase(),
@@ -251,18 +297,31 @@ export default function SearchPanel({
     const cache = new Map();
     return (b) => {
       let s = cache.get(b.id);
-      if (s === undefined) { s = scoreTitle(titlePrep(b), phrase, terms, caseSensitive); cache.set(b.id, s); }
+      if (s === undefined) {
+        s = scoreTitle(titlePrep(b), phrase, terms, caseSensitive);
+        cache.set(b.id, s);
+      }
       return s;
     };
   }, [q, caseSensitive, wholeWord, titlePrep]);
   const labelMatches = useMemo(() => {
     if (!labels.length) return [];
     const members = homeBlocks.filter((b) => {
-      const cats = (b.properties?.category || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
-      const folders = (b.properties?.folder || "").toLowerCase().split(",").map((s) => s.trim()).filter(Boolean);
+      const cats = (b.properties?.category || "")
+        .toLowerCase()
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const folders = (b.properties?.folder || "")
+        .toLowerCase()
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
       return labels.every((c) => {
         const n = c.name.toLowerCase();
-        return c.kind === "folder" ? folders.some((t) => t === n || t.startsWith(n + "/")) : cats.includes(n);
+        return c.kind === "folder"
+          ? folders.some((t) => t === n || t.startsWith(n + "/"))
+          : cats.includes(n);
       });
     });
     // With a query typed, float its matches to the top of the folder/label
@@ -271,9 +330,10 @@ export default function SearchPanel({
     return members;
   }, [labels, homeBlocks, titleScoreOf]);
   // With chips active, text results only count inside the matching pages.
-  const labelPageIds = useMemo(() => (
-    labels.length ? new Set(labelMatches.map((b) => b.id)) : null
-  ), [labels.length, labelMatches]);
+  const labelPageIds = useMemo(
+    () => (labels.length ? new Set(labelMatches.map((b) => b.id)) : null),
+    [labels.length, labelMatches],
+  );
 
   // ---- find navigation in the open PDF
   function gotoFind(i, list = pdfMatches) {
@@ -293,18 +353,28 @@ export default function SearchPanel({
 
   // Match highlights for the PDF viewer (multi-rect: a match spanning text
   // runs paints one box per run).
-  const marks = useMemo(() => (
-    q && (open || pinned)
-      ? pdfMatches.flatMap((m, i) => m.rects.map((rect) => ({ page: m.page, rect, active: i === findIndex })))
-      : []
-  ), [pdfMatches, findIndex, open, pinned, q]);
-  useEffect(() => { onFindMarks(marks); }, [marks, onFindMarks]);
+  const marks = useMemo(
+    () =>
+      q && (open || pinned)
+        ? pdfMatches.flatMap((m, i) =>
+            m.rects.map((rect) => ({ page: m.page, rect, active: i === findIndex })),
+          )
+        : [],
+    [pdfMatches, findIndex, open, pinned, q],
+  );
+  useEffect(() => {
+    onFindMarks(marks);
+  }, [marks, onFindMarks]);
 
   // ---- the search itself (debounced; re-runs when a new document renders so
   // pinned searches follow navigation)
   useEffect(() => {
     if (!q || !(open || pinned)) {
-      setNoteHits([]); setLibHits([]); setLibIndexing(0); setPdfMatches([]); setBusy(false);
+      setNoteHits([]);
+      setLibHits([]);
+      setLibIndexing(0);
+      setPdfMatches([]);
+      setBusy(false);
       return;
     }
     const timer = setTimeout(() => {
@@ -317,33 +387,47 @@ export default function SearchPanel({
       // word matching — the Aa/ab toggles only apply to notes and the
       // open document)
       const libReq = apiJson(`${API}/pdf-search?q=${encodeURIComponent(q)}&limit=15`)
-        .then((d) => { setLibHits(d.results || []); setLibIndexing(d.indexing || 0); })
-        .catch(() => { setLibHits([]); setLibIndexing(0); });
+        .then((d) => {
+          setLibHits(d.results || []);
+          setLibIndexing(d.indexing || 0);
+        })
+        .catch(() => {
+          setLibHits([]);
+          setLibIndexing(0);
+        });
       let pdfReq = Promise.resolve();
       const re = pdfSearchRef.current ? buildSearchRegex(q, { caseSensitive, wholeWord }) : null;
       if (re) {
-        pdfReq = pdfSearchRef.current(re).then(async (matches) => {
-          // A library hit was opened: jump to its page's first match now that
-          // the document is rendered and re-searched.
-          const pending = pendingFindRef.current;
-          if (pending && docNonce > pending.sinceNonce) {
-            if (!matches.length) {
-              // The library index matches words scattered across a page (AND
-              // of terms), so the exact phrase may not exist anywhere — fall
-              // back to highlighting the longest word of the query.
-              const terms = q.split(/\s+/).filter(Boolean).sort((a, b) => b.length - a.length);
-              const re2 = terms.length > 1 && pdfSearchRef.current
-                ? buildSearchRegex(terms[0], { caseSensitive, wholeWord, regex: false }) : null;
-              if (re2) matches = (await pdfSearchRef.current(re2).catch(() => [])) || [];
+        pdfReq = pdfSearchRef
+          .current(re)
+          .then(async (matches) => {
+            // A library hit was opened: jump to its page's first match now that
+            // the document is rendered and re-searched.
+            const pending = pendingFindRef.current;
+            if (pending && docNonce > pending.sinceNonce) {
+              if (!matches.length) {
+                // The library index matches words scattered across a page (AND
+                // of terms), so the exact phrase may not exist anywhere — fall
+                // back to highlighting the longest word of the query.
+                const terms = q
+                  .split(/\s+/)
+                  .filter(Boolean)
+                  .sort((a, b) => b.length - a.length);
+                const re2 =
+                  terms.length > 1 && pdfSearchRef.current
+                    ? buildSearchRegex(terms[0], { caseSensitive, wholeWord, regex: false })
+                    : null;
+                if (re2) matches = (await pdfSearchRef.current(re2).catch(() => [])) || [];
+              }
+              if (matches.length) {
+                pendingFindRef.current = null;
+                const idx = matches.findIndex((m) => m.page === pending.page);
+                gotoFind(idx >= 0 ? idx : 0, matches);
+              }
             }
-            if (matches.length) {
-              pendingFindRef.current = null;
-              const idx = matches.findIndex((m) => m.page === pending.page);
-              gotoFind(idx >= 0 ? idx : 0, matches);
-            }
-          }
-          setPdfMatches(matches);
-        }).catch(() => setPdfMatches([]));
+            setPdfMatches(matches);
+          })
+          .catch(() => setPdfMatches([]));
       } else {
         setPdfMatches([]);
       }
@@ -365,13 +449,14 @@ export default function SearchPanel({
     if (r.block_id === focusedBlockId) {
       const idx = pdfMatches.findIndex((m) => m.page === r.page);
       if (idx >= 0) gotoFind(idx);
-      else scrollToRef.current?.({
-        position: {
-          pageNumber: r.page,
-          boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: r.page },
-          rects: [],
-        },
-      });
+      else
+        scrollToRef.current?.({
+          position: {
+            pageNumber: r.page,
+            boundingRect: { x1: 0, y1: 0, x2: 1, y2: 1, width: 1, height: 1, pageNumber: r.page },
+            rects: [],
+          },
+        });
       return;
     }
     pendingFindRef.current = { page: r.page, sinceNonce: docNonce };
@@ -404,21 +489,33 @@ export default function SearchPanel({
   const inScope = (pageId) => !labelPageIds || labelPageIds.has(pageId);
   const titleMatches = titleScoreOf
     ? homeBlocks
-      .filter((b) => inScope(b.id) && titleScoreOf(b) > 0)
-      .sort((a, b) => titleScoreOf(b) - titleScoreOf(a))
-      .slice(0, 8)
+        .filter((b) => inScope(b.id) && titleScoreOf(b) > 0)
+        .sort((a, b) => titleScoreOf(b) - titleScoreOf(a))
+        .slice(0, 8)
     : [];
   const titleIds = new Set(titleMatches.map((b) => b.id));
-  const scopedNotes = noteHits.filter((r) => inScope(r.page_root_id || r.id) && !(r.kind === "page" && titleIds.has(r.id)));
-  const inPage = (r) => focusedBlockId && (r.page_root_id === focusedBlockId || r.id === focusedBlockId);
+  const scopedNotes = noteHits.filter(
+    (r) => inScope(r.page_root_id || r.id) && !(r.kind === "page" && titleIds.has(r.id)),
+  );
+  const inPage = (r) =>
+    focusedBlockId && (r.page_root_id === focusedBlockId || r.id === focusedBlockId);
   const titlesExtra = scopedNotes.filter((r) => r.kind === "page"); // regex-mode / non-home pages
   const notesHere = scopedNotes.filter((r) => r.kind !== "page" && inPage(r));
-  const notesElsewhere = scopedNotes.filter((r) => r.kind === "note" || r.kind === "highlight").filter((r) => !inPage(r));
+  const notesElsewhere = scopedNotes
+    .filter((r) => r.kind === "note" || r.kind === "highlight")
+    .filter((r) => !inPage(r));
   const linkHits = scopedNotes.filter((r) => r.kind === "link" && !inPage(r));
   const libElsewhere = libHits.filter((r) => r.block_id !== focusedBlockId && inScope(r.block_id));
   const showPdfMatches = inScope(focusedBlockId);
-  const anything = titleMatches.length || titlesExtra.length || notesHere.length || notesElsewhere.length
-    || linkHits.length || labelMatches.length || (showPdfMatches && pdfMatches.length) || libElsewhere.length;
+  const anything =
+    titleMatches.length ||
+    titlesExtra.length ||
+    notesHere.length ||
+    notesElsewhere.length ||
+    linkHits.length ||
+    labelMatches.length ||
+    (showPdfMatches && pdfMatches.length) ||
+    libElsewhere.length;
 
   // One switch for the whole detail area (all the result lists). Its default
   // comes from Settings → Search via the detailsDefault prop (App owns the
@@ -427,15 +524,22 @@ export default function SearchPanel({
   // Re-applied each time the panel opens; the toggle button then only affects
   // the current panel session.
   const [showDetails, setShowDetails] = useState(detailsDefault);
-  useEffect(() => { if (open) setShowDetails(detailsDefault); }, [open, detailsDefault]);
+  useEffect(() => {
+    if (open) setShowDetails(detailsDefault);
+  }, [open, detailsDefault]);
 
-  const kindBadge = (r) => (
-    r.kind === "highlight" ? <span className="searchKindBadge">highlight</span>
-      : r.kind === "link" ? <span className="searchKindBadge">link</span> : null
-  );
+  const kindBadge = (r) =>
+    r.kind === "highlight" ? (
+      <span className="searchKindBadge">highlight</span>
+    ) : r.kind === "link" ? (
+      <span className="searchKindBadge">link</span>
+    ) : null;
   const noteRow = (r) => (
     <button key={r.id} className="searchResult" onClick={() => openNoteHit(r)}>
-      <span className="searchResultPage">{r.page_title || "Untitled"}{kindBadge(r)}</span>
+      <span className="searchResultPage">
+        {r.page_title || "Untitled"}
+        {kindBadge(r)}
+      </span>
       <span className="searchResultText">{r.content}</span>
     </button>
   );
@@ -443,7 +547,10 @@ export default function SearchPanel({
     <button
       key={`title-${b.id}`}
       className="searchResult"
-      onClick={() => { onOpenChange(false); openBlock(b.id, { restoreScroll: true }); }}
+      onClick={() => {
+        onOpenChange(false);
+        openBlock(b.id, { restoreScroll: true });
+      }}
     >
       <span className="searchResultPage">{b.content || "Untitled"}</span>
       <span className="searchResultText">{subtitle || ""}</span>
@@ -466,14 +573,18 @@ export default function SearchPanel({
             <button
               className={`searchToggle ${showDetails ? "on" : ""}`}
               onClick={() => setShowDetails((v) => !v)}
-              title={showDetails
-                ? "Collapse result details (compact find — the default is in Settings → Search)"
-                : "Expand result details: titles, notes, and other papers"}
+              title={
+                showDetails
+                  ? "Collapse result details (compact find — the default is in Settings → Search)"
+                  : "Expand result details: titles, notes, and other papers"
+              }
               aria-label="Toggle result details"
             >
-              {showDetails
-                ? <ChevronDownIcon size={12} strokeWidth={2.4} />
-                : <ChevronRightIcon size={12} strokeWidth={2.4} />}
+              {showDetails ? (
+                <ChevronDownIcon size={12} strokeWidth={2.4} />
+              ) : (
+                <ChevronRightIcon size={12} strokeWidth={2.4} />
+              )}
             </button>
             <div className="searchInputWrap">
               {labels.map((l) => (
@@ -484,14 +595,20 @@ export default function SearchPanel({
                     className="uiClose uiCloseSm searchChipX"
                     title={`Remove ${l.kind === "folder" ? "folder" : "label"} filter "${l.name}"`}
                     onClick={() => setLabels((prev) => prev.filter((x) => x !== l))}
-                  >×</button>
+                  >
+                    ×
+                  </button>
                 </span>
               ))}
               <input
                 autoFocus
                 className="searchInput"
                 value={query}
-                onChange={(e) => { setQuery(e.target.value); setPinned(false); pendingFindRef.current = null; }}
+                onChange={(e) => {
+                  setQuery(e.target.value);
+                  setPinned(false);
+                  pendingFindRef.current = null;
+                }}
                 onKeyDown={(e) => {
                   if ((e.key === "Tab" || isEnterCommit(e)) && suggestions.length) {
                     e.preventDefault();
@@ -509,7 +626,11 @@ export default function SearchPanel({
                     setLabels((prev) => prev.slice(0, -1));
                   }
                 }}
-                placeholder={labels.length ? "Search within labeled pages…" : "Search titles, notes, and PDF text — Tab adds a label filter"}
+                placeholder={
+                  labels.length
+                    ? "Search within labeled pages…"
+                    : "Search titles, notes, and PDF text — Tab adds a label filter"
+                }
               />
               {suggestions.length ? (
                 <div className="categorySuggestions searchLabelSuggest">
@@ -517,7 +638,10 @@ export default function SearchPanel({
                     <button
                       key={`${s.kind}:${s.name}`}
                       className={`categorySuggestionItem${i === sugIdx ? " selected" : ""}`}
-                      onMouseDown={(e) => { e.preventDefault(); confirmLabel(s); }}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        confirmLabel(s);
+                      }}
                       onMouseEnter={() => setSugIdx(i)}
                     >
                       <span className="searchSuggestName">
@@ -532,17 +656,39 @@ export default function SearchPanel({
             </div>
             {showPdfMatches && pdfMatches.length ? (
               <span className="searchNavGroup">
-                <span className="searchFindCount" title="Matches in the open PDF">{findIndex + 1}/{pdfMatches.length}</span>
-                <button className="searchToggle searchNavBtn" onClick={() => gotoFind(findIndex - 1)} title="Previous match (matches are highlighted in the PDF)">
+                <span className="searchFindCount" title="Matches in the open PDF">
+                  {findIndex + 1}/{pdfMatches.length}
+                </span>
+                <button
+                  className="searchToggle searchNavBtn"
+                  onClick={() => gotoFind(findIndex - 1)}
+                  title="Previous match (matches are highlighted in the PDF)"
+                >
                   <ChevronUpIcon size={14} />
                 </button>
-                <button className="searchToggle searchNavBtn" onClick={() => gotoFind(findIndex + 1)} title="Next match (Enter)">
+                <button
+                  className="searchToggle searchNavBtn"
+                  onClick={() => gotoFind(findIndex + 1)}
+                  title="Next match (Enter)"
+                >
                   <ChevronDownIcon size={14} />
                 </button>
               </span>
             ) : null}
-            <button className={`searchToggle ${caseSensitive ? "on" : ""}`} onClick={() => setCaseSensitive((v) => !v)} title="Match case">Aa</button>
-            <button className={`searchToggle ${wholeWord ? "on" : ""}`} onClick={() => setWholeWord((v) => !v)} title="Match whole word"><u>ab</u></button>
+            <button
+              className={`searchToggle ${caseSensitive ? "on" : ""}`}
+              onClick={() => setCaseSensitive((v) => !v)}
+              title="Match case"
+            >
+              Aa
+            </button>
+            <button
+              className={`searchToggle ${wholeWord ? "on" : ""}`}
+              onClick={() => setWholeWord((v) => !v)}
+              title="Match whole word"
+            >
+              <u>ab</u>
+            </button>
           </div>
           <div className="searchResults">
             {busy ? <div className="searchHint">Searching…</div> : null}
@@ -551,18 +697,35 @@ export default function SearchPanel({
               <>
                 {labels.length ? (
                   <>
-                    <div className="searchSection">Filters: {labels.map((c) => c.name).join(" + ")}</div>
+                    <div className="searchSection">
+                      Filters: {labels.map((c) => c.name).join(" + ")}
+                    </div>
                     {labelMatches.length === 0 ? (
-                      <div className="searchHint">No pages carry {labels.length === 1 ? "this label" : "all these labels"}.</div>
-                    ) : labelMatches.map((b) => titleRow(b, b.properties?.category || b.properties?.folder || ""))}
+                      <div className="searchHint">
+                        No pages carry {labels.length === 1 ? "this label" : "all these labels"}.
+                      </div>
+                    ) : (
+                      labelMatches.map((b) =>
+                        titleRow(b, b.properties?.category || b.properties?.folder || ""),
+                      )
+                    )}
                   </>
                 ) : null}
-                {titleMatches.length || titlesExtra.length ? <div className="searchSection">Titles</div> : null}
-                {titleMatches.map((b) => titleRow(b, [b.properties?.category, b.properties?.folder].filter(Boolean).join(", ")))}
+                {titleMatches.length || titlesExtra.length ? (
+                  <div className="searchSection">Titles</div>
+                ) : null}
+                {titleMatches.map((b) =>
+                  titleRow(
+                    b,
+                    [b.properties?.category, b.properties?.folder].filter(Boolean).join(", "),
+                  ),
+                )}
                 {titlesExtra.map(noteRow)}
                 {notesHere.length ? <div className="searchSection">Notes in this paper</div> : null}
                 {notesHere.map(noteRow)}
-                {showPdfMatches && pdfMatches.length ? <div className="searchSection">This PDF</div> : null}
+                {showPdfMatches && pdfMatches.length ? (
+                  <div className="searchSection">This PDF</div>
+                ) : null}
                 {(showPdfMatches ? pdfMatches : []).map((m, i) => (
                   <button
                     key={`pdf-${i}`}
@@ -573,15 +736,22 @@ export default function SearchPanel({
                     <span className="searchResultText">…{m.snippet}…</span>
                   </button>
                 ))}
-                {notesElsewhere.length ? <div className="searchSection">{focusedBlockId ? "Other notes" : "Notes"}</div> : null}
+                {notesElsewhere.length ? (
+                  <div className="searchSection">{focusedBlockId ? "Other notes" : "Notes"}</div>
+                ) : null}
                 {notesElsewhere.map(noteRow)}
                 {linkHits.length ? <div className="searchSection">Reference links</div> : null}
                 {linkHits.map(noteRow)}
                 {libElsewhere.length || libIndexing ? (
-                  <div className="searchSection">{focusedBlockId ? "Other papers" : "Library PDFs"}</div>
+                  <div className="searchSection">
+                    {focusedBlockId ? "Other papers" : "Library PDFs"}
+                  </div>
                 ) : null}
                 {libIndexing ? (
-                  <div className="searchHint">Indexing {libIndexing} paper{libIndexing === 1 ? "" : "s"} in the background — results will fill in shortly.</div>
+                  <div className="searchHint">
+                    Indexing {libIndexing} paper{libIndexing === 1 ? "" : "s"} in the background —
+                    results will fill in shortly.
+                  </div>
                 ) : null}
                 {libElsewhere.map((r, i) => (
                   <button
@@ -590,7 +760,9 @@ export default function SearchPanel({
                     onClick={() => openLibHit(r)}
                     title={`Open "${r.title}" at page ${r.page} — the match will be highlighted`}
                   >
-                    <span className="searchResultPage">{r.title.slice(0, 60)} · p. {r.page}</span>
+                    <span className="searchResultPage">
+                      {r.title.slice(0, 60)} · p. {r.page}
+                    </span>
                     <span className="searchResultText">…{r.snippet}…</span>
                   </button>
                 ))}

@@ -44,19 +44,24 @@ MAX_PASSWORD_LEN = 128
 
 def _user_list(conn: sqlite3.Connection) -> list:
     rows = conn.execute(
-        "SELECT username, is_guest, is_admin, created_at, max_upload_mb, quota_mb "
-        "FROM users ORDER BY created_at"
+        "SELECT username, is_guest, is_admin, created_at, max_upload_mb, quota_mb FROM users ORDER BY created_at"
     ).fetchall()
-    return [{"username": u, "is_guest": bool(g), "is_admin": bool(a), "created_at": c,
-             "max_upload_mb": mu, "quota_mb": q,  # overrides; null = server default
-             "used_bytes": usage_bytes(u)}
-            for u, g, a, c, mu, q in rows]
+    return [
+        {
+            "username": u,
+            "is_guest": bool(g),
+            "is_admin": bool(a),
+            "created_at": c,
+            "max_upload_mb": mu,
+            "quota_mb": q,  # overrides; null = server default
+            "used_bytes": usage_bytes(u),
+        }
+        for u, g, a, c, mu, q in rows
+    ]
 
 
 def _get_user(conn: sqlite3.Connection, username: str):
-    return conn.execute(
-        "SELECT username, is_guest, is_admin FROM users WHERE username = ?", (username,)
-    ).fetchone()
+    return conn.execute("SELECT username, is_guest, is_admin FROM users WHERE username = ?", (username,)).fetchone()
 
 
 def _admin_count(conn: sqlite3.Connection) -> int:
@@ -84,9 +89,11 @@ async def get_settings(request: Request):
     """Server-wide default storage limits (per-user overrides live on the
     users list) for the admin rows in the Settings dialog."""
     require_admin(request)
-    return {**get_defaults(),
-            "max_upload_mb_range": [UPLOAD_MB_MIN, UPLOAD_MB_MAX],
-            "quota_mb_range": [QUOTA_MB_MIN, QUOTA_MB_MAX]}
+    return {
+        **get_defaults(),
+        "max_upload_mb_range": [UPLOAD_MB_MIN, UPLOAD_MB_MAX],
+        "quota_mb_range": [QUOTA_MB_MIN, QUOTA_MB_MAX],
+    }
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -125,8 +132,7 @@ async def create_user(payload: UserCreateRequest, request: Request):
     require_admin(request)
     username = payload.username.strip()
     if not _USERNAME_RE.match(username):
-        raise HTTPException(status_code=400,
-                            detail="username must be 1-64 chars of letters, digits, '_', '.', '-'")
+        raise HTTPException(status_code=400, detail="username must be 1-64 chars of letters, digits, '_', '.', '-'")
     password = _check_password(payload.password)
     with connect_users_db() as conn:
         if _get_user(conn, username):
@@ -143,12 +149,12 @@ async def create_user(payload: UserCreateRequest, request: Request):
 
 
 class UserUpdateRequest(BaseModel):
-    password: str | None = None   # set a new password (never invalidates sessions)
+    password: str | None = None  # set a new password (never invalidates sessions)
     is_admin: bool | None = None  # grant/revoke the admin privilege
     # storage-limit overrides: omitted = unchanged, explicit null = inherit the
     # server default again (model_fields_set tells the two apart)
     max_upload_mb: int | None = None
-    quota_mb: int | None = None   # 0 = unlimited
+    quota_mb: int | None = None  # 0 = unlimited
 
 
 @router.put("/users/{username}")
@@ -169,8 +175,7 @@ async def update_user(username: str, payload: UserUpdateRequest, request: Reques
         if payload.is_admin is not None:
             if not payload.is_admin and row[2] and _admin_count(conn) <= 1:
                 raise HTTPException(status_code=400, detail="cannot demote the last admin")
-            conn.execute("UPDATE users SET is_admin = ? WHERE username = ?",
-                         (1 if payload.is_admin else 0, username))
+            conn.execute("UPDATE users SET is_admin = ? WHERE username = ?", (1 if payload.is_admin else 0, username))
         try:
             if "max_upload_mb" in payload.model_fields_set:
                 value = None if payload.max_upload_mb is None else validate_upload_mb(payload.max_upload_mb)
@@ -199,8 +204,7 @@ async def rename_user(username: str, payload: UserRenameRequest, request: Reques
     require_admin(request)
     new = payload.new_username.strip()
     if not _USERNAME_RE.match(new):
-        raise HTTPException(status_code=400,
-                            detail="username must be 1-64 chars of letters, digits, '_', '.', '-'")
+        raise HTTPException(status_code=400, detail="username must be 1-64 chars of letters, digits, '_', '.', '-'")
     with connect_users_db() as conn:
         row = _get_user(conn, username)
         if not row:
@@ -221,7 +225,8 @@ async def rename_user(username: str, payload: UserRenameRequest, request: Reques
                 raise HTTPException(
                     status_code=409,
                     detail="the account's files are in use (someone is working in it right now) — "
-                           "try again in a moment, or run manage.py rename-user with the server stopped")
+                    "try again in a moment, or run manage.py rename-user with the server stopped",
+                )
         try:
             conn.execute("UPDATE users SET username = ? WHERE username = ?", (new, username))
             conn.execute("UPDATE sessions SET username = ? WHERE username = ?", (new, username))
@@ -260,5 +265,7 @@ async def delete_user(username: str, request: Request):
         except OSError as e:
             # Windows: a lingering SQLite handle can lock the directory. The
             # account is gone either way; the files just need a manual sweep.
-            warning = f"account deleted, but its data directory could not be removed ({e}); delete users/{username}/ manually"
+            warning = (
+                f"account deleted, but its data directory could not be removed ({e}); delete users/{username}/ manually"
+            )
     return {"users": users, "warning": warning}

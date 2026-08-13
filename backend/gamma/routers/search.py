@@ -37,8 +37,8 @@ _FTS_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS pdf_fts_docs (doc_id TEXT PRIMARY KEY, indexed_at TEXT NOT NULL, pages INTEGER, ver INTEGER NOT NULL DEFAULT 0)",
 )
 
-_MAX_PAGES = 400          # per document
-_MAX_PAGE_CHARS = 20000   # per page
+_MAX_PAGES = 400  # per document
+_MAX_PAGE_CHARS = 20000  # per page
 
 _index_threads: dict[str, threading.Thread] = {}
 _index_progress: dict[str, dict] = {}  # user -> {"total": n, "done": m}
@@ -110,10 +110,14 @@ def search_reindex(request: Request):
     Progress is visible via /api/tasks like any lazy indexing run."""
     user = require_user(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        doc_ids = [r[0] for r in conn.execute(
-            "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks "
-            "WHERE parent_id = 'root' AND json_extract(properties, '$.doc_id') IS NOT NULL"
-        ).fetchall() if r[0]]
+        doc_ids = [
+            r[0]
+            for r in conn.execute(
+                "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks "
+                "WHERE parent_id = 'root' AND json_extract(properties, '$.doc_id') IS NOT NULL"
+            ).fetchall()
+            if r[0]
+        ]
     # Stamp everything stale first: if the run is interrupted, the next search
     # still sees the remainder as missing and finishes the job.
     with sqlite3.connect(user_db_path(user, "data.db")) as conn:
@@ -121,8 +125,7 @@ def search_reindex(request: Request):
         conn.execute("UPDATE pdf_fts_docs SET ver = 0")
         conn.commit()
     started = doc_ids and _index_missing_async(user, doc_ids)
-    return {"scheduled": len(doc_ids) if started else 0,
-            "busy": bool(doc_ids) and not started}
+    return {"scheduled": len(doc_ids) if started else 0, "busy": bool(doc_ids) and not started}
 
 
 @router.get("/tasks")
@@ -167,8 +170,9 @@ def pdf_search(request: Request, q: str = "", limit: int = 20):
 
     with sqlite3.connect(user_db_path(user, "data.db")) as conn:
         _ensure_schema(conn)
-        current = {r[0] for r in conn.execute(
-            "SELECT doc_id FROM pdf_fts_docs WHERE ver = ?", (INDEX_VERSION,)).fetchall()}
+        current = {
+            r[0] for r in conn.execute("SELECT doc_id FROM pdf_fts_docs WHERE ver = ?", (INDEX_VERSION,)).fetchall()
+        }
         missing = [d for d in docs if d not in current]  # never indexed or stale version
         if missing:
             _index_missing_async(user, missing)
@@ -186,8 +190,15 @@ def pdf_search(request: Request, q: str = "", limit: int = 20):
                     info = docs.get(doc_id)  # skips docs deleted since indexing
                     if not info:
                         continue
-                    results.append({"block_id": info["block_id"], "doc_id": doc_id,
-                                    "title": info["title"], "page": page, "snippet": snip})
+                    results.append(
+                        {
+                            "block_id": info["block_id"],
+                            "doc_id": doc_id,
+                            "title": info["title"],
+                            "page": page,
+                            "snippet": snip,
+                        }
+                    )
                     if len(results) >= limit:
                         break
             except sqlite3.OperationalError:

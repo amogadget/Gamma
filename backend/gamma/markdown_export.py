@@ -30,6 +30,7 @@ _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 # --- tree assembly -----------------------------------------------------------
 
+
 def build_tree(rows, root_id):
     """Assemble ``fetch_subtree`` rows into a nested node (children sorted by
     position). Returns the root node, or ``None`` if root_id isn't present."""
@@ -52,6 +53,7 @@ def _is_highlight(props):
 
 
 # --- readable rendering ------------------------------------------------------
+
 
 def render_readable(page):
     """Nested-bullet Markdown with a title, YAML front-matter and BibTeX block."""
@@ -126,6 +128,7 @@ def _render_readable_block(node, depth, lines):
 
 
 # --- asset handling ----------------------------------------------------------
+
 
 def collect_and_rewrite(md, include_pdf=True, prefix="assets/"):
     """Rewrite ``/api/uploads/<sha>.<ext>`` refs to ``<prefix><sha>.<ext>`` and

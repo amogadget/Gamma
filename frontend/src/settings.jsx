@@ -47,7 +47,10 @@ export function QuotaMeter({ usedBytes, quotaMb, barOnly }) {
     <span className="quotaMeter">
       {quotaBytes ? (
         <span className="quotaBar">
-          <span className={`quotaBarFill${state}`} style={{ width: `${usedBytes ? Math.max(pct, 2) : 0}%` }} />
+          <span
+            className={`quotaBarFill${state}`}
+            style={{ width: `${usedBytes ? Math.max(pct, 2) : 0}%` }}
+          />
         </span>
       ) : null}
       {barOnly ? null : (
@@ -69,7 +72,11 @@ function SettingToggle({ label, description, checked, onChange }) {
         <span className="settingDesc">{description}</span>
       </span>
       <span className="switch">
-        <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+        />
         <span className="switchTrack" />
       </span>
     </label>
@@ -80,7 +87,8 @@ function PapersSettings({ value }) {
   return (
     <>
       <PaneIntro title="Paper metadata">
-        How papers are fetched, stored, and enriched when you open them. These preferences are saved in this browser.
+        How papers are fetched, stored, and enriched when you open them. These preferences are saved
+        in this browser.
       </PaneIntro>
       <SettingToggle
         label="Open-access fallback"
@@ -112,18 +120,23 @@ function PapersSettings({ value }) {
           <span className="settingDesc">
             Highlights, notes, and rectangle annotations saved inside a PDF file (a Gamma export,
             SumatraPDF, Acrobat…) are imported as regular highlights — this controls what happens to
-            the embedded originals so they don't render twice. "Hide in viewer" leaves the file untouched; "Strip from file" removes them
-            from the stored PDF when they're imported.
+            the embedded originals so they don't render twice. "Hide in viewer" leaves the file
+            untouched; "Strip from file" removes them from the stored PDF when they're imported.
           </span>
         </span>
-        <select className="aiKeyInput settingSelect" value={value.embAnnots}
-          onChange={(e) => value.setEmbAnnots(e.target.value)}>
+        <select
+          className="aiKeyInput settingSelect"
+          value={value.embAnnots}
+          onChange={(e) => value.setEmbAnnots(e.target.value)}
+        >
           <option value="hide">Hide in viewer</option>
           <option value="strip">Strip from file</option>
         </select>
       </label>
       <MetaModelRow value={value} />
-      {value.isAdmin ? <ServerLimitRows setStatus={value.setStatus} refreshQuota={value.refreshQuota} /> : null}
+      {value.isAdmin ? (
+        <ServerLimitRows setStatus={value.setStatus} refreshQuota={value.refreshQuota} />
+      ) : null}
     </>
   );
 }
@@ -172,14 +185,20 @@ function ServerLimitRows({ setStatus, refreshQuota }) {
         ) : (
           <span style={{ display: "flex", gap: 6, alignItems: "center" }}>
             <input
-              className="aiKeyInput" style={{ width: 84, textAlign: "right" }}
-              type="number" min={min}
+              className="aiKeyInput"
+              style={{ width: 84, textAlign: "right" }}
+              type="number"
+              min={min}
               value={draft[key]}
               disabled={!saved}
               onChange={(e) => setDraft((f) => ({ ...f, [key]: e.target.value }))}
-              onKeyDown={(e) => { if (e.key === "Enter" && dirty) save(key, saveLabel); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && dirty) save(key, saveLabel);
+              }}
             />
-            <button className="uiBtn sm" disabled={!dirty} onClick={() => save(key, saveLabel)}>Save</button>
+            <button className="uiBtn sm" disabled={!dirty} onClick={() => save(key, saveLabel)}>
+              Save
+            </button>
           </span>
         )}
       </div>
@@ -187,12 +206,20 @@ function ServerLimitRows({ setStatus, refreshQuota }) {
   }
   return (
     <>
-      {row("max_upload_mb", "Default maximum upload size (MB)",
+      {row(
+        "max_upload_mb",
+        "Default maximum upload size (MB)",
         "Server-wide cap on a single uploaded PDF or image. Override per account from Manage users. Admins only.",
-        1, "Upload limit")}
-      {row("quota_mb", "Default storage quota (MB)",
+        1,
+        "Upload limit",
+      )}
+      {row(
+        "quota_mb",
+        "Default storage quota (MB)",
         "Total uploads storage per account; 0 = unlimited. Override per account from Manage users. Admins only.",
-        0, "Storage quota")}
+        0,
+        "Storage quota",
+      )}
     </>
   );
 }
@@ -201,7 +228,9 @@ function ServerLimitRows({ setStatus, refreshQuota }) {
 function StorageUsageRow() {
   const [q, setQ] = React.useState(null);
   React.useEffect(() => {
-    apiJson(`${API}/quota`).then(setQ).catch(() => {});
+    apiJson(`${API}/quota`)
+      .then(setQ)
+      .catch(() => {});
   }, []);
   if (!q) return null;
   return (
@@ -224,8 +253,8 @@ function LibrarySettings({ value }) {
   return (
     <>
       <PaneIntro title="Library status">
-        Per-paper health of your library: metadata, extracted PDF text, and the search index —
-        with batch retry for failed or missing metadata lookups.
+        Per-paper health of your library: metadata, extracted PDF text, and the search index — with
+        batch retry for failed or missing metadata lookups.
       </PaneIntro>
       <StorageUsageRow />
       <MetaStatusSection value={value} />
@@ -239,15 +268,22 @@ function LibrarySettings({ value }) {
 function MetaModelRow({ value }) {
   const models = value.aiModels || [];
   const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
-  const current = value.metaModel && models.some((m) => m.id === value.metaModel) ? value.metaModel : "";
+  const current =
+    value.metaModel && models.some((m) => m.id === value.metaModel) ? value.metaModel : "";
   return (
     <label className="settingRow">
       <span className="settingText">
         <span className="settingLabel">Metadata model</span>
-        <span className="settingDesc">Model used when metadata has to be AI-extracted from the PDF text (no arXiv id or DOI found). A fast, cheap model works well for this.</span>
+        <span className="settingDesc">
+          Model used when metadata has to be AI-extracted from the PDF text (no arXiv id or DOI
+          found). A fast, cheap model works well for this.
+        </span>
       </span>
-      <select className="aiKeyInput settingSelect" value={current}
-        onChange={(e) => value.setMetaModel(e.target.value)}>
+      <select
+        className="aiKeyInput settingSelect"
+        value={current}
+        onChange={(e) => value.setMetaModel(e.target.value)}
+      >
         <option value="">Same as chat model</option>
         {models.map((m) => (
           <option key={m.id} value={m.id}>
@@ -264,11 +300,13 @@ function MetaModelRow({ value }) {
 async function requestReindex(setStatus, scheduledSuffix) {
   try {
     const result = await apiJson(`${API}/search-reindex`, { method: "POST" });
-    setStatus(result.busy
-      ? "Indexing is already running—see the tasks popover."
-      : result.scheduled
-        ? `Re-indexing ${result.scheduled} paper${result.scheduled === 1 ? "" : "s"} ${scheduledSuffix}`
-        : "No papers with PDFs to index.");
+    setStatus(
+      result.busy
+        ? "Indexing is already running—see the tasks popover."
+        : result.scheduled
+          ? `Re-indexing ${result.scheduled} paper${result.scheduled === 1 ? "" : "s"} ${scheduledSuffix}`
+          : "No papers with PDFs to index.",
+    );
   } catch (err) {
     setStatus(`Reindex failed: ${err.message}`);
   }
@@ -292,13 +330,17 @@ function MetaStatusSection({ value }) {
       const data = await apiJson(`${API}/metadata/status`);
       setPapers(data.papers || []);
       setError("");
-      setSelected((prev) => new Set([...prev].filter((id) => (data.papers || []).some((p) => p.id === id))));
+      setSelected(
+        (prev) => new Set([...prev].filter((id) => (data.papers || []).some((p) => p.id === id))),
+      );
     } catch (err) {
       setError(err.message);
       setPapers((prev) => prev || []);
     }
   }
-  React.useEffect(() => { refresh(); }, []);
+  React.useEffect(() => {
+    refresh();
+  }, []);
 
   const list = React.useMemo(() => papers || [], [papers]);
   const textOk = (p) => (p.text_chars ?? 0) >= 50; // same threshold as /api/pdf-text-status
@@ -313,8 +355,10 @@ function MetaStatusSection({ value }) {
   const sorted = React.useMemo(() => {
     const byTime = (a, b) => (b.updated_at || "").localeCompare(a.updated_at || "");
     const arr = [...list];
-    if (sortMode === "meta") arr.sort((a, b) => (a.has_meta ? 1 : 0) - (b.has_meta ? 1 : 0) || byTime(a, b));
-    else if (sortMode === "text") arr.sort((a, b) => (textOk(a) ? 1 : 0) - (textOk(b) ? 1 : 0) || byTime(a, b));
+    if (sortMode === "meta")
+      arr.sort((a, b) => (a.has_meta ? 1 : 0) - (b.has_meta ? 1 : 0) || byTime(a, b));
+    else if (sortMode === "text")
+      arr.sort((a, b) => (textOk(a) ? 1 : 0) - (textOk(b) ? 1 : 0) || byTime(a, b));
     else arr.sort(byTime);
     return arr;
   }, [list, sortMode]);
@@ -322,7 +366,8 @@ function MetaStatusSection({ value }) {
   async function retry(targets) {
     if (!targets.length || busy) return;
     stopRef.current = false;
-    let ok = 0, failed = 0;
+    let ok = 0,
+      failed = 0;
     for (let i = 0; i < targets.length; i++) {
       if (stopRef.current) break;
       const paper = targets[i];
@@ -345,7 +390,9 @@ function MetaStatusSection({ value }) {
       }
     }
     setBusy(null);
-    value.setStatus(`Metadata: ${ok} fetched${failed ? `, ${failed} failed` : ""}${stopRef.current ? " (stopped)" : ""}.`);
+    value.setStatus(
+      `Metadata: ${ok} fetched${failed ? `, ${failed} failed` : ""}${stopRef.current ? " (stopped)" : ""}.`,
+    );
     refresh();
   }
 
@@ -354,65 +401,108 @@ function MetaStatusSection({ value }) {
   function toggle(id) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
   const allSelected = list.length > 0 && selected.size === list.length;
 
-  const metaCell = (p) => (
-    p.has_meta
-      ? <span className="metaStatOk">✓ {p.meta_source === "ai" ? "AI" : p.meta_source || "yes"}</span>
-      : p.meta_error
-        ? <span className="metaStatBad" title={p.meta_error}>✗ failed</span>
-        : <span className="metaStatMuted">—</span>
-  );
+  const metaCell = (p) =>
+    p.has_meta ? (
+      <span className="metaStatOk">✓ {p.meta_source === "ai" ? "AI" : p.meta_source || "yes"}</span>
+    ) : p.meta_error ? (
+      <span className="metaStatBad" title={p.meta_error}>
+        ✗ failed
+      </span>
+    ) : (
+      <span className="metaStatMuted">—</span>
+    );
   // Text and index are separate columns: extraction state is only known once
   // the indexer has visited the doc, so an unindexed paper shows "?" here.
-  const textCell = (p) => (
-    p.text_chars === null
-      ? <span className="metaStatMuted" title="Unknown until the paper is indexed — Reindex to find out">?</span>
-      : textOk(p)
-        ? <span className="metaStatOk" title={`${p.text_chars.toLocaleString()} characters extracted`}>✓ {p.text_chars >= 1000 ? `${Math.round(p.text_chars / 1000)}k` : p.text_chars}</span>
-        : <span className="metaStatBad" title={p.has_file ? "No text layer — scanned or image-only?" : "PDF file not on the server"}>✗ no text</span>
-  );
-  const indexCell = (p) => (
-    p.indexed
-      ? <span className="metaStatOk">✓ indexed</span>
-      : p.index_stale
-        ? <span className="metaStatMuted" title="Indexed with an older extractor version — Reindex refreshes it">stale</span>
-        : <span className="metaStatMuted" title="Not in the search index yet">—</span>
-  );
+  const textCell = (p) =>
+    p.text_chars === null ? (
+      <span
+        className="metaStatMuted"
+        title="Unknown until the paper is indexed — Reindex to find out"
+      >
+        ?
+      </span>
+    ) : textOk(p) ? (
+      <span className="metaStatOk" title={`${p.text_chars.toLocaleString()} characters extracted`}>
+        ✓ {p.text_chars >= 1000 ? `${Math.round(p.text_chars / 1000)}k` : p.text_chars}
+      </span>
+    ) : (
+      <span
+        className="metaStatBad"
+        title={p.has_file ? "No text layer — scanned or image-only?" : "PDF file not on the server"}
+      >
+        ✗ no text
+      </span>
+    );
+  const indexCell = (p) =>
+    p.indexed ? (
+      <span className="metaStatOk">✓ indexed</span>
+    ) : p.index_stale ? (
+      <span
+        className="metaStatMuted"
+        title="Indexed with an older extractor version — Reindex refreshes it"
+      >
+        stale
+      </span>
+    ) : (
+      <span className="metaStatMuted" title="Not in the search index yet">
+        —
+      </span>
+    );
 
   return (
     <>
       <div className="promptSectionHead metaStatHead">
         <span>Papers</span>
         <span className="metaStatActions">
-          <select className="homeSortSelect" value={sortMode} onChange={(e) => setSortMode(e.target.value)} title="Sort papers">
+          <select
+            className="homeSortSelect"
+            value={sortMode}
+            onChange={(e) => setSortMode(e.target.value)}
+            title="Sort papers"
+          >
             <option value="meta">Metadata — unfinished first</option>
             <option value="text">PDF text — unfinished first</option>
             <option value="updated">Recently modified</option>
           </select>
-          <button className="uiBtn sm" onClick={reindex} title="Re-extract every paper's text into the search index (also fills in the text column)">Reindex</button>
-          <button className="uiBtn sm" onClick={refresh} disabled={!!busy}>Refresh</button>
+          <button
+            className="uiBtn sm"
+            onClick={reindex}
+            title="Re-extract every paper's text into the search index (also fills in the text column)"
+          >
+            Reindex
+          </button>
+          <button className="uiBtn sm" onClick={refresh} disabled={!!busy}>
+            Refresh
+          </button>
         </span>
       </div>
       {papers === null ? <div className="reportModalHint">Loading…</div> : null}
       {error ? <div className="reportModalHint">Status failed: {error}</div> : null}
-      {papers !== null && !list.length ? <div className="reportModalHint">No papers yet — open a PDF first.</div> : null}
+      {papers !== null && !list.length ? (
+        <div className="reportModalHint">No papers yet — open a PDF first.</div>
+      ) : null}
       {list.length ? (
         <>
           <div className="metaStatSummary">
-            Out of {list.length} paper{list.length === 1 ? "" : "s"}: <b>{counts.meta}</b> with metadata
-            · <b>{counts.text}</b> with extracted text · <b>{counts.indexed}</b> indexed for search
+            Out of {list.length} paper{list.length === 1 ? "" : "s"}: <b>{counts.meta}</b> with
+            metadata · <b>{counts.text}</b> with extracted text · <b>{counts.indexed}</b> indexed
+            for search
           </div>
           <div className="metaStatTable">
             <div className="metaStatRow metaStatHeader">
               <input
                 type="checkbox"
                 checked={allSelected}
-                onChange={() => setSelected(allSelected ? new Set() : new Set(list.map((p) => p.id)))}
+                onChange={() =>
+                  setSelected(allSelected ? new Set() : new Set(list.map((p) => p.id)))
+                }
                 title={allSelected ? "Clear selection" : "Select all"}
               />
               <span>Paper</span>
@@ -423,7 +513,9 @@ function MetaStatusSection({ value }) {
             {sorted.map((p) => (
               <label key={p.id} className="metaStatRow">
                 <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggle(p.id)} />
-                <span className="metaStatTitle" title={p.title}>{p.title}</span>
+                <span className="metaStatTitle" title={p.title}>
+                  {p.title}
+                </span>
                 {metaCell(p)}
                 {textCell(p)}
                 {indexCell(p)}
@@ -432,20 +524,37 @@ function MetaStatusSection({ value }) {
           </div>
           {busy ? (
             <div className="metaStatBatchRow">
-              <span className="metaStatProgress">Fetching {busy.done + 1}/{busy.total} — {busy.title}</span>
-              <button className="uiBtn sm" onClick={() => { stopRef.current = true; }}>Stop</button>
+              <span className="metaStatProgress">
+                Fetching {busy.done + 1}/{busy.total} — {busy.title}
+              </span>
+              <button
+                className="uiBtn sm"
+                onClick={() => {
+                  stopRef.current = true;
+                }}
+              >
+                Stop
+              </button>
             </div>
           ) : (
             <div className="metaStatBatchRow">
-              <button className="uiBtn sm" disabled={!selected.size}
-                onClick={() => retry(list.filter((p) => selected.has(p.id)))}>
+              <button
+                className="uiBtn sm"
+                disabled={!selected.size}
+                onClick={() => retry(list.filter((p) => selected.has(p.id)))}
+              >
                 Retry selected{selected.size ? ` (${selected.size})` : ""}
               </button>
-              <button className="uiBtn sm" disabled={!missing.length}
-                onClick={() => retry(missing)}>
+              <button
+                className="uiBtn sm"
+                disabled={!missing.length}
+                onClick={() => retry(missing)}
+              >
                 Retry missing ({missing.length})
               </button>
-              <button className="uiBtn sm" onClick={() => retry(list)}>Retry all ({list.length})</button>
+              <button className="uiBtn sm" onClick={() => retry(list)}>
+                Retry all ({list.length})
+              </button>
             </div>
           )}
         </>
@@ -481,13 +590,19 @@ function ProviderForm({ value }) {
 
   return (
     <div className="aiProvForm">
-      <div className="promptSectionHead"><span>{aiKeysForm.id ? "Edit key" : "Add key"}</span></div>
+      <div className="promptSectionHead">
+        <span>{aiKeysForm.id ? "Edit key" : "Add key"}</span>
+      </div>
       <select
         className="aiKeyInput"
         value={aiKeysForm.protocol}
         onChange={(event) => setAiKeysForm((form) => ({ ...form, protocol: event.target.value }))}
       >
-        {aiKeysInfo.protocols.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+        {aiKeysInfo.protocols.map((item) => (
+          <option key={item.id} value={item.id}>
+            {item.label}
+          </option>
+        ))}
       </select>
 
       {oauth ? (
@@ -513,7 +628,7 @@ function ProviderForm({ value }) {
               title="Read the callback URL from your clipboard"
               onClick={async () => {
                 try {
-                  const text = (await navigator.clipboard.readText() || "").trim();
+                  const text = ((await navigator.clipboard.readText()) || "").trim();
                   const match = text.match(/https?:\/\/localhost:1455\/auth\/callback[^\s]*/);
                   if (match) {
                     setAiKeysForm((form) => (form ? { ...form, oauthCallback: match[0] } : form));
@@ -525,13 +640,15 @@ function ProviderForm({ value }) {
                   setAiKeysError(`Clipboard read blocked: ${err.message || err}`);
                 }
               }}
-            >Paste from clipboard</button>
+            >
+              Paste from clipboard
+            </button>
           </div>
           {aiKeysForm.oauthWaiting ? (
             <div className="reportModalHint">
-              Waiting for the popup… After signing in, the browser will hit an error page —
-              just <b>copy that URL</b> from the popup's address bar and close the popup.
-              This form will pick it up automatically.
+              Waiting for the popup… After signing in, the browser will hit an error page — just{" "}
+              <b>copy that URL</b> from the popup's address bar and close the popup. This form will
+              pick it up automatically.
             </div>
           ) : null}
           <input
@@ -541,12 +658,15 @@ function ProviderForm({ value }) {
             spellCheck={false}
             placeholder="Callback URL — auto-filled from the clipboard when the popup closes"
             value={aiKeysForm.oauthCallback || ""}
-            onChange={(event) => setAiKeysForm((form) => ({ ...form, oauthCallback: event.target.value }))}
+            onChange={(event) =>
+              setAiKeysForm((form) => ({ ...form, oauthCallback: event.target.value }))
+            }
           />
         </>
       ) : (
         <div className="reportModalHint">
-          Pick the API format, not the vendor. Many services support either Anthropic or OpenAI-compatible requests.
+          Pick the API format, not the vendor. Many services support either Anthropic or
+          OpenAI-compatible requests.
         </div>
       )}
 
@@ -565,10 +685,16 @@ function ProviderForm({ value }) {
             type="password"
             autoComplete="new-password"
             spellCheck={false}
-            placeholder={aiKeysForm.id ? "API key (leave empty to keep the current one)" : "API key"}
+            placeholder={
+              aiKeysForm.id ? "API key (leave empty to keep the current one)" : "API key"
+            }
             value={aiKeysForm.api_key}
-            onChange={(event) => setAiKeysForm((form) => ({ ...form, api_key: event.target.value }))}
-            onBlur={() => { if (aiKeysForm.api_key?.trim()) loadModelCatalog(); }}
+            onChange={(event) =>
+              setAiKeysForm((form) => ({ ...form, api_key: event.target.value }))
+            }
+            onBlur={() => {
+              if (aiKeysForm.api_key?.trim()) loadModelCatalog();
+            }}
           />
           <input
             className="aiKeyInput"
@@ -576,7 +702,9 @@ function ProviderForm({ value }) {
             spellCheck={false}
             placeholder={`Base URL (optional—default ${protocol?.default_base_url || ""})`}
             value={aiKeysForm.base_url}
-            onChange={(event) => setAiKeysForm((form) => ({ ...form, base_url: event.target.value }))}
+            onChange={(event) =>
+              setAiKeysForm((form) => ({ ...form, base_url: event.target.value }))
+            }
           />
         </>
       ) : null}
@@ -584,19 +712,31 @@ function ProviderForm({ value }) {
       <div className="reportModalHint aiModelsHead settingsNoMargin">
         <span>
           Models shown in the chat model menu
-          {formModels.length === 0 ? ` (none picked: uses ${protocol?.default_model || "the provider default"})` : ""}
+          {formModels.length === 0
+            ? ` (none picked: uses ${protocol?.default_model || "the provider default"})`
+            : ""}
         </span>
         <button
           className="searchToggle transferClearBtn"
           disabled={!!aiModelCatalog?.loading || formOauthPending}
-          title={formOauthPending ? "Connect with ChatGPT first" : "Fetch models available to this credential"}
+          title={
+            formOauthPending
+              ? "Connect with ChatGPT first"
+              : "Fetch models available to this credential"
+          }
           onClick={loadModelCatalog}
         >
-          {aiModelCatalog?.loading
-            ? <><span className="transferSpin inline" /> fetching models…</>
-            : aiModelCatalog?.models
-              ? `↻ ${aiModelCatalog.models.length} usable models`
-              : formOauthPending ? "Models list after connect" : "Fetch usable models"}
+          {aiModelCatalog?.loading ? (
+            <>
+              <span className="transferSpin inline" /> fetching models…
+            </>
+          ) : aiModelCatalog?.models ? (
+            `↻ ${aiModelCatalog.models.length} usable models`
+          ) : formOauthPending ? (
+            "Models list after connect"
+          ) : (
+            "Fetch usable models"
+          )}
         </button>
       </div>
       {formModels.length ? (
@@ -604,7 +744,14 @@ function ProviderForm({ value }) {
           {formModels.map((model) => (
             <span className="categoryTag" key={model}>
               {model}
-              <button className="uiClose uiCloseSm" title="Remove model" aria-label={`Remove ${model}`} onClick={() => removeModel(model)}>×</button>
+              <button
+                className="uiClose uiCloseSm"
+                title="Remove model"
+                aria-label={`Remove ${model}`}
+                onClick={() => removeModel(model)}
+              >
+                ×
+              </button>
             </span>
           ))}
         </div>
@@ -615,16 +762,21 @@ function ProviderForm({ value }) {
           type="text"
           spellCheck={false}
           list="aiModelSuggestions"
-          placeholder={aiModelCatalog?.loading
-            ? "Add a model—loading the provider's list…"
-            : availModels.length
-              ? `Add a model—type or pick (${availModels.length} available), Enter to add`
-              : "Add a model—Enter to add"}
+          placeholder={
+            aiModelCatalog?.loading
+              ? "Add a model—loading the provider's list…"
+              : availModels.length
+                ? `Add a model—type or pick (${availModels.length} available), Enter to add`
+                : "Add a model—Enter to add"
+          }
           value={customModel}
           onChange={(event) => {
             const next = event.target.value;
             const inputType = event.nativeEvent?.inputType;
-            if ((!inputType || inputType === "insertReplacementText") && availModels.includes(next)) {
+            if (
+              (!inputType || inputType === "insertReplacementText") &&
+              availModels.includes(next)
+            ) {
               addCatalogModel(next);
               setCustomModel("");
             } else {
@@ -641,23 +793,43 @@ function ProviderForm({ value }) {
           }}
         />
         <datalist id="aiModelSuggestions">
-          {availModels.map((model) => <option key={model} value={model} />)}
+          {availModels.map((model) => (
+            <option key={model} value={model} />
+          ))}
         </datalist>
       </div>
       {aiModelCatalog?.error ? (
         <div className="reportModalHint settingsNoMargin">
           {aiModelCatalog.error}{" "}
-          <button className="searchToggle" title="Retry loading the model list" onClick={loadModelCatalog}>↻</button>
+          <button
+            className="searchToggle"
+            title="Retry loading the model list"
+            onClick={loadModelCatalog}
+          >
+            ↻
+          </button>
         </div>
       ) : null}
       <div className="reportModalBtns">
-        <button className="uiBtn" onClick={() => { setAiKeysForm(null); setAiKeysError(""); }}>Cancel</button>
+        <button
+          className="uiBtn"
+          onClick={() => {
+            setAiKeysForm(null);
+            setAiKeysError("");
+          }}
+        >
+          Cancel
+        </button>
         <button className="uiBtn primary" disabled={aiKeysBusy} onClick={submitAiProvider}>
           {aiKeysBusy
             ? "Saving…"
             : oauth
-              ? ((aiKeysForm.oauthCallback || "").trim() || !aiKeysForm.id ? "Connect" : "Save changes")
-              : aiKeysForm.id ? "Save changes" : "Add key"}
+              ? (aiKeysForm.oauthCallback || "").trim() || !aiKeysForm.id
+                ? "Connect"
+                : "Save changes"
+              : aiKeysForm.id
+                ? "Save changes"
+                : "Add key"}
         </button>
       </div>
       {aiKeysError ? <div className="settingsPaneHint aiKeysError">{aiKeysError}</div> : null}
@@ -672,12 +844,14 @@ function AiSettings({ value }) {
   return (
     <>
       <PaneIntro title="AI & API keys">
-        Bring your own API keys. They are stored on the server and never returned to the browser. The selected
-        credential is used for AI requests; its configured models appear in the chat model menu. The menu is also
-        refreshed automatically (about once a day) with the latest models each account lists — hit ↻ in the chat
-        header to fetch right now.
+        Bring your own API keys. They are stored on the server and never returned to the browser.
+        The selected credential is used for AI requests; its configured models appear in the chat
+        model menu. The menu is also refreshed automatically (about once a day) with the latest
+        models each account lists — hit ↻ in the chat header to fetch right now.
       </PaneIntro>
-      {!value.aiKeysInfo && !value.aiKeysError ? <div className="settingsPaneHint">Loading…</div> : null}
+      {!value.aiKeysInfo && !value.aiKeysError ? (
+        <div className="settingsPaneHint">Loading…</div>
+      ) : null}
       {value.aiKeysInfo ? (
         <>
           {value.aiKeysInfo.providers.length === 0 && !value.aiKeysForm ? (
@@ -690,7 +864,10 @@ function AiSettings({ value }) {
           {value.aiKeysInfo.providers.map((provider) => {
             const protocol = value.aiProtocolOf(provider.protocol);
             return (
-              <label key={provider.id} className={`aiProvRow aiProvSelectable ${activeKeyId === provider.id ? "active" : ""}`}>
+              <label
+                key={provider.id}
+                className={`aiProvRow aiProvSelectable ${activeKeyId === provider.id ? "active" : ""}`}
+              >
                 {value.aiKeysInfo.providers.length > 1 ? (
                   <input
                     type="radio"
@@ -704,29 +881,46 @@ function AiSettings({ value }) {
                 <span className="aiProvMeta">
                   <span className="aiProvName">
                     {provider.name || protocol?.label || provider.protocol}
-                    {activeKeyId === provider.id ? <span className="aiProvActiveBadge">in use</span> : null}
+                    {activeKeyId === provider.id ? (
+                      <span className="aiProvActiveBadge">in use</span>
+                    ) : null}
                   </span>
                   <span className="aiProvDesc">
                     {value.isOauthProto(provider.protocol)
                       ? `${provider.oauth_connected ? `signed in${provider.account ? ` as ${provider.account}` : ""}` : "not connected"} · ChatGPT subscription`
                       : `key ${provider.key_hint || "set"} · ${protocol?.label || provider.protocol}`}
                     {provider.base_url ? ` · ${provider.base_url}` : ""}
-                    {provider.created_at ? ` · added ${new Date(provider.created_at).toLocaleDateString()}` : ""}
+                    {provider.created_at
+                      ? ` · added ${new Date(provider.created_at).toLocaleDateString()}`
+                      : ""}
                   </span>
                   <span className="aiProvDesc aiProvModels">
                     {(parseFolderTags(provider.models).length
                       ? parseFolderTags(provider.models)
-                      : [protocol?.default_model || "provider default"]).map((model) => (
-                      <span className="categoryTag" key={model}>{model}</span>
+                      : [protocol?.default_model || "provider default"]
+                    ).map((model) => (
+                      <span className="categoryTag" key={model}>
+                        {model}
+                      </span>
                     ))}
                   </span>
                 </span>
                 {value.aiKeysInfo.can_edit ? (
                   <span className="aiProvActions">
-                    <button className="uiBtn sm iconSq" disabled={value.aiKeysBusy} title="Edit this key" onClick={() => value.startEditAiProvider(provider)}>
+                    <button
+                      className="uiBtn sm iconSq"
+                      disabled={value.aiKeysBusy}
+                      title="Edit this key"
+                      onClick={() => value.startEditAiProvider(provider)}
+                    >
                       <PenIcon size={13} />
                     </button>
-                    <button className="uiBtn sm iconSq danger" disabled={value.aiKeysBusy} title="Remove this key" onClick={() => value.deleteAiProvider(provider)}>
+                    <button
+                      className="uiBtn sm iconSq danger"
+                      disabled={value.aiKeysBusy}
+                      title="Remove this key"
+                      onClick={() => value.deleteAiProvider(provider)}
+                    >
                       <Trash2Icon size={13} />
                     </button>
                   </span>
@@ -734,14 +928,20 @@ function AiSettings({ value }) {
               </label>
             );
           })}
-          {value.aiKeysForm
-            ? <ProviderForm value={value} />
-            : value.aiKeysInfo.can_edit
-              ? <div className="reportModalBtns"><button className="uiBtn primary" onClick={value.startAddAiProvider}>+ Add key</button></div>
-              : null}
+          {value.aiKeysForm ? (
+            <ProviderForm value={value} />
+          ) : value.aiKeysInfo.can_edit ? (
+            <div className="reportModalBtns">
+              <button className="uiBtn primary" onClick={value.startAddAiProvider}>
+                + Add key
+              </button>
+            </div>
+          ) : null}
         </>
       ) : null}
-      {!value.aiKeysForm && value.aiKeysError ? <div className="settingsPaneHint aiKeysError">{value.aiKeysError}</div> : null}
+      {!value.aiKeysForm && value.aiKeysError ? (
+        <div className="settingsPaneHint aiKeysError">{value.aiKeysError}</div>
+      ) : null}
     </>
   );
 }
@@ -750,23 +950,57 @@ function PromptSettings({ value }) {
   return (
     <>
       <PaneIntro title="Prompts">
-        Instructions Gamma sends with each kind of AI request. Custom prompts are saved in this browser.
+        Instructions Gamma sends with each kind of AI request. Custom prompts are saved in this
+        browser.
       </PaneIntro>
       {[
-        ["Chat system prompt", value.chatSystem, value.promptDraft, value.setPromptDraft, value.aiInfo?.default_prompt, 5],
-        ["Metadata extraction", value.metaPrompt, value.metaPromptDraft, value.setMetaPromptDraft, value.aiInfo?.metadata_prompt, 4],
-        ["PPT citation", value.citePrompt, value.citePromptDraft, value.setCitePromptDraft, value.aiInfo?.cite_prompt, 4],
+        [
+          "Chat system prompt",
+          value.chatSystem,
+          value.promptDraft,
+          value.setPromptDraft,
+          value.aiInfo?.default_prompt,
+          5,
+        ],
+        [
+          "Metadata extraction",
+          value.metaPrompt,
+          value.metaPromptDraft,
+          value.setMetaPromptDraft,
+          value.aiInfo?.metadata_prompt,
+          4,
+        ],
+        [
+          "PPT citation",
+          value.citePrompt,
+          value.citePromptDraft,
+          value.setCitePromptDraft,
+          value.aiInfo?.cite_prompt,
+          4,
+        ],
       ].map(([label, custom, draft, setDraft, defaultValue, rows]) => (
         <React.Fragment key={label}>
           <div className="promptSectionHead">
-            <span>{label}{custom ? " · custom" : ""}</span>
-            <button className="uiBtn sm" onClick={() => setDraft(defaultValue || "")}>Reset</button>
+            <span>
+              {label}
+              {custom ? " · custom" : ""}
+            </span>
+            <button className="uiBtn sm" onClick={() => setDraft(defaultValue || "")}>
+              Reset
+            </button>
           </div>
-          <textarea className="promptTextarea" value={draft} onChange={(event) => setDraft(event.target.value)} rows={rows} />
+          <textarea
+            className="promptTextarea"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            rows={rows}
+          />
         </React.Fragment>
       ))}
       <div className="reportModalBtns">
-        <button className="uiBtn primary" onClick={value.savePrompts}>Save prompts</button>
+        <button className="uiBtn primary" onClick={value.savePrompts}>
+          Save prompts
+        </button>
       </div>
     </>
   );
@@ -774,14 +1008,30 @@ function PromptSettings({ value }) {
 
 function ContextSettings({ value }) {
   const limits = [
-    ["Single-paper chat", "Maximum characters extracted from the open paper for a normal chat message.", value.chatContextChars, value.setChatContextChars],
-    ["Metadata extraction", "Maximum characters read while detecting identifiers and extracting paper metadata.", value.metaContextChars, value.setMetaContextChars],
-    ["Multi-paper chat total", "Total character budget shared evenly by the selected papers.", value.multiContextChars, value.setMultiContextChars],
+    [
+      "Single-paper chat",
+      "Maximum characters extracted from the open paper for a normal chat message.",
+      value.chatContextChars,
+      value.setChatContextChars,
+    ],
+    [
+      "Metadata extraction",
+      "Maximum characters read while detecting identifiers and extracting paper metadata.",
+      value.metaContextChars,
+      value.setMetaContextChars,
+    ],
+    [
+      "Multi-paper chat total",
+      "Total character budget shared evenly by the selected papers.",
+      value.multiContextChars,
+      value.setMultiContextChars,
+    ],
   ];
   return (
     <>
       <PaneIntro title="AI chat">
-        Chat behavior and how much extracted PDF text Gamma sends to the AI. Larger context values can improve answers but use more tokens.
+        Chat behavior and how much extracted PDF text Gamma sends to the AI. Larger context values
+        can improve answers but use more tokens.
       </PaneIntro>
       <SettingToggle
         label="Clear snapshots when clicking elsewhere"
@@ -792,10 +1042,16 @@ function ContextSettings({ value }) {
       <label className="settingRow">
         <span className="settingText">
           <span className="settingLabel">Voice dictation model</span>
-          <span className="settingDesc">Speech-to-text for the chat's mic button. gpt-4o-transcribe is what ChatGPT's dictation uses; needs an OpenAI-protocol provider key.</span>
+          <span className="settingDesc">
+            Speech-to-text for the chat's mic button. gpt-4o-transcribe is what ChatGPT's dictation
+            uses; needs an OpenAI-protocol provider key.
+          </span>
         </span>
-        <select className="aiKeyInput settingSelect" value={value.dictationModel}
-          onChange={(e) => value.setDictationModel(e.target.value)}>
+        <select
+          className="aiKeyInput settingSelect"
+          value={value.dictationModel}
+          onChange={(e) => value.setDictationModel(e.target.value)}
+        >
           <option value="gpt-4o-transcribe">gpt-4o-transcribe</option>
           <option value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</option>
           <option value="whisper-1">whisper-1</option>
@@ -804,10 +1060,16 @@ function ContextSettings({ value }) {
       <label className="settingRow">
         <span className="settingText">
           <span className="settingLabel">Voice dictation language</span>
-          <span className="settingDesc">Telling the model the spoken language improves accuracy; auto-detect handles mixed or unlisted languages.</span>
+          <span className="settingDesc">
+            Telling the model the spoken language improves accuracy; auto-detect handles mixed or
+            unlisted languages.
+          </span>
         </span>
-        <select className="aiKeyInput settingSelect" value={value.dictationLang}
-          onChange={(e) => value.setDictationLang(e.target.value)}>
+        <select
+          className="aiKeyInput settingSelect"
+          value={value.dictationLang}
+          onChange={(e) => value.setDictationLang(e.target.value)}
+        >
           <option value="">Auto-detect</option>
           <option value="en">English</option>
           <option value="zh">中文 (Chinese)</option>
@@ -843,7 +1105,11 @@ function ContextSettings({ value }) {
           />
         </label>
       ))}
-      <div className="reportModalBtns"><button className="uiBtn" onClick={value.reset}>Reset defaults</button></div>
+      <div className="reportModalBtns">
+        <button className="uiBtn" onClick={value.reset}>
+          Reset defaults
+        </button>
+      </div>
     </>
   );
 }
@@ -853,7 +1119,8 @@ function SearchSettings({ value }) {
   return (
     <>
       <PaneIntro title="Search">
-        Full-text search covers your notes and every PDF in the library. PDFs are indexed automatically in the background.
+        Full-text search covers your notes and every PDF in the library. PDFs are indexed
+        automatically in the background.
       </PaneIntro>
       <SettingToggle
         label="Expand result details on the home page"
@@ -870,7 +1137,9 @@ function SearchSettings({ value }) {
       <div className="settingRow">
         <span className="settingText">
           <span className="settingLabel">Rebuild the PDF text index</span>
-          <span className="settingDesc">Re-extract every paper when library-wide results look stale or incomplete.</span>
+          <span className="settingDesc">
+            Re-extract every paper when library-wide results look stale or incomplete.
+          </span>
         </span>
         <button className="uiBtn sm" disabled={value.indexTask?.active} onClick={rebuild}>
           {value.indexTask?.active ? "Indexing…" : "Rebuild"}
@@ -885,7 +1154,10 @@ function SearchSettings({ value }) {
 function LogBox({ label, description, entries, emptyText, copyStatus, setStatus }) {
   function copy() {
     const text = entries
-      .map((entry) => `${new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })} ${entry.text}`)
+      .map(
+        (entry) =>
+          `${new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })} ${entry.text}`,
+      )
       .join("\n");
     navigator.clipboard?.writeText(text).then(
       () => setStatus(copyStatus),
@@ -899,15 +1171,23 @@ function LogBox({ label, description, entries, emptyText, copyStatus, setStatus 
           <span className="settingLabel">{label}</span>
           <span className="settingDesc">{description}</span>
         </span>
-        <button className="uiBtn sm" disabled={!entries.length} onClick={copy}>Copy</button>
+        <button className="uiBtn sm" disabled={!entries.length} onClick={copy}>
+          Copy
+        </button>
       </div>
       <div className="sysLogBox">
-        {entries.length ? [...entries].reverse().map((entry) => (
-          <div key={entry.key} className="sysLogRow">
-            <span className="sysLogTime">{new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })}</span>
-            <span className="sysLogMsg">{entry.text}</span>
-          </div>
-        )) : <div className="sysLogEmpty">{emptyText}</div>}
+        {entries.length ? (
+          [...entries].reverse().map((entry) => (
+            <div key={entry.key} className="sysLogRow">
+              <span className="sysLogTime">
+                {new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })}
+              </span>
+              <span className="sysLogMsg">{entry.text}</span>
+            </div>
+          ))
+        ) : (
+          <div className="sysLogEmpty">{emptyText}</div>
+        )}
       </div>
     </>
   );
@@ -934,12 +1214,18 @@ function ServerLogBox({ setStatus }) {
         setEntries([...stateRef.current.entries]);
         setError("");
       } catch (err) {
-        if (alive) { setError(err.message); setEntries((prev) => prev || []); }
+        if (alive) {
+          setError(err.message);
+          setEntries((prev) => prev || []);
+        }
       }
     }
     poll();
     const timer = setInterval(poll, 2000);
-    return () => { alive = false; clearInterval(timer); };
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
   }, []);
   const shown = (entries || []).map((entry) => ({
     key: entry.seq,
@@ -951,9 +1237,13 @@ function ServerLogBox({ setStatus }) {
       label="Server log"
       description="Backend events since the server started, newest first. Secrets are masked; visible to admins only."
       entries={shown}
-      emptyText={error ? `Server log unavailable: ${error}`
-        : entries ? "Nothing logged since the server started."
-          : "Loading…"}
+      emptyText={
+        error
+          ? `Server log unavailable: ${error}`
+          : entries
+            ? "Nothing logged since the server started."
+            : "Loading…"
+      }
       copyStatus="Server log copied."
       setStatus={setStatus}
     />
@@ -964,7 +1254,8 @@ function DiagnosticsSettings({ value }) {
   return (
     <>
       <PaneIntro title="Diagnostics">
-        Status messages appear briefly as a floating pill. Pin them to a permanent bar or inspect this session's log.
+        Status messages appear briefly as a floating pill. Pin them to a permanent bar or inspect
+        this session's log.
       </PaneIntro>
       <SettingToggle
         label="Show status bar"
@@ -981,7 +1272,11 @@ function DiagnosticsSettings({ value }) {
       <LogBox
         label="System log"
         description="Application events from this session, newest first."
-        entries={value.sysLog.map((entry, index) => ({ key: index, timeMs: entry.t, text: entry.msg }))}
+        entries={value.sysLog.map((entry, index) => ({
+          key: index,
+          timeMs: entry.t,
+          text: entry.msg,
+        }))}
         emptyText="Nothing logged yet this session."
         copyStatus="Log copied."
         setStatus={value.setStatus}
@@ -1004,12 +1299,17 @@ function UsersSettings({ value }) {
 
   const [defaults, setDefaults] = React.useState(null); // {max_upload_mb, quota_mb} server-wide
   React.useEffect(() => {
-    apiJson(`${API}/admin/users`).then((d) => setInfo(d)).catch((err) => setError(err.message));
-    apiJson(`${API}/admin/settings`).then(setDefaults).catch(() => {});
+    apiJson(`${API}/admin/users`)
+      .then((d) => setInfo(d))
+      .catch((err) => setError(err.message));
+    apiJson(`${API}/admin/settings`)
+      .then(setDefaults)
+      .catch(() => {});
   }, []);
 
   const myName = info?.me || me;
-  const lastAdmin = (u) => u.is_admin && (info?.users || []).filter((x) => x.is_admin && !x.is_guest).length <= 1;
+  const lastAdmin = (u) =>
+    u.is_admin && (info?.users || []).filter((x) => x.is_admin && !x.is_guest).length <= 1;
 
   function openEdit(u) {
     setError("");
@@ -1047,7 +1347,10 @@ function UsersSettings({ value }) {
     if (quotaMb !== (u.quota_mb ?? null)) payload.quota_mb = quotaMb;
     const newName = u.is_guest ? u.username : (edit.username || "").trim();
     const renaming = newName && newName !== u.username;
-    if (!Object.keys(payload).length && !renaming) { setEdit(null); return; }
+    if (!Object.keys(payload).length && !renaming) {
+      setEdit(null);
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -1070,7 +1373,8 @@ function UsersSettings({ value }) {
           users: d.users,
           me: d.renamed?.from === prev.me ? d.renamed.to : prev.me,
         }));
-        if (d.renamed) setStatus(`Renamed ${d.renamed.from} → ${d.renamed.to}. Sessions keep working.`);
+        if (d.renamed)
+          setStatus(`Renamed ${d.renamed.from} → ${d.renamed.to}. Sessions keep working.`);
         // Renamed yourself? Re-read the session so the whole app re-keys
         // (avatar, per-user prefs, synced tabs all follow the new name).
         if (d.renamed?.from === myName) onSelfRenamed?.();
@@ -1095,7 +1399,9 @@ function UsersSettings({ value }) {
         setBusy(true);
         setError("");
         try {
-          const d = await apiJson(`${API}/admin/users/${encodeURIComponent(u.username)}`, { method: "DELETE" });
+          const d = await apiJson(`${API}/admin/users/${encodeURIComponent(u.username)}`, {
+            method: "DELETE",
+          });
           setInfo((prev) => ({ ...prev, users: d.users }));
           setStatus(d.warning || `Deleted ${u.username}.`);
           setEdit(null);
@@ -1109,14 +1415,21 @@ function UsersSettings({ value }) {
 
   async function submitAdd() {
     const f = addForm;
-    if (!f?.username.trim() || !f?.password) { setError("Username and password are required."); return; }
+    if (!f?.username.trim() || !f?.password) {
+      setError("Username and password are required.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
       const d = await apiJson(`${API}/admin/users`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: f.username.trim(), password: f.password, is_admin: !!f.is_admin }),
+        body: JSON.stringify({
+          username: f.username.trim(),
+          password: f.password,
+          is_admin: !!f.is_admin,
+        }),
       });
       setInfo((prev) => ({ ...prev, users: d.users }));
       setStatus(`Created ${f.username.trim()}.`);
@@ -1136,41 +1449,62 @@ function UsersSettings({ value }) {
       : "server default";
     return (
       <div className="aiProvForm" key={u.username}>
-        <div className="promptSectionHead"><span>{u.is_guest ? "Guest storage limits" : `Edit ${u.username}`}</span></div>
+        <div className="promptSectionHead">
+          <span>{u.is_guest ? "Guest storage limits" : `Edit ${u.username}`}</span>
+        </div>
         <QuotaMeter usedBytes={u.used_bytes} quotaMb={effQuota} />
         {!u.is_guest ? (
           <>
-            <span className="settingDesc formFieldLabel">Username — change it to rename the account (sessions and share links keep working)</span>
+            <span className="settingDesc formFieldLabel">
+              Username — change it to rename the account (sessions and share links keep working)
+            </span>
             <input
-              className="aiKeyInput" type="text" spellCheck={false}
+              className="aiKeyInput"
+              type="text"
+              spellCheck={false}
               value={edit.username}
               onChange={(e) => setEdit((f) => ({ ...f, username: e.target.value }))}
             />
             <input
-              className="aiKeyInput" type="password" autoComplete="new-password"
+              className="aiKeyInput"
+              type="password"
+              autoComplete="new-password"
               placeholder="New password — blank keeps the current one"
               value={edit.password}
               onChange={(e) => setEdit((f) => ({ ...f, password: e.target.value }))}
             />
-            <label className="uiCheckRow" title={lastAdmin(u) ? "The last admin can't be demoted" : ""}>
+            <label
+              className="uiCheckRow"
+              title={lastAdmin(u) ? "The last admin can't be demoted" : ""}
+            >
               <input
-                type="checkbox" checked={edit.is_admin} disabled={lastAdmin(u)}
+                type="checkbox"
+                checked={edit.is_admin}
+                disabled={lastAdmin(u)}
                 onChange={(e) => setEdit((f) => ({ ...f, is_admin: e.target.checked }))}
               />
               Admin privilege
             </label>
           </>
         ) : null}
-        <span className="settingDesc formFieldLabel">Max upload size (MB) — largest single PDF/image; blank = server default</span>
+        <span className="settingDesc formFieldLabel">
+          Max upload size (MB) — largest single PDF/image; blank = server default
+        </span>
         <input
-          className="aiKeyInput" type="number" min={1}
+          className="aiKeyInput"
+          type="number"
+          min={1}
           placeholder={defUpload}
           value={edit.max_upload_mb}
           onChange={(e) => setEdit((f) => ({ ...f, max_upload_mb: e.target.value }))}
         />
-        <span className="settingDesc formFieldLabel">Storage quota (MB) — total for all uploads; blank = server default, 0 = unlimited</span>
+        <span className="settingDesc formFieldLabel">
+          Storage quota (MB) — total for all uploads; blank = server default, 0 = unlimited
+        </span>
         <input
-          className="aiKeyInput" type="number" min={0}
+          className="aiKeyInput"
+          type="number"
+          min={0}
           placeholder={defQuota}
           value={edit.quota_mb}
           onChange={(e) => setEdit((f) => ({ ...f, quota_mb: e.target.value }))}
@@ -1181,8 +1515,18 @@ function UsersSettings({ value }) {
               <Trash2Icon size={13} /> Delete…
             </button>
           ) : null}
-          <button className="uiBtn" onClick={() => { setEdit(null); setError(""); }}>Cancel</button>
-          <button className="uiBtn primary" disabled={busy} onClick={saveEdit}>Save</button>
+          <button
+            className="uiBtn"
+            onClick={() => {
+              setEdit(null);
+              setError("");
+            }}
+          >
+            Cancel
+          </button>
+          <button className="uiBtn primary" disabled={busy} onClick={saveEdit}>
+            Save
+          </button>
         </div>
       </div>
     );
@@ -1199,14 +1543,22 @@ function UsersSettings({ value }) {
             {u.is_guest ? <span className="uiTag">guest</span> : null}
           </span>
           <span className="aiProvDesc">
-            {u.is_guest ? "shared demo workspace, resets daily" : `created ${new Date(u.created_at).toLocaleDateString()}`}
+            {u.is_guest
+              ? "shared demo workspace, resets daily"
+              : `created ${new Date(u.created_at).toLocaleDateString()}`}
             {u.max_upload_mb != null ? ` · max file ${u.max_upload_mb} MB` : ""}
-            {u.quota_mb != null ? (u.quota_mb ? ` · quota ${u.quota_mb} MB` : " · quota unlimited") : ""}
+            {u.quota_mb != null
+              ? u.quota_mb
+                ? ` · quota ${u.quota_mb} MB`
+                : " · quota unlimited"
+              : ""}
           </span>
           <QuotaMeter usedBytes={u.used_bytes} quotaMb={u.quota_mb ?? defaults?.quota_mb} />
         </span>
         <span className="aiProvActions">
-          <button className="uiBtn sm" disabled={busy} onClick={() => openEdit(u)}>Edit…</button>
+          <button className="uiBtn sm" disabled={busy} onClick={() => openEdit(u)}>
+            Edit…
+          </button>
         </span>
       </div>
     );
@@ -1220,32 +1572,52 @@ function UsersSettings({ value }) {
         server defaults from the Paper metadata pane.
       </PaneIntro>
       {!info && !error ? <div className="reportModalHint">Loading…</div> : null}
-      {(info?.users || []).map((u) => (edit?.original.username === u.username ? editForm(u) : userRow(u)))}
+      {(info?.users || []).map((u) =>
+        edit?.original.username === u.username ? editForm(u) : userRow(u),
+      )}
       {addForm ? (
         <div className="aiProvForm">
-          <div className="promptSectionHead"><span>Add user</span></div>
+          <div className="promptSectionHead">
+            <span>Add user</span>
+          </div>
           <input
-            className="aiKeyInput" type="text" spellCheck={false} autoFocus
+            className="aiKeyInput"
+            type="text"
+            spellCheck={false}
+            autoFocus
             placeholder="Username (letters, digits, _ . -)"
             value={addForm.username}
             onChange={(e) => setAddForm((f) => ({ ...f, username: e.target.value }))}
           />
           <input
-            className="aiKeyInput" type="password" autoComplete="new-password"
+            className="aiKeyInput"
+            type="password"
+            autoComplete="new-password"
             placeholder="Password"
             value={addForm.password}
             onChange={(e) => setAddForm((f) => ({ ...f, password: e.target.value }))}
-            onKeyDown={(e) => { if (e.key === "Enter") submitAdd(); }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submitAdd();
+            }}
           />
           <label className="uiCheckRow">
             <input
-              type="checkbox" checked={!!addForm.is_admin}
+              type="checkbox"
+              checked={!!addForm.is_admin}
               onChange={(e) => setAddForm((f) => ({ ...f, is_admin: e.target.checked }))}
             />
             Grant the admin privilege
           </label>
           <div className="reportModalBtns">
-            <button className="uiBtn" onClick={() => { setAddForm(null); setError(""); }}>Cancel</button>
+            <button
+              className="uiBtn"
+              onClick={() => {
+                setAddForm(null);
+                setError("");
+              }}
+            >
+              Cancel
+            </button>
             <button className="uiBtn primary" disabled={busy} onClick={submitAdd}>
               {busy ? "Creating…" : "Create user"}
             </button>
@@ -1253,7 +1625,14 @@ function UsersSettings({ value }) {
         </div>
       ) : info ? (
         <div className="reportModalBtns settingsAlignStart">
-          <button className="uiBtn" onClick={() => { setError(""); setEdit(null); setAddForm({ username: "", password: "", is_admin: false }); }}>
+          <button
+            className="uiBtn"
+            onClick={() => {
+              setError("");
+              setEdit(null);
+              setAddForm({ username: "", password: "", is_admin: false });
+            }}
+          >
             + Add user
           </button>
         </div>
@@ -1284,13 +1663,25 @@ export default function SettingsDialog({
         <div className="settingsSidebar">
           <div className="settingsSideTitle">Settings</div>
           {navItems.map(([id, label, Icon]) => (
-            <button key={id} className={`settingsNavBtn ${activePane === id ? "active" : ""}`} onClick={() => onPaneChange(id)}>
-              <Icon size={15} />{label}
+            <button
+              key={id}
+              className={`settingsNavBtn ${activePane === id ? "active" : ""}`}
+              onClick={() => onPaneChange(id)}
+            >
+              <Icon size={15} />
+              {label}
             </button>
           ))}
         </div>
         <div className="settingsPane">
-          <button className="uiClose uiCloseLg settingsClose" onClick={onClose} title="Close settings" aria-label="Close settings">×</button>
+          <button
+            className="uiClose uiCloseLg settingsClose"
+            onClick={onClose}
+            title="Close settings"
+            aria-label="Close settings"
+          >
+            ×
+          </button>
           {activePane === "papers" ? <PapersSettings value={papers} /> : null}
           {activePane === "library" ? <LibrarySettings value={library} /> : null}
           {activePane === "ai" ? <AiSettings value={ai} /> : null}

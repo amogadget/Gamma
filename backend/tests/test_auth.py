@@ -29,8 +29,7 @@ def test_user_guard_mismatch_rejected(guest):
     assert r.headers["X-Gamma-Session-User"] == "guest"
     assert len(r.headers["X-Gamma-Request-ID"]) == 8
 
-    r = guest.post("/api/blocks", json={"parent_id": "root", "content": "x"},
-                   headers={"X-Gamma-User": "someone-else"})
+    r = guest.post("/api/blocks", json={"parent_id": "root", "content": "x"}, headers={"X-Gamma-User": "someone-else"})
     assert r.status_code == 409
 
 
@@ -39,6 +38,7 @@ def test_user_guard_signed_out_session():
     (the frontend turns that into the auth-expired flow, not the conflict UI)."""
     from fastapi.testclient import TestClient
     from gamma.app import app
+
     with TestClient(app) as c:
         r = c.get("/api/blocks/root/children", headers={"X-Gamma-User": "ghost"})
         assert r.status_code == 409

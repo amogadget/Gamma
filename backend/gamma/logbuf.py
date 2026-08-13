@@ -33,8 +33,7 @@ _SCRUB_RULES = (
     (re.compile(r"\bsk-[A-Za-z0-9_-]{8,}"), "sk-***"),
     # key=value / key: value shapes (query strings, exception messages that
     # echo request bodies or headers)
-    (re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization)(\s*[=:]\s*)[^\s&'\"]+"),
-     r"\1\2***"),
+    (re.compile(r"(?i)\b(password|passwd|secret|token|api[_-]?key|authorization)(\s*[=:]\s*)[^\s&'\"]+"), r"\1\2***"),
     # Long urlsafe-base64 runs: session/share tokens are token_urlsafe(32) →
     # 43 chars. The 40+ threshold spares block ids and sha256[:24] upload
     # names, which are worth keeping readable in a debugging log.

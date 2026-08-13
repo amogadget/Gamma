@@ -71,7 +71,7 @@ def build_messages(payload, context: str) -> list[dict]:
     """Build common chat messages, injecting context once before a user turn."""
     messages = []
     context_used = False
-    for history_item in (payload.history or []):
+    for history_item in payload.history or []:
         role = "assistant" if history_item.get("role") == "ai" else "user"
         content = history_item.get("text", "")
         if role == "user" and context and not context_used:
@@ -91,8 +91,7 @@ def _download_pdf_from_source(user: str, doc_id: str, pdf_path) -> None:
     try:
         with sqlite3.connect(user_db_path(user, "pages.db")) as connection:
             row = connection.execute(
-                "SELECT properties FROM unified_blocks "
-                "WHERE json_extract(properties, '$.doc_id') = ?",
+                "SELECT properties FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?",
                 (doc_id,),
             ).fetchone()
         if not row:

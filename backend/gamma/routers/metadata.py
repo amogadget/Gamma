@@ -74,10 +74,7 @@ def _fetch_arxiv(arxiv_id: str) -> dict | None:
         title = re.sub(r"\s+", " ", entry.findtext(f"{_ATOM}title") or "").strip()
         if not title or title.lower() == "error":
             return None
-        authors = [
-            (a.findtext(f"{_ATOM}name") or "").strip()
-            for a in entry.findall(f"{_ATOM}author")
-        ]
+        authors = [(a.findtext(f"{_ATOM}name") or "").strip() for a in entry.findall(f"{_ATOM}author")]
         journal_ref = (entry.findtext(f"{_ARXIV_NS}journal_ref") or "").strip()
         return {
             "title": title,
@@ -113,8 +110,7 @@ def _fetch_doi(doi: str) -> tuple[dict | None, str]:
     meta = {
         "title": re.sub(r"\s+", " ", str(title)).strip(),
         "authors": [
-            " ".join(filter(None, [a.get("given"), a.get("family")])).strip()
-            for a in (data.get("author") or [])
+            " ".join(filter(None, [a.get("given"), a.get("family")])).strip() for a in (data.get("author") or [])
         ],
         "year": str(date_parts[0] or ""),
         "venue": str(data.get("container-title") or ""),
@@ -138,7 +134,11 @@ def _ai_extract_meta(text: str, prompt: str, model: str, rt: dict) -> dict | Non
         raw = _call_ai(
             [{"role": "user", "content": f"First pages of the paper:\n\n{text[:6000]}"}],
             # Generous cap: reasoning models spend invisible tokens before the JSON
-            system, _resolve_model(rt, model), rt, max_tokens=8000, timeout=120,
+            system,
+            _resolve_model(rt, model),
+            rt,
+            max_tokens=8000,
+            timeout=120,
         )
         m = re.search(r"\{[\s\S]*\}", raw)
         if not m:
@@ -190,9 +190,7 @@ def _build_bibtex(meta: dict) -> str:
 
 def _load_page(user: str, block_id: str):
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        row = conn.execute(
-            "SELECT content, properties FROM unified_blocks WHERE id = ?", (block_id,)
-        ).fetchone()
+        row = conn.execute("SELECT content, properties FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="page not found")
     return row[0] or "", json.loads(row[1] or "{}")
@@ -239,25 +237,27 @@ def metadata_status(request: Request):
             continue  # plain note page, not a paper
         entry = index.get(doc_id)
         meta = props.get("meta") or None
-        papers.append({
-            "id": block_id,
-            "title": (meta or {}).get("title") or content or "Untitled",
-            "updated_at": updated_at,
-            "doc_id": doc_id,
-            "has_file": bool(doc_id and (uploads / f"{doc_id}.pdf").exists()),
-            "has_meta": bool(meta),
-            "meta_source": (meta or {}).get("source", ""),
-            "meta_error": (props.get("meta_error") or {}).get("detail", ""),
-            "indexed": bool(entry and entry["ver"] == INDEX_VERSION),
-            "index_stale": bool(entry and entry["ver"] != INDEX_VERSION),
-            "text_chars": entry["chars"] if entry else None,
-        })
+        papers.append(
+            {
+                "id": block_id,
+                "title": (meta or {}).get("title") or content or "Untitled",
+                "updated_at": updated_at,
+                "doc_id": doc_id,
+                "has_file": bool(doc_id and (uploads / f"{doc_id}.pdf").exists()),
+                "has_meta": bool(meta),
+                "meta_source": (meta or {}).get("source", ""),
+                "meta_error": (props.get("meta_error") or {}).get("detail", ""),
+                "indexed": bool(entry and entry["ver"] == INDEX_VERSION),
+                "index_stale": bool(entry and entry["ver"] != INDEX_VERSION),
+                "text_chars": entry["chars"] if entry else None,
+            }
+        )
     return {"papers": papers}
 
 
 class MetaFetchRequest(BaseModel):
     block_id: str
-    prompt: str = ""   # custom AI metadata-extraction prompt (empty = built-in)
+    prompt: str = ""  # custom AI metadata-extraction prompt (empty = built-in)
     model: str = ""
     force: bool = False
     context_char_limit: int = Field(default=6000, ge=100, le=1_000_000)
@@ -269,8 +269,12 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
     user = require_user(request)
     _, props = _load_page(user, payload.block_id)
     if props.get("meta") and not payload.force:
-        return {"meta": props["meta"], "bibtex": props.get("bibtex", ""),
-                "source": props["meta"].get("source", ""), "cached": True}
+        return {
+            "meta": props["meta"],
+            "bibtex": props.get("bibtex", ""),
+            "source": props["meta"].get("source", ""),
+            "cached": True,
+        }
 
     doc_id = props.get("doc_id") or ""
     source_url = props.get("source_url") or props.get("sourceUrl") or ""
@@ -358,7 +362,7 @@ def metadata_update(payload: MetaUpdateRequest, request: Request):
 
 class CiteRequest(BaseModel):
     block_id: str
-    prompt: str = ""   # custom PPT-citation prompt (empty = built-in)
+    prompt: str = ""  # custom PPT-citation prompt (empty = built-in)
     model: str = ""
     force: bool = False  # regenerate even when a cached citation exists
 
@@ -377,8 +381,14 @@ def metadata_cite(payload: CiteRequest, request: Request):
     system = (payload.prompt or CITE_PROMPT).strip()[:4000]
     source = bibtex or json.dumps(meta, indent=2)
     try:
-        text = _call_ai([{"role": "user", "content": source}], system,
-                        _resolve_model(rt, payload.model), rt, max_tokens=4000, timeout=120)
+        text = _call_ai(
+            [{"role": "user", "content": source}],
+            system,
+            _resolve_model(rt, payload.model),
+            rt,
+            max_tokens=4000,
+            timeout=120,
+        )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
     citation = text.strip()

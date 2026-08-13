@@ -89,9 +89,7 @@ def _graph_page_parts(page, uploads_dir, include_pdf):
     pdf_path = uploads_dir / f"{doc_id}.pdf" if doc_id else None
     has_pdf = bool(include_pdf and pdf_path and pdf_path.is_file())
 
-    md, assets = collect_and_rewrite(
-        render_graph_page_md(page, stem, has_pdf), include_pdf=False, prefix="../assets/"
-    )
+    md, assets = collect_and_rewrite(render_graph_page_md(page, stem, has_pdf), include_pdf=False, prefix="../assets/")
     entries = [(f"pages/{stem}.md", md)]
     files, blobs = [], []
     if has_pdf:
@@ -124,8 +122,7 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
     if mode == "logseq-graph":
         entries, files, blobs, assets = _graph_page_parts(page, user_uploads_dir(user), bool(pdf))
         entries.append(("logseq/config.edn", CONFIG_EDN))
-        return _zip_response(entries, assets, user_uploads_dir(user),
-                             f"{slug}-logseq.zip", files, blobs)
+        return _zip_response(entries, assets, user_uploads_dir(user), f"{slug}-logseq.zip", files, blobs)
 
     md, assets = collect_and_rewrite(render_readable(page), include_pdf=bool(pdf))
     if not assets:
@@ -169,11 +166,13 @@ def export_page_pdf(block_id: str, request: Request):
             continue
         if props.get("link_url") or props.get("link_page_id"):
             continue
-        highlights.append({
-            "position": props["pdf_position"],
-            "color": props.get("color"),
-            "note": highlight_note_text(b, children_by_id),
-        })
+        highlights.append(
+            {
+                "position": props["pdf_position"],
+                "color": props.get("color"),
+                "note": highlight_note_text(b, children_by_id),
+            }
+        )
 
     try:
         pdf_bytes, written = annotate_pdf(pdf_path.read_bytes(), highlights, author=user)
@@ -208,9 +207,7 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
         raise HTTPException(status_code=400, detail="folder name required")
     user = resolve_user(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        roots = conn.execute(
-            f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = 'root'"
-        ).fetchall()
+        roots = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = 'root'").fetchall()
         matches = [block_to_dict(r) for r in roots]
         matches = [b for b in matches if _page_in_folder(b["properties"], name)]
         if not matches:
@@ -222,8 +219,7 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
             rows = fetch_subtree(conn, root["id"])
             page = build_tree(rows, root["id"])
             if mode == "logseq-graph":
-                p_entries, p_files, p_blobs, p_assets = _graph_page_parts(
-                    page, user_uploads_dir(user), bool(pdf))
+                p_entries, p_files, p_blobs, p_assets = _graph_page_parts(page, user_uploads_dir(user), bool(pdf))
                 entries += p_entries
                 files += p_files
                 blobs += p_blobs
@@ -242,6 +238,5 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
     folder_slug = slugify(name.replace("/", "-"), "")
     if mode == "logseq-graph":
         entries.append(("logseq/config.edn", CONFIG_EDN))
-        return _zip_response(entries, assets, user_uploads_dir(user),
-                             f"{folder_slug}-logseq.zip", files, blobs)
+        return _zip_response(entries, assets, user_uploads_dir(user), f"{folder_slug}-logseq.zip", files, blobs)
     return _zip_response(entries, assets, user_uploads_dir(user), f"{folder_slug}.zip")

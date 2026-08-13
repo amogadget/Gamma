@@ -33,8 +33,8 @@
   --accent: #5b9bd5;
   --accent-dark: #3a7bd5;
   --accent-bright: #7ab8f5;
-  --accent-bg: rgba(42,79,122,0.3);
-  --accent-bg-light: rgba(90,155,213,0.1);
+  --accent-bg: rgba(42, 79, 122, 0.3);
+  --accent-bg-light: rgba(90, 155, 213, 0.1);
   --drag-accent: #64b5f6;
   --scrollbar-bg: #1a1a1a;
   --scrollbar-thumb: #3f3f3f;
@@ -75,15 +75,16 @@
   --accent: var(--accent-dark);
   --accent-dark: #3a7bd5;
   --accent-bright: #2b6bcb;
-  --accent-bg: rgba(74,144,226,0.12);
-  --accent-bg-light: rgba(74,144,226,0.06);
+  --accent-bg: rgba(74, 144, 226, 0.12);
+  --accent-bg-light: rgba(74, 144, 226, 0.06);
   --drag-accent: #1565c0;
   --scrollbar-bg: #f5f5f5;
   --scrollbar-thumb: #cccccc;
 }
 
-
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
 /* Shared visual primitives. Components keep their layout and sizing rules,
    while these groups own the recurring surface, field, and hover language. */
@@ -118,14 +119,14 @@
 }
 
 :is(
-  .topbar .iconBtn,
-  .searchToggle,
-  .pageActionBtn,
-  .uiBtn,
-  .chatMsgActionBtn,
-  .loadMoreBtn,
-  .settingsNavBtn
-):hover:not(:disabled) {
+    .topbar .iconBtn,
+    .searchToggle,
+    .pageActionBtn,
+    .uiBtn,
+    .chatMsgActionBtn,
+    .loadMoreBtn,
+    .settingsNavBtn
+  ):hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
@@ -148,7 +149,9 @@
   white-space: nowrap;
 }
 
-:is(.chatFileChipName, .attachName) { min-width: 0; }
+:is(.chatFileChipName, .attachName) {
+  min-width: 0;
+}
 
 .categoryFrontmatterValue.empty {
   color: var(--text-dim);
@@ -161,13 +164,27 @@
   justify-content: space-between;
 }
 
-html, body, .app, .topbar, .sidebar, .blockRowWrap, .blockRow,
-.blockEditor, .carouselTrack, .recentCard, .categoryFrontmatter,
+html,
+body,
+.app,
+.topbar,
+.sidebar,
+.blockRowWrap,
+.blockRow,
+.blockEditor,
+.carouselTrack,
+.recentCard,
+.categoryFrontmatter,
 .backlinksPanel {
-  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   margin: 0;
   height: 100%;
   background: var(--bg-page);
@@ -241,9 +258,14 @@ body {
   color: var(--text-muted);
   font-size: 16px;
   flex-shrink: 0;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
-.topbar .iconBtn:disabled { opacity: 0.4; cursor: default; }
+.topbar .iconBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 
 /* --- unified close / dismiss control -------------------------------------
    One look for every "×" in the app, modeled on the tab close button:
@@ -265,13 +287,32 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.12s ease, color 0.12s ease, transform 0.08s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    transform 0.08s ease;
 }
-.uiClose:hover { background: var(--bg-subtle); color: var(--text-bright); }
-.uiClose:active { transform: scale(0.82); }
-.uiClose.uiCloseLg { width: 28px; height: 28px; font-size: 20px; }
-.uiClose.uiCloseSm { width: 16px; height: 16px; font-size: 12px; }
-.uiClose.uiCloseDanger:hover { background: rgba(224, 92, 92, 0.15); color: #e05c5c; }
+.uiClose:hover {
+  background: var(--bg-subtle);
+  color: var(--text-bright);
+}
+.uiClose:active {
+  transform: scale(0.82);
+}
+.uiClose.uiCloseLg {
+  width: 28px;
+  height: 28px;
+  font-size: 20px;
+}
+.uiClose.uiCloseSm {
+  width: 16px;
+  height: 16px;
+  font-size: 12px;
+}
+.uiClose.uiCloseDanger:hover {
+  background: rgba(224, 92, 92, 0.15);
+  color: #e05c5c;
+}
 /* out-specify the generic ".topbar button" pill for close buttons in the topbar */
 .topbar .uiClose {
   padding: 0;
@@ -279,7 +320,9 @@ body {
   border: none;
   border-radius: 50%;
 }
-.topbar .uiClose:hover { background: var(--bg-subtle); }
+.topbar .uiClose:hover {
+  background: var(--bg-subtle);
+}
 
 .status {
   padding: 8px 12px;
@@ -307,10 +350,25 @@ body {
   -webkit-user-select: text;
   cursor: text;
 }
-.sysLogRow { display: flex; gap: 10px; padding: 2px 0; }
-.sysLogTime { color: var(--text-tertiary); flex: none; font-variant-numeric: tabular-nums; }
-.sysLogMsg { color: var(--text-muted); word-break: break-word; white-space: pre-wrap; } /* pre-wrap: server tracebacks are multi-line */
-.sysLogEmpty { color: var(--text-tertiary); padding: 4px 0; }
+.sysLogRow {
+  display: flex;
+  gap: 10px;
+  padding: 2px 0;
+}
+.sysLogTime {
+  color: var(--text-tertiary);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.sysLogMsg {
+  color: var(--text-muted);
+  word-break: break-word;
+  white-space: pre-wrap;
+} /* pre-wrap: server tracebacks are multi-line */
+.sysLogEmpty {
+  color: var(--text-tertiary);
+  padding: 4px 0;
+}
 
 .pdfSaveToggle {
   display: flex;
@@ -401,7 +459,7 @@ body {
 
 @media (max-width: 680px) {
   .openBtn {
-    display: none !important;  /* Enter key opens instead */
+    display: none !important; /* Enter key opens instead */
   }
   .topbar input {
     min-width: 80px;
@@ -545,7 +603,11 @@ body {
   align-self: flex-start;
   margin-top: 2px;
   opacity: 0;
-  transition: opacity 0.1s, background 0.12s ease, color 0.12s ease, transform 0.08s ease;
+  transition:
+    opacity 0.1s,
+    background 0.12s ease,
+    color 0.12s ease,
+    transform 0.08s ease;
 }
 
 .blockRow:hover .blockDeleteBtn,
@@ -701,7 +763,7 @@ body {
   position: sticky;
   bottom: 0;
   padding-top: 10px;
-  background: linear-gradient(to bottom, rgba(24,24,24,0), rgba(24,24,24,1) 30%);
+  background: linear-gradient(to bottom, rgba(24, 24, 24, 0), rgba(24, 24, 24, 1) 30%);
 }
 
 .empty {
@@ -896,9 +958,6 @@ body {
   }
 }
 
-
-
-
 /* --- drag-and-drop overlay for PDF uploads --- */
 .app.dragOver::after {
   content: "Drop PDF to upload";
@@ -916,16 +975,19 @@ body {
   z-index: 9999;
 }
 
-
 /* --- inline-editable title --- */
-.titleText { margin: 0; }
+.titleText {
+  margin: 0;
+}
 .titleText.editable {
   cursor: text;
   border-radius: 4px;
   padding: 2px 6px;
   margin-left: -6px;
 }
-.titleText.editable:hover { background: var(--bg-hover); }
+.titleText.editable:hover {
+  background: var(--bg-hover);
+}
 .titleEdit {
   font: inherit;
   font-size: 1.17em;
@@ -939,12 +1001,10 @@ body {
   width: 100%;
   max-width: 480px;
 }
-.titleEdit:focus { outline: none; border-color: var(--accent-dark); }
-
-
-
-
-
+.titleEdit:focus {
+  outline: none;
+  border-color: var(--accent-dark);
+}
 
 /* --- home button (icon-style, identical on editor and read-only) --- */
 .homeBtn {
@@ -954,7 +1014,6 @@ body {
 .homeBtn:disabled {
   cursor: default;
 }
-
 
 /* --- drag-and-drop (Phase A: bigger, whiter, in-row, tight to dot column) --- */
 .dropIndicator {
@@ -989,7 +1048,9 @@ body {
   line-height: 1;
   cursor: grab;
   opacity: 0.85;
-  transition: opacity 120ms ease, color 120ms ease;
+  transition:
+    opacity 120ms ease,
+    color 120ms ease;
   user-select: none;
   -webkit-user-drag: element;
 }
@@ -1007,43 +1068,61 @@ body {
   min-width: 0;
 }
 
-
 /* equal-width dot slot for alignment between highlight and non-highlight blocks */
-.dotSlot { width: 16px; min-width: 16px; display: inline-flex; align-items: center; justify-content: center; }
-.dotSlotEmpty { height: 16px; }
-.pageBulletBtn { color: var(--text-bright); }
-.pageBulletBtn:hover { color: var(--accent-bright); }
-.pageBulletDot { display: inline-block; width: 10px; height: 10px; border-radius: 999px; background: currentColor; }
-
+.dotSlot {
+  width: 16px;
+  min-width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.dotSlotEmpty {
+  height: 16px;
+}
+.pageBulletBtn {
+  color: var(--text-bright);
+}
+.pageBulletBtn:hover {
+  color: var(--accent-bright);
+}
+.pageBulletDot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: currentColor;
+}
 
 /* Logseq-style depth guide lines (one per depth level) */
-.sortableBlockWrap[data-depth] { position: relative; }
+.sortableBlockWrap[data-depth] {
+  position: relative;
+}
 .sortableBlockWrap[data-depth]::before {
-  content: '';
+  content: "";
   position: absolute;
-  top: 0; bottom: 0;
+  top: 0;
+  bottom: 0;
   left: 0;
-  background-image:
-    linear-gradient(to right, #2e2e2e 1px, transparent 1px);
+  background-image: linear-gradient(to right, #2e2e2e 1px, transparent 1px);
   background-size: 14px 100%;
   background-repeat: repeat-x;
   pointer-events: none;
   width: calc(14px * var(--depth, 0));
-  margin-left: -14px;  /* align with the start of this block's depth indent */
+  margin-left: -14px; /* align with the start of this block's depth indent */
   opacity: 0.6;
 }
-
 
 /* Logseq-style nested children container */
 .blockChildren {
   border-left: 1px solid var(--border-subtle);
   padding-left: 14px;
-  margin-left: 11px;  /* align line under the dot column of parent */
+  margin-left: 11px; /* align line under the dot column of parent */
 }
 
-
 /* Close-PDF feature */
-.viewerWrap.pdfHidden { display: none; }
+.viewerWrap.pdfHidden {
+  display: none;
+}
 /* Look comes from .uiClose.uiCloseLg; this only positions it over the PDF. */
 .pdfCloseBtn {
   position: absolute;
@@ -1099,7 +1178,7 @@ body {
   border-radius: 8px;
 }
 [data-theme="light"] :is(.pdfZoomOverlay, .pdfOutlineBtn, .pdfFullscreenBtn) {
-  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
 /* --- PDF table of contents (document outline) --- */
@@ -1107,7 +1186,9 @@ body {
   top: 8px;
   left: 14px;
 }
-.pdfOutlineBtn.open { color: var(--accent); }
+.pdfOutlineBtn.open {
+  color: var(--accent);
+}
 
 /* Current-page widget — top-right, same elevated look as the TOC button.
    The number is an input: type a page and press Enter to jump. */
@@ -1136,9 +1217,16 @@ body {
   font: inherit;
   text-align: right;
 }
-.pdfPageWidget input:focus { color: var(--accent); }
-.pdfPageTotal { margin-left: 3px; white-space: nowrap; }
-[data-theme="light"] .pdfPageWidget { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+.pdfPageWidget input:focus {
+  color: var(--accent);
+}
+.pdfPageTotal {
+  margin-left: 3px;
+  white-space: nowrap;
+}
+[data-theme="light"] .pdfPageWidget {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
 
 /* The floating status pill — the app's single transient-message surface
    (status messages, PDF load progress, load errors), anchored top-center of
@@ -1160,14 +1248,21 @@ body {
   border-radius: 999px;
   color: var(--text-muted);
   font-size: 12px;
-  box-shadow: 0 3px 12px rgba(0,0,0,0.25);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.25);
   pointer-events: none;
   opacity: 1;
   transition: opacity 0.4s;
 }
-.statusPill.fading { opacity: 0; }
-.statusPill.error { color: #e07a6a; border-color: rgba(224, 122, 106, 0.5); }
-.statusPill.interactive { pointer-events: auto; } /* has a Retry button */
+.statusPill.fading {
+  opacity: 0;
+}
+.statusPill.error {
+  color: #e07a6a;
+  border-color: rgba(224, 122, 106, 0.5);
+}
+.statusPill.interactive {
+  pointer-events: auto;
+} /* has a Retry button */
 .pillSpin {
   flex: none;
   width: 12px;
@@ -1177,7 +1272,11 @@ body {
   border-radius: 50%;
   animation: pillSpin 0.9s linear infinite;
 }
-@keyframes pillSpin { to { transform: rotate(360deg); } }
+@keyframes pillSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 .pillRetryBtn {
   flex: none;
   padding: 2px 10px;
@@ -1188,7 +1287,9 @@ body {
   font-size: 12px;
   cursor: pointer;
 }
-.pillRetryBtn:hover { background: var(--bg-hover); }
+.pillRetryBtn:hover {
+  background: var(--bg-hover);
+}
 
 /* Fullscreen toggle — bottom-left, same look as the TOC button. */
 .pdfFullscreenBtn {
@@ -1211,7 +1312,9 @@ body {
   border-radius: 8px;
   padding: 6px 4px;
 }
-[data-theme="light"] .pdfOutlinePanel { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+[data-theme="light"] .pdfOutlinePanel {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
 
 .pdfOutlineRow {
   display: flex;
@@ -1220,8 +1323,13 @@ body {
   padding: 2px 6px 2px 0;
   border-radius: 4px;
 }
-.pdfOutlineRow:hover { background: var(--bg-active); }
-.pdfOutlineNode { display: flex; flex-direction: column; }
+.pdfOutlineRow:hover {
+  background: var(--bg-active);
+}
+.pdfOutlineNode {
+  display: flex;
+  flex-direction: column;
+}
 /* Indent guide: each nesting level draws a vertical line under its parent's
    chevron, so the section structure reads at a glance. */
 .pdfOutlineKids {
@@ -1246,9 +1354,16 @@ body {
   cursor: pointer;
 }
 /* translucent gray so it stays visible on top of the row's own hover tint */
-button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: var(--text-primary); }
-.pdfOutlineChevron svg { transition: transform 0.12s; }
-.pdfOutlineChevron.open svg { transform: rotate(90deg); }
+button.pdfOutlineChevron:hover {
+  background: rgba(128, 128, 128, 0.28);
+  color: var(--text-primary);
+}
+.pdfOutlineChevron svg {
+  transition: transform 0.12s;
+}
+.pdfOutlineChevron.open svg {
+  transform: rotate(90deg);
+}
 .pdfOutlineTitle {
   flex: 1 1 auto;
   min-width: 0;
@@ -1269,7 +1384,6 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   height: 100% !important;
   border-left: none !important;
 }
-
 
 .categoryFrontmatter {
   display: flex;
@@ -1354,7 +1468,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-radius: 6px;
   margin-top: 4px;
   overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 .categorySuggestionItem {
   display: block;
@@ -1384,10 +1498,14 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   opacity: 0;
   transition: opacity 0.15s;
 }
-.blockRow:hover .attachModeBtn { opacity: 1; }
+.blockRow:hover .attachModeBtn {
+  opacity: 1;
+}
 .attachModeBanner {
   position: fixed;
-  top: 0; left: 0; right: 0;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 1000;
   background: #2a4a6b;
   color: #cde;
@@ -1400,14 +1518,16 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   gap: 12px;
 }
 .attachModeBanner button {
-  background: rgba(255,255,255,0.15);
-  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.3);
   color: inherit;
   border-radius: 4px;
   padding: 2px 8px;
   cursor: pointer;
 }
-.attachModeTarget { cursor: pointer; }
+.attachModeTarget {
+  cursor: pointer;
+}
 
 /* -- backlinks panel -- */
 .backlinksPanel {
@@ -1479,10 +1599,18 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   align-self: stretch;
   padding-top: 4px;
 }
-.tabStrip::-webkit-scrollbar { display: none; }
+.tabStrip::-webkit-scrollbar {
+  display: none;
+}
 @keyframes tabIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 .tab {
   display: flex;
@@ -1500,7 +1628,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border: 1px solid transparent;
   border-bottom: none;
   min-height: 30px;
-  transition: background 0.12s ease, color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
   animation: tabIn 0.15s ease-out;
   will-change: transform;
   position: relative;
@@ -1520,9 +1650,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .tab.active::before,
 .tab:hover::before,
 .tab.active + .tab::before,
-.tab:hover + .tab::before { background: transparent; }
-.tab:hover { background: var(--bg-hover); }
-.tab.dragging { opacity: 0.45; }
+.tab:hover + .tab::before {
+  background: transparent;
+}
+.tab:hover {
+  background: var(--bg-hover);
+}
+.tab.dragging {
+  opacity: 0.45;
+}
 .tab.active {
   background: var(--bg-surface);
   border-color: var(--border);
@@ -1538,10 +1674,17 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   flex: 1;
   min-width: 0;
 }
-.tabClose { flex-shrink: 0; cursor: pointer; line-height: 1; }
+.tabClose {
+  flex-shrink: 0;
+  cursor: pointer;
+  line-height: 1;
+}
 /* Pinned tabs: pin glyph instead of the close button (close via right-click),
    sitting left of the unpinned tabs. */
-.tab.pinned { padding-right: 12px; min-width: 0; }
+.tab.pinned {
+  padding-right: 12px;
+  min-width: 0;
+}
 .tabPin {
   flex-shrink: 0;
   display: inline-flex;
@@ -1550,7 +1693,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 
 /* --- modern topbar bits --- */
-.addPopover { min-width: 300px; }
+.addPopover {
+  min-width: 300px;
+}
 .readOnlyTitle {
   flex: 1;
   min-width: 0;
@@ -1561,7 +1706,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   font-size: 13px;
   font-weight: 600;
 }
-.logoutMenuBtn { color: var(--text-muted); }
+.logoutMenuBtn {
+  color: var(--text-muted);
+}
 
 /* --- popovers --- */
 .popoverAnchor {
@@ -1581,8 +1728,18 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   flex-direction: column;
   gap: 4px;
 }
-.popoverTitle { font-size: 13px; font-weight: 600; color: var(--text-primary); padding: 2px 4px; }
-.popoverHint { font-size: 11px; color: var(--text-muted); line-height: 1.45; padding: 0 4px; }
+.popoverTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  padding: 2px 4px;
+}
+.popoverHint {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  padding: 0 4px;
+}
 .popoverSection {
   font-size: 10px;
   font-weight: 600;
@@ -1591,7 +1748,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-dim);
   padding: 4px 4px 0;
 }
-.popoverDivider { border-top: 1px solid var(--border-subtle); margin: 4px 0; }
+.popoverDivider {
+  border-top: 1px solid var(--border-subtle);
+  margin: 4px 0;
+}
 .topbar .popover .popoverItem,
 .popover .popoverItem {
   background: none;
@@ -1607,13 +1767,29 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   align-items: center;
   gap: 6px;
 }
-.popover .popoverItem:hover { background: var(--bg-hover); }
-.popover .check { display: inline-block; width: 14px; color: var(--accent-dark); font-weight: 700; }
-.topbar .iconBtn.activeIcon { background: var(--bg-hover); color: var(--text-primary); }
+.popover .popoverItem:hover {
+  background: var(--bg-hover);
+}
+.popover .check {
+  display: inline-block;
+  width: 14px;
+  color: var(--accent-dark);
+  font-weight: 700;
+}
+.topbar .iconBtn.activeIcon {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
 /* Fixed width: the BibTeX pre would otherwise stretch the popover to its
    longest line — it scrolls inside instead. */
-.sharePopover { width: 320px; }
-.shareRow { display: flex; align-items: center; gap: 6px; }
+.sharePopover {
+  width: 320px;
+}
+.shareRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .shareRow input {
   flex: 1;
   min-width: 0;
@@ -1624,7 +1800,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-radius: 6px;
   color: var(--text-secondary);
 }
-.userPopover { min-width: 268px; }
+.userPopover {
+  min-width: 268px;
+}
 .topbar .userBadge {
   background: var(--bg-raised);
   border: 1px solid var(--border-hover);
@@ -1634,7 +1812,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-primary);
   cursor: pointer;
 }
-.topbar .userBadge:hover { background: var(--bg-hover); }
+.topbar .userBadge:hover {
+  background: var(--bg-hover);
+}
 
 /* account card header inside the popover */
 .userCard {
@@ -1655,7 +1835,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--accent-bright);
   border: 1px solid var(--border);
 }
-.userAvatarInitial { font-size: 17px; font-weight: 700; line-height: 1; }
+.userAvatarInitial {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1;
+}
 .userCardName {
   font-size: 14px;
   font-weight: 600;
@@ -1664,7 +1848,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.userCardRole { font-size: 11px; color: var(--text-muted); }
+.userCardRole {
+  font-size: 11px;
+  color: var(--text-muted);
+}
 
 /* settings row with a toggle switch */
 .settingRow {
@@ -1676,9 +1863,18 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-radius: 8px;
   cursor: pointer;
 }
-.settingRow:hover { background: var(--bg-hover); }
-.settingLabel { font-size: 13px; color: var(--text-primary); }
-.settingDesc { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+.settingRow:hover {
+  background: var(--bg-hover);
+}
+.settingLabel {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.settingDesc {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
 
 .switch {
   position: relative;
@@ -1717,29 +1913,59 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
   transition: transform 0.15s ease;
 }
-.switch input:checked + .switchTrack { background: var(--accent-dark); }
-.switch input:checked + .switchTrack::after { transform: translateX(14px); }
+.switch input:checked + .switchTrack {
+  background: var(--accent-dark);
+}
+.switch input:checked + .switchTrack::after {
+  transform: translateX(14px);
+}
 .switch input:focus-visible + .switchTrack {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
 /* leading icon + danger variant for popover action rows */
-.popover .popoverItemIcon { flex-shrink: 0; color: var(--text-muted); }
-.popover .popoverItem:hover .popoverItemIcon { color: var(--text-primary); }
-.popover .popoverItemDanger { color: #e05c5c; }
-.popover .popoverItemDanger .popoverItemIcon { color: #e05c5c; }
-.popover .popoverItemDanger:hover { background: rgba(224, 92, 92, 0.12); }
+.popover .popoverItemIcon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.popover .popoverItem:hover .popoverItemIcon {
+  color: var(--text-primary);
+}
+.popover .popoverItemDanger {
+  color: #e05c5c;
+}
+.popover .popoverItemDanger .popoverItemIcon {
+  color: #e05c5c;
+}
+.popover .popoverItemDanger:hover {
+  background: rgba(224, 92, 92, 0.12);
+}
 /* search */
-.searchPopover { min-width: 380px; max-width: 70vw; }
+.searchPopover {
+  min-width: 380px;
+  max-width: 70vw;
+}
 .searchInput {
   width: 100%;
   padding: 8px 10px;
   font-size: 13px;
 }
-.searchInput:focus { border-color: var(--accent-dark); }
-.searchResults { max-height: 50vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.searchHint { font-size: 12px; color: var(--text-dim); padding: 8px 4px; }
+.searchInput:focus {
+  border-color: var(--accent-dark);
+}
+.searchResults {
+  max-height: 50vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.searchHint {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 8px 4px;
+}
 .topbar .searchResult,
 .searchResult {
   background: none;
@@ -1753,8 +1979,14 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   gap: 2px;
   width: 100%;
 }
-.searchResult:hover { background: var(--bg-hover); }
-.searchResultPage { font-size: 11px; color: var(--accent-dark); font-weight: 600; }
+.searchResult:hover {
+  background: var(--bg-hover);
+}
+.searchResultPage {
+  font-size: 11px;
+  color: var(--accent-dark);
+  font-weight: 600;
+}
 .searchKindBadge {
   margin-left: 6px;
   padding: 0 5px;
@@ -1765,8 +1997,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-radius: 7px;
   vertical-align: 1px;
 }
-.searchRow { display: flex; gap: 4px; align-items: center; }
-.searchRow .searchInput { flex: 1; min-width: 0; }
+.searchRow {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.searchRow .searchInput {
+  flex: 1;
+  min-width: 0;
+}
 /* chips + input share one box; label suggestions drop down from it */
 .searchInputWrap {
   position: relative;
@@ -1781,7 +2020,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border: 1px solid var(--border);
   border-radius: 6px;
 }
-.searchInputWrap:focus-within { border-color: var(--accent-dark); }
+.searchInputWrap:focus-within {
+  border-color: var(--accent-dark);
+}
 .searchInputWrap .searchInput {
   flex: 1;
   min-width: 90px;
@@ -1789,7 +2030,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   background: none;
   padding: 5px 2px;
 }
-.searchChip { display: inline-flex; align-items: center; gap: 3px; }
+.searchChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
 /* .searchChipX look comes from .uiClose.uiCloseSm */
 .searchPopover .categorySuggestionItem {
   padding: 6px 10px;
@@ -1801,7 +2046,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   align-items: center;
 }
 .searchPopover .categorySuggestionItem:hover,
-.searchPopover .categorySuggestionItem.selected { background: var(--bg-hover); }
+.searchPopover .categorySuggestionItem.selected {
+  background: var(--bg-hover);
+}
 .searchSuggestHint {
   font-size: 10px;
   color: var(--text-dim);
@@ -1809,8 +2056,16 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-radius: 4px;
   padding: 0 4px;
 }
-.searchSuggestName { display: inline-flex; align-items: center; gap: 5px; }
-.searchSuggestName svg, .searchChip svg { flex-shrink: 0; opacity: 0.8; }
+.searchSuggestName {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.searchSuggestName svg,
+.searchChip svg {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
 .topbar .searchToggle,
 .searchToggle {
   background: none;
@@ -1863,7 +2118,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border: none;
   border-radius: 4px;
 }
-.searchToggle.searchNavBtn:disabled { opacity: 0.4; cursor: default; background: none; }
+.searchToggle.searchNavBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: none;
+}
 .searchResultText {
   font-size: 12px;
   color: var(--text-secondary);
@@ -1874,10 +2133,26 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 
 /* --- dockable windows (notes + chat share the same slot system) --- */
-.workArea { display: flex; flex: 1; min-height: 0; min-width: 0; position: relative; }
-.workArea > [data-panel-group] { flex: 1; }
-[data-panel] { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-[data-panel] > .main { flex: 1; min-height: 0; }
+.workArea {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+.workArea > [data-panel-group] {
+  flex: 1;
+}
+[data-panel] {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+[data-panel] > .main {
+  flex: 1;
+  min-height: 0;
+}
 
 /* panel resize handles (VSCode-style sashes) */
 .sash {
@@ -1885,11 +2160,20 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   flex-shrink: 0;
   transition: background 0.15s ease 0.1s;
 }
-.sash-horizontal { width: 5px; cursor: col-resize; }
-.sash-vertical { height: 5px; cursor: row-resize; }
+.sash-horizontal {
+  width: 5px;
+  cursor: col-resize;
+}
+.sash-vertical {
+  height: 5px;
+  cursor: row-resize;
+}
 .sash:hover,
 .sash[data-resize-handle-state="hover"],
-.sash[data-resize-handle-state="drag"] { background: var(--accent-dark); transition: none; }
+.sash[data-resize-handle-state="drag"] {
+  background: var(--accent-dark);
+  transition: none;
+}
 
 /* uniform window chrome */
 .dockWindow {
@@ -1922,24 +2206,62 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   white-space: nowrap;
   flex-shrink: 0;
 }
-.dockGrip:hover { color: var(--text-primary); }
-.dockHeaderSpacer { flex: 1; min-width: 0; }
-.dockWindow.collapsed { flex: 0 0 auto; }
+.dockGrip:hover {
+  color: var(--text-primary);
+}
+.dockHeaderSpacer {
+  flex: 1;
+  min-width: 0;
+}
+.dockWindow.collapsed {
+  flex: 0 0 auto;
+}
 /* slot layout: collapsed windows are fixed header bars above/beside the
    resizable group of expanded windows */
-.slotStack { display: flex; flex: 1; min-width: 0; min-height: 0; }
-.slotStack-vertical { flex-direction: column; }
-.slotStack-horizontal { flex-direction: row; }
-.collapsedBar { flex: 0 0 auto; display: flex; min-width: 0; }
+.slotStack {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.slotStack-vertical {
+  flex-direction: column;
+}
+.slotStack-horizontal {
+  flex-direction: row;
+}
+.collapsedBar {
+  flex: 0 0 auto;
+  display: flex;
+  min-width: 0;
+}
 /* in vertical columns a collapsed bar spans the full column width */
-.slotStack-vertical .collapsedBar .dockWindow { flex: 1 1 auto; min-width: 0; }
-.slotStack-horizontal .collapsedBar .dockWindow { border-right: 1px solid var(--border-subtle); }
-.slotStackGroup { flex: 1; min-width: 0; min-height: 0; display: flex; }
-.slotStackGroup > [data-panel-group] { flex: 1; }
+.slotStack-vertical .collapsedBar .dockWindow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.slotStack-horizontal .collapsedBar .dockWindow {
+  border-right: 1px solid var(--border-subtle);
+}
+.slotStackGroup {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+.slotStackGroup > [data-panel-group] {
+  flex: 1;
+}
 /* unified compact header controls */
-.dockWindowHeader .chatClearBtn { white-space: nowrap; }
-.dockWindowHeader .chatHeaderSelects { margin: 0; }
-.dockWindowHeader .chatPanelHeaderBtns { flex-shrink: 0; }
+.dockWindowHeader .chatClearBtn {
+  white-space: nowrap;
+}
+.dockWindowHeader .chatHeaderSelects {
+  margin: 0;
+}
+.dockWindowHeader .chatPanelHeaderBtns {
+  flex-shrink: 0;
+}
 .dockWindowBody {
   flex: 1;
   min-height: 0;
@@ -1959,7 +2281,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-top: none !important;
   border-left: none !important;
 }
-.chatPanel.chatWindow { padding: 0 6px 6px; display: flex; flex-direction: column; overflow: hidden; }
+.chatPanel.chatWindow {
+  padding: 0 6px 6px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 
 /* --- phone layout (≤700px): dock slots collapse, windows become full-screen
    overlays over the work area, switched from a bottom tab bar --- */
@@ -1970,8 +2297,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   display: flex;
   background: var(--bg-surface);
 }
-.phonePanel .dockWindow { border-left: none; }
-.phonePanel .dockGrip { cursor: default; }
+.phonePanel .dockWindow {
+  border-left: none;
+}
+.phonePanel .dockGrip {
+  cursor: default;
+}
 /* Phone: the notes panel is a full-screen overlay — fill the whole width
    instead of inheriting the desktop sidebar sizing (420px / 75vw caps),
    and never scale it like a PDF page. */
@@ -2002,19 +2333,35 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   font-size: 13px;
   font-weight: 500;
 }
-.phoneTab.active { color: var(--accent); }
+.phoneTab.active {
+  color: var(--accent);
+}
 
 /* pseudo-fullscreen (iOS has no Fullscreen API): hide the app chrome and let
    the work area take the whole screen; the viewer's own ⛶ button exits */
 .app.pseudoFullscreen .topbar,
 .app.pseudoFullscreen .phoneTabBar,
-.app.pseudoFullscreen .status { display: none !important; }
+.app.pseudoFullscreen .status {
+  display: none !important;
+}
 
 /* chat attach picker + zoom input */
-.popover.popUp { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
-.attachPopover { min-width: 300px; max-width: 380px; }
+.popover.popUp {
+  top: auto;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: auto;
+}
+.attachPopover {
+  min-width: 300px;
+  max-width: 380px;
+}
 /* GPT-style "+" menu: icon + label + dim hint per row */
-.chatPlusMenu { min-width: 260px; max-width: 340px; padding: 4px; }
+.chatPlusMenu {
+  min-width: 260px;
+  max-width: 340px;
+  padding: 4px;
+}
 .chatPlusMenuItem {
   display: flex;
   align-items: center;
@@ -2029,7 +2376,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   font-size: 12px;
   text-align: left;
 }
-.chatPlusMenuItem:hover { background: var(--bg-hover); }
+.chatPlusMenuItem:hover {
+  background: var(--bg-hover);
+}
 .chatPlusMenuIcon {
   display: inline-flex;
   align-items: center;
@@ -2037,7 +2386,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   flex-shrink: 0;
   color: var(--text-secondary);
 }
-.chatPlusMenuLabel { white-space: nowrap; }
+.chatPlusMenuLabel {
+  white-space: nowrap;
+}
 .chatPlusMenuHint {
   color: var(--text-dim);
   font-size: 11px;
@@ -2060,10 +2411,16 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-secondary);
   max-width: 220px;
 }
-.chatFileChip svg { flex-shrink: 0; }
-.chatFileChipRemove { flex-shrink: 0; }
+.chatFileChip svg {
+  flex-shrink: 0;
+}
+.chatFileChipRemove {
+  flex-shrink: 0;
+}
 /* "Add papers to the chat" picker modal */
-.docPickerModal { width: min(480px, calc(100vw - 32px)); }
+.docPickerModal {
+  width: min(480px, calc(100vw - 32px));
+}
 .docPickerList {
   max-height: 46vh;
   overflow-x: hidden;
@@ -2083,12 +2440,26 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   font-size: 12px;
   color: var(--text-primary);
 }
-.docPickerItem:hover { background: var(--bg-hover); }
-.docPickerItem input { flex-shrink: 0; margin: 0; }
-.docPickerItem .attachName { flex: 1; min-width: 0; }
-.docPickerNotes { padding-left: 0; }
-.docPickerNotes:hover { background: none; }
-.docPickerNotes .attachName { flex: initial; }
+.docPickerItem:hover {
+  background: var(--bg-hover);
+}
+.docPickerItem input {
+  flex-shrink: 0;
+  margin: 0;
+}
+.docPickerItem .attachName {
+  flex: 1;
+  min-width: 0;
+}
+.docPickerNotes {
+  padding-left: 0;
+}
+.docPickerNotes:hover {
+  background: none;
+}
+.docPickerNotes .attachName {
+  flex: initial;
+}
 .docPickerBadge {
   flex-shrink: 0;
   margin-left: auto;
@@ -2098,9 +2469,19 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border: 1px solid var(--border-subtle);
   color: var(--text-dim);
 }
-.attachList { max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.attachItem { font-size: 12px; }
-.attachItem input { flex-shrink: 0; }
+.attachList {
+  max-height: 40vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.attachItem {
+  font-size: 12px;
+}
+.attachItem input {
+  flex-shrink: 0;
+}
 .chatAttachToggle.on {
   color: #8ab4f8;
   border-color: #8ab4f8;
@@ -2130,11 +2511,24 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   flex-shrink: 0;
   padding: 0;
 }
-.pageActionBtn:disabled { opacity: 0.6; cursor: default; }
-.pageActionBtn.pageDeleteBtn:hover { color: #d05050; }
-.sourcePopover { min-width: 300px; right: 0; }
-.findNav { display: inline-flex; gap: 2px; }
-.searchResult.active { background: color-mix(in srgb, var(--accent-dark) 14%, transparent); }
+.pageActionBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.pageActionBtn.pageDeleteBtn:hover {
+  color: #d05050;
+}
+.sourcePopover {
+  min-width: 300px;
+  right: 0;
+}
+.findNav {
+  display: inline-flex;
+  gap: 2px;
+}
+.searchResult.active {
+  background: color-mix(in srgb, var(--accent-dark) 14%, transparent);
+}
 
 .sidebarDockGrip {
   flex-shrink: 0;
@@ -2149,7 +2543,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   touch-action: none;
   border-bottom: 1px solid var(--border-subtle);
 }
-.sidebarDockGrip:hover { color: var(--text-primary); background: var(--bg-hover); }
+.sidebarDockGrip:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
 .dockPreview {
   position: fixed;
   z-index: 2000;
@@ -2157,7 +2554,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border: 2px solid var(--accent-dark);
   border-radius: 8px;
   pointer-events: none;
-  transition: left 0.1s ease, top 0.1s ease, width 0.1s ease, height 0.1s ease;
+  transition:
+    left 0.1s ease,
+    top 0.1s ease,
+    width 0.1s ease,
+    height 0.1s ease;
 }
 .chatPanel {
   display: flex;
@@ -2197,8 +2598,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   margin-bottom: 8px;
   padding: 0 2px;
 }
-.chatBubbleRow.user { justify-content: flex-end; }
-.chatBubbleRow.ai { justify-content: flex-start; }
+.chatBubbleRow.user {
+  justify-content: flex-end;
+}
+.chatBubbleRow.ai {
+  justify-content: flex-start;
+}
 .chatBubble {
   max-width: 88%;
   border-radius: 12px;
@@ -2220,17 +2625,32 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-bottom-left-radius: 4px;
   max-width: 96%;
 }
-.chatUserText { white-space: pre-wrap; }
+.chatUserText {
+  white-space: pre-wrap;
+}
 /* markdown inside AI bubbles */
-.chatBubble.ai p { margin: 0 0 6px; }
-.chatBubble.ai p:last-child { margin-bottom: 0; }
-.chatBubble.ai h1, .chatBubble.ai h2, .chatBubble.ai h3, .chatBubble.ai h4 {
+.chatBubble.ai p {
+  margin: 0 0 6px;
+}
+.chatBubble.ai p:last-child {
+  margin-bottom: 0;
+}
+.chatBubble.ai h1,
+.chatBubble.ai h2,
+.chatBubble.ai h3,
+.chatBubble.ai h4 {
   margin: 8px 0 4px;
   font-size: 13px;
   color: var(--text-primary);
 }
-.chatBubble.ai ul, .chatBubble.ai ol { margin: 0 0 6px; padding-left: 18px; }
-.chatBubble.ai li { margin: 2px 0; }
+.chatBubble.ai ul,
+.chatBubble.ai ol {
+  margin: 0 0 6px;
+  padding-left: 18px;
+}
+.chatBubble.ai li {
+  margin: 2px 0;
+}
 .chatBubble.ai code {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
@@ -2246,18 +2666,39 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   overflow-x: auto;
   margin: 4px 0 6px;
 }
-.chatBubble.ai pre code { background: none; border: none; padding: 0; }
-.chatBubble.ai table { border-collapse: collapse; margin: 4px 0 6px; display: block; overflow-x: auto; }
-.chatBubble.ai th, .chatBubble.ai td { border: 1px solid var(--border); padding: 3px 8px; }
+.chatBubble.ai pre code {
+  background: none;
+  border: none;
+  padding: 0;
+}
+.chatBubble.ai table {
+  border-collapse: collapse;
+  margin: 4px 0 6px;
+  display: block;
+  overflow-x: auto;
+}
+.chatBubble.ai th,
+.chatBubble.ai td {
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+}
 .chatBubble.ai blockquote {
   border-left: 3px solid var(--border);
   margin: 4px 0 6px;
   padding: 0 0 0 8px;
   color: var(--text-muted);
 }
-.chatBubble.ai .katex-display { margin: 6px 0; overflow-x: auto; overflow-y: hidden; }
+.chatBubble.ai .katex-display {
+  margin: 6px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
 /* typing indicator */
-.chatTyping { display: inline-flex; gap: 4px; padding: 3px 2px; }
+.chatTyping {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px 2px;
+}
 .chatTyping span {
   width: 6px;
   height: 6px;
@@ -2265,11 +2706,23 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   background: var(--text-dim);
   animation: chatTypingBlink 1.2s infinite ease-in-out;
 }
-.chatTyping span:nth-child(2) { animation-delay: 0.2s; }
-.chatTyping span:nth-child(3) { animation-delay: 0.4s; }
+.chatTyping span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.chatTyping span:nth-child(3) {
+  animation-delay: 0.4s;
+}
 @keyframes chatTypingBlink {
-  0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
-  40% { opacity: 1; transform: translateY(-2px); }
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
 }
 /* model + effort switchers */
 .chatHeaderSelects {
@@ -2310,7 +2763,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-primary);
   border-color: var(--border);
 }
-.chatModelRefreshBtn:disabled { cursor: default; opacity: 0.6; }
+.chatModelRefreshBtn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
 /* prompt editor */
 .promptTextarea {
   width: 100%;
@@ -2319,7 +2775,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   padding: 8px 10px;
   resize: vertical;
 }
-.promptTextarea:focus { border-color: var(--text-dim); }
+.promptTextarea:focus {
+  border-color: var(--text-dim);
+}
 /* AI provider key editor (Settings → AI providers) */
 .aiKeyInput {
   width: 100%;
@@ -2327,8 +2785,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   padding: 7px 10px;
   margin-bottom: 6px;
 }
-.aiKeyInput:focus { border-color: var(--text-dim); }
-.aiKeysError { color: #e5534b; }
+.aiKeyInput:focus {
+  border-color: var(--text-dim);
+}
+.aiKeysError {
+  color: #e5534b;
+}
 /* Uniform buttons for the settings modals (AI providers, prompt editor):
    ghost by default, .primary for the main action, .danger for destructive,
    .sm for inline row actions. */
@@ -2351,15 +2813,42 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   line-height: 1.4;
   white-space: nowrap;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
 }
-.uiBtn:active:not(:disabled) { background: var(--bg-active); box-shadow: none; }
-.uiBtn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
-.uiBtn.sm { font-size: 11.5px; padding: 4px 12px; border-radius: 8px; }
+.uiBtn:active:not(:disabled) {
+  background: var(--bg-active);
+  box-shadow: none;
+}
+.uiBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+}
+.uiBtn.sm {
+  font-size: 11.5px;
+  padding: 4px 12px;
+  border-radius: 8px;
+}
 /* Icon-only square variant (delete/edit row actions). */
-.uiBtn.iconSq { width: 27px; height: 25px; padding: 0; flex-shrink: 0; }
-.uiBtn.primary { background: var(--accent-dark); border-color: transparent; color: #fff; }
-.uiBtn.primary:hover:not(:disabled) { background: #3568a0; color: #fff; }
+.uiBtn.iconSq {
+  width: 27px;
+  height: 25px;
+  padding: 0;
+  flex-shrink: 0;
+}
+.uiBtn.primary {
+  background: var(--accent-dark);
+  border-color: transparent;
+  color: #fff;
+}
+.uiBtn.primary:hover:not(:disabled) {
+  background: #3568a0;
+  color: #fff;
+}
 .uiBtn.danger:hover:not(:disabled) {
   color: #e5534b;
   border-color: rgba(229, 83, 75, 0.5);
@@ -2375,7 +2864,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   cursor: pointer;
   text-decoration: underline;
 }
-.chatEmptyLink:hover { color: #6fb2ff; }
+.chatEmptyLink:hover {
+  color: #6fb2ff;
+}
 .aiProvRow {
   display: flex;
   align-items: center;
@@ -2384,38 +2875,92 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   padding: 8px 2px;
   border-bottom: 1px solid var(--border-subtle);
 }
-.aiProvName { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
-.aiProvDesc { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
-.aiProvActions { display: flex; gap: 6px; flex-shrink: 0; }
-.aiProvForm { margin-top: 8px; }
+.aiProvName {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.aiProvDesc {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.aiProvActions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.aiProvForm {
+  margin-top: 8px;
+}
 /* layout only: field caption sitting above an input inside a form */
-.formFieldLabel { display: block; margin: 2px 0 4px; }
+.formFieldLabel {
+  display: block;
+  margin: 2px 0 4px;
+}
 /* Storage meter (QuotaMeter): thin cloud-drive-style usage bar. */
-.quotaMeter { display: block; min-width: 0; }
+.quotaMeter {
+  display: block;
+  min-width: 0;
+}
 .quotaBar {
-  display: block; height: 4px; border-radius: 2px;
-  background: var(--bg-active); overflow: hidden; margin: 5px 0 4px;
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-active);
+  overflow: hidden;
+  margin: 5px 0 4px;
 }
 .quotaBarFill {
-  display: block; height: 100%; border-radius: 2px;
-  background: var(--accent-dark); transition: width 0.3s ease;
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent-dark);
+  transition: width 0.3s ease;
 }
-.quotaBarFill.warn { background: #d9822b; }
-.quotaBarFill.full { background: #e5534b; }
+.quotaBarFill.warn {
+  background: #d9822b;
+}
+.quotaBarFill.full {
+  background: #e5534b;
+}
 /* meters inside user-list rows stay compact */
-.aiProvMeta .quotaMeter { max-width: 260px; }
+.aiProvMeta .quotaMeter {
+  max-width: 260px;
+}
 /* right-hand cell of a settings row holding a meter */
-.settingQuotaCell { width: 200px; flex-shrink: 0; text-align: right; }
-.settingQuotaCell .settingDesc { white-space: nowrap; }
+.settingQuotaCell {
+  width: 200px;
+  flex-shrink: 0;
+  text-align: right;
+}
+.settingQuotaCell .settingDesc {
+  white-space: nowrap;
+}
 /* storage meter in the account popover: numbers ride in the user card row,
    the bar (quota only) sits as a thin strip beneath it */
-.popoverQuota { padding: 0 14px 8px; }
-.userCardQuota {
-  margin-left: auto; align-self: center; flex-shrink: 0;
-  font-size: 11px; color: var(--text-muted); white-space: nowrap;
+.popoverQuota {
+  padding: 0 14px 8px;
 }
-.aiProvPwForm { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
-.aiProvPwForm .aiKeyInput { margin-bottom: 0; width: auto; flex: 1; }
+.userCardQuota {
+  margin-left: auto;
+  align-self: center;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.aiProvPwForm {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+.aiProvPwForm .aiKeyInput {
+  margin-bottom: 0;
+  width: auto;
+  flex: 1;
+}
 /* small badge chips (admin / guest / you) */
 .uiTag {
   display: inline-block;
@@ -2429,7 +2974,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   font-weight: 500;
   vertical-align: 1px;
 }
-.uiTag.admin { color: #4a9eff; border-color: rgba(74, 158, 255, 0.4); }
+.uiTag.admin {
+  color: #4a9eff;
+  border-color: rgba(74, 158, 255, 0.4);
+}
 .uiCheckRow {
   display: flex;
   align-items: center;
@@ -2440,7 +2988,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   cursor: pointer;
 }
 /* selection chips (multiple via Ctrl+select) */
-.chatSelChips { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+.chatSelChips {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
 .chatSelChip {
   display: flex;
   align-items: center;
@@ -2467,7 +3020,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   font-style: italic;
 }
 /* Look comes from .uiClose.uiCloseSm; keep it pinned to the right of the chip. */
-.chatSelChipClose { margin-left: auto; }
+.chatSelChipClose {
+  margin-left: auto;
+}
 /* attach-PDF toggle */
 .chatAttachToggle {
   display: inline-flex;
@@ -2482,7 +3037,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   user-select: none;
   white-space: nowrap;
 }
-.chatAttachToggle input { display: none; }
+.chatAttachToggle input {
+  display: none;
+}
 /* report modal */
 .reportOverlay {
   position: fixed;
@@ -2496,7 +3053,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 /* The confirm dialog can be triggered FROM another modal (e.g. deleting a
    user from the Users manager) — it must always stack above sibling overlays
    regardless of DOM order. */
-.reportOverlay[data-popover="confirm"] { z-index: 1300; }
+.reportOverlay[data-popover="confirm"] {
+  z-index: 1300;
+}
 .reportModal {
   border-radius: var(--radius-surface);
   padding: 16px;
@@ -2534,13 +3093,18 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   font-size: 12px;
   color: var(--text-secondary);
 }
-.reportPageItem:hover { background: var(--bg-hover); }
+.reportPageItem:hover {
+  background: var(--bg-hover);
+}
 .reportModalBtns {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
 }
-.reportModalBtns .chatClearBtn { font-size: 12px; padding: 5px 12px; }
+.reportModalBtns .chatClearBtn {
+  font-size: 12px;
+  padding: 5px 12px;
+}
 .chatInputRow {
   display: flex;
   gap: 4px;
@@ -2558,7 +3122,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   font-family: inherit;
   outline: none;
 }
-.chatInput:focus { border-color: var(--text-dim); }
+.chatInput:focus {
+  border-color: var(--text-dim);
+}
 .chatInputArea {
   resize: none;
   max-height: 140px;
@@ -2631,8 +3197,13 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   cursor: pointer;
   font-family: inherit;
 }
-.loginBtn:disabled { opacity: 0.5; cursor: default; }
-.loginBtn:hover:not(:disabled) { filter: brightness(1.1); }
+.loginBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.loginBtn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
 .loginGuestBtn {
   display: block;
   width: 100%;
@@ -2645,7 +3216,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   cursor: pointer;
   font-family: inherit;
 }
-.loginGuestBtn:hover { background: var(--bg-hover); }
+.loginGuestBtn:hover {
+  background: var(--bg-hover);
+}
 .loginConflictText {
   font-size: 14px;
   line-height: 1.5;
@@ -2680,8 +3253,13 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   padding: 0 2px;
   line-height: 1;
 }
-.logoutBtn:hover { color: var(--text-primary); }
-.pdfSaveSwitch.disabled { opacity: 0.5; pointer-events: none; }
+.logoutBtn:hover {
+  color: var(--text-primary);
+}
+.pdfSaveSwitch.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
 
 /* --- page header: title with category chips below, buttons at the right --- */
 .pageTitleMain {
@@ -2710,9 +3288,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   max-width: 88%;
   min-width: 0;
 }
-.chatBubbleRow.user .chatMsgCol { align-items: flex-end; }
-.chatBubbleRow.ai .chatMsgCol { max-width: 96%; }
-.chatMsgCol .chatBubble { max-width: 100%; }
+.chatBubbleRow.user .chatMsgCol {
+  align-items: flex-end;
+}
+.chatBubbleRow.ai .chatMsgCol {
+  max-width: 96%;
+}
+.chatMsgCol .chatBubble {
+  max-width: 100%;
+}
 .chatMsgActions {
   display: flex;
   gap: 2px;
@@ -2721,7 +3305,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   transition: opacity 0.12s;
 }
 .chatBubbleRow:hover .chatMsgActions,
-.chatBubbleRow:focus-within .chatMsgActions { opacity: 1; }
+.chatBubbleRow:focus-within .chatMsgActions {
+  opacity: 1;
+}
 .chatMsgActionBtn {
   background: none;
   border: none;
@@ -2740,7 +3326,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   outline-offset: 1px;
 }
 /* edit-in-place bubble */
-.chatEditBubble { width: 100%; }
+.chatEditBubble {
+  width: 100%;
+}
 .chatEditTextarea {
   width: 100%;
   min-height: 40px;
@@ -2761,9 +3349,18 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   gap: 4px;
   margin-top: 4px;
 }
-.chatEditBubble .chatClearBtn { color: rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.35); }
-.chatEditBubble .chatClearBtn:hover { color: #fff; border-color: rgba(255,255,255,0.7); }
-.chatEditBubble .chatClearBtn:disabled { opacity: 0.5; cursor: default; }
+.chatEditBubble .chatClearBtn {
+  color: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+.chatEditBubble .chatClearBtn:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.7);
+}
+.chatEditBubble .chatClearBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 /* find-in-chat bar */
 .chatFindRow {
   display: flex;
@@ -2773,7 +3370,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   flex-shrink: 0;
   border-bottom: 1px solid var(--border-subtle);
 }
-.chatFindRow .searchInput { flex: 1; min-width: 0; padding: 4px 8px; font-size: 12px; }
+.chatFindRow .searchInput {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
 .chatFindCount {
   font-size: 11px;
   color: var(--text-muted);
@@ -2781,8 +3383,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   text-align: center;
   flex-shrink: 0;
 }
-.chatFindRow .searchToggle:disabled { opacity: 0.35; cursor: default; }
-.chatClearBtn.on { color: var(--text-primary); border-color: var(--accent-dark); background: color-mix(in srgb, var(--accent-dark) 15%, transparent); }
+.chatFindRow .searchToggle:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.chatClearBtn.on {
+  color: var(--text-primary);
+  border-color: var(--accent-dark);
+  background: color-mix(in srgb, var(--accent-dark) 15%, transparent);
+}
 /* pasted figures: pending previews + in-bubble display */
 .chatImgPreviewRow {
   display: flex;
@@ -2813,8 +3422,16 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   background: var(--bg-raised);
   color: var(--text-primary);
 }
-.chatImgRemove:hover { background: #b93c3c; color: #fff; }
-.chatMsgImages { display: flex; flex-direction: column; gap: 4px; margin-bottom: 4px; }
+.chatImgRemove:hover {
+  background: #b93c3c;
+  color: #fff;
+}
+.chatMsgImages {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
 .chatMsgImage {
   max-width: 100%;
   max-height: 260px;
@@ -2822,7 +3439,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-radius: 8px;
   background: var(--bg-surface);
 }
-.chatMsgPdfs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.chatMsgPdfs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
 .chatPdfChip {
   display: inline-flex;
   align-items: center;
@@ -2836,7 +3458,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   max-width: 100%;
   overflow: hidden;
 }
-.chatBubble.ai .chatPdfChip { background: var(--bg-raised); color: var(--text-muted); }
+.chatBubble.ai .chatPdfChip {
+  background: var(--bg-raised);
+  color: var(--text-muted);
+}
 .chatPdfToggle {
   gap: 3px;
   font-size: 10px;
@@ -2845,7 +3470,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   height: 26px;
   padding: 0 8px;
 }
-.chatPdfToggle:disabled { opacity: 0.4; cursor: default; }
+.chatPdfToggle:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
 
 /* "+" context button and round send/stop */
 .chatAttachToggle.chatPlusBtn {
@@ -2858,7 +3486,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   line-height: 1;
   align-self: center;
 }
-.chatPlusCount { font-size: 10px; font-weight: 600; margin-left: 1px; }
+.chatPlusCount {
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 1px;
+}
 /* Round send/stop variant of .uiBtn (chat composer). */
 .uiBtn.chatCircleBtn {
   border-radius: 999px;
@@ -2872,8 +3504,13 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 /* Stop + voice dictation (mic / cancel / stop) share the muted circle look;
    while recording the row becomes × + live waveform + timer + ■/↑
    (ChatGPT-style). */
-.uiBtn.chatCircleBtn:is(.chatStopBtn, .chatMicBtn) { background: var(--bg-subtle); color: var(--text-primary); }
-.uiBtn.chatCircleBtn:is(.chatStopBtn, .chatMicBtn):hover:not(:disabled) { background: var(--bg-hover); }
+.uiBtn.chatCircleBtn:is(.chatStopBtn, .chatMicBtn) {
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+}
+.uiBtn.chatCircleBtn:is(.chatStopBtn, .chatMicBtn):hover:not(:disabled) {
+  background: var(--bg-hover);
+}
 .chatWaveCanvas {
   flex: 1;
   min-width: 40px;
@@ -2898,10 +3535,20 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   background: #e5484d;
   animation: chatRecPulse 1.3s ease-in-out infinite;
 }
-@keyframes chatRecPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes chatRecPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
 
 /* --- downloads & uploads (Chrome-style transfer list) --- */
-.topbar .transferBtn { position: relative; }
+.topbar .transferBtn {
+  position: relative;
+}
 .transferSpin {
   position: absolute;
   top: 3px;
@@ -2919,8 +3566,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   width: 9px;
   height: 9px;
 }
-@keyframes transferSpin { to { transform: rotate(360deg); } }
-.downloadsPopover { min-width: 320px; max-width: 420px; }
+@keyframes transferSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.downloadsPopover {
+  min-width: 320px;
+  max-width: 420px;
+}
 .transferRow {
   display: flex;
   align-items: center;
@@ -2929,11 +3583,26 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-radius: 6px;
   font-size: 12px;
 }
-.transferRow:hover { background: var(--bg-block); }
-.transferStatus { display: inline-flex; width: 14px; justify-content: center; flex-shrink: 0; }
-.transferStatus.done { color: #4caf50; }
-.transferStatus.error { color: #e05c5c; }
-.transferKind { display: inline-flex; color: var(--text-dim); flex-shrink: 0; }
+.transferRow:hover {
+  background: var(--bg-block);
+}
+.transferStatus {
+  display: inline-flex;
+  width: 14px;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.transferStatus.done {
+  color: #4caf50;
+}
+.transferStatus.error {
+  color: #e05c5c;
+}
+.transferKind {
+  display: inline-flex;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
 .transferName {
   flex: 1;
   min-width: 0;
@@ -2942,13 +3611,26 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   white-space: nowrap;
   color: var(--text-secondary);
 }
-.transferInfo { flex-shrink: 0; font-size: 11px; color: var(--text-muted); }
-.searchToggle.transferClearBtn { width: auto; padding: 0 8px; }
+.transferInfo {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.searchToggle.transferClearBtn {
+  width: auto;
+  padding: 0 8px;
+}
 
 /* --- global Back button (topbar) --- */
 @keyframes navBackIn {
-  from { opacity: 0; transform: translateX(-6px) scale(0.85); }
-  to { opacity: 1; transform: translateX(0) scale(1); }
+  from {
+    opacity: 0;
+    transform: translateX(-6px) scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
 }
 .topbar .navBackBtn {
   position: relative;
@@ -2958,7 +3640,10 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--accent);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
   animation: navBackIn 0.16s ease-out;
-  transition: background 0.12s, border-color 0.12s, transform 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    transform 0.12s;
 }
 .topbar .navBackBtn:hover {
   background: var(--accent-bg);
@@ -2966,7 +3651,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--accent-bright);
   transform: translateX(-1px);
 }
-.topbar .navBackBtn:active { transform: translateX(-2px) scale(0.95); }
+.topbar .navBackBtn:active {
+  transform: translateX(-2px) scale(0.95);
+}
 .navBackBadge {
   position: absolute;
   top: -3px;
@@ -3034,9 +3721,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-primary);
   pointer-events: none;
 }
-.pdfNoteTip > *:first-child { margin-top: 0; }
-.pdfNoteTip > *:last-child { margin-bottom: 0; }
-.pdfNoteTip p { margin: 4px 0; }
+.pdfNoteTip > *:first-child {
+  margin-top: 0;
+}
+.pdfNoteTip > *:last-child {
+  margin-bottom: 0;
+}
+.pdfNoteTip p {
+  margin: 4px 0;
+}
 
 /* --- area notes (Ctrl+drag rectangle selection on the PDF) --- */
 /* pinch-preview transform target. Origin 0 0 = the layer's top-left, which
@@ -3092,9 +3785,17 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.citeMetaSource { color: var(--text-dim); font-size: 11px; }
-.citeBtnRow { gap: 6px; }
-.citeBtnRow .chatClearBtn { font-size: 12px; padding: 5px 10px; }
+.citeMetaSource {
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.citeBtnRow {
+  gap: 6px;
+}
+.citeBtnRow .chatClearBtn {
+  font-size: 12px;
+  padding: 5px 10px;
+}
 .pptCiteBox {
   display: flex;
   align-items: flex-start;
@@ -3104,8 +3805,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   border-radius: 6px;
   padding: 8px 10px;
 }
-.pptCitePreview { flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary); }
-.pptCitePreview p { margin: 0; }
+.pptCitePreview {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.pptCitePreview p {
+  margin: 0;
+}
 /* Full BibTeX entry in the share popover: scrolls instead of growing. */
 .bibtexPre {
   flex: 1;
@@ -3132,16 +3840,46 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 
 /* --- paper metadata popover --- */
-.metaPopover { min-width: 340px; max-width: 420px; }
-.metaTable { display: flex; flex-direction: column; gap: 4px; padding: 2px 4px; }
-.metaRow { display: flex; gap: 8px; font-size: 12px; line-height: 1.45; }
-.metaKey { color: var(--text-dim); flex: 0 0 52px; }
-.metaVal { color: var(--text-secondary); min-width: 0; word-break: break-word; }
-.metaVal a { color: var(--accent); text-decoration: none; }
-.metaVal a:hover { text-decoration: underline; }
+.metaPopover {
+  min-width: 340px;
+  max-width: 420px;
+}
+.metaTable {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 4px;
+}
+.metaRow {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.metaKey {
+  color: var(--text-dim);
+  flex: 0 0 52px;
+}
+.metaVal {
+  color: var(--text-secondary);
+  min-width: 0;
+  word-break: break-word;
+}
+.metaVal a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.metaVal a:hover {
+  text-decoration: underline;
+}
 /* Editable metadata fields: quiet inputs that only reveal their border on
    hover/focus, so the table still reads like a table. */
-.metaValEdit { flex: 1; display: flex; align-items: center; gap: 4px; }
+.metaValEdit {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 .metaInput {
   flex: 1;
   min-width: 0;
@@ -3155,18 +3893,29 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
      value column, aligned with the read-only rows below. */
   margin: -2px 0 -2px -5px;
 }
-.metaInput:hover { border-color: var(--border); }
+.metaInput:hover {
+  border-color: var(--border);
+}
 .metaInput:focus {
   outline: none;
   border-color: var(--accent-dark);
   background: var(--bg-input);
   color: var(--text-primary);
 }
-.metaLink { display: inline-flex; align-items: center; color: var(--accent); flex-shrink: 0; }
+.metaLink {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+  flex-shrink: 0;
+}
 /* Icon buttons inside metadata rows: negative vertical margins keep the 20px
    hit target from inflating the text row's height, so keys and values stay
    on one baseline. */
-.metaTable .metaRowBtn { width: 20px; height: 20px; margin: -4px 0; }
+.metaTable .metaRowBtn {
+  width: 20px;
+  height: 20px;
+  margin: -4px 0;
+}
 
 /* --- reference-link creation --- */
 .linkTipBtn {
@@ -3176,9 +3925,22 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   align-items: center;
   justify-content: center;
 }
-.linkTipBtn:hover { background: var(--bg-hover); }
-.linkRefQuote { font-style: italic; color: var(--text-tertiary); }
-.linkPageItem { background: none; border: none; width: 100%; text-align: left; font: inherit; color: var(--text-secondary); justify-content: space-between; }
+.linkTipBtn:hover {
+  background: var(--bg-hover);
+}
+.linkRefQuote {
+  font-style: italic;
+  color: var(--text-tertiary);
+}
+.linkPageItem {
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--text-secondary);
+  justify-content: space-between;
+}
 .linkLikelyBadge {
   flex-shrink: 0;
   font-size: 10px;
@@ -3207,12 +3969,26 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.blockLinkChip:hover { background: var(--accent-dark); border-color: #4a8abf; color: #fff; }
-[data-theme="light"] .blockLinkChip { background: #e3effa; color: #2b6bcb; border-color: #b5d2ee; }
-[data-theme="light"] .blockLinkChip:hover { background: #cfe3f7; color: #1d5ab3; }
+.blockLinkChip:hover {
+  background: var(--accent-dark);
+  border-color: #4a8abf;
+  color: #fff;
+}
+[data-theme="light"] .blockLinkChip {
+  background: #e3effa;
+  color: #2b6bcb;
+  border-color: #b5d2ee;
+}
+[data-theme="light"] .blockLinkChip:hover {
+  background: #cfe3f7;
+  color: #1d5ab3;
+}
 
 /* --- prompt editor (3 prompts) --- */
-.promptModal { width: min(560px, calc(100vw - 32px)); overflow-y: auto; }
+.promptModal {
+  width: min(560px, calc(100vw - 32px));
+  overflow-y: auto;
+}
 
 /* --- cursor-positioned context menu (shared surface recipe) --- */
 .ctxMenu {
@@ -3238,7 +4014,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   font-size: 13px;
   color: var(--text-primary);
 }
-.ctxMenuItem:hover { background: var(--bg-hover); }
+.ctxMenuItem:hover {
+  background: var(--bg-hover);
+}
 /* Menu rows with a leading glyph (e.g. the tab menu's pin/close). */
 .ctxMenuItemIconed {
   display: flex;
@@ -3260,15 +4038,22 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   max-height: 320px;
   overflow-y: auto;
 }
-.refPopupEntry { border-bottom: 1px solid var(--border-subtle); }
-.refPopupEntry:last-child { border-bottom: none; }
+.refPopupEntry {
+  border-bottom: 1px solid var(--border-subtle);
+}
+.refPopupEntry:last-child {
+  border-bottom: none;
+}
 .refPopupPath {
   padding: 3px 12px 0;
   font-size: 11px;
   color: var(--text-muted);
   line-height: 1.4;
 }
-.refPopupSep { color: var(--text-dim); margin: 0 3px; }
+.refPopupSep {
+  color: var(--text-dim);
+  margin: 0 3px;
+}
 .refPopupItem {
   display: block;
   width: 100%;
@@ -3280,8 +4065,13 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   cursor: pointer;
   font: inherit;
 }
-.refPopupItem:hover { background: var(--bg-hover); }
-.refPopupItem.selected { background: var(--accent-bg); color: var(--text-primary); }
+.refPopupItem:hover {
+  background: var(--bg-hover);
+}
+.refPopupItem.selected {
+  background: var(--accent-bg);
+  color: var(--text-primary);
+}
 .refPopupText {
   font-size: 13px;
   white-space: nowrap;
@@ -3301,7 +4091,9 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   color: var(--text-primary);
   font-size: 15px;
 }
-.mathPreviewTip .katex-display { margin: 0; }
+.mathPreviewTip .katex-display {
+  margin: 0;
+}
 /* \command completion list: rendered glyph + command name per row. */
 .latexAcPopup {
   position: fixed;
@@ -3324,8 +4116,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   cursor: pointer;
   color: var(--text-primary);
 }
-.latexAcItem:hover { background: var(--bg-hover); }
-.latexAcItem.selected { background: var(--accent-bg); }
+.latexAcItem:hover {
+  background: var(--bg-hover);
+}
+.latexAcItem.selected {
+  background: var(--accent-bg);
+}
 .latexAcGlyph {
   min-width: 36px;
   text-align: center;
@@ -3340,8 +4136,20 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 
 /* --- confirm / link dialogs --- */
-.confirmModal { width: min(400px, calc(100vw - 32px)); }
-.confirmMessage { font-size: 13px; color: var(--text-secondary); }
-.linkPromptUrl { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.uiBtn.primary.dangerBtn { background: #b93c3c; }
-.uiBtn.primary.dangerBtn:hover:not(:disabled) { background: #d04848; }
+.confirmModal {
+  width: min(400px, calc(100vw - 32px));
+}
+.confirmMessage {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.linkPromptUrl {
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.uiBtn.primary.dangerBtn {
+  background: #b93c3c;
+}
+.uiBtn.primary.dangerBtn:hover:not(:disabled) {
+  background: #d04848;
+}

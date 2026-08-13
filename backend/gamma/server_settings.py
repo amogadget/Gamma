@@ -58,8 +58,10 @@ def _set_raw(key: str, value: str) -> None:
 
 def _defaults(conn) -> tuple[int, int]:
     rows = dict(conn.execute("SELECT key, value FROM settings WHERE key IN ('max_upload_mb', 'quota_mb')"))
-    return (_parse(rows.get("max_upload_mb"), DEFAULT_MAX_UPLOAD_MB, UPLOAD_MB_MIN, UPLOAD_MB_MAX),
-            _parse(rows.get("quota_mb"), DEFAULT_QUOTA_MB, QUOTA_MB_MIN, QUOTA_MB_MAX))
+    return (
+        _parse(rows.get("max_upload_mb"), DEFAULT_MAX_UPLOAD_MB, UPLOAD_MB_MIN, UPLOAD_MB_MAX),
+        _parse(rows.get("quota_mb"), DEFAULT_QUOTA_MB, QUOTA_MB_MIN, QUOTA_MB_MAX),
+    )
 
 
 def get_defaults() -> dict:
@@ -80,8 +82,7 @@ def user_limits(username: str) -> dict:
     """Effective limits for an account: per-user override, else server default."""
     with connect_users_db() as conn:
         default_upload, default_quota = _defaults(conn)
-        row = conn.execute("SELECT max_upload_mb, quota_mb FROM users WHERE username = ?",
-                           (username,)).fetchone()
+        row = conn.execute("SELECT max_upload_mb, quota_mb FROM users WHERE username = ?", (username,)).fetchone()
     upload_override = row[0] if row else None
     quota_override = row[1] if row else None
     return {
@@ -113,7 +114,8 @@ def check_upload_allowed(username: str, nbytes: int) -> None:
             raise HTTPException(
                 status_code=507,
                 detail=f"storage quota exceeded ({used // MB} of {quota} MB used — "
-                       f"this file needs {max(1, nbytes // MB)} MB more)")
+                f"this file needs {max(1, nbytes // MB)} MB more)",
+            )
 
 
 def can_store(username: str, nbytes: int) -> bool:

@@ -31,8 +31,9 @@ def bob(client):
 
 
 def _post_audio(client, **form):
-    return client.post("/api/ai/transcribe", data=form,
-                       files={"file": ("dictation.webm", b"\x1aE\xdf\xa3fake-opus", "audio/webm")})
+    return client.post(
+        "/api/ai/transcribe", data=form, files={"file": ("dictation.webm", b"\x1aE\xdf\xa3fake-opus", "audio/webm")}
+    )
 
 
 class _FakeResponse:
@@ -75,6 +76,7 @@ def test_transcribe_uses_the_openai_entry(bob, monkeypatch):
         return _FakeResponse({"text": " hello world "})
 
     from gamma.routers import ai
+
     monkeypatch.setattr(ai, "urlopen", fake_urlopen)
 
     r = _post_audio(bob)
@@ -92,11 +94,13 @@ def test_transcribe_falls_back_to_whisper(bob, monkeypatch):
     def fake_urlopen(req, timeout=0):
         calls.append(req.data)
         if len(calls) == 1:
-            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", None,
-                                         io.BytesIO(b'{"error":{"message":"model not found"}}'))
+            raise urllib.error.HTTPError(
+                req.full_url, 404, "Not Found", None, io.BytesIO(b'{"error":{"message":"model not found"}}')
+            )
         return _FakeResponse({"text": "second try"})
 
     from gamma.routers import ai
+
     monkeypatch.setattr(ai, "urlopen", fake_urlopen)
 
     r = _post_audio(bob)
@@ -113,6 +117,7 @@ def test_transcribe_honors_the_model_override(bob, monkeypatch):
         return _FakeResponse({"text": "ok"})
 
     from gamma.routers import ai
+
     monkeypatch.setattr(ai, "urlopen", fake_urlopen)
 
     r = _post_audio(bob, model="gpt-4o-mini-transcribe", language="zh")
@@ -131,6 +136,5 @@ def test_transcribe_honors_the_model_override(bob, monkeypatch):
 
 
 def test_transcribe_rejects_empty_audio(bob):
-    r = bob.post("/api/ai/transcribe",
-                 files={"file": ("dictation.webm", b"", "audio/webm")})
+    r = bob.post("/api/ai/transcribe", files={"file": ("dictation.webm", b"", "audio/webm")})
     assert r.status_code == 400

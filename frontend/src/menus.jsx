@@ -18,15 +18,25 @@ function ContextMenu({ x, y, onClose, className = "", children }) {
     if (!el) return;
     const pad = 8;
     const { width, height } = el.getBoundingClientRect();
-    let left = x, top = y;
-    if (left + width > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - width - pad);
-    if (top + height > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - height - pad);
+    let left = x,
+      top = y;
+    if (left + width > window.innerWidth - pad)
+      left = Math.max(pad, window.innerWidth - width - pad);
+    if (top + height > window.innerHeight - pad)
+      top = Math.max(pad, window.innerHeight - height - pad);
     setPos({ left, top });
   }, [x, y]);
 
   useEffect(() => {
-    function onDown(e) { if (ref.current && !ref.current.contains(e.target)) onClose(); }
-    function onKey(e) { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }
+    function onDown(e) {
+      if (ref.current && !ref.current.contains(e.target)) onClose();
+    }
+    function onKey(e) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose();
+      }
+    }
     // Capture phase so we see the click before it lands on other handlers.
     document.addEventListener("pointerdown", onDown, true);
     document.addEventListener("keydown", onKey);

@@ -30,12 +30,12 @@ from ..storage import find_upload_file
 
 router = APIRouter(prefix="/api", tags=["pageimage"])
 
-WIDTHS = (960, 1280, 1600)     # only these, so the cache cannot be fanned out
+WIDTHS = (960, 1280, 1600)  # only these, so the cache cannot be fanned out
 MAX_PAGE = 5000
 QUALITY = 72
-CACHE_DIR_NAME = "pagecache"   # beside uploads/, NOT inside it: the orphan
-                               # sweep walks uploads/ and would delete these
-CACHE_BUDGET = 512 * 1024 * 1024   # per user; ~1700 pages at 300 KB
+CACHE_DIR_NAME = "pagecache"  # beside uploads/, NOT inside it: the orphan
+# sweep walks uploads/ and would delete these
+CACHE_BUDGET = 512 * 1024 * 1024  # per user; ~1700 pages at 300 KB
 
 
 def _evict(root: Path):
@@ -45,20 +45,19 @@ def _evict(root: Path):
     is deliberately crude and only runs after a write.
     """
     try:
-        files = [(f.stat().st_mtime, f.stat().st_size, f)
-                 for f in root.rglob("*.jpg") if f.is_file()]
+        files = [(f.stat().st_mtime, f.stat().st_size, f) for f in root.rglob("*.jpg") if f.is_file()]
     except OSError:
         return
     total = sum(s for _, s, _ in files)
     if total <= CACHE_BUDGET:
         return
-    for _mt, size, f in sorted(files):     # oldest first
+    for _mt, size, f in sorted(files):  # oldest first
         try:
             f.unlink()
             total -= size
         except OSError:
             pass
-        if total <= CACHE_BUDGET * 0.9:    # under with headroom, so this is rare
+        if total <= CACHE_BUDGET * 0.9:  # under with headroom, so this is rare
             break
 
 
@@ -68,6 +67,7 @@ def _cache_path(user: str, doc_id: str, page: int, width: int) -> Path:
 
 def _render(pdf_path: Path, page: int, width: int) -> bytes:
     import pypdfium2 as pdfium
+
     doc = pdfium.PdfDocument(str(pdf_path))
     try:
         if page < 1 or page > len(doc):
@@ -78,8 +78,7 @@ def _render(pdf_path: Path, page: int, width: int) -> bytes:
             raise HTTPException(status_code=400, detail="bad page size")
         img = pg.render(scale=width / w).to_pil()
         buf = io.BytesIO()
-        img.convert("L" if img.mode in ("L", "1") else "RGB").save(
-            buf, "JPEG", quality=QUALITY, optimize=True)
+        img.convert("L" if img.mode in ("L", "1") else "RGB").save(buf, "JPEG", quality=QUALITY, optimize=True)
         return buf.getvalue()
     finally:
         try:
@@ -101,6 +100,7 @@ def ensure_dims(user: str, doc_id: str, pdf_path) -> bool:
     """
     import json as _json
     import pypdfium2 as pdfium
+
     out = dims_path(user, doc_id)
     if out.exists():
         return True
@@ -149,8 +149,9 @@ def page_dims(doc_id: str, request: Request):
             raise HTTPException(status_code=404, detail="not found")
         if not ensure_dims(user, doc_id, pdf_path):
             raise HTTPException(status_code=500, detail="could not read page sizes")
-    return FileResponse(cached, media_type="application/json",
-                        headers={"Cache-Control": "public, max-age=2592000, immutable"})
+    return FileResponse(
+        cached, media_type="application/json", headers={"Cache-Control": "public, max-age=2592000, immutable"}
+    )
 
 
 # Sync def on purpose: rendering is CPU-bound, and FastAPI runs sync endpoints
@@ -181,11 +182,12 @@ def page_image(doc_id: str, page: int, request: Request, w: int = 1280):
         cached.parent.mkdir(parents=True, exist_ok=True)
         tmp = cached.with_suffix(".part")
         tmp.write_bytes(data)
-        tmp.replace(cached)   # only ever served complete
+        tmp.replace(cached)  # only ever served complete
         _evict(cached.parent.parent)
 
     # doc_id is a content hash and the width is one of a fixed set, so this
     # bitmap can never change meaning — cache it as hard as the uploads it
     # comes from.
-    return FileResponse(cached, media_type="image/jpeg",
-                        headers={"Cache-Control": "public, max-age=2592000, immutable"})
+    return FileResponse(
+        cached, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=2592000, immutable"}
+    )

@@ -32,8 +32,8 @@ class UBCreateRequest(BaseModel):
     parent_id: str
     content: str = ""
     properties: dict = {}
-    before: str | None = None   # fractional position of the sibling before this one
-    after: str | None = None    # fractional position of the sibling after this one
+    before: str | None = None  # fractional position of the sibling before this one
+    after: str | None = None  # fractional position of the sibling after this one
 
 
 class UBUpdateRequest(BaseModel):
@@ -42,7 +42,7 @@ class UBUpdateRequest(BaseModel):
 
 
 class UBReorderRequest(BaseModel):
-    parent_id: str | None = None   # if provided, also reparents the block
+    parent_id: str | None = None  # if provided, also reparents the block
     before: str | None = None
     after: str | None = None
 
@@ -73,8 +73,9 @@ def _block_kind(parent_id: str, properties: str) -> str:
 
 
 @router.get("/block-search")
-async def block_search(request: Request, q: str = "", ids: str = "", limit: int = 10,
-                       case: int = 0, whole: int = 0, regex: int = 0):
+async def block_search(
+    request: Request, q: str = "", ids: str = "", limit: int = 10, case: int = 0, whole: int = 0, regex: int = 0
+):
     results = []
     with sqlite3.connect(user_db_path(require_user(request), "pages.db")) as conn:
         if ids:
@@ -93,18 +94,21 @@ async def block_search(request: Request, q: str = "", ids: str = "", limit: int 
             pattern = fuzzy_pattern(q, bool(case), bool(whole), bool(regex))
             if pattern is None:
                 return {"blocks": [], "error": "invalid regex" if regex else "empty query"}
-            rows = [r for r in conn.execute(
-                "SELECT id, content, parent_id, properties FROM unified_blocks "
-                "WHERE content != '' ORDER BY updated_at DESC",
-            ) if pattern.search(r[1] or "")][:limit]
+            rows = [
+                r
+                for r in conn.execute(
+                    "SELECT id, content, parent_id, properties FROM unified_blocks "
+                    "WHERE content != '' ORDER BY updated_at DESC",
+                )
+                if pattern.search(r[1] or "")
+            ][:limit]
         if not rows:
             return {"blocks": []}
 
         ancestors_by_id, page_root_by_id = ancestor_chains(conn, [r[0] for r in rows])
 
         for block_id, content, parent_id, properties in rows:
-            block = {"id": block_id, "content": content,
-                     "kind": _block_kind(parent_id, properties)}
+            block = {"id": block_id, "content": content, "kind": _block_kind(parent_id, properties)}
             ancestors = ancestors_by_id.get(block_id)
             if ancestors:
                 block["ancestors"] = ancestors
@@ -118,6 +122,7 @@ async def block_search(request: Request, q: str = "", ids: str = "", limit: int 
 
 
 # Route order matters: static-prefix routes must come before /{block_id}
+
 
 @router.get("/blocks/by-doc/{doc_id}")
 async def ub_get_by_doc(doc_id: str, request: Request):
@@ -168,8 +173,13 @@ async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate, request: 
         )
         conn.commit()
     return {
-        "id": block_id, "parent_id": "root", "position": new_pos,
-        "content": title, "properties": props, "created_at": now, "updated_at": now,
+        "id": block_id,
+        "parent_id": "root",
+        "position": new_pos,
+        "content": title,
+        "properties": props,
+        "created_at": now,
+        "updated_at": now,
     }
 
 
@@ -213,12 +223,14 @@ async def ub_get_backlinks(block_id: str, request: Request):
         results = []
         for bid, content, _parent_id in rows:
             ancestors = ancestors_by_id.get(bid)
-            results.append({
-                "id": bid,
-                "content": content,
-                "page_root_id": page_root_by_id.get(bid, bid),
-                "page_title": ancestors[0]["content"] if ancestors else content,
-            })
+            results.append(
+                {
+                    "id": bid,
+                    "content": content,
+                    "page_root_id": page_root_by_id.get(bid, bid),
+                    "page_title": ancestors[0]["content"] if ancestors else content,
+                }
+            )
     return {"backlinks": results}
 
 
@@ -249,14 +261,17 @@ async def ub_create_block(payload: UBCreateRequest, request: Request):
         conn.execute(
             "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (block_id, payload.parent_id, new_pos, payload.content,
-             json.dumps(payload.properties), now, now),
+            (block_id, payload.parent_id, new_pos, payload.content, json.dumps(payload.properties), now, now),
         )
         conn.commit()
     return {
-        "id": block_id, "parent_id": payload.parent_id, "position": new_pos,
-        "content": payload.content, "properties": payload.properties,
-        "created_at": now, "updated_at": now,
+        "id": block_id,
+        "parent_id": payload.parent_id,
+        "position": new_pos,
+        "content": payload.content,
+        "properties": payload.properties,
+        "created_at": now,
+        "updated_at": now,
     }
 
 
@@ -264,9 +279,7 @@ async def ub_create_block(payload: UBCreateRequest, request: Request):
 async def ub_update_block(block_id: str, payload: UBUpdateRequest, request: Request):
     now = page_now()
     with sqlite3.connect(user_db_path(require_user(request), "pages.db")) as conn:
-        row = conn.execute(
-            "SELECT properties FROM unified_blocks WHERE id = ?", (block_id,)
-        ).fetchone()
+        row = conn.execute("SELECT properties FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="block not found")
         sets = ["updated_at = ?"]
@@ -290,9 +303,14 @@ def _purge_derived_data(user: str, conn, deleted_ids: list):
     sweep them so data.db doesn't accumulate orphans."""
     try:
         from .search import _ensure_schema  # local import: search imports ai, keep module load acyclic
-        live_docs = {r[0] for r in conn.execute(
-            "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks "
-            "WHERE json_extract(properties, '$.doc_id') IS NOT NULL").fetchall()}
+
+        live_docs = {
+            r[0]
+            for r in conn.execute(
+                "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks "
+                "WHERE json_extract(properties, '$.doc_id') IS NOT NULL"
+            ).fetchall()
+        }
         with connect_data_db(user) as ddb:
             _ensure_schema(ddb)
             ddb.executemany("DELETE FROM chats WHERE block_id = ?", [(i,) for i in deleted_ids])
@@ -336,8 +354,15 @@ async def ub_put_children(block_id: str, payload: UBPutChildrenRequest, request:
             conn.execute(
                 "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (r["id"], r["parent_id"], r["position"], r["content"],
-                 r["properties"], r["created_at"], r["updated_at"]),
+                (
+                    r["id"],
+                    r["parent_id"],
+                    r["position"],
+                    r["content"],
+                    r["properties"],
+                    r["created_at"],
+                    r["updated_at"],
+                ),
             )
         conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, block_id))
         conn.commit()

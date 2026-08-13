@@ -23,6 +23,7 @@ def _make_user(username, password, is_admin=0):
 
 def _login(username, password):
     from gamma.app import app
+
     c = TestClient(app)
     r = c.post("/api/login", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
@@ -71,8 +72,8 @@ def test_scrub_keeps_debuggable_ids():
 
 
 def test_logs_require_admin(client, plainuser):
-    assert client.get("/api/admin/logs").status_code == 401       # no session
-    assert plainuser.get("/api/admin/logs").status_code == 403    # non-admin
+    assert client.get("/api/admin/logs").status_code == 401  # no session
+    assert plainuser.get("/api/admin/logs").status_code == 403  # non-admin
 
 
 def test_logs_tail_cursor_and_endpoint_scrub(logadmin):

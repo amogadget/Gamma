@@ -88,15 +88,17 @@ def flatten_tree(tree, parent_id, result, now):
             except Exception:
                 props = {}
         node_id = node.get("id") or secrets.token_urlsafe(9)
-        result.append({
-            "id": node_id,
-            "parent_id": parent_id,
-            "position": key,
-            "content": node.get("content", "") or "",
-            "properties": json.dumps(props),
-            "created_at": node.get("created_at") or now,
-            "updated_at": now,
-        })
+        result.append(
+            {
+                "id": node_id,
+                "parent_id": parent_id,
+                "position": key,
+                "content": node.get("content", "") or "",
+                "properties": json.dumps(props),
+                "created_at": node.get("created_at") or now,
+                "updated_at": now,
+            }
+        )
         flatten_tree(node.get("children") or [], node_id, result, now)
 
 

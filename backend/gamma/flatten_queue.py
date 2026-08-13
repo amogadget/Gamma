@@ -30,7 +30,7 @@ FLAT_SUFFIX = "-flat"
 _q: "queue.Queue[tuple[str, str]]" = queue.Queue()
 _worker: threading.Thread | None = None
 _lock = threading.Lock()
-_seen: set[tuple[str, str]] = set()   # jobs queued or done this process
+_seen: set[tuple[str, str]] = set()  # jobs queued or done this process
 _state = {"total": 0, "done": 0, "current": "", "flattened": 0}
 
 
@@ -54,8 +54,7 @@ def _point_blocks_at(user: str, doc_id: str):
     try:
         with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
             rows = conn.execute(
-                "SELECT id, properties FROM unified_blocks "
-                "WHERE json_extract(properties, '$.doc_id') = ?", (doc_id,)
+                "SELECT id, properties FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?", (doc_id,)
             ).fetchall()
             for bid, props in rows:
                 try:
@@ -65,8 +64,7 @@ def _point_blocks_at(user: str, doc_id: str):
                 if p.get("source_url") == flat_url:
                     continue
                 p["source_url"] = flat_url
-                conn.execute("UPDATE unified_blocks SET properties = ? WHERE id = ?",
-                             (json.dumps(p), bid))
+                conn.execute("UPDATE unified_blocks SET properties = ? WHERE id = ?", (json.dumps(p), bid))
             conn.commit()
     except Exception as e:
         log.warning(f"[flatten] could not repoint blocks for {doc_id}: {e}")
@@ -78,7 +76,8 @@ def _prepare_dims(user: str, doc_id: str):
     Walking a 332-page scan takes ~1.2 s; doing it here means the first person
     to open the paper does not wait for it.
     """
-    from .routers.pageimage import ensure_dims   # local: routers import upward
+    from .routers.pageimage import ensure_dims  # local: routers import upward
+
     path = source_path(user, doc_id)
     if path.exists():
         ensure_dims(user, doc_id, path)
@@ -94,7 +93,7 @@ def _run_one(user: str, doc_id: str):
     if not src.exists():
         return
     if not needs_flattening(src):
-        _prepare_dims(user, doc_id)   # served as-is, so it needs its own dims
+        _prepare_dims(user, doc_id)  # served as-is, so it needs its own dims
         return
     tmp = dst.with_suffix(".part")
     log.info(f"[flatten] {user}/{doc_id}: flattening")
@@ -103,14 +102,14 @@ def _run_one(user: str, doc_id: str):
         if not ok:
             tmp.unlink(missing_ok=True)
             return
-        tmp.replace(dst)   # only ever visible complete
+        tmp.replace(dst)  # only ever visible complete
         with _lock:
             _state["flattened"] += 1
         _point_blocks_at(user, doc_id)
         # Readers will be sent to the flattened copy, so that is the one whose
         # page sizes need to be ready.
         _prepare_dims(user, f"{doc_id}{FLAT_SUFFIX}")
-        log.info(f"[flatten] {user}/{doc_id}: done ({dst.stat().st_size // (1024*1024)} MB)")
+        log.info(f"[flatten] {user}/{doc_id}: done ({dst.stat().st_size // (1024 * 1024)} MB)")
     except Exception as e:
         tmp.unlink(missing_ok=True)
         log.warning(f"[flatten] {user}/{doc_id} failed: {e}")

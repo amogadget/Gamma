@@ -46,9 +46,7 @@ def create_user(username, password=None):
 
 def list_users():
     with connect_users_db() as conn:
-        rows = conn.execute(
-            "SELECT username, is_guest, is_admin, created_at FROM users ORDER BY created_at"
-        ).fetchall()
+        rows = conn.execute("SELECT username, is_guest, is_admin, created_at FROM users ORDER BY created_at").fetchall()
     if not rows:
         print("No users.")
     for user, is_guest, is_admin, created in rows:
@@ -67,8 +65,7 @@ def set_admin(username, value):
         if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
             print(f"User '{username}' not found.")
             return
-        conn.execute("UPDATE users SET is_admin = ? WHERE username = ?",
-                     (1 if value == "on" else 0, username))
+        conn.execute("UPDATE users SET is_admin = ? WHERE username = ?", (1 if value == "on" else 0, username))
         conn.commit()
     print(f"Admin privilege {'granted to' if value == 'on' else 'revoked from'} '{username}'.")
 
@@ -127,8 +124,10 @@ def rename_user(old, new):
             old_dir.rename(new_dir)
         except OSError as e:
             print(f"Account row renamed, but moving {old_dir} -> {new_dir} failed: {e}")
-            print("Stop the server (open database handles lock the directory on Windows), "
-                  "move the folder manually, then everything is consistent.")
+            print(
+                "Stop the server (open database handles lock the directory on Windows), "
+                "move the folder manually, then everything is consistent."
+            )
             return
     print(f"Renamed user '{old}' -> '{new}'")
 
@@ -172,8 +171,13 @@ def flatten_uploads(username=None):
     from gamma import flatten_queue
     from gamma.flatten_mrc import flatten, needs_flattening
 
-    users = [username] if username else sorted(
-        d.name for d in USERS_DIR.iterdir() if d.is_dir()) if USERS_DIR.exists() else []
+    users = (
+        [username]
+        if username
+        else sorted(d.name for d in USERS_DIR.iterdir() if d.is_dir())
+        if USERS_DIR.exists()
+        else []
+    )
     total_done = total_skipped = 0
     for user in users:
         uploads = USERS_DIR / user / "uploads"
@@ -189,13 +193,13 @@ def flatten_uploads(username=None):
             if not needs_flattening(f):
                 total_skipped += 1
                 continue
-            print(f"  {user}/{f.stem}: flattening {f.stat().st_size // (1024*1024)} MB ...", flush=True)
+            print(f"  {user}/{f.stem}: flattening {f.stat().st_size // (1024 * 1024)} MB ...", flush=True)
             tmp = dst.with_suffix(".part")
             try:
                 if flatten(f, tmp):
                     tmp.replace(dst)
                     flatten_queue._point_blocks_at(user, f.stem)
-                    print(f"    -> {dst.name} ({dst.stat().st_size // (1024*1024)} MB)", flush=True)
+                    print(f"    -> {dst.name} ({dst.stat().st_size // (1024 * 1024)} MB)", flush=True)
                     total_done += 1
                 else:
                     tmp.unlink(missing_ok=True)

@@ -15,7 +15,7 @@ export function isHighlightBlock(b) {
 }
 
 export function blockColor(b) {
-  return (b?.properties?.color) || DEFAULT_COLOR;
+  return b?.properties?.color || DEFAULT_COLOR;
 }
 
 export function blockPage(b) {
@@ -73,7 +73,7 @@ export function updateBlockTree(blocks, id, fn) {
     }
     return {
       ...b,
-      children: updateBlockTree(b.children || [], id, fn)
+      children: updateBlockTree(b.children || [], id, fn),
     };
   });
 }
@@ -84,7 +84,7 @@ export function removeBlockTree(blocks, id) {
     if (b.id === id) continue;
     out.push({
       ...b,
-      children: removeBlockTree(b.children || [], id)
+      children: removeBlockTree(b.children || [], id),
     });
   }
   return out;
@@ -99,7 +99,7 @@ export function insertSiblingAfter(blocks, id, newBlock) {
     } else {
       out.push({
         ...b,
-        children: insertSiblingAfter(b.children || [], id, newBlock)
+        children: insertSiblingAfter(b.children || [], id, newBlock),
       });
     }
   }
@@ -112,12 +112,12 @@ export function appendChild(blocks, id, newBlock) {
       return {
         ...b,
         children: [...(b.children || []), newBlock],
-        collapsed: false
+        collapsed: false,
       };
     }
     return {
       ...b,
-      children: appendChild(b.children || [], id, newBlock)
+      children: appendChild(b.children || [], id, newBlock),
     };
   });
 }
@@ -209,7 +209,10 @@ export function expandToBlock(blocks, targetId) {
   let found = false;
   function walk(list) {
     return (list || []).map((b) => {
-      if (b.id === targetId) { found = true; return { ...b }; }
+      if (b.id === targetId) {
+        found = true;
+        return { ...b };
+      }
       if (b.children && b.children.length > 0) {
         const newChildren = walk(b.children);
         if (found) return { ...b, collapsed: false, children: newChildren };
@@ -237,7 +240,7 @@ export function addSiblingBlock(blocks, id) {
   const newBlock = makeNewBlock({ parentId: info?.parent?.id || null });
   return {
     blocks: insertSiblingAfter(blocks, id, newBlock),
-    newId: newBlock.id
+    newId: newBlock.id,
   };
 }
 
@@ -245,7 +248,7 @@ export function addChildBlock(blocks, id) {
   const newBlock = makeNewBlock({ parentId: id });
   return {
     blocks: appendChild(blocks, id, newBlock),
-    newId: newBlock.id
+    newId: newBlock.id,
   };
 }
 
@@ -314,13 +317,7 @@ export function normalizeBlocks(blocks) {
 // --- markdown export (kept for syncPdfPage → pages.content) ---
 
 export function blocksToPageMarkdown(title, sourceUrl, docId, blocks) {
-  const lines = [
-    `# ${title}`,
-    "",
-    `Source: ${sourceUrl || ""}`,
-    `Doc ID: ${docId || ""}`,
-    "",
-  ];
+  const lines = [`# ${title}`, "", `Source: ${sourceUrl || ""}`, `Doc ID: ${docId || ""}`, ""];
   lines.push(...blocksToMarkdownLines(blocks, 0));
   return lines.join("\n");
 }
@@ -345,7 +342,6 @@ function blocksToMarkdownLines(blocks, depth) {
   }
   return lines;
 }
-
 
 // --- Phase B3 tree helpers ---
 

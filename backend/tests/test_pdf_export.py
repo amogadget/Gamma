@@ -61,14 +61,19 @@ def test_annotate_roundtrips_through_import_extractor():
 def test_annotate_multiline_and_skips_unusable():
     from PyPDF2 import PdfReader
 
-    multiline = _position(extra_rects=[
-        {"x1": 50, "y1": 100, "x2": 500, "y2": 120, "width": PAGE_W, "height": PAGE_H, "pageNumber": 1},
-    ])
-    out, written = annotate_pdf(_blank_pdf(pages=2), [
-        {"position": multiline, "color": None, "note": ""},
-        {"position": _position(page=99), "color": None, "note": ""},   # page out of range
-        {"position": {"pageNumber": 1, "rects": []}, "note": ""},       # no rects
-    ])
+    multiline = _position(
+        extra_rects=[
+            {"x1": 50, "y1": 100, "x2": 500, "y2": 120, "width": PAGE_W, "height": PAGE_H, "pageNumber": 1},
+        ]
+    )
+    out, written = annotate_pdf(
+        _blank_pdf(pages=2),
+        [
+            {"position": multiline, "color": None, "note": ""},
+            {"position": _position(page=99), "color": None, "note": ""},  # page out of range
+            {"position": {"pageNumber": 1, "rects": []}, "note": ""},  # no rects
+        ],
+    )
     assert written == 1
     annots = PdfReader(io.BytesIO(out)).pages[0]["/Annots"]
     obj = annots[0].get_object()
@@ -121,10 +126,13 @@ def test_annotate_rotated_page():
     from PyPDF2 import PdfReader
 
     # Rendered size is swapped (H x W); a rect near the view's top-left.
-    pos = {"pageNumber": 1, "boundingRect": None, "rects": [
-        {"x1": 79.2, "y1": 61.2, "x2": 158.4, "y2": 122.4,
-         "width": PAGE_H, "height": PAGE_W, "pageNumber": 1},
-    ]}
+    pos = {
+        "pageNumber": 1,
+        "boundingRect": None,
+        "rects": [
+            {"x1": 79.2, "y1": 61.2, "x2": 158.4, "y2": 122.4, "width": PAGE_H, "height": PAGE_W, "pageNumber": 1},
+        ],
+    }
     out, written = annotate_pdf(_blank_pdf(rotate=90), [{"position": pos, "note": ""}])
     assert written == 1
     rect = [float(v) for v in PdfReader(io.BytesIO(out)).pages[0]["/Annots"][0].get_object()["/Rect"]]
@@ -144,21 +152,41 @@ def test_export_pdf_endpoint(guest):
 
     up = guest.post("/api/uploads", files={"file": ("p.pdf", _blank_pdf(), "application/pdf")})
     assert up.status_code == 200, up.text
-    page = make_page(guest, "Annotated paper",
-                     properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]})
-    r = guest.put(f"/api/blocks/{page['id']}/children", json={"blocks": [
-        {"id": "hl1", "content": "top comment", "properties": {
-            "highlight_id": "hl1", "quote": "quoted text", "pdf_page": 1,
-            "color": "rgba(155, 205, 255, 0.65)", "pdf_position": _position(),
-        }, "children": [
-            {"id": "note1", "content": "nested note", "properties": {}, "children": []},
-        ]},
-        {"id": "free1", "content": "a free note (no highlight)", "properties": {}, "children": []},
-        {"id": "link1", "content": "", "properties": {
-            "highlight_id": "link1", "link_url": "https://example.com",
-            "pdf_position": _position(y1=300, y2=320),
-        }, "children": []},
-    ]})
+    page = make_page(
+        guest, "Annotated paper", properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]}
+    )
+    r = guest.put(
+        f"/api/blocks/{page['id']}/children",
+        json={
+            "blocks": [
+                {
+                    "id": "hl1",
+                    "content": "top comment",
+                    "properties": {
+                        "highlight_id": "hl1",
+                        "quote": "quoted text",
+                        "pdf_page": 1,
+                        "color": "rgba(155, 205, 255, 0.65)",
+                        "pdf_position": _position(),
+                    },
+                    "children": [
+                        {"id": "note1", "content": "nested note", "properties": {}, "children": []},
+                    ],
+                },
+                {"id": "free1", "content": "a free note (no highlight)", "properties": {}, "children": []},
+                {
+                    "id": "link1",
+                    "content": "",
+                    "properties": {
+                        "highlight_id": "link1",
+                        "link_url": "https://example.com",
+                        "pdf_position": _position(y1=300, y2=320),
+                    },
+                    "children": [],
+                },
+            ]
+        },
+    )
     assert r.status_code == 200, r.text
 
     r = guest.get(f"/api/pages/{page['id']}/export-pdf")
@@ -182,10 +210,13 @@ def test_import_annotations_strip_rewrites_pdf(guest):
 
     area_pos = _position(x1=50, y1=300, x2=250, y2=400)
     area_pos["area"] = True
-    annotated, written = annotate_pdf(_blank_pdf(), [
-        {"position": _position(), "color": "rgba(170, 235, 170, 0.65)", "note": "kept as block"},
-        {"position": area_pos, "color": "rgba(155, 205, 255, 0.65)", "note": "figure"},
-    ])
+    annotated, written = annotate_pdf(
+        _blank_pdf(),
+        [
+            {"position": _position(), "color": "rgba(170, 235, 170, 0.65)", "note": "kept as block"},
+            {"position": area_pos, "color": "rgba(155, 205, 255, 0.65)", "note": "figure"},
+        ],
+    )
     assert written == 2
 
     up = guest.post("/api/uploads", files={"file": ("a.pdf", annotated, "application/pdf")})
@@ -193,8 +224,7 @@ def test_import_annotations_strip_rewrites_pdf(guest):
     doc_id, source_url = up.json()["doc_id"], up.json()["source_url"]
     page = make_page(guest, "Strip me", properties={"doc_id": doc_id, "source_url": source_url})
 
-    r = guest.post("/api/import/pdf-annotations",
-                   json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
+    r = guest.post("/api/import/pdf-annotations", json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": True, "found": 2, "imported": 2, "stripped": 2}
 
@@ -215,8 +245,7 @@ def test_import_annotations_strip_rewrites_pdf(guest):
     assert len(areas) == 1 and areas[0]["content"] == "figure"
 
     # Re-running finds nothing left to import or strip.
-    r = guest.post("/api/import/pdf-annotations",
-                   json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
+    r = guest.post("/api/import/pdf-annotations", json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
     assert r.json() == {"ok": True, "found": 0, "imported": 0, "stripped": 0}
 
     # A fresh PDF export re-writes both annotations — without annot_stripped
@@ -224,8 +253,7 @@ def test_import_annotations_strip_rewrites_pdf(guest):
     r = guest.get(f"/api/pages/{page['id']}/export-pdf")
     assert r.status_code == 200, r.text
     assert r.headers["x-annotations-written"] == "2"
-    subtypes = sorted(str(a.get_object()["/Subtype"])
-                      for a in PdfReader(io.BytesIO(r.content)).pages[0]["/Annots"])
+    subtypes = sorted(str(a.get_object()["/Subtype"]) for a in PdfReader(io.BytesIO(r.content)).pages[0]["/Annots"])
     assert subtypes == ["/Highlight", "/Square"]
 
 

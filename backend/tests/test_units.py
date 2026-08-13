@@ -23,10 +23,16 @@ def test_doi_candidates_keep_uppercase_suffixes():
 
 
 def test_build_bibtex_arxiv():
-    bib = _build_bibtex({
-        "title": "A Paper", "authors": ["Ada Lovelace", "Alan Turing"],
-        "year": "2019", "venue": "", "arxiv_id": "1810.11086", "doi": "",
-    })
+    bib = _build_bibtex(
+        {
+            "title": "A Paper",
+            "authors": ["Ada Lovelace", "Alan Turing"],
+            "year": "2019",
+            "venue": "",
+            "arxiv_id": "1810.11086",
+            "doi": "",
+        }
+    )
     assert bib.startswith("@article{lovelace2019,")
     assert "eprint = {1810.11086}" in bib
     assert "Ada Lovelace and Alan Turing" in bib
@@ -42,22 +48,24 @@ def test_fts_query_quotes_and_prefixes():
 
 def test_normalize_text():
     from gamma.textnorm import normalize_text
+
     assert normalize_text("a 3,000-qubit array") == "a 3000-qubit array"
     assert normalize_text("the sys-\ntem works") == "the system works"  # line-break hyphenation
-    assert normalize_text("eﬃcient  ﬁne") == "efficient fine"          # ligatures fold
-    assert normalize_text("well-known") == "well-known"                 # real hyphens survive
+    assert normalize_text("eﬃcient  ﬁne") == "efficient fine"  # ligatures fold
+    assert normalize_text("well-known") == "well-known"  # real hyphens survive
     assert normalize_text("") == ""
 
 
 def test_fuzzy_pattern_separator_tolerance():
     from gamma.textnorm import fuzzy_pattern
+
     assert fuzzy_pattern("3000").search("a coherent 3,000-qubit system")
-    assert fuzzy_pattern("3000 qubit").search("a 3,000-qubit system")   # space matches hyphen
-    assert fuzzy_pattern("3,000-qubit").search("3000 qubit")            # and the other way
-    assert fuzzy_pattern("Qubit").search("QUBIT")                       # case-insensitive default
+    assert fuzzy_pattern("3000 qubit").search("a 3,000-qubit system")  # space matches hyphen
+    assert fuzzy_pattern("3,000-qubit").search("3000 qubit")  # and the other way
+    assert fuzzy_pattern("Qubit").search("QUBIT")  # case-insensitive default
     assert not fuzzy_pattern("qubit", case=True).search("QUBIT")
     assert not fuzzy_pattern("fine", whole=True).search("refined")
-    assert fuzzy_pattern("(", regex=True) is None                       # invalid regex reported
+    assert fuzzy_pattern("(", regex=True) is None  # invalid regex reported
     assert fuzzy_pattern("   ") is None
 
 
@@ -70,6 +78,7 @@ def test_parse_images_validates():
 
 def test_parse_files_validates():
     from gamma.routers.ai import _parse_files
+
     good = {"name": "paper.pdf", "data": "data:application/pdf;base64,JVBERi0="}
     junk = [
         {"name": "x.png", "data": "data:image/png;base64,iVBORw0KGgo="},  # wrong type
@@ -82,20 +91,21 @@ def test_parse_files_validates():
 
 def test_extract_pdf_annotations_resolves_indirects():
     from PyPDF2 import PdfWriter, PdfReader
-    from PyPDF2.generic import (ArrayObject, DictionaryObject, FloatObject,
-                                NameObject, TextStringObject)
+    from PyPDF2.generic import ArrayObject, DictionaryObject, FloatObject, NameObject, TextStringObject
     from gamma.routers.imports import _extract_pdf_annotations
 
     w = PdfWriter()
     w.add_blank_page(width=612, height=792)
-    annot = DictionaryObject({
-        NameObject("/Type"): NameObject("/Annot"),
-        NameObject("/Subtype"): NameObject("/Highlight"),
-        NameObject("/Rect"): ArrayObject([FloatObject(v) for v in (100, 700, 300, 720)]),
-        NameObject("/QuadPoints"): ArrayObject([FloatObject(v) for v in (100, 720, 300, 720, 100, 700, 300, 700)]),
-        NameObject("/Contents"): TextStringObject("a note"),
-        NameObject("/C"): ArrayObject([FloatObject(1), FloatObject(0.9), FloatObject(0.3)]),
-    })
+    annot = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Highlight"),
+            NameObject("/Rect"): ArrayObject([FloatObject(v) for v in (100, 700, 300, 720)]),
+            NameObject("/QuadPoints"): ArrayObject([FloatObject(v) for v in (100, 720, 300, 720, 100, 700, 300, 700)]),
+            NameObject("/Contents"): TextStringObject("a note"),
+            NameObject("/C"): ArrayObject([FloatObject(1), FloatObject(0.9), FloatObject(0.3)]),
+        }
+    )
     w.add_annotation(page_number=0, annotation=annot)
     buf = io.BytesIO()
     w.write(buf)

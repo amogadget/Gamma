@@ -34,14 +34,14 @@ _legacy_url = os.environ.get("GAMMA_AI_BASE_URL", "") or os.environ.get("ANTHROP
 AI_PROTOCOLS = {
     "anthropic": {
         "label": "Anthropic Messages API",
-        "base_url": (os.environ.get("GAMMA_AI_ANTHROPIC_BASE_URL", "") or _legacy_url
-                     or "https://api.anthropic.com").rstrip("/"),
+        "base_url": (
+            os.environ.get("GAMMA_AI_ANTHROPIC_BASE_URL", "") or _legacy_url or "https://api.anthropic.com"
+        ).rstrip("/"),
         "default_model": "claude-haiku-4-5-20251001",
     },
     "openai": {
         "label": "OpenAI Chat Completions API",
-        "base_url": (os.environ.get("GAMMA_AI_OPENAI_BASE_URL", "")
-                     or "https://api.openai.com").rstrip("/"),
+        "base_url": (os.environ.get("GAMMA_AI_OPENAI_BASE_URL", "") or "https://api.openai.com").rstrip("/"),
         "default_model": "gpt-4o-mini",
     },
     # No API key: the entry holds OAuth tokens from signing in with a ChatGPT
@@ -51,8 +51,9 @@ AI_PROTOCOLS = {
     # provider CRUD guards (default is "key").
     "chatgpt": {
         "label": "ChatGPT (subscription sign-in)",
-        "base_url": (os.environ.get("GAMMA_AI_CHATGPT_BASE_URL", "")
-                     or "https://chatgpt.com/backend-api/codex").rstrip("/"),
+        "base_url": (os.environ.get("GAMMA_AI_CHATGPT_BASE_URL", "") or "https://chatgpt.com/backend-api/codex").rstrip(
+            "/"
+        ),
         "default_model": "gpt-5.1",
         "auth": "oauth",
     },

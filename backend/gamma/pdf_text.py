@@ -20,10 +20,12 @@ def iter_page_texts(src, max_pages: int = 400):
     """Yield per-page text (1-based order). src is a path str or PDF bytes."""
     try:
         import pypdfium2 as pdfium
+
         pdf = pdfium.PdfDocument(src)
     except Exception as e:
         log.warning(f"[pdf-text] pypdfium2 open failed ({e}), falling back to PyPDF2")
         from PyPDF2 import PdfReader
+
         reader = PdfReader(io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else str(src))
         for i, pg in enumerate(reader.pages):
             if i >= max_pages:

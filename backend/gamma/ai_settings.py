@@ -159,6 +159,5 @@ def require_ai_runtime(user: str) -> dict:
     """ai_runtime(), raising the standard 503 when no provider is usable."""
     rt = ai_runtime(user)
     if not rt["enabled"]:
-        raise HTTPException(status_code=503,
-                            detail="AI not configured (add an API key in Settings → AI providers)")
+        raise HTTPException(status_code=503, detail="AI not configured (add an API key in Settings → AI providers)")
     return rt

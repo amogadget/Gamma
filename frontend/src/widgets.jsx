@@ -12,7 +12,15 @@ import { PinIcon } from "./icons";
 // double-click to collapse), the close button right beside it, then the
 // window's own controls. Notes and chat both use this so their behavior
 // can't drift apart.
-function DockWindow({ title, onGrip, onGripDoubleClick, onClose, headerContent, collapsed, children }) {
+function DockWindow({
+  title,
+  onGrip,
+  onGripDoubleClick,
+  onClose,
+  headerContent,
+  collapsed,
+  children,
+}) {
   return (
     <div className={`dockWindow ${collapsed ? "collapsed" : ""}`}>
       <div className="dockWindowHeader">
@@ -21,9 +29,18 @@ function DockWindow({ title, onGrip, onGripDoubleClick, onClose, headerContent, 
           onPointerDown={onGrip}
           onDoubleClick={onGripDoubleClick}
           title="Drag to move this window · double-click to collapse/expand"
-        >⠿ {title}</span>
+        >
+          ⠿ {title}
+        </span>
         {onClose ? (
-          <button className="uiClose" onClick={onClose} title="Close window (reopen from the ⋮ menu)" aria-label={`Close ${title}`}>×</button>
+          <button
+            className="uiClose"
+            onClick={onClose}
+            title="Close window (reopen from the ⋮ menu)"
+            aria-label={`Close ${title}`}
+          >
+            ×
+          </button>
         ) : null}
         <span className="dockHeaderSpacer" />
         {collapsed ? null : headerContent}
@@ -72,16 +89,24 @@ function handleMathCopy(e) {
 }
 
 const ChatMarkdown = React.memo(function ChatMarkdown({ text }) {
-  const normalized = useMemo(() => (text || "")
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `\n$$\n${m}\n$$\n`)
-    .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`), [text]);
+  const normalized = useMemo(
+    () =>
+      (text || "")
+        .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `\n$$\n${m}\n$$\n`)
+        .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`),
+    [text],
+  );
   return (
     <div onCopy={handleMathCopy}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
         components={{
-          a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noreferrer">
+              {children}
+            </a>
+          ),
         }}
       >
         {normalized}
@@ -118,10 +143,13 @@ const AutoGrowTextarea = React.forwardRef(function AutoGrowTextarea(props, forwa
 // dialog, so the confirm timing can't drift apart.
 function useCopied(ms = 1500) {
   const [copied, setCopied] = useState(null);
-  const flash = useCallback((key = true) => {
-    setCopied(key);
-    setTimeout(() => setCopied((cur) => (cur === key ? null : cur)), ms);
-  }, [ms]);
+  const flash = useCallback(
+    (key = true) => {
+      setCopied(key);
+      setTimeout(() => setCopied((cur) => (cur === key ? null : cur)), ms);
+    },
+    [ms],
+  );
   const reset = useCallback(() => setCopied(null), []);
   return [copied, flash, reset];
 }
@@ -134,15 +162,7 @@ function PopoverAnchor({ name, children, className = "" }) {
   );
 }
 
-function OpenTabs({
-  tabs,
-  activeId,
-  tabElements,
-  onReorder,
-  onOpen,
-  onClose,
-  onContext,
-}) {
+function OpenTabs({ tabs, activeId, tabElements, onReorder, onOpen, onClose, onContext }) {
   // Drag-reorder bookkeeping is private to the strip: the dragged tab id as a
   // ref (read during dragover) with a state twin for the .dragging style.
   const dragTab = useRef(null);
@@ -192,7 +212,11 @@ function OpenTabs({
             onContext(tab, event.clientX, event.clientY);
           }}
         >
-          {tab.pinned ? <span className="tabPin"><PinIcon filled size={11} /></span> : null}
+          {tab.pinned ? (
+            <span className="tabPin">
+              <PinIcon filled size={11} />
+            </span>
+          ) : null}
           <span className="tabTitle">{tab.title}</span>
           {tab.pinned ? null : (
             <button

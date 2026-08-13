@@ -6,19 +6,52 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson, isEnterCommit } from "./utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied } from "./widgets";
-import { ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FileIcon, MicIcon, PaperclipIcon, PencilIcon, StopIcon, XIcon } from "./icons";
+import {
+  ArrowUpIcon,
+  BookIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  CopyIcon,
+  FileIcon,
+  MicIcon,
+  PaperclipIcon,
+  PencilIcon,
+  StopIcon,
+  XIcon,
+} from "./icons";
 
 export default function ChatDock({
-  docId, focusedBlockId, homeBlocks, pdfTitle, openTabs,
-  pdfSelections, setPdfSelections,
-  chatImages, setChatImages,
-  chatModel, setChatModel, chatEffort, setChatEffort, chatSystem, setAiProvider,
-  dictationModel, dictationLang,
-  chatContextChars, multiContextChars,
-  aiInfo, aiProvider, openAiKeysEditor, refreshAiModels,
-  openPopover, setOpenPopover,
+  docId,
+  focusedBlockId,
+  homeBlocks,
+  pdfTitle,
+  openTabs,
+  pdfSelections,
+  setPdfSelections,
+  chatImages,
+  setChatImages,
+  chatModel,
+  setChatModel,
+  chatEffort,
+  setChatEffort,
+  chatSystem,
+  setAiProvider,
+  dictationModel,
+  dictationLang,
+  chatContextChars,
+  multiContextChars,
+  aiInfo,
+  aiProvider,
+  openAiKeysEditor,
+  refreshAiModels,
+  openPopover,
+  setOpenPopover,
   setStatus,
-  onGrip, onGripDoubleClick, collapsed, onClose,
+  onGrip,
+  onGripDoubleClick,
+  collapsed,
+  onClose,
 }) {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
@@ -70,8 +103,8 @@ export default function ChatDock({
     let cancelled = false;
     chatLoadedForRef.current = "";
     fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : { messages: [] })
-      .then(data => {
+      .then((r) => (r.ok ? r.json() : { messages: [] }))
+      .then((data) => {
         if (cancelled) return;
         const msgs = data.messages || [];
         setChatMessages(msgs);
@@ -80,13 +113,19 @@ export default function ChatDock({
         // conversation, then off. Messages record the doc ids they carried
         // (pdfDocs); older saves only have display names — treat any sent
         // PDF as covering the current one.
-        const sent = msgs.some((m) => m.pdfDocs
-          ? (docId && m.pdfDocs.includes(docId)) || m.pdfDocs.some((d) => chatDocs.includes(d))
-          : m.pdfs?.length);
+        const sent = msgs.some((m) =>
+          m.pdfDocs
+            ? (docId && m.pdfDocs.includes(docId)) || m.pdfDocs.some((d) => chatDocs.includes(d))
+            : m.pdfs?.length,
+        );
         setAttachPdf(!sent);
       })
-      .catch(() => { if (!cancelled) chatLoadedForRef.current = chatKey; });
-    return () => { cancelled = true; };
+      .catch(() => {
+        if (!cancelled) chatLoadedForRef.current = chatKey;
+      });
+    return () => {
+      cancelled = true;
+    };
     // chatDocs is read inside the async callback, not a load trigger — the
     // chat re-fetches only when the bucket (chatKey/docId) changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -121,14 +160,26 @@ export default function ChatDock({
   function addChatFiles(files) {
     for (const f of files) {
       if (f.type === "application/pdf" || /\.pdf$/i.test(f.name || "")) {
-        if (f.size > 15 * 1024 * 1024) { setStatus(`"${f.name}" is too large to attach (max 15 MB).`); continue; }
+        if (f.size > 15 * 1024 * 1024) {
+          setStatus(`"${f.name}" is too large to attach (max 15 MB).`);
+          continue;
+        }
         const reader = new FileReader();
-        reader.onload = () => setChatFiles((prev) => prev.length >= 4 ? prev : [...prev, { name: f.name || "file.pdf", data: reader.result }]);
+        reader.onload = () =>
+          setChatFiles((prev) =>
+            prev.length >= 4
+              ? prev
+              : [...prev, { name: f.name || "file.pdf", data: reader.result }],
+          );
         reader.readAsDataURL(f);
       } else if (f.type?.startsWith("image/")) {
-        if (f.size > 6 * 1024 * 1024) { setStatus("Image too large to attach (max 6 MB)."); continue; }
+        if (f.size > 6 * 1024 * 1024) {
+          setStatus("Image too large to attach (max 6 MB).");
+          continue;
+        }
         const reader = new FileReader();
-        reader.onload = () => setChatImages((prev) => prev.length >= 4 ? prev : [...prev, reader.result]);
+        reader.onload = () =>
+          setChatImages((prev) => (prev.length >= 4 ? prev : [...prev, reader.result]));
         reader.readAsDataURL(f);
       } else {
         setStatus(`Can't attach "${f.name}" — only images and PDFs are supported.`);
@@ -150,9 +201,13 @@ export default function ChatDock({
   const chatFindMatches = useMemo(() => {
     const q = chatFind.trim().toLowerCase();
     if (!q) return [];
-    return chatMessages.map((m, i) => ((m.text || "").toLowerCase().includes(q) ? i : -1)).filter((i) => i >= 0);
+    return chatMessages
+      .map((m, i) => ((m.text || "").toLowerCase().includes(q) ? i : -1))
+      .filter((i) => i >= 0);
   }, [chatFind, chatMessages]);
-  useEffect(() => { setChatFindIdx(0); }, [chatFind]);
+  useEffect(() => {
+    setChatFindIdx(0);
+  }, [chatFind]);
 
   function gotoChatFind(n) {
     if (!chatFindMatches.length) return;
@@ -166,8 +221,12 @@ export default function ChatDock({
   // handler defers to us in that case).
   useEffect(() => {
     function onKey(e) {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "f"
-          && document.activeElement?.closest?.(".chatPanel")) {
+      if (
+        (e.ctrlKey || e.metaKey) &&
+        !e.altKey &&
+        e.key.toLowerCase() === "f" &&
+        document.activeElement?.closest?.(".chatPanel")
+      ) {
         e.preventDefault();
         setChatFindOpen(true);
       }
@@ -179,7 +238,9 @@ export default function ChatDock({
   // Escape closes the paper-picker modal wherever focus is.
   useEffect(() => {
     if (!docPicker) return;
-    function onKey(e) { if (e.key === "Escape") setDocPicker(false); }
+    function onKey(e) {
+      if (e.key === "Escape") setDocPicker(false);
+    }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [docPicker]);
@@ -191,7 +252,9 @@ export default function ChatDock({
   const chatStickRef = useRef(true);
   const chatProgScrollRef = useRef(false);
   const chatLastScrollTopRef = useRef(0);
-  useEffect(() => { chatStickRef.current = true; }, [chatKey]);
+  useEffect(() => {
+    chatStickRef.current = true;
+  }, [chatKey]);
   useEffect(() => {
     const el = chatScrollRef.current;
     if (!el || !chatStickRef.current) return;
@@ -215,15 +278,17 @@ export default function ChatDock({
     const files = chatFiles;
     setChatFiles([]);
     const prevMessages = baseMessages ?? chatMessages;
-    const shown = selection ? `${text}\n\n> ${selection.slice(0, 280)}${selection.length > 280 ? "…" : ""}` : text;
+    const shown = selection
+      ? `${text}\n\n> ${selection.slice(0, 280)}${selection.length > 280 ? "…" : ""}`
+      : text;
     // Names of PDFs that ride along with THIS message (displayed in the bubble)
     const sendingPdf = attachPdf && (chatDocs.length > 0 || !!docId);
     const pdfNames = [
       ...files.map((f) => f.name),
       ...(sendingPdf
-        ? (chatDocs.length
-            ? chatDocs.map((id) => homeBlocks.find((b) => b.id === id)?.content || "PDF")
-            : [pdfTitle || "current PDF"])
+        ? chatDocs.length
+          ? chatDocs.map((id) => homeBlocks.find((b) => b.id === id)?.content || "PDF")
+          : [pdfTitle || "current PDF"]
         : []),
     ];
     const userMsg = {
@@ -233,7 +298,9 @@ export default function ChatDock({
       // pdfDocs records WHICH documents rode along, so reloading the page
       // can tell whether this document was already sent in the conversation
       // (uploaded files aren't library docs — they contribute names only).
-      ...(pdfNames.length ? { pdfs: pdfNames, pdfDocs: sendingPdf ? (chatDocs.length ? [...chatDocs] : [docId]) : [] } : {}),
+      ...(pdfNames.length
+        ? { pdfs: pdfNames, pdfDocs: sendingPdf ? (chatDocs.length ? [...chatDocs] : [docId]) : [] }
+        : {}),
     };
     const sendKey = chatKey; // reply belongs to THIS conversation, even if the user navigates away
     const showReply = (aiMsg, final) => {
@@ -286,7 +353,9 @@ export default function ChatDock({
       });
       if (!res.ok) {
         let detail = `${res.status} ${res.statusText}`;
-        try { detail = (await res.json()).detail || detail; } catch {}
+        try {
+          detail = (await res.json()).detail || detail;
+        } catch {}
         throw new Error(detail);
       }
       // NDJSON stream: {"delta": "…"} per chunk, {"error": "…"} on failure.
@@ -310,12 +379,19 @@ export default function ChatDock({
       showReply({ role: "ai", text: acc || "(no response)" }, true);
     } catch (err) {
       const stopped = err?.name === "AbortError";
-      showReply({
-        role: "ai",
-        text: stopped
-          ? (acc ? `${acc}\n\n*(stopped)*` : "*(stopped)*")
-          : (acc ? `${acc}\n\n**Error:** ${err.message}` : `Error: ${err.message}`),
-      }, true);
+      showReply(
+        {
+          role: "ai",
+          text: stopped
+            ? acc
+              ? `${acc}\n\n*(stopped)*`
+              : "*(stopped)*"
+            : acc
+              ? `${acc}\n\n**Error:** ${err.message}`
+              : `Error: ${err.message}`,
+        },
+        true,
+      );
     } finally {
       setChatLoading(false);
       setChatLoadingKey("");
@@ -339,7 +415,9 @@ export default function ChatDock({
   async function startDictation() {
     if (dictation) return;
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-      setStatus("Voice input needs HTTPS or localhost — the browser blocks the microphone on plain HTTP.");
+      setStatus(
+        "Voice input needs HTTPS or localhost — the browser blocks the microphone on plain HTTP.",
+      );
       return;
     }
     let stream;
@@ -350,12 +428,19 @@ export default function ChatDock({
       return;
     }
     // Chrome/Firefox record webm/opus; Safari only mp4 (m4a to OpenAI).
-    const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((t) => MediaRecorder.isTypeSupported(t)) || "";
+    const mime =
+      ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((t) =>
+        MediaRecorder.isTypeSupported(t),
+      ) || "";
     const rec = {
       recorder: new MediaRecorder(stream, mime ? { mimeType: mime } : undefined),
-      stream, chunks: [], canceled: false, autoSend: false,
+      stream,
+      chunks: [],
+      canceled: false,
+      autoSend: false,
       baseText: chatInput, // composer text at record start (the input is hidden while recording)
-      amps: [], peak: 0,
+      amps: [],
+      peak: 0,
     };
     // Analyser feeds the live waveform; recording works fine without it.
     try {
@@ -367,12 +452,17 @@ export default function ChatDock({
       rec.analyser = analyser;
     } catch {}
     recRef.current = rec;
-    rec.recorder.ondataavailable = (e) => { if (e.data?.size) rec.chunks.push(e.data); };
+    rec.recorder.ondataavailable = (e) => {
+      if (e.data?.size) rec.chunks.push(e.data);
+    };
     rec.recorder.onstop = () => {
       stream.getTracks().forEach((t) => t.stop());
       rec.audioCtx?.close().catch(() => {});
       if (rec.canceled) return;
-      transcribeDictation(new Blob(rec.chunks, { type: rec.recorder.mimeType || mime || "audio/webm" }), rec);
+      transcribeDictation(
+        new Blob(rec.chunks, { type: rec.recorder.mimeType || mime || "audio/webm" }),
+        rec,
+      );
     };
     rec.recorder.start();
     setRecSecs(0);
@@ -387,7 +477,11 @@ export default function ChatDock({
     rec.canceled = mode === "cancel";
     rec.autoSend = mode === "send";
     setDictation(rec.canceled ? "" : "busy");
-    try { rec.recorder.stop(); } catch { setDictation(""); }
+    try {
+      rec.recorder.stop();
+    } catch {
+      setDictation("");
+    }
     if (rec.canceled) recRef.current = null;
   }
 
@@ -425,22 +519,31 @@ export default function ChatDock({
     const ctx = canvas.getContext("2d");
     const data = new Uint8Array(rec.analyser.fftSize);
     const barColor = getComputedStyle(canvas).color; // fixed for the recording
-    let raf, lastPush = 0;
+    let raf,
+      lastPush = 0;
     const draw = (now) => {
       raf = requestAnimationFrame(draw);
       rec.analyser.getByteTimeDomainData(data);
       let sum = 0;
-      for (let i = 0; i < data.length; i++) { const v = (data[i] - 128) / 128; sum += v * v; }
+      for (let i = 0; i < data.length; i++) {
+        const v = (data[i] - 128) / 128;
+        sum += v * v;
+      }
       rec.peak = Math.max(rec.peak, Math.sqrt(sum / data.length));
-      if (now - lastPush >= 50) { // one slot ≈ 50 ms of audio
+      if (now - lastPush >= 50) {
+        // one slot ≈ 50 ms of audio
         rec.amps.push(rec.peak);
         rec.peak = 0;
         lastPush = now;
       }
       const dpr = window.devicePixelRatio || 1;
-      const w = canvas.clientWidth, h = canvas.clientHeight;
+      const w = canvas.clientWidth,
+        h = canvas.clientHeight;
       if (!w || !h) return;
-      if (canvas.width !== Math.round(w * dpr)) { canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr); }
+      if (canvas.width !== Math.round(w * dpr)) {
+        canvas.width = Math.round(w * dpr);
+        canvas.height = Math.round(h * dpr);
+      }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
       ctx.strokeStyle = barColor;
@@ -448,7 +551,10 @@ export default function ChatDock({
       ctx.lineCap = "round";
       const cursorX = w - 3;
       ctx.globalAlpha = 0.9;
-      ctx.beginPath(); ctx.moveTo(cursorX, h * 0.12); ctx.lineTo(cursorX, h * 0.88); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cursorX, h * 0.12);
+      ctx.lineTo(cursorX, h * 0.88);
+      ctx.stroke();
       const pitch = 5;
       for (let i = 0; i < Math.floor((cursorX - 4) / pitch); i++) {
         const amp = rec.amps[rec.amps.length - 1 - i];
@@ -476,15 +582,20 @@ export default function ChatDock({
     const timer = setInterval(() => setRecSecs((s) => s + 1), 1000);
     return () => clearInterval(timer);
   }, [dictation]);
-  useEffect(() => () => {
-    const rec = recRef.current;
-    if (rec) {
-      rec.canceled = true;
-      try { rec.recorder.stop(); } catch {}
-      rec.stream.getTracks().forEach((t) => t.stop());
-      rec.audioCtx?.close().catch(() => {});
-    }
-  }, []);
+  useEffect(
+    () => () => {
+      const rec = recRef.current;
+      if (rec) {
+        rec.canceled = true;
+        try {
+          rec.recorder.stop();
+        } catch {}
+        rec.stream.getTracks().forEach((t) => t.stop());
+        rec.audioCtx?.close().catch(() => {});
+      }
+    },
+    [],
+  );
 
   async function copyChatMessage(idx, text) {
     try {
@@ -496,60 +607,92 @@ export default function ChatDock({
   const headerContent = (
     <>
       {aiInfo && !aiInfo.enabled && openAiKeysEditor ? (
-        <button className="uiBtn sm" onClick={openAiKeysEditor}
-          title="AI needs an API key — add a provider to enable chat">
+        <button
+          className="uiBtn sm"
+          onClick={openAiKeysEditor}
+          title="AI needs an API key — add a provider to enable chat"
+        >
           Set up AI…
         </button>
       ) : null}
-      {aiInfo?.models?.length > 0 ? (() => {
-        // Show every configured model, not just the active key's. Picking one
-        // from a different provider also flips the Settings-side aiProvider so
-        // the two selectors stay in sync (previously the model-scope effect
-        // in App.jsx snapped chatModel back and made cross-provider picks a
-        // no-op).
-        const models = aiInfo.models;
-        const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
-        const currentId = models.some((m) => m.id === chatModel) ? chatModel : models[0].id;
-        const lastRefresh = aiInfo.refreshed_at ? new Date(aiInfo.refreshed_at) : null;
-        return (
-          <span className="chatHeaderSelects">
-            <select className="chatModelSelect" value={currentId}
-              onChange={(e) => {
-                const id = e.target.value;
-                const picked = models.find((m) => m.id === id);
-                if (picked && picked.provider !== aiProvider) setAiProvider?.(picked.provider);
-                setChatModel(id);
-              }} title="Switch model">
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {multiProvider ? `${m.model} · ${m.provider_name || m.provider}` : m.model}
-                </option>
-              ))}
-            </select>
-            <button className="chatModelRefreshBtn" onClick={refreshModelList}
-              disabled={chatModelRefreshing}
-              title={`Fetch the latest model lists from your providers`
-                + (lastRefresh && !Number.isNaN(lastRefresh.getTime())
-                   ? ` — last auto-refresh ${lastRefresh.toLocaleString()}`
-                   : " — refreshed automatically about once a day")}>
-              {chatModelRefreshing ? "…" : "↻"}
-            </button>
-            <select className="chatModelSelect" value={chatEffort}
-              onChange={(e) => setChatEffort(e.target.value)}
-              title="Reasoning effort — leave on 'effort: default' unless the model supports it">
-              <option value="">effort: default</option>
-              {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
-                <option key={ef} value={ef}>effort: {ef}</option>
-              ))}
-            </select>
-          </span>
-        );
-      })() : null}
+      {aiInfo?.models?.length > 0
+        ? (() => {
+            // Show every configured model, not just the active key's. Picking one
+            // from a different provider also flips the Settings-side aiProvider so
+            // the two selectors stay in sync (previously the model-scope effect
+            // in App.jsx snapped chatModel back and made cross-provider picks a
+            // no-op).
+            const models = aiInfo.models;
+            const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
+            const currentId = models.some((m) => m.id === chatModel) ? chatModel : models[0].id;
+            const lastRefresh = aiInfo.refreshed_at ? new Date(aiInfo.refreshed_at) : null;
+            return (
+              <span className="chatHeaderSelects">
+                <select
+                  className="chatModelSelect"
+                  value={currentId}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    const picked = models.find((m) => m.id === id);
+                    if (picked && picked.provider !== aiProvider) setAiProvider?.(picked.provider);
+                    setChatModel(id);
+                  }}
+                  title="Switch model"
+                >
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {multiProvider ? `${m.model} · ${m.provider_name || m.provider}` : m.model}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="chatModelRefreshBtn"
+                  onClick={refreshModelList}
+                  disabled={chatModelRefreshing}
+                  title={
+                    `Fetch the latest model lists from your providers` +
+                    (lastRefresh && !Number.isNaN(lastRefresh.getTime())
+                      ? ` — last auto-refresh ${lastRefresh.toLocaleString()}`
+                      : " — refreshed automatically about once a day")
+                  }
+                >
+                  {chatModelRefreshing ? "…" : "↻"}
+                </button>
+                <select
+                  className="chatModelSelect"
+                  value={chatEffort}
+                  onChange={(e) => setChatEffort(e.target.value)}
+                  title="Reasoning effort — leave on 'effort: default' unless the model supports it"
+                >
+                  <option value="">effort: default</option>
+                  {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
+                    <option key={ef} value={ef}>
+                      effort: {ef}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            );
+          })()
+        : null}
       <div className="chatPanelHeaderBtns">
-        <button className={`chatClearBtn ${chatFindOpen ? "on" : ""}`}
-          onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}
-          title="Find in this conversation">Find</button>
-        <button className="chatClearBtn" onClick={clearChat} title="Start a fresh conversation (clears saved history)">New chat</button>
+        <button
+          className={`chatClearBtn ${chatFindOpen ? "on" : ""}`}
+          onClick={() => {
+            setChatFindOpen((v) => !v);
+            setChatFind("");
+          }}
+          title="Find in this conversation"
+        >
+          Find
+        </button>
+        <button
+          className="chatClearBtn"
+          onClick={clearChat}
+          title="Start a fresh conversation (clears saved history)"
+        >
+          New chat
+        </button>
       </div>
     </>
   );
@@ -569,380 +712,607 @@ export default function ChatDock({
   }
 
   return (
-    <DockWindow title="Chat" onGrip={onGrip} onGripDoubleClick={onGripDoubleClick}
-      collapsed={collapsed} onClose={onClose} headerContent={headerContent}>
-    <div className="chatPanel chatWindow">
-      {chatFindOpen ? (
-        <div className="chatFindRow">
-          <input
-            autoFocus
-            className="searchInput"
-            value={chatFind}
-            onChange={(e) => setChatFind(e.target.value)}
-            placeholder="Find in chat…"
-            onKeyDown={(e) => {
-              if (isEnterCommit(e)) { e.preventDefault(); gotoChatFind(e.shiftKey ? chatFindIdx - 1 : chatFindIdx + 1); }
-              else if (e.key === "Escape") { e.preventDefault(); setChatFindOpen(false); setChatFind(""); }
-            }}
-          />
-          <span className="chatFindCount">{chatFind.trim() ? `${chatFindMatches.length ? chatFindIdx + 1 : 0}/${chatFindMatches.length}` : ""}</span>
-          <button className="searchToggle searchNavBtn" onClick={() => gotoChatFind(chatFindIdx - 1)} disabled={!chatFindMatches.length} title="Previous match">
-            <ChevronUpIcon size={14} />
-          </button>
-          <button className="searchToggle searchNavBtn" onClick={() => gotoChatFind(chatFindIdx + 1)} disabled={!chatFindMatches.length} title="Next match">
-            <ChevronDownIcon size={14} />
-          </button>
-          <button className="uiClose" onClick={() => { setChatFindOpen(false); setChatFind(""); }} title="Close find" aria-label="Close find">×</button>
-        </div>
-      ) : null}
-      <div
-        className="chatMessages"
-        ref={chatScrollRef}
-        onScroll={(e) => {
-          const el = e.currentTarget;
-          const last = chatLastScrollTopRef.current;
-          chatLastScrollTopRef.current = el.scrollTop;
-          if (chatProgScrollRef.current) { chatProgScrollRef.current = false; return; }
-          if (el.scrollTop < last) {
-            chatStickRef.current = false; // any upward move de-sticks
-          } else if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) {
-            chatStickRef.current = true; // back at the bottom → follow again
-          }
-        }}
-        onWheel={(e) => {
-          // Upward intent unsticks immediately — before any scroll event —
-          // so an arriving delta can't yank the view back down first.
-          if (e.deltaY < 0) chatStickRef.current = false;
-        }}
-      >
-        {chatMessages.length === 0 ? (
-          <div className="chatEmpty">
-            {aiInfo && !aiInfo.enabled ? (
-              openAiKeysEditor ? (
-                <>
-                  AI is not configured —{" "}
-                  <button className="chatEmptyLink" onClick={openAiKeysEditor}>add an AI provider</button>
-                  {" "}with your API key to enable it.
-                </>
-              ) : "AI is not configured."
-            ) : (focusedBlockId ? "Ask AI about this page…" : "Ask AI anything, or generate a report from your pages…")}
+    <DockWindow
+      title="Chat"
+      onGrip={onGrip}
+      onGripDoubleClick={onGripDoubleClick}
+      collapsed={collapsed}
+      onClose={onClose}
+      headerContent={headerContent}
+    >
+      <div className="chatPanel chatWindow">
+        {chatFindOpen ? (
+          <div className="chatFindRow">
+            <input
+              autoFocus
+              className="searchInput"
+              value={chatFind}
+              onChange={(e) => setChatFind(e.target.value)}
+              placeholder="Find in chat…"
+              onKeyDown={(e) => {
+                if (isEnterCommit(e)) {
+                  e.preventDefault();
+                  gotoChatFind(e.shiftKey ? chatFindIdx - 1 : chatFindIdx + 1);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setChatFindOpen(false);
+                  setChatFind("");
+                }
+              }}
+            />
+            <span className="chatFindCount">
+              {chatFind.trim()
+                ? `${chatFindMatches.length ? chatFindIdx + 1 : 0}/${chatFindMatches.length}`
+                : ""}
+            </span>
+            <button
+              className="searchToggle searchNavBtn"
+              onClick={() => gotoChatFind(chatFindIdx - 1)}
+              disabled={!chatFindMatches.length}
+              title="Previous match"
+            >
+              <ChevronUpIcon size={14} />
+            </button>
+            <button
+              className="searchToggle searchNavBtn"
+              onClick={() => gotoChatFind(chatFindIdx + 1)}
+              disabled={!chatFindMatches.length}
+              title="Next match"
+            >
+              <ChevronDownIcon size={14} />
+            </button>
+            <button
+              className="uiClose"
+              onClick={() => {
+                setChatFindOpen(false);
+                setChatFind("");
+              }}
+              title="Close find"
+              aria-label="Close find"
+            >
+              ×
+            </button>
           </div>
-        ) : (
-          chatMessages.map((m, i) => {
-            const isUser = m.role === "user";
-            const isFindHit = chatFindOpen && chatFind.trim() && chatFindMatches[chatFindIdx] === i;
-            if (editingMsg?.idx === i) {
-              return (
-                <div key={i} className="chatBubbleRow user" data-msg-idx={i}>
-                  <div className="chatMsgCol">
-                    <div className="chatBubble user chatEditBubble">
-                      <AutoGrowTextarea
-                        autoFocus
-                        className="chatEditTextarea"
-                        value={editingMsg.text}
-                        onChange={(e) => setEditingMsg({ idx: i, text: e.target.value })}
-                        onKeyDown={(e) => {
-                          if (isEnterCommit(e) && !e.shiftKey) {
-                            e.preventDefault();
-                            const base = chatMessages.slice(0, i);
-                            const text = editingMsg.text;
-                            setEditingMsg(null);
-                            sendChat(text, { baseMessages: base });
-                          } else if (e.key === "Escape") { e.preventDefault(); setEditingMsg(null); }
-                        }}
-                      />
-                      <div className="chatEditBtns">
-                        <button type="button" className="chatClearBtn" onClick={() => setEditingMsg(null)}>Cancel</button>
-                        <button type="button" className="chatClearBtn chatEditSend"
-                          disabled={!editingMsg.text.trim() || chatLoading}
-                          onClick={() => {
-                            const base = chatMessages.slice(0, i);
-                            const text = editingMsg.text;
-                            setEditingMsg(null);
-                            sendChat(text, { baseMessages: base });
+        ) : null}
+        <div
+          className="chatMessages"
+          ref={chatScrollRef}
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            const last = chatLastScrollTopRef.current;
+            chatLastScrollTopRef.current = el.scrollTop;
+            if (chatProgScrollRef.current) {
+              chatProgScrollRef.current = false;
+              return;
+            }
+            if (el.scrollTop < last) {
+              chatStickRef.current = false; // any upward move de-sticks
+            } else if (el.scrollHeight - el.scrollTop - el.clientHeight < 40) {
+              chatStickRef.current = true; // back at the bottom → follow again
+            }
+          }}
+          onWheel={(e) => {
+            // Upward intent unsticks immediately — before any scroll event —
+            // so an arriving delta can't yank the view back down first.
+            if (e.deltaY < 0) chatStickRef.current = false;
+          }}
+        >
+          {chatMessages.length === 0 ? (
+            <div className="chatEmpty">
+              {aiInfo && !aiInfo.enabled ? (
+                openAiKeysEditor ? (
+                  <>
+                    AI is not configured —{" "}
+                    <button className="chatEmptyLink" onClick={openAiKeysEditor}>
+                      add an AI provider
+                    </button>{" "}
+                    with your API key to enable it.
+                  </>
+                ) : (
+                  "AI is not configured."
+                )
+              ) : focusedBlockId ? (
+                "Ask AI about this page…"
+              ) : (
+                "Ask AI anything, or generate a report from your pages…"
+              )}
+            </div>
+          ) : (
+            chatMessages.map((m, i) => {
+              const isUser = m.role === "user";
+              const isFindHit =
+                chatFindOpen && chatFind.trim() && chatFindMatches[chatFindIdx] === i;
+              if (editingMsg?.idx === i) {
+                return (
+                  <div key={i} className="chatBubbleRow user" data-msg-idx={i}>
+                    <div className="chatMsgCol">
+                      <div className="chatBubble user chatEditBubble">
+                        <AutoGrowTextarea
+                          autoFocus
+                          className="chatEditTextarea"
+                          value={editingMsg.text}
+                          onChange={(e) => setEditingMsg({ idx: i, text: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (isEnterCommit(e) && !e.shiftKey) {
+                              e.preventDefault();
+                              const base = chatMessages.slice(0, i);
+                              const text = editingMsg.text;
+                              setEditingMsg(null);
+                              sendChat(text, { baseMessages: base });
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              setEditingMsg(null);
+                            }
                           }}
-                          title="Re-send — replaces this message and everything after it">Send</button>
+                        />
+                        <div className="chatEditBtns">
+                          <button
+                            type="button"
+                            className="chatClearBtn"
+                            onClick={() => setEditingMsg(null)}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="chatClearBtn chatEditSend"
+                            disabled={!editingMsg.text.trim() || chatLoading}
+                            onClick={() => {
+                              const base = chatMessages.slice(0, i);
+                              const text = editingMsg.text;
+                              setEditingMsg(null);
+                              sendChat(text, { baseMessages: base });
+                            }}
+                            title="Re-send — replaces this message and everything after it"
+                          >
+                            Send
+                          </button>
+                        </div>
                       </div>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div
+                  key={i}
+                  className={`chatBubbleRow ${isUser ? "user" : "ai"}${isFindHit ? " findHit" : ""}`}
+                  data-msg-idx={i}
+                >
+                  <div className="chatMsgCol">
+                    <div className={`chatBubble ${isUser ? "user" : "ai"}`}>
+                      {m.images?.length ? (
+                        <div className="chatMsgImages">
+                          {m.images.map((src, j) => (
+                            <img key={j} src={src} className="chatMsgImage" alt="pasted figure" />
+                          ))}
+                        </div>
+                      ) : null}
+                      {m.pdfs?.length ? (
+                        <div className="chatMsgPdfs">
+                          {m.pdfs.map((n, j) => (
+                            <span key={j} className="chatPdfChip" title={n}>
+                              <FileIcon size={11} />
+                              {n.slice(0, 40)}
+                              {n.length > 40 ? "…" : ""}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                      {isUser ? (
+                        <div className="chatUserText">{m.text}</div>
+                      ) : (
+                        <ChatMarkdown text={m.text} />
+                      )}
+                    </div>
+                    <div className="chatMsgActions">
+                      <button
+                        type="button"
+                        className="chatMsgActionBtn"
+                        title="Copy message"
+                        onClick={() => copyChatMessage(i, m.text)}
+                      >
+                        {copiedMsgIdx === i ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+                      </button>
+                      {isUser && !chatLoading ? (
+                        <button
+                          type="button"
+                          className="chatMsgActionBtn"
+                          title="Edit and re-send (removes later messages)"
+                          onClick={() => setEditingMsg({ idx: i, text: m.text })}
+                        >
+                          <PencilIcon size={13} />
+                        </button>
+                      ) : null}
                     </div>
                   </div>
                 </div>
               );
-            }
-            return (
-              <div key={i} className={`chatBubbleRow ${isUser ? "user" : "ai"}${isFindHit ? " findHit" : ""}`} data-msg-idx={i}>
-                <div className="chatMsgCol">
-                  <div className={`chatBubble ${isUser ? "user" : "ai"}`}>
-                    {m.images?.length ? (
-                      <div className="chatMsgImages">
-                        {m.images.map((src, j) => <img key={j} src={src} className="chatMsgImage" alt="pasted figure" />)}
-                      </div>
-                    ) : null}
-                    {m.pdfs?.length ? (
-                      <div className="chatMsgPdfs">
-                        {m.pdfs.map((n, j) => (
-                          <span key={j} className="chatPdfChip" title={n}>
-                            <FileIcon size={11} />
-                            {n.slice(0, 40)}{n.length > 40 ? "…" : ""}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                    {isUser
-                      ? <div className="chatUserText">{m.text}</div>
-                      : <ChatMarkdown text={m.text} />}
-                  </div>
-                  <div className="chatMsgActions">
-                    <button type="button" className="chatMsgActionBtn" title="Copy message"
-                      onClick={() => copyChatMessage(i, m.text)}>
-                      {copiedMsgIdx === i
-                        ? <CheckIcon size={13} />
-                        : <CopyIcon size={13} />}
-                    </button>
-                    {isUser && !chatLoading ? (
-                      <button type="button" className="chatMsgActionBtn" title="Edit and re-send (removes later messages)"
-                        onClick={() => setEditingMsg({ idx: i, text: m.text })}>
-                        <PencilIcon size={13} />
-                      </button>
-                    ) : null}
-                  </div>
-                </div>
+            })
+          )}
+          {chatLoading &&
+          chatLoadingKey === chatKey &&
+          !chatMessages[chatMessages.length - 1]?.partial ? (
+            <div className="chatBubbleRow ai">
+              <div className="chatBubble ai">
+                <span className="chatTyping">
+                  <span />
+                  <span />
+                  <span />
+                </span>
               </div>
-            );
-          })
-        )}
-        {chatLoading && chatLoadingKey === chatKey && !chatMessages[chatMessages.length - 1]?.partial ? (
-          <div className="chatBubbleRow ai">
-            <div className="chatBubble ai">
-              <span className="chatTyping"><span /><span /><span /></span>
+            </div>
+          ) : null}
+        </div>
+        {pdfSelections.length ? (
+          <div className="chatSelChips">
+            {pdfSelections.map((s, i) => (
+              <div key={i} className="chatSelChip" title={s}>
+                <span
+                  className="chatSelChipLabel"
+                  title="Hold Ctrl while selecting in the PDF to add more passages"
+                >
+                  {pdfSelections.length > 1 ? `Sel ${i + 1}` : "Selection"}
+                </span>
+                <span className="chatSelChipText">
+                  {s.slice(0, 140)}
+                  {s.length > 140 ? "…" : ""}
+                </span>
+                <button
+                  type="button"
+                  className="uiClose uiCloseSm chatSelChipClose"
+                  onClick={() => setPdfSelections((prev) => prev.filter((_, j) => j !== i))}
+                  title="Remove this passage"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {chatFiles.length ? (
+          <div className="chatImgPreviewRow">
+            {chatFiles.map((f, i) => (
+              <span
+                key={i}
+                className="chatFileChip"
+                title={`${f.name} — sent with your next message`}
+              >
+                <FileIcon size={12} />
+                <span className="chatFileChipName">{f.name}</span>
+                <button
+                  type="button"
+                  className="uiClose uiCloseSm chatFileChipRemove"
+                  title="Remove file"
+                  onClick={() => setChatFiles((prev) => prev.filter((_, j) => j !== i))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {chatImages.length ? (
+          <div className="chatImgPreviewRow">
+            {chatImages.map((src, i) => (
+              <span key={i} className="chatImgPreview">
+                <img src={src} alt="pasted figure" />
+                <button
+                  type="button"
+                  className="uiClose uiCloseSm uiCloseDanger chatImgRemove"
+                  title="Remove image"
+                  onClick={() => setChatImages((prev) => prev.filter((_, j) => j !== i))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <form
+          className="chatInputRow"
+          onSubmit={(e) => {
+            e.preventDefault();
+            sendChatMessage();
+          }}
+        >
+          {dictation === "rec" ? (
+            <>
+              <button
+                className="uiBtn chatCircleBtn chatMicBtn"
+                type="button"
+                onClick={() => finishDictation("cancel")}
+                title="Cancel recording"
+                aria-label="Cancel recording"
+              >
+                <XIcon size={13} />
+              </button>
+              <canvas ref={waveCanvasRef} className="chatWaveCanvas" />
+              <span className="chatRecTimer" aria-live="polite">
+                <span className="chatRecDot" />
+                {Math.floor(recSecs / 60)}:{String(recSecs % 60).padStart(2, "0")}
+              </span>
+              <button
+                className="uiBtn chatCircleBtn chatMicBtn"
+                type="button"
+                onClick={() => finishDictation("insert")}
+                title="Stop — put the transcript in the input"
+                aria-label="Stop and transcribe"
+              >
+                <StopIcon size={11} />
+              </button>
+              <button
+                className="uiBtn primary chatCircleBtn"
+                type="button"
+                onClick={() => finishDictation("send")}
+                title="Stop and send"
+                aria-label="Stop, transcribe and send"
+              >
+                <ArrowUpIcon size={14} strokeWidth={2.4} />
+              </button>
+            </>
+          ) : (
+            <>
+              <span
+                data-popover="chatdocs"
+                style={{ position: "relative", display: "inline-flex" }}
+              >
+                <button
+                  type="button"
+                  className={`chatAttachToggle chatPlusBtn ${chatDocs.length || chatIncludeNotes ? "on" : ""}`}
+                  onClick={() => setOpenPopover((p) => (p === "chatdocs" ? null : "chatdocs"))}
+                  title="Add photos & files, or papers from your library"
+                  aria-label="Add attachments or chat context"
+                >
+                  +
+                  {chatDocs.length ? (
+                    <span className="chatPlusCount">{chatDocs.length}</span>
+                  ) : null}
+                </button>
+                {openPopover === "chatdocs" ? (
+                  <div className="popover popUp chatPlusMenu">
+                    <button
+                      type="button"
+                      className="chatPlusMenuItem"
+                      onClick={() => {
+                        setOpenPopover(null);
+                        fileInputRef.current?.click();
+                      }}
+                    >
+                      <span className="chatPlusMenuIcon">
+                        <PaperclipIcon size={15} />
+                      </span>
+                      <span className="chatPlusMenuLabel">Add photos &amp; files</span>
+                      <span className="chatPlusMenuHint">Images or PDFs from your computer</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="chatPlusMenuItem"
+                      onClick={() => {
+                        setOpenPopover(null);
+                        setDocPickerQuery("");
+                        setDocPicker(true);
+                      }}
+                    >
+                      <span className="chatPlusMenuIcon">
+                        <BookIcon size={15} />
+                      </span>
+                      <span className="chatPlusMenuLabel">Add papers from library</span>
+                      <span className="chatPlusMenuHint">
+                        {chatDocs.length ? `${chatDocs.length} selected` : "Search your papers"}
+                      </span>
+                    </button>
+                  </div>
+                ) : null}
+              </span>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept="image/*,application/pdf"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  addChatFiles(Array.from(e.target.files || []));
+                  e.target.value = "";
+                }}
+              />
+              <button
+                type="button"
+                className={`chatAttachToggle chatPdfToggle ${attachPdf ? "on" : ""}`}
+                disabled={!docId && !chatDocs.length}
+                onClick={() => setAttachPdf((v) => !v)}
+                title={
+                  attachPdf
+                    ? "Full PDF file is sent with each message (model sees figures & tables). Click to switch to extracted text only."
+                    : "Send the full PDF file with your messages so the model sees figures & tables (uses more tokens). Click to enable."
+                }
+              >
+                <FileIcon size={12} />
+                PDF
+              </button>
+              <AutoGrowTextarea
+                className="chatInput chatInputArea"
+                rows={1}
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onPaste={handleChatPaste}
+                onKeyDown={(e) => {
+                  if (isEnterCommit(e) && !e.shiftKey) {
+                    e.preventDefault();
+                    sendChatMessage();
+                  }
+                }}
+                placeholder={
+                  chatFiles.length
+                    ? `Ask about the attached file${chatFiles.length > 1 ? "s" : ""}…`
+                    : chatImages.length
+                      ? "Ask about the pasted figure…"
+                      : pdfSelections.length
+                        ? pdfSelections.length > 1
+                          ? `Ask about the ${pdfSelections.length} selected passages…`
+                          : "Ask about the selection…"
+                        : chatDocs.length
+                          ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…`
+                          : "Ask…"
+                }
+              />
+              {chatLoading ? (
+                <button
+                  className="uiBtn chatCircleBtn chatStopBtn"
+                  type="button"
+                  onClick={stopChat}
+                  title="Stop generating"
+                  aria-label="Stop generating"
+                >
+                  <StopIcon size={11} />
+                </button>
+              ) : dictation === "busy" ? (
+                <button
+                  className="uiBtn chatCircleBtn chatMicBtn"
+                  type="button"
+                  disabled
+                  title="Transcribing…"
+                  aria-label="Transcribing"
+                >
+                  <span className="transferSpin inline" />
+                </button>
+              ) : (
+                <>
+                  <button
+                    className="uiBtn chatCircleBtn chatMicBtn"
+                    type="button"
+                    onClick={startDictation}
+                    title="Dictate — transcribed with your OpenAI key"
+                    aria-label="Start dictation"
+                  >
+                    <MicIcon size={13} />
+                  </button>
+                  <button
+                    className="uiBtn primary chatCircleBtn"
+                    type="submit"
+                    disabled={!chatInput.trim()}
+                    title="Send"
+                    aria-label="Send"
+                  >
+                    <ArrowUpIcon size={14} strokeWidth={2.4} />
+                  </button>
+                </>
+              )}
+            </>
+          )}
+        </form>
+        {docPicker ? (
+          <div className="reportOverlay" onClick={() => setDocPicker(false)}>
+            <div className="reportModal docPickerModal" onClick={(e) => e.stopPropagation()}>
+              <div className="reportModalTitle">Add papers to the chat</div>
+              <div className="reportModalHint">
+                Selected papers (and optionally your notes) are sent with every question — pick a
+                few and just ask for a report.
+              </div>
+              <input
+                autoFocus
+                className="searchInput"
+                placeholder="Search your papers…"
+                value={docPickerQuery}
+                onChange={(e) => setDocPickerQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setDocPicker(false);
+                  }
+                }}
+              />
+              <div className="reportPageList docPickerList">
+                {(() => {
+                  const papers = homeBlocks.filter((b) => b.properties?.doc_id);
+                  if (!papers.length)
+                    return (
+                      <div className="popoverHint">No PDFs yet — open or upload one first.</div>
+                    );
+                  const title = (b) => b.content || "Untitled";
+                  const byRecency = (x, y) =>
+                    (y.updated_at || "").localeCompare(x.updated_at || "");
+                  const row = (b, badge) => (
+                    <label key={b.id} className="docPickerItem" title={title(b)}>
+                      <input
+                        type="checkbox"
+                        checked={chatDocs.includes(b.id)}
+                        onChange={(e) =>
+                          setChatDocs((prev) =>
+                            e.target.checked ? [...prev, b.id] : prev.filter((id) => id !== b.id),
+                          )
+                        }
+                      />
+                      <span className="attachName">{title(b)}</span>
+                      {badge || null}
+                    </label>
+                  );
+                  const q = docPickerQuery.trim().toLowerCase();
+                  if (q) {
+                    const words = q.split(/\s+/);
+                    const hits = papers
+                      .filter((b) => {
+                        const t = title(b).toLowerCase();
+                        return words.every((w) => t.includes(w));
+                      })
+                      .sort(byRecency);
+                    return hits.length ? (
+                      hits.map((b) => row(b))
+                    ) : (
+                      <div className="popoverHint">No papers match “{docPickerQuery.trim()}”.</div>
+                    );
+                  }
+                  // No search: papers open as tabs first (the likely candidates),
+                  // then the rest of the library by recency.
+                  const tabIds = (openTabs || []).map((t) => t.id);
+                  const inTabs = tabIds
+                    .map((id) => papers.find((b) => b.id === id))
+                    .filter(Boolean);
+                  const rest = papers.filter((b) => !tabIds.includes(b.id)).sort(byRecency);
+                  return (
+                    <>
+                      {inTabs.length ? <div className="popoverSection">Open tabs</div> : null}
+                      {inTabs.map((b) =>
+                        row(
+                          b,
+                          b.id === focusedBlockId ? (
+                            <span className="docPickerBadge">current</span>
+                          ) : null,
+                        ),
+                      )}
+                      {rest.length ? <div className="popoverSection">Library</div> : null}
+                      {rest.map((b) => row(b))}
+                    </>
+                  );
+                })()}
+              </div>
+              <label className="docPickerItem docPickerNotes">
+                <input
+                  type="checkbox"
+                  checked={chatIncludeNotes}
+                  onChange={(e) => setChatIncludeNotes(e.target.checked)}
+                />
+                <span className="attachName">Include my notes &amp; highlights</span>
+              </label>
+              {!chatDocs.length && docId ? (
+                <div className="popoverHint">
+                  Nothing selected — the currently open PDF is used.
+                </div>
+              ) : null}
+              <div className="reportModalBtns">
+                {chatDocs.length ? (
+                  <button className="chatClearBtn" onClick={() => setChatDocs([])}>
+                    Clear selection
+                  </button>
+                ) : null}
+                <button className="uiBtn primary" onClick={() => setDocPicker(false)}>
+                  Done
+                </button>
+              </div>
             </div>
           </div>
         ) : null}
       </div>
-      {pdfSelections.length ? (
-        <div className="chatSelChips">
-          {pdfSelections.map((s, i) => (
-            <div key={i} className="chatSelChip" title={s}>
-              <span className="chatSelChipLabel" title="Hold Ctrl while selecting in the PDF to add more passages">
-                {pdfSelections.length > 1 ? `Sel ${i + 1}` : "Selection"}
-              </span>
-              <span className="chatSelChipText">{s.slice(0, 140)}{s.length > 140 ? "…" : ""}</span>
-              <button
-                type="button"
-                className="uiClose uiCloseSm chatSelChipClose"
-                onClick={() => setPdfSelections((prev) => prev.filter((_, j) => j !== i))}
-                title="Remove this passage"
-              >×</button>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {chatFiles.length ? (
-        <div className="chatImgPreviewRow">
-          {chatFiles.map((f, i) => (
-            <span key={i} className="chatFileChip" title={`${f.name} — sent with your next message`}>
-              <FileIcon size={12} />
-              <span className="chatFileChipName">{f.name}</span>
-              <button type="button" className="uiClose uiCloseSm chatFileChipRemove" title="Remove file"
-                onClick={() => setChatFiles((prev) => prev.filter((_, j) => j !== i))}>×</button>
-            </span>
-          ))}
-        </div>
-      ) : null}
-      {chatImages.length ? (
-        <div className="chatImgPreviewRow">
-          {chatImages.map((src, i) => (
-            <span key={i} className="chatImgPreview">
-              <img src={src} alt="pasted figure" />
-              <button type="button" className="uiClose uiCloseSm uiCloseDanger chatImgRemove" title="Remove image"
-                onClick={() => setChatImages((prev) => prev.filter((_, j) => j !== i))}>×</button>
-            </span>
-          ))}
-        </div>
-      ) : null}
-      <form
-        className="chatInputRow"
-        onSubmit={(e) => { e.preventDefault(); sendChatMessage(); }}
-      >
-        {dictation === "rec" ? (
-          <>
-            <button className="uiBtn chatCircleBtn chatMicBtn" type="button" onClick={() => finishDictation("cancel")} title="Cancel recording" aria-label="Cancel recording">
-              <XIcon size={13} />
-            </button>
-            <canvas ref={waveCanvasRef} className="chatWaveCanvas" />
-            <span className="chatRecTimer" aria-live="polite">
-              <span className="chatRecDot" />
-              {Math.floor(recSecs / 60)}:{String(recSecs % 60).padStart(2, "0")}
-            </span>
-            <button className="uiBtn chatCircleBtn chatMicBtn" type="button" onClick={() => finishDictation("insert")} title="Stop — put the transcript in the input" aria-label="Stop and transcribe">
-              <StopIcon size={11} />
-            </button>
-            <button className="uiBtn primary chatCircleBtn" type="button" onClick={() => finishDictation("send")} title="Stop and send" aria-label="Stop, transcribe and send">
-              <ArrowUpIcon size={14} strokeWidth={2.4} />
-            </button>
-          </>
-        ) : (
-        <>
-        <span data-popover="chatdocs" style={{ position: "relative", display: "inline-flex" }}>
-          <button
-            type="button"
-            className={`chatAttachToggle chatPlusBtn ${(chatDocs.length || chatIncludeNotes) ? "on" : ""}`}
-            onClick={() => setOpenPopover((p) => (p === "chatdocs" ? null : "chatdocs"))}
-            title="Add photos & files, or papers from your library"
-            aria-label="Add attachments or chat context"
-          >
-            +{chatDocs.length ? <span className="chatPlusCount">{chatDocs.length}</span> : null}
-          </button>
-          {openPopover === "chatdocs" ? (
-            <div className="popover popUp chatPlusMenu">
-              <button type="button" className="chatPlusMenuItem"
-                onClick={() => { setOpenPopover(null); fileInputRef.current?.click(); }}>
-                <span className="chatPlusMenuIcon">
-                  <PaperclipIcon size={15} />
-                </span>
-                <span className="chatPlusMenuLabel">Add photos &amp; files</span>
-                <span className="chatPlusMenuHint">Images or PDFs from your computer</span>
-              </button>
-              <button type="button" className="chatPlusMenuItem"
-                onClick={() => { setOpenPopover(null); setDocPickerQuery(""); setDocPicker(true); }}>
-                <span className="chatPlusMenuIcon">
-                  <BookIcon size={15} />
-                </span>
-                <span className="chatPlusMenuLabel">Add papers from library</span>
-                <span className="chatPlusMenuHint">{chatDocs.length ? `${chatDocs.length} selected` : "Search your papers"}</span>
-              </button>
-            </div>
-          ) : null}
-        </span>
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept="image/*,application/pdf"
-          style={{ display: "none" }}
-          onChange={(e) => { addChatFiles(Array.from(e.target.files || [])); e.target.value = ""; }}
-        />
-        <button
-          type="button"
-          className={`chatAttachToggle chatPdfToggle ${attachPdf ? "on" : ""}`}
-          disabled={!docId && !chatDocs.length}
-          onClick={() => setAttachPdf((v) => !v)}
-          title={attachPdf
-            ? "Full PDF file is sent with each message (model sees figures & tables). Click to switch to extracted text only."
-            : "Send the full PDF file with your messages so the model sees figures & tables (uses more tokens). Click to enable."}
-        >
-          <FileIcon size={12} />
-          PDF
-        </button>
-        <AutoGrowTextarea
-          className="chatInput chatInputArea"
-          rows={1}
-          value={chatInput}
-          onChange={(e) => setChatInput(e.target.value)}
-          onPaste={handleChatPaste}
-          onKeyDown={(e) => {
-            if (isEnterCommit(e) && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
-          }}
-          placeholder={chatFiles.length ? `Ask about the attached file${chatFiles.length > 1 ? "s" : ""}…` : chatImages.length ? "Ask about the pasted figure…" : (pdfSelections.length ? (pdfSelections.length > 1 ? `Ask about the ${pdfSelections.length} selected passages…` : "Ask about the selection…") : (chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…` : "Ask…"))}
-        />
-        {chatLoading ? (
-          <button className="uiBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
-            <StopIcon size={11} />
-          </button>
-        ) : dictation === "busy" ? (
-          <button className="uiBtn chatCircleBtn chatMicBtn" type="button" disabled title="Transcribing…" aria-label="Transcribing">
-            <span className="transferSpin inline" />
-          </button>
-        ) : (
-          <>
-            <button className="uiBtn chatCircleBtn chatMicBtn" type="button" onClick={startDictation} title="Dictate — transcribed with your OpenAI key" aria-label="Start dictation">
-              <MicIcon size={13} />
-            </button>
-            <button className="uiBtn primary chatCircleBtn" type="submit" disabled={!chatInput.trim()} title="Send" aria-label="Send">
-              <ArrowUpIcon size={14} strokeWidth={2.4} />
-            </button>
-          </>
-        )}
-        </>
-        )}
-      </form>
-      {docPicker ? (
-        <div className="reportOverlay" onClick={() => setDocPicker(false)}>
-          <div className="reportModal docPickerModal" onClick={(e) => e.stopPropagation()}>
-            <div className="reportModalTitle">Add papers to the chat</div>
-            <div className="reportModalHint">
-              Selected papers (and optionally your notes) are sent with every question —
-              pick a few and just ask for a report.
-            </div>
-            <input
-              autoFocus
-              className="searchInput"
-              placeholder="Search your papers…"
-              value={docPickerQuery}
-              onChange={(e) => setDocPickerQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Escape") { e.preventDefault(); setDocPicker(false); } }}
-            />
-            <div className="reportPageList docPickerList">
-              {(() => {
-                const papers = homeBlocks.filter((b) => b.properties?.doc_id);
-                if (!papers.length) return <div className="popoverHint">No PDFs yet — open or upload one first.</div>;
-                const title = (b) => b.content || "Untitled";
-                const byRecency = (x, y) => (y.updated_at || "").localeCompare(x.updated_at || "");
-                const row = (b, badge) => (
-                  <label key={b.id} className="docPickerItem" title={title(b)}>
-                    <input
-                      type="checkbox"
-                      checked={chatDocs.includes(b.id)}
-                      onChange={(e) => setChatDocs((prev) => e.target.checked
-                        ? [...prev, b.id]
-                        : prev.filter((id) => id !== b.id))}
-                    />
-                    <span className="attachName">{title(b)}</span>
-                    {badge || null}
-                  </label>
-                );
-                const q = docPickerQuery.trim().toLowerCase();
-                if (q) {
-                  const words = q.split(/\s+/);
-                  const hits = papers
-                    .filter((b) => { const t = title(b).toLowerCase(); return words.every((w) => t.includes(w)); })
-                    .sort(byRecency);
-                  return hits.length
-                    ? hits.map((b) => row(b))
-                    : <div className="popoverHint">No papers match “{docPickerQuery.trim()}”.</div>;
-                }
-                // No search: papers open as tabs first (the likely candidates),
-                // then the rest of the library by recency.
-                const tabIds = (openTabs || []).map((t) => t.id);
-                const inTabs = tabIds.map((id) => papers.find((b) => b.id === id)).filter(Boolean);
-                const rest = papers.filter((b) => !tabIds.includes(b.id)).sort(byRecency);
-                return (
-                  <>
-                    {inTabs.length ? <div className="popoverSection">Open tabs</div> : null}
-                    {inTabs.map((b) => row(b, b.id === focusedBlockId
-                      ? <span className="docPickerBadge">current</span> : null))}
-                    {rest.length ? <div className="popoverSection">Library</div> : null}
-                    {rest.map((b) => row(b))}
-                  </>
-                );
-              })()}
-            </div>
-            <label className="docPickerItem docPickerNotes">
-              <input type="checkbox" checked={chatIncludeNotes} onChange={(e) => setChatIncludeNotes(e.target.checked)} />
-              <span className="attachName">Include my notes &amp; highlights</span>
-            </label>
-            {!chatDocs.length && docId ? (
-              <div className="popoverHint">Nothing selected — the currently open PDF is used.</div>
-            ) : null}
-            <div className="reportModalBtns">
-              {chatDocs.length ? (
-                <button className="chatClearBtn" onClick={() => setChatDocs([])}>Clear selection</button>
-              ) : null}
-              <button className="uiBtn primary" onClick={() => setDocPicker(false)}>Done</button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
     </DockWindow>
   );
 }

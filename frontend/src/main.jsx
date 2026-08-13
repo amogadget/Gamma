@@ -14,5 +14,5 @@ if (navigator.maxTouchPoints > 0) document.documentElement.dataset.touch = "1";
 ReactDOM.createRoot(document.getElementById("root")).render(
   <React.StrictMode>
     <App />
-  </React.StrictMode>
+  </React.StrictMode>,
 );

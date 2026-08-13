@@ -34,7 +34,7 @@ CONTACT_EMAIL = "gamma-pdf-annotator@users.noreply.github.com"
 # Realistic browser headers get past simple UA filters (many hosts 403 bare bots)
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
     "Accept": "application/pdf,text/html;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
@@ -57,8 +57,7 @@ def _open_access_pdf_for_doi(doi: str) -> tuple[str, str]:
     Unpaywall. Prefers the published PDF over accepted manuscripts over
     preprints — repositories often only hold the submitted version."""
     try:
-        url = (f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}"
-               f"?email={urllib.parse.quote(CONTACT_EMAIL)}")
+        url = f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?email={urllib.parse.quote(CONTACT_EMAIL)}"
         req = URLRequest(url, headers={"User-Agent": "gamma-pdf-annotator/1.0"})
         with urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
@@ -148,18 +147,22 @@ def resolve_pdf(payload: ResolvePdfRequest, request: Request):
             raise HTTPException(
                 status_code=400,
                 detail="The publisher's PDF isn't accessible server-side (usually a paywall). "
-                       "Open-access fallback is disabled in your settings — download the PDF in "
-                       "your browser and drop it onto Gamma.",
+                "Open-access fallback is disabled in your settings — download the PDF in "
+                "your browser and drop it onto Gamma.",
             )
         oa_url, oa_version = _open_access_pdf_for_doi(doi)
         if oa_url:
             note = ""
             if oa_version and oa_version != "publishedVersion":
-                pretty = {"acceptedVersion": "accepted manuscript",
-                          "submittedVersion": "preprint (submitted version)"}.get(oa_version, oa_version)
-                note = (f"The publisher's PDF is paywalled — loaded the open-access {pretty} instead. "
-                        "For the published version, download it in your browser and replace the "
-                        "source file via the page's source button.")
+                pretty = {
+                    "acceptedVersion": "accepted manuscript",
+                    "submittedVersion": "preprint (submitted version)",
+                }.get(oa_version, oa_version)
+                note = (
+                    f"The publisher's PDF is paywalled — loaded the open-access {pretty} instead. "
+                    "For the published version, download it in your browser and replace the "
+                    "source file via the page's source button."
+                )
             try:
                 final_url, content_type, _ = try_resolve(oa_url)
                 if "application/pdf" in content_type:
@@ -170,19 +173,19 @@ def resolve_pdf(payload: ResolvePdfRequest, request: Request):
         raise HTTPException(
             status_code=400,
             detail="This leads to a publisher page whose PDF isn't accessible server-side "
-                   "(usually a paywall), and no open-access copy was found. Open the link in your "
-                   "browser instead — if you can download the PDF there, drop the file onto Gamma.",
+            "(usually a paywall), and no open-access copy was found. Open the link in your "
+            "browser instead — if you can download the PDF there, drop the file onto Gamma.",
         )
     if blocked:
         raise HTTPException(
             status_code=400,
-            detail="This site blocks server-side fetching. Download the PDF in your browser "
-                   "and drop it onto the page.",
+            detail="This site blocks server-side fetching. Download the PDF in your browser and drop it onto the page.",
         )
     raise HTTPException(
         status_code=400,
         detail=f"Couldn't find a PDF behind this link (got {content_type or 'no content type'}, "
-               "and the page doesn't advertise a PDF). Download it in your browser and drop it onto Gamma.")
+        "and the page doesn't advertise a PDF). Download it in your browser and drop it onto Gamma.",
+    )
 
 
 @router.get("/pdf")

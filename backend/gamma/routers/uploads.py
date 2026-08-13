@@ -91,7 +91,7 @@ async def serve_upload(filename: str, request: Request):
     else:
         raise HTTPException(status_code=400, detail="unsupported file type")
     # Flattened copies live beside the original as "<doc_id>-flat.pdf".
-    bare = stem[:-len(flatten_queue.FLAT_SUFFIX)] if stem.endswith(flatten_queue.FLAT_SUFFIX) else stem
+    bare = stem[: -len(flatten_queue.FLAT_SUFFIX)] if stem.endswith(flatten_queue.FLAT_SUFFIX) else stem
     if not bare or not all(c in "0123456789abcdef" for c in bare):
         raise HTTPException(status_code=400, detail="invalid filename")
     path = find_upload_file(filename, request)
@@ -99,6 +99,4 @@ async def serve_upload(filename: str, request: Request):
         raise HTTPException(status_code=404, detail="not found")
     # Filenames are content hashes (or URL hashes the server only writes once),
     # so a given name can never serve different bytes — cache hard for a month.
-    return FileResponse(path, media_type=media_type,
-                        headers={"Cache-Control": "public, max-age=2592000, immutable"})
-
+    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=2592000, immutable"})

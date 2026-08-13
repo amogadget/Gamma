@@ -12,14 +12,22 @@ def _paper(r, block_id):
 
 
 def test_status_lists_papers_not_notes(guest):
-    with_meta = make_page(guest, "Has meta", properties={
-        "doc_id": "a" * 24,
-        "meta": {"title": "Proper Title", "source": "arxiv"},
-    })
-    failed = make_page(guest, "Lookup failed", properties={
-        "source_url": "https://example.org/x.pdf",
-        "meta_error": {"at": "2026-01-01T00:00:00Z", "detail": "no arXiv id, DOI, or AI match"},
-    })
+    with_meta = make_page(
+        guest,
+        "Has meta",
+        properties={
+            "doc_id": "a" * 24,
+            "meta": {"title": "Proper Title", "source": "arxiv"},
+        },
+    )
+    failed = make_page(
+        guest,
+        "Lookup failed",
+        properties={
+            "source_url": "https://example.org/x.pdf",
+            "meta_error": {"at": "2026-01-01T00:00:00Z", "detail": "no arXiv id, DOI, or AI match"},
+        },
+    )
     note = make_page(guest, "Plain note page")
 
     r = guest.get("/api/metadata/status")
@@ -32,7 +40,7 @@ def test_status_lists_papers_not_notes(guest):
     assert p1["has_meta"] is True
     assert p1["meta_source"] == "arxiv"
     assert p1["title"] == "Proper Title"  # metadata title wins over block content
-    assert p1["text_chars"] is None       # never indexed → unknown
+    assert p1["text_chars"] is None  # never indexed → unknown
 
     p2 = _paper(r, failed["id"])
     assert p2["has_meta"] is False
@@ -44,9 +52,13 @@ def test_status_reads_index_state(guest):
     page = make_page(guest, "Indexed paper", properties={"doc_id": doc})
     with sqlite3.connect(user_db_path("guest", "data.db")) as conn:
         conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS pdf_fts USING fts5(doc_id UNINDEXED, page UNINDEXED, content)")
-        conn.execute("CREATE TABLE IF NOT EXISTS pdf_fts_docs (doc_id TEXT PRIMARY KEY, indexed_at TEXT NOT NULL, pages INTEGER, ver INTEGER NOT NULL DEFAULT 0)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pdf_fts_docs (doc_id TEXT PRIMARY KEY, indexed_at TEXT NOT NULL, pages INTEGER, ver INTEGER NOT NULL DEFAULT 0)"
+        )
         conn.execute("INSERT INTO pdf_fts (doc_id, page, content) VALUES (?, 1, ?)", (doc, "hello " * 20))
-        conn.execute("INSERT INTO pdf_fts_docs (doc_id, indexed_at, pages, ver) VALUES (?, 'now', 1, ?)", (doc, INDEX_VERSION))
+        conn.execute(
+            "INSERT INTO pdf_fts_docs (doc_id, indexed_at, pages, ver) VALUES (?, 'now', 1, ?)", (doc, INDEX_VERSION)
+        )
         conn.commit()
 
     r = guest.get("/api/metadata/status")

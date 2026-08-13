@@ -15,8 +15,15 @@ from .logbuf import log
 
 
 def anthropic_request(
-    conf, messages, system, model, pdf_b64s=None, effort="",
-    max_tokens=8192, images=None, stream=False,
+    conf,
+    messages,
+    system,
+    model,
+    pdf_b64s=None,
+    effort="",
+    max_tokens=8192,
+    images=None,
+    stream=False,
 ):
     """Build an Anthropic Messages API request."""
     if pdf_b64s or images:
@@ -64,19 +71,22 @@ def anthropic_request(
 
 
 def _anthropic_extract(data) -> str:
-    text = "".join(
-        item.get("text", "")
-        for item in data.get("content", [])
-        if item.get("type") == "text"
-    )
+    text = "".join(item.get("text", "") for item in data.get("content", []) if item.get("type") == "text")
     if not text.strip():
         raise RuntimeError(f"empty response (stop_reason={data.get('stop_reason', 'unknown')})")
     return text
 
 
 def openai_request(
-    conf, messages, system, model, pdf_b64s=None, effort="",
-    max_tokens=8192, images=None, stream=False,
+    conf,
+    messages,
+    system,
+    model,
+    pdf_b64s=None,
+    effort="",
+    max_tokens=8192,
+    images=None,
+    stream=False,
 ):
     """Build an OpenAI Chat Completions API request."""
     if pdf_b64s or images:
@@ -137,8 +147,15 @@ def _openai_extract(data) -> str:
 
 
 def chatgpt_request(
-    conf, messages, system, model, pdf_b64s=None, effort="",
-    max_tokens=8192, images=None, stream=False,
+    conf,
+    messages,
+    system,
+    model,
+    pdf_b64s=None,
+    effort="",
+    max_tokens=8192,
+    images=None,
+    stream=False,
 ):
     """Build a ChatGPT subscription Responses API request.
 
@@ -229,15 +246,30 @@ def upstream_detail(error: urllib.error.HTTPError, cap: int = 500) -> str:
 
 
 def open_ai(
-    messages, system, entry, runtime, pdf_b64s=None, effort="",
-    max_tokens=8192, timeout=60, images=None, stream=False,
+    messages,
+    system,
+    entry,
+    runtime,
+    pdf_b64s=None,
+    effort="",
+    max_tokens=8192,
+    timeout=60,
+    images=None,
+    stream=False,
 ):
     """Open a provider call without consuming response bytes."""
     conf = runtime["providers"][entry["provider"]]
     build_request = _WIRE[conf["protocol"]][0]
     request = build_request(
-        conf, messages, system, entry["model"], pdf_b64s,
-        effort, max_tokens, images, stream,
+        conf,
+        messages,
+        system,
+        entry["model"],
+        pdf_b64s,
+        effort,
+        max_tokens,
+        images,
+        stream,
     )
     try:
         return urllib.request.urlopen(request, timeout=timeout)
@@ -255,13 +287,27 @@ def read_reply(response, provider_protocol) -> str:
 
 
 def call_ai(
-    messages, system, entry, runtime, pdf_b64s=None, effort="",
-    max_tokens=8192, timeout=60, images=None,
+    messages,
+    system,
+    entry,
+    runtime,
+    pdf_b64s=None,
+    effort="",
+    max_tokens=8192,
+    timeout=60,
+    images=None,
 ):
     """Send a chat and return its complete reply text."""
     with open_ai(
-        messages, system, entry, runtime, pdf_b64s,
-        effort, max_tokens, timeout, images,
+        messages,
+        system,
+        entry,
+        runtime,
+        pdf_b64s,
+        effort,
+        max_tokens,
+        timeout,
+        images,
     ) as response:
         return read_reply(response, protocol(runtime, entry))
 
@@ -302,11 +348,7 @@ def sse_deltas(response, provider_protocol):
             elif kind == "response.completed":
                 stop = (event.get("response") or {}).get("status") or "completed"
             elif kind in ("response.failed", "error"):
-                error = (
-                    (event.get("response") or {}).get("error") or {}
-                    if kind == "response.failed"
-                    else event
-                )
+                error = (event.get("response") or {}).get("error") or {} if kind == "response.failed" else event
                 raise RuntimeError(error.get("message") or "stream error")
         else:
             if event.get("error"):

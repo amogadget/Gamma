@@ -19,15 +19,18 @@ from gamma.routers.ai import _chatgpt_request, _sse_deltas
 def _fake_jwt(claims: dict) -> str:
     def seg(d):
         return base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip("=")
+
     return f"{seg({'alg': 'none'})}.{seg(claims)}.sig"
 
 
 def _fake_tokens(exp=None, email="tim@example.com", account="acct-123"):
     return {
-        "access_token": _fake_jwt({
-            "exp": exp or int(time.time()) + 3600,
-            "https://api.openai.com/auth": {"chatgpt_account_id": account},
-        }),
+        "access_token": _fake_jwt(
+            {
+                "exp": exp or int(time.time()) + 3600,
+                "https://api.openai.com/auth": {"chatgpt_account_id": account},
+            }
+        ),
         "refresh_token": "rt-1",
         "id_token": _fake_jwt({"email": email}),
     }
@@ -55,6 +58,7 @@ def erin(client):
 
 
 # --- OAuth helpers ------------------------------------------------------------
+
 
 def test_parse_callback_accepts_url_and_bare_code():
     url = "http://localhost:1455/auth/callback?code=abc123&state=st1"
@@ -84,6 +88,7 @@ def test_exchange_code_extracts_account_and_expiry(monkeypatch):
 
 # --- Connect endpoints --------------------------------------------------------
 
+
 def test_guest_cannot_start_oauth(guest):
     assert guest.post("/api/ai/oauth/chatgpt/start").status_code == 403
 
@@ -107,17 +112,28 @@ def test_connect_flow_creates_masked_entry_and_models(erin, monkeypatch):
 
     monkeypatch.setattr(co, "_token_request", lambda form: _fake_tokens())
     # A fresh connect seeds its model list live from the account (first two).
-    monkeypatch.setattr(ai_mod, "urlopen", lambda req, timeout=0: _FakeResp({"models": [
-        {"slug": "gpt-6-sol", "visibility": "list"},
-        {"slug": "gpt-6-terra", "visibility": "list"},
-        {"slug": "gpt-6-luna", "visibility": "list"},
-    ]}))
+    monkeypatch.setattr(
+        ai_mod,
+        "urlopen",
+        lambda req, timeout=0: _FakeResp(
+            {
+                "models": [
+                    {"slug": "gpt-6-sol", "visibility": "list"},
+                    {"slug": "gpt-6-terra", "visibility": "list"},
+                    {"slug": "gpt-6-luna", "visibility": "list"},
+                ]
+            }
+        ),
+    )
     state = erin.post("/api/ai/oauth/chatgpt/start").json()["state"]
-    r = erin.post("/api/ai/oauth/chatgpt/complete", json={
-        "state": state,
-        "callback": f"http://localhost:1455/auth/callback?code=abc&state={state}",
-        "name": "My ChatGPT",
-    })
+    r = erin.post(
+        "/api/ai/oauth/chatgpt/complete",
+        json={
+            "state": state,
+            "callback": f"http://localhost:1455/auth/callback?code=abc&state={state}",
+            "name": "My ChatGPT",
+        },
+    )
     assert r.status_code == 200, r.text
     entry = next(p for p in r.json()["providers"] if p["protocol"] == "chatgpt")
     assert entry["oauth_connected"] is True
@@ -168,20 +184,23 @@ class _FakeResp:
 def test_model_catalog_asks_chatgpt_backend_live(erin, monkeypatch):
     import gamma.routers.ai as ai_mod
 
-    entry = next(p for p in erin.get("/api/ai/settings").json()["providers"]
-                 if p["protocol"] == "chatgpt")
+    entry = next(p for p in erin.get("/api/ai/settings").json()["providers"] if p["protocol"] == "chatgpt")
     seen = {}
 
     def fake_urlopen(req, timeout=0):
         seen["url"] = req.full_url
         seen["auth"] = req.get_header("Authorization")
-        return _FakeResp({"models": [
-            {"slug": "gpt-6-codex", "visibility": "list"},
-            {"slug": "gpt-5.1-codex", "visibility": "list"},
-            {"slug": "gpt-6-codex", "visibility": "list"},       # dupe collapses
-            {"slug": "gpt-5-codex-mini", "visibility": "hide"},  # usable, offered last
-            {"slug": "gpt-4-gone", "visibility": "none"},        # dropped
-        ]})
+        return _FakeResp(
+            {
+                "models": [
+                    {"slug": "gpt-6-codex", "visibility": "list"},
+                    {"slug": "gpt-5.1-codex", "visibility": "list"},
+                    {"slug": "gpt-6-codex", "visibility": "list"},  # dupe collapses
+                    {"slug": "gpt-5-codex-mini", "visibility": "hide"},  # usable, offered last
+                    {"slug": "gpt-4-gone", "visibility": "none"},  # dropped
+                ]
+            }
+        )
 
     monkeypatch.setattr(ai_mod, "urlopen", fake_urlopen)
     r = erin.post("/api/ai/model-catalog", json={"provider_id": entry["id"]})
@@ -223,10 +242,13 @@ def test_api_model_catalog_uses_one_short_attempt(erin, monkeypatch):
         raise TimeoutError("timed out")
 
     monkeypatch.setattr(ai_mod, "urlopen", timed_out)
-    r = erin.post("/api/ai/model-catalog", json={
-        "protocol": "openai",
-        "api_key": "sk-test",
-    })
+    r = erin.post(
+        "/api/ai/model-catalog",
+        json={
+            "protocol": "openai",
+            "api_key": "sk-test",
+        },
+    )
 
     assert r.status_code == 400
     assert "timed out" in r.json()["detail"]
@@ -252,10 +274,13 @@ def test_api_model_catalog_does_not_retry_auth_error(erin, monkeypatch):
         )
 
     monkeypatch.setattr(ai_mod, "urlopen", unauthorized)
-    r = erin.post("/api/ai/model-catalog", json={
-        "protocol": "openai",
-        "api_key": "sk-bad",
-    })
+    r = erin.post(
+        "/api/ai/model-catalog",
+        json={
+            "protocol": "openai",
+            "api_key": "sk-bad",
+        },
+    )
 
     assert r.status_code == 400
     assert "bad key" in r.json()["detail"]
@@ -264,11 +289,11 @@ def test_api_model_catalog_does_not_retry_auth_error(erin, monkeypatch):
 
 # --- Wire protocol ------------------------------------------------------------
 
+
 def test_chatgpt_request_shape_with_pdf_and_image():
     conf = {"api_key": "tok", "account_id": "acct-123", "base_url": "https://chatgpt.com/backend-api/codex"}
     msgs = [{"role": "assistant", "content": "earlier answer"}, {"role": "user", "content": "what does fig 2 show?"}]
-    req = _chatgpt_request(conf, msgs, "be brief", "gpt-5.1",
-                           pdf_b64s=["UERG"], images=[("image/png", "SU1H")])
+    req = _chatgpt_request(conf, msgs, "be brief", "gpt-5.1", pdf_b64s=["UERG"], images=[("image/png", "SU1H")])
     body = json.loads(req.data)
     assert req.full_url.endswith("/responses")
     assert body["stream"] is True and body["store"] is False
