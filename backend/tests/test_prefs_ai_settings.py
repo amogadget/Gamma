@@ -167,6 +167,48 @@ def test_provider_validation(alice):
     assert alice.put("/api/ai/providers/does-not-exist", json={"name": "x"}).status_code == 404
 
 
+# --- provider Test button (live probe) ----------------------------------------
+
+def test_provider_test_probe_reports_ok(alice, monkeypatch):
+    import gamma.routers.ai as ai_mod
+
+    seen = {}
+
+    def fake_call(messages, system, entry, rt, **kw):
+        seen.update(entry)
+        return "ok"
+
+    monkeypatch.setattr(ai_mod, "_call_ai", fake_call)
+    pid = alice.get("/api/ai/settings").json()["providers"][0]["id"]
+    r = alice.post(f"/api/ai/providers/{pid}/test")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["model"] == "claude-solo"
+    assert isinstance(body["latency_ms"], int)
+    # The probe goes through the tested entry's first model, not the default.
+    assert seen == {"provider": pid, "model": "claude-solo"}
+
+
+def test_provider_test_reports_upstream_failure_in_body(alice, monkeypatch):
+    # A failed probe is a successful test: 200 with the upstream error in-body.
+    import gamma.routers.ai as ai_mod
+    from gamma.ai_client import UpstreamError
+
+    def fake_call(*a, **kw):
+        raise UpstreamError(401, "upstream 401: token expired")
+
+    monkeypatch.setattr(ai_mod, "_call_ai", fake_call)
+    pid = alice.get("/api/ai/settings").json()["providers"][0]["id"]
+    r = alice.post(f"/api/ai/providers/{pid}/test")
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+    assert "401" in r.json()["error"]
+
+
+def test_provider_test_unknown_entry_404(alice):
+    assert alice.post("/api/ai/providers/does-not-exist/test").status_code == 404
+
+
 def test_export_stays_owner_only(alice):
     # Keys ride along inside data.db in the owner's backup — which is fine
     # exactly because only the owner's session can request it.

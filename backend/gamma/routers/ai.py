@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from .. import chatgpt_oauth
 from ..ai_client import (
     UpstreamError,
+    call_ai as _call_ai,
     chatgpt_request as _chatgpt_request,  # noqa: F401  (re-exported for tests)
     open_ai as _open_ai,
     protocol as _protocol,
@@ -38,6 +39,7 @@ from ..ai_settings import (
     MAX_PROVIDERS,
     MAX_URL_LEN,
     ai_runtime,
+    entry_models,
     load_provider_entries,
     new_provider_id,
     require_ai_runtime,
@@ -319,6 +321,39 @@ async def ai_provider_delete(provider_id: str, request: Request):
     entries = [e for e in load_provider_entries(user) if e.get("id") != provider_id]
     save_provider_entries(user, entries)
     return _masked_settings(user, request.state.is_guest)
+
+
+# Sync def: the probe call runs in the threadpool.
+@router.post("/ai/providers/{provider_id}/test")
+def ai_provider_test(provider_id: str, request: Request):
+    """One tiny live completion through a saved entry, for the settings list's
+    Test button — answers "does this credential still work" without waiting for
+    a real chat to 502 (the common case: an expired/revoked ChatGPT sign-in).
+    The probe result comes back in-body — a failed probe is a successful test,
+    not an HTTP error."""
+    user = _require_editor(request)
+    entries = load_provider_entries(user)
+    entry = next((e for e in entries if e.get("id") == provider_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="provider not found")
+    # A test click is an explicit retry: drop the refresh backoff so a ChatGPT
+    # entry re-attempts its token refresh now instead of reusing a stale token.
+    oauth = entry.get("oauth")
+    if isinstance(oauth, dict) and oauth.pop("refresh_failed_at", None) is not None:
+        save_provider_entries(user, entries)
+    rt = ai_runtime(user)
+    if provider_id not in rt["providers"]:
+        return {"ok": False, "error": "entry has no usable credential — set an API key or sign in again"}
+    model = entry_models(entry)[0]
+    started = time.time()
+    try:
+        # Generous cap: reasoning models burn invisible tokens even on "ok".
+        _call_ai([{"role": "user", "content": 'Reply with the single word "ok".'}],
+                 "", {"provider": provider_id, "model": model}, rt,
+                 max_tokens=2048, timeout=45)
+    except Exception as e:
+        return {"ok": False, "model": model, "error": str(e)}
+    return {"ok": True, "model": model, "latency_ms": int((time.time() - started) * 1000)}
 
 
 # Fallback when the live listing fails on a connected entry (offline, backend

@@ -1988,6 +1988,9 @@ export default function App() {
   const [aiKeysForm, setAiKeysForm] = useState(null); // null | {id: ""=add, protocol, name, api_key, base_url, models}
   const [aiKeysBusy, setAiKeysBusy] = useState(false);
   const [aiKeysError, setAiKeysError] = useState("");
+  // Per-entry results of the list's Test button (a tiny live completion):
+  // id -> {busy} | {ok, model, latency_ms} | {ok: false, error}
+  const [aiKeyTests, setAiKeyTests] = useState({});
 
   // The settings page (account popover → Settings…): two-column modal,
   // categories on the left, the selected pane on the right.
@@ -2084,11 +2087,26 @@ export default function App() {
     setAiKeysError("");
     setAiKeysInfo(null);
     setAiKeysForm(null);
+    setAiKeyTests({});
     try {
       setAiKeysInfo(await apiJson(`${API}/ai/settings`));
     } catch (err) {
       setAiKeysError(err.message);
     }
+  }
+
+  // Probe one entry with a tiny real completion — the honest answer to "will
+  // my chats work", surfacing an expired ChatGPT sign-in as a readable error
+  // here instead of a 502 mid-conversation.
+  async function testAiProvider(p) {
+    setAiKeyTests((t) => ({ ...t, [p.id]: { busy: true } }));
+    let result;
+    try {
+      result = await apiJson(`${API}/ai/providers/${p.id}/test`, { method: "POST" });
+    } catch (err) {
+      result = { ok: false, error: err.message };
+    }
+    setAiKeyTests((t) => ({ ...t, [p.id]: result }));
   }
   // Entering the AI pane always refetches the masked key list.
   useEffect(() => {
@@ -7658,6 +7676,8 @@ export default function App() {
           startAddAiProvider,
           startEditAiProvider,
           deleteAiProvider,
+          aiKeyTests,
+          testAiProvider,
           startChatGPTAuth,
           loadModelCatalog,
           addCatalogModel,
