@@ -3616,6 +3616,15 @@ export default function App() {
     await downloadExport(path, name);
   }
 
+  // Download every page tagged into a folder (and its subfolders) as one
+  // Markdown bundle — the server decides bare .md vs .zip by whether any page
+  // references uploaded assets, same as the single-page export.
+  async function exportFolder(name) {
+    if (!name) return;
+    setHomeMenu(null);
+    await downloadExport(`/folders/export?name=${encodeURIComponent(name)}`, "folder.zip");
+  }
+
   // Ask the AI for the document's title and fill it into the page name.
   const [aiTitleBusy, setAiTitleBusy] = useState(false);
   const [sourceDraft, setSourceDraft] = useState(""); // edit buffer for the source-PDF popover
@@ -6346,6 +6355,7 @@ export default function App() {
               <>
                 <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setFolderFilter(homeMenu.name); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(homeMenu.name)}`); }}>Open</button>
                 <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); setFolderRenaming({ name: homeMenu.name, draft: homeMenu.name }); }}>Rename</button>
+                <button className="ctxMenuItem" onClick={() => { const name = homeMenu.name; setHomeMenu(null); exportFolder(name); }}>Export</button>
                 <button className="ctxMenuItem" onClick={() => { setHomeMenu(null); deleteFolderByName(homeMenu.name); }}>Delete</button>
               </>
             )}

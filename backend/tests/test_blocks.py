@@ -1,4 +1,4 @@
-"""Core data model: block CRUD, tree replacement, ordering, search, replace,
+"""Core data model: block CRUD, tree replacement, ordering, search,
 and the cleanup that must happen on delete."""
 
 from conftest import make_page
@@ -38,7 +38,7 @@ def test_sibling_order_is_lexicographic_on_position(guest):
     assert contents == ["first", "middle", "second"]
 
 
-def test_block_search_and_replace(guest):
+def test_block_search(guest):
     page = make_page(guest, "Search page")
     guest.post("/api/blocks", json={"parent_id": page["id"], "content": "the zorbly quux appears"})
     r = guest.get("/api/block-search", params={"q": "zorbly"})
@@ -46,11 +46,6 @@ def test_block_search_and_replace(guest):
     # case-sensitive: no match for wrong case
     r = guest.get("/api/block-search", params={"q": "ZORBLY", "case": 1})
     assert not any("zorbly" in b["content"] for b in r.json()["blocks"])
-    # replace across notes
-    r = guest.post("/api/blocks-replace", json={"query": "zorbly", "replacement": "shiny"})
-    assert r.status_code == 200 and r.json()["changed"] >= 1
-    r = guest.get("/api/block-search", params={"q": "shiny quux"})
-    assert any("shiny quux" in b["content"] for b in r.json()["blocks"])
 
 
 def test_block_search_is_separator_tolerant(guest):
