@@ -9,7 +9,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
 import { COLORS } from "./pdfViewer";
-import { AutoGrowTextarea } from "./widgets";
+import { AutoGrowTextarea, handleMarkdownCopy } from "./widgets";
 import { isEnterCommit } from "./utils";
 import { FolderIcon, LinkIcon } from "./icons";
 import {
@@ -714,7 +714,7 @@ function BlockRow({
               placeholder="Type..."
             />
           ) : (
-            <div className="blockRendered">
+            <div className="blockRendered" onCopy={handleMarkdownCopy}>
               {(block.content || "").trim() ? (
                 <BlockMarkdown
                   content={block.content || ""}

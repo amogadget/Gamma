@@ -2725,18 +2725,15 @@ export default function App() {
   async function copyCitation(kind, text) {
     let ok;
     if (kind === "ppt") {
-      // Rich copy: PowerPoint/Word get real italics & bold, plain-text
-      // targets get the clean string without markdown markers.
+      // Rich copy: PowerPoint/Word get real italics & bold via text/html;
+      // plain-text targets keep the markdown source so **bold** survives a
+      // paste into notes or any markdown editor.
       const esc = (text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
       const html = esc
         .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
         .replace(/_([^_]+)_/g, "<i>$1</i>")
         .replace(/\*([^*]+)\*/g, "<i>$1</i>");
-      const plain = (text || "")
-        .replace(/\*\*([^*]+)\*\*/g, "$1")
-        .replace(/_([^_]+)_/g, "$1")
-        .replace(/\*([^*]+)\*/g, "$1");
-      ok = await copyRich(html, plain);
+      ok = await copyRich(html, text || "");
     } else {
       ok = await copyText(text || "");
     }

@@ -57,35 +57,91 @@ function DockWindow({
 // Memoized: the chat input re-renders all of ChatDock on every keystroke,
 // and without the memo each keypress re-ran ReactMarkdown + KaTeX over every
 // AI message in the conversation — visible typing lag on long chats.
-// Selecting rendered chat text and hitting Ctrl+C would copy KaTeX's DOM,
-// which duplicates every symbol (hidden MathML + visual layer). Rewrite the
-// copied selection so each rendered formula becomes its LaTeX source (KaTeX
-// keeps it in an <annotation encoding="application/x-tex">), yielding clean
-// $...$ / $$...$$ markdown on paste.
-function handleMathCopy(e) {
+// Selecting rendered chat/note text and hitting Ctrl+C would copy the plain
+// rendered characters — **bold**, *italics*, `code`, links, and list markers
+// all vanish, and KaTeX's double DOM (hidden MathML + visual layer) duplicates
+// every symbol. Instead, serialize the copied selection back to markdown
+// source for text/plain (paste into a note or any editor keeps the
+// formatting), and keep the formatted fragment as text/html for rich targets
+// like Word. Formulas become their LaTeX source (KaTeX keeps it in an
+// <annotation encoding="application/x-tex">).
+function fragmentToMarkdown(node, ctx = {}) {
+  if (node.nodeType === Node.TEXT_NODE) {
+    return ctx.pre ? node.textContent : node.textContent.replace(/\s+/g, " ");
+  }
+  if (node.nodeType !== Node.ELEMENT_NODE) return "";
+  const el = node;
+  if (el.classList.contains("katex-display")) {
+    const tex = el.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
+    return tex != null ? `\n\n$$\n${tex.trim()}\n$$\n\n` : el.textContent;
+  }
+  if (el.classList.contains("katex")) {
+    const tex = el.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
+    return tex != null ? `$${tex.trim()}$` : el.textContent;
+  }
+  const kids = (c = ctx) => Array.from(el.childNodes).map((n) => fragmentToMarkdown(n, c)).join("");
+  // Inline markers hug the text: whitespace at the edges of <strong>bold </strong>
+  // must stay outside the ** or the markdown doesn't parse back.
+  const wrap = (marker) => {
+    const raw = kids();
+    const inner = raw.trim();
+    return inner ? `${raw.match(/^\s*/)[0]}${marker}${inner}${marker}${raw.match(/\s*$/)[0]}` : raw;
+  };
+  switch (el.tagName) {
+    case "STRONG": case "B": return wrap("**");
+    case "EM": case "I": return wrap("*");
+    case "DEL": case "S": return wrap("~~");
+    case "CODE": return ctx.pre ? el.textContent : `\`${el.textContent}\``;
+    case "PRE": return `\n\n\`\`\`\n${el.textContent.replace(/\n$/, "")}\n\`\`\`\n\n`;
+    case "A": {
+      const href = el.getAttribute("href") || "";
+      if (href.startsWith("blockref:")) return `[[${href.slice(9)}]]`; // note ref chips round-trip
+      const inner = kids().trim();
+      return href ? `[${inner || href}](${href})` : inner;
+    }
+    case "IMG": return `![${el.getAttribute("alt") || ""}](${el.getAttribute("src") || ""})`;
+    case "BR": return "\n";
+    case "HR": return "\n\n---\n\n";
+    case "H1": case "H2": case "H3": case "H4": case "H5": case "H6":
+      return `\n\n${"#".repeat(Number(el.tagName[1]))} ${kids().trim()}\n\n`;
+    case "UL": case "OL": {
+      const indent = "  ".repeat(ctx.listDepth || 0);
+      const items = Array.from(el.children).filter((c) => c.tagName === "LI").map((li, i) => {
+        const marker = el.tagName === "OL" ? `${(Number(el.getAttribute("start")) || 1) + i}. ` : "- ";
+        const inner = Array.from(li.childNodes)
+          .map((n) => fragmentToMarkdown(n, { ...ctx, listDepth: (ctx.listDepth || 0) + 1 }))
+          .join("").replace(/^\n+|\n+$/g, "");
+        return `${indent}${marker}${inner.replace(/\n+/g, "\n").replace(/\n/g, `\n${indent}  `)}`;
+      });
+      return `\n\n${items.join("\n")}\n\n`;
+    }
+    case "BLOCKQUOTE":
+      return `\n\n${kids().trim().split("\n").map((l) => `> ${l}`).join("\n")}\n\n`;
+    case "TABLE": {
+      const rows = Array.from(el.querySelectorAll("tr")).map((tr) =>
+        `| ${Array.from(tr.children).map((td) => kidsOf(td).trim().replace(/\|/g, "\\|") || " ").join(" | ")} |`);
+      function kidsOf(td) { return Array.from(td.childNodes).map((n) => fragmentToMarkdown(n, ctx)).join(""); }
+      if (!rows.length) return "";
+      const cols = el.querySelector("tr")?.children.length || 1;
+      rows.splice(1, 0, `| ${Array(cols).fill("---").join(" | ")} |`);
+      return `\n\n${rows.join("\n")}\n\n`;
+    }
+    case "P": case "DIV": case "LI": return `\n\n${kids().trim()}\n\n`;
+    default: return kids();
+  }
+}
+
+function handleMarkdownCopy(e) {
   const sel = window.getSelection();
   if (!sel || sel.isCollapsed || !e.clipboardData) return;
   const holder = document.createElement("div");
   for (let i = 0; i < sel.rangeCount; i++) holder.appendChild(sel.getRangeAt(i).cloneContents());
-  if (!holder.querySelector(".katex")) return;
-  holder.querySelectorAll(".katex-display").forEach((el) => {
-    const tex = el.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
-    if (tex != null) el.replaceWith(document.createTextNode(`$$\n${tex.trim()}\n$$`));
-  });
-  holder.querySelectorAll(".katex").forEach((el) => {
-    const tex = el.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
-    if (tex != null) el.replaceWith(document.createTextNode(`$${tex.trim()}$`));
-  });
-  // innerText (not textContent) so paragraphs/list items keep their line
-  // breaks — but it needs layout, so the holder must be in the document.
-  holder.style.cssText = "position:fixed;left:-9999px;top:0;white-space:pre-wrap;";
-  document.body.appendChild(holder);
-  // innerText's own block breaks stack with blank lines already in the
-  // markdown — collapse runs so formulas sit one blank line from the text.
-  const text = holder.innerText.replace(/\n{3,}/g, "\n\n");
-  document.body.removeChild(holder);
-  e.clipboardData.setData("text/plain", text);
+  const md = Array.from(holder.childNodes).map((n) => fragmentToMarkdown(n))
+    .join("").replace(/\n{3,}/g, "\n\n").trim();
+  if (!md) return;
   e.preventDefault();
+  e.clipboardData.setData("text/plain", md);
+  e.clipboardData.setData("text/html", holder.innerHTML);
 }
 
 const ChatMarkdown = React.memo(function ChatMarkdown({ text }) {
@@ -97,7 +153,7 @@ const ChatMarkdown = React.memo(function ChatMarkdown({ text }) {
     [text],
   );
   return (
-    <div onCopy={handleMathCopy}>
+    <div onCopy={handleMarkdownCopy}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
@@ -259,6 +315,7 @@ export {
   BlockDropIndicator,
   ChatMarkdown,
   DockWindow,
+  handleMarkdownCopy,
   OpenTabs,
   PopoverAnchor,
   useCopied,
