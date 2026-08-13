@@ -2,6 +2,7 @@
 
 import sqlite3
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -79,10 +80,20 @@ def _startup_maintenance():
                 conn.commit()
 
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup maintenance + background model-catalog refresher, run for the
+    server's lifetime — not at import time, so importing gamma.app (tests,
+    tooling) has no data-directory side effects."""
+    _startup_maintenance()
+    ai.start_model_catalog_watcher()
+    yield
+
+
 def create_app() -> FastAPI:
     setup_logging()
     _silence_windows_connection_reset()
-    app = FastAPI(title="Gamma PDF Annotator")
+    app = FastAPI(title="Gamma PDF Annotator", lifespan=lifespan)
 
     app.middleware("http")(session_middleware)
 
@@ -126,11 +137,6 @@ def create_app() -> FastAPI:
             # deleted hashed assets after a deploy.
             return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
 
-    _startup_maintenance()
-    # Background model-catalog refresher: keeps each provider entry's
-    # auto-fetched model list current (daily TTL) so the chat selector shows
-    # newly released models without any manual step.
-    ai.start_model_catalog_watcher()
     return app
 
 
