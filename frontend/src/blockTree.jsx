@@ -92,6 +92,9 @@ function AreaSnapshot({ block, captureArea, docNonce }) {
       setSrc(img);
     }).catch(() => {});
     return () => { cancelled = true; };
+    // `block` is captured via `key` (id+position), not object identity — the
+    // block object changes every render, but the crop only changes with key/doc.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, captureArea, docNonce]);
   // Reserve the crop's aspect ratio while it renders so the card doesn't jump.
   const ratio = r && r.y2 > r.y1 ? (r.x2 - r.x1) / (r.y2 - r.y1) : null;
@@ -106,7 +109,7 @@ function AreaSnapshot({ block, captureArea, docNonce }) {
 
 function BlockRow({
   block,
-  depth,
+  _depth,
   focusedId,
   setFocusedId,
   onJump,
@@ -118,7 +121,7 @@ function BlockRow({
   selectedPageIds,
   onChangeText,
   onEnterSibling,
-  onAddChild,
+  _onAddChild,
   onIndent,
   onOutdent,
   onToggle,
@@ -180,6 +183,8 @@ function BlockRow({
       } catch (_) { setSearchResults([]); }
     }, 120);
     return () => clearTimeout(timer);
+    // refPopup is a prop object; query text + block id are the intended trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refPopup?.query, block.id]);
 
   // Resolve cross-note refs found in content
@@ -188,6 +193,9 @@ function BlockRow({
     const ids = [...block.content.matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)].map((m) => m[1]);
     const unknown = ids.filter((id) => !allBlocks?.find((b) => b.id === id) && !refCache?.[id]);
     if (unknown.length > 0) onFetchRefs(unknown);
+    // allBlocks/refCache are read as caches and onFetchRefs is an unstable
+    // prop; block.content is the real trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [block.content]);
 
   function insertRef(b) {

@@ -17,7 +17,7 @@
 // with pdf.js and the match is highlighted and scrolled into view — positions
 // come from the same engine that draws the page, so they are always exact.
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson, isEnterCommit } from "./utils";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, LabelIcon, SearchIcon } from "./icons";
 
@@ -218,6 +218,10 @@ export default function SearchPanel({
   // across keystrokes — only a changed library invalidates it.
   const titlePrep = useMemo(() => {
     const cache = new Map();
+    for (const b of homeBlocks) {
+      const t = b.content || "";
+      cache.set(b.id, { title: t, lower: t.toLowerCase() });
+    }
     return (b) => {
       let p = cache.get(b.id);
       if (!p) {
@@ -346,6 +350,10 @@ export default function SearchPanel({
       Promise.allSettled([notesReq, libReq, pdfReq]).then(() => setBusy(false));
     }, 250);
     return () => clearTimeout(timer);
+    // gotoFind is recreated each render — re-running the debounced search on
+    // it would reset the 250ms timer continuously; the query/library inputs
+    // above are the real triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, open, pinned, caseSensitive, wholeWord, docNonce]);
 
   // Open a library content hit: pin the search, load the paper, and let the
@@ -419,7 +427,7 @@ export default function SearchPanel({
   // Re-applied each time the panel opens; the toggle button then only affects
   // the current panel session.
   const [showDetails, setShowDetails] = useState(detailsDefault);
-  useEffect(() => { if (open) setShowDetails(detailsDefault); }, [open]);
+  useEffect(() => { if (open) setShowDetails(detailsDefault); }, [open, detailsDefault]);
 
   const kindBadge = (r) => (
     r.kind === "highlight" ? <span className="searchKindBadge">highlight</span>

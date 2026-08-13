@@ -1,8 +1,6 @@
 // Shared inline icons — 24×24 stroke glyphs sized via the `size` prop.
 // One definition per glyph, replacing the copy-pasted <svg> literals that
 // used to drift in stroke width between call sites.
-import React from "react";
-
 function Icon({ size = 15, strokeWidth = 2, children, ...rest }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"

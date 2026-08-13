@@ -2,7 +2,7 @@
 // a caret-anchored live KaTeX preview of the math span being typed, and
 // \command autocompletion (Tab/Enter to accept). Pure helpers + two small
 // presentational components; blockTree.jsx owns the state and key handling.
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import katex from "katex";
 
 // --- command catalog -------------------------------------------------------

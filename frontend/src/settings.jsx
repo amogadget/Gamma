@@ -300,7 +300,7 @@ function MetaStatusSection({ value }) {
   }
   React.useEffect(() => { refresh(); }, []);
 
-  const list = papers || [];
+  const list = React.useMemo(() => papers || [], [papers]);
   const textOk = (p) => (p.text_chars ?? 0) >= 50; // same threshold as /api/pdf-text-status
   const missing = list.filter((p) => !p.has_meta);
   const counts = {

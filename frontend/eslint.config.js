@@ -21,7 +21,12 @@ export default [
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
       // The codebase predates linting; surface dead code without failing CI.
-      "no-unused-vars": "warn",
+      // `_` is the established "intentionally unused" convention (map index,
+      // useState setter destructure, catch bindings) — don't flag those.
+      "no-unused-vars": [
+        "warn",
+        { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_", "caughtErrorsIgnorePattern": "^_" },
+      ],
       // Intentional `catch {}` guards are everywhere; still flag empty
       // if/for/function bodies as real errors.
       "no-empty": ["error", { "allowEmptyCatch": true }],

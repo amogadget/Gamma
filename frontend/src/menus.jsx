@@ -1,7 +1,7 @@
 // Shared menu primitives. One dismissal + positioning story for every
 // cursor-anchored menu in the app (right-click page/folder menu, highlight
 // menu, attach-highlight menu), so they can't drift apart again.
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 // A context menu positioned at a screen point (x, y). Rendered through a

@@ -131,7 +131,7 @@ function usePersistedState(key, initial, { parse, serialize } = {}) {
   });
   useEffect(() => {
     try { localStorage.setItem(key, serialize ? serialize(value) : String(value)); } catch {}
-  }, [key, value]);
+  }, [key, value, serialize]);
   return [value, setValue];
 }
 

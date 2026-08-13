@@ -26,7 +26,6 @@ import {
 
 
 import {
-  blocksToPageMarkdown,
   setBlockText,
   setBlockEditMode,
   addSiblingBlock,
@@ -38,7 +37,6 @@ import {
   updateBlockTree,
   removeBlockTree,
   flattenBlocks,
-  withLegacyAccessors,
   isDescendant,
   findBlockContext,
   extractBlock,
@@ -392,7 +390,7 @@ export default function App() {
   const [docId, setDocId] = useState("");
   const [focusedBlockId, setFocusedBlockId] = useState("");
   const [focusedBlock, setFocusedBlock] = useState(null);
-  const [summary, setSummary] = useState("");
+  const [, setSummary] = useState("");
   const [category, setCategory] = useState("");
   const [categoryEditing, setCategoryEditing] = useState(false);
   const [categoryInput, setCategoryInput] = useState("");
@@ -496,6 +494,7 @@ export default function App() {
       }
       aiSelLoadedRef.current = true;   // pushes are armed only after this
     }).catch(() => { if (prefsUserRef.current === u) aiSelLoadedRef.current = true; });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the four helpers are unstable; load on user/readOnly change only
   }, [authUser?.user, readOnly]);
 
   // Folder-tag helpers: parse/serialize the comma-separated path list.
@@ -1247,6 +1246,7 @@ export default function App() {
       document.removeEventListener("scroll", onScroll, true);
       clearTimeout(notesScrollTimerRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only scroll capture; recordNotesPos is an unstable closure
   }, []);
   // Multi-browser convergence: whenever this window regains focus, pull the
   // latest stored tabs. Skipped while a local push is pending (ours is newer).
@@ -1345,6 +1345,7 @@ export default function App() {
       window.removeEventListener("pagehide", flushNotesPos);
       document.removeEventListener("visibilitychange", onVisibility);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only listeners; the helpers are unstable closures
   }, []);
   // Recently-viewed pages — a device-local history for the library's top
   // shortcut bar ([{id, at}], most recent first). Not page data, so it lives
@@ -1669,6 +1670,7 @@ export default function App() {
         aiProviderSyncRef.current = "";
       }
     }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sync on user change only; adding aiProvider would re-trigger the load loop
   }, [authUser?.user, readOnly]);
   useEffect(() => {
     if (aiProviderSyncRef.current === null || aiProviderSyncRef.current === aiProvider || readOnly) return;
@@ -1729,6 +1731,7 @@ export default function App() {
   // Entering the AI pane always refetches the masked key list.
   useEffect(() => {
     if (settingsOpen === "ai" && authUser?.user && !readOnly) loadAiKeys();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gated on pane open; user/readOnly are read as guards
   }, [settingsOpen]);
 
   function openAiKeysEditor() {
@@ -1806,6 +1809,7 @@ export default function App() {
     if (!f) return;
     const stored = f.id ? aiKeysInfo?.providers?.find((p) => p.id === f.id) : null;
     if (stored?.oauth_connected || stored?.key_hint) loadModelCatalog();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gated on form id/protocol; the rest are read as guards
   }, [aiKeysForm?.id, aiKeysForm?.protocol]);
 
   // "Sign in with ChatGPT": opens the OAuth page in a centered popup, tracks
@@ -2003,6 +2007,7 @@ export default function App() {
   useEffect(() => {
     if (openPopover !== "meta" || !docId || readOnly) { setPdfTextInfo(null); return; }
     checkPdfText();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gated on popover/docId; readOnly/checkPdfText are read as guards
   }, [openPopover, docId]);
 
   // Modal preview of what the AI actually gets to read.
@@ -2132,6 +2137,7 @@ export default function App() {
     if (attemptedMetaRef.current.has(b.id)) return;
     attemptedMetaRef.current.add(b.id);
     fetchMetadata(b, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gated on focused block; metadata fetch + guards must not retrigger
   }, [focusedBlock?.id]);
 
   // Import annotations embedded in the PDF file itself (SumatraPDF, Acrobat…).
@@ -2196,6 +2202,7 @@ export default function App() {
     if (openPopover === "share" && (pageMeta || pageBibtex) && !pptCite && !pptCiteBusy) {
       makePptCitation();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gated on share popover; makePptCitation/bibtex are read as inputs
   }, [openPopover, pageMeta]);
 
   async function copyCitation(kind, text) {
@@ -2228,7 +2235,7 @@ export default function App() {
   useEffect(() => {
     if (!authUser?.user || readOnly) return;
     refreshAiModels();
-  }, [authUser]);
+  }, [authUser, readOnly]);
 
   // …and pushed back so it follows the account to the next browser. Armed only
   // once the server's copy has been read, or the first render would overwrite
@@ -2248,6 +2255,7 @@ export default function App() {
         });
       } catch {}
     }, 800);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- readOnly is read as a guard, not a push trigger
   }, [chatModel, aiProvider, chatEffort, authUser]);
 
   useEffect(() => {
@@ -2261,6 +2269,7 @@ export default function App() {
         localStorage.setItem("gamma-chat-model-by-key", JSON.stringify(chatModelMemRef.current));
       }
     } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- aiInfo?.models maps model→key; chatModel is the trigger
   }, [chatModel]);
 
   // Capture text selected inside the PDF viewer so chat can focus on it.
@@ -2336,7 +2345,7 @@ export default function App() {
 
   useEffect(() => {
     if (authUser?.user && !readOnly) fetchHomeBlocks();
-  }, [authUser]);
+  }, [authUser, readOnly]);
 
   useEffect(() => {
     function onExpired() { setAuthUser(false); }
@@ -2363,7 +2372,7 @@ export default function App() {
   // Desktop expresses this by holding Ctrl; a phone has no Ctrl, so it gets a
   // sticky toggle button in the viewer's zoom column instead.
   const [areaSelectMode, setAreaSelectMode] = useState(false);
-  const [flashingId, setFlashingId] = useState(null);
+  const [, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
   const [focusedId, setFocusedId] = useState(null);
   const [pdfTitle, setPdfTitle] = useState("");
@@ -2533,6 +2542,7 @@ export default function App() {
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- savePending/focusedBlockId are read via refs; blocks is the trigger
   }, [blocks, readOnly]);
   // Closing/reloading the tab: best-effort keepalive save of queued edits.
   useEffect(() => {
@@ -2656,6 +2666,7 @@ export default function App() {
         });
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only session restore; initial* are read once
   }, []);
 
   // Restore viewer/layout prefs from session on mount
@@ -2691,6 +2702,7 @@ export default function App() {
       if (existing) return prev.map((t) => (t.id === focusedBlockId ? { ...t, title } : t));
       return [...prev, { id: focusedBlockId, title }];
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- updateTabs is an unstable updater; title/id are the triggers
   }, [focusedBlockId, pdfTitle, readOnly]);
 
   // Persist session state on relevant changes (skip initial mount)
@@ -2817,7 +2829,7 @@ export default function App() {
       const sourceUrl = data.source_url;
       const defaultTitle = getPdfPageTitle(data.doc_id, sourceUrl);
       const block = await getOrCreateBlockForDoc(data.doc_id, defaultTitle, sourceUrl);
-      const nextBlocks = await loadBlocksForBlock(block.id);
+      await loadBlocksForBlock(block.id);
       setDocId(data.doc_id);
       setInputUrl(sourceUrl);
       setFocusedBlockId(block.id);
@@ -2912,7 +2924,7 @@ export default function App() {
         name: (block.content || defaultTitle).slice(0, 60),
         ...(isUpload ? { status: "done", info: "local file" } : { info: "downloading…" }),
       });
-      const nextBlocks = await loadBlocksForBlock(block.id);
+      await loadBlocksForBlock(block.id);
       setDocId(resolvedDocId);
       setInputUrl(finalUrl);
       setFocusedBlockId(block.id);
@@ -3723,6 +3735,7 @@ export default function App() {
     setPromptDraft(chatSystem || aiInfo?.default_prompt || "");
     setMetaPromptDraft(metaPrompt || aiInfo?.metadata_prompt || "");
     setCitePromptDraft(citePrompt || aiInfo?.cite_prompt || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- gated on pane open; prompts are read as initial values
   }, [settingsOpen]);
 
 
@@ -3930,6 +3943,7 @@ export default function App() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- openFolder/openPage are unstable handlers; keys on mode/selection
   }, [homeMode, selectedPages, selectedFolders]);
   // Scrolling the "load more" sentinel into view grows the feed.
   useEffect(() => {
@@ -3994,6 +4008,7 @@ export default function App() {
       pendingJumpRef.current = null;
     };
     setTimeout(attempt, 100);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- blocks/pdfUrl are read for the jump target; pdfHidden/highlights trigger
   }, [pdfHidden, highlights]);
 
   // Jump to the last-read page when a document opens.
@@ -4097,6 +4112,7 @@ export default function App() {
     };
     tryRestore();
     return () => { cancelled = true; done(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- dbg is an unstable helper; restore keys on pdfUrl/pdfHidden
   }, [pdfUrl, pdfHidden]);
 
   // Track PDF scroll position — feeds the page indicator and the synced
@@ -4588,12 +4604,9 @@ export default function App() {
                   seenInCategory.add(b.id);
                 }
               }
-              const uncategorized = homeBlocks.filter((b) => !seenInCategory.has(b.id));
               for (const cat of Object.keys(categories)) {
                 categories[cat].sort((a, b) => (b.updated_at || "").localeCompare(a.updated_at || ""));
               }
-              const catNames = Object.keys(categories).sort();
-
               if (categoryFilter) {
                 // Filtered view — show pages in this category only
                 const filtered = categories[categoryFilter] || [];
@@ -5203,7 +5216,7 @@ export default function App() {
                     setDropTarget(null);
                     _dragState.dropTarget = null;
                   },
-                  onBlockDrop: (e, block) => {
+                  onBlockDrop: (e, _block) => {
                     e.preventDefault();
                     const dt = _dragState.dropTarget;
                     setDropTarget(null);

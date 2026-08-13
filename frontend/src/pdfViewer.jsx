@@ -667,6 +667,9 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       awaitingPaintRef.current = url;
       onLoadState?.(url, { phase: "rendered" });
     }
+    // Keyed on docSeq only — numPages/url/onLoadState are read but must not
+    // re-trigger the pre-paint "rendered" signal (scroll restore depends on it).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docSeq]);
 
   // The document currently on screen. Kept visible while the next one loads —
@@ -841,6 +844,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       // now-orphaned "downloading…" task entry.
       onLoadState?.(url, { phase: "cancelled" });
     };
+    // onLoadState is an unstable host callback; the download keys on url/retry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, retryNonce]);
 
   // A document swap replaces the scroller's content wholesale: the host's
@@ -977,7 +982,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         try {
           const page = await pdfDoc.getPage(i + 1);
           heights[i] = page.getViewport({ scale: 1 }).height;
-        } catch (e) {
+        } catch {
           heights[i] = FALLBACK_H;
         }
       }
@@ -1024,7 +1029,12 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // Resync outside of scroll events: document swaps (a restore to the same
   // scrollTop fires no scroll event), zoom changes, and height refinement on
   // long documents can all move the page under the reference point.
-  useEffect(() => { syncCurPage(); }, [docSeq, scale, numPages, pageHeights]);
+  useEffect(() => {
+    syncCurPage();
+    // syncCurPage is recreated each render; the layout inputs above are the
+    // real triggers (a swap/zoom/height change, not the function identity).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docSeq, scale, numPages, pageHeights]);
   const jumpToPage = (pn) => {
     if (!numPages || !Number.isFinite(pn)) return;
     const p = Math.max(1, Math.min(numPages, pn));
@@ -1430,7 +1440,7 @@ function NoteBadge({ hlId, text, style, onClick, onContextMenu }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, previewBase, areaMode, noteBadges, hideEmbeddedAnnots }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, _onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, previewBase, areaMode, noteBadges, hideEmbeddedAnnots }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1548,6 +1558,9 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       }
     })();
     return () => { cancelled = true; };
+    // onPainted is an unstable host callback; the render is keyed on the
+    // document/page/scale inputs, not the callback identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfDoc, pageNumber, scale, visible, hideEmbeddedAnnots]);
 
   const curW = pageSize ? pageSize.width * scale : 1, curH = pageSize ? pageSize.height * scale : 1;

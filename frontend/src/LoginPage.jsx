@@ -1,5 +1,3 @@
-import React from "react";
-
 function AuthShell({ children }) {
   return (
     <div className="app">

@@ -3,7 +3,7 @@
 // pasted figures, the "+" context picker, and the per-message PDF attach.
 // App provides context (open paper, library, selections) and the model/effort/
 // prompt preferences it also needs elsewhere.
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson, isEnterCommit } from "./utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied } from "./widgets";
 import { ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FileIcon, MicIcon, PaperclipIcon, PencilIcon, StopIcon, XIcon } from "./icons";
@@ -87,6 +87,9 @@ export default function ChatDock({
       })
       .catch(() => { if (!cancelled) chatLoadedForRef.current = chatKey; });
     return () => { cancelled = true; };
+    // chatDocs is read inside the async callback, not a load trigger — the
+    // chat re-fetches only when the bucket (chatKey/docId) changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatKey, docId]);
 
   // Save chat to backend (debounced) when chatMessages changes, but only

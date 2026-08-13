@@ -3,7 +3,6 @@
 // FileGlyph) live in icons.jsx with the rest of the shared icons. All
 // interaction (selection, drag, rename, context menus) stays wired in
 // App.jsx alongside the shared handlers.
-import React from "react";
 import { GridIcon, ListIcon } from "./icons";
 
 // List / Grid segmented control.
