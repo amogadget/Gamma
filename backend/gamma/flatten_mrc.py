@@ -22,6 +22,7 @@ selection and highlight anchoring all depend on — is never touched.
 import io
 
 from .logbuf import log
+from .pdfium_lock import PDFIUM_LOCK
 
 # A mask only matters once the composite it forces is big enough to hurt.
 # pdf.js turns the composite into RGBA, so this is ~4 bytes per pixel; 4 MP is
@@ -126,59 +127,62 @@ def _form_to_replace(page):
 
 def flatten(src_path, dst_path, width=DEFAULT_WIDTH, quality=DEFAULT_QUALITY, progress=None) -> bool:
     """Write a flattened copy of src_path. False when nothing was rewritten."""
-    import pikepdf
-    import pypdfium2 as pdfium
-    from PIL import Image  # noqa: F401  (pdfium hands back a PIL image)
+    # pdfium is not thread-safe; hold the lock for the whole render so request
+    # threads (previews, text extraction) can't crash the process mid-flatten.
+    with PDFIUM_LOCK:
+        import pikepdf
+        import pypdfium2 as pdfium
+        from PIL import Image  # noqa: F401  (pdfium hands back a PIL image)
 
-    pdf = pikepdf.open(str(src_path))
-    render_doc = pdfium.PdfDocument(str(src_path))
-    rewritten = 0
-    try:
-        total = len(pdf.pages)
-        for i, page in enumerate(pdf.pages):
-            form = _form_to_replace(page)
-            if form is None:
-                continue
-            try:
-                bbox = form.get("/BBox")
-                bw = float(bbox[2]) - float(bbox[0])
-                bh = float(bbox[3]) - float(bbox[1])
-                if bw <= 0 or bh <= 0:
-                    continue
-                rp = render_doc[i]
-                pw, _ph = rp.get_size()
-                if pw <= 0:
-                    continue
-                bitmap = rp.render(scale=width / pw, grayscale=True)
-                img = bitmap.to_pil()
-                buf = io.BytesIO()
-                img.save(buf, "JPEG", quality=quality, optimize=True)
-                data = buf.getvalue()
-
-                stream = pikepdf.Stream(pdf, data)
-                stream.Type = pikepdf.Name("/XObject")
-                stream.Subtype = pikepdf.Name("/Image")
-                stream.Width, stream.Height = img.size
-                stream.ColorSpace = pikepdf.Name("/DeviceGray")
-                stream.BitsPerComponent = 8
-                stream.Filter = pikepdf.Name("/DCTDecode")
-
-                form.write(
-                    f"q {bw:.4f} 0 0 {bh:.4f} {float(bbox[0]):.4f} {float(bbox[1]):.4f} cm /ImFlat Do Q".encode()
-                )
-                form.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(ImFlat=stream))
-                rewritten += 1
-            except Exception as e:
-                log.warning("flatten: page %d left as-is (%s)", i + 1, e)
-            if progress and (i + 1) % 25 == 0:
-                progress(i + 1, total)
-        if not rewritten:
-            return False
-        pdf.save(str(dst_path), linearize=False)
-        return True
-    finally:
+        pdf = pikepdf.open(str(src_path))
+        render_doc = pdfium.PdfDocument(str(src_path))
+        rewritten = 0
         try:
-            render_doc.close()
-        except Exception:
-            pass
-        pdf.close()
+            total = len(pdf.pages)
+            for i, page in enumerate(pdf.pages):
+                form = _form_to_replace(page)
+                if form is None:
+                    continue
+                try:
+                    bbox = form.get("/BBox")
+                    bw = float(bbox[2]) - float(bbox[0])
+                    bh = float(bbox[3]) - float(bbox[1])
+                    if bw <= 0 or bh <= 0:
+                        continue
+                    rp = render_doc[i]
+                    pw, _ph = rp.get_size()
+                    if pw <= 0:
+                        continue
+                    bitmap = rp.render(scale=width / pw, grayscale=True)
+                    img = bitmap.to_pil()
+                    buf = io.BytesIO()
+                    img.save(buf, "JPEG", quality=quality, optimize=True)
+                    data = buf.getvalue()
+
+                    stream = pikepdf.Stream(pdf, data)
+                    stream.Type = pikepdf.Name("/XObject")
+                    stream.Subtype = pikepdf.Name("/Image")
+                    stream.Width, stream.Height = img.size
+                    stream.ColorSpace = pikepdf.Name("/DeviceGray")
+                    stream.BitsPerComponent = 8
+                    stream.Filter = pikepdf.Name("/DCTDecode")
+
+                    form.write(
+                        f"q {bw:.4f} 0 0 {bh:.4f} {float(bbox[0]):.4f} {float(bbox[1]):.4f} cm /ImFlat Do Q".encode()
+                    )
+                    form.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(ImFlat=stream))
+                    rewritten += 1
+                except Exception as e:
+                    log.warning("flatten: page %d left as-is (%s)", i + 1, e)
+                if progress and (i + 1) % 25 == 0:
+                    progress(i + 1, total)
+            if not rewritten:
+                return False
+            pdf.save(str(dst_path), linearize=False)
+            return True
+        finally:
+            try:
+                render_doc.close()
+            except Exception:
+                pass
+            pdf.close()

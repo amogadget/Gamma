@@ -10,6 +10,7 @@ search indexer, so extraction fixes land once.
 import io
 
 from .logbuf import log
+from .pdfium_lock import PDFIUM_LOCK
 
 # Sentinel the AI context builder hands to the model when extraction raised.
 # Compare against the constant, never a rewritten literal.
@@ -20,32 +21,40 @@ def iter_page_texts(src, max_pages: int = 400):
     """Yield per-page text (1-based order). src is a path str or PDF bytes."""
     try:
         import pypdfium2 as pdfium
-
-        pdf = pdfium.PdfDocument(src)
     except Exception as e:
-        log.warning(f"[pdf-text] pypdfium2 open failed ({e}), falling back to PyPDF2")
-        from PyPDF2 import PdfReader
-
-        reader = PdfReader(io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else str(src))
-        for i, pg in enumerate(reader.pages):
-            if i >= max_pages:
+        log.warning(f"[pdf-text] pypdfium2 import failed ({e}), falling back to PyPDF2")
+        pdfium = None
+    if pdfium is not None:
+        with PDFIUM_LOCK:
+            try:
+                pdf = pdfium.PdfDocument(src)
+            except Exception as e:
+                log.warning(f"[pdf-text] pypdfium2 open failed ({e}), falling back to PyPDF2")
+                pdf = None
+            if pdf is not None:
+                try:
+                    for i in range(min(len(pdf), max_pages)):
+                        page = pdf[i]
+                        tp = page.get_textpage()
+                        try:
+                            yield tp.get_text_bounded() or ""
+                        finally:
+                            tp.close()
+                            page.close()
+                finally:
+                    pdf.close()
                 return
-            try:
-                yield pg.extract_text() or ""
-            except Exception:
-                yield ""
-        return
-    try:
-        for i in range(min(len(pdf), max_pages)):
-            page = pdf[i]
-            tp = page.get_textpage()
-            try:
-                yield tp.get_text_bounded() or ""
-            finally:
-                tp.close()
-                page.close()
-    finally:
-        pdf.close()
+    # PyPDF2 fallback (does not touch pdfium)
+    from PyPDF2 import PdfReader
+
+    reader = PdfReader(io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else str(src))
+    for i, pg in enumerate(reader.pages):
+        if i >= max_pages:
+            return
+        try:
+            yield pg.extract_text() or ""
+        except Exception:
+            yield ""
 
 
 def extract_pages(src, max_pages: int = 400) -> list[str]:

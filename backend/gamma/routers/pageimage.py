@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse
 from ..auth import resolve_user
 from ..db import user_uploads_dir
 from ..logbuf import log
+from ..pdfium_lock import PDFIUM_LOCK
 from ..storage import find_upload_file
 
 router = APIRouter(prefix="/api", tags=["pageimage"])
@@ -68,23 +69,24 @@ def _cache_path(user: str, doc_id: str, page: int, width: int) -> Path:
 def _render(pdf_path: Path, page: int, width: int) -> bytes:
     import pypdfium2 as pdfium
 
-    doc = pdfium.PdfDocument(str(pdf_path))
-    try:
-        if page < 1 or page > len(doc):
-            raise HTTPException(status_code=404, detail="page out of range")
-        pg = doc[page - 1]
-        w, _h = pg.get_size()
-        if w <= 0:
-            raise HTTPException(status_code=400, detail="bad page size")
-        img = pg.render(scale=width / w).to_pil()
-        buf = io.BytesIO()
-        img.convert("L" if img.mode in ("L", "1") else "RGB").save(buf, "JPEG", quality=QUALITY, optimize=True)
-        return buf.getvalue()
-    finally:
+    with PDFIUM_LOCK:
+        doc = pdfium.PdfDocument(str(pdf_path))
         try:
-            doc.close()
-        except Exception:
-            pass
+            if page < 1 or page > len(doc):
+                raise HTTPException(status_code=404, detail="page out of range")
+            pg = doc[page - 1]
+            w, _h = pg.get_size()
+            if w <= 0:
+                raise HTTPException(status_code=400, detail="bad page size")
+            img = pg.render(scale=width / w).to_pil()
+            buf = io.BytesIO()
+            img.convert("L" if img.mode in ("L", "1") else "RGB").save(buf, "JPEG", quality=QUALITY, optimize=True)
+            return buf.getvalue()
+        finally:
+            try:
+                doc.close()
+            except Exception:
+                pass
 
 
 def dims_path(user: str, doc_id: str) -> Path:
@@ -104,18 +106,19 @@ def ensure_dims(user: str, doc_id: str, pdf_path) -> bool:
     out = dims_path(user, doc_id)
     if out.exists():
         return True
-    try:
-        doc = pdfium.PdfDocument(str(pdf_path))
+    with PDFIUM_LOCK:
         try:
-            dims = [[round(v, 2) for v in doc[i].get_size()] for i in range(len(doc))]
-        finally:
+            doc = pdfium.PdfDocument(str(pdf_path))
             try:
-                doc.close()
-            except Exception:
-                pass
-    except Exception as e:
-        log.warning(f"[page-dims] {doc_id} failed: {e}")
-        return False
+                dims = [[round(v, 2) for v in doc[i].get_size()] for i in range(len(doc))]
+            finally:
+                try:
+                    doc.close()
+                except Exception:
+                    pass
+        except Exception as e:
+            log.warning(f"[page-dims] {doc_id} failed: {e}")
+            return False
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".part")
     tmp.write_text(_json.dumps({"pages": len(dims), "dims": dims}, separators=(",", ":")))
