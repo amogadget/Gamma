@@ -1666,45 +1666,32 @@ function NoteBadge({ hlId, text, style, onClick, onContextMenu }) {
       if (!r) return;
       const below = r.top < window.innerHeight * 0.45;
       setTip({
-        left: Math.max(8, Math.min(r.left - 12, window.innerWidth - 396)),
+        left: Math.max(8, Math.min(r.left - 12, window.innerWidth - 536)),
         ...(below ? { top: r.bottom + 6 } : { bottom: window.innerHeight - r.top + 6 }),
       });
     }, 120);
   };
-  const hide = () => {
-    clearTimeout(timerRef.current);
-    setTip(null);
-  };
+  // Hide on a short delay so the pointer can cross the gap into the tip;
+  // entering the tip cancels it — the tip scrolls, so it must survive hover.
+  const hide = () => { clearTimeout(timerRef.current); timerRef.current = setTimeout(() => setTip(null), 200); };
+  const hideNow = () => { clearTimeout(timerRef.current); setTip(null); };
+  const hold = () => clearTimeout(timerRef.current);
   useEffect(() => () => clearTimeout(timerRef.current), []);
   return (
     <>
-      <button
-        ref={btnRef}
-        type="button"
-        className="pdfNoteBadge"
-        data-hl-id={hlId}
-        style={style}
-        onMouseEnter={show}
-        onMouseLeave={hide}
-        onClick={(e) => {
-          hide();
-          onClick(e);
-        }}
-        onContextMenu={(e) => {
-          hide();
-          onContextMenu(e);
-        }}
+      <button ref={btnRef} type="button" className="pdfNoteBadge" data-hl-id={hlId} style={style}
+        onMouseEnter={show} onMouseLeave={hide}
+        onClick={(e) => { hideNow(); onClick(e); }}
+        onContextMenu={(e) => { hideNow(); onContextMenu(e); }}
       >
         <MessageSquareIcon size={10} strokeWidth={2.2} />
       </button>
-      {tip
-        ? createPortal(
-            <div className="pdfNoteTip" style={tip}>
-              {text ? <ChatMarkdown text={text} /> : "This highlight has a note"}
-            </div>,
-            document.body,
-          )
-        : null}
+      {tip ? createPortal(
+        <div className="pdfNoteTip" style={tip} onMouseEnter={hold} onMouseLeave={hide}>
+          {text ? <ChatMarkdown text={text} /> : "This highlight has a note"}
+        </div>,
+        document.body
+      ) : null}
     </>
   );
 }
