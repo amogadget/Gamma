@@ -16,8 +16,8 @@ for var in ("GAMMA_STATIC_DIR", "GAMMA_AI_ANTHROPIC_API_KEY", "GAMMA_AI_OPENAI_A
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pytest
-from fastapi.testclient import TestClient
+import pytest  # noqa: E402  (must follow the env/sys.path setup above)
+from fastapi.testclient import TestClient  # noqa: E402
 
 
 @pytest.fixture(scope="session")

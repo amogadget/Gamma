@@ -17,8 +17,7 @@ from pydantic import BaseModel, Field
 from .. import chatgpt_oauth
 from ..ai_client import (
     UpstreamError,
-    call_ai as _call_ai,
-    chatgpt_request as _chatgpt_request,
+    chatgpt_request as _chatgpt_request,  # noqa: F401  (re-exported for tests)
     open_ai as _open_ai,
     protocol as _protocol,
     read_reply as _read_reply,
@@ -27,9 +26,8 @@ from ..ai_client import (
 )
 from ..ai_context import (
     build_messages as _build_messages,
-    extract_pdf_context as _extract_pdf_context,
     gather_inputs as _gather_inputs,
-    parse_files as _parse_files,
+    parse_files as _parse_files,  # noqa: F401  (re-exported for tests)
     parse_images as _parse_images,
     pdf_path as _pdf_path,
 )

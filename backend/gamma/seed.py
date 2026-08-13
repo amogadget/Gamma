@@ -131,7 +131,7 @@ def ensure_admin_seed():
     # (GBK) raises UnicodeEncodeError on characters it can't encode.
     # Raw print()s on purpose — the one-time password must go to the console
     # ONLY, never through the log buffer that admins can read later.
-    print(f"[startup] fresh instance - created the admin account:")
+    print("[startup] fresh instance - created the admin account:")
     print(f"[startup]   username: {username}")
     print(f"[startup]   password: {'(from GAMMA_ADMIN_PASSWORD)' if env_password else password}")
     if not env_password:

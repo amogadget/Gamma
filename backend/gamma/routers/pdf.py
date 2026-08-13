@@ -62,9 +62,9 @@ def _open_access_pdf_for_doi(doi: str) -> tuple[str, str]:
         req = URLRequest(url, headers={"User-Agent": "gamma-pdf-annotator/1.0"})
         with urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
-        locs = [l for l in (data.get("oa_locations") or []) if l.get("url_for_pdf")]
+        locs = [loc for loc in (data.get("oa_locations") or []) if loc.get("url_for_pdf")]
         order = {"publishedVersion": 0, "acceptedVersion": 1, "submittedVersion": 2}
-        locs.sort(key=lambda l: order.get(l.get("version"), 3))
+        locs.sort(key=lambda loc: order.get(loc.get("version"), 3))
         if not locs:
             return "", ""
         return locs[0]["url_for_pdf"], locs[0].get("version") or ""

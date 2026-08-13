@@ -75,7 +75,7 @@ def test_seed_password_is_random_and_works(tmp_path):
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          env=env, cwd=str(Path(__file__).resolve().parent.parent)).stdout
     assert "MATCH" in out, out
-    pw = next(l for l in out.splitlines() if l.startswith("PW:"))[3:]
+    pw = next(line for line in out.splitlines() if line.startswith("PW:"))[3:]
     assert len(pw) >= 12
     # ...and the console output actually shows it (that's the only place it exists)
     assert f"password: {pw}" in out

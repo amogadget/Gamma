@@ -57,7 +57,7 @@ def test_models_starts_with_no_catalog(user):
 
 def test_refresh_merges_catalog_after_curated_models(user, monkeypatch):
     c, _ = user
-    pid = _add_provider(c, models="gpt-5.6")
+    _add_provider(c, models="gpt-5.6")
     monkeypatch.setattr("gamma.routers.ai._live_models_for_entry",
                         _live_fake(["gpt-5.6", "gpt-5.7-new", "gpt-5.8-new"]))
 

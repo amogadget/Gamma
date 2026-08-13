@@ -145,8 +145,8 @@ def parse_logseq_md(text):
     i = 0
     # skip front-matter (lines before first bare `-` or tab-indented block)
     while i < len(lines):
-        l = lines[i].rstrip()
-        if re.match(r'^\t*- ?', l):
+        line = lines[i].rstrip()
+        if re.match(r'^\t*- ?', line):
             break
         i += 1
 

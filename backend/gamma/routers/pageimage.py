@@ -18,7 +18,6 @@ matches the box it is dropped into and stretching it to 100%/100% is a no-op.
 """
 
 import io
-import hashlib
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request

@@ -53,7 +53,7 @@ def _import(c, payload: bytes, name="backup.zip"):
 def test_export_import_roundtrip_into_another_account(donor, receiver):
     up = donor.post("/api/uploads", files={"file": ("d.pdf", b"%PDF-1.4 donor", "application/pdf")})
     assert up.status_code == 200, up.text
-    page = make_page(donor, "Donor paper", properties={"source_url": up.json()["source_url"]})
+    make_page(donor, "Donor paper", properties={"source_url": up.json()["source_url"]})
     make_page(receiver, "Receiver original")
 
     backup = donor.get("/api/export")
