@@ -23,6 +23,7 @@ import threading
 
 from .db import user_db_path, user_uploads_dir
 from .flatten_mrc import flatten, needs_flattening
+from .logbuf import log
 
 FLAT_SUFFIX = "-flat"
 
@@ -68,7 +69,7 @@ def _point_blocks_at(user: str, doc_id: str):
                              (json.dumps(p), bid))
             conn.commit()
     except Exception as e:
-        print(f"[flatten] could not repoint blocks for {doc_id}: {e}", flush=True)
+        log.warning(f"[flatten] could not repoint blocks for {doc_id}: {e}")
 
 
 def _prepare_dims(user: str, doc_id: str):
@@ -96,7 +97,7 @@ def _run_one(user: str, doc_id: str):
         _prepare_dims(user, doc_id)   # served as-is, so it needs its own dims
         return
     tmp = dst.with_suffix(".part")
-    print(f"[flatten] {user}/{doc_id}: flattening", flush=True)
+    log.info(f"[flatten] {user}/{doc_id}: flattening")
     try:
         ok = flatten(src, tmp)
         if not ok:
@@ -109,10 +110,10 @@ def _run_one(user: str, doc_id: str):
         # Readers will be sent to the flattened copy, so that is the one whose
         # page sizes need to be ready.
         _prepare_dims(user, f"{doc_id}{FLAT_SUFFIX}")
-        print(f"[flatten] {user}/{doc_id}: done ({dst.stat().st_size // (1024*1024)} MB)", flush=True)
+        log.info(f"[flatten] {user}/{doc_id}: done ({dst.stat().st_size // (1024*1024)} MB)")
     except Exception as e:
         tmp.unlink(missing_ok=True)
-        print(f"[flatten] {user}/{doc_id} failed: {e}", flush=True)
+        log.warning(f"[flatten] {user}/{doc_id} failed: {e}")
 
 
 def _loop():

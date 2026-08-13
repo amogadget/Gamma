@@ -20,9 +20,8 @@ selection and highlight anchoring all depend on — is never touched.
 """
 
 import io
-import logging
 
-log = logging.getLogger("gamma.flatten")
+from .logbuf import log
 
 # A mask only matters once the composite it forces is big enough to hurt.
 # pdf.js turns the composite into RGBA, so this is ~4 bytes per pixel; 4 MP is

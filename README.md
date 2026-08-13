@@ -127,7 +127,7 @@ Put a TLS-terminating reverse proxy (Caddy, nginx) in front of 9001 for a domain
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `GAMMA_DATA_DIR` | No | `backend/` (`/data` in Docker) | Where users.db and per-user data live |
+| `GAMMA_DATA_DIR` | No | `./data` (repo root; `/data` in Docker) | Where users.db and per-user data live |
 | `GAMMA_STATIC_DIR` | No | unset (`/app/static` in Docker) | Built frontend to serve as SPA; unset = API only |
 | `GAMMA_PORT` | No | `9001` | Listen port (Docker entrypoint only) |
 | `GAMMA_ADMIN_USER` / `GAMMA_ADMIN_PASSWORD` | No | `admin` / random, printed to the log once | Overrides the account a **fresh** instance seeds itself at startup (only while no real accounts exist; never touched afterwards). Admins manage users from the GUI (account menu → *Manage users…*) |
