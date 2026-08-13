@@ -12,6 +12,11 @@ export function cleanFolderSegment(name) {
   return (name || "").replace(/[,/]/g, " ").replace(/\s+/g, " ").trim();
 }
 
+// Normalize a typed folder path: "cs229/" → "cs229", " cs229 / hw " → "cs229/hw".
+export function cleanFolderPath(path) {
+  return (path || "").split("/").map(cleanFolderSegment).filter(Boolean).join("/");
+}
+
 export function formatRelativeTime(iso, now = Date.now()) {
   if (!iso) return "";
   const then = new Date(/[Zz]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`).getTime();

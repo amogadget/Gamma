@@ -1479,6 +1479,20 @@ button.pdfOutlineChevron:hover {
   white-space: nowrap;
 }
 /* .categoryTagRemove look comes from .uiClose.uiCloseSm */
+/* Folder-label variant of the chips/badges: same accent, folder icon marks the kind */
+.folderChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.categorySuggestionItem.categorySuggestionFolder {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.categorySuggestionItem.categorySuggestionFolder svg {
+  flex-shrink: 0;
+}
 .categorySuggestions {
   position: absolute;
   top: 100%;
