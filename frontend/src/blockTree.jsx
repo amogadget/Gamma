@@ -2,6 +2,7 @@
 // editing, [[refs]], link chips, image drop/paste), drag handles, and the tree.
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -34,7 +35,9 @@ const BlockMarkdown = React.memo(
   function BlockMarkdown({ content, refLabels, onBlockRefClick }) {
     return (
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        // remark-breaks: a single Enter inside a note renders as a real line
+        // break (the editor lets you type them), not markdown's soft-break space.
+        remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
         rehypePlugins={[rehypeRaw, rehypeKatex]}
         urlTransform={(url) => (url.startsWith("blockref:") ? url : defaultUrlTransform(url))}
         components={{
@@ -151,6 +154,7 @@ function BlockRow({
   selectedPageIds,
   onChangeText,
   onEnterSibling,
+  enterNewNote,
   _onAddChild,
   onIndent,
   onOutdent,
@@ -670,7 +674,12 @@ function BlockRow({
                     return;
                   }
                 }
-                if (isEnterCommit(e) && !e.shiftKey) {
+                // Which Enter starts a new note is a preference (Settings →
+                // Notes); the other one falls through to a plain line break.
+                // Page-title rows on the home library always create on Enter —
+                // a line break inside a title makes no sense.
+                const newNoteKey = block._pageId || enterNewNote ? !e.shiftKey : e.shiftKey;
+                if (isEnterCommit(e) && newNoteKey) {
                   e.preventDefault();
                   onEnterSibling(block.id);
                 } else if (e.key === "Tab" && !e.shiftKey) {

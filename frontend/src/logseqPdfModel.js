@@ -244,6 +244,16 @@ export function addSiblingBlock(blocks, id) {
   };
 }
 
+// Append a fresh empty note at the end of the top level (the notes panel's
+// "+ New note" button — works even when the page has no blocks yet).
+export function addRootBlock(blocks) {
+  const newBlock = makeNewBlock();
+  return {
+    blocks: [...(blocks || []), newBlock],
+    newId: newBlock.id
+  };
+}
+
 export function addChildBlock(blocks, id) {
   const newBlock = makeNewBlock({ parentId: id });
   return {

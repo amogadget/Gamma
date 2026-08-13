@@ -709,6 +709,28 @@ body {
   font-style: italic;
 }
 
+/* Ghost "+ New note" row under the block tree — the mouse path to a fresh
+   top-level note (the keyboard path is Enter/Shift+Enter, Settings → Notes). */
+.addNoteBtn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 2px 0 12px;
+  padding: 5px 10px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.addNoteBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .blockRefChip {
   display: inline-block;
   background: #1e3a5a;
