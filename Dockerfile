@@ -1,5 +1,7 @@
 # --- Stage 1: build the frontend ---
-FROM node:22-alpine AS frontend
+# Pinned to the build host's platform: the vite output is platform-independent
+# static files, and running npm ci under QEMU for the arm64 image hangs.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
