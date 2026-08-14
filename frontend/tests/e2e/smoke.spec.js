@@ -4,6 +4,7 @@ const USER = process.env.ADMIN_USER || "admin";
 const PASS = process.env.ADMIN_PASS || "smoke-pass-123";
 const BLOCK_A = process.env.BLOCK_A;
 const BLOCK_B = process.env.BLOCK_B;
+const NOTES_BLOCK = process.env.NOTES_BLOCK;
 
 async function login(page) {
   await page.goto("/");
@@ -94,4 +95,25 @@ test("select text → pick a color → creates a highlight", async ({ page }) =>
   await page.locator(".plainTip .colorBtn").first().click();
 
   await page.waitForSelector("[data-hl-id]", { timeout: 10_000 });
+});
+
+test("notes panel position restores on refresh", async ({ page }) => {
+  await login(page);
+  await page.goto(`/?page=${NOTES_BLOCK}`);
+  await page.waitForSelector(".sidebar .blockList", { timeout: 30_000 });
+
+  const notes = page.locator(".sidebar .blockList");
+  await notes.evaluate((el) => {
+    el.scrollTo({ top: 300, behavior: "instant" });
+    el.dispatchEvent(new Event("scroll"));
+  });
+  await page.waitForTimeout(1500);
+  const before = await notes.evaluate((el) => el.scrollTop);
+
+  await page.reload();
+  await page.waitForSelector(".sidebar .blockList", { timeout: 30_000 });
+  await page.waitForTimeout(2500);
+
+  const after = await notes.evaluate((el) => el.scrollTop);
+  expect(Math.abs(after - before)).toBeLessThan(200);
 });

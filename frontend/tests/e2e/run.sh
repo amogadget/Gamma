@@ -73,7 +73,8 @@ seed_pdf() {  # $1=pdf path, $2=title → prints the created block id
 }
 BLOCK_A="$(seed_pdf "$DATA_DIR/a.pdf" "Paper A")"
 BLOCK_B="$(seed_pdf "$DATA_DIR/b.pdf" "Paper B")"
-echo "[smoke] block_a=$BLOCK_A block_b=$BLOCK_B"
+NOTES_BLOCK="$(BASE_URL="http://127.0.0.1:$PORT" ADMIN_USER="$ADMIN_USER" ADMIN_PASS="$ADMIN_PASS" "$VENV/bin/python" "$ROOT/tests/e2e/seed_notes.py")"
+echo "[smoke] block_a=$BLOCK_A block_b=$BLOCK_B notes_block=$NOTES_BLOCK"
 
 # Optionally seed a large paper (from the running Docker volume) for the
 # first-paint timing probe. Skipped if the volume/PDF isn't present.
@@ -92,5 +93,6 @@ BASE_URL="http://127.0.0.1:$PORT" \
   ADMIN_PASS="$ADMIN_PASS" \
   BLOCK_A="$BLOCK_A" \
   BLOCK_B="$BLOCK_B" \
+  NOTES_BLOCK="$NOTES_BLOCK" \
   BIG_BLOCK="$BIG_BLOCK" \
   npx playwright test tests/e2e/smoke.spec.js tests/e2e/bigpdf.spec.js "$@"
