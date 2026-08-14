@@ -165,6 +165,10 @@ export default function App() {
   // user (someone logged into another account from a second tab) — freezes the
   // tab behind SessionConflictPage until reload.
   const [sessionConflict, setSessionConflict] = useState(null);
+  // App-level UI state used across many domains — declared early so domain
+  // hooks can read it regardless of their position in this file.
+  const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
+  const [settingsOpen, setSettingsOpen] = useState(null); // null | "papers" | "library" | "ai" | "prompts" | "search" | "account"
 
   // This tab's real signed-in user — null while loading, logged out, or in a
   // public share view.
@@ -1802,7 +1806,6 @@ export default function App() {
   const [dockPreview, setDockPreview] = useState(null); // {left, top, width, height} of the drop target while dragging a window
   const [collapsedWins, setCollapsedWins] = useState({}); // window id -> collapsed to header bar
   // One popover open at a time; any click outside a [data-popover] container closes it.
-  const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
   useEffect(() => {
     if (!openPopover) return;
     function onDown(e) {
@@ -1976,7 +1979,6 @@ export default function App() {
 
   // The settings page (account popover → Settings…): two-column modal,
   // categories on the left, the selected pane on the right.
-  const [settingsOpen, setSettingsOpen] = useState(null); // null | "papers" | "library" | "ai" | "prompts" | "search" | "account"
   // Which provider entry (API key) AI requests use. Only the key is chosen
   // here — the model itself is picked in the chat panel, scoped to this key.
   const [aiProvider, setAiProvider] = usePersistedState("gamma-ai-provider", "");
