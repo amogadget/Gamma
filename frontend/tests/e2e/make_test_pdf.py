@@ -52,6 +52,7 @@ def build_text_pdf(pages=4, lines_per_page=8):
 
 if __name__ == "__main__":
     out_path = sys.argv[1] if len(sys.argv) > 1 else "test.pdf"
+    pages = int(sys.argv[2]) if len(sys.argv) > 2 else 4
     with open(out_path, "wb") as f:
-        f.write(build_text_pdf())
+        f.write(build_text_pdf(pages=pages))
     print(out_path)

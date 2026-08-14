@@ -21,8 +21,9 @@ trap cleanup EXIT
 echo "[smoke] building frontend…"
 (cd "$ROOT" && npm run build >/dev/null)
 
-echo "[smoke] generating test PDF…"
-python3 "$ROOT/tests/e2e/make_test_pdf.py" "$DATA_DIR/test.pdf" >/dev/null
+echo "[smoke] generating test PDFs…"
+python3 "$ROOT/tests/e2e/make_test_pdf.py" "$DATA_DIR/a.pdf" 4 >/dev/null
+python3 "$ROOT/tests/e2e/make_test_pdf.py" "$DATA_DIR/b.pdf" 5 >/dev/null
 
 echo "[smoke] starting backend on :$PORT (user=$ADMIN_USER)…"
 # Refuse to run if something already answers on the port (a stale instance from
@@ -52,7 +53,7 @@ curl -sf "http://127.0.0.1:$PORT/api/health" >/dev/null || {
   echo "backend failed to start:"; cat "$DATA_DIR/backend.log"; exit 1;
 }
 
-echo "[smoke] seeding a PDF via API…"
+echo "[smoke] seeding PDFs via API…"
 LOGIN_RESP="$(curl -s -c "$DATA_DIR/cookies.txt" -X POST "http://127.0.0.1:$PORT/api/login" \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}")"
@@ -60,22 +61,25 @@ echo "  login: $LOGIN_RESP"
 if [[ "$LOGIN_RESP" != *'"ok":true'* ]]; then
   echo "--- backend.log ---"; cat "$DATA_DIR/backend.log"; exit 1;
 fi
-UPLOAD_RESP="$(curl -s -b "$DATA_DIR/cookies.txt" -X POST "http://127.0.0.1:$PORT/api/uploads" \
-  -F "file=@$DATA_DIR/test.pdf;type=application/pdf")"
-echo "  upload: $UPLOAD_RESP"
-SOURCE_URL="$(echo "$UPLOAD_RESP" | python3 -c 'import sys, json; print(json.load(sys.stdin)["source_url"])')"
-DOC_ID="$(echo "$UPLOAD_RESP" | python3 -c 'import sys, json; print(json.load(sys.stdin)["doc_id"])')"
-BLOCK_ID="$(curl -s -b "$DATA_DIR/cookies.txt" -X POST "http://127.0.0.1:$PORT/api/blocks/by-doc/$DOC_ID" \
-  -H 'Content-Type: application/json' \
-  -d "{\"default_title\":\"Smoke Test Paper\",\"source_url\":\"$SOURCE_URL\"}" \
-  | python3 -c 'import sys, json; print(json.load(sys.stdin)["id"])')"
-echo "[smoke] source_url=$SOURCE_URL block_id=$BLOCK_ID"
+seed_pdf() {  # $1=pdf path, $2=title → prints the created block id
+  local up doc src
+  up="$(curl -s -b "$DATA_DIR/cookies.txt" -X POST "http://127.0.0.1:$PORT/api/uploads" -F "file=@$1;type=application/pdf")"
+  doc="$(echo "$up" | python3 -c 'import sys, json; print(json.load(sys.stdin)["doc_id"])')"
+  src="$(echo "$up" | python3 -c 'import sys, json; print(json.load(sys.stdin)["source_url"])')"
+  curl -s -b "$DATA_DIR/cookies.txt" -X POST "http://127.0.0.1:$PORT/api/blocks/by-doc/$doc" \
+    -H 'Content-Type: application/json' \
+    -d "{\"default_title\":\"$2\",\"source_url\":\"$src\"}" \
+    | python3 -c 'import sys, json; print(json.load(sys.stdin)["id"])'
+}
+BLOCK_A="$(seed_pdf "$DATA_DIR/a.pdf" "Paper A")"
+BLOCK_B="$(seed_pdf "$DATA_DIR/b.pdf" "Paper B")"
+echo "[smoke] block_a=$BLOCK_A block_b=$BLOCK_B"
 
 echo "[smoke] running Playwright…"
 cd "$ROOT"
 BASE_URL="http://127.0.0.1:$PORT" \
   ADMIN_USER="$ADMIN_USER" \
   ADMIN_PASS="$ADMIN_PASS" \
-  SOURCE_URL="$SOURCE_URL" \
-  BLOCK_ID="$BLOCK_ID" \
+  BLOCK_A="$BLOCK_A" \
+  BLOCK_B="$BLOCK_B" \
   npx playwright test tests/e2e/smoke.spec.js "$@"
