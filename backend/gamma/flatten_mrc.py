@@ -136,6 +136,7 @@ def flatten(src_path, dst_path, width=DEFAULT_WIDTH, quality=DEFAULT_QUALITY, pr
 
     # Pass 1 (pikepdf only): which pages carry a mask-bearing Form to replace.
     candidates = []  # (page_index, form, bw, bh, x0, y0)
+    progress_pages = set()  # page indices that advance the progress report
     for i, page in enumerate(pdf.pages):
         form = _form_to_replace(page)
         if form is None:
@@ -147,8 +148,10 @@ def flatten(src_path, dst_path, width=DEFAULT_WIDTH, quality=DEFAULT_QUALITY, pr
             if bw <= 0 or bh <= 0:
                 continue
             candidates.append((i, form, bw, bh, float(bbox[0]), float(bbox[1])))
+            progress_pages.add(i)
         except Exception as e:
             log.warning("flatten: page %d left as-is (%s)", i + 1, e)
+            progress_pages.add(i)
 
     if not candidates:
         pdf.close()
@@ -166,6 +169,7 @@ def flatten(src_path, dst_path, width=DEFAULT_WIDTH, quality=DEFAULT_QUALITY, pr
                     rp = render_doc[i]
                     pw, _ph = rp.get_size()
                     if pw <= 0:
+                        progress_pages.discard(i)  # original loop `continue`s here
                         continue
                     bitmap = rp.render(scale=width / pw, grayscale=True)
                     rendered.append((i, form, bw, bh, x0, y0, bitmap.to_pil()))
@@ -200,8 +204,15 @@ def flatten(src_path, dst_path, width=DEFAULT_WIDTH, quality=DEFAULT_QUALITY, pr
             rewritten += 1
         except Exception as e:
             log.warning("flatten: page %d left as-is (%s)", i + 1, e)
-        if progress and (i + 1) % 25 == 0:
-            progress(i + 1, total)
+
+    # Progress mirrors the original single loop: every candidate page advances
+    # it — whether it rendered/rewrote or was logged as left-as-is — while a
+    # skipped page (bad bbox/pw) does not. Emitted after the rewrite, in
+    # ascending page order, matching the original callback sequence.
+    if progress:
+        for i in sorted(progress_pages):
+            if (i + 1) % 25 == 0:
+                progress(i + 1, total)
 
     if not rewritten:
         pdf.close()
