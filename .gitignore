@@ -16,6 +16,8 @@ uploads/
 *.log
 .vite/
 dist/
+test-results/
+playwright-report/
 **/.backup/
 *.bak
 *.bak.*
