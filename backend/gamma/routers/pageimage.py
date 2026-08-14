@@ -69,6 +69,9 @@ def _cache_path(user: str, doc_id: str, page: int, width: int) -> Path:
 def _render(pdf_path: Path, page: int, width: int) -> bytes:
     import pypdfium2 as pdfium
 
+    # Hold the lock only across the pdfium calls (open → render → to_pil).
+    # The PIL JPEG encode is pure Pillow — it needs no pdfium, and keeping it
+    # outside the lock lets previews serialize only the native part.
     with PDFIUM_LOCK:
         doc = pdfium.PdfDocument(str(pdf_path))
         try:
@@ -79,14 +82,14 @@ def _render(pdf_path: Path, page: int, width: int) -> bytes:
             if w <= 0:
                 raise HTTPException(status_code=400, detail="bad page size")
             img = pg.render(scale=width / w).to_pil()
-            buf = io.BytesIO()
-            img.convert("L" if img.mode in ("L", "1") else "RGB").save(buf, "JPEG", quality=QUALITY, optimize=True)
-            return buf.getvalue()
         finally:
             try:
                 doc.close()
             except Exception:
                 pass
+    buf = io.BytesIO()
+    img.convert("L" if img.mode in ("L", "1") else "RGB").save(buf, "JPEG", quality=QUALITY, optimize=True)
+    return buf.getvalue()
 
 
 def dims_path(user: str, doc_id: str) -> Path:
@@ -106,7 +109,13 @@ def ensure_dims(user: str, doc_id: str, pdf_path) -> bool:
     out = dims_path(user, doc_id)
     if out.exists():
         return True
+    # The whole compute-and-write is atomic under the lock: two callers
+    # (flatten worker + a page-dims request) could otherwise both see no
+    # cache, both write the same `.part`, and one hits FileNotFoundError on
+    # `tmp.replace`. Re-check inside the lock for the same reason.
     with PDFIUM_LOCK:
+        if out.exists():
+            return True
         try:
             doc = pdfium.PdfDocument(str(pdf_path))
             try:
@@ -119,11 +128,11 @@ def ensure_dims(user: str, doc_id: str, pdf_path) -> bool:
         except Exception as e:
             log.warning(f"[page-dims] {doc_id} failed: {e}")
             return False
-    out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".part")
-    tmp.write_text(_json.dumps({"pages": len(dims), "dims": dims}, separators=(",", ":")))
-    tmp.replace(out)
-    return True
+        out.parent.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_suffix(".part")
+        tmp.write_text(_json.dumps({"pages": len(dims), "dims": dims}, separators=(",", ":")))
+        tmp.replace(out)
+        return True
 
 
 @router.get("/page-dims/{doc_id}")
