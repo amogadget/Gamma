@@ -75,3 +75,23 @@ test("tab switch A→B→A restores each PDF's scroll position", async ({ page }
   const restored = await scroller.evaluate((el) => el.scrollTop);
   expect(Math.abs(restored - aPos)).toBeLessThan(300);
 });
+
+test("select text → pick a color → creates a highlight", async ({ page }) => {
+  await login(page);
+  await openPdf(page, BLOCK_A);
+
+  // pdf.js renders selectable text spans once the page paints.
+  await page.waitForSelector(".textLayer span", { timeout: 30_000 });
+
+  const span = page.locator(".textLayer span").first();
+  const box = await span.boundingBox();
+  await page.mouse.move(box.x + 3, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + Math.max(box.width - 6, 40), box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+
+  await page.waitForSelector(".plainTip .colorBtn", { timeout: 10_000 });
+  await page.locator(".plainTip .colorBtn").first().click();
+
+  await page.waitForSelector("[data-hl-id]", { timeout: 10_000 });
+});
