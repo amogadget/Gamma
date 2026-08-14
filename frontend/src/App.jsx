@@ -27,6 +27,7 @@ import { ViewToggle } from "./fileBrowser";
 import ChatDock from "./chatDock";
 import SearchPanel from "./search";
 import { ContextMenu } from "./menus";
+import { useTransfers } from "./useTransfers";
 import {
   ActivityIcon,
   AlertCircleIcon,
@@ -1668,21 +1669,11 @@ export default function App() {
   }, [openTabs]);
 
   // Background tasks: client-side transfers (downloads/uploads) plus
-  // server-side work (library indexing), shown in one popover.
-  const [transfers, setTransfers] = useState([]); // [{id, name, kind, status, info}]
-  const [indexTask, setIndexTask] = useState(null); // {total, done, active} from /api/tasks
-  // The server remembers the last run's progress forever; this hides the
-  // finished row after "Clear" until a new indexing run starts.
-  const [indexTaskCleared, setIndexTaskCleared] = useState(false);
-  const transferByUrlRef = useRef({});
-  function addTransfer(t) {
-    const id = makeId();
-    setTransfers((prev) => [{ id, status: "active", ...t }, ...prev].slice(0, 20));
-    return id;
-  }
-  function updateTransfer(id, patch) {
-    setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
-  }
+  // server-side work (library indexing), shown in one popover. The rows live
+  // in useTransfers; the PDF-load handler that feeds them stays here (it is
+  // tangled with the scroll-restore machinery below).
+  const { transfers, setTransfers, indexTask, setIndexTask, indexTaskCleared, setIndexTaskCleared, transferByUrlRef, addTransfer, updateTransfer } =
+    useTransfers();
   // Byte-level download state reported by the PDF viewer (skips local uploads).
   // One row per URL: a re-download (LRU eviction, retry) reactivates the
   // existing entry instead of stacking duplicates.
@@ -1860,7 +1851,7 @@ export default function App() {
       cancelled = true;
       clearInterval(t);
     };
-  }, [openPopover, authUser?.user, readOnly, indexTask?.active]);
+  }, [openPopover, authUser?.user, readOnly, indexTask?.active, setIndexTask, setIndexTaskCleared]);
 
   // Every folder path in use (from page tags + manually created empties),
   // plus all ancestor prefixes — "readout" exists once "readout/destructive"
