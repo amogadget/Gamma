@@ -42,22 +42,17 @@ _USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")  # names a data directory
 MAX_PASSWORD_LEN = 128
 
 
-def _user_list(conn: sqlite3.Connection) -> list:
+def _user_list(conn: sqlite3.Connection, with_usage: bool = False) -> list:
+    """with_usage stats every file of every account — only the GET listing pays
+    for it; mutation responses omit used_bytes and the client keeps its last
+    known values."""
     rows = conn.execute(
         "SELECT username, is_guest, is_admin, created_at, max_upload_mb, quota_mb FROM users ORDER BY created_at"
     ).fetchall()
-    return [
-        {
-            "username": u,
-            "is_guest": bool(g),
-            "is_admin": bool(a),
-            "created_at": c,
-            "max_upload_mb": mu,
-            "quota_mb": q,  # overrides; null = server default
-            "used_bytes": usage_bytes(u),
-        }
-        for u, g, a, c, mu, q in rows
-    ]
+    return [{"username": u, "is_guest": bool(g), "is_admin": bool(a), "created_at": c,
+             "max_upload_mb": mu, "quota_mb": q,  # overrides; null = server default
+             **({"used_bytes": usage_bytes(u)} if with_usage else {})}
+            for u, g, a, c, mu, q in rows]
 
 
 def _get_user(conn: sqlite3.Connection, username: str):
@@ -118,7 +113,7 @@ async def update_settings(payload: SettingsUpdateRequest, request: Request):
 async def list_users(request: Request):
     me = require_admin(request)
     with connect_users_db() as conn:
-        return {"users": _user_list(conn), "me": me}
+        return {"users": _user_list(conn, with_usage=True), "me": me}
 
 
 class UserCreateRequest(BaseModel):

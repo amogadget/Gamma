@@ -39,6 +39,7 @@ from ..ai_settings import (
     MAX_PROVIDERS,
     MAX_URL_LEN,
     ai_runtime,
+    clear_refresh_backoff,
     entry_models,
     load_provider_entries,
     new_provider_id,
@@ -338,9 +339,7 @@ def ai_provider_test(provider_id: str, request: Request):
         raise HTTPException(status_code=404, detail="provider not found")
     # A test click is an explicit retry: drop the refresh backoff so a ChatGPT
     # entry re-attempts its token refresh now instead of reusing a stale token.
-    oauth = entry.get("oauth")
-    if isinstance(oauth, dict) and oauth.pop("refresh_failed_at", None) is not None:
-        save_provider_entries(user, entries)
+    clear_refresh_backoff(user, provider_id)
     rt = ai_runtime(user)
     if provider_id not in rt["providers"]:
         return {"ok": False, "error": "entry has no usable credential — set an API key or sign in again"}

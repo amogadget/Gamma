@@ -129,8 +129,8 @@ def check_upload_allowed(username: str, nbytes: int) -> None:
 def can_store(username: str, nbytes: int) -> bool:
     """Soft gate for best-effort caches (external-PDF save, AI re-download):
     same rules as check_upload_allowed, but the caller just skips the save."""
-    limits = user_limits(username)
-    if nbytes > limits["max_upload_mb"] * MB:
+    try:
+        check_upload_allowed(username, nbytes)
+        return True
+    except HTTPException:
         return False
-    quota = limits["quota_mb"]
-    return not quota or usage_bytes(username) + nbytes <= quota * MB

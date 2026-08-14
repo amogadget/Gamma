@@ -1,31 +1,9 @@
 """Admin user-management API: privilege gating, CRUD, and lockout rails."""
 
-import bcrypt
 import pytest
 from fastapi.testclient import TestClient
 
-
-def _make_user(username, password, is_admin=0):
-    from gamma.db import connect_users_db, page_now
-    from gamma.seed import create_user_dbs
-
-    with connect_users_db() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
-            conn.execute(
-                "INSERT INTO users (username, password_hash, is_guest, is_admin, created_at) VALUES (?, ?, 0, ?, ?)",
-                (username, bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode(), is_admin, page_now()),
-            )
-            conn.commit()
-    create_user_dbs(username)
-
-
-def _login(username, password):
-    from gamma.app import app
-
-    c = TestClient(app)
-    r = c.post("/api/login", json={"username": username, "password": password})
-    assert r.status_code == 200, r.text
-    return c
+from conftest import login as _login, make_user as _make_user
 
 
 @pytest.fixture(scope="module")

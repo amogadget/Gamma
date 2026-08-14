@@ -1,35 +1,12 @@
 """Storage limits: server-wide defaults, per-user quota overrides, enforcement."""
 
-import bcrypt
 import pytest
-from fastapi.testclient import TestClient
+
+from conftest import login as _login, make_user as _make_user
 
 
 def _pdf_of_mb(mb, filler=b"x"):
     return b"%PDF-1.4 " + filler * (mb * 1024 * 1024)
-
-
-def _make_user(username, password, is_admin=0):
-    from gamma.db import connect_users_db, page_now
-    from gamma.seed import create_user_dbs
-
-    with connect_users_db() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
-            conn.execute(
-                "INSERT INTO users (username, password_hash, is_guest, is_admin, created_at) VALUES (?, ?, 0, ?, ?)",
-                (username, bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode(), is_admin, page_now()),
-            )
-            conn.commit()
-    create_user_dbs(username)
-
-
-def _login(username, password):
-    from gamma.app import app
-
-    c = TestClient(app)
-    r = c.post("/api/login", json={"username": username, "password": password})
-    assert r.status_code == 200, r.text
-    return c
 
 
 def _drop_user(username):
@@ -130,7 +107,12 @@ def test_per_user_override_beats_default(sizeadmin, sizeuser):
     r = sizeadmin.put("/api/admin/users/sizeuser", json={"max_upload_mb": 1})
     assert r.status_code == 200
     me = next(u for u in r.json()["users"] if u["username"] == "sizeuser")
-    assert me["max_upload_mb"] == 1 and "used_bytes" in me
+    assert me["max_upload_mb"] == 1
+    # only the GET listing pays for disk usage; mutations omit it
+    assert "used_bytes" not in me
+    listed = next(u for u in sizeadmin.get("/api/admin/users").json()["users"]
+                  if u["username"] == "sizeuser")
+    assert isinstance(listed["used_bytes"], int)
 
     big = _pdf_of_mb(2, b"o")
     r = sizeuser.post("/api/uploads", files={"file": ("o.pdf", big, "application/pdf")})

@@ -17,6 +17,13 @@ export function cleanFolderPath(path) {
   return (path || "").split("/").map(cleanFolderSegment).filter(Boolean).join("/");
 }
 
+// Add a folder path to a page's folder tags (a soft link — other tags are
+// kept). The only tag removed is an ancestor of the new path: refining
+// "readout" into "readout/nondestructive" shouldn't leave both levels.
+export function addFolderTag(tags, path) {
+  return [...tags.filter((t) => t !== path && !path.startsWith(t + "/")), path];
+}
+
 export function formatRelativeTime(iso, now = Date.now()) {
   if (!iso) return "";
   const then = new Date(/[Zz]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`).getTime();

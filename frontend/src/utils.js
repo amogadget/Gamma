@@ -208,6 +208,8 @@ async function copyRich(html, plain) {
   return legacyCopy(plain, html);
 }
 
+const isPdfFile = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
+
 async function apiJson(url, options = {}) {
   const r = await fetch(url, { ...options, credentials: "include" });
   if (r.status === 401) {
@@ -254,6 +256,7 @@ export {
   fmtBytes,
   sha256,
   getDocIdForUrl,
+  isPdfFile,
   apiJson,
   resolvePdfUrl,
   setExpectedUser,

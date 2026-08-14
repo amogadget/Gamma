@@ -155,6 +155,19 @@ def ai_runtime(user: str) -> dict:
     }
 
 
+def clear_refresh_backoff(user: str, provider_id: str) -> None:
+    """Forget a ChatGPT entry's failed-refresh timestamp so the next
+    ai_runtime() re-attempts the token refresh immediately (an explicit
+    retry, e.g. the settings Test button)."""
+    entries = load_provider_entries(user)
+    for e in entries:
+        oauth = e.get("oauth")
+        if e.get("id") == provider_id and isinstance(oauth, dict) \
+                and oauth.pop("refresh_failed_at", None) is not None:
+            save_provider_entries(user, entries)
+            return
+
+
 def require_ai_runtime(user: str) -> dict:
     """ai_runtime(), raising the standard 503 when no provider is usable."""
     rt = ai_runtime(user)
