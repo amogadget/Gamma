@@ -25,6 +25,7 @@ def iter_page_texts(src, max_pages: int = 400):
         log.warning(f"[pdf-text] pypdfium2 import failed ({e}), falling back to PyPDF2")
         pdfium = None
     if pdfium is not None:
+        texts = None
         with PDFIUM_LOCK:
             try:
                 pdf = pdfium.PdfDocument(src)
@@ -32,18 +33,25 @@ def iter_page_texts(src, max_pages: int = 400):
                 log.warning(f"[pdf-text] pypdfium2 open failed ({e}), falling back to PyPDF2")
                 pdf = None
             if pdf is not None:
+                texts = []
                 try:
                     for i in range(min(len(pdf), max_pages)):
                         page = pdf[i]
                         tp = page.get_textpage()
                         try:
-                            yield tp.get_text_bounded() or ""
+                            texts.append(tp.get_text_bounded() or "")
                         finally:
                             tp.close()
                             page.close()
                 finally:
                     pdf.close()
-                return
+        # Yield outside the lock: the extracted strings are plain Python, and
+        # the generator must not keep the pdfium lock while a caller digests
+        # each page (or between pulls).
+        if texts is not None:
+            for t in texts:
+                yield t
+            return
     # PyPDF2 fallback (does not touch pdfium)
     from PyPDF2 import PdfReader
 

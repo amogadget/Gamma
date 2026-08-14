@@ -127,62 +127,85 @@ def _form_to_replace(page):
 
 def flatten(src_path, dst_path, width=DEFAULT_WIDTH, quality=DEFAULT_QUALITY, progress=None) -> bool:
     """Write a flattened copy of src_path. False when nothing was rewritten."""
-    # pdfium is not thread-safe; hold the lock for the whole render so request
-    # threads (previews, text extraction) can't crash the process mid-flatten.
-    with PDFIUM_LOCK:
-        import pikepdf
-        import pypdfium2 as pdfium
-        from PIL import Image  # noqa: F401  (pdfium hands back a PIL image)
+    import pikepdf
+    import pypdfium2 as pdfium
+    from PIL import Image  # noqa: F401  (pdfium hands back a PIL image)
 
-        pdf = pikepdf.open(str(src_path))
-        render_doc = pdfium.PdfDocument(str(src_path))
-        rewritten = 0
+    pdf = pikepdf.open(str(src_path))
+    total = len(pdf.pages)
+
+    # Pass 1 (pikepdf only): which pages carry a mask-bearing Form to replace.
+    candidates = []  # (page_index, form, bw, bh, x0, y0)
+    for i, page in enumerate(pdf.pages):
+        form = _form_to_replace(page)
+        if form is None:
+            continue
         try:
-            total = len(pdf.pages)
-            for i, page in enumerate(pdf.pages):
-                form = _form_to_replace(page)
-                if form is None:
-                    continue
+            bbox = form.get("/BBox")
+            bw = float(bbox[2]) - float(bbox[0])
+            bh = float(bbox[3]) - float(bbox[1])
+            if bw <= 0 or bh <= 0:
+                continue
+            candidates.append((i, form, bw, bh, float(bbox[0]), float(bbox[1])))
+        except Exception as e:
+            log.warning("flatten: page %d left as-is (%s)", i + 1, e)
+
+    if not candidates:
+        pdf.close()
+        return False
+
+    # Pass 2 (pdfium, under the lock): render each candidate page to a PIL
+    # image. Only the native calls hold the lock; the JPEG encode and the
+    # pikepdf rewrite below run outside it.
+    rendered = []  # (page_index, form, bw, bh, x0, y0, img)
+    with PDFIUM_LOCK:
+        render_doc = pdfium.PdfDocument(str(src_path))
+        try:
+            for i, form, bw, bh, x0, y0 in candidates:
                 try:
-                    bbox = form.get("/BBox")
-                    bw = float(bbox[2]) - float(bbox[0])
-                    bh = float(bbox[3]) - float(bbox[1])
-                    if bw <= 0 or bh <= 0:
-                        continue
                     rp = render_doc[i]
                     pw, _ph = rp.get_size()
                     if pw <= 0:
                         continue
                     bitmap = rp.render(scale=width / pw, grayscale=True)
-                    img = bitmap.to_pil()
-                    buf = io.BytesIO()
-                    img.save(buf, "JPEG", quality=quality, optimize=True)
-                    data = buf.getvalue()
-
-                    stream = pikepdf.Stream(pdf, data)
-                    stream.Type = pikepdf.Name("/XObject")
-                    stream.Subtype = pikepdf.Name("/Image")
-                    stream.Width, stream.Height = img.size
-                    stream.ColorSpace = pikepdf.Name("/DeviceGray")
-                    stream.BitsPerComponent = 8
-                    stream.Filter = pikepdf.Name("/DCTDecode")
-
-                    form.write(
-                        f"q {bw:.4f} 0 0 {bh:.4f} {float(bbox[0]):.4f} {float(bbox[1]):.4f} cm /ImFlat Do Q".encode()
-                    )
-                    form.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(ImFlat=stream))
-                    rewritten += 1
+                    rendered.append((i, form, bw, bh, x0, y0, bitmap.to_pil()))
                 except Exception as e:
                     log.warning("flatten: page %d left as-is (%s)", i + 1, e)
-                if progress and (i + 1) % 25 == 0:
-                    progress(i + 1, total)
-            if not rewritten:
-                return False
-            pdf.save(str(dst_path), linearize=False)
-            return True
         finally:
             try:
                 render_doc.close()
             except Exception:
                 pass
-            pdf.close()
+
+    # Pass 3 (Pillow + pikepdf, no pdfium): encode and rewrite each page.
+    rewritten = 0
+    for i, form, bw, bh, x0, y0, img in rendered:
+        try:
+            buf = io.BytesIO()
+            img.save(buf, "JPEG", quality=quality, optimize=True)
+            data = buf.getvalue()
+
+            stream = pikepdf.Stream(pdf, data)
+            stream.Type = pikepdf.Name("/XObject")
+            stream.Subtype = pikepdf.Name("/Image")
+            stream.Width, stream.Height = img.size
+            stream.ColorSpace = pikepdf.Name("/DeviceGray")
+            stream.BitsPerComponent = 8
+            stream.Filter = pikepdf.Name("/DCTDecode")
+
+            form.write(
+                f"q {bw:.4f} 0 0 {bh:.4f} {x0:.4f} {y0:.4f} cm /ImFlat Do Q".encode()
+            )
+            form.Resources = pikepdf.Dictionary(XObject=pikepdf.Dictionary(ImFlat=stream))
+            rewritten += 1
+        except Exception as e:
+            log.warning("flatten: page %d left as-is (%s)", i + 1, e)
+        if progress and (i + 1) % 25 == 0:
+            progress(i + 1, total)
+
+    if not rewritten:
+        pdf.close()
+        return False
+    pdf.save(str(dst_path), linearize=False)
+    pdf.close()
+    return True

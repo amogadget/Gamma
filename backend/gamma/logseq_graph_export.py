@@ -235,6 +235,9 @@ def render_area_images(pdf_path, stem, highlights, scale=2.0):
     try:
         import pypdfium2 as pdfium
 
+        # pdfium is not thread-safe: render and copy the pixel buffer under
+        # the lock, then crop and PNG-encode (pure Python) outside it.
+        rendered = []  # (h, W, H, stride, nch, buf)
         with PDFIUM_LOCK:
             pdf = pdfium.PdfDocument(str(pdf_path))
             try:
@@ -242,28 +245,41 @@ def render_area_images(pdf_path, stem, highlights, scale=2.0):
                     try:
                         page = pdf[h["page"] - 1]
                         bitmap = page.render(scale=scale, rev_byteorder=True)
-                        buf = bytes(bitmap.buffer)
-                        W, H, stride, nch = bitmap.width, bitmap.height, bitmap.stride, bitmap.n_channels
-                        br = h["position"]["boundingRect"]
-                        # br coords are relative to a capture-time render of size
-                        # width×height — rescale into this bitmap's pixel grid.
-                        sx, sy = W / (br.get("width") or W), H / (br.get("height") or H)
-                        x1, x2 = sorted((int(br["x1"] * sx), int(br["x2"] * sx)))
-                        y1, y2 = sorted((int(br["y1"] * sy), int(br["y2"] * sy)))
-                        x1, y1 = max(0, x1), max(0, y1)
-                        x2, y2 = min(W, max(x2, x1 + 1)), min(H, max(y2, y1 + 1))
-                        rows = []
-                        for y in range(y1, y2):
-                            row = buf[y * stride + x1 * nch : y * stride + x2 * nch]
-                            if nch == 4:  # RGBA → RGB
-                                row = b"".join(row[i : i + 3] for i in range(0, len(row), 4))
-                            rows.append(row)
-                        png = _encode_png(x2 - x1, y2 - y1, rows)
-                        out.append((f"assets/{stem}/{h['page']}_{h['uuid']}_{h['stamp']}.png", png))
+                        rendered.append(
+                            (
+                                h,
+                                bitmap.width,
+                                bitmap.height,
+                                bitmap.stride,
+                                bitmap.n_channels,
+                                bytes(bitmap.buffer),
+                            )
+                        )
                     except Exception:
                         continue
             finally:
                 pdf.close()
+
+        for h, W, H, stride, nch, buf in rendered:
+            try:
+                br = h["position"]["boundingRect"]
+                # br coords are relative to a capture-time render of size
+                # width×height — rescale into this bitmap's pixel grid.
+                sx, sy = W / (br.get("width") or W), H / (br.get("height") or H)
+                x1, x2 = sorted((int(br["x1"] * sx), int(br["x2"] * sx)))
+                y1, y2 = sorted((int(br["y1"] * sy), int(br["y2"] * sy)))
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(W, max(x2, x1 + 1)), min(H, max(y2, y1 + 1))
+                rows = []
+                for y in range(y1, y2):
+                    row = buf[y * stride + x1 * nch : y * stride + x2 * nch]
+                    if nch == 4:  # RGBA → RGB
+                        row = b"".join(row[i : i + 3] for i in range(0, len(row), 4))
+                    rows.append(row)
+                png = _encode_png(x2 - x1, y2 - y1, rows)
+                out.append((f"assets/{stem}/{h['page']}_{h['uuid']}_{h['stamp']}.png", png))
+            except Exception:
+                continue
     except Exception:
         return out
     return out
