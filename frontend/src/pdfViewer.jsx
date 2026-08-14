@@ -1883,19 +1883,24 @@ const PdfPage = React.memo(function PdfPage({
   const curW = pageSize ? pageSize.width * scale : 1,
     curH = pageSize ? pageSize.height * scale : 1;
 
-  // Rectangle drag (screenshot-style area note): Ctrl+drag with a mouse, or
-  // any drag while the phone's rectangle mode (areaMode) is on. Pointer
-  // events cover mouse and touch with one path; document-level move/up
-  // listeners so the drag survives leaving the page box; rects are clamped
-  // to it. Tiny drags are clicks — ignored, so Ctrl+click on highlights
-  // (additive chat quote) keeps working.
+  // Rectangle drag (screenshot-style area note): Cmd/Ctrl+drag with a mouse,
+  // or any drag while rectangle mode (areaMode) is on. Pointer events cover
+  // mouse and touch with one path; document-level move/up listeners so the
+  // drag survives leaving the page box; rects are clamped to it. Tiny drags
+  // are clicks — ignored, so Ctrl+click on highlights (additive chat quote)
+  // keeps working.
   const [marquee, setMarquee] = useState(null); // live drag rect, current-render px
   function beginAreaDrag(e) {
     if (readOnly || !onAreaSelected) return;
     if (e.button !== 0) return;
-    const viaCtrl =
-      e.pointerType === "mouse" && e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey;
-    if (!areaMode && !viaCtrl) return;
+    // Cmd (macOS) or Ctrl (Windows/Linux) + drag = area screenshot. macOS
+    // maps Ctrl+click to right-click, so Mac users reach for Cmd instead.
+    const viaMod =
+      e.pointerType === "mouse" &&
+      (e.ctrlKey || e.metaKey) &&
+      !e.shiftKey &&
+      !e.altKey;
+    if (!areaMode && !viaMod) return;
     const wrap = wrapRef.current;
     if (!wrap) return;
     e.preventDefault(); // keep the text layer from starting a selection

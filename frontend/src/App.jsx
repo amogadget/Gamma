@@ -7175,14 +7175,14 @@ export default function App() {
                         >
                           <FitWidthIcon size={15} />
                         </button>
-                        {isPhone && !readOnly ? (
+                        {!readOnly ? (
                           <button
                             className={areaSelectMode ? "modeActive" : ""}
                             onClick={() => setAreaSelectMode((v) => !v)}
                             title={
                               areaSelectMode
-                                ? "Rectangle mode — drag draws an area note (tap to switch to text selection)"
-                                : "Text mode — drag selects text (tap to switch to rectangle drawing)"
+                                ? "Rectangle mode — drag draws an area screenshot (click to switch to text selection)"
+                                : "Text mode — drag selects text (click to switch to rectangle drawing)"
                             }
                             aria-label="Toggle selection mode"
                           >
@@ -7219,7 +7219,7 @@ export default function App() {
                         highlights={highlights}
                         noteBadges={hlNoteBadges}
                         hideEmbeddedAnnots={embAnnots === "hide"}
-                        areaMode={areaSelectMode && isPhone && !readOnly}
+                        areaMode={areaSelectMode && !readOnly}
                         pdfScaleValue={pdfScale}
                         scrollRef={scrollToRef}
                         searchRef={pdfSearchRef}
