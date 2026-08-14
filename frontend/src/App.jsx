@@ -153,6 +153,42 @@ function useIsPhone() {
   return UA_MOBILE || mqPhone;
 }
 
+const isPdfFile = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
+
+// Drag payload prefix marking a folder drag (page cards drag their bare id).
+const FOLDER_DRAG = "gamma-folder:";
+
+// Folder uploads tag each PDF with its directory path as a folder label:
+// "papers/readout/x.pdf" → "papers/readout" (the picked/dropped root included).
+function folderFromRelPath(relPath) {
+  const idx = (relPath || "").lastIndexOf("/");
+  return idx > 0 ? cleanFolderPath(relPath.slice(0, idx)) : "";
+}
+
+// Recursively walk directory entries from a drop into {file, folder} pairs.
+// The entries themselves must be captured synchronously in the drop handler
+// (webkitGetAsEntry) — the DataTransfer is neutered once the event returns.
+async function collectEntryFiles(entries) {
+  const out = [];
+  async function walk(entry, folder) {
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej)).catch(() => null);
+      if (file) out.push({ file, folder });
+    } else if (entry.isDirectory) {
+      const seg = cleanFolderSegment(entry.name);
+      const sub = folder && seg ? `${folder}/${seg}` : folder || seg;
+      const reader = entry.createReader();
+      for (;;) { // readEntries returns ≤100 entries per call — drain until empty
+        const batch = await new Promise((res, rej) => reader.readEntries(res, rej)).catch(() => null);
+        if (!batch || !batch.length) break;
+        for (const e of batch) await walk(e, sub);
+      }
+    }
+  }
+  for (const entry of entries) await walk(entry, "");
+  return out;
+}
+
 export default function App() {
   const params = new URLSearchParams(window.location.search);
   const initialUrl = params.get("src") || params.get("url") || "";
@@ -908,16 +944,10 @@ export default function App() {
     );
   }
 
-  // Rename one path segment: rewrites the prefix on every page's folder tags,
-  // so renaming a parent folder carries all its subfolders along.
-  async function renameFolder(oldPath, newNameRaw) {
-    const newName = cleanFolderSegment(newNameRaw);
-    setFolderRenaming(null);
-    const parent = oldPath.includes("/") ? oldPath.slice(0, oldPath.lastIndexOf("/")) : "";
-    const newPath = parent ? `${parent}/${newName}` : newName;
-    if (!newName || newPath === oldPath) return;
-    const mapTag = (t) =>
-      t === oldPath ? newPath : t.startsWith(oldPath + "/") ? newPath + t.slice(oldPath.length) : t;
+  // Apply a path-rewriting map to every folder tag in the library: pages, the
+  // localStorage-only empties, the open page's chips, and the active folder
+  // filter all follow. Shared by folder rename and folder move.
+  async function applyFolderMap(mapTag) {
     for (const b of homeBlocks) {
       const tags = parseFolderTags(b.properties?.folder);
       const next = [...new Set(tags.map(mapTag))];
@@ -928,24 +958,91 @@ export default function App() {
     }
     updateExtraFolders((prev) => [...new Set(prev.map(mapTag))]);
     setPageFolders((prev) => [...new Set(prev.map(mapTag))]);
-    if (folderFilter === oldPath || folderFilter.startsWith(oldPath + "/")) {
-      const next = mapTag(folderFilter);
-      setFolderFilter(next);
-      window.history.replaceState(null, "", `/?folder=${encodeURIComponent(next)}`);
+    const nextFilter = mapTag(folderFilter);
+    if (nextFilter !== folderFilter) {
+      setFolderFilter(nextFilter);
+      window.history.replaceState(null, "", nextFilter ? `/?folder=${encodeURIComponent(nextFilter)}` : "/");
     }
     await fetchHomeBlocks();
+  }
+
+  const prefixMapTag = (oldPath, newPath) => (t) =>
+    t === oldPath ? newPath : t.startsWith(oldPath + "/") ? newPath + t.slice(oldPath.length) : t;
+
+  // Rename one path segment: rewrites the prefix on every page's folder tags,
+  // so renaming a parent folder carries all its subfolders along.
+  async function renameFolder(oldPath, newNameRaw) {
+    const newName = cleanFolderSegment(newNameRaw);
+    setFolderRenaming(null);
+    const parent = oldPath.includes("/") ? oldPath.slice(0, oldPath.lastIndexOf("/")) : "";
+    const newPath = parent ? `${parent}/${newName}` : newName;
+    if (!newName || newPath === oldPath) return;
+    await applyFolderMap(prefixMapTag(oldPath, newPath));
     setStatus(`Folder renamed to “${newPath}”.`);
+  }
+
+  // Move folders (with their subtrees) under a new parent path ("" = top
+  // level). One combined rewrite pass so a page tagged with several of the
+  // moved folders isn't clobbered by sequential sweeps.
+  async function moveFolders(paths, newParent) {
+    const moves = [];
+    for (const oldPath of paths) {
+      if (newParent === oldPath || newParent.startsWith(oldPath + "/")) continue; // into itself
+      const name = oldPath.slice(oldPath.lastIndexOf("/") + 1);
+      const newPath = newParent ? `${newParent}/${name}` : name;
+      if (newPath !== oldPath) moves.push([oldPath, newPath]);
+    }
+    if (!moves.length) return;
+    await applyFolderMap((t) => {
+      for (const [oldPath, newPath] of moves) {
+        if (t === oldPath) return newPath;
+        if (t.startsWith(oldPath + "/")) return newPath + t.slice(oldPath.length);
+      }
+      return t;
+    });
+    clearSelection();
+    setStatus(`Moved ${moves.length === 1 ? `“${moves[0][0]}”` : `${moves.length} folders`} to “${newParent || "All files"}”.`);
+  }
+
+  // Folders share the "text/plain" drag channel with page cards — prefixed so
+  // drop targets can tell them apart. Returns null for a page drag.
+  function droppedFolderPaths(e) {
+    const raw = e.dataTransfer.getData("text/plain");
+    if (!raw.startsWith(FOLDER_DRAG)) return null;
+    const path = raw.slice(FOLDER_DRAG.length);
+    return selectedFolders.has(path) && selectedFolders.size > 1 ? [...selectedFolders] : [path];
   }
 
   function deleteFolderByName(path) {
     const inPath = (t) => t === path || t.startsWith(path + "/");
     const members = homeBlocks.filter((b) => parseFolderTags(b.properties?.folder).some(inPath));
+    const cleanupAfter = async (statusMsg) => {
+      updateExtraFolders((prev) => prev.filter((f) => !inPath(f)));
+      setPageFolders((prev) => prev.filter((t) => !inPath(t)));
+      if (folderFilter === path || folderFilter.startsWith(path + "/")) {
+        const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+        setFolderFilter(parent);
+        window.history.replaceState(null, "", parent ? `/?folder=${encodeURIComponent(parent)}` : "/");
+      }
+      clearSelection();
+      await fetchHomeBlocks();
+      setStatus(statusMsg);
+    };
+    if (!members.length) {
+      setConfirmBox({
+        title: "Delete folder",
+        message: `Delete the empty folder “${path}”?`,
+        confirmLabel: "Delete folder",
+        onConfirm: () => cleanupAfter(`Folder “${path}” deleted.`),
+      });
+      return;
+    }
+    const n = members.length;
+    const papers = `${n} paper${n === 1 ? "" : "s"}`;
     setConfirmBox({
       title: "Delete folder",
-      message: members.length
-        ? `Delete “${path}”? The folder tag is removed from its ${members.length} paper${members.length === 1 ? "" : "s"} — no papers are deleted.`
-        : `Delete the empty folder “${path}”?`,
-      confirmLabel: "Delete folder",
+      message: `Delete “${path}”? It contains ${papers}. Keep ${n === 1 ? "it" : "them"} in the library (only the folder goes away), or delete ${n === 1 ? "it and its" : "them and their"} notes too — papers linked into other folders are deleted as well.`,
+      confirmLabel: "Keep papers",
       onConfirm: async () => {
         for (const b of members) {
           try {
@@ -955,19 +1052,17 @@ export default function App() {
             );
           } catch {}
         }
-        updateExtraFolders((prev) => prev.filter((f) => !inPath(f)));
-        setPageFolders((prev) => prev.filter((t) => !inPath(t)));
-        if (folderFilter === path || folderFilter.startsWith(path + "/")) {
-          const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
-          setFolderFilter(parent);
-          window.history.replaceState(
-            null,
-            "",
-            parent ? `/?folder=${encodeURIComponent(parent)}` : "/",
-          );
+        await cleanupAfter(`Folder “${path}” deleted — its ${papers} stay in the library.`);
+      },
+      altLabel: `Delete ${papers} too`,
+      altDanger: true,
+      onAlt: async () => {
+        const ids = members.map((b) => b.id);
+        for (const id of ids) {
+          try { await apiJson(`${API}/blocks/${id}`, { method: "DELETE" }); } catch {}
         }
-        await fetchHomeBlocks();
-        setStatus(`Folder “${path}” deleted.`);
+        updateTabs((prev) => prev.filter((t) => !ids.includes(t.id)));
+        await cleanupAfter(`Folder “${path}” and its ${papers} deleted.`);
       },
     });
   }
@@ -2421,7 +2516,7 @@ export default function App() {
     }
   }
   // Styled in-app dialogs replacing window.confirm / link decisions.
-  const [confirmBox, setConfirmBox] = useState(null); // {title, message, confirmLabel, danger, onConfirm}
+  const [confirmBox, setConfirmBox] = useState(null); // {title, message, confirmLabel, danger, onConfirm, altLabel, altDanger, onAlt}
   const [linkPrompt, setLinkPrompt] = useState(null); // external URL clicked inside the PDF
   const [linkDialog, setLinkDialog] = useState(null); // {position, content} — creating a manual reference link
   const [linkDialogInput, setLinkDialogInput] = useState("");
@@ -2625,6 +2720,43 @@ export default function App() {
     } finally {
       setMetaBusy(false);
     }
+  }
+
+  // Bulk-upload follow-up: fetch metadata for each new page (sequentially, like
+  // the Settings batch retry) and replace still-default "PDF Notes - <sha>.pdf"
+  // titles with the paper title. The single-upload path doesn't need this — it
+  // opens the page, and the open-time effect below handles it.
+  async function fetchMetadataForUploads(uploaded) {
+    if (readOnly || !metaAutoFetch) return;
+    let renamed = 0;
+    for (const { block } of uploaded) {
+      if (!block?.id || block.properties?.meta) continue;
+      const taskId = addTransfer({ name: `Metadata — ${(block.content || "paper").slice(0, 48)}`, kind: "ai", info: "fetching…" });
+      try {
+        const data = await apiJson(`${API}/metadata/fetch`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            block_id: block.id,
+            prompt: metaPrompt || "",
+            model: metaFetchModel || "",
+            context_char_limit: metaContextChars,
+          }),
+        });
+        updateTransfer(taskId, { status: "done", info: data.cached ? "cached" : data.source === "ai" ? "AI-extracted" : data.source || "" });
+        if (data.meta?.title && /^PDF Notes - /.test(block.content || "")) {
+          await apiJson(`${API}/blocks/${block.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content: data.meta.title }),
+          });
+          renamed++;
+        }
+      } catch (err) {
+        updateTransfer(taskId, { status: "error", info: (err.message || "failed").slice(0, 60) });
+      }
+    }
+    if (renamed) fetchHomeBlocks();
   }
 
   // When a paper is opened/uploaded, fetch its metadata in the background
@@ -3364,7 +3496,7 @@ export default function App() {
     });
   }
 
-  async function uploadOnePdf(file) {
+  async function uploadOnePdf(file, folder = "") {
     const transferId = addTransfer({ name: file.name, kind: "upload", info: fmtBytes(file.size) });
     const form = new FormData();
     form.append("file", file);
@@ -3380,6 +3512,18 @@ export default function App() {
     updateTransfer(transferId, { status: "done", info: fmtBytes(file.size) });
     const defaultTitle = getPdfPageTitle(data.doc_id, data.source_url);
     const block = await getOrCreateBlockForDoc(data.doc_id, defaultTitle, data.source_url);
+    if (folder) {
+      // Same refinement rule as addPagesToFolder: keep other folder tags,
+      // replacing only an ancestor of the target path.
+      const tags = parseFolderTags(block.properties?.folder);
+      if (!tags.includes(folder)) {
+        const next = [...tags.filter((t) => !folder.startsWith(t + "/")), folder];
+        try {
+          await writePageFolders(block.id, next);
+          block.properties = { ...block.properties, folder: next.join(", ") };
+        } catch {}
+      }
+    }
     // If the file carries embedded annotations (SumatraPDF etc.), pull them in
     importEmbeddedAnnots(block.id, data.doc_id, true);
     return { data, block, defaultTitle };
@@ -3387,32 +3531,40 @@ export default function App() {
 
   async function uploadPdfs(fileList) {
     if (readOnly) return;
-    const isPdf = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
-    const files = Array.from(fileList || []).filter(isPdf);
-    if (!files.length) {
-      setStatus("Not a PDF file.");
+    // Accepts Files (picker/drop) or {file, folder} pairs (dropped-folder walk);
+    // the directory picker's Files carry the path in webkitRelativePath instead.
+    // With a folder open in the library view, uploads land inside it.
+    const base = homeMode && folderFilter ? folderFilter : "";
+    const items = Array.from(fileList || [])
+      .map((it) => (it instanceof File ? { file: it, folder: folderFromRelPath(it.webkitRelativePath) } : it))
+      .filter((it) => it?.file && isPdfFile(it.file))
+      .map(({ file, folder }) => ({ file, folder: [base, folder].filter(Boolean).join("/") }));
+    if (!items.length) {
+      setStatus("No PDF files found.");
       return;
     }
     const maxUploadMb = quotaInfo?.max_upload_mb || 55;
     setLoading(true);
     let last = null;
+    const done = [];
     const failed = [];
     try {
-      for (const file of files) {
+      for (const { file, folder } of items) {
         if (file.size > maxUploadMb * 1024 * 1024) {
           failed.push(`${file.name} (max ${maxUploadMb} MB)`);
           continue;
         }
         setStatus(`Uploading ${file.name}...`);
         try {
-          last = await uploadOnePdf(file);
+          last = await uploadOnePdf(file, folder);
+          done.push(last);
         } catch (err) {
           failed.push(`${file.name} (${err.message})`);
         }
       }
-      const okCount = files.length - failed.length;
+      const okCount = items.length - failed.length;
       if (okCount > 0) refreshQuota();
-      if (files.length === 1 && last) {
+      if (items.length === 1 && last) {
         // Single upload keeps the old behavior: open the paper directly
         // (bypass openPdf's URL-resolution path).
         const { data, block, defaultTitle } = last;
@@ -3428,12 +3580,15 @@ export default function App() {
         setPdfUrl(data.source_url);
         const newUrl = `${window.location.pathname}?block=${encodeURIComponent(block.id)}`;
         window.history.replaceState({}, "", newUrl);
-        setStatus(`Uploaded ${files[0].name} (${data.doc_id})`);
+        setStatus(`Uploaded ${items[0].file.name} (${data.doc_id})`);
       } else if (okCount > 0) {
         fetchHomeBlocks();
         setStatus(failed.length
-          ? `Uploaded ${okCount} of ${files.length} PDFs — failed: ${failed.join(", ")}`
+          ? `Uploaded ${okCount} of ${items.length} PDFs — failed: ${failed.join(", ")}`
           : `Uploaded ${okCount} PDFs.`);
+        // Bulk uploads never get opened, so the open-time auto-metadata (which
+        // also fills in real titles) wouldn't run — do it here in the background.
+        fetchMetadataForUploads(done);
       } else {
         setStatus(`Upload failed: ${failed.join(", ")}`);
       }
@@ -5655,13 +5810,21 @@ export default function App() {
                   onDrop={(e) => {
                     e.preventDefault();
                     setFolderDragOver(null);
+                    const folders = droppedFolderPaths(e);
+                    if (folders) {
+                      const parent = folderFilter.includes("/")
+                        ? folderFilter.slice(0, folderFilter.lastIndexOf("/"))
+                        : "";
+                      moveFolders(folders, parent);
+                      return;
+                    }
                     const id = e.dataTransfer.getData("text/plain");
                     if (!id) return;
                     const ids =
                       selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
                     removePagesFromFolder(ids, folderFilter);
                   }}
-                  title="Back — or drop a paper here to remove it from this folder"
+                  title="Back — or drop a paper or folder here to move it out of this folder"
                 >
                   <ArrowLeftIcon size={14} />
                   <span className="folderName">
@@ -5669,7 +5832,7 @@ export default function App() {
                       ? folderFilter.slice(0, folderFilter.lastIndexOf("/"))
                       : "All files"}
                   </span>
-                  <span className="folderHint">drop here to remove from this folder</span>
+                  <span className="folderHint">drop here to move out of this folder</span>
                 </div>
                 <div className="folderCurrent">
                   <FolderOpenIcon size={15} />
@@ -5704,6 +5867,8 @@ export default function App() {
                   <div
                     key={f}
                     className={`folderRow ${folderDragOver === f ? "dragOver" : ""} ${selectedFolders.has(f) ? "selected" : ""}`}
+                    draggable={folderRenaming?.name !== f}
+                    onDragStart={(e) => { e.dataTransfer.setData("text/plain", FOLDER_DRAG + f); e.dataTransfer.effectAllowed = "move"; }}
                     onClick={(e) => handleFolderClick(f, e)}
                     onDoubleClick={() => {
                       if (folderRenaming?.name !== f) openFolder(f);
@@ -5720,6 +5885,8 @@ export default function App() {
                     onDrop={(e) => {
                       e.preventDefault();
                       setFolderDragOver(null);
+                      const folders = droppedFolderPaths(e);
+                      if (folders) { moveFolders(folders, f); return; }
                       const id = e.dataTransfer.getData("text/plain");
                       if (!id) return;
                       // A selected card drags its whole selection along
@@ -5727,7 +5894,7 @@ export default function App() {
                         selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
                       addPagesToFolder(ids, f);
                     }}
-                    title="Click to select · double-click to open · right-click to rename or delete · drop a paper to add it"
+                    title="Click to select · double-click to open · right-click to rename or delete · drop a paper or folder to move it in"
                   >
                     <FolderIcon size={15} />
                     {folderRenaming?.name === f ? (
@@ -5822,6 +5989,11 @@ export default function App() {
                   <div
                     key={f}
                     className={`folderTile ${folderDragOver === f ? "dragOver" : ""} ${selectedFolders.has(f) ? "selected" : ""}`}
+                    draggable={folderRenaming?.name !== f}
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData("text/plain", FOLDER_DRAG + f);
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
                     onClick={(e) => handleFolderClick(f, e)}
                     onDoubleClick={() => {
                       if (folderRenaming?.name !== f) openFolder(f);
@@ -5838,13 +6010,18 @@ export default function App() {
                     onDrop={(e) => {
                       e.preventDefault();
                       setFolderDragOver(null);
+                      const folders = droppedFolderPaths(e);
+                      if (folders) {
+                        moveFolders(folders, f);
+                        return;
+                      }
                       const id = e.dataTransfer.getData("text/plain");
                       if (!id) return;
                       const ids =
                         selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
                       addPagesToFolder(ids, f);
                     }}
-                    title="Click to select · double-click to open · drop a paper to add it"
+                    title="Click to select · double-click to open · drop a paper or folder to move it in"
                   >
                     <FolderGlyph />
                     {folderRenaming?.name === f ? (
@@ -6651,7 +6828,18 @@ export default function App() {
       }}
       onDrop={readOnly ? undefined : (e) => {
         appRef.current?.classList.remove("dragOver");
-        const files = Array.from(e.dataTransfer?.files || []).filter((f) => f.type === "application/pdf");
+        if (!e.dataTransfer) return;
+        // Grab entries synchronously — the DataTransfer is neutered once the
+        // handler returns. Folders only arrive via the entry API.
+        const entries = Array.from(e.dataTransfer.items || [])
+          .map((it) => it.webkitGetAsEntry?.())
+          .filter(Boolean);
+        if (entries.some((en) => en.isDirectory)) {
+          e.preventDefault();
+          collectEntryFiles(entries).then((found) => uploadPdfs(found));
+          return;
+        }
+        const files = Array.from(e.dataTransfer.files || []).filter(isPdfFile);
         if (!files.length) return;
         e.preventDefault();
         uploadPdfs(files);
@@ -6740,9 +6928,21 @@ export default function App() {
                       onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; setOpenPopover(null); if (files.length) uploadPdfs(files); }}
                     />
                   </label>
-                  <button className="popoverItem" onClick={createNotePage}>
-                    New note page
-                  </button>
+                  <label
+                    className="popoverItem"
+                    style={{ cursor: loading ? "not-allowed" : "pointer" }}
+                    title="Upload every PDF in a folder — subfolders become folder labels"
+                  >
+                    Upload folder…
+                    <input
+                      type="file"
+                      webkitdirectory=""
+                      style={{ display: "none" }}
+                      disabled={loading}
+                      onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; setOpenPopover(null); if (files.length) uploadPdfs(files); }}
+                    />
+                  </label>
+                  <button className="popoverItem" onClick={createNotePage}>New note page</button>
                 </div>
               ) : null}
             </span>
@@ -7417,9 +7617,13 @@ export default function App() {
             <div className="reportModalTitle">{confirmBox.title}</div>
             <div className="reportModalHint confirmMessage">{confirmBox.message}</div>
             <div className="reportModalBtns">
-              <button className="chatClearBtn" onClick={() => setConfirmBox(null)} autoFocus>
-                Cancel
-              </button>
+              <button className="chatClearBtn" onClick={() => setConfirmBox(null)} autoFocus>Cancel</button>
+              {confirmBox.altLabel ? (
+                <button
+                  className={`uiBtn ${confirmBox.altDanger ? "dangerBtn" : ""}`}
+                  onClick={() => { const fn = confirmBox.onAlt; setConfirmBox(null); fn?.(); }}
+                >{confirmBox.altLabel}</button>
+              ) : null}
               <button
                 className={`uiBtn primary ${confirmBox.danger ? "dangerBtn" : ""}`}
                 onClick={() => {

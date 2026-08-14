@@ -4170,20 +4170,11 @@ button.pdfOutlineChevron:hover {
 }
 
 /* --- confirm / link dialogs --- */
-.confirmModal {
-  width: min(400px, calc(100vw - 32px));
-}
-.confirmMessage {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-.linkPromptUrl {
-  word-break: break-all;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-.uiBtn.primary.dangerBtn {
-  background: #b93c3c;
-}
-.uiBtn.primary.dangerBtn:hover:not(:disabled) {
-  background: #d04848;
-}
+.confirmModal { width: min(400px, calc(100vw - 32px)); }
+.confirmMessage { font-size: 13px; color: var(--text-secondary); }
+.linkPromptUrl { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.uiBtn.primary.dangerBtn { background: #b93c3c; }
+.uiBtn.primary.dangerBtn:hover:not(:disabled) { background: #d04848; }
+/* secondary danger (e.g. the confirm dialog's alternative action): outlined red */
+.uiBtn.dangerBtn:not(.primary) { color: #c24a4a; border-color: rgba(190, 70, 70, 0.5); }
+.uiBtn.dangerBtn:not(.primary):hover:not(:disabled) { background: rgba(190, 70, 70, 0.1); border-color: #c24a4a; }
