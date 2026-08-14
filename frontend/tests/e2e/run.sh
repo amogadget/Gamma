@@ -75,6 +75,16 @@ BLOCK_A="$(seed_pdf "$DATA_DIR/a.pdf" "Paper A")"
 BLOCK_B="$(seed_pdf "$DATA_DIR/b.pdf" "Paper B")"
 echo "[smoke] block_a=$BLOCK_A block_b=$BLOCK_B"
 
+# Optionally seed a large paper (from the running Docker volume) for the
+# first-paint timing probe. Skipped if the volume/PDF isn't present.
+BIG_BLOCK=""
+if docker cp "gamma:/data/users/admin/uploads/8af945b6f5759a397d988b59.pdf" "$DATA_DIR/big.pdf" 2>/dev/null; then
+  BIG_BLOCK="$(seed_pdf "$DATA_DIR/big.pdf" "Big Paper")"
+  echo "[smoke] big_pdf block=$BIG_BLOCK"
+else
+  echo "[smoke] big PDF not available — skipping timing test"
+fi
+
 echo "[smoke] running Playwright…"
 cd "$ROOT"
 BASE_URL="http://127.0.0.1:$PORT" \
@@ -82,4 +92,5 @@ BASE_URL="http://127.0.0.1:$PORT" \
   ADMIN_PASS="$ADMIN_PASS" \
   BLOCK_A="$BLOCK_A" \
   BLOCK_B="$BLOCK_B" \
-  npx playwright test tests/e2e/smoke.spec.js "$@"
+  BIG_BLOCK="$BIG_BLOCK" \
+  npx playwright test tests/e2e/smoke.spec.js tests/e2e/bigpdf.spec.js "$@"
