@@ -44,6 +44,7 @@ import {
   FileGlyph,
   FileHighlightIcon,
   FileIcon,
+  FileNotesIcon,
   FileTextIcon,
   FitWidthIcon,
   FolderGlyph,
@@ -4167,14 +4168,16 @@ export default function App() {
 
   // Download the PDF with the page's highlights burned in as standard PDF
   // annotations (notes become annotation popups) — viewable anywhere.
-  async function exportAnnotatedPdf() {
+  // notes: also paint the note text onto the page, in nearby free space.
+  async function exportAnnotatedPdf(notes = false) {
     const id = focusedBlock?.id;
     if (!id) {
       setStatus("Open a page first to export it.");
       return;
     }
     setOpenPopover(null);
-    await downloadExport(`/pages/${id}/export-pdf`, "annotated.pdf");
+    await downloadExport(`/pages/${id}/export-pdf${notes ? "?notes=1" : ""}`,
+      notes ? "notes.pdf" : "annotated.pdf");
   }
 
   // Download the PDF exactly as stored — no highlight annotations. Reuses the
@@ -6559,6 +6562,16 @@ export default function App() {
                 >
                   <FileHighlightIcon className="popoverItemIcon" size={15} />
                   Export PDF with highlights
+                </button>
+              ) : null}
+              {docId ? (
+                <button
+                  className="popoverItem"
+                  onClick={() => { exportAnnotatedPdf(true); setOpenPopover(null); }}
+                  title="Same, plus every note printed onto the page itself — each one placed in the nearest empty space with a line back to its highlight, with pasted images and $LaTeX$ rendered. Readable (and printable) without opening annotation popups."
+                >
+                  <FileNotesIcon className="popoverItemIcon" size={15} />
+                  Export PDF with notes on page
                 </button>
               ) : null}
               {pdfUrl ? (

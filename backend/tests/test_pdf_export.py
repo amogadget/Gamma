@@ -23,6 +23,12 @@ def _blank_pdf(pages=1, rotate=0):
     return buf.getvalue()
 
 
+def _blank_png(width, height):
+    from gamma.logseq_graph_export import _encode_png
+
+    return _encode_png(width, height, [bytes([200, 210, 220]) * width for _ in range(height)])
+
+
 def _position(page=1, x1=100, y1=72, x2=300, y2=92, w=PAGE_W, h=PAGE_H, extra_rects=None):
     """Viewer-space position: top-left origin, rects carry the render size."""
     rects = [{"x1": x1, "y1": y1, "x2": x2, "y2": y2, "width": w, "height": h, "pageNumber": page}]
@@ -255,6 +261,138 @@ def test_import_annotations_strip_rewrites_pdf(guest):
     assert r.headers["x-annotations-written"] == "2"
     subtypes = sorted(str(a.get_object()["/Subtype"]) for a in PdfReader(io.BytesIO(r.content)).pages[0]["/Annots"])
     assert subtypes == ["/Highlight", "/Square"]
+
+
+def _page_text(pdf_bytes, page=1):
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(pdf_bytes)
+    try:
+        tp = doc[page - 1].get_textpage()
+        try:
+            return tp.get_text_bounded() or ""
+        finally:
+            tp.close()
+    finally:
+        doc.close()
+
+
+def _text_boxes(pdf_bytes, page=1):
+    """(left, bottom, right, top) of every text object drawn on the page."""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(pdf_bytes)
+    try:
+        return [o.get_bounds() for o in doc[page - 1].get_objects(max_depth=1) if o.type == 1]
+    finally:
+        doc.close()
+
+
+def test_render_notes_draws_text_clear_of_the_highlight():
+    """notes=1 paints the note next to its highlight instead of hiding it in a
+    popup — the text is real page content, and it doesn't sit on the quote."""
+    from gamma.pdf_notes import render_notes
+
+    out, drawn = render_notes(_blank_pdf(pages=2), [
+        {"position": _position(x1=120, y1=300, x2=420, y2=320),
+         "color": "rgba(255, 226, 143, 0.65)", "note": "why this matters"},
+        {"position": _position(x1=120, y1=500, x2=420, y2=520), "note": ""},   # nothing to draw
+        {"position": _position(page=9), "note": "off the end"},                # page out of range
+    ])
+    assert drawn == 1
+    assert "why this matters" in _page_text(out)
+    assert _page_text(out, 2).strip() == ""
+
+    boxes = _text_boxes(out)
+    assert boxes, "note text should be a page object now, not an annotation"
+    # Viewer y ∈ [300, 320] on a 792pt page → PDF y ∈ [472, 492]; the box must
+    # miss that band or the column it highlights.
+    for left, bottom, right, top in boxes:
+        assert not (bottom < 492 and 472 < top and left < 420 and 120 < right)
+
+
+def test_render_notes_skips_when_nothing_to_draw():
+    from gamma.pdf_notes import render_notes
+
+    src = _blank_pdf()
+    out, drawn = render_notes(src, [{"position": _position(), "note": "   "}])
+    assert drawn == 0 and out is src   # untouched, not re-written
+
+
+def test_render_notes_on_rotated_page():
+    """Display space follows /Rotate, so the box lands inside the visible page
+    (which is 792 wide × 612 tall once the viewer applies the rotation)."""
+    from gamma.pdf_notes import render_notes
+
+    pos = {"pageNumber": 1, "rects": [
+        {"x1": 200, "y1": 100, "x2": 500, "y2": 130,
+         "width": PAGE_H, "height": PAGE_W, "pageNumber": 1},
+    ]}
+    out, drawn = render_notes(_blank_pdf(rotate=90), [{"position": pos, "note": "rotated note"}])
+    assert drawn == 1
+    assert "rotated note" in _page_text(out)
+    for left, bottom, right, top in _text_boxes(out):
+        assert 0 <= left and right <= PAGE_W and 0 <= bottom and top <= PAGE_H
+
+
+def test_export_pdf_notes_mode(guest):
+    up = guest.post("/api/uploads", files={"file": ("p.pdf", _blank_pdf(), "application/pdf")})
+    page = make_page(guest, "Rendered notes",
+                     properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]})
+    r = guest.put(f"/api/blocks/{page['id']}/children", json={"blocks": [
+        {"id": "nhl1", "content": "top comment", "properties": {
+            "highlight_id": "nhl1", "quote": "quoted text", "pdf_page": 1,
+            "pdf_position": _position(),
+        }, "children": [
+            {"id": "nnote1", "content": "nested note", "properties": {}, "children": []},
+        ]},
+        {"id": "nhl2", "content": "", "properties": {   # highlight with no note
+            "highlight_id": "nhl2", "pdf_position": _position(y1=400, y2=420),
+        }, "children": []},
+    ]})
+    assert r.status_code == 200, r.text
+
+    r = guest.get(f"/api/pages/{page['id']}/export-pdf?notes=1")
+    assert r.status_code == 200, r.text
+    assert "notes.pdf" in r.headers["content-disposition"]
+    assert r.headers["x-annotations-written"] == "2"
+    assert r.headers["x-notes-rendered"] == "1"   # the note-less highlight adds no box
+    text = _page_text(r.content)
+    assert "top comment" in text and "nested note" in text
+
+    # …and the default export leaves the page pixels alone.
+    plain = guest.get(f"/api/pages/{page['id']}/export-pdf")
+    assert plain.headers["x-notes-rendered"] == "0"
+    assert _page_text(plain.content).strip() == ""
+
+
+def test_render_notes_draws_math_and_images(guest):
+    """A note is markdown with LaTeX and image refs, not plain text: the box
+    shows φ/∑ (Symbol font) and the picture, never the raw source."""
+    import pypdfium2 as pdfium
+    from gamma.db import user_uploads_dir
+    from gamma.pdf_notes import render_notes
+
+    png = _blank_png(24, 16)
+    up = guest.post("/api/upload-image", files={"file": ("shot.png", png, "image/png")})
+    assert up.status_code == 200, up.text
+    src = up.json()["url"]
+
+    out, drawn = render_notes(_blank_pdf(), [{
+        "position": _position(x1=120, y1=300, x2=420, y2=320),
+        "note": f"weight $\\phi_j$ over $\\sum_i x^2$\n![shot]({src})",
+    }], uploads_dir=user_uploads_dir("guest"))
+    assert drawn == 1
+
+    doc = pdfium.PdfDocument(out)
+    try:
+        text = doc[0].get_textpage().get_text_bounded()
+        kinds = [o.type for o in doc[0].get_objects(max_depth=1)]
+    finally:
+        doc.close()
+    assert "φ" in text and "∑" in text     # Symbol font, not "\phi"
+    assert "\\phi" not in text and src not in text
+    assert 3 in kinds, "the note's image should be drawn as a page image"
 
 
 def test_export_pdf_endpoint_rejects_pageless(guest):

@@ -30,6 +30,7 @@ from ..markdown_export import (
     slugify,
 )
 from ..pdf_export import annotate_pdf, highlight_note_text
+from ..pdf_notes import render_notes
 
 router = APIRouter(prefix="/api", tags=["export"])
 
@@ -139,10 +140,12 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
 
 # Sync on purpose: PyPDF2 rewriting is CPU-bound; the threadpool keeps the loop free.
 @router.get("/pages/{block_id}/export-pdf")
-def export_page_pdf(block_id: str, request: Request):
+def export_page_pdf(block_id: str, request: Request, notes: int = 0):
     """The page's PDF with its highlights burned in as standard /Highlight
     annotations (notes become the annotation popup text), so they survive in
-    any external PDF viewer."""
+    any external PDF viewer. ``notes=1`` additionally paints every non-empty
+    note onto the page itself, in the nearest free space with a leader line
+    back to its highlight — readable without opening popups, and printable."""
     user = resolve_user(request)
     scope = share_scope_doc(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
@@ -191,13 +194,23 @@ def export_page_pdf(block_id: str, request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"could not annotate PDF: {e}")
 
+    drawn = 0
+    if notes:
+        try:
+            pdf_bytes, drawn = render_notes(pdf_bytes, highlights,
+                                            uploads_dir=user_uploads_dir(user))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"could not render notes: {e}")
+
     slug = slugify(root.get("content"), block_id)
+    suffix = "notes" if notes else "annotated"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": _content_disposition(f"{slug}-annotated.pdf"),
+            "Content-Disposition": _content_disposition(f"{slug}-{suffix}.pdf"),
             "X-Annotations-Written": str(written),
+            "X-Notes-Rendered": str(drawn),
         },
     )
 
