@@ -368,7 +368,7 @@ def test_export_pdf_notes_mode(guest):
 
 def test_render_notes_draws_math_and_images(guest):
     """A note is markdown with LaTeX and image refs, not plain text: the box
-    shows φ/∑ (Symbol font) and the picture, never the raw source."""
+    typesets the math as vector paths and draws the picture, never the source."""
     import pypdfium2 as pdfium
     from gamma.db import user_uploads_dir
     from gamma.pdf_notes import render_notes
@@ -380,19 +380,44 @@ def test_render_notes_draws_math_and_images(guest):
 
     out, drawn = render_notes(_blank_pdf(), [{
         "position": _position(x1=120, y1=300, x2=420, y2=320),
-        "note": f"weight $\\phi_j$ over $\\sum_i x^2$\n![shot]({src})",
+        "note": f"weight $\\phi_j$ over $$\\frac{{\\sum_i x^2}}{{n}}$$\n![shot]({src})",
     }], uploads_dir=user_uploads_dir("guest"))
     assert drawn == 1
 
     doc = pdfium.PdfDocument(out)
     try:
-        text = doc[0].get_textpage().get_text_bounded()
-        kinds = [o.type for o in doc[0].get_objects(max_depth=1)]
+        page = doc[0]
+        text = page.get_textpage().get_text_bounded()
+        kinds = [o.type for o in page.get_objects(max_depth=1)]
     finally:
         doc.close()
-    assert "φ" in text and "∑" in text     # Symbol font, not "\phi"
-    assert "\\phi" not in text and src not in text
+    assert "weight" in text and "over" in text
+    assert "\\phi" not in text and "\\frac" not in text and src not in text
     assert 3 in kinds, "the note's image should be drawn as a page image"
+    # Glyph outlines, not text objects: the box chrome is 4 paths, the rest are
+    # the typeset α/∑/fraction bar.
+    assert kinds.count(2) >= 10, "math should be typeset as vector paths"
+
+
+def test_render_notes_falls_back_when_math_renderer_is_missing(monkeypatch):
+    """Without ziamath the box must still say something sensible — the unicode
+    approximation — rather than dropping the expression."""
+    import pypdfium2 as pdfium
+    from gamma import math_render, pdf_notes
+
+    math_render.render.cache_clear()
+    monkeypatch.setattr(pdf_notes.math_render, "render", lambda *a, **k: None)
+    out, drawn = pdf_notes.render_notes(_blank_pdf(), [{
+        "position": _position(),
+        "note": "ratio $\\frac{\\alpha}{\\beta}$ here",
+    }])
+    assert drawn == 1
+    doc = pdfium.PdfDocument(out)
+    try:
+        text = doc[0].get_textpage().get_text_bounded()
+    finally:
+        doc.close()
+    assert "α/β" in text and "ratio" in text
 
 
 def test_export_pdf_endpoint_rejects_pageless(guest):

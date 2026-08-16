@@ -3,13 +3,18 @@
 import io
 import zlib
 
-from gamma.note_markup import SUB, SUP, SYMBOLS, latex_spans, parse_note
+from gamma.note_markup import MATH, SUB, SUP, SYMBOLS, TEXT, latex_spans, parse_note
 from gamma.pdf_image import image_xobject
 from gamma.pdf_notes import CID, _font_of
 
 
 def flat(spans):
-    return "".join(t for t, _ in spans)
+    """Spans → the text they draw; inline math shows as ⟪tex⟫."""
+    return "".join(f"⟪{p}⟫" if k == MATH else p for k, p, _ in spans)
+
+
+def levels(spans, level):
+    return [p for k, p, lv in spans if k == TEXT and lv == level]
 
 
 def test_every_symbol_is_drawable():
@@ -25,8 +30,8 @@ def test_latex_becomes_symbols_and_scripts():
     spans = latex_spans(r"F_1=\frac{1}{2}+\sum_{i=1}^N \sin\left( nx \right)^2")
     assert flat(spans) == "F1=1/2+∑i=1N sin( nx )2"
     # The parts that must not be drawn on the baseline.
-    assert [t for t, lv in spans if lv == SUP] == ["N", "2"]
-    assert [t for t, lv in spans if lv == SUB] == ["1", "i=1"]
+    assert levels(spans, SUP) == ["N", "2"]
+    assert levels(spans, SUB) == ["1", "i=1"]
 
     assert flat(latex_spans(r"\ket{\phi_j}")) == "|φj〉"
     assert flat(latex_spans(r"\nabla g \geq \alpha \cdot \beta")) == "∇ g ≥ α ⋅ β"
@@ -42,13 +47,13 @@ def test_parse_note_splits_math_images_and_markdown():
         "$$E = mc^2$$"
     )
     kinds = [i["kind"] for i in items]
-    assert kinds == ["text", "image", "text"]
-    assert flat(items[0]["spans"]) == "bold and code and a link with α"
+    assert kinds == ["text", "image", "math"]
+    # Inline math stays in the line (typeset in place); display math is its own
+    # item so pdf_notes can centre it.
+    assert flat(items[0]["spans"]) == r"bold and code and a link with ⟪\alpha⟫"
     assert items[1]["src"] == "/api/uploads/ab12cd.png"
     assert items[1]["alt"] == "shot"
-    # Display math gets its own line, with the exponent raised.
-    assert flat(items[2]["spans"]) == "E = mc2"
-    assert [t for t, lv in items[2]["spans"] if lv == SUP] == ["2"]
+    assert items[2]["tex"] == "E = mc^2"
 
 
 def test_parse_note_keeps_plain_text_intact():

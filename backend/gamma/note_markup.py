@@ -5,20 +5,28 @@ KaTeX) and ``![](/api/uploads/…)`` image refs. Drawing the raw source into the
 PDF box would show ``$\\frac{1}{2}$`` and a naked URL, so this module turns a
 note into the small item list ``pdf_notes`` lays out:
 
-    {"kind": "text",  "spans": [(text, level), …]}   level 0 / +1 sup / -1 sub
+    {"kind": "text",  "spans": [(kind, payload, level), …]}
     {"kind": "image", "src": "/api/uploads/ab12.png", "alt": "…"}
+    {"kind": "math",  "tex": "…"}          one display ($$…$$) expression
 
-Math is *approximated*, not typeset — there is no TeX engine on the server.
-Commands become their unicode symbol (drawn with the base-14 Symbol font, which
-every PDF viewer has), ``^``/``_`` become genuinely raised/lowered runs, and
-structures collapse to inline forms (``\\frac{a}{b}`` → ``a/b``, ``\\sqrt x`` →
-``√x``). Unknown commands fall back to their own name, which is what you want
-for ``\\sin``, ``\\log``, ``\\max`` and friends.
+A span is ``(TEXT, string, level)`` — level 0, +1 superscript, -1 subscript —
+or ``(MATH, latex, 0)`` for inline math, which ``math_render`` typesets as
+vector paths.
+
+``latex_spans`` here is the *fallback* for when that renderer is unavailable or
+chokes on an expression: commands become their unicode symbol (drawn with the
+base-14 Symbol font, which every viewer has), ``^``/``_`` become genuinely
+raised/lowered runs, and structures collapse to inline forms
+(``\\frac{a}{b}`` → ``a/b``, ``\\sqrt x`` → ``√x``). Unknown commands fall back
+to their own name, which is what you want for ``\\sin``, ``\\log``, ``\\max``.
 """
 
 import re
 
 SUP, SUB = 1, -1
+# A span is (kind, payload, level): TEXT carries a string, MATH the LaTeX source
+# of an inline expression that pdf_notes typesets as vector paths.
+TEXT, MATH = "t", "m"
 
 # LaTeX command → unicode. Every value here is either WinAnsi- or Symbol-font
 # encodable (see pdf_notes._font_of), so it can actually be drawn.
@@ -111,7 +119,13 @@ def _paren(spans, level):
 
 
 def latex_spans(tex: str, level: int = 0):
-    """LaTeX fragment → [(text, level)]. Newlines survive as "\\n" spans."""
+    """LaTeX fragment → text spans: the unicode approximation used when the
+    math renderer isn't available (or chokes). Newlines survive as "\\n"."""
+    return merge_spans([(TEXT, t, lv) for t, lv in _latex_pairs(tex, level)])
+
+
+def _latex_pairs(tex: str, level: int = 0):
+    """The approximation itself, as (text, level) pairs."""
     out, i, n = [], 0, len(tex)
     while i < n:
         ch = tex[i]
@@ -131,29 +145,29 @@ def latex_spans(tex: str, level: int = 0):
                 out.append((" ", level))
             elif cmd in _TRANSPARENT:
                 g, i = _read_group(tex, i)
-                out.extend(latex_spans(g, level))
+                out.extend(_latex_pairs(g, level))
             elif cmd in ("frac", "dfrac", "tfrac", "binom"):
                 a, i = _read_group(tex, i)
                 b, i = _read_group(tex, i)
-                out.extend(_paren(latex_spans(a, level), level))
+                out.extend(_paren(_latex_pairs(a, level), level))
                 out.append(("/", level))
-                out.extend(_paren(latex_spans(b, level), level))
+                out.extend(_paren(_latex_pairs(b, level), level))
             elif cmd == "sqrt":
                 if i < n and tex[i] == "[":          # \sqrt[n]{…} — index dropped
                     i = tex.find("]", i) + 1 or i
                 g, i = _read_group(tex, i)
                 out.append(("√", level))
-                out.extend(_paren(latex_spans(g, level), level))
+                out.extend(_paren(_latex_pairs(g, level), level))
             elif cmd in ("ket", "bra", "braket", "ketbra"):
                 a, i = _read_group(tex, i)
                 if cmd == "ket":
-                    out += [("|", level)] + latex_spans(a, level) + [("〉", level)]
+                    out += [("|", level)] + _latex_pairs(a, level) + [("〉", level)]
                 elif cmd == "bra":
-                    out += [("〈", level)] + latex_spans(a, level) + [("|", level)]
+                    out += [("〈", level)] + _latex_pairs(a, level) + [("|", level)]
                 else:
                     b, i = _read_group(tex, i)
-                    out += ([("〈", level)] + latex_spans(a, level) + [("|", level)]
-                            + latex_spans(b, level) + [("〉", level)])
+                    out += ([("〈", level)] + _latex_pairs(a, level) + [("|", level)]
+                            + _latex_pairs(b, level) + [("〉", level)])
             elif cmd in ("begin", "end"):
                 _, i = _read_group(tex, i)           # environment name
                 out.append(("\n", level))
@@ -163,7 +177,7 @@ def latex_spans(tex: str, level: int = 0):
                 out.append((cmd, level))             # \sin, \log, \max …
         elif ch in "^_":
             g, i = _read_group(tex, i + 1)
-            out.extend(latex_spans(g, SUP if ch == "^" else SUB))
+            out.extend(_latex_pairs(g, SUP if ch == "^" else SUB))
         elif ch in "{}":
             i += 1
         elif ch in "&~":
@@ -176,7 +190,7 @@ def latex_spans(tex: str, level: int = 0):
         else:
             out.append((ch, level))
             i += 1
-    return merge_spans(out)
+    return _merge_pairs(out)
 
 
 def _plain(md: str) -> str:
@@ -191,15 +205,26 @@ def _plain(md: str) -> str:
     return md
 
 
-def merge_spans(spans):
-    """Collapse neighbouring spans that share a level."""
+def _merge_pairs(pairs):
+    """Collapse neighbouring (text, level) pairs that share a level."""
     out = []
-    for text, level in spans:
+    for text, level in pairs:
         if out and out[-1][1] == level:
             out[-1] = (out[-1][0] + text, level)
         elif text:
             out.append((text, level))
     return [(t, lv) for t, lv in out if t]
+
+
+def merge_spans(spans):
+    """Collapse neighbouring text spans that share a level; math stays whole."""
+    out = []
+    for kind, payload, level in spans:
+        if kind == TEXT and out and out[-1][0] == TEXT and out[-1][2] == level:
+            out[-1] = (TEXT, out[-1][1] + payload, level)
+        elif kind == MATH or payload:
+            out.append((kind, payload, level))
+    return [s for s in out if s[0] == MATH or s[1]]
 
 
 def parse_note(text: str):
@@ -209,17 +234,20 @@ def parse_note(text: str):
     def flush():
         if line:
             spans = merge_spans(line)
-            if any(t.strip() for t, _ in spans):
+            if any(kind == MATH or payload.strip() for kind, payload, _ in spans):
                 items.append({"kind": "text", "spans": spans})
             line.clear()
 
     def add_spans(spans):
-        for text_, level in spans:
-            for k, part in enumerate(text_.split("\n")):
+        for kind, payload, level in spans:
+            if kind != TEXT:
+                line.append((kind, payload, level))
+                continue
+            for k, part in enumerate(payload.split("\n")):
                 if k:
                     flush()
                 if part:
-                    line.append((part, level))
+                    line.append((TEXT, part, level))
 
     def add_plain(chunk: str):
         for k, raw in enumerate(chunk.split("\n")):
@@ -227,22 +255,24 @@ def parse_note(text: str):
                 flush()
             pos = 0
             for m in _IMG_RE.finditer(raw):
-                add_spans([(_plain(raw[pos:m.start()]), 0)])
+                add_spans([(TEXT, _plain(raw[pos:m.start()]), 0)])
                 flush()
                 items.append({"kind": "image", "src": m.group(2), "alt": m.group(1)})
                 pos = m.end()
-            add_spans([(_plain(raw[pos:]), 0)])
+            add_spans([(TEXT, _plain(raw[pos:]), 0)])
 
     pos = 0
     for m in _MATH_RE.finditer(text):
         add_plain(text[pos:m.start()])
         display = bool(m.group(1) or m.group(2))
-        tex = m.group(1) or m.group(2) or m.group(3) or m.group(4) or ""
+        tex = (m.group(1) or m.group(2) or m.group(3) or m.group(4) or "").strip()
         if display:
+            # Display math gets its own centred item; inline math rides along in
+            # the line and is typeset (or approximated) where it sits.
             flush()
-        add_spans(latex_spans(tex.strip()))
-        if display:
-            flush()
+            items.append({"kind": "math", "tex": tex})
+        elif tex:
+            add_spans([(MATH, tex, 0)])
         pos = m.end()
     add_plain(text[pos:])
     flush()

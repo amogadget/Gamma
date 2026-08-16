@@ -20,12 +20,17 @@ that maps that frame back to PDF user space, so rotated pages need no special
 casing beyond that matrix.
 
 Notes are markdown with LaTeX and image refs, not plain text: ``note_markup``
-turns them into text spans (with super/subscript levels) and image items, and
-``pdf_image`` turns the uploads into image XObjects. Three fonts carry the
-text, all of them built into every PDF viewer: Helvetica for WinAnsi, the
-Symbol font for Greek and math (``\\phi`` → φ, ``\\sum`` → ∑), and a
-non-embedded STSong-Light CID font for CJK — viewers with Asian font support
-render that, others substitute, and the raw text is still in the popup.
+splits them into text spans (with super/subscript levels), inline math, display
+math and images. ``math_render`` typesets the math as vector paths (inline
+expressions sit on the text baseline, ``$$…$$`` gets its own centred row),
+``pdf_image`` embeds the uploads as image XObjects, and a box that had to
+squeeze either one down loses to a wider candidate during placement.
+
+Prose is drawn with three fonts, all built into every PDF viewer: Helvetica for
+WinAnsi, the Symbol font for the Greek and math left over when the math
+renderer is unavailable (``\\phi`` → φ, ``\\sum`` → ∑), and a non-embedded
+STSong-Light CID font for CJK — viewers with Asian font support render that,
+others substitute, and the raw text is still in the annotation popup.
 """
 
 import io
@@ -43,9 +48,10 @@ from PyPDF2.generic import (
     create_string_object,
 )
 
+from . import math_render
 from .logbuf import log
 from .markdown_export import UPLOAD_RE
-from .note_markup import SUB, SUP, merge_spans, parse_note
+from .note_markup import MATH, SUB, SUP, TEXT, latex_spans, merge_spans, parse_note
 from .pdf_export import parse_css_color
 from .pdf_image import image_xobject
 
@@ -58,10 +64,11 @@ SUB_DROP = 0.16
 PAD = 4.0               # box inner padding
 BORDER = 0.7
 BOX_WIDTHS = (168.0, 132.0, 102.0)
-IMAGE_WIDTHS = (260.0, 190.0, 140.0)    # notes with a picture may go wider
+WIDE_WIDTHS = (260.0, 190.0, 140.0)     # notes with a picture or display math
 IMAGE_MAX_H = 150.0
 IMAGE_GAP = 2.0
 PX_PT = 0.75            # CSS px → pt: pasted screenshots are 96 dpi
+DISPLAY_MATH_SCALE = 1.15   # $$…$$ is set a touch larger than the note text
 PAGE_MARGIN = 8.0       # never place a box closer than this to the page edge
 CLEARANCE = 2.5         # empty space to keep around a placed box
 MAX_BOX_FRAC = 0.45     # box height cap, as a fraction of the page height
@@ -147,60 +154,98 @@ def _span_width(text: str, size: float, level: int = 0) -> float:
 
 
 def _spans_width(spans, size: float) -> float:
-    return sum(_span_width(t, size, lv) for t, lv in spans)
+    return sum(_token_width(k, p, lv, size) for k, p, lv in spans)
 
 
 # --- text layout -------------------------------------------------------------
 
-def _tokens(spans):
-    """Unbreakable chunks across spans: words, single spaces, and one token per
-    CJK character (which has no spaces, so every character breaks)."""
+def _resolve(spans, size: float, width: float):
+    """Typeset every inline-math span into (ops, w, h, ascent), falling back to
+    the unicode approximation when the renderer can't handle it."""
     out = []
-    for text, level in spans:
+    for kind, payload, level in spans:
+        if kind != MATH:
+            out.append((kind, payload, level))
+            continue
+        math = math_render.render(payload, size)
+        if math and math[1] <= width:
+            out.append((MATH, math, level))
+        else:
+            if math:
+                log.info("[pdf-notes] inline math too wide for the box, "
+                         "falling back to text")
+            out.extend(latex_spans(payload))
+    return merge_spans(out)
+
+
+def _token_width(kind, payload, level, size: float) -> float:
+    return payload[1] if kind == MATH else _span_width(payload, size, level)
+
+
+def _tokens(spans):
+    """Unbreakable chunks across spans: words, single spaces, one token per CJK
+    character (no spaces there, so every character breaks), and math as a
+    whole."""
+    out = []
+    for kind, payload, level in spans:
+        if kind == MATH:
+            out.append((kind, payload, level))
+            continue
         cur = ""
-        for ch in text:
+        for ch in payload:
             if ch == " " or _font_of(ch) == CID:
                 if cur:
-                    out.append((cur, level))
+                    out.append((TEXT, cur, level))
                     cur = ""
-                out.append((ch, level))
+                out.append((TEXT, ch, level))
             else:
                 cur += ch
         if cur:
-            out.append((cur, level))
+            out.append((TEXT, cur, level))
     return out
 
 
 def _hang(spans, size: float, width: float) -> float:
     """Continuation indent: nested note bullets keep their step."""
-    head = spans[0][0] if spans else ""
+    head = spans[0][1] if spans and spans[0][0] == TEXT else ""
     body = head.lstrip(" ")
     lead = head[: len(head) - len(body)]
     return min(_span_width(lead + ("  " if body[:2] in ("- ", "* ") else ""), size),
                width * 0.4)
 
 
+def _line_metrics(spans, size: float):
+    """(ascent, height) of one line: tall inline math pushes the line open."""
+    asc, desc = size * 0.82, size * (LEADING - 0.82)
+    for kind, payload, _level in spans:
+        if kind == MATH:
+            _ops, _w, h, a = payload
+            asc = max(asc, a + 0.5)
+            desc = max(desc, h - a + 0.5)
+    return asc, asc + desc
+
+
 def _wrap(spans, width: float, size: float):
     """Spans → [(indent, spans)], one entry per rendered line."""
     hang = _hang(spans, size, width)
     lines, cur, cur_w, indent = [], [], 0.0, 0.0
-    for tok, level in _tokens(spans):
-        w = _span_width(tok, size, level)
+    for kind, payload, level in _tokens(spans):
+        w = _token_width(kind, payload, level, size)
         if cur and cur_w + w > width - indent:
-            if tok == " ":
+            if kind == TEXT and payload == " ":
                 continue                          # swallow the break's space
             lines.append((indent, merge_spans(cur)))
             cur, cur_w, indent = [], 0.0, hang
-        if not cur and tok == " ":
+        if not cur and kind == TEXT and payload == " ":
             continue
-        while w > width - indent and len(tok) > 1:      # one token too long
-            cut = len(tok)
-            while cut > 1 and _span_width(tok[:cut], size, level) > width - indent:
+        while kind == TEXT and w > width - indent and len(payload) > 1:
+            cut = len(payload)                    # one token too long: hard-split
+            while cut > 1 and _span_width(payload[:cut], size, level) > width - indent:
                 cut -= 1
-            lines.append((indent, [(tok[:cut], level)]))
-            tok, indent = tok[cut:], hang
-            w = _span_width(tok, size, level)
-        cur.append((tok, level))
+            lines.append((indent, [(TEXT, payload[:cut], level)]))
+            payload, indent = payload[cut:], hang
+            w = _span_width(payload, size, level)
+        cur.append((kind, payload, level))
         cur_w += w
     if cur:
         lines.append((indent, merge_spans(cur)))
@@ -209,15 +254,31 @@ def _wrap(spans, width: float, size: float):
 
 def _measure(items, width: float, size: float, max_h: float, images):
     """Note items → (rows, natural width, height). A row is
-    ``("text", indent, spans)`` or ``("image", xobject name, w, h)``.
-    Content past ``max_h`` is dropped with an ellipsis — the full text is still
-    in the annotation popup."""
-    rows, height, natural, cut = [], 2 * PAD, 0.0, False
+    ``("text", indent, spans, ascent, height)``, ``("image", name, w, h)`` or
+    ``("math", ops, w, h)``. Content past ``max_h`` is dropped with an ellipsis
+    — the full text is still in the annotation popup."""
+    rows, height, natural, cut, shrink = [], 2 * PAD, 0.0, False, 1.0
     for item in items:
         if height >= max_h:
             cut = True
             break
-        if item["kind"] == "image":
+        if item["kind"] == "math":
+            math = math_render.render(item["tex"], size * DISPLAY_MATH_SCALE)
+            if math:
+                ops, w, h, _asc = math
+                scale = min(1.0, width / w) if w else 1.0
+                if h * scale > max_h - height - IMAGE_GAP:
+                    scale = min(scale, max(0.0, max_h - height - IMAGE_GAP) / h)
+                if h * scale < 5:
+                    cut = True
+                    break
+                shrink = min(shrink, scale)
+                rows.append(("math", (ops, scale), w * scale, h * scale))
+                height += h * scale + IMAGE_GAP
+                natural = max(natural, w * scale)
+                continue
+            item = {"spans": latex_spans(item["tex"])}     # renderer gave up
+        elif item["kind"] == "image":
             info = images.get(item["src"])
             if info:
                 name, px_w, px_h = info
@@ -229,24 +290,26 @@ def _measure(items, width: float, size: float, max_h: float, images):
                 if h < 8:
                     cut = True
                     break
+                shrink = min(shrink, w / max(px_w * PX_PT, 1))
                 rows.append(("image", name, w, h))
                 height += h + IMAGE_GAP
                 natural = max(natural, w)
                 continue
-            item = {"spans": [((item.get("alt") or "image").strip(), 0)]}
-        for indent, spans in _wrap(item["spans"], width, size):
-            if height + size * LEADING > max_h:
+            item = {"spans": [(TEXT, (item.get("alt") or "image").strip(), 0)]}
+        for indent, spans in _wrap(_resolve(item["spans"], size, width), width, size):
+            ascent, line_h = _line_metrics(spans, size)
+            if height + line_h > max_h:
                 cut = True
                 break
-            rows.append(("text", indent, spans))
-            height += size * LEADING
+            rows.append(("text", indent, spans, ascent, line_h))
+            height += line_h
             natural = max(natural, indent + _spans_width(spans, size))
         if cut:
             break
     if cut:
-        rows.append(("text", 0.0, [("…", 0)]))
+        rows.append(("text", 0.0, [(TEXT, "…", 0)], size * 0.82, size * LEADING))
         height += size * LEADING
-    return rows, natural, height
+    return rows, natural, height, shrink
 
 
 # --- free-space search -------------------------------------------------------
@@ -419,6 +482,7 @@ def _draw_note(ops: list, box, anchor, rows, size: float, color):
         _num(bx0), _num(by0), _num(bx1 - bx0), _num(by1 - by0)))
 
     y = by0 + PAD
+    inner = bx1 - bx0 - 2 * PAD
     for row in rows:
         if row[0] == "image":
             _kind, name, w, h = row
@@ -427,12 +491,27 @@ def _draw_note(ops: list, box, anchor, rows, size: float, color):
                 _num(w), _num(-h), _num(bx0 + PAD), _num(y + h), name.encode()))
             y += h + IMAGE_GAP
             continue
-        _kind, indent, spans = row
+        if row[0] == "math":                     # display math, centred
+            _kind, (math_ops, scale), w, h = row
+            ops.append(b"q %s 0 0 %s %s %s cm" % (
+                _num(scale), _num(scale), _num(bx0 + PAD + max(0, (inner - w) / 2)), _num(y)))
+            ops.append(math_ops)
+            ops.append(b"Q")
+            y += h + IMAGE_GAP
+            continue
+        _kind, indent, spans, ascent, line_h = row
         x = bx0 + PAD + indent
-        base = y + size * 0.82
-        ops.append(b"BT 0.13 0.13 0.15 rg")
-        for text, level in spans:
-            for font, chunk, lv in _runs(text, level):
+        base = y + ascent
+        for kind, payload, level in spans:
+            if kind == MATH:
+                math_ops, w, h, asc = payload
+                ops.append(b"q 1 0 0 1 %s %s cm" % (_num(x), _num(base - asc)))
+                ops.append(math_ops)
+                ops.append(b"Q")
+                x += w
+                continue
+            ops.append(b"BT 0.13 0.13 0.15 rg")
+            for font, chunk, lv in _runs(payload, level):
                 if chunk.strip():
                     fs = _size_of(size, lv)
                     shift = -SUP_RISE * size if lv == SUP else SUB_DROP * size if lv == SUB else 0
@@ -441,8 +520,8 @@ def _draw_note(ops: list, box, anchor, rows, size: float, color):
                     ops.append(b"/%s %s Tf 1 0 0 -1 %s %s Tm %s Tj" % (
                         font.encode(), _num(fs), _num(x), _num(base + shift), body))
                 x += _span_width(chunk, size, lv)
-        ops.append(b"ET")
-        y += size * LEADING
+            ops.append(b"ET")
+        y += line_h
 
 
 def _fonts():
@@ -608,7 +687,7 @@ class _Images:
         return info
 
     def used(self, rows):
-        return {name: self.refs[name] for kind, name, *_ in rows if kind == "image"}
+        return {row[1]: self.refs[row[1]] for row in rows if row[0] == "image"}
 
 
 # --- entry point -------------------------------------------------------------
@@ -686,15 +765,19 @@ def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]
             ops, used = [], {}
             max_h = disp_h * MAX_BOX_FRAC
             for anchor, items, resolved, color in placements:
-                widths = IMAGE_WIDTHS if resolved else BOX_WIDTHS
+                blocks = bool(resolved) or any(i["kind"] == "math" for i in items)
+                widths = WIDE_WIDTHS if blocks else BOX_WIDTHS
                 best = None
                 for width in widths:
                     limit = min(width, disp_w - 2 * PAGE_MARGIN) - 2 * PAD
-                    rows, natural, box_h = _measure(items, limit, FONT_SIZE, max_h, resolved)
+                    rows, natural, box_h, shrink = _measure(
+                        items, limit, FONT_SIZE, max_h, resolved)
                     # A one-line note gets a one-line-wide box, not a column.
                     box_w = min(limit, natural) + 2 * PAD
-                    spot = _place(space, anchor, box_w, box_h,
-                                  (widths[0] - width) * 0.35)
+                    # Penalty for narrow boxes, and for squeezing an equation or
+                    # picture down to fit one — a shrunk formula is unreadable.
+                    penalty = (widths[0] - width) * 0.35 + (1 - shrink) * 160
+                    spot = _place(space, anchor, box_w, box_h, penalty)
                     if spot and (best is None or spot[0] < best[0][0]):
                         best = (spot, box_w, box_h, rows)
                     if spot and spot[3] and spot[0] < 30:
