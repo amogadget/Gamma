@@ -21,7 +21,7 @@ casing beyond that matrix.
 
 Notes are markdown with LaTeX and image refs, not plain text: ``note_markup``
 splits them into text spans (with super/subscript levels), inline math, display
-math and images. ``math_render`` typesets the math as vector paths (inline
+math and images. ``vector_text`` typesets the math as vector paths (inline
 expressions sit on the text baseline, ``$$…$$`` gets its own centred row),
 ``pdf_image`` embeds the uploads as image XObjects, and a box that had to
 squeeze either one down loses to a wider candidate during placement.
@@ -48,7 +48,7 @@ from PyPDF2.generic import (
     create_string_object,
 )
 
-from . import math_render
+from . import vector_text
 from .logbuf import log
 from .markdown_export import UPLOAD_RE
 from .note_markup import MATH, SUB, SUP, TEXT, latex_spans, merge_spans, parse_note
@@ -160,21 +160,35 @@ def _spans_width(spans, size: float) -> float:
 # --- text layout -------------------------------------------------------------
 
 def _resolve(spans, size: float, width: float):
-    """Typeset every inline-math span into (ops, w, h, ascent), falling back to
-    the unicode approximation when the renderer can't handle it."""
+    """Turn every span the base-14 fonts can't draw into vector paths:
+    (ops, w, h, ascent). Inline math that won't fit the box falls back to the
+    unicode approximation; CJK without an outline font falls back to the CID
+    font, which is only legible in viewers that can substitute one."""
     out = []
     for kind, payload, level in spans:
-        if kind != MATH:
-            out.append((kind, payload, level))
+        if kind == MATH:
+            drawn = vector_text.math(payload, size)
+            if drawn and drawn[1] <= width:
+                out.append((MATH, drawn, level))
+            else:
+                if drawn:
+                    log.info("[pdf-notes] inline math too wide for the box, "
+                             "falling back to text")
+                out.extend(latex_spans(payload))
             continue
-        math = math_render.render(payload, size)
-        if math and math[1] <= width:
-            out.append((MATH, math, level))
-        else:
-            if math:
-                log.info("[pdf-notes] inline math too wide for the box, "
-                         "falling back to text")
-            out.extend(latex_spans(payload))
+        # One vector span per CJK character, so lines still break between them.
+        run = ""
+        for ch in payload:
+            drawn = vector_text.glyphs(ch, _size_of(size, level)) if _font_of(ch) == CID else None
+            if drawn is None:
+                run += ch
+                continue
+            if run:
+                out.append((TEXT, run, level))
+                run = ""
+            out.append((MATH, drawn, level))
+        if run:
+            out.append((TEXT, run, level))
     return merge_spans(out)
 
 
@@ -263,7 +277,7 @@ def _measure(items, width: float, size: float, max_h: float, images):
             cut = True
             break
         if item["kind"] == "math":
-            math = math_render.render(item["tex"], size * DISPLAY_MATH_SCALE)
+            math = vector_text.math(item["tex"], size * DISPLAY_MATH_SCALE)
             if math:
                 ops, w, h, _asc = math
                 scale = min(1.0, width / w) if w else 1.0

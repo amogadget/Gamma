@@ -105,3 +105,49 @@ def test_unsupported_image_is_skipped(tmp_path):
     path = tmp_path / "a.gif"
     path.write_bytes(b"GIF89a nope")
     assert image_xobject(path) is None
+
+
+def _palette_png(width, height, palette):
+    import struct
+
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    raw = b"".join(bytes([0]) + bytes(range(width)) for _ in range(height))
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 3, 0, 0, 0))
+            + chunk(b"PLTE", palette)
+            + chunk(b"IDAT", zlib.compress(raw))
+            + chunk(b"IEND", b""))
+
+
+def test_palette_survives_as_raw_bytes(tmp_path):
+    """The /Indexed lookup table must be a byte string. As a *text* string
+    PyPDF2 re-encodes it (UTF-16 as soon as a byte isn't PDFDocEncodable),
+    which scrambles the palette and paints the picture one flat colour."""
+    from PyPDF2.generic import ByteStringObject
+
+    palette = bytes([255, 0, 0, 0, 200, 0, 32, 64, 255, 250, 250, 180])
+    path = tmp_path / "p.png"
+    path.write_bytes(_palette_png(4, 2, palette))
+    stream, w, h = image_xobject(path)
+    space = stream["/ColorSpace"]
+    assert str(space[0]) == "/Indexed" and int(space[2]) == 3
+    assert isinstance(space[3], ByteStringObject)
+    assert bytes(space[3]) == palette
+
+
+def test_vector_text_refuses_rescaled_svg():
+    """A <symbol>/<use> or a group transform rescales what follows; drawing
+    those children as-is is silently wrong (ziafont's default output makes
+    glyphs ~1.5x too big), so the converter must refuse them."""
+    from gamma.vector_text import _svg_ops
+
+    flat = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -8 10 10">'
+            '<path d="M 0 0 L 5 0 L 5 -5 Z"/></svg>')
+    assert _svg_ops(flat) is not None
+    for bad in ('<symbol id="g" viewBox="0 -20 20 20"><path d="M 0 0 L 5 0 Z"/></symbol>',
+                '<g transform="scale(2)"><path d="M 0 0 L 5 0 Z"/></g>'):
+        svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -8 10 10">{bad}</svg>'
+        assert _svg_ops(svg) is None

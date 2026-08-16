@@ -10,7 +10,7 @@ note into the small item list ``pdf_notes`` lays out:
     {"kind": "math",  "tex": "…"}          one display ($$…$$) expression
 
 A span is ``(TEXT, string, level)`` — level 0, +1 superscript, -1 subscript —
-or ``(MATH, latex, 0)`` for inline math, which ``math_render`` typesets as
+or ``(MATH, latex, 0)`` for inline math, which ``vector_text`` typesets as
 vector paths.
 
 ``latex_spans`` here is the *fallback* for when that renderer is unavailable or

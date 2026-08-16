@@ -20,11 +20,11 @@ import zlib
 
 from PyPDF2.generic import (
     ArrayObject,
+    ByteStringObject,
     DecodedStreamObject,
     DictionaryObject,
     NameObject,
     NumberObject,
-    create_string_object,
 )
 
 from .logbuf import log
@@ -167,9 +167,12 @@ def _png(data: bytes):
         if ctype == 3:
             if not plte:
                 return None
+            # ByteStringObject, NOT create_string_object: a text string gets
+            # re-encoded (UTF-16 once a byte isn't PDFDocEncodable), which
+            # scrambles the palette and paints the image a solid colour.
             space = ArrayObject([NameObject("/Indexed"), NameObject("/DeviceRGB"),
                                  NumberObject(len(plte) // 3 - 1),
-                                 create_string_object(plte.decode("latin-1"))])
+                                 ByteStringObject(plte)])
         else:
             space = NameObject("/DeviceGray" if ctype == 0 else "/DeviceRGB")
         parms = DictionaryObject({

@@ -12,6 +12,12 @@ RUN npm run build
 FROM python:3.12-slim
 WORKDIR /app
 
+# CJK glyphs in the "notes on page" PDF export are drawn as outlines from this
+# font (gamma/vector_text.py) — a plain 4 MB .ttf, unlike the .ttc collections
+# most CJK font packages ship, which ziafont can't open.
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-droid-fallback \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 

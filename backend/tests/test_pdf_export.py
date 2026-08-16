@@ -399,14 +399,43 @@ def test_render_notes_draws_math_and_images(guest):
     assert kinds.count(2) >= 10, "math should be typeset as vector paths"
 
 
+def test_render_notes_draws_cjk_without_relying_on_the_viewer():
+    """CJK goes in as outlines when a font is installed — the non-embedded CID
+    font only works where the viewer can substitute one (pdf.js can't), which
+    is how notes ended up as latin gibberish."""
+    import pypdfium2 as pdfium
+    from gamma import vector_text
+    from gamma.pdf_notes import render_notes
+
+    out, drawn = render_notes(_blank_pdf(), [{
+        "position": _position(),
+        "note": "Bayes 公式是: ok",
+    }])
+    assert drawn == 1
+    doc = pdfium.PdfDocument(out)
+    try:
+        kinds = [o.type for o in doc[0].get_objects(max_depth=1)]
+        text = doc[0].get_textpage().get_text_bounded()
+    finally:
+        doc.close()
+    assert "Bayes" in text
+    has_cjk_text = any("一" <= c <= "鿿" for c in text)
+    if vector_text.cjk_font() is not None:
+        # 4 paths of box chrome + one filled outline per character.
+        assert kinds.count(2) >= 4 + 3, "CJK should be drawn as glyph outlines"
+        assert not has_cjk_text, "outlines, so the glyphs are no longer text"
+    else:                      # no CJK font on this box: CID font fallback
+        assert has_cjk_text
+
+
 def test_render_notes_falls_back_when_math_renderer_is_missing(monkeypatch):
     """Without ziamath the box must still say something sensible — the unicode
     approximation — rather than dropping the expression."""
     import pypdfium2 as pdfium
-    from gamma import math_render, pdf_notes
+    from gamma import pdf_notes, vector_text
 
-    math_render.render.cache_clear()
-    monkeypatch.setattr(pdf_notes.math_render, "render", lambda *a, **k: None)
+    vector_text.math.cache_clear()
+    monkeypatch.setattr(pdf_notes.vector_text, "math", lambda *a, **k: None)
     out, drawn = pdf_notes.render_notes(_blank_pdf(), [{
         "position": _position(),
         "note": "ratio $\\frac{\\alpha}{\\beta}$ here",
