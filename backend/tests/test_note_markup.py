@@ -3,6 +3,8 @@
 import io
 import zlib
 
+import pytest
+
 from gamma.note_markup import MATH, SUB, SUP, SYMBOLS, TEXT, latex_spans, parse_note
 from gamma.pdf_image import image_xobject
 from gamma.pdf_notes import CID, _font_of
@@ -136,6 +138,26 @@ def test_palette_survives_as_raw_bytes(tmp_path):
     assert str(space[0]) == "/Indexed" and int(space[2]) == 3
     assert isinstance(space[3], ByteStringObject)
     assert bytes(space[3]) == palette
+
+
+def test_boxed_math_is_stroked_not_filled():
+    """`\\boxed{}` is a stroked, unfilled rect. Painting it solid (ignoring the
+    SVG's fill/stroke) turned every boxed equation into a black slab."""
+    from gamma.vector_text import _svg_ops, math
+
+    boxed = math(r"\boxed{w = \frac{a}{b}}", 8)
+    plain = math(r"w = \frac{a}{b}", 8)
+    if boxed is None or plain is None:
+        pytest.skip("ziamath not installed")
+    assert b"re\nS" in boxed[0], "the box outline must be stroked"
+    assert b"re\nS" not in plain[0], "…and only where there is a box"
+    assert b"re\nf" in plain[0], "the fraction bar stays a filled rect"
+
+    # The fill/stroke attributes drive it, not the element type.
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -8 10 10">'
+           '<rect x="0" y="-8" width="10" height="10" fill="none" stroke="black"'
+           ' stroke-width="0.5"/></svg>')
+    assert b"0.500 w" in _svg_ops(svg)[0]
 
 
 def test_vector_text_refuses_rescaled_svg():

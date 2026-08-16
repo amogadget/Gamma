@@ -104,12 +104,27 @@ def _path_ops(d: str, out: list) -> bool:
     return True
 
 
+def _paint(el):
+    """(line-width op or None, painting operator) for one SVG shape, honouring
+    its fill/stroke. Glyph outlines are filled, but ``\\boxed{}`` draws a
+    *stroked, unfilled* rect — painting that solid turns the whole expression
+    into a black slab. The width has to be set before the path is built: no
+    graphics-state ops are allowed inside a path object."""
+    filled = (el.get("fill") or "black").strip().lower() != "none"
+    stroke = (el.get("stroke") or "none").strip().lower() != "none"
+    width = b"%s w" % _fmt(float(el.get("stroke-width") or 1)) if stroke else None
+    even_odd = b"*" if (el.get("fill-rule") or "").strip() == "evenodd" else b""
+    return width, (b"B" + even_odd if filled and stroke else b"f" + even_odd if filled
+                   else b"S" if stroke else b"n")
+
+
 def _svg_ops(svg: str):
     """Outline SVG → (path ops, width, height, ascent); None if it uses
     anything we don't emit (arcs — glyph outlines never do)."""
     root = ET.fromstring(svg)
     vx, vy, vw, vh = (float(v) for v in root.get("viewBox").split())
     ops = [b"%s %s %s rg" % tuple(_fmt(c) for c in TEXT_COLOR),
+           b"%s %s %s RG" % tuple(_fmt(c) for c in TEXT_COLOR),
            b"1 0 0 1 %s %s cm" % (_fmt(-vx), _fmt(-vy))]
     for el in root.iter():
         tag = el.tag.rsplit("}", 1)[-1]
@@ -119,13 +134,18 @@ def _svg_ops(svg: str):
         # instead — both libraries are configured to emit flat paths.
         if tag in ("symbol", "use") or (el.get("transform") or "").strip():
             return None
+        if tag not in ("path", "rect"):
+            continue
+        width, paint = _paint(el)
+        if width:
+            ops.append(width)
         if tag == "path":
             if not _path_ops(el.get("d") or "", ops):
                 return None
-            ops.append(b"f")
-        elif tag == "rect":
-            ops.append(b"%s %s %s %s re f" % tuple(
+        else:
+            ops.append(b"%s %s %s %s re" % tuple(
                 _fmt(float(el.get(k) or 0)) for k in ("x", "y", "width", "height")))
+        ops.append(paint)
     return b"\n".join(ops), vw, vh, -vy
 
 
