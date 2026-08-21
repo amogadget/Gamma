@@ -366,6 +366,36 @@ def test_export_pdf_notes_mode(guest):
     assert _page_text(plain.content).strip() == ""
 
 
+def test_export_pdf_highlights_switch(guest):
+    """highlights=0 skips the annotation layer; with notes=1 that is a clean
+    PDF carrying only the written notes, and with both off the file is
+    returned untouched."""
+    up = guest.post("/api/uploads", files={"file": ("p.pdf", _blank_pdf(), "application/pdf")})
+    original = _blank_pdf()
+    page = make_page(guest, "Switches",
+                     properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]})
+    r = guest.put(f"/api/blocks/{page['id']}/children", json={"blocks": [
+        {"id": "shl1", "content": "only the note", "properties": {
+            "highlight_id": "shl1", "quote": "quoted text", "pdf_page": 1,
+            "pdf_position": _position(),
+        }, "children": []},
+    ]})
+    assert r.status_code == 200, r.text
+
+    notes_only = guest.get(f"/api/pages/{page['id']}/export-pdf?highlights=0&notes=1")
+    assert notes_only.status_code == 200, notes_only.text
+    assert notes_only.headers["x-annotations-written"] == "0"
+    assert notes_only.headers["x-notes-rendered"] == "1"
+    assert "only the note" in _page_text(notes_only.content)
+
+    bare = guest.get(f"/api/pages/{page['id']}/export-pdf?highlights=0&notes=0")
+    assert bare.status_code == 200, bare.text
+    assert bare.headers["x-annotations-written"] == "0"
+    assert bare.headers["x-notes-rendered"] == "0"
+    assert bare.content == original          # byte-for-byte the stored file
+    assert "-annotated" not in bare.headers["content-disposition"]
+
+
 def test_render_notes_draws_math_and_images(guest):
     """A note is markdown with LaTeX and image refs, not plain text: the box
     typesets the math as vector paths and draws the picture, never the source."""

@@ -54,9 +54,14 @@ def _is_highlight(props):
 
 # --- readable rendering ------------------------------------------------------
 
+def render_readable(page, highlights=True, notes=True):
+    """Nested-bullet Markdown with a title, YAML front-matter and BibTeX block.
 
-def render_readable(page):
-    """Nested-bullet Markdown with a title, YAML front-matter and BibTeX block."""
+    ``highlights``/``notes`` are the export dialog's two switches: dropping
+    highlights leaves your own writing, dropping notes leaves a bare quote
+    extract. The front-matter and BibTeX describe the page itself and always
+    stay.
+    """
     props = page.get("properties") or {}
     title = (page.get("content") or "").strip() or "Untitled"
 
@@ -80,14 +85,24 @@ def render_readable(page):
         lines += ["```bibtex", (props["bibtex"] or "").strip(), "```", ""]
 
     for child in page["children"]:
-        _render_readable_block(child, 0, lines)
+        _render_readable_block(child, 0, lines, highlights, notes)
 
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _render_readable_block(node, depth, lines):
+def _render_readable_block(node, depth, lines, highlights=True, notes=True):
     props = node.get("properties") or {}
     content = (node.get("content") or "").strip()
+    # The two export switches. A highlight block carries both a PDF region and
+    # (often) writing of your own, so dropping highlights keeps its text as a
+    # plain bullet rather than losing the note with the quote.
+    if props.get("highlight_id") or props.get("link_url"):
+        if not highlights:
+            props = {}
+        if not notes:
+            content = ""
+    elif not notes:
+        content = ""
     indent = "  " * depth
     emitted = False
 
@@ -124,7 +139,7 @@ def _render_readable_block(node, depth, lines):
     # level, so their children stay at the current depth rather than orphaning.
     child_depth = depth + 1 if emitted else depth
     for child in node["children"]:
-        _render_readable_block(child, child_depth, lines)
+        _render_readable_block(child, child_depth, lines, highlights, notes)
 
 
 # --- asset handling ----------------------------------------------------------

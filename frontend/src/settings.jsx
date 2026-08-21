@@ -1335,14 +1335,17 @@ function DiagnosticsSettings({ value }) {
 // there is no editor — the same rule the backend enforces on /api/export and
 // /api/import-data (your own account, unless you are an admin).
 function UsersSettings({ value }) {
-  const { setStatus, confirm, onSelfRenamed, refreshQuota, closeSettings,
+  const { setStatus, confirm, onSelfRenamed, refreshQuota, closeSettings, openDataFor,
           isAdmin, me, isGuest, quotaInfo, exportUserData, importUserData } = value;
   const [info, setInfo] = React.useState(null); // {users, me}
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [edit, setEdit] = React.useState(null); // {original, username, password, is_admin, max_upload_mb, quota_mb}
   const [addForm, setAddForm] = React.useState(null); // {username, password, is_admin}
-  const [dataFor, setDataFor] = React.useState(null); // username whose backup panel is open
+  // Username whose backup panel is open. The popover's "Backup & restore…"
+  // opens this pane already pointed at your own row, so an admin doesn't have
+  // to find themselves in a list of accounts first.
+  const [dataFor, setDataFor] = React.useState(openDataFor || null);
 
   const [defaults, setDefaults] = React.useState(null); // {max_upload_mb, quota_mb} server-wide
   React.useEffect(() => {

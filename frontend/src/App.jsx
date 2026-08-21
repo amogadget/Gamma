@@ -20,6 +20,8 @@ import {
 import {
   BlockDropIndicator,
   ChatMarkdown,
+  ExportDialog,
+  ImportDialog,
   DockWindow,
   OpenTabs,
   PopoverAnchor,
@@ -40,12 +42,11 @@ import {
   CopyIcon,
   DatabaseIcon,
   DownloadIcon,
+  ExportIcon,
   ExternalLinkIcon,
   EyeIcon,
   FileGlyph,
-  FileHighlightIcon,
   FileIcon,
-  FileNotesIcon,
   FileTextIcon,
   FitWidthIcon,
   FolderGlyph,
@@ -53,8 +54,10 @@ import {
   FolderOpenIcon,
   FolderPlusIcon,
   HomeIcon,
+  ImportIcon,
   InfoIcon,
   LabelIcon,
+  MessageSquareIcon,
   LinkIcon,
   LogOutIcon,
   MaximizeIcon,
@@ -2082,8 +2085,21 @@ export default function App() {
   // id -> {busy} | {ok, model, latency_ms} | {ok: false, error}
   const [aiKeyTests, setAiKeyTests] = useState({});
 
-  // The settings page (account popover → Settings…): two-column modal,
-  // categories on the left, the selected pane on the right.
+  const [importOpen, setImportOpen] = useState(false);
+  // Which account's backup panel the Users pane should open expanded (the
+  // popover's "Backup & restore…" — null lands on the plain account list).
+  const [dataPaneFor, setDataPaneFor] = useState(null);
+  // Export dialog: one "Export…" menu entry, the shape of the export chosen
+  // here. Remembered across sessions — most people export the same way twice.
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exportOpts, setExportOpts] = usePersistedState(
+    "gamma-export-opts",
+    { format: "pdf", highlights: true, notes: true, bundle: true },
+    {
+      parse: (raw) => ({ format: "pdf", highlights: true, notes: true, bundle: true, ...JSON.parse(raw) }),
+      serialize: JSON.stringify,
+    },
+  );
   // Which provider entry (API key) AI requests use. Only the key is chosen
   // here — the model itself is picked in the chat panel, scoped to this key.
   const [aiProvider, setAiProvider] = usePersistedState("gamma-ai-provider", "");
@@ -2775,21 +2791,16 @@ export default function App() {
 
   // Import annotations embedded in the PDF file itself (SumatraPDF, Acrobat…).
   // Idempotent server-side, so calling it on every upload is safe.
-  async function importEmbeddedAnnots(blockId, targetDocId, silent) {
-    const taskId = addTransfer({
-      name: "Importing embedded PDF annotations",
-      kind: "import",
-      info: "scanning…",
-    });
+  // strip: rewrite the stored PDF without the annotations being imported.
+  // Defaults to the Settings preference; the import dialog can override it for
+  // one run (auto-import on open always follows the preference).
+  async function importEmbeddedAnnots(blockId, targetDocId, silent, strip = embAnnots === "strip") {
+    const taskId = addTransfer({ name: "Importing embedded PDF annotations", kind: "import", info: "scanning…" });
     try {
       const res = await apiJson(`${API}/import/pdf-annotations`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          block_id: blockId,
-          doc_id: targetDocId,
-          strip: embAnnots === "strip",
-        }),
+        body: JSON.stringify({ block_id: blockId, doc_id: targetDocId, strip }),
       });
       updateTransfer(taskId, {
         status: "done",
@@ -4371,28 +4382,43 @@ export default function App() {
   const shareTokenQuery = () =>
     readOnly && shareTokenRef.current ? `share=${encodeURIComponent(shareTokenRef.current)}` : "";
 
-  async function exportPage(mode = "readable") {
-    const id = focusedBlock?.id;
-    if (!id) {
-      setStatus("Open a page first to export it.");
+  // Run what the import dialog was configured to do. Logseq needs files, so
+  // its button opens the picker and the import starts once they're chosen.
+  function runImport(o) {
+    setImportOpen(false);
+    if (o.source === "annots") {
+      if (!docId || !focusedBlockId) { setStatus("Open a PDF first."); return; }
+      importEmbeddedAnnots(focusedBlockId, docId, false, o.strip);
       return;
     }
-    setOpenPopover(null);
-    await downloadExport(`/pages/${id}/export?mode=${mode}`, "page.md");
+    const inp = document.createElement("input");
+    inp.type = "file";
+    inp.multiple = true;
+    inp.accept = ".pdf,.edn,.md";
+    inp.onchange = () => { if (inp.files?.length) importLogseq(inp.files); };
+    inp.click();
   }
 
-  // Download the PDF with the page's highlights burned in as standard PDF
-  // annotations (notes become annotation popups) — viewable anywhere.
-  // notes: also paint the note text onto the page, in nearby free space.
-  async function exportAnnotatedPdf(notes = false) {
+  // Run what the export dialog was configured to do. Every format is one
+  // endpoint with flags, except a PDF with both switches off — that is the
+  // stored file itself, which the raw path serves without a round trip (and
+  // works for PDFs that only exist behind the proxy).
+  async function runExport(o) {
+    setExportOpen(false);
     const id = focusedBlock?.id;
-    if (!id) {
-      setStatus("Open a page first to export it.");
+    if (!id) { setStatus("Open a page first to export it."); return; }
+    const flags = `highlights=${o.highlights ? 1 : 0}&notes=${o.notes ? 1 : 0}`;
+    if (o.format === "pdf") {
+      if (!o.highlights && !o.notes) { await exportRawPdf(); return; }
+      await downloadExport(`/pages/${id}/export-pdf?${flags}`, "export.pdf");
       return;
     }
-    setOpenPopover(null);
-    await downloadExport(`/pages/${id}/export-pdf${notes ? "?notes=1" : ""}`,
-      notes ? "notes.pdf" : "annotated.pdf");
+    const bundle = `pdf=${o.bundle ? 1 : 0}`;
+    if (o.format === "logseq") {
+      await downloadExport(`/pages/${id}/export?mode=logseq-graph&${bundle}`, "graph.zip");
+      return;
+    }
+    await downloadExport(`/pages/${id}/export?mode=readable&${flags}&${bundle}`, "page.md");
   }
 
   // Download the PDF exactly as stored — no highlight annotations. Reuses the
@@ -6626,114 +6652,44 @@ export default function App() {
           <div className="popoverSection">Windows</div>
           {!homeMode && pdfUrl ? (
             <button className="popoverItem" onClick={() => setPdfHidden((v) => !v)}>
-              <span className="check">{!pdfHidden ? "✓" : ""}</span> PDF
+              <span className="check">{!pdfHidden ? "✓" : ""}</span>
+              <FileIcon className="popoverItemIcon" size={15} /> PDF
             </button>
           ) : null}
           {!homeMode ? (
             <button className="popoverItem" onClick={() => setNotesVisible((v) => !v)}>
-              <span className="check">{notesVisible ? "✓" : ""}</span> Notes
+              <span className="check">{notesVisible ? "✓" : ""}</span>
+              <FileTextIcon className="popoverItemIcon" size={15} /> Notes
             </button>
           ) : null}
           {!menuReadOnly ? (
             <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
-              <span className="check">{!chatHidden ? "✓" : ""}</span> AI Chat
+              <span className="check">{!chatHidden ? "✓" : ""}</span>
+              <MessageSquareIcon className="popoverItemIcon" size={15} /> AI Chat
             </button>
           ) : null}
           {!menuReadOnly ? <div className="popoverDivider" /> : null}
-          {!menuReadOnly && docId && focusedBlockId ? (
+          {!menuReadOnly ? (
             <button
               className="popoverItem"
-              title="Import highlights/notes saved inside the PDF file (SumatraPDF, Acrobat…)"
-              onClick={() => {
-                importEmbeddedAnnots(focusedBlockId, docId, false);
-                setOpenPopover(null);
-              }}
+              onClick={() => { setOpenPopover(null); setImportOpen(true); }}
+              title="Bring in highlights — the ones saved inside this PDF file, or a Logseq export"
             >
-              Import PDF annotations
+              <ImportIcon className="popoverItemIcon" size={15} />
+              Import…
             </button>
-          ) : null}
-          {!menuReadOnly ? (
-            <label
-              className="popoverItem importLogseqBtn"
-              title="Import Logseq PDF highlights (.pdf + .edn)"
-              style={{ cursor: loading ? "not-allowed" : "pointer" }}
-            >
-              Import Logseq…
-              <input
-                type="file"
-                multiple
-                accept=".pdf,.edn,.md"
-                style={{ display: "none" }}
-                disabled={loading}
-                onChange={(e) => {
-                  importLogseq(e.target.files);
-                  e.target.value = "";
-                  setOpenPopover(null);
-                }}
-              />
-            </label>
           ) : null}
           {focusedBlock && !homeMode ? (
             <>
               <div className="popoverDivider" />
               <button
                 className="popoverItem"
-                onClick={() => {
-                  exportPage("readable");
-                  setOpenPopover(null);
-                }}
-                title="Download this page as Markdown — nested notes, highlights as quotes, metadata front-matter. Bundles the PDF & images into a .zip when the page references them."
+                onClick={() => { setOpenPopover(null); setExportOpen(true); }}
+                title="Download this page — the PDF with highlights and notes, Markdown, or a Logseq graph"
               >
-                <FileTextIcon className="popoverItemIcon" size={15} />
-                Export this page (.md)
+                <ExportIcon className="popoverItemIcon" size={15} />
+                Export…
               </button>
-              <button
-                className="popoverItem"
-                onClick={() => {
-                  exportPage("logseq-graph");
-                  setOpenPopover(null);
-                }}
-                title="Download a complete Logseq graph (.zip): notes page + native PDF highlights (hls page + .edn). Unzip and open the folder in file-based Logseq, or use the DB version's 'File to DB graph' import."
-              >
-                <FileTextIcon className="popoverItemIcon" size={15} />
-                Export as Logseq graph (.zip)
-              </button>
-              {docId ? (
-                <button
-                  className="popoverItem"
-                  onClick={() => {
-                    exportAnnotatedPdf();
-                    setOpenPopover(null);
-                  }}
-                  title="Download this paper's PDF with your highlights embedded as standard PDF annotations — notes appear as annotation popups in Acrobat, SumatraPDF, browsers, etc."
-                >
-                  <FileHighlightIcon className="popoverItemIcon" size={15} />
-                  Export PDF with highlights
-                </button>
-              ) : null}
-              {docId ? (
-                <button
-                  className="popoverItem"
-                  onClick={() => { exportAnnotatedPdf(true); setOpenPopover(null); }}
-                  title="Same, plus every note printed onto the page itself — each one placed in the nearest empty space with a line back to its highlight, with pasted images and $LaTeX$ rendered. Readable (and printable) without opening annotation popups."
-                >
-                  <FileNotesIcon className="popoverItemIcon" size={15} />
-                  Export PDF with notes on page
-                </button>
-              ) : null}
-              {pdfUrl ? (
-                <button
-                  className="popoverItem"
-                  onClick={() => {
-                    exportRawPdf();
-                    setOpenPopover(null);
-                  }}
-                  title="Download the PDF file as stored — no highlights or notes."
-                >
-                  <FileIcon className="popoverItemIcon" size={15} />
-                  Export raw PDF
-                </button>
-              ) : null}
             </>
           ) : null}
         </div>
@@ -7018,27 +6974,26 @@ export default function App() {
                 <SettingsIcon className="popoverItemIcon" size={15} />
                 Settings…
               </button>
-              {/* One entry, one pane: backups live on each account's row in
-                  Settings → Users, which for a non-admin is only their own. */}
+              {/* Both land in Settings → Users; they differ in where they put
+                  you — your own data panel, or the account list. */}
+              <button
+                className="popoverItem"
+                onClick={() => { setDataPaneFor(authUser.user); setSettingsOpen("users"); setOpenPopover(null); }}
+                title="Download a backup of this account, or restore one"
+              >
+                <DatabaseIcon className="popoverItemIcon" size={15} />
+                Backup &amp; restore…
+              </button>
               {authUser.is_admin ? (
                 <button
                   className="popoverItem"
-                  onClick={() => { setSettingsOpen("users"); setOpenPopover(null); }}
+                  onClick={() => { setDataPaneFor(null); setSettingsOpen("users"); setOpenPopover(null); }}
                   title="Accounts, storage limits, and backup/restore for any of them"
                 >
                   <UsersIcon className="popoverItemIcon" size={15} />
                   Manage users…
                 </button>
-              ) : (
-                <button
-                  className="popoverItem"
-                  onClick={() => { setSettingsOpen("users"); setOpenPopover(null); }}
-                  title="Download a backup of this account, or restore one"
-                >
-                  <DatabaseIcon className="popoverItemIcon" size={15} />
-                  Backup &amp; restore…
-                </button>
-              )}
+              ) : null}
               <div className="popoverDivider" />
               <button className="popoverItem popoverItemDanger" onClick={doLogout}>
                 <LogOutIcon className="popoverItemIcon" size={15} />
@@ -7450,7 +7405,28 @@ export default function App() {
           {!readOnly ? <div className="topbar phoneActions">{topbarActions}</div> : null}
         </div>
       ) : null}
-      {dockPreview ? <div className="dockPreview" style={dockPreview} /> : null}
+      {dockPreview ? (
+        <div className="dockPreview" style={dockPreview} />
+      ) : null}
+      {importOpen ? (
+        <ImportDialog
+          hasPdf={!!docId && !!focusedBlockId}
+          stripDefault={embAnnots === "strip"}
+          busy={loading}
+          onCancel={() => setImportOpen(false)}
+          onImport={runImport}
+        />
+      ) : null}
+      {exportOpen ? (
+        <ExportDialog
+          opts={exportOpts}
+          setOpts={setExportOpts}
+          hasPdf={!!pdfUrl}
+          pdfStored={!!docId}
+          onCancel={() => setExportOpen(false)}
+          onExport={runExport}
+        />
+      ) : null}
       {confirmBox ? (
         // data-popover keeps an open popover (e.g. search) alive while the dialog is up
         <div className="reportOverlay" data-popover="confirm" onClick={() => setConfirmBox(null)}>
@@ -7665,7 +7641,7 @@ export default function App() {
       <SettingsDialog
         activePane={settingsOpen}
         onPaneChange={setSettingsOpen}
-        onClose={() => setSettingsOpen(null)}
+        onClose={() => { setSettingsOpen(null); setDataPaneFor(null); }}
         papers={{
           oaFallback,
           setOaFallback,
@@ -7772,13 +7748,14 @@ export default function App() {
           // the other accounts and the account editor.
           isAdmin: !!authUser?.is_admin,
           me: authUser.user,
+          openDataFor: dataPaneFor,
           isGuest: !!authUser?.is_guest,
           quotaInfo,
           exportUserData,
           importUserData,
           setStatus,
           confirm: setConfirmBox,
-          closeSettings: () => setSettingsOpen(null),
+          closeSettings: () => { setSettingsOpen(null); setDataPaneFor(null); },
           onSelfRenamed: checkSession, // self-rename re-keys the whole app
           refreshQuota,
         } : null}

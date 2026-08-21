@@ -232,7 +232,6 @@ body {
 }
 
 .topbar button,
-.topbar .importLogseqBtn,
 .noteBtn {
   padding: 7px 12px;
   background: var(--bg-raised);
@@ -245,7 +244,6 @@ body {
 }
 
 .topbar button:hover,
-.topbar .importLogseqBtn:hover,
 .noteBtn:hover {
   background: var(--bg-hover);
 }
@@ -448,8 +446,7 @@ body {
 .topbarOverflow.open {
   display: flex;
 }
-.topbar .topbarOverflow button,
-.topbar .topbarOverflow .importLogseqBtn {
+.topbar .topbarOverflow button {
   white-space: nowrap;
   width: 100%;
   text-align: left;
@@ -458,8 +455,7 @@ body {
   border-radius: 6px;
   padding: 8px 10px;
 }
-.topbar .topbarOverflow button:hover,
-.topbar .topbarOverflow .importLogseqBtn:hover {
+.topbar .topbarOverflow button:hover {
   background: var(--bg-hover);
 }
 
@@ -474,8 +470,7 @@ body {
     padding: 6px 8px;
     gap: 4px;
   }
-  .topbar button,
-  .topbar .importLogseqBtn {
+  .topbar button {
     padding: 7px 10px;
     font-size: 13px;
   }
@@ -1917,6 +1912,14 @@ button.pdfOutlineChevron:hover {
   color: var(--text-muted);
   line-height: 1.35;
 }
+
+/* A settingRow that isn't itself a control (a label + <select>), and one whose
+   switch the current choice can't honour — shown disabled, not hidden, so the
+   dialog keeps its shape. */
+.settingRowStatic { cursor: default; }
+.settingRowStatic:hover { background: none; }
+.settingRowOff { opacity: 0.45; cursor: default; }
+.settingRowOff:hover { background: none; }
 
 .switch {
   position: relative;
@@ -4217,6 +4220,13 @@ button.pdfOutlineChevron:hover {
 
 /* --- confirm / link dialogs --- */
 .confirmModal { width: min(400px, calc(100vw - 32px)); }
+/* Export dialog: rows are the shared settingRow, so it only needs a width and
+   a little air between the switches and the buttons. */
+.exportModal { width: min(460px, calc(100vw - 32px)); gap: 4px; }
+.exportModal .reportModalTitle { margin-bottom: 4px; }
+.exportModal .reportModalHint { margin-top: 6px; }
+.exportModal .reportModalBtns { margin-top: 8px; }
+.exportFormatSelect { min-width: 168px; }
 .confirmMessage { font-size: 13px; color: var(--text-secondary); }
 .linkPromptUrl { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .uiBtn.primary.dangerBtn { background: #b93c3c; }

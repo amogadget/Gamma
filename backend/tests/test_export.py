@@ -84,6 +84,38 @@ def test_export_pdf_opt_out_stays_bare_md(guest):
     assert "/api/uploads/" in r.text  # link left absolute, not bundled
 
 
+def _switch_page(guest):
+    """A page with a highlight that carries a note, plus a free note."""
+    page = make_page(guest, "Switches")
+    _put_children(guest, page["id"], [
+        _highlight("sh1", "the quoted passage", note="what I thought", page=2),
+        {"id": "sfree", "content": "a free-standing note", "properties": {}, "children": []},
+    ])
+    return page
+
+
+def test_export_switches_drop_highlights_or_notes(guest):
+    """The export dialog's two switches: highlights are the quoted passages,
+    notes are your own writing — a highlight block holds one of each."""
+    page = _switch_page(guest)
+    both = guest.get(f"/api/pages/{page['id']}/export").text
+    assert "> the quoted passage" in both and "what I thought" in both
+    assert "a free-standing note" in both
+
+    no_hl = guest.get(f"/api/pages/{page['id']}/export", params={"highlights": 0}).text
+    assert "the quoted passage" not in no_hl and "`p.2`" not in no_hl
+    # the note under the highlight survives, as a plain bullet
+    assert "- what I thought" in no_hl and "a free-standing note" in no_hl
+
+    no_notes = guest.get(f"/api/pages/{page['id']}/export", params={"notes": 0}).text
+    assert "> the quoted passage" in no_notes and "`p.2`" in no_notes
+    assert "what I thought" not in no_notes and "a free-standing note" not in no_notes
+
+    neither = guest.get(f"/api/pages/{page['id']}/export", params={"highlights": 0, "notes": 0}).text
+    assert "# Switches" in neither  # title + front-matter always stay
+    assert "quoted passage" not in neither and "free-standing note" not in neither
+
+
 def test_folder_export_zips_matching_pages(guest):
     make_page(guest, "In folder A", properties={"folder": "research/optics"})
     make_page(guest, "In subfolder", properties={"folder": "research/optics/lasers"})

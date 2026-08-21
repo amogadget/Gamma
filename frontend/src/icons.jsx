@@ -61,17 +61,6 @@ export const FileTextIcon = (p) => (
     <line x1="16" y1="17" x2="8" y2="17" />
   </Icon>
 );
-export const FileHighlightIcon = (p) => (
-  <Icon {...p}>
-    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-    <polyline points="14 2 14 8 20 8" />
-    <path d="M9 17l2-6 2 4 1.5-2.5L16 17" />
-  </Icon>
-);
-// Page with a note card in the margin — the "notes rendered on the page" export.
-export const FileNotesIcon = (p) => (
-  <Icon {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4" /><polyline points="14 2 14 8 20 8" /><line x1="8" y1="12" x2="11" y2="12" /><rect x="13" y="12" width="9" height="8" rx="1.5" /><line x1="15.5" y1="15" x2="19.5" y2="15" /><line x1="15.5" y1="17.5" x2="18" y2="17.5" /></Icon>
-);
 export const PaperIcon = (p) => (
   <Icon {...p}>
     <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />

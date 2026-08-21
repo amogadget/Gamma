@@ -109,13 +109,16 @@ def _graph_page_parts(page, uploads_dir, include_pdf):
 
 # Sync on purpose: rendering + zipping runs in FastAPI's threadpool.
 @router.get("/pages/{block_id}/export")
-def export_page(block_id: str, request: Request, mode: str = "readable", pdf: int = 1):
+def export_page(block_id: str, request: Request, mode: str = "readable", pdf: int = 1,
+                highlights: int = 1, notes: int = 1):
     """One page → readable Markdown: bare .md when it references no local
-    assets, else a .zip of the .md plus an assets/ folder. ``mode=logseq-graph``
-    instead returns a complete Logseq file graph (pages/ + assets/ +
-    logseq/config.edn, highlights as native hls__ page + EDN) — openable by
-    file-based Logseq directly and convertible by the DB version's "File to DB
-    graph" importer."""
+    assets, else a .zip of the .md plus an assets/ folder. ``highlights=0`` /
+    ``notes=0`` (the export dialog's switches) leave out the quoted PDF text or
+    your own writing. ``mode=logseq-graph`` instead returns a complete Logseq
+    file graph (pages/ + assets/ + logseq/config.edn, highlights as native
+    hls__ page + EDN) — openable by file-based Logseq directly and convertible
+    by the DB version's "File to DB graph" importer; a graph is defined by both
+    layers, so the two switches don't apply to it."""
     user = resolve_user(request)
     scope = share_scope_doc(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
@@ -132,7 +135,9 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
         entries.append(("logseq/config.edn", CONFIG_EDN))
         return _zip_response(entries, assets, user_uploads_dir(user), f"{slug}-logseq.zip", files, blobs)
 
-    md, assets = collect_and_rewrite(render_readable(page), include_pdf=bool(pdf))
+    md, assets = collect_and_rewrite(
+        render_readable(page, highlights=bool(highlights), notes=bool(notes)),
+        include_pdf=bool(pdf))
     if not assets:
         return _md_response(md, slug)
     return _zip_response([(f"{slug}.md", md)], assets, user_uploads_dir(user), f"{slug}.zip")
@@ -140,12 +145,14 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
 
 # Sync on purpose: PyPDF2 rewriting is CPU-bound; the threadpool keeps the loop free.
 @router.get("/pages/{block_id}/export-pdf")
-def export_page_pdf(block_id: str, request: Request, notes: int = 0):
+def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights: int = 1):
     """The page's PDF with its highlights burned in as standard /Highlight
     annotations (notes become the annotation popup text), so they survive in
     any external PDF viewer. ``notes=1`` additionally paints every non-empty
     note onto the page itself, in the nearest free space with a leader line
-    back to its highlight — readable without opening popups, and printable."""
+    back to its highlight — readable without opening popups, and printable.
+    ``highlights=0`` skips the annotation layer, so ``highlights=0&notes=1``
+    gives a clean PDF carrying only the written notes."""
     user = resolve_user(request)
     scope = share_scope_doc(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
@@ -169,7 +176,7 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0):
     for b in sorted(blocks, key=lambda b: b["position"] or ""):
         children_by_id.setdefault(b["parent_id"], []).append(b)
 
-    highlights = []
+    marks = []  # not "highlights": that name is the query flag now
     for b in blocks:
         props = b["properties"]
         if not props.get("highlight_id") or not props.get("pdf_position"):
@@ -181,34 +188,36 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0):
             continue
         if props.get("link_url") or props.get("link_page_id"):
             continue
-        highlights.append(
-            {
-                "position": props["pdf_position"],
-                "color": props.get("color"),
-                "note": highlight_note_text(b, children_by_id),
-            }
-        )
+        marks.append({
+            "position": props["pdf_position"],
+            "color": props.get("color"),
+            "note": highlight_note_text(b, children_by_id),
+        })
 
-    try:
-        pdf_bytes, written = annotate_pdf(pdf_path.read_bytes(), highlights, author=user)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"could not annotate PDF: {e}")
+    written = 0
+    pdf_bytes = pdf_path.read_bytes()
+    if highlights:
+        try:
+            pdf_bytes, written = annotate_pdf(pdf_bytes, marks, author=user)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"could not annotate PDF: {e}")
 
     drawn = 0
     if notes:
+        # Still positioned from the highlight rects, annotation layer or not.
         try:
-            pdf_bytes, drawn = render_notes(pdf_bytes, highlights,
+            pdf_bytes, drawn = render_notes(pdf_bytes, marks,
                                             uploads_dir=user_uploads_dir(user))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"could not render notes: {e}")
 
     slug = slugify(root.get("content"), block_id)
-    suffix = "notes" if notes else "annotated"
+    suffix = "-notes" if notes else "-annotated" if highlights else ""
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": _content_disposition(f"{slug}-{suffix}.pdf"),
+            "Content-Disposition": _content_disposition(f"{slug}{suffix}.pdf"),
             "X-Annotations-Written": str(written),
             "X-Notes-Rendered": str(drawn),
         },

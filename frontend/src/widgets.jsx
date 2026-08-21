@@ -293,6 +293,175 @@ function OpenTabs({ tabs, activeId, tabElements, onReorder, onOpen, onClose, onC
   );
 }
 
+// The one export dialog behind the ⋮ menu's "Export…" — a format picker plus
+// switches, instead of one menu item per combination. What each switch means
+// depends on the format (annotations vs. blockquotes), so the descriptions and
+// the one-line summary above the buttons are written per format; a switch that
+// the format can't honour is shown disabled rather than hidden, so the choice
+// on offer never changes shape between formats.
+const EXPORT_FORMATS = [
+  ["pdf", "PDF"],
+  ["markdown", "Markdown (.md)"],
+  ["logseq", "Logseq graph (.zip)"],
+];
+
+function SwitchRow({ label, description, checked, onChange, disabled }) {
+  return (
+    <label className={`settingRow ${disabled ? "settingRowOff" : ""}`}>
+      <span className="settingText">
+        <span className="settingLabel">{label}</span>
+        <span className="settingDesc">{description}</span>
+      </span>
+      <span className="switch">
+        <input
+          type="checkbox" checked={checked} disabled={disabled}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span className="switchTrack" />
+      </span>
+    </label>
+  );
+}
+
+function ExportDialog({ opts, setOpts, hasPdf, pdfStored, onCancel, onExport }) {
+  // A note page has no PDF to export; a PDF opened from a URL and not saved
+  // here has no server copy to annotate. Both fall back to Markdown.
+  const format = hasPdf || opts.format !== "pdf" ? opts.format : "markdown";
+  const isPdf = format === "pdf";
+  const isGraph = format === "logseq";
+  const set = (patch) => setOpts((o) => ({ ...o, ...patch }));
+
+  // A graph is defined by carrying both layers, so its switches are pinned on.
+  const highlights = isGraph ? true : opts.highlights;
+  const notes = isGraph ? true : opts.notes;
+  const rawPdf = isPdf && !highlights && !notes;
+  const noPdfCopy = isPdf && !pdfStored;
+
+  const summary = isGraph
+    ? "A Logseq graph: the notes page plus native PDF highlights (hls page + .edn)."
+    : isPdf
+      ? noPdfCopy
+        ? "This PDF isn't stored on the server, so only the file itself can be exported."
+        : rawPdf
+          ? "The PDF file exactly as stored, with nothing added."
+          : `The PDF with ${highlights ? "highlight annotations" : "no annotations"}${notes ? " and every note printed onto the page" : ""}.`
+      : highlights || notes
+        ? `Markdown with ${highlights ? "quoted highlights" : "no quotes"}${notes ? " and your notes" : ""}.`
+        : "Markdown with the title and metadata only — both switches are off.";
+
+  return (
+    <div className="reportOverlay" onClick={onCancel}>
+      <div className="reportModal exportModal" onClick={(event) => event.stopPropagation()}>
+        <div className="reportModalTitle">Export</div>
+        <div className="settingRow settingRowStatic">
+          <span className="settingText"><span className="settingLabel">Export format</span></span>
+          <select
+            className="aiKeyInput settingSelect exportFormatSelect"
+            value={format}
+            onChange={(event) => set({ format: event.target.value })}
+          >
+            {EXPORT_FORMATS.map(([id, label]) => (
+              (id !== "pdf" || hasPdf) ? <option key={id} value={id}>{label}</option> : null
+            ))}
+          </select>
+        </div>
+        <SwitchRow
+          label="Highlights"
+          description={isPdf
+            ? "Burned in as standard PDF annotations — they survive in Acrobat, SumatraPDF, browsers."
+            : isGraph
+              ? "Always included: a graph's highlights are its hls page and .edn."
+              : "Each highlighted passage as a blockquote with its page number."}
+          checked={highlights}
+          disabled={isGraph || noPdfCopy}
+          onChange={(v) => set({ highlights: v })}
+        />
+        <SwitchRow
+          label="Notes"
+          description={isPdf
+            ? "Printed onto the page in nearby free space, with a line back to the highlight. Off: they stay in the annotation popups."
+            : isGraph
+              ? "Always included: the graph's notes page."
+              : "Your own writing, nested under the highlight it belongs to."}
+          checked={notes}
+          disabled={isGraph || noPdfCopy}
+          onChange={(v) => set({ notes: v })}
+        />
+        {isPdf ? null : (
+          <SwitchRow
+            label="Bundle the files"
+            description="Pack the PDF and any pasted images into the .zip. Off: they stay as links back to this server."
+            checked={opts.bundle}
+            onChange={(v) => set({ bundle: v })}
+          />
+        )}
+        <div className="reportModalHint">{summary}</div>
+        <div className="reportModalBtns">
+          <button className="uiBtn" onClick={onCancel}>Cancel</button>
+          <button
+            className="uiBtn primary"
+            onClick={() => onExport({ format, highlights, notes, bundle: opts.bundle })}
+          >
+            Export
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// The import counterpart of ExportDialog, same shape: pick a source, flip the
+// switch that source understands, confirm. Nothing here is remembered — the
+// strip switch starts from the Settings preference every time, so the setting
+// stays the standing policy and the dialog is only ever a one-off override.
+function ImportDialog({ hasPdf, stripDefault, busy, onCancel, onImport }) {
+  const [source, setSource] = React.useState(hasPdf ? "annots" : "logseq");
+  const [strip, setStrip] = React.useState(stripDefault);
+  const isAnnots = hasPdf && source === "annots";
+
+  return (
+    <div className="reportOverlay" onClick={onCancel}>
+      <div className="reportModal exportModal" onClick={(event) => event.stopPropagation()}>
+        <div className="reportModalTitle">Import</div>
+        <div className="settingRow settingRowStatic">
+          <span className="settingText"><span className="settingLabel">Import from</span></span>
+          <select
+            className="aiKeyInput settingSelect exportFormatSelect"
+            value={isAnnots ? "annots" : "logseq"}
+            onChange={(event) => setSource(event.target.value)}
+          >
+            {hasPdf ? <option value="annots">Annotations in this PDF</option> : null}
+            <option value="logseq">Logseq highlights (.pdf + .edn)</option>
+          </select>
+        </div>
+        <SwitchRow
+          label="Strip the originals from the PDF"
+          description={isAnnots
+            ? "Rewrite the stored file without the annotations you're importing, so only Gamma's copies remain. Off: they stay in the file and the viewer hides them."
+            : "Only applies to annotations already inside a PDF."}
+          checked={isAnnots ? strip : false}
+          disabled={!isAnnots}
+          onChange={setStrip}
+        />
+        <div className="reportModalHint">
+          {isAnnots
+            ? "Highlights, notes and boxes saved inside this PDF (a Gamma export, SumatraPDF, Acrobat…) become regular blocks. Importing twice adds nothing — each annotation is matched to the block it already made."
+            : "Pick a Logseq .pdf and its .edn (a .md of notes is optional). The paper and its highlights land in your library as a new page."}
+        </div>
+        <div className="reportModalBtns">
+          <button className="uiBtn" onClick={onCancel}>Cancel</button>
+          <button
+            className="uiBtn primary" disabled={busy}
+            onClick={() => onImport(isAnnots ? { source: "annots", strip } : { source: "logseq" })}
+          >
+            {isAnnots ? "Import" : "Choose files…"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BlockDropIndicator({ target }) {
   if (!target) return null;
   const indentStep = 14;
@@ -313,6 +482,8 @@ function BlockDropIndicator({ target }) {
 export {
   AutoGrowTextarea,
   BlockDropIndicator,
+  ExportDialog,
+  ImportDialog,
   ChatMarkdown,
   DockWindow,
   handleMarkdownCopy,
