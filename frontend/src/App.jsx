@@ -3036,6 +3036,23 @@ export default function App() {
   // null = the main view). Reset on navigation so a new page opens on its content.
   const isPhone = useIsPhone();
   const [phonePanel, setPhonePanel] = useState(null);
+  // Phone: kill the browser's own zoom. The viewport meta covers Android and
+  // `touch-action: manipulation` (on .app.phoneUI) the double-tap, but iOS
+  // Safari honours neither — only refusing its gesture events stops a pinch
+  // from scaling the whole app until the toolbars sit off-screen. The PDF's
+  // own pinch-zoom is unaffected: it runs off touchstart/touchmove.
+  useEffect(() => {
+    if (!isPhone) return;
+    const block = (e) => e.preventDefault();
+    for (const ev of ["gesturestart", "gesturechange", "gestureend"]) {
+      document.addEventListener(ev, block, { passive: false });
+    }
+    return () => {
+      for (const ev of ["gesturestart", "gesturechange", "gestureend"]) {
+        document.removeEventListener(ev, block);
+      }
+    };
+  }, [isPhone]);
   // Phone: drag-on-PDF mode — text selection (default) or rectangle drawing.
   // Desktop expresses this by holding Ctrl; a phone has no Ctrl, so it gets a
   // sticky toggle button in the viewer's zoom column instead.
@@ -6732,10 +6749,342 @@ export default function App() {
     </PopoverAnchor>
   );
 
+  // The topbar action buttons. On a phone these move to the bottom bar:
+  // the tab row is too narrow to hold both, and thumbs reach the bottom.
+  const topbarActions = (
+    <>
+      <span data-popover="add" style={{ position: "relative", display: "inline-flex" }}>
+        <button
+          className={`iconBtn addBtn ${openPopover === "add" ? "activeIcon" : ""}`}
+          onClick={() => setOpenPopover((p) => (p === "add" ? null : "add"))}
+          title="Add — open a PDF by URL, upload a file, or start a note page"
+          aria-label="Add"
+        >
+          <PlusIcon size={17} strokeWidth={2.2} />
+        </button>
+        {openPopover === "add" ? (
+          <div className="popover addPopover">
+            <input
+              autoFocus
+              className="searchInput"
+              value={addUrl}
+              onChange={(e) => setAddUrl(e.target.value)}
+              placeholder="Open a PDF by URL — press Enter"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && addUrl.trim() && !loading) {
+                  setOpenPopover(null);
+                  openPdf(addUrl.trim());
+                  setAddUrl("");
+                }
+              }}
+            />
+            <label className="popoverItem" style={{ cursor: loading ? "not-allowed" : "pointer" }}>
+              Upload PDFs…
+              <input
+                type="file"
+                accept=".pdf"
+                multiple
+                style={{ display: "none" }}
+                disabled={loading}
+                onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; setOpenPopover(null); if (files.length) uploadPdfs(files); }}
+              />
+            </label>
+            <label
+              className="popoverItem"
+              style={{ cursor: loading ? "not-allowed" : "pointer" }}
+              title="Upload every PDF in a folder — subfolders become folder labels"
+            >
+              Upload folder…
+              <input
+                type="file"
+                webkitdirectory=""
+                style={{ display: "none" }}
+                disabled={loading}
+                onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; setOpenPopover(null); if (files.length) uploadPdfs(files); }}
+              />
+            </label>
+            <button className="popoverItem" onClick={createNotePage}>New note page</button>
+          </div>
+        ) : null}
+      </span>
+      <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
+          <button
+            className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
+            onClick={() => setOpenPopover((p) => (p === "downloads" ? null : "downloads"))}
+            title="Background tasks — downloads, uploads, indexing, metadata/AI jobs"
+            aria-label="Background tasks"
+          >
+            <ActivityIcon size={16} />
+            {(transfers.some((t) => t.status === "active") || indexTask?.active) ? <span className="transferSpin" /> : null}
+          </button>
+          {openPopover === "downloads" ? (
+            <div className="popover downloadsPopover">
+              <div className="popoverTitle citeSectionRow">
+                <span>Background tasks</span>
+                <button
+                  className="searchToggle transferClearBtn"
+                  title="Clear finished"
+                  onClick={() => {
+                    if (!indexTask?.active) setIndexTaskCleared(true);
+                    setTransfers((prev) => {
+                      const kept = prev.filter((t) => t.status === "active");
+                      const ids = new Set(kept.map((t) => t.id));
+                      for (const [u, id] of Object.entries(transferByUrlRef.current)) {
+                        if (!ids.has(id)) delete transferByUrlRef.current[u]; // cleared rows can be re-created later
+                      }
+                      return kept;
+                    });
+                  }}
+                >Clear</button>
+              </div>
+              {!transfers.length && !(indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0))) ? (
+                <div className="popoverHint">No background tasks — downloads, uploads, indexing, metadata and AI jobs show up here.</div>
+              ) : null}
+              {indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0)) ? (
+                <div className="transferRow">
+                  <span className={`transferStatus ${indexTask.active ? "active" : "done"}`}>
+                    {indexTask.active
+                      ? <span className="transferSpin inline" />
+                      : <CheckIcon size={12} strokeWidth={2.6} />}
+                  </span>
+                  <span className="transferKind">
+                    <SearchIcon size={12} />
+                  </span>
+                  <span className="transferName">Indexing PDF library for search</span>
+                  <span className="transferInfo">{indexTask.done}/{indexTask.total}</span>
+                </div>
+              ) : null}
+              {transfers.map((t) => (
+                <div key={t.id} className="transferRow">
+                  <span className={`transferStatus ${t.status}`}>
+                    {t.status === "active" ? <span className="transferSpin inline" />
+                      : t.status === "done"
+                        ? <CheckIcon size={12} strokeWidth={2.6} />
+                        : <AlertCircleIcon size={12} strokeWidth={2.4} />}
+                  </span>
+                  <span className="transferKind">
+                    {t.kind === "upload"
+                      ? <UploadIcon size={12} />
+                      : t.kind === "ai"
+                        ? <SparklesIcon size={12} />
+                        : t.kind === "import"
+                          ? <FileIcon size={12} />
+                          : <DownloadIcon size={12} />}
+                  </span>
+                  <span className="transferName" title={t.name}>{t.name}</span>
+                  <span className="transferInfo">{t.info || ""}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </span>
+      <SearchPanel
+        open={openPopover === "search"}
+        onOpenChange={(v) => setOpenPopover(v ? "search" : null)}
+        detailsDefault={focusedBlockId ? searchDetailsPaper : searchDetailsHome}
+        focusedBlockId={focusedBlockId}
+        homeBlocks={homeBlocks}
+        allFolderPaths={allFolderPaths}
+        openBlock={openBlock}
+        pendingBlockScrollRef={pendingBlockScrollRef}
+        pdfSearchRef={pdfSearchRef}
+        scrollToRef={scrollToRef}
+        setPdfHidden={setPdfHidden}
+        docNonce={pdfDocNonce}
+        onFindMarks={setFindMarks}
+      />
+      {pdfUrl && !homeMode ? (
+        <span data-popover="share" style={{ position: "relative", display: "inline-flex" }}>
+          <button
+            className={`iconBtn ${openPopover === "share" ? "activeIcon" : ""}`}
+            onClick={() => {
+              const opening = openPopover !== "share";
+              setOpenPopover(opening ? "share" : null);
+              if (opening) fetchShareLink();
+            }}
+            disabled={loading}
+            title="Share"
+            aria-label="Share"
+          >
+            <LinkIcon size={16} />
+          </button>
+          {openPopover === "share" ? (
+            <div className="popover sharePopover">
+              <div className="popoverTitle">Share this page</div>
+              <div className="popoverHint">Anyone with the link can view the PDF, highlights, and notes — read-only, no login.</div>
+              {shareUrl ? (
+                <div className="shareRow">
+                  <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
+                  <button
+                    className="chatMsgActionBtn"
+                    onClick={copyShareLink}
+                    title="Copy link"
+                    aria-label="Copy share link"
+                  >
+                    {shareCopied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
+                  </button>
+                </div>
+              ) : (
+                <div className="popoverHint">Creating link…</div>
+              )}
+              {(pageMeta || pageBibtex) ? (
+                <>
+                  <div className="popoverDivider" />
+                  <div className="popoverSection citeSectionRow">
+                    <span>Slide citation</span>
+                    <button
+                      className="searchToggle"
+                      title="Regenerate the citation"
+                      disabled={pptCiteBusy}
+                      onClick={() => makePptCitation(true)}
+                    >{pptCiteBusy ? "…" : "↻"}</button>
+                  </div>
+                  {pptCite ? (
+                    <div className="pptCiteBox">
+                      <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
+                      <button
+                        className="chatMsgActionBtn"
+                        onClick={() => copyCitation("ppt", pptCite)}
+                        title="Copy — pastes with real italics/bold into PowerPoint"
+                        aria-label="Copy slide citation"
+                      >
+                        {citeCopied === "ppt"
+                          ? <CheckIcon size={13} />
+                          : <CopyIcon size={13} />}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
+                  )}
+                  {pageBibtex ? (
+                    <>
+                      <div className="popoverSection">BibTeX</div>
+                      <div className="pptCiteBox">
+                        <pre className="bibtexPre">{pageBibtex}</pre>
+                        <button
+                          className="chatMsgActionBtn"
+                          onClick={() => copyCitation("bibtex", pageBibtex)}
+                          title="Copy the BibTeX entry"
+                          aria-label="Copy BibTeX"
+                        >
+                          {citeCopied === "bibtex"
+                            ? <CheckIcon size={13} />
+                            : <CopyIcon size={13} />}
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </span>
+      ) : null}
+      {authUser?.user && (
+        <span data-popover="user" style={{ position: "relative", display: "inline-flex" }}>
+          <button
+            className={`iconBtn ${openPopover === "user" ? "activeIcon" : ""}`}
+            onClick={() => {
+              const opening = openPopover !== "user";
+              if (opening) refreshQuota(); // fresh storage meter on open
+              setOpenPopover(opening ? "user" : null);
+            }}
+            title="Account & settings"
+            aria-label="Account & settings"
+          >
+            <UserIcon size={18} />
+          </button>
+          {openPopover === "user" ? (
+            <div className="popover userPopover">
+              <div className="userCard">
+                <span className="userAvatar" aria-hidden="true">
+                  {authUser.is_guest
+                    ? <UserIcon size={20} />
+                    : <span className="userAvatarInitial">{authUser.user.charAt(0).toUpperCase()}</span>}
+                </span>
+                <span className="userCardMeta">
+                  <span className="userCardName">{authUser.is_guest ? "Guest" : authUser.user}</span>
+                  <span className="userCardRole">{authUser.is_guest ? "Temporary workspace" : "Signed in"}</span>
+                </span>
+                {quotaInfo ? (
+                  <span className="userCardQuota" title="Storage used by your uploaded PDFs and images">
+                    {fmtBytes(quotaInfo.used_bytes)}
+                    {quotaInfo.quota_mb ? ` / ${fmtBytes(quotaInfo.quota_mb * 1024 * 1024)}` : ""}
+                  </span>
+                ) : null}
+              </div>
+              {authUser.is_guest ? (
+                <div className="popoverHint">Guest data resets daily. Ask the admin for an account to keep your work.</div>
+              ) : null}
+              {quotaInfo?.quota_mb ? (
+                <div className="popoverQuota">
+                  <QuotaMeter usedBytes={quotaInfo.used_bytes} quotaMb={quotaInfo.quota_mb} barOnly />
+                </div>
+              ) : null}
+              <div className="popoverDivider" />
+              <button className="popoverItem" onClick={() => { setSettingsOpen("papers"); setOpenPopover(null); }}>
+                <SettingsIcon className="popoverItemIcon" size={15} />
+                Settings…
+              </button>
+              <button
+                className="popoverItem"
+                onClick={() => { setOpenPopover(null); exportUserData(true); }}
+                title="Download a zip backup: your notes databases + every uploaded PDF"
+              >
+                <ExportIcon className="popoverItemIcon" size={15} />
+                Export my data (.zip)
+              </button>
+              <button
+                className="popoverItem"
+                onClick={() => { setOpenPopover(null); exportUserData(false); }}
+                title="Download a small zip with just the databases (notes, chats, settings) — no uploaded PDFs"
+              >
+                <ExportIcon className="popoverItemIcon" size={15} />
+                Export database only (.zip)
+              </button>
+              {!authUser.is_guest ? (
+                <>
+                  <button
+                    className="popoverItem"
+                    onClick={() => { setOpenPopover(null); importUserData("replace"); }}
+                    title="Restore an exported zip: notes and settings are replaced by the backup, uploaded files are merged in"
+                  >
+                    <ImportIcon className="popoverItemIcon" size={15} />
+                    Import data (.zip)…
+                  </button>
+                  <button
+                    className="popoverItem"
+                    onClick={() => { setOpenPopover(null); importUserData("merge"); }}
+                    title="Add pages from an exported zip that are missing here; everything already in this account is kept unchanged"
+                  >
+                    <ImportIcon className="popoverItemIcon" size={15} />
+                    Import &amp; merge (.zip)…
+                  </button>
+                </>
+              ) : null}
+              {authUser.is_admin ? (
+                <button className="popoverItem" onClick={() => { setSettingsOpen("users"); setOpenPopover(null); }}>
+                  <UsersIcon className="popoverItemIcon" size={15} />
+                  Manage users…
+                </button>
+              ) : null}
+              <div className="popoverDivider" />
+              <button className="popoverItem popoverItemDanger" onClick={doLogout}>
+                <LogOutIcon className="popoverItemIcon" size={15} />
+                Log out
+              </button>
+            </div>
+          ) : null}
+        </span>
+      )}
+      {renderOverflowMenu(false)}
+    </>
+  );
+
   return (
     <div
       ref={appRef}
-      className={`app layout-horizontal ${readOnly ? "readOnlyMode" : ""} ${pseudoFullscreen ? "pseudoFullscreen" : ""}`}
+      className={`app layout-horizontal ${readOnly ? "readOnlyMode" : ""} ${pseudoFullscreen ? "pseudoFullscreen" : ""} ${isPhone ? "phoneUI" : ""}`}
       onDragOver={readOnly ? undefined : (e) => {
         if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes("Files")) return;
         e.preventDefault();
@@ -6814,411 +7163,7 @@ export default function App() {
               onClose={closeTab}
               onContext={(tab, x, y) => setTabMenu({ id: tab.id, pinned: !!tab.pinned, x, y })}
             />
-            <span data-popover="add" style={{ position: "relative", display: "inline-flex" }}>
-              <button
-                className={`iconBtn addBtn ${openPopover === "add" ? "activeIcon" : ""}`}
-                onClick={() => setOpenPopover((p) => (p === "add" ? null : "add"))}
-                title="Add — open a PDF by URL, upload a file, or start a note page"
-                aria-label="Add"
-              >
-                <PlusIcon size={17} strokeWidth={2.2} />
-              </button>
-              {openPopover === "add" ? (
-                <div className="popover addPopover">
-                  <input
-                    autoFocus
-                    className="searchInput"
-                    value={addUrl}
-                    onChange={(e) => setAddUrl(e.target.value)}
-                    placeholder="Open a PDF by URL — press Enter"
-                    onKeyDown={(e) => {
-                      if (isEnterCommit(e) && addUrl.trim() && !loading) {
-                        setOpenPopover(null);
-                        openPdf(addUrl.trim());
-                        setAddUrl("");
-                      }
-                    }}
-                  />
-                  <label className="popoverItem" style={{ cursor: loading ? "not-allowed" : "pointer" }}>
-                    Upload PDFs…
-                    <input
-                      type="file"
-                      accept=".pdf"
-                      multiple
-                      style={{ display: "none" }}
-                      disabled={loading}
-                      onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; setOpenPopover(null); if (files.length) uploadPdfs(files); }}
-                    />
-                  </label>
-                  <label
-                    className="popoverItem"
-                    style={{ cursor: loading ? "not-allowed" : "pointer" }}
-                    title="Upload every PDF in a folder — subfolders become folder labels"
-                  >
-                    Upload folder…
-                    <input
-                      type="file"
-                      webkitdirectory=""
-                      style={{ display: "none" }}
-                      disabled={loading}
-                      onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; setOpenPopover(null); if (files.length) uploadPdfs(files); }}
-                    />
-                  </label>
-                  <button className="popoverItem" onClick={createNotePage}>New note page</button>
-                </div>
-              ) : null}
-            </span>
-            <span data-popover="downloads" style={{ position: "relative", display: "inline-flex" }}>
-              <button
-                className={`iconBtn transferBtn ${openPopover === "downloads" ? "activeIcon" : ""}`}
-                onClick={() => setOpenPopover((p) => (p === "downloads" ? null : "downloads"))}
-                title="Background tasks — downloads, uploads, indexing, metadata/AI jobs"
-                aria-label="Background tasks"
-              >
-                <ActivityIcon size={16} />
-                {transfers.some((t) => t.status === "active") || indexTask?.active ? (
-                  <span className="transferSpin" />
-                ) : null}
-              </button>
-              {openPopover === "downloads" ? (
-                <div className="popover downloadsPopover">
-                  <div className="popoverTitle citeSectionRow">
-                    <span>Background tasks</span>
-                    <button
-                      className="searchToggle transferClearBtn"
-                      title="Clear finished"
-                      onClick={() => {
-                        if (!indexTask?.active) setIndexTaskCleared(true);
-                        setTransfers((prev) => {
-                          const kept = prev.filter((t) => t.status === "active");
-                          const ids = new Set(kept.map((t) => t.id));
-                          for (const [u, id] of Object.entries(transferByUrlRef.current)) {
-                            if (!ids.has(id)) delete transferByUrlRef.current[u]; // cleared rows can be re-created later
-                          }
-                          return kept;
-                        });
-                      }}
-                    >
-                      Clear
-                    </button>
-                  </div>
-                  {!transfers.length &&
-                  !(
-                    indexTask &&
-                    (indexTask.active || (!indexTaskCleared && indexTask.total > 0))
-                  ) ? (
-                    <div className="popoverHint">
-                      No background tasks — downloads, uploads, indexing, metadata and AI jobs show
-                      up here.
-                    </div>
-                  ) : null}
-                  {indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0)) ? (
-                    <div className="transferRow">
-                      <span className={`transferStatus ${indexTask.active ? "active" : "done"}`}>
-                        {indexTask.active ? (
-                          <span className="transferSpin inline" />
-                        ) : (
-                          <CheckIcon size={12} strokeWidth={2.6} />
-                        )}
-                      </span>
-                      <span className="transferKind">
-                        <SearchIcon size={12} />
-                      </span>
-                      <span className="transferName">Indexing PDF library for search</span>
-                      <span className="transferInfo">
-                        {indexTask.done}/{indexTask.total}
-                      </span>
-                    </div>
-                  ) : null}
-                  {transfers.map((t) => (
-                    <div key={t.id} className="transferRow">
-                      <span className={`transferStatus ${t.status}`}>
-                        {t.status === "active" ? (
-                          <span className="transferSpin inline" />
-                        ) : t.status === "done" ? (
-                          <CheckIcon size={12} strokeWidth={2.6} />
-                        ) : (
-                          <AlertCircleIcon size={12} strokeWidth={2.4} />
-                        )}
-                      </span>
-                      <span className="transferKind">
-                        {t.kind === "upload" ? (
-                          <UploadIcon size={12} />
-                        ) : t.kind === "ai" ? (
-                          <SparklesIcon size={12} />
-                        ) : t.kind === "import" ? (
-                          <FileIcon size={12} />
-                        ) : (
-                          <DownloadIcon size={12} />
-                        )}
-                      </span>
-                      <span className="transferName" title={t.name}>
-                        {t.name}
-                      </span>
-                      <span className="transferInfo">{t.info || ""}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </span>
-            <SearchPanel
-              open={openPopover === "search"}
-              onOpenChange={(v) => setOpenPopover(v ? "search" : null)}
-              detailsDefault={focusedBlockId ? searchDetailsPaper : searchDetailsHome}
-              focusedBlockId={focusedBlockId}
-              homeBlocks={homeBlocks}
-              allFolderPaths={allFolderPaths}
-              openBlock={openBlock}
-              pendingBlockScrollRef={pendingBlockScrollRef}
-              pdfSearchRef={pdfSearchRef}
-              scrollToRef={scrollToRef}
-              setPdfHidden={setPdfHidden}
-              docNonce={pdfDocNonce}
-              onFindMarks={setFindMarks}
-            />
-            {pdfUrl && !homeMode ? (
-              <span data-popover="share" style={{ position: "relative", display: "inline-flex" }}>
-                <button
-                  className={`iconBtn ${openPopover === "share" ? "activeIcon" : ""}`}
-                  onClick={() => {
-                    const opening = openPopover !== "share";
-                    setOpenPopover(opening ? "share" : null);
-                    if (opening) fetchShareLink();
-                  }}
-                  disabled={loading}
-                  title="Share"
-                  aria-label="Share"
-                >
-                  <LinkIcon size={16} />
-                </button>
-                {openPopover === "share" ? (
-                  <div className="popover sharePopover">
-                    <div className="popoverTitle">Share this page</div>
-                    <div className="popoverHint">
-                      Anyone with the link can view the PDF, highlights, and notes — read-only, no
-                      login.
-                    </div>
-                    {shareUrl ? (
-                      <div className="shareRow">
-                        <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
-                        <button
-                          className="chatMsgActionBtn"
-                          onClick={copyShareLink}
-                          title="Copy link"
-                          aria-label="Copy share link"
-                        >
-                          {shareCopied ? <CheckIcon size={13} /> : <CopyIcon size={13} />}
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="popoverHint">Creating link…</div>
-                    )}
-                    {pageMeta || pageBibtex ? (
-                      <>
-                        <div className="popoverDivider" />
-                        <div className="popoverSection citeSectionRow">
-                          <span>Slide citation</span>
-                          <button
-                            className="searchToggle"
-                            title="Regenerate the citation"
-                            disabled={pptCiteBusy}
-                            onClick={() => makePptCitation(true)}
-                          >
-                            {pptCiteBusy ? "…" : "↻"}
-                          </button>
-                        </div>
-                        {pptCite ? (
-                          <div className="pptCiteBox">
-                            <div className="pptCitePreview">
-                              <ChatMarkdown text={pptCite} />
-                            </div>
-                            <button
-                              className="chatMsgActionBtn"
-                              onClick={() => copyCitation("ppt", pptCite)}
-                              title="Copy — pastes with real italics/bold into PowerPoint"
-                              aria-label="Copy slide citation"
-                            >
-                              {citeCopied === "ppt" ? (
-                                <CheckIcon size={13} />
-                              ) : (
-                                <CopyIcon size={13} />
-                              )}
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="popoverHint">
-                            {pptCiteBusy
-                              ? "Generating…"
-                              : "Citation will generate when metadata is ready."}
-                          </div>
-                        )}
-                        {pageBibtex ? (
-                          <>
-                            <div className="popoverSection">BibTeX</div>
-                            <div className="pptCiteBox">
-                              <pre className="bibtexPre">{pageBibtex}</pre>
-                              <button
-                                className="chatMsgActionBtn"
-                                onClick={() => copyCitation("bibtex", pageBibtex)}
-                                title="Copy the BibTeX entry"
-                                aria-label="Copy BibTeX"
-                              >
-                                {citeCopied === "bibtex" ? (
-                                  <CheckIcon size={13} />
-                                ) : (
-                                  <CopyIcon size={13} />
-                                )}
-                              </button>
-                            </div>
-                          </>
-                        ) : null}
-                      </>
-                    ) : null}
-                  </div>
-                ) : null}
-              </span>
-            ) : null}
-            {authUser?.user && (
-              <span data-popover="user" style={{ position: "relative", display: "inline-flex" }}>
-                <button
-                  className={`iconBtn ${openPopover === "user" ? "activeIcon" : ""}`}
-                  onClick={() => {
-                    const opening = openPopover !== "user";
-                    if (opening) refreshQuota(); // fresh storage meter on open
-                    setOpenPopover(opening ? "user" : null);
-                  }}
-                  title="Account & settings"
-                  aria-label="Account & settings"
-                >
-                  <UserIcon size={18} />
-                </button>
-                {openPopover === "user" ? (
-                  <div className="popover userPopover">
-                    <div className="userCard">
-                      <span className="userAvatar" aria-hidden="true">
-                        {authUser.is_guest ? (
-                          <UserIcon size={20} />
-                        ) : (
-                          <span className="userAvatarInitial">
-                            {authUser.user.charAt(0).toUpperCase()}
-                          </span>
-                        )}
-                      </span>
-                      <span className="userCardMeta">
-                        <span className="userCardName">
-                          {authUser.is_guest ? "Guest" : authUser.user}
-                        </span>
-                        <span className="userCardRole">
-                          {authUser.is_guest ? "Temporary workspace" : "Signed in"}
-                        </span>
-                      </span>
-                      {quotaInfo ? (
-                        <span
-                          className="userCardQuota"
-                          title="Storage used by your uploaded PDFs and images"
-                        >
-                          {fmtBytes(quotaInfo.used_bytes)}
-                          {quotaInfo.quota_mb
-                            ? ` / ${fmtBytes(quotaInfo.quota_mb * 1024 * 1024)}`
-                            : ""}
-                        </span>
-                      ) : null}
-                    </div>
-                    {authUser.is_guest ? (
-                      <div className="popoverHint">
-                        Guest data resets daily. Ask the admin for an account to keep your work.
-                      </div>
-                    ) : null}
-                    {quotaInfo?.quota_mb ? (
-                      <div className="popoverQuota">
-                        <QuotaMeter
-                          usedBytes={quotaInfo.used_bytes}
-                          quotaMb={quotaInfo.quota_mb}
-                          barOnly
-                        />
-                      </div>
-                    ) : null}
-                    <div className="popoverDivider" />
-                    <button
-                      className="popoverItem"
-                      onClick={() => {
-                        setSettingsOpen("papers");
-                        setOpenPopover(null);
-                      }}
-                    >
-                      <SettingsIcon className="popoverItemIcon" size={15} />
-                      Settings…
-                    </button>
-                    <button
-                      className="popoverItem"
-                      onClick={() => {
-                        setOpenPopover(null);
-                        exportUserData(true);
-                      }}
-                      title="Download a zip backup: your notes databases + every uploaded PDF"
-                    >
-                      <ExportIcon className="popoverItemIcon" size={15} />
-                      Export my data (.zip)
-                    </button>
-                    <button
-                      className="popoverItem"
-                      onClick={() => {
-                        setOpenPopover(null);
-                        exportUserData(false);
-                      }}
-                      title="Download a small zip with just the databases (notes, chats, settings) — no uploaded PDFs"
-                    >
-                      <ExportIcon className="popoverItemIcon" size={15} />
-                      Export database only (.zip)
-                    </button>
-                    {!authUser.is_guest ? (
-                      <>
-                        <button
-                          className="popoverItem"
-                          onClick={() => {
-                            setOpenPopover(null);
-                            importUserData("replace");
-                          }}
-                          title="Restore an exported zip: notes and settings are replaced by the backup, uploaded files are merged in"
-                        >
-                          <ImportIcon className="popoverItemIcon" size={15} />
-                          Import data (.zip)…
-                        </button>
-                        <button
-                          className="popoverItem"
-                          onClick={() => {
-                            setOpenPopover(null);
-                            importUserData("merge");
-                          }}
-                          title="Add pages from an exported zip that are missing here; everything already in this account is kept unchanged"
-                        >
-                          <ImportIcon className="popoverItemIcon" size={15} />
-                          Import &amp; merge (.zip)…
-                        </button>
-                      </>
-                    ) : null}
-                    {authUser.is_admin ? (
-                      <button
-                        className="popoverItem"
-                        onClick={() => {
-                          setSettingsOpen("users");
-                          setOpenPopover(null);
-                        }}
-                      >
-                        <UsersIcon className="popoverItemIcon" size={15} />
-                        Manage users…
-                      </button>
-                    ) : null}
-                    <div className="popoverDivider" />
-                    <button className="popoverItem popoverItemDanger" onClick={doLogout}>
-                      <LogOutIcon className="popoverItemIcon" size={15} />
-                      Log out
-                    </button>
-                  </div>
-                ) : null}
-              </span>
-            )}
-            {renderOverflowMenu(false)}
+            {isPhone ? null : topbarActions}
           </div>
           {statusBarVisible ? <div className="status">{status}</div> : null}
         </>
@@ -7494,41 +7439,44 @@ export default function App() {
         ) : null}
       </div>
       {isPhone && (!centerNotes || !readOnly) ? (
-        <div className="phoneTabBar">
-          <button
-            className={`phoneTab ${phonePanel === null || (phonePanel === "notes" && centerNotes) ? "active" : ""}`}
-            onClick={() => setPhonePanel(null)}
-          >
-            {homeMode ? (
-              <HomeIcon size={16} />
-            ) : centerNotes ? (
-              <FileTextIcon size={16} />
-            ) : (
-              <FileIcon size={16} />
-            )}
-            <span>{homeMode ? "Library" : centerNotes ? "Notes" : "PDF"}</span>
-          </button>
-          {!centerNotes ? (
+        // Phone: one bottom bar — view tabs on the left, the topbar's action
+        // buttons on the right. Icon-only, because both groups share the row.
+        <div className="phoneBottomBar">
+          <div className={`phoneTabBar ${readOnly ? "" : "hasActions"}`}>
             <button
-              className={`phoneTab ${phonePanel === "notes" ? "active" : ""}`}
-              onClick={() => {
-                setNotesVisible(true);
-                setPhonePanel((p) => (p === "notes" ? null : "notes"));
-              }}
+              className={`phoneTab ${phonePanel === null || (phonePanel === "notes" && centerNotes) ? "active" : ""}`}
+              onClick={() => setPhonePanel(null)}
+              title={homeMode ? "Library" : centerNotes ? "Notes" : "PDF"}
+              aria-label={homeMode ? "Library" : centerNotes ? "Notes" : "PDF"}
             >
-              <FileTextIcon size={16} />
-              <span>Notes</span>
+              {homeMode ? <HomeIcon size={16} /> : centerNotes ? <FileTextIcon size={16} /> : <FileIcon size={16} />}
+              <span>{homeMode ? "Library" : centerNotes ? "Notes" : "PDF"}</span>
             </button>
-          ) : null}
-          {!readOnly ? (
-            <button
-              className={`phoneTab ${phonePanel === "chat" ? "active" : ""}`}
-              onClick={() => setPhonePanel((p) => (p === "chat" ? null : "chat"))}
-            >
-              <SparklesIcon size={16} />
-              <span>Chat</span>
-            </button>
-          ) : null}
+            {!centerNotes ? (
+              <button
+                className={`phoneTab ${phonePanel === "notes" ? "active" : ""}`}
+                onClick={() => { setNotesVisible(true); setPhonePanel((p) => (p === "notes" ? null : "notes")); }}
+                title="Notes"
+                aria-label="Notes"
+              >
+                <FileTextIcon size={16} />
+                <span>Notes</span>
+              </button>
+            ) : null}
+            {!readOnly ? (
+              <button
+                className={`phoneTab ${phonePanel === "chat" ? "active" : ""}`}
+                onClick={() => setPhonePanel((p) => (p === "chat" ? null : "chat"))}
+                title="AI chat"
+                aria-label="AI chat"
+              >
+                <SparklesIcon size={16} />
+                <span>Chat</span>
+              </button>
+            ) : null}
+          </div>
+          {/* keeps the .topbar class so every ".topbar X" style still applies */}
+          {!readOnly ? <div className="topbar phoneActions">{topbarActions}</div> : null}
         </div>
       ) : null}
       {dockPreview ? <div className="dockPreview" style={dockPreview} /> : null}
