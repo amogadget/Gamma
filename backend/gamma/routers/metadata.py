@@ -200,8 +200,23 @@ def _load_page(user: str, block_id: str):
     return row[0] or "", json.loads(row[1] or "{}")
 
 
-def _save_props(user: str, block_id: str, props: dict):
+def _save_props(user: str, block_id: str, updates: dict | None = None, remove: tuple = ()):
+    """Apply a delta to the page's properties, re-reading them inside the write.
+
+    Lookups take seconds to minutes, and the user can label the page (which
+    merges into properties via PUT /api/blocks/{id}) at any point during one.
+    Writing back the dict we read before the lookup would silently drop that
+    label, so only the keys metadata owns are touched here."""
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        row = conn.execute(
+            "SELECT properties FROM unified_blocks WHERE id = ?", (block_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="page not found")
+        props = json.loads(row[0] or "{}")
+        props.update(updates or {})
+        for key in remove:
+            props.pop(key, None)
         conn.execute(
             "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
             (json.dumps(props), page_now(), block_id),
@@ -310,17 +325,15 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
         # Negative cache: remember the failed attempt on the page so clients
         # stop auto-retrying on every open. Manual ↻ (force) still retries,
         # and a success below clears the marker.
-        props["meta_error"] = {"at": page_now(), "detail": "no arXiv id, DOI, or AI match"}
-        _save_props(user, payload.block_id, props)
+        _save_props(user, payload.block_id, {
+            "meta_error": {"at": page_now(), "detail": "no arXiv id, DOI, or AI match"}})
         raise HTTPException(status_code=404, detail="no metadata found (no arXiv id, DOI, or AI match)")
 
     if not bibtex:
         bibtex = _build_bibtex(meta)
-    props["meta"] = meta
-    props["bibtex"] = bibtex
-    props.pop("meta_error", None)
-    props.pop("ppt_cite", None)  # metadata changed — cached citation is stale
-    _save_props(user, payload.block_id, props)
+    # ppt_cite is dropped because the metadata it was generated from changed
+    _save_props(user, payload.block_id, {"meta": meta, "bibtex": bibtex},
+                remove=("meta_error", "ppt_cite"))
     return {"meta": meta, "bibtex": bibtex, "source": meta.get("source", ""), "cached": False}
 
 
@@ -335,7 +348,7 @@ def metadata_update(payload: MetaUpdateRequest, request: Request):
     the cached slide citation is invalidated. All-blank fields clear the
     cached metadata entirely."""
     user = require_user(request)
-    _, props = _load_page(user, payload.block_id)
+    _load_page(user, payload.block_id)  # 404 before validating the edit
     m = payload.meta or {}
     authors = m.get("authors") or []
     if isinstance(authors, str):
@@ -351,17 +364,14 @@ def metadata_update(payload: MetaUpdateRequest, request: Request):
         "arxiv_id": str(m.get("arxiv_id") or "").strip()[:60],
         "source": "manual",
     }
-    props.pop("ppt_cite", None)  # metadata changed — cached citation is stale
-    props.pop("meta_error", None)  # hand-edits settle (or reset) a failed lookup
+    # ppt_cite is stale (the metadata changed); meta_error is settled (or
+    # reset) by the hand-edit either way
+    stale = ("ppt_cite", "meta_error")
     if not any(v for k, v in meta.items() if k != "source"):
-        props.pop("meta", None)
-        props.pop("bibtex", None)
-        _save_props(user, payload.block_id, props)
+        _save_props(user, payload.block_id, remove=stale + ("meta", "bibtex"))
         return {"meta": None, "bibtex": "", "source": "", "cached": False}
     bibtex = _build_bibtex(meta)
-    props["meta"] = meta
-    props["bibtex"] = bibtex
-    _save_props(user, payload.block_id, props)
+    _save_props(user, payload.block_id, {"meta": meta, "bibtex": bibtex}, remove=stale)
     return {"meta": meta, "bibtex": bibtex, "source": "manual", "cached": False}
 
 
@@ -397,6 +407,6 @@ def metadata_cite(payload: CiteRequest, request: Request):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
     citation = text.strip()
-    props["ppt_cite"] = citation  # cache alongside the rest of the metadata
-    _save_props(user, payload.block_id, props)
+    # cache alongside the rest of the metadata
+    _save_props(user, payload.block_id, {"ppt_cite": citation})
     return {"citation": citation, "cached": False}
