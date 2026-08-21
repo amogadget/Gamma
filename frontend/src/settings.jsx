@@ -113,6 +113,12 @@ function PapersSettings({ value }) {
         checked={value.pdfSaveLocal}
         onChange={value.setPdfSaveLocal}
       />
+      <SettingToggle
+        label="Snap vertical scrolling"
+        description="On a touch screen, a one-finger swipe that's roughly straight up or down scrolls a zoomed-in PDF vertically only, so the page doesn't drift sideways while you read. Diagonal and sideways swipes still pan freely."
+        checked={value.snapVertical}
+        onChange={value.setSnapVertical}
+      />
       <label className="settingRow">
         <span className="settingText">
           <span className="settingLabel">Embedded PDF annotations</span>

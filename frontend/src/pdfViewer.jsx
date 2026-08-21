@@ -39,8 +39,14 @@ export const clampZoom = (s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, s));
 // page boxes stack with a fixed gap, and unmeasured pages assume page 1's
 // size (FALLBACK_* is the last resort before even that is known).
 const PAGE_GAP = 8;
-const FALLBACK_H = 800,
-  FALLBACK_W = 600;
+// One-finger scroll axis lock (Settings → "Snap vertical scrolling"). A
+// gesture whose horizontal travel stays inside this ratio of its vertical
+// travel counts as "meant to be vertical" — tan(30°), i.e. within 30° of
+// straight up/down.
+const SNAP_TAN = Math.tan(Math.PI / 6);
+const SNAP_MIN_PX = 8; // travel before the direction is judged at all
+const SNAP_IDLE_MS = 250; // lock outlives the finger by this much of quiet scrolling (momentum)
+const FALLBACK_H = 800, FALLBACK_W = 600;
 
 // Content-y of page idx's top edge at the given scale.
 function pageTopAt(heights, idx, scale) {
@@ -313,31 +319,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({
-  url,
-  highlights,
-  pdfScaleValue,
-  scrollRef,
-  onJump,
-  onHighlightJump,
-  onLinkHighlight,
-  onSelectionFinished,
-  onAreaSelection,
-  onHighlightContext,
-  searchRef,
-  captureRef,
-  onEffectiveScale,
-  onZoomTo,
-  findMarks,
-  onExternalLink,
-  onLinkContext,
-  onBeforeLinkJump,
-  onLoadState,
-  retryRef,
-  areaMode,
-  noteBadges,
-  hideEmbeddedAnnots,
-}) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -540,6 +522,85 @@ function PdfViewer({
       el.removeEventListener("touchcancel", onTouchEnd);
     };
   }, []);
+
+  // One-finger vertical snap. Papers are read top-to-bottom, so once you're
+  // zoomed in past the viewport width a swipe that only *drifts* sideways is
+  // almost never meant to pan — it just makes the column wander. The gesture
+  // stays a NATIVE scroll (momentum, rubber-banding, the whole feel); we only
+  // pin scrollLeft back to where the finger landed while the direction reads
+  // as vertical. Taking the scroll over with preventDefault would have to
+  // start on the very first move event — before any direction is known — and
+  // would mean re-implementing inertia, so it isn't worth it. Corrections are
+  // sub-pixel-ish in practice: a near-vertical swipe barely moves sideways.
+  // The lock outlives the finger by SNAP_IDLE_MS of quiet so the momentum
+  // phase can't reintroduce the drift, then releases so programmatic
+  // horizontal scrolls (zoom anchoring, jump-to-highlight) run untouched.
+  useEffect(() => {
+    const el = viewerRef.current;
+    if (!el || !snapVertical) return;
+    let g = null; // live gesture: {x0, y0, left, locked, decided}
+    let idle = 0;
+    let lockedLeft = null; // non-null while scrollLeft is pinned
+    const release = () => { clearTimeout(idle); idle = 0; lockedLeft = null; };
+    const armIdle = () => {
+      clearTimeout(idle);
+      idle = setTimeout(() => { idle = 0; lockedLeft = null; }, SNAP_IDLE_MS);
+    };
+    const pin = () => {
+      if (lockedLeft === null) return;
+      // Deadband: assigning scrollLeft mid-gesture can interrupt iOS momentum,
+      // so tolerate a pixel of wobble instead of correcting every frame. The
+      // pin is absolute, not incremental, so nothing accumulates past it.
+      if (Math.abs(el.scrollLeft - lockedLeft) > 1.5) el.scrollLeft = lockedLeft;
+      lastScrollLeftRef.current = lockedLeft;
+    };
+    const onTouchStart = (e) => {
+      release();
+      // Zoomed out to fit (or narrower) there is nothing to drift into, and a
+      // second finger means the pinch handler owns the gesture.
+      if (e.touches.length !== 1 || el.scrollWidth - el.clientWidth <= 1) { g = null; return; }
+      const t = e.touches[0];
+      g = { x0: t.clientX, y0: t.clientY, left: el.scrollLeft, decided: false };
+    };
+    const onTouchMove = (e) => {
+      if (!g) return;
+      if (e.touches.length !== 1) { g = null; release(); return; } // pinch started
+      const t = e.touches[0];
+      if (!g.decided) {
+        const dx = t.clientX - g.x0, dy = t.clientY - g.y0;
+        if (Math.hypot(dx, dy) < SNAP_MIN_PX) return;
+        g.decided = true;
+        // Near-vertical → pin to the scrollLeft the gesture started from.
+        // Anything else is a real pan and is left alone for its whole life.
+        if (Math.abs(dx) <= Math.abs(dy) * SNAP_TAN) lockedLeft = g.left;
+        else { g = null; return; }
+      }
+      pin();
+    };
+    const onTouchEnd = (e) => {
+      if (e.touches.length) return;
+      g = null;
+      if (lockedLeft !== null) armIdle(); // ride out the momentum, then let go
+    };
+    const onScroll = () => {
+      if (lockedLeft === null) return;
+      pin();
+      if (!g) armIdle();
+    };
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      release();
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, [snapVertical]);
 
   // Group find marks per page once, sharing one frozen empty array so pages
   // without marks keep referentially-equal props (memo stays effective).
