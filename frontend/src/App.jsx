@@ -57,7 +57,6 @@ import {
   ImportIcon,
   InfoIcon,
   LabelIcon,
-  MessageSquareIcon,
   LinkIcon,
   LogOutIcon,
   MaximizeIcon,
@@ -6665,7 +6664,7 @@ export default function App() {
           {!menuReadOnly ? (
             <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
               <span className="check">{!chatHidden ? "✓" : ""}</span>
-              <MessageSquareIcon className="popoverItemIcon" size={15} /> AI Chat
+              <SparklesIcon className="popoverItemIcon" size={15} /> AI Chat
             </button>
           ) : null}
           {!menuReadOnly ? <div className="popoverDivider" /> : null}
