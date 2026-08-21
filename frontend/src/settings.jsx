@@ -4,6 +4,9 @@ import { parseFolderTags } from "./libraryUtils";
 import {
   ActivityIcon,
   BookIcon,
+  DatabaseIcon,
+  ExportIcon,
+  ImportIcon,
   KeyIcon,
   ListIcon,
   PaperIcon,
@@ -11,6 +14,7 @@ import {
   SearchIcon,
   SlidersIcon,
   Trash2Icon,
+  UserIcon,
   UsersIcon,
 } from "./icons";
 
@@ -22,7 +26,7 @@ const NAV_ITEMS = [
   ["prompts", "Prompts", SlidersIcon],
   ["context", "AI chat", BookIcon],
   ["search", "Search", SearchIcon],
-  ["users", "Users", UsersIcon], // admin-only, filtered in SettingsDialog
+  ["users", "Users", UsersIcon], // relabelled "Account" for non-admins (see SettingsDialog)
   ["diagnostics", "Diagnostics", ActivityIcon],
 ];
 
@@ -1320,28 +1324,48 @@ function DiagnosticsSettings({ value }) {
   );
 }
 
-// Settings → Users (admins only): the GUI for /api/admin/users*. One combined
-// editor per account — name, password, privilege, storage limits, delete —
-// instead of scattered per-action forms.
+// Settings → Users: the GUI for /api/admin/users*, plus the backup/restore
+// actions for each account (the Data button — they used to live in the account
+// popover). One combined editor per account — name, password, privilege,
+// storage limits, delete — instead of scattered per-action forms.
+//
+// Non-admins get this pane too, as "Account": a single read-only row for
+// themselves with the Data button. /api/admin/* is admin-only, so their row is
+// built from the session + /api/quota instead of the accounts listing, and
+// there is no editor — the same rule the backend enforces on /api/export and
+// /api/import-data (your own account, unless you are an admin).
 function UsersSettings({ value }) {
-  const { setStatus, confirm, onSelfRenamed, refreshQuota } = value;
+  const { setStatus, confirm, onSelfRenamed, refreshQuota, closeSettings,
+          isAdmin, me, isGuest, quotaInfo, exportUserData, importUserData } = value;
   const [info, setInfo] = React.useState(null); // {users, me}
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [edit, setEdit] = React.useState(null); // {original, username, password, is_admin, max_upload_mb, quota_mb}
   const [addForm, setAddForm] = React.useState(null); // {username, password, is_admin}
+  const [dataFor, setDataFor] = React.useState(null); // username whose backup panel is open
 
   const [defaults, setDefaults] = React.useState(null); // {max_upload_mb, quota_mb} server-wide
   React.useEffect(() => {
-    apiJson(`${API}/admin/users`)
-      .then((d) => setInfo(d))
-      .catch((err) => setError(err.message));
-    apiJson(`${API}/admin/settings`)
-      .then(setDefaults)
-      .catch(() => {});
-  }, []);
+    if (!isAdmin) {
+      refreshQuota?.(); // the self row's storage meter comes from /api/quota
+      return;
+    }
+    apiJson(`${API}/admin/users`).then((d) => setInfo(d)).catch((err) => setError(err.message));
+    apiJson(`${API}/admin/settings`).then(setDefaults).catch(() => {});
+  }, [isAdmin]);
 
-  const myName = info?.me;
+  const myName = isAdmin ? info?.me : me;
+  // /api/quota reports effective limits (overrides already resolved), which is
+  // exactly what the self row shows — no "blank = inherit" distinction to make.
+  const rows = isAdmin ? (info?.users || []) : [{
+    username: me,
+    is_guest: isGuest,
+    is_admin: false,
+    created_at: null,
+    used_bytes: quotaInfo?.used_bytes,
+    max_upload_mb: quotaInfo?.max_upload_mb ?? null,
+    quota_mb: quotaInfo?.quota_mb ?? null,
+  }];
   const lastAdmin = (u) => u.is_admin && (info?.users || []).filter((x) => x.is_admin && !x.is_guest).length <= 1;
 
   // Mutation responses carry the fresh users list but omit used_bytes (the
@@ -1373,9 +1397,25 @@ function UsersSettings({ value }) {
     }
   }
 
+  function openData(u) {
+    setError("");
+    setEdit(null);
+    setAddForm(null);
+    setDataFor(u.username);
+  }
+
+  // Export/import report progress in the status pill and the background-tasks
+  // popover, and the import confirm box wants the screen — so get out of the
+  // settings modal first.
+  function runDataAction(fn) {
+    closeSettings?.();
+    fn();
+  }
+
   function openEdit(u) {
     setError("");
     setAddForm(null);
+    setDataFor(null);
     setEdit({
       original: u,
       username: u.username,
@@ -1450,6 +1490,64 @@ function UsersSettings({ value }) {
     if (!d) return;
     setStatus(`Created ${f.username.trim()}.`);
     setAddForm(null);
+  }
+
+  // Backup/restore for one account. Admins get it on every row; everyone else
+  // only ever sees their own (the pane shows no other accounts).
+  function dataForm(u) {
+    const mine = u.username === myName;
+    const who = mine ? "your" : `${u.username}'s`;
+    return (
+      <div className="aiProvForm" key={u.username}>
+        <div className="promptSectionHead"><span>{mine ? "Your data" : `${u.username}'s data`}</span></div>
+        <QuotaMeter usedBytes={u.used_bytes} quotaMb={u.quota_mb ?? defaults?.quota_mb} />
+        <span className="settingDesc formFieldLabel">
+          A backup zip holds {who} notes databases (pages, highlights, chats, settings) and,
+          unless you pick the small one, every uploaded PDF and image.
+        </span>
+        <div className="reportModalBtns settingsAlignStart settingsDataBtns">
+          <button
+            className="uiBtn"
+            title={`Download a zip backup: ${who} notes databases + every uploaded PDF`}
+            onClick={() => runDataAction(() => exportUserData(true, u.username))}
+          >
+            <ExportIcon size={13} /> Export data (.zip)
+          </button>
+          <button
+            className="uiBtn"
+            title="Download a small zip with just the databases (notes, chats, settings) — no uploaded PDFs"
+            onClick={() => runDataAction(() => exportUserData(false, u.username))}
+          >
+            <ExportIcon size={13} /> Export database only (.zip)
+          </button>
+        </div>
+        {u.is_guest ? (
+          <span className="settingDesc">
+            The guest workspace is shared and resets daily — backups can't be restored into it.
+          </span>
+        ) : (
+          <div className="reportModalBtns settingsAlignStart settingsDataBtns">
+            <button
+              className="uiBtn"
+              title={`Restore an exported zip: ${who} notes and settings are replaced by the backup, uploaded files are merged in`}
+              onClick={() => runDataAction(() => importUserData("replace", u.username))}
+            >
+              <ImportIcon size={13} /> Import data (.zip)…
+            </button>
+            <button
+              className="uiBtn"
+              title={`Add pages from an exported zip that are missing there; everything already in ${mine ? "your" : "that"} account is kept unchanged`}
+              onClick={() => runDataAction(() => importUserData("merge", u.username))}
+            >
+              <ImportIcon size={13} /> Import &amp; merge (.zip)…
+            </button>
+          </div>
+        )}
+        <div className="reportModalBtns">
+          <button className="uiBtn" onClick={() => setDataFor(null)}>Close</button>
+        </div>
+      </div>
+    );
   }
 
   function editForm(u) {
@@ -1557,7 +1655,9 @@ function UsersSettings({ value }) {
           <span className="aiProvDesc">
             {u.is_guest
               ? "shared demo workspace, resets daily"
-              : `created ${new Date(u.created_at).toLocaleDateString()}`}
+              : u.created_at // absent on the self row: non-admins can't list accounts
+                ? `created ${new Date(u.created_at).toLocaleDateString()}`
+                : "signed in"}
             {u.max_upload_mb != null ? ` · max file ${u.max_upload_mb} MB` : ""}
             {u.quota_mb != null
               ? u.quota_mb
@@ -1568,26 +1668,54 @@ function UsersSettings({ value }) {
           <QuotaMeter usedBytes={u.used_bytes} quotaMb={u.quota_mb ?? defaults?.quota_mb} />
         </span>
         <span className="aiProvActions">
-          <button className="uiBtn sm" disabled={busy} onClick={() => openEdit(u)}>
-            Edit…
+          <button
+            className="uiBtn sm iconSq"
+            title={u.username === myName ? "Back up or restore your data" : `Back up or restore ${u.username}'s data`}
+            aria-label="Backup and restore"
+            onClick={() => openData(u)}
+          >
+            <DatabaseIcon size={13} />
           </button>
+          {isAdmin ? (
+            <button
+              className="uiBtn sm iconSq" disabled={busy}
+              title={u.is_guest ? "Guest storage limits" : `Edit ${u.username}`}
+              aria-label="Edit account"
+              onClick={() => openEdit(u)}
+            >
+              <PenIcon size={13} />
+            </button>
+          ) : null}
         </span>
       </div>
     );
   }
 
+  const rowFor = (u) => (
+    dataFor === u.username ? dataForm(u)
+      : edit?.original.username === u.username ? editForm(u)
+        : userRow(u)
+  );
+
   return (
     <>
-      <PaneIntro title="Users">
-        Accounts on this server. Admin is a privilege, not a name — any account can be granted it,
-        and the last admin can never be demoted or deleted. Storage limits left blank inherit the
-        server defaults from the Paper metadata pane.
-      </PaneIntro>
-      {!info && !error ? <div className="reportModalHint">Loading…</div> : null}
-      {(info?.users || []).map((u) =>
-        edit?.original.username === u.username ? editForm(u) : userRow(u),
+      {isAdmin ? (
+        <PaneIntro title="Users">
+          Accounts on this server. Admin is a privilege, not a name — any account can be granted it,
+          and the last admin can never be demoted or deleted. Storage limits left blank inherit the
+          server defaults from the Paper metadata pane. The database button backs up or restores an
+          account's whole workspace.
+        </PaneIntro>
+      ) : (
+        <PaneIntro title="Account">
+          Your account and its storage. The database button downloads a backup of everything you
+          have here, or restores one. Only an admin can rename accounts, change passwords or set
+          storage limits.
+        </PaneIntro>
       )}
-      {addForm ? (
+      {isAdmin && !info && !error ? <div className="reportModalHint">Loading…</div> : null}
+      {rows.map(rowFor)}
+      {!isAdmin ? null : addForm ? (
         <div className="aiProvForm">
           <div className="promptSectionHead">
             <span>Add user</span>
@@ -1669,7 +1797,11 @@ export default function SettingsDialog({
   diagnostics,
 }) {
   if (!activePane) return null;
-  const navItems = NAV_ITEMS.filter(([id]) => id !== "users" || users);
+  // The users pane doubles as every non-admin's own "Account" pane — same
+  // component, but it only ever shows their row (see UsersSettings).
+  const navItems = NAV_ITEMS.map(([id, label, Icon]) =>
+    (id === "users" && !users?.isAdmin ? [id, "Account", UserIcon] : [id, label, Icon]))
+    .filter(([id]) => id !== "users" || users);
   return (
     <div className="reportOverlay" onClick={onClose}>
       <div className="settingsModal" onClick={(event) => event.stopPropagation()}>

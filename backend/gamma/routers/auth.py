@@ -34,20 +34,44 @@ router = APIRouter(prefix="/api", tags=["auth"])
 _export_progress: dict[str, dict] = {}
 
 
-@router.get("/export-progress")
-def export_progress(request: Request):
+def _target_user(request: Request, target: str | None) -> tuple[str, bool]:
+    """The account an export/import applies to, as (username, is_guest).
+
+    Normally the session user. Admins may name any account with ?user= — the
+    Settings > Users pane offers each row a Data button — but a backup carries
+    every note and PDF of an account, so nobody else can ever name one but
+    their own.
+    """
     user = require_user(request)
-    return _export_progress.get(user) or {"active": False, "total": 0, "done": 0}
+    if target and target != user:
+        if not request.state.is_admin:
+            raise HTTPException(status_code=403, detail="admin privilege required")
+        with connect_users_db() as conn:
+            row = conn.execute(
+                "SELECT username, is_guest FROM users WHERE username = ?", (target,)
+            ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="no such user")
+        return row[0], bool(row[1])
+    return user, bool(request.state.is_guest)
+
+
+@router.get("/export-progress")
+def export_progress(request: Request, user: str | None = None):
+    who, _ = _target_user(request, user)
+    return _export_progress.get(who) or {"active": False, "total": 0, "done": 0}
 
 
 # Sync endpoint on purpose: zipping a large library runs in the threadpool.
 @router.get("/export")
-def export_data(request: Request, uploads: int = 1):
-    """Full backup of the requesting user's data as a zip: consistent SQLite
-    snapshots (via the sqlite backup API, safe while the app is running) plus
-    every uploaded file. `uploads=0` skips the uploaded files for a small
-    database-only backup. Restoring = unpacking into users/<name>/."""
-    user = require_user(request)
+def export_data(request: Request, uploads: int = 1, user: str | None = None):
+    """Full backup of an account's data as a zip: consistent SQLite snapshots
+    (via the sqlite backup API, safe while the app is running) plus every
+    uploaded file. `uploads=0` skips the uploaded files for a small
+    database-only backup. Restoring = unpacking into users/<name>/.
+
+    Defaults to the requesting user; admins can back up any account (?user=)."""
+    user, _ = _target_user(request, user)
     user_dir = Path(USERS_DIR) / user
     if not user_dir.exists():
         raise HTTPException(status_code=404, detail="no data for this user yet")
@@ -177,18 +201,20 @@ def _merge_backup(user_dir: Path, tdir: Path) -> dict:
 
 # Sync on purpose: unzip + sqlite restore runs in the threadpool.
 @router.post("/import-data")
-def import_data(request: Request, file: UploadFile = File(...), mode: str = "replace"):
-    """Restore an /api/export zip into the requesting user's workspace.
+def import_data(request: Request, file: UploadFile = File(...), mode: str = "replace",
+                user: str | None = None):
+    """Restore an /api/export zip into an account's workspace (the requesting
+    user's, or — admins only — the one named by ?user=).
 
     mode=replace (default): pages.db and data.db are REPLACED (via the sqlite
     backup API, so the swap is transactional and safe while the app is
     serving). mode=merge: additive — see _merge_backup. In both modes uploads
     are merged in (filenames are content hashes, so identical files never
     conflict and nothing existing gets overwritten). Everything is validated
-    before any live data is touched. Guests can't import: one visitor could
-    wipe the shared demo workspace for everyone."""
-    user = require_user(request)
-    if request.state.is_guest:
+    before any live data is touched. Nothing can be imported into the guest
+    workspace: it is shared, and one visitor could wipe it for everyone."""
+    user, target_is_guest = _target_user(request, user)
+    if target_is_guest:
         raise HTTPException(status_code=403, detail="the guest workspace cannot import backups")
     if mode not in ("replace", "merge"):
         raise HTTPException(status_code=400, detail="mode must be 'replace' or 'merge'")

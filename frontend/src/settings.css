@@ -80,6 +80,11 @@
 .settingsAlignStart {
   justify-content: flex-start;
 }
+/* Backup/restore actions (Settings → Users → Data): two wide buttons per row
+   that wrap instead of squeezing when the pane is narrow. */
+.settingsDataBtns {
+  flex-wrap: wrap;
+}
 .settingsNoMargin {
   margin: 0;
 }
