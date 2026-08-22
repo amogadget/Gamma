@@ -93,6 +93,30 @@ def test_search_reindex_marks_everything_stale(guest):
     assert ver in (0, INDEX_VERSION)
 
 
+def test_search_reindex_targeted_single_doc(guest):
+    """doc_ids re-indexes just those papers: no global stale stamp, and ids
+    outside the caller's library are ignored."""
+    from gamma.db import user_db_path
+    from gamma.textnorm import INDEX_VERSION
+
+    user = guest.get("/api/session").json()["user"]
+    make_page(guest, "Keep me", properties={"doc_id": "ftsdoc005"})
+    make_page(guest, "Reindex me", properties={"doc_id": "ftsdoc006"})
+    _index_rows(user, "ftsdoc005", [(1, "already indexed text")])
+
+    r = guest.post("/api/search-reindex", json={"doc_ids": ["ftsdoc006", "not-my-doc"]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scheduled"] == 1 or body["busy"]
+
+    # The untouched doc keeps its current-version stamp (a full rebuild would
+    # have zeroed it).
+    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+        ver = conn.execute(
+            "SELECT ver FROM pdf_fts_docs WHERE doc_id = 'ftsdoc005'").fetchone()[0]
+    assert ver == INDEX_VERSION
+
+
 def test_tasks_endpoint_shape(guest):
     r = guest.get("/api/tasks")
     assert r.status_code == 200

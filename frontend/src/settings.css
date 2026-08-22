@@ -117,10 +117,11 @@
 .setRow {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
   gap: 11px;
   padding: 7px 8px;
+  cursor: default; /* the control on the right is the click target, not the row */
 }
-.setRow.static { cursor: default; }
 .setIcon {
   width: 28px; height: 28px; flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center;
@@ -134,8 +135,6 @@
 .settingsPane .settingRow { flex-shrink: 0; }
 
 /* --- controls sitting in the right-hand cell of a row --- */
-/* Selects size to their options instead of the number box's fixed width. */
-.settingSelect { width: auto; flex: 0 0 auto; margin-bottom: 0; cursor: pointer; max-width: 210px; }
 /* Number box, alone or paired with a slider / Save button. */
 .setSlider { display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .setNum { width: 92px; flex: 0 0 auto; margin-bottom: 0; text-align: right; }
@@ -238,30 +237,60 @@
 .setAccBody .promptTextarea { margin-bottom: 6px; }
 
 /* --- AI provider rows and their editor form --- */
-.oauthInstructions { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 3px; }
+.oauthInstructions {
+  margin: 2px 0 4px;
+  padding-left: 18px;
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
 .settingsAlignStart { justify-content: flex-start; }
-/* Backup/restore actions (Settings → Users → Data): wide buttons that wrap
-   instead of squeezing when the pane is narrow. */
-.settingsDataBtns { flex-wrap: wrap; }
+/* Editor-form body inside a SubDialog (add/edit key, account editor, add
+   user): the dialog owns the chrome, this just stacks Steps / Fields. */
+.settingsForm { display: flex; flex-direction: column; }
+.settingsForm > .quotaMeter { margin-bottom: 8px; }
+.settingsForm .reportModalBtns { margin-top: 10px; }
+/* Numbered stage of a dialog flow (the add/edit-key wizard). */
+.setStep { display: flex; flex-direction: column; gap: 7px; margin-bottom: 14px; }
+.setStep:last-of-type { margin-bottom: 4px; }
+.setStepHead { display: flex; align-items: center; gap: 10px; }
+.setStepNum {
+  width: 20px; height: 20px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+}
+.setStepTitle { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+.setStepBody { display: flex; flex-direction: column; padding-left: 30px; }
+.setStepBody .oauthInstructions { margin-top: 0; }
+/* One labeled control: caption + hint above, the input below. */
+.setField { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+.setField:last-child { margin-bottom: 0; }
+.setFieldLabel { font-size: 11.5px; font-weight: 500; color: var(--text-secondary); }
+.setField .aiKeyInput { margin-bottom: 0; }
+/* Number input with a fixed unit suffix (MB) hugging its right edge. */
+.unitInput { position: relative; display: block; }
+.unitInput .aiKeyInput { width: 100%; margin-bottom: 0; padding-right: 44px; }
+.unitSuffix {
+  position: absolute;
+  right: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+/* In a settings row (admin defaults) the unit input stays compact. */
+.setSlider .unitInput { width: 116px; }
+.setSlider .unitInput .aiKeyInput { text-align: right; padding-right: 36px; }
 .settingsNoMargin { margin: 0; }
 /* Model chips in the provider form — .categoryTag, same look as page labels. */
 .aiModelChips { display: flex; flex-wrap: wrap; gap: 5px; }
-/* "Models" header row in the form: hint text left, fetch-models button right. */
-.aiModelsHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-.aiModelsHead .searchToggle {
-  flex-shrink: 0;
-  gap: 5px;
-}
-.aiModelsHead .searchToggle:disabled {
-  opacity: 0.45;
-  cursor: default;
-  background: none;
-}
 /* …and the same chips on the saved-provider rows. */
 .aiProvModels { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 /* Provider rows double as the active-key picker in the Providers pane. */
@@ -313,23 +342,19 @@
 }
 .metaStatRow {
   display: grid;
-  grid-template-columns: 24px 1fr 84px 76px 76px;
+  grid-template-columns: 24px 1fr 84px 76px 76px 26px;
   align-items: center;
   gap: 6px;
-  padding: 5px 10px;
+  padding: 3px 10px;
+  min-height: 32px;
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
 }
-.metaStatRow:last-child {
-  border-bottom: none;
-}
-.metaStatRow:hover {
-  background: var(--bg-hover);
-}
-.metaStatRow input[type="checkbox"] {
-  accent-color: var(--accent);
-  margin: 0;
-}
+.metaStatRow .searchToggle { width: 24px; height: 24px; color: var(--text-dim); }
+.metaStatRow .searchToggle:hover { color: var(--text-primary); }
+.metaStatRow:last-child { border-bottom: none; }
+.metaStatRow:hover { background: var(--bg-hover); }
+.metaStatRow input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
 .metaStatHeader {
   position: sticky;
   top: 0;
@@ -346,8 +371,16 @@
   color: var(--text-primary);
 }
 /* Status cell: a colour-coded dot carries the verdict, the word qualifies it. */
-.metaCell { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-muted); }
-.metaCell > span, .metaCell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.metaCell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .setDot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: currentColor; }
 .metaCell.ok { color: var(--ok); }
 .metaCell.bad { color: var(--danger); }
@@ -380,6 +413,6 @@
   .settingsNavBtn { padding: 7px 9px; }
   .settingsNavBtn span { display: none; }
   .settingsPane { padding: 14px 14px 20px; }
-  .setStats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .setStats { gap: 6px; }
   .setRange { display: none; }
 }

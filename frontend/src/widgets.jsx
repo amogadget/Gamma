@@ -7,6 +7,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { PinIcon } from "./icons";
+import { MenuSelect } from "./menus";
 
 // Shared chrome for every dockable window: one grip (drag to move/reorder,
 // double-click to collapse), the close button right beside it, then the
@@ -355,15 +356,11 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, onCancel, onExport }) 
         <div className="reportModalTitle">Export</div>
         <div className="settingRow settingRowStatic">
           <span className="settingText"><span className="settingLabel">Export format</span></span>
-          <select
-            className="aiKeyInput settingSelect exportFormatSelect"
-            value={format}
-            onChange={(event) => set({ format: event.target.value })}
-          >
-            {EXPORT_FORMATS.map(([id, label]) => (
-              (id !== "pdf" || hasPdf) ? <option key={id} value={id}>{label}</option> : null
-            ))}
-          </select>
+          <MenuSelect
+            label="Export format" value={format}
+            onChange={(format) => set({ format })}
+            options={EXPORT_FORMATS.filter(([id]) => id !== "pdf" || hasPdf)}
+          />
         </div>
         <SwitchRow
           label="Highlights"
@@ -425,14 +422,14 @@ function ImportDialog({ hasPdf, stripDefault, busy, onCancel, onImport }) {
         <div className="reportModalTitle">Import</div>
         <div className="settingRow settingRowStatic">
           <span className="settingText"><span className="settingLabel">Import from</span></span>
-          <select
-            className="aiKeyInput settingSelect exportFormatSelect"
-            value={isAnnots ? "annots" : "logseq"}
-            onChange={(event) => setSource(event.target.value)}
-          >
-            {hasPdf ? <option value="annots">Annotations in this PDF</option> : null}
-            <option value="logseq">Logseq highlights (.pdf + .edn)</option>
-          </select>
+          <MenuSelect
+            label="Import from" value={isAnnots ? "annots" : "logseq"}
+            onChange={setSource}
+            options={[
+              ...(hasPdf ? [["annots", "Annotations in this PDF"]] : []),
+              ["logseq", "Logseq highlights (.pdf + .edn)"],
+            ]}
+          />
         </div>
         <SwitchRow
           label="Strip the originals from the PDF"

@@ -2927,6 +2927,20 @@ button.pdfOutlineChevron:hover {
 }
 /* Icon-only square variant (delete/edit row actions). */
 .uiBtn.iconSq { width: 27px; height: 25px; padding: 0; flex-shrink: 0; }
+/* Dropdown trigger (Codex-style select): a uiBtn whose content is the
+   current choice plus a chevron. `.block` stretches it into a form field. */
+.uiSelectBtn { gap: 7px; }
+.uiSelectBtn .uiSelectLabel {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.uiSelectBtn .uiSelectChev { color: var(--text-dim); flex-shrink: 0; }
+.uiSelectBtn.block { width: 100%; justify-content: space-between; }
+.uiSelectBtn.block .uiSelectLabel { max-width: none; }
+/* Checkmark on the selected row of a dropdown menu. */
+.ctxMenuCheck { margin-left: auto; padding-left: 14px; color: var(--text-primary); flex-shrink: 0; }
 /* Selected state for a button that is a choice rather than an action —
    segmented groups (Settings) light the active option this way. */
 .uiBtn.on {
@@ -2956,36 +2970,32 @@ button.pdfOutlineChevron:hover {
   color: #6fb2ff;
 }
 .aiProvRow {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 8px 2px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 8px 8px;
+  border-radius: 10px;
+  transition: background 0.12s ease;
 }
-.aiProvName {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-primary);
+/* Flat at rest: rows are separated by a straight inset hairline (a border
+   would curve around the radius and read as a card edge), and only hover
+   paints the rounded highlight. */
+.aiProvRow:not(:last-of-type)::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  height: 1px;
+  background: var(--border-subtle);
 }
-.aiProvDesc {
-  font-size: 11px;
-  color: var(--text-muted);
-  overflow-wrap: anywhere;
-}
-.aiProvActions {
-  display: flex;
-  gap: 6px;
-  flex-shrink: 0;
-}
-.aiProvForm {
-  margin-top: 8px;
-}
-/* layout only: field caption sitting above an input inside a form */
-.formFieldLabel {
-  display: block;
-  margin: 2px 0 4px;
-}
+.aiProvRow:hover { background: var(--bg-hover); }
+.aiProvName { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
+.aiProvDesc { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.aiProvActions { display: flex; gap: 6px; flex-shrink: 0; }
+.aiProvForm { margin-top: 8px; }
 /* Storage meter (QuotaMeter): thin cloud-drive-style usage bar. */
 .quotaMeter {
   display: block;
@@ -3130,9 +3140,10 @@ button.pdfOutlineChevron:hover {
 /* The confirm dialog can be triggered FROM another modal (e.g. deleting a
    user from the Users manager) — it must always stack above sibling overlays
    regardless of DOM order. */
-.reportOverlay[data-popover="confirm"] {
-  z-index: 1300;
-}
+.reportOverlay[data-popover="confirm"] { z-index: 1300; }
+/* Sub-dialogs opened from inside the settings modal (edit key, edit account,
+   add user): above the settings overlay, still below the confirm box. */
+.reportOverlay.subDialog { z-index: 1290; }
 .reportModal {
   border-radius: var(--radius-surface);
   padding: 16px;
@@ -4215,7 +4226,6 @@ button.pdfOutlineChevron:hover {
 .exportModal .reportModalTitle { margin-bottom: 4px; }
 .exportModal .reportModalHint { margin-top: 6px; }
 .exportModal .reportModalBtns { margin-top: 8px; }
-.exportFormatSelect { min-width: 168px; }
 .confirmMessage { font-size: 13px; color: var(--text-secondary); }
 .linkPromptUrl { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .uiBtn.primary.dangerBtn { background: #b93c3c; }

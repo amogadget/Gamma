@@ -21,6 +21,7 @@ import sqlite3
 import threading
 
 from fastapi import APIRouter, Request
+from pydantic import BaseModel
 
 from ..ai_context import pdf_path as _pdf_path
 from .. import flatten_queue
@@ -104,26 +105,37 @@ def _index_missing_async(user: str, doc_ids: list[str]) -> bool:
         return True
 
 
-@router.post("/search-reindex")
-def search_reindex(request: Request):
-    """Settings button: throw away the whole index and re-extract every paper.
-    Progress is visible via /api/tasks like any lazy indexing run."""
-    user = require_user(request)
+def _library_doc_ids(user: str) -> list[str]:
+    """doc_ids of every paper page in the user's library."""
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        doc_ids = [
-            r[0]
-            for r in conn.execute(
-                "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks "
-                "WHERE parent_id = 'root' AND json_extract(properties, '$.doc_id') IS NOT NULL"
-            ).fetchall()
-            if r[0]
-        ]
-    # Stamp everything stale first: if the run is interrupted, the next search
-    # still sees the remainder as missing and finishes the job.
-    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
-        _ensure_schema(conn)
-        conn.execute("UPDATE pdf_fts_docs SET ver = 0")
-        conn.commit()
+        return [r[0] for r in conn.execute(
+            "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks "
+            "WHERE parent_id = 'root' AND json_extract(properties, '$.doc_id') IS NOT NULL"
+        ).fetchall() if r[0]]
+
+
+class ReindexRequest(BaseModel):
+    doc_ids: list[str] = []  # empty = rebuild the whole library
+
+
+@router.post("/search-reindex")
+def search_reindex(request: Request, payload: ReindexRequest | None = None):
+    """Settings: re-extract papers into the FTS index. With doc_ids, just those
+    papers (the Library pane's per-paper button — no global stale stamp);
+    without, the whole library. Progress is visible via /api/tasks either way."""
+    user = require_user(request)
+    library = _library_doc_ids(user)
+    wanted = [d for d in (payload.doc_ids if payload else []) if d]
+    if wanted:
+        doc_ids = [d for d in library if d in set(wanted)]  # only own papers
+    else:
+        doc_ids = library
+        # Stamp everything stale first: if the run is interrupted, the next
+        # search still sees the remainder as missing and finishes the job.
+        with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+            _ensure_schema(conn)
+            conn.execute("UPDATE pdf_fts_docs SET ver = 0")
+            conn.commit()
     started = doc_ids and _index_missing_async(user, doc_ids)
     return {"scheduled": len(doc_ids) if started else 0, "busy": bool(doc_ids) and not started}
 
