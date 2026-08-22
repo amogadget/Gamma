@@ -8,11 +8,22 @@
     <link rel="icon" type="image/x-icon" href="/favicon.svg" />
     <title>Gamma — Annotate PDFs, Share Your Thinking</title>
     <link rel="preload" href="/pdf.worker.min.mjs" as="worker" crossorigin="anonymous">
+    <!-- A pinned theme (Settings → General) must win before the bundle loads,
+         or the splash flashes the OS color. App.jsx keeps the attribute in
+         sync (and handles "system") once React is up. -->
+    <script>
+      try {
+        var t = localStorage.getItem("gamma-theme");
+        if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    </script>
     <style>
       html, body, #root { margin: 0; height: 100%; background: #111; }
       @media (prefers-color-scheme: light) {
         html, body, #root { background: #f6f6f4; }
       }
+      html[data-theme="light"], html[data-theme="light"] body, html[data-theme="light"] #root { background: #f6f6f4; }
+      html[data-theme="dark"], html[data-theme="dark"] body, html[data-theme="dark"] #root { background: #111; }
       /* First-load splash: index.html is tiny and paints immediately, while
          the app bundle (~450 kB gzipped) downloads and parses — without this
          that window is a pure blank page. Lives inside #root, so React's

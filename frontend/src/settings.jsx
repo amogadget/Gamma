@@ -11,6 +11,7 @@ import {
   DatabaseIcon,
   ExportIcon,
   EyeOffIcon,
+  FileIcon,
   FileTextIcon,
   GlobeIcon,
   HardDriveIcon,
@@ -22,6 +23,8 @@ import {
   ListIcon,
   MessageSquareIcon,
   MicIcon,
+  MonitorIcon,
+  MoonIcon,
   MoveVerticalIcon,
   PaperIcon,
   PenIcon,
@@ -34,6 +37,7 @@ import {
   SettingsIcon,
   ShieldIcon,
   SparklesIcon,
+  SunIcon,
   TerminalIcon,
   Trash2Icon,
   TypeIcon,
@@ -41,15 +45,19 @@ import {
   UsersIcon,
 } from "./icons";
 
-// Seven panes in three groups. Each pane is a stack of Sections, each Section a
+// Seven panes in four groups. Each pane is a stack of Sections, each Section a
 // stack of Rows — icon · label · one short hint · control. The paragraph that
 // used to sit under every label now lives in the row's `title`, so a pane scans
 // as a column of pictures and still explains itself on hover.
 const NAV_GROUPS = [
   ["Workspace", [
     ["general", "General", SettingsIcon],
-    ["search", "Search", SearchIcon],
     ["library", "Library", ListIcon],
+  ]],
+  ["Reading", [
+    ["viewer", "PDF viewer", FileIcon],
+    ["search", "Search", SearchIcon],
+    ["notes", "Notes", FileTextIcon],
   ]],
   ["AI", [
     ["ai", "Providers", KeyIcon],
@@ -62,7 +70,7 @@ const NAV_GROUPS = [
 ];
 // Older entry points (and anything that remembered a pane id) still resolve.
 const PANE_ALIASES = {
-  papers: "general", notes: "general",
+  papers: "general",
   prompts: "assistant", context: "assistant",
   diagnostics: "advanced", account: "users",
 };
@@ -292,9 +300,27 @@ function GeneralSettings({ value }) {
   return (
     <>
       <PaneHead icon={SettingsIcon} title="General">
-        Reading, notes and interface preferences — saved in this browser.
+        Appearance and paper preferences — saved in this browser.
       </PaneHead>
-      <Section title="Reading">
+      <Section title="Appearance">
+        <Row
+          icon={value.theme === "dark" ? MoonIcon : value.theme === "light" ? SunIcon : MonitorIcon}
+          label="Theme"
+          hint="System follows the OS setting"
+          title="Light or dark interface. System tracks the operating system's appearance and switches live when it changes."
+        >
+          <Segmented
+            value={value.theme}
+            onChange={value.setTheme}
+            options={[
+              ["system", "System", MonitorIcon, "Follow the OS light/dark setting"],
+              ["light", "Light", SunIcon, "Always light"],
+              ["dark", "Dark", MoonIcon, "Always dark"],
+            ]}
+          />
+        </Row>
+      </Section>
+      <Section title="Papers">
         <Toggle
           icon={CloudDownloadIcon}
           label="Open-access fallback"
@@ -319,6 +345,20 @@ function GeneralSettings({ value }) {
           checked={value.pdfSaveLocal}
           onChange={value.setPdfSaveLocal}
         />
+      </Section>
+    </>
+  );
+}
+
+// --- Reading: PDF viewer + search + notes -----------------------------------
+
+function ViewerSettings({ value }) {
+  return (
+    <>
+      <PaneHead icon={FileIcon} title="PDF viewer">
+        How the PDF pane scrolls and what it paints.
+      </PaneHead>
+      <Section title="Viewing">
         <Toggle
           icon={MoveVerticalIcon}
           label="Snap vertical scrolling"
@@ -343,43 +383,8 @@ function GeneralSettings({ value }) {
           />
         </Row>
       </Section>
-      <Section title="Notes">
-        <Toggle
-          icon={CornerDownLeftIcon}
-          label="Enter starts a new note"
-          hint="Off: Enter breaks the line, Shift+Enter starts a note"
-          title="Logseq-style: Enter creates the next note, Shift+Enter types a line break inside the current one. Turn off to swap them (the + button under the notes always creates one)."
-          checked={value.enterNewNote}
-          onChange={value.setEnterNewNote}
-        />
-        <Toggle
-          icon={MessageSquareIcon}
-          label="Note badges on highlights"
-          hint="Bubble on a highlight that carries a note"
-          title="Show a small speech-bubble next to a highlight in the PDF when you've typed a note on it. Click the bubble to jump to the note."
-          checked={value.hlNoteBadges}
-          onChange={value.setHlNoteBadges}
-        />
-      </Section>
     </>
   );
-}
-
-// --- Search -----------------------------------------------------------------
-
-// Kick off a full search-index rebuild. Shared by the Library pane and the
-// Search pane — only the phrasing after the scheduled count differs.
-async function requestReindex(setStatus, scheduledSuffix) {
-  try {
-    const result = await apiJson(`${API}/search-reindex`, { method: "POST" });
-    setStatus(result.busy
-      ? "Indexing is already running—see the tasks popover."
-      : result.scheduled
-        ? `Re-indexing ${result.scheduled} paper${result.scheduled === 1 ? "" : "s"} ${scheduledSuffix}`
-        : "No papers with PDFs to index.");
-  } catch (err) {
-    setStatus(`Reindex failed: ${err.message}`);
-  }
 }
 
 function SearchSettings({ value }) {
@@ -406,20 +411,50 @@ function SearchSettings({ value }) {
           onChange={value.setSearchDetailsPaper}
         />
       </Section>
-      <Section title="Index">
-        <Row
-          icon={RefreshIcon}
-          label="PDF text index"
-          hint={value.indexTask?.active ? "Rebuilding — progress in the tasks popover" : "Re-extract every paper if results look stale"}
-          title="Full-text search reads a per-user index built from the extracted PDF text. Rebuild it when library-wide results look stale or incomplete."
-        >
-          <button className="uiBtn sm" disabled={value.indexTask?.active} onClick={() => requestReindex(value.setStatus, "in the background.")}>
-            {value.indexTask?.active ? "Indexing…" : "Rebuild"}
-          </button>
-        </Row>
+    </>
+  );
+}
+
+function NotesSettings({ value }) {
+  return (
+    <>
+      <PaneHead icon={FileTextIcon} title="Notes">
+        How the outliner behaves while you write.
+      </PaneHead>
+      <Section title="Editing">
+        <Toggle
+          icon={CornerDownLeftIcon}
+          label="Enter starts a new note"
+          hint="Off: Enter breaks the line, Shift+Enter starts a note"
+          title="Logseq-style: Enter creates the next note, Shift+Enter types a line break inside the current one. Turn off to swap them (the + button under the notes always creates one)."
+          checked={value.enterNewNote}
+          onChange={value.setEnterNewNote}
+        />
+        <Toggle
+          icon={MessageSquareIcon}
+          label="Note badges on highlights"
+          hint="Bubble on a highlight that carries a note"
+          title="Show a small speech-bubble next to a highlight in the PDF when you've typed a note on it. Click the bubble to jump to the note."
+          checked={value.hlNoteBadges}
+          onChange={value.setHlNoteBadges}
+        />
       </Section>
     </>
   );
+}
+
+// Kick off a full search-index rebuild (the Library pane's Index section).
+async function requestReindex(setStatus, scheduledSuffix) {
+  try {
+    const result = await apiJson(`${API}/search-reindex`, { method: "POST" });
+    setStatus(result.busy
+      ? "Indexing is already running—see the tasks popover."
+      : result.scheduled
+        ? `Re-indexing ${result.scheduled} paper${result.scheduled === 1 ? "" : "s"} ${scheduledSuffix}`
+        : "No papers with PDFs to index.");
+  } catch (err) {
+    setStatus(`Reindex failed: ${err.message}`);
+  }
 }
 
 // --- Library: storage + per-paper health ------------------------------------
@@ -517,6 +552,18 @@ function LibrarySettings({ value }) {
       <Section title="Storage">
         <StorageCard />
         {value.isAdmin ? <ServerLimitRows setStatus={value.setStatus} refreshQuota={value.refreshQuota} /> : null}
+      </Section>
+      <Section title="Index">
+        <Row
+          icon={RefreshIcon}
+          label="PDF text index"
+          hint={value.indexTask?.active ? "Rebuilding — progress in the tasks popover" : "Re-extract every paper if results look stale"}
+          title="Full-text search reads a per-user index built from the extracted PDF text. Rebuild it when library-wide results look stale or incomplete."
+        >
+          <button className="uiBtn sm" disabled={value.indexTask?.active} onClick={() => requestReindex(value.setStatus, "in the background.")}>
+            {value.indexTask?.active ? "Indexing…" : "Rebuild"}
+          </button>
+        </Row>
       </Section>
       <MetaStatusSection value={value} />
     </>
@@ -1855,8 +1902,10 @@ export default function SettingsDialog({
         </div>
         <div className="settingsPane">
           <button className="uiClose uiCloseLg settingsClose" onClick={onClose} title="Close settings" aria-label="Close settings">×</button>
-          {pane === "general" ? <GeneralSettings value={{ ...papers, ...notes }} /> : null}
+          {pane === "general" ? <GeneralSettings value={papers} /> : null}
+          {pane === "viewer" ? <ViewerSettings value={papers} /> : null}
           {pane === "search" ? <SearchSettings value={search} /> : null}
+          {pane === "notes" ? <NotesSettings value={notes} /> : null}
           {pane === "library" ? (
             <LibrarySettings value={{ ...library, isAdmin: papers.isAdmin, refreshQuota: papers.refreshQuota }} />
           ) : null}
