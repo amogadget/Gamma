@@ -4553,10 +4553,10 @@ export default function App() {
     await loadBlocksForBlock(focusedBlockId);
   }
 
-  // (Re)entering the Prompts pane rebuilds the drafts from the saved values —
-  // switching away without saving is the cancel path.
+  // (Re)entering the Assistant pane rebuilds the prompt drafts from the saved
+  // values — switching away without saving is the cancel path.
   useEffect(() => {
-    if (settingsOpen !== "prompts") return;
+    if (settingsOpen !== "assistant") return;
     setPromptDraft(chatSystem || aiInfo?.default_prompt || "");
     setMetaPromptDraft(metaPrompt || aiInfo?.metadata_prompt || "");
     setCitePromptDraft(citePrompt || aiInfo?.cite_prompt || "");
@@ -6973,7 +6973,7 @@ export default function App() {
                 </div>
               ) : null}
               <div className="popoverDivider" />
-              <button className="popoverItem" onClick={() => { setSettingsOpen("papers"); setOpenPopover(null); }}>
+              <button className="popoverItem" onClick={() => { setSettingsOpen("general"); setOpenPopover(null); }}>
                 <SettingsIcon className="popoverItemIcon" size={15} />
                 Settings…
               </button>

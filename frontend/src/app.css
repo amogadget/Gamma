@@ -30,6 +30,8 @@
   --border-light: #444;
   --border-hover: #555;
   --border-subtle: #3f3f3f;
+  --ok: #4caf7d;
+  --danger: #e05c5c;
   --accent: #5b9bd5;
   --accent-dark: #3a7bd5;
   --accent-bright: #7ab8f5;
@@ -72,6 +74,8 @@
   --border-light: #cccccc;
   --border-hover: #aaaaaa;
   --border-subtle: #e0e0e0;
+  --ok: #2f8f57;
+  --danger: #c23b3b;
   --accent: var(--accent-dark);
   --accent-dark: #3a7bd5;
   --accent-bright: #2b6bcb;
@@ -2922,21 +2926,17 @@ button.pdfOutlineChevron:hover {
   border-radius: 8px;
 }
 /* Icon-only square variant (delete/edit row actions). */
-.uiBtn.iconSq {
-  width: 27px;
-  height: 25px;
-  padding: 0;
-  flex-shrink: 0;
+.uiBtn.iconSq { width: 27px; height: 25px; padding: 0; flex-shrink: 0; }
+/* Selected state for a button that is a choice rather than an action —
+   segmented groups (Settings) light the active option this way. */
+.uiBtn.on {
+  background: var(--accent-bg);
+  border-color: var(--accent-dark);
+  color: var(--text-primary);
 }
-.uiBtn.primary {
-  background: var(--accent-dark);
-  border-color: transparent;
-  color: #fff;
-}
-.uiBtn.primary:hover:not(:disabled) {
-  background: #3568a0;
-  color: #fff;
-}
+.uiBtn.on:hover:not(:disabled) { background: var(--accent-bg); color: var(--text-primary); }
+.uiBtn.primary { background: var(--accent-dark); border-color: transparent; color: #fff; }
+.uiBtn.primary:hover:not(:disabled) { background: #3568a0; color: #fff; }
 .uiBtn.danger:hover:not(:disabled) {
   color: #e5534b;
   border-color: rgba(229, 83, 75, 0.5);
@@ -3013,18 +3013,7 @@ button.pdfOutlineChevron:hover {
   background: #e5534b;
 }
 /* meters inside user-list rows stay compact */
-.aiProvMeta .quotaMeter {
-  max-width: 260px;
-}
-/* right-hand cell of a settings row holding a meter */
-.settingQuotaCell {
-  width: 200px;
-  flex-shrink: 0;
-  text-align: right;
-}
-.settingQuotaCell .settingDesc {
-  white-space: nowrap;
-}
+.aiProvMeta .quotaMeter { max-width: 260px; }
 /* storage meter in the account popover: numbers ride in the user card row,
    the bar (quota only) sits as a thin strip beneath it */
 .popoverQuota {

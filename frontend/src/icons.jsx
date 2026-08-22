@@ -333,6 +333,54 @@ export const SettingsIcon = (p) => (
   </Icon>
 );
 
+// Settings-pane row glyphs — one per preference, so a pane reads as a list of
+// pictures instead of a wall of sentences.
+export const CloudDownloadIcon = (p) => (
+  <Icon {...p}><path d="M12 13v8" /><path d="m8 17 4 4 4-4" /><path d="M4.4 15.2A5 5 0 0 1 7 6a7 7 0 0 1 13.2 2.3A4.5 4.5 0 0 1 19.6 17" /></Icon>
+);
+export const MoveVerticalIcon = (p) => (
+  <Icon {...p}><path d="M12 3v18" /><path d="m8 7 4-4 4 4" /><path d="m8 17 4 4 4-4" /></Icon>
+);
+export const EyeOffIcon = (p) => (
+  <Icon {...p}><path d="M10.7 5.1A10 10 0 0 1 12 5c5 0 9 4.5 9 7a11 11 0 0 1-2.2 3.1" /><path d="M6.3 6.4A11.6 11.6 0 0 0 3 12c0 2.5 4 7 9 7a10 10 0 0 0 4.2-.9" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /><path d="m3 3 18 18" /></Icon>
+);
+export const ScissorsIcon = (p) => (
+  <Icon {...p}><circle cx="6" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M20 4 8.1 15.9" /><path d="m8.1 8.1 11.9 11.9" /></Icon>
+);
+export const CornerDownLeftIcon = (p) => (
+  <Icon {...p}><path d="m9 10-5 5 5 5" /><path d="M20 4v7a4 4 0 0 1-4 4H4" /></Icon>
+);
+export const LayoutIcon = (p) => (
+  <Icon {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 15h18" /></Icon>
+);
+export const HardDriveIcon = (p) => (
+  <Icon {...p}><path d="M3 12h18" /><path d="M5.5 5h13a2 2 0 0 1 1.8 1.1l1.5 3A2 2 0 0 1 22 10v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 .2-.9l1.5-3A2 2 0 0 1 5.5 5z" /><path d="M6.5 15.5h.01" /><path d="M10.5 15.5h.01" /></Icon>
+);
+export const RefreshIcon = (p) => (
+  <Icon {...p}><path d="M21 12a9 9 0 1 1-2.6-6.4" /><path d="M21 3v5h-5" /></Icon>
+);
+export const TerminalIcon = (p) => (
+  <Icon {...p}><path d="m4 17 6-6-6-6" /><path d="M12 19h8" /></Icon>
+);
+export const BugIcon = (p) => (
+  <Icon {...p}><rect x="8" y="6" width="8" height="14" rx="4" /><path d="M9 8a3 3 0 0 1 6 0" /><path d="M3 11h5" /><path d="M16 11h5" /><path d="m3 18 5-2" /><path d="m16 16 5 2" /><path d="m3.5 5 4 2.5" /><path d="M20.5 5l-4 2.5" /></Icon>
+);
+export const ServerIcon = (p) => (
+  <Icon {...p}><rect x="2" y="3" width="20" height="8" rx="2" /><rect x="2" y="13" width="20" height="8" rx="2" /><path d="M6 7h.01" /><path d="M6 17h.01" /></Icon>
+);
+export const GlobeIcon = (p) => (
+  <Icon {...p}><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z" /></Icon>
+);
+export const TypeIcon = (p) => (
+  <Icon {...p}><path d="M4 7V5h16v2" /><path d="M12 5v14" /><path d="M9 19h6" /></Icon>
+);
+export const ShieldIcon = (p) => (
+  <Icon {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></Icon>
+);
+export const HighlightIcon = (p) => (
+  <Icon {...p}><path d="m9 11-4 4v3h3l4-4" /><path d="m13 7 4 4" /><path d="M15 3.5 20.5 9 13 16.5 7.5 11z" /><path d="M4 21h16" /></Icon>
+);
+
 // PDF viewer chrome.
 export const ZoomOutIcon = (p) => (
   <Icon {...p}>
