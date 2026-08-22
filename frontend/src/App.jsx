@@ -7435,7 +7435,7 @@ export default function App() {
             <div className="reportModalTitle">{confirmBox.title}</div>
             <div className="reportModalHint confirmMessage">{confirmBox.message}</div>
             <div className="reportModalBtns">
-              <button className="chatClearBtn" onClick={() => setConfirmBox(null)} autoFocus>Cancel</button>
+              <button className="uiBtn" onClick={() => setConfirmBox(null)} autoFocus>Cancel</button>
               {confirmBox.altLabel ? (
                 <button
                   className={`uiBtn ${confirmBox.altDanger ? "dangerBtn" : ""}`}
@@ -7491,33 +7491,23 @@ export default function App() {
             <div className="reportModalTitle">External link</div>
             <div className="reportModalHint confirmMessage linkPromptUrl">{linkPrompt}</div>
             <div className="reportModalBtns">
-              <button className="chatClearBtn" onClick={() => setLinkPrompt(null)}>
-                Cancel
-              </button>
+              <button className="uiBtn" onClick={() => setLinkPrompt(null)}>Cancel</button>
               {(() => {
                 // Right-click always lands here, even for links whose paper is
                 // already in the library — offer that copy instead of a re-fetch.
                 const pid = findPageForUrl(linkPrompt, homeBlocks);
                 return pid ? (
                   <button
-                    className="chatClearBtn"
-                    onClick={() => {
-                      setLinkPrompt(null);
-                      openBlock(pid, { pushNav: true });
-                    }}
+                    className="uiBtn"
+                    onClick={() => { setLinkPrompt(null); openBlock(pid, { pushNav: true }); }}
                     title="This paper is already in your library"
                   >
                     Open in Gamma
                   </button>
                 ) : (
                   <button
-                    className="chatClearBtn"
-                    onClick={() => {
-                      const url = linkPrompt;
-                      setLinkPrompt(null);
-                      pushNav();
-                      openPdf(url);
-                    }}
+                    className="uiBtn"
+                    onClick={() => { const url = linkPrompt; setLinkPrompt(null); pushNav(); openPdf(url); }}
                     title="Resolve this link as a PDF and open it as a new paper in Gamma"
                   >
                     Fetch into Gamma
@@ -7624,17 +7614,9 @@ export default function App() {
             </div>
             <div className="reportModalBtns">
               {linkDialog.editBlockId ? (
-                <button
-                  className="chatClearBtn"
-                  onClick={() => createLinkHighlight({})}
-                  title="Turn this back into a plain highlight"
-                >
-                  Remove link
-                </button>
+                <button className="uiBtn" onClick={() => createLinkHighlight({})} title="Turn this back into a plain highlight">Remove link</button>
               ) : null}
-              <button className="chatClearBtn" onClick={() => setLinkDialog(null)}>
-                Cancel
-              </button>
+              <button className="uiBtn" onClick={() => setLinkDialog(null)}>Cancel</button>
             </div>
           </div>
         </div>

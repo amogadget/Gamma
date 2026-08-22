@@ -2014,15 +2014,9 @@ button.pdfOutlineChevron:hover {
   flex: 1;
 }
 /* unified compact header controls */
-.dockWindowHeader .chatClearBtn {
-  white-space: nowrap;
-}
-.dockWindowHeader .chatHeaderSelects {
-  margin: 0;
-}
-.dockWindowHeader .chatPanelHeaderBtns {
-  flex-shrink: 0;
-}
+.dockWindowHeader .uiBtn.sm { padding: 2px 10px; font-size: 11px; }
+.dockWindowHeader .chatHeaderSelects { margin: 0; }
+.dockWindowHeader .chatPanelHeaderBtns { flex-shrink: 0; }
 .dockWindowBody {
   flex: 1;
   min-height: 0;
@@ -2321,16 +2315,6 @@ button.pdfOutlineChevron:hover {
   display: flex;
   gap: 4px;
 }
-.chatClearBtn {
-  background: none;
-  border: 1px solid var(--border-subtle);
-  border-radius: 3px;
-  color: var(--text-muted);
-  font-size: 10px;
-  cursor: pointer;
-  padding: 1px 6px;
-  font-family: inherit;
-}
 .chatMessages {
   flex: 1;
   overflow-y: auto;
@@ -2475,7 +2459,8 @@ button.pdfOutlineChevron:hover {
     transform: translateY(-2px);
   }
 }
-/* model + effort switchers */
+/* model + effort switchers — shared MenuSelect pills, sized down for the
+   window header (the dropdown look itself comes from .uiBtn/.uiSelectBtn). */
 .chatHeaderSelects {
   display: flex;
   gap: 4px;
@@ -2483,41 +2468,8 @@ button.pdfOutlineChevron:hover {
   margin-right: auto;
   min-width: 0;
 }
-.chatModelSelect {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 3px;
-  color: var(--text-muted);
-  font-size: 10px;
-  font-family: inherit;
-  padding: 1px 2px;
-  max-width: 180px;
-  outline: none;
-  cursor: pointer;
-  min-width: 0;
-}
-:is(.chatClearBtn, .chatModelSelect):hover {
-  color: var(--text-primary);
-  border-color: var(--border);
-}
-.chatModelRefreshBtn {
-  background: none;
-  border: 1px solid var(--border-subtle);
-  border-radius: 3px;
-  color: var(--text-muted);
-  font-size: 11px;
-  line-height: 1;
-  padding: 1px 5px;
-  cursor: pointer;
-}
-.chatModelRefreshBtn:hover:not(:disabled) {
-  color: var(--text-primary);
-  border-color: var(--border);
-}
-.chatModelRefreshBtn:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
+.chatHeaderSelects .uiBtn.sm { padding: 2px 8px; font-size: 11px; min-width: 0; }
+.chatHeaderSelects .uiSelectBtn .uiSelectLabel { max-width: 150px; }
 /* prompt editor */
 .promptTextarea {
   width: 100%;
@@ -2850,10 +2802,6 @@ button.pdfOutlineChevron:hover {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-}
-.reportModalBtns .chatClearBtn {
-  font-size: 12px;
-  padding: 5px 12px;
 }
 .chatInputRow {
   display: flex;

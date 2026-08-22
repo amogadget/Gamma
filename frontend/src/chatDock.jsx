@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson, isEnterCommit, copyText, isPdfFile } from "./utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied } from "./widgets";
+import { MenuSelect } from "./menus";
 import {
   ArrowUpIcon,
   BookIcon,
@@ -622,23 +623,19 @@ export default function ChatDock({
             const lastRefresh = aiInfo.refreshed_at ? new Date(aiInfo.refreshed_at) : null;
             return (
               <span className="chatHeaderSelects">
-                <select
-                  className="chatModelSelect"
+                <MenuSelect
+                  label="Switch model"
                   value={currentId}
-                  onChange={(e) => {
-                    const id = e.target.value;
+                  onChange={(id) => {
                     const picked = models.find((m) => m.id === id);
                     if (picked && picked.provider !== aiProvider) setAiProvider?.(picked.provider);
                     setChatModel(id);
                   }}
-                  title="Switch model"
-                >
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {multiProvider ? `${m.model} · ${m.provider_name || m.provider}` : m.model}
-                    </option>
-                  ))}
-                </select>
+                  options={models.map((m) => [
+                    m.id,
+                    multiProvider ? `${m.model} · ${m.provider_name || m.provider}` : m.model,
+                  ])}
+                />
                 <button
                   className="chatModelRefreshBtn"
                   onClick={refreshModelList}
@@ -652,26 +649,22 @@ export default function ChatDock({
                 >
                   {chatModelRefreshing ? "…" : "↻"}
                 </button>
-                <select
-                  className="chatModelSelect"
+                <MenuSelect
+                  label="Reasoning effort — leave on 'effort: default' unless the model supports it"
                   value={chatEffort}
-                  onChange={(e) => setChatEffort(e.target.value)}
-                  title="Reasoning effort — leave on 'effort: default' unless the model supports it"
-                >
-                  <option value="">effort: default</option>
-                  {(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => (
-                    <option key={ef} value={ef}>
-                      effort: {ef}
-                    </option>
-                  ))}
-                </select>
+                  onChange={setChatEffort}
+                  options={[
+                    ["", "effort: default"],
+                    ...(aiInfo.efforts || ["low", "medium", "high"]).map((ef) => [ef, `effort: ${ef}`]),
+                  ]}
+                />
               </span>
             );
           })()
         : null}
       <div className="chatPanelHeaderBtns">
         <button
-          className={`chatClearBtn ${chatFindOpen ? "on" : ""}`}
+          className={`uiBtn sm ${chatFindOpen ? "on" : ""}`}
           onClick={() => {
             setChatFindOpen((v) => !v);
             setChatFind("");
@@ -681,7 +674,7 @@ export default function ChatDock({
           Find
         </button>
         <button
-          className="chatClearBtn"
+          className="uiBtn sm"
           onClick={clearChat}
           title="Start a fresh conversation (clears saved history)"
         >
@@ -842,14 +835,14 @@ export default function ChatDock({
                         <div className="chatEditBtns">
                           <button
                             type="button"
-                            className="chatClearBtn"
+                            className="uiBtn sm"
                             onClick={() => setEditingMsg(null)}
                           >
                             Cancel
                           </button>
                           <button
                             type="button"
-                            className="chatClearBtn chatEditSend"
+                            className="uiBtn sm chatEditSend"
                             disabled={!editingMsg.text.trim() || chatLoading}
                             onClick={() => {
                               const base = chatMessages.slice(0, i);
@@ -1295,7 +1288,7 @@ export default function ChatDock({
               ) : null}
               <div className="reportModalBtns">
                 {chatDocs.length ? (
-                  <button className="chatClearBtn" onClick={() => setChatDocs([])}>
+                  <button className="uiBtn" onClick={() => setChatDocs([])}>
                     Clear selection
                   </button>
                 ) : null}
