@@ -86,9 +86,7 @@
   --scrollbar-thumb: #cccccc;
 }
 
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
 /* Shared visual primitives. Components keep their layout and sizing rules,
    while these groups own the recurring surface, field, and hover language. */
@@ -235,8 +233,7 @@ body {
   font-size: 14px;
 }
 
-.topbar button,
-.noteBtn {
+.topbar button {
   padding: 7px 12px;
   background: var(--bg-raised);
   color: var(--text-primary);
@@ -247,8 +244,7 @@ body {
   font-size: 13px;
 }
 
-.topbar button:hover,
-.noteBtn:hover {
+.topbar button:hover {
   background: var(--bg-hover);
 }
 
@@ -378,95 +374,8 @@ body {
   padding: 4px 0;
 }
 
-.pdfSaveToggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 8px;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--text-muted);
-  user-select: none;
-}
-.pdfSaveSwitch {
-  position: relative;
-  display: inline-block;
-  width: 28px;
-  height: 16px;
-  flex-shrink: 0;
-}
-.pdfSaveSwitch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-  position: absolute;
-}
-.pdfSaveSlider {
-  position: absolute;
-  inset: 0;
-  background: var(--bg-subtle);
-  border-radius: 8px;
-  transition: background 0.15s;
-}
-.pdfSaveSlider::before {
-  content: "";
-  position: absolute;
-  width: 12px;
-  height: 12px;
-  left: 2px;
-  top: 2px;
-  background: #fff;
-  border-radius: 50%;
-  transition: transform 0.15s;
-}
-.pdfSaveSwitch input:checked + .pdfSaveSlider {
-  background: var(--accent);
-}
-.pdfSaveSwitch input:checked + .pdfSaveSlider::before {
-  transform: translateX(12px);
-}
-
-.menuToggleBtn {
-  font-size: 18px;
-  line-height: 1;
-}
-
-/* The overflow menu is always a dropdown under the ⋮ button */
-.topbarOverflow {
-  display: none;
-  position: absolute;
-  top: 100%;
-  right: 8px;
-  z-index: 100;
-  flex-direction: column;
-  gap: 2px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 6px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
-  min-width: 180px;
-}
-.topbarOverflow.open {
-  display: flex;
-}
-.topbar .topbarOverflow button {
-  white-space: nowrap;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 10px;
-}
-.topbar .topbarOverflow button:hover {
-  background: var(--bg-hover);
-}
-
 @media (max-width: 680px) {
-  .openBtn {
-    display: none !important; /* Enter key opens instead */
-  }
+
   .topbar input {
     min-width: 80px;
   }
@@ -478,11 +387,7 @@ body {
     padding: 7px 10px;
     font-size: 13px;
   }
-  .themeToggle {
-    padding: 7px 10px !important;
-    font-size: 16px;
-    min-width: 36px;
-  }
+
 }
 
 .main {
@@ -519,27 +424,6 @@ body {
   position: relative !important;
 }
 
-.splitter {
-  flex: 0 0 8px;
-  width: 8px;
-  cursor: col-resize;
-  background: var(--bg-block);
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-  position: relative;
-  z-index: 50;
-  touch-action: none !important;
-  user-select: none;
-  -webkit-user-select: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.splitter:hover {
-  background: var(--bg-hover);
-}
-
 .pageTitleRow {
   display: flex;
   align-items: flex-start;
@@ -552,27 +436,6 @@ body {
   font-size: 18px;
   flex: 1;
   min-width: 0;
-}
-
-.pageHeaderMeta {
-  margin-bottom: 14px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-deeper);
-}
-
-.pageHeaderLabel {
-  font-size: 12px;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-}
-
-.pageHeaderUrl {
-  font-size: 12px;
-  line-height: 1.4;
-  word-break: break-all;
-  color: var(--text-secondary);
 }
 
 .blockList {
@@ -630,15 +493,6 @@ body {
   cursor: pointer;
   padding: 0;
   font-size: 14px;
-}
-
-.noteSwatch {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  margin-top: 7px;
-  flex: 0 0 auto;
 }
 
 .blockBody {
@@ -786,21 +640,8 @@ body {
   opacity: 0.5;
 }
 
-.sidebarFooter {
-  position: sticky;
-  bottom: 0;
-  padding-top: 10px;
-  background: linear-gradient(to bottom, rgba(24, 24, 24, 0), rgba(24, 24, 24, 1) 30%);
-}
-
 .empty {
   color: var(--text-muted);
-}
-
-.PdfHighlighter__tip,
-.PdfHighlighter__tip-container,
-.PdfHighlighter__popup {
-  z-index: 30000 !important;
 }
 
 /* highlight-color picker over a text selection (shared surface recipe) */
@@ -809,22 +650,6 @@ body {
   padding: 10px;
   min-width: 260px;
   z-index: var(--z-tip);
-}
-
-.plainTipInput {
-  width: 100%;
-  min-height: 90px;
-  resize: vertical;
-  box-sizing: border-box;
-  font: inherit;
-  margin-bottom: 8px;
-  color: var(--text-primary);
-  background: #fff;
-}
-
-.plainTipActions {
-  display: flex;
-  gap: 8px;
 }
 
 .colorRow {
@@ -847,10 +672,6 @@ body {
   box-shadow: 0 0 0 2px var(--border);
 }
 
-.colorWrap .Highlight__part {
-  background: var(--highlight-color) !important;
-}
-
 @keyframes flashHighlightCustom {
   0% {
     background: rgba(255, 80, 80, 0.95);
@@ -858,10 +679,6 @@ body {
   100% {
     background: var(--highlight-color);
   }
-}
-
-.flashWrap .Highlight__part {
-  animation: flashHighlightCustom 1s ease-out 1 !important;
 }
 
 @media (max-width: 900px) {
@@ -878,9 +695,6 @@ body {
     border-top: 1px solid var(--border) !important;
   }
 
-  .splitter {
-    display: none;
-  }
 }
 
 .highlightDotBtn {
@@ -920,68 +734,9 @@ body {
   max-width: 75vw !important;
 }
 
-.layout-vertical .main {
-  flex-direction: column !important;
-}
-
-.layout-vertical .viewerWrap {
-  flex: 1 1 auto !important;
-  width: 100% !important;
-  height: auto !important;
-  min-height: 0 !important;
-}
-
-.layout-vertical .sidebar {
-  flex: 0 0 var(--sidebar-height, 280px) !important;
-  width: 100% !important;
-  max-width: none !important;
-  height: var(--sidebar-height, 280px) !important;
-  border-left: none !important;
-  border-top: 1px solid var(--border) !important;
-  resize: none !important;
-}
-
 @media (max-width: 900px) {
   .layout-horizontal .sidebar {
     min-width: 220px !important;
-  }
-}
-
-@media (max-width: 900px) {
-  .main.mobileHorizontal {
-    flex-direction: row !important;
-  }
-
-  .main.mobileVertical {
-    flex-direction: column !important;
-  }
-
-  .main.mobileHorizontal .sidebar {
-    width: var(--sidebar-width, 420px) !important;
-    max-width: 85vw !important;
-    height: 100% !important;
-    border-left: 1px solid var(--border) !important;
-    border-top: none !important;
-  }
-
-  .main.mobileVertical .sidebar {
-    width: 100% !important;
-    max-width: none !important;
-    height: var(--sidebar-height, 260px) !important;
-    border-left: none !important;
-    border-top: 1px solid var(--border) !important;
-  }
-
-  .main.mobileVertical .splitter {
-    width: 100% !important;
-    height: 8px !important;
-    cursor: row-resize !important;
-  }
-
-  .main.mobileHorizontal .splitter {
-    width: 8px !important;
-    height: 100% !important;
-    cursor: col-resize !important;
   }
 }
 
@@ -1028,10 +783,7 @@ body {
   width: 100%;
   max-width: 480px;
 }
-.titleEdit:focus {
-  outline: none;
-  border-color: var(--accent-dark);
-}
+.titleEdit:focus { outline: none; border-color: var(--accent-dark); }
 
 /* --- home button (icon-style, identical on editor and read-only) --- */
 .homeBtn {
@@ -1096,29 +848,11 @@ body {
 }
 
 /* equal-width dot slot for alignment between highlight and non-highlight blocks */
-.dotSlot {
-  width: 16px;
-  min-width: 16px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.dotSlotEmpty {
-  height: 16px;
-}
-.pageBulletBtn {
-  color: var(--text-bright);
-}
-.pageBulletBtn:hover {
-  color: var(--accent-bright);
-}
-.pageBulletDot {
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: currentColor;
-}
+.dotSlot { width: 16px; min-width: 16px; display: inline-flex; align-items: center; justify-content: center; }
+.dotSlotEmpty { height: 16px; }
+.pageBulletBtn { color: var(--text-bright); }
+.pageBulletBtn:hover { color: var(--accent-bright); }
+.pageBulletDot { display: inline-block; width: 10px; height: 10px; border-radius: 999px; background: currentColor; }
 
 /* Logseq-style depth guide lines (one per depth level) */
 .sortableBlockWrap[data-depth] {
@@ -1402,9 +1136,7 @@ button.pdfOutlineChevron:hover {
 }
 
 /* When PDF is hidden, sidebar takes full width */
-.main.pdfHidden .sidebar,
-.layout-horizontal .main.pdfHidden .sidebar,
-.layout-vertical .main.pdfHidden .sidebar {
+.main.pdfHidden .sidebar {
   flex: 1 1 auto !important;
   width: 100% !important;
   max-width: none !important;
@@ -1564,9 +1296,6 @@ button.pdfOutlineChevron:hover {
   color: inherit;
   border-radius: 4px;
   padding: 2px 8px;
-  cursor: pointer;
-}
-.attachModeTarget {
   cursor: pointer;
 }
 
@@ -1747,9 +1476,6 @@ button.pdfOutlineChevron:hover {
   font-size: 13px;
   font-weight: 600;
 }
-.logoutMenuBtn {
-  color: var(--text-muted);
-}
 
 /* --- popovers --- */
 .popoverAnchor {
@@ -1841,21 +1567,7 @@ button.pdfOutlineChevron:hover {
   border-radius: 6px;
   color: var(--text-secondary);
 }
-.userPopover {
-  min-width: 268px;
-}
-.topbar .userBadge {
-  background: var(--bg-raised);
-  border: 1px solid var(--border-hover);
-  border-radius: 999px;
-  padding: 5px 12px;
-  font-size: 12px;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-.topbar .userBadge:hover {
-  background: var(--bg-hover);
-}
+.userPopover { min-width: 268px; }
 
 /* account card header inside the popover */
 .userCard {
@@ -2435,16 +2147,8 @@ button.pdfOutlineChevron:hover {
 .app.pseudoFullscreen .status { display: none !important; }
 
 /* chat attach picker + zoom input */
-.popover.popUp {
-  top: auto;
-  bottom: calc(100% + 6px);
-  left: 0;
-  right: auto;
-}
-.attachPopover {
-  min-width: 300px;
-  max-width: 380px;
-}
+.popover.popUp { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
+
 /* GPT-style "+" menu: icon + label + dim hint per row */
 .chatPlusMenu {
   min-width: 260px;
@@ -2558,19 +2262,7 @@ button.pdfOutlineChevron:hover {
   border: 1px solid var(--border-subtle);
   color: var(--text-dim);
 }
-.attachList {
-  max-height: 40vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.attachItem {
-  font-size: 12px;
-}
-.attachItem input {
-  flex-shrink: 0;
-}
+
 .chatAttachToggle.on {
   color: #8ab4f8;
   border-color: #8ab4f8;
@@ -2600,42 +2292,12 @@ button.pdfOutlineChevron:hover {
   flex-shrink: 0;
   padding: 0;
 }
-.pageActionBtn:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-.pageActionBtn.pageDeleteBtn:hover {
-  color: #d05050;
-}
-.sourcePopover {
-  min-width: 300px;
-  right: 0;
-}
-.findNav {
-  display: inline-flex;
-  gap: 2px;
-}
-.searchResult.active {
-  background: color-mix(in srgb, var(--accent-dark) 14%, transparent);
-}
+.pageActionBtn:disabled { opacity: 0.6; cursor: default; }
+.pageActionBtn.pageDeleteBtn:hover { color: #d05050; }
+.sourcePopover { min-width: 300px; right: 0; }
 
-.sidebarDockGrip {
-  flex-shrink: 0;
-  text-align: center;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  padding: 2px 0 4px;
-  cursor: grab;
-  user-select: none;
-  touch-action: none;
-  border-bottom: 1px solid var(--border-subtle);
-}
-.sidebarDockGrip:hover {
-  color: var(--text-primary);
-  background: var(--bg-hover);
-}
+.searchResult.active { background: color-mix(in srgb, var(--accent-dark) 14%, transparent); }
+
 .dockPreview {
   position: fixed;
   z-index: 2000;
@@ -2995,7 +2657,7 @@ button.pdfOutlineChevron:hover {
 .aiProvName { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
 .aiProvDesc { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
 .aiProvActions { display: flex; gap: 6px; flex-shrink: 0; }
-.aiProvForm { margin-top: 8px; }
+
 /* Storage meter (QuotaMeter): thin cloud-drive-style usage bar. */
 .quotaMeter {
   display: block;
@@ -3317,36 +2979,6 @@ button.pdfOutlineChevron:hover {
   font-size: 12px;
   line-height: 1.5;
   margin-top: 12px;
-}
-
-/* --- User badge --- */
-.userBadge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-.logoutBtn {
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 14px;
-  padding: 0 2px;
-  line-height: 1;
-}
-.logoutBtn:hover {
-  color: var(--text-primary);
-}
-.pdfSaveSwitch.disabled {
-  opacity: 0.5;
-  pointer-events: none;
 }
 
 /* --- page header: title with category chips below, buttons at the right --- */
@@ -3859,26 +3491,6 @@ button.pdfOutlineChevron:hover {
   border-radius: 2px;
 }
 
-/* --- citation export (share popover) --- */
-.citeMetaLine {
-  font-size: 12px;
-  color: var(--text-secondary);
-  padding: 0 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.citeMetaSource {
-  color: var(--text-dim);
-  font-size: 11px;
-}
-.citeBtnRow {
-  gap: 6px;
-}
-.citeBtnRow .chatClearBtn {
-  font-size: 12px;
-  padding: 5px 10px;
-}
 .pptCiteBox {
   display: flex;
   align-items: flex-start;
@@ -4065,12 +3677,6 @@ button.pdfOutlineChevron:hover {
 [data-theme="light"] .blockLinkChip:hover {
   background: #cfe3f7;
   color: #1d5ab3;
-}
-
-/* --- prompt editor (3 prompts) --- */
-.promptModal {
-  width: min(560px, calc(100vw - 32px));
-  overflow-y: auto;
 }
 
 /* --- cursor-positioned context menu (shared surface recipe) --- */

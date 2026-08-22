@@ -320,15 +320,6 @@
   margin-left: 6px;
   vertical-align: 1px;
 }
-.promptSectionHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-primary);
-  margin-top: 2px;
-}
 
 /* --- Library pane: per-paper status table + batch retry --- */
 .metaStatActions { display: flex; gap: 5px; align-items: center; }
