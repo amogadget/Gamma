@@ -16,7 +16,7 @@ from gamma.ai_client import (
     sse_events,
     wire_protocol,
 )
-from gamma.ai_tools import FOLDER_TOOLS, run_folder_tool
+from gamma.ai_tools import FOLDER_TOOLS, READ_TOOLS, WRITE_TOOLS, folder_tools, run_folder_tool
 
 
 @pytest.fixture(scope="module")
@@ -133,6 +133,50 @@ def test_labels_are_off_limits(org):
 def test_unknown_tool_is_an_error_not_a_crash(org):
     text, action = run_folder_tool("organizer", "", "delete_page", {"page_id": "x"})
     assert text.startswith("error") and action is None
+
+
+def test_folder_tools_permission_selection():
+    assert folder_tools(True, True) == FOLDER_TOOLS
+    assert folder_tools(True, False) == READ_TOOLS
+    assert folder_tools(False, True) == WRITE_TOOLS
+    assert folder_tools(False, False) == []
+
+
+def test_read_page_returns_notes_and_respects_scope(org):
+    c, ids = org
+    r = c.post("/api/blocks", json={"parent_id": ids["a"], "content": "important note"})
+    assert r.status_code == 200
+    text, action = run_folder_tool("organizer", "readout", "read_page", {"page_id": ids["a"]})
+    assert action is None
+    assert "important note" in text  # the user's notes ride along
+    # A page outside the scope is unreadable, same rule as the write tools.
+    text, _ = run_folder_tool("organizer", "readout", "read_page", {"page_id": ids["note"]})
+    assert text.startswith("error")
+
+
+def test_search_pdfs_scoped_snippets(org):
+    import sqlite3 as sq
+    from gamma.db import page_now, user_db_path
+    from gamma.routers.search import _ensure_schema
+    from gamma.textnorm import INDEX_VERSION
+
+    c, ids = org
+    doc = "d" * 24  # page a's doc_id
+    with sq.connect(user_db_path("organizer", "data.db")) as db:
+        _ensure_schema(db)
+        db.execute("INSERT INTO pdf_fts (doc_id, page, content) VALUES (?, ?, ?)",
+                   (doc, 3, "quantum error correction with cat qubits"))
+        db.execute("INSERT OR REPLACE INTO pdf_fts_docs (doc_id, indexed_at, pages, ver) "
+                   "VALUES (?, ?, 1, ?)", (doc, page_now(), INDEX_VERSION))
+        db.commit()
+    text, action = run_folder_tool("organizer", "readout", "search_pdfs",
+                                   {"query": "error correction"})
+    assert action is None
+    assert "p.3" in text and "cat qubits" in text
+    assert "not indexed" not in text  # everything in scope is stamped current
+    # A folder without PDF papers has nothing to search.
+    text, _ = run_folder_tool("organizer", "cooling", "search_pdfs", {"query": "cat"})
+    assert text == "No papers with PDFs in the current folder."
 
 
 # --- wire formats ------------------------------------------------------------
@@ -293,7 +337,7 @@ def test_chat_agent_loop_streams_actions(org, monkeypatch):
     def fake_open(messages, system, entry, rt, pdf_b64s=None, **kw):
         opened.append([dict(m) for m in messages])
         if len(opened) == 1:
-            assert "library organizer" in system
+            assert "library agent" in system
             assert '"readout"' in system  # scope comes from THIS request's folder
             return _FakeResp([
                 {"type": "content_block_start", "content_block":
@@ -354,6 +398,45 @@ def test_chat_agent_round_budget_and_folder_switch(org, monkeypatch):
     assert len(systems) == 1  # budget of 1: no second round opened
     assert "tool-round limit" in text
     assert '"cooling"' in systems[0]  # same conversation, new folder → new scope
+
+
+def test_chat_permissions_gate_tools_and_execution(org, monkeypatch):
+    c, ids = org
+    import gamma.routers.ai as ai_mod
+
+    seen = {}
+
+    def fake_open(messages, system, entry, rt, pdf_b64s=None, **kw):
+        seen["tools"] = kw.get("tools")
+        if len(seen.setdefault("rounds", [])) == 0:
+            seen["rounds"].append(1)
+            # Model tries a rename even though write permission is off.
+            return _FakeResp([
+                {"type": "content_block_start", "content_block":
+                    {"type": "tool_use", "id": "t1", "name": "rename_page"}},
+                {"type": "content_block_delta", "delta": {"type": "input_json_delta",
+                    "partial_json": json.dumps({"page_id": ids["a"], "title": "hacked"})}},
+                {"type": "content_block_stop"},
+            ])
+        seen["blocked"] = messages[-1]["content"]
+        return _FakeResp([{"type": "content_block_delta",
+                           "delta": {"type": "text_delta", "text": "ok"}}])
+
+    monkeypatch.setattr(ai_mod, "_open_ai", fake_open)
+    before = _props(c, ids["a"])["content"]
+    r = c.post("/api/ai/chat", json={"prompt": "rename stuff", "organize": True,
+                                     "folder": "readout", "stream": True, "allow_write": False})
+    assert r.status_code == 200
+    assert [t["name"] for t in seen["tools"]] == [t["name"] for t in READ_TOOLS]
+    assert seen["blocked"].startswith("error: tool not enabled")
+    assert _props(c, ids["a"])["content"] == before  # nothing was renamed
+
+    # Both permissions off → plain chat, no tools at all.
+    seen.clear()
+    r = c.post("/api/ai/chat", json={"prompt": "hi", "organize": True, "folder": "readout",
+                                     "stream": True, "allow_read": False, "allow_write": False})
+    assert r.status_code == 200
+    assert seen["tools"] is None
 
 
 def test_chat_without_organize_gets_no_tools(org, monkeypatch):

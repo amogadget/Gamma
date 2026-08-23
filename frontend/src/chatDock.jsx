@@ -49,6 +49,14 @@ export default function ChatDock({
   openPopover,
   setOpenPopover,
   setStatus,
+  // Home/folder view: the folder path being viewed ("" = library root) —
+  // enables the folder-agent tools; null in the paper view. Permissions arm
+  // read/search and rename/move tools independently.
+  organizeFolder = null,
+  toolRounds,
+  agentRead = true,
+  agentWrite = true,
+  onLibraryChange,
   onGrip,
   onGripDoubleClick,
   collapsed,
@@ -61,8 +69,9 @@ export default function ChatDock({
   // Tracks which block we've finished loading from the server, so the save
   // effect doesn't fire (and clobber the stored chat) before the load lands.
   const chatLoadedForRef = useRef("");
-  // Chat history is per page; the home view gets its own bucket.
-  const chatKey = focusedBlockId || "home";
+  // Chat history is per page; the home view buckets per folder so switching
+  // folders cannot leak one organizer conversation into another.
+  const chatKey = focusedBlockId || (organizeFolder ? `home:${organizeFolder}` : "home");
   const chatKeyRef = useRef(chatKey);
   chatKeyRef.current = chatKey;
   // Which conversation the in-flight request belongs to (typing indicator
@@ -349,8 +358,14 @@ export default function ChatDock({
           context_char_limit: chatContextChars,
           multi_context_char_limit: multiContextChars,
           stream: true,
-          ...(organizeFolder != null
-            ? { organize: true, folder: organizeFolder, tool_rounds: toolRounds || 0 }
+          ...(organizeFolder != null && (agentRead || agentWrite)
+            ? {
+                organize: true,
+                folder: organizeFolder,
+                tool_rounds: toolRounds || 0,
+                allow_read: !!agentRead,
+                allow_write: !!agentWrite,
+              }
             : {}),
         }),
       });
@@ -808,6 +823,10 @@ export default function ChatDock({
                 )
               ) : focusedBlockId ? (
                 "Ask AI about this page…"
+              ) : organizeFolder != null && agentWrite ? (
+                `Ask AI anything — it can ${agentRead ? "read, search and " : ""}organize ${organizeFolder ? "this folder" : "your library"} (rename papers, file them into folders)…`
+              ) : organizeFolder != null && agentRead ? (
+                `Ask AI across ${organizeFolder ? "this folder's papers" : "your library"} — it can read, search and summarize them…`
               ) : (
                 "Ask AI anything, or generate a report from your pages…"
               )}
@@ -1148,7 +1167,11 @@ export default function ChatDock({
                           : "Ask about the selection…"
                         : chatDocs.length
                           ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…`
-                          : "Ask…"
+                          : organizeFolder != null && (agentRead || agentWrite)
+                            ? agentWrite
+                              ? `Ask, or organize ${organizeFolder ? "this folder" : "your library"}…`
+                              : `Ask across ${organizeFolder ? "this folder" : "your library"}…`
+                            : "Ask…"
                 }
               />
               {chatLoading ? (

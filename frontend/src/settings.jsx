@@ -1265,16 +1265,34 @@ function AssistantSettings({ value }) {
           />
         </Row>
       </Section>
-      <Section title="Chat">
-        <Row icon={FolderIcon} label="Organizer tool rounds"
-          hint="AI ↔ tool round-trips per message in home/folder chat"
-          title="The home/folder chat can rename and re-file pages via tools; each round-trip lets the model issue more tool calls. This is a runaway guard — actual work is separately capped at 200 changes per message.">
+      <Section title="Folder agent">
+        <Toggle
+          icon={BookIcon}
+          label="Read papers & notes"
+          hint="The folder chat may list, read and search your papers"
+          title="Lets the home/folder chat list the folder's pages, read a paper's extracted text plus your highlights and notes, and full-text-search the folder's PDFs — e.g. to compare papers or write a summary. Content is sent to your configured AI provider."
+          checked={value.agentRead}
+          onChange={value.setAgentRead}
+        />
+        <Toggle
+          icon={FolderIcon}
+          label="Organize files"
+          hint="The folder chat may rename pages and move them between folders"
+          title="Lets the home/folder chat rename pages and file them into folders on request. It can never delete anything or edit your notes; every change is shown in the reply. Turn both permissions off for a plain chat."
+          checked={value.agentWrite}
+          onChange={value.setAgentWrite}
+        />
+        <Row icon={RefreshIcon} label="Tool rounds"
+          hint="AI ↔ tool round-trips per message"
+          title="Each round-trip lets the model issue more tool calls. This is a runaway guard — actual work is separately capped at 200 changes per message.">
           <UnitInput value={value.toolRounds} unit="rounds" min={1}
             onChange={(raw) => {
               const n = Number.parseInt(raw, 10);
               if (Number.isFinite(n)) value.setToolRounds(Math.max(1, Math.min(100, n)));
             }} />
         </Row>
+      </Section>
+      <Section title="Chat">
         <Toggle
           icon={RectSelectIcon}
           label="Clear snapshots on click"

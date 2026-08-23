@@ -2089,6 +2089,15 @@ export default function App() {
     18000,
     CONTEXT_CHARS_CODEC,
   );
+  const [toolRounds, setToolRounds] = usePersistedState(
+    "gamma-ai-tool-rounds",
+    32,
+    TOOL_ROUNDS_CODEC,
+  );
+  // Folder-agent permissions (Settings → Assistant): what the home/folder
+  // chat may do — read papers/notes/search, and rename/move pages.
+  const [agentRead, setAgentRead] = usePersistedFlag("gamma-ai-agent-read", true);
+  const [agentWrite, setAgentWrite] = usePersistedFlag("gamma-ai-agent-write", true);
   const [promptDraft, setPromptDraft] = useState("");
   // AI providers (Settings → AI providers): a user-managed list of API keys,
   // OpenAI-platform style. Keys are stored server-side per user; the server
@@ -6596,6 +6605,8 @@ export default function App() {
           setStatus={setStatus}
           organizeFolder={!focusedBlockId && !readOnly ? folderFilter : null}
           toolRounds={toolRounds}
+          agentRead={agentRead}
+          agentWrite={agentWrite}
           onLibraryChange={fetchHomeBlocks}
         />
       );
@@ -7744,6 +7755,10 @@ export default function App() {
           setMultiContextChars,
           toolRounds,
           setToolRounds,
+          agentRead,
+          setAgentRead,
+          agentWrite,
+          setAgentWrite,
           reset: () => {
             setChatContextChars(8000);
             setMetaContextChars(6000);
