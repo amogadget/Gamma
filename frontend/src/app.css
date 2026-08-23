@@ -445,6 +445,10 @@ body {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Reserve the scrollbar's space even while nothing scrolls, so the layout
+     (the home library's right-aligned toolbar especially) doesn't shift when
+     the scrollbar appears. */
+  scrollbar-gutter: stable;
   min-height: 0;
   padding-bottom: 24px;
 }

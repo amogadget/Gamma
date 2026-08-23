@@ -284,17 +284,6 @@
   letter-spacing: 0.06em;
   color: var(--text-dim);
 }
-.homeSortSelect {
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 11px;
-  padding: 2px 6px;
-  outline: none;
-  cursor: pointer;
-}
 .loadMoreBtn {
   display: block;
   margin: 8px auto 16px;
@@ -390,7 +379,8 @@
   justify-content: center;
 }
 .fileRowIcon .tileGlyph,
-.folderBrowser .folderRow > svg {
+.folderBrowser .folderRow > svg,
+.fileList .folderRow > svg {
   width: 20px;
   height: 20px;
 }

@@ -1,9 +1,10 @@
 // Presentational pieces for the modern file-manager home library: the
-// List/Grid view switch. The large iPadOS-style tile glyphs (FolderGlyph,
-// FileGlyph) live in icons.jsx with the rest of the shared icons. All
-// interaction (selection, drag, rename, context menus) stays wired in
-// App.jsx alongside the shared handlers.
-import { GridIcon, ListIcon } from "./icons";
+// List/Grid view switch and the folders/files kind filter. The large
+// iPadOS-style tile glyphs (FolderGlyph, FileGlyph) live in icons.jsx with
+// the rest of the shared icons. All interaction (selection, drag, rename,
+// context menus) stays wired in App.jsx alongside the shared handlers.
+import React from "react";
+import { FileIcon, FolderFilesIcon, FolderIcon, GridIcon, ListIcon } from "./icons";
 
 // List / Grid segmented control.
 function ViewToggle({ view, onChange }) {
@@ -29,4 +30,28 @@ function ViewToggle({ view, onChange }) {
   );
 }
 
-export { ViewToggle };
+// What the listing shows: folders + files, folders only, or files only.
+function KindToggle({ value, onChange }) {
+  const kinds = [
+    ["all", "Folders & files", FolderFilesIcon],
+    ["folders", "Folders only", FolderIcon],
+    ["files", "Files only", FileIcon],
+  ];
+  return (
+    <div className="homeViewToggle" role="group" aria-label="Shown items">
+      {kinds.map(([val, label, Icon]) => (
+        <button
+          key={val}
+          className={`homeViewBtn ${value === val ? "active" : ""}`}
+          onClick={() => onChange(val)}
+          title={label}
+          aria-pressed={value === val}
+        >
+          <Icon size={15} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export { ViewToggle, KindToggle };

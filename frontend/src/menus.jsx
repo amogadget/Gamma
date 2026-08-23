@@ -82,21 +82,26 @@ function useDropdown() {
 
 // A <select> replacement: options are [value, label] pairs; the menu marks
 // the current one with a check. `block` stretches the trigger into a field.
+// Options are [value, label] or [value, label, Icon] tuples — with an Icon the
+// pill and the menu items lead with the glyph (same look as ActionMenu items).
 function MenuSelect({ value, onChange, options, label, block }) {
   const [menu, close, triggerProps, triggerRef] = useDropdown();
   const current = options.find(([v]) => v === value) || options[0];
+  const CurrentIcon = current?.[2];
   return (
     <>
       <button type="button" className={`uiBtn sm uiSelectBtn ${block ? "block" : ""}`}
         aria-label={label} title={label} {...triggerProps}>
+        {CurrentIcon ? <CurrentIcon size={13} /> : null}
         <span className="uiSelectLabel">{current?.[1]}</span>
         <ChevronDownIcon size={13} className="uiSelectChev" />
       </button>
       {menu ? (
         <ContextMenu x={menu.x} y={menu.y} anchorRight onClose={close} ignoreRef={triggerRef}>
-          {options.map(([val, lab]) => (
+          {options.map(([val, lab, OptIcon]) => (
             <button key={val} className="ctxMenuItem ctxMenuItemIconed"
               onClick={() => { close(); onChange(val); }}>
+              {OptIcon ? <span className="ctxMenuIcon"><OptIcon size={14} /></span> : null}
               {lab}
               {val === value ? <CheckIcon size={14} className="ctxMenuCheck" /> : null}
             </button>

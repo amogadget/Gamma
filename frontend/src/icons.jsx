@@ -47,6 +47,14 @@ export const FolderOpenIcon = (p) => (
     <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2" />
   </Icon>
 );
+// Small folder + file pair — the home library's "everything" filter state.
+export const FolderFilesIcon = (p) => (
+  <Icon {...p}>
+    <path d="M14 12.5a1.8 1.8 0 0 0 1.8-1.8V6.4a1.8 1.8 0 0 0-1.8-1.8H9.5a1.8 1.8 0 0 1-1.5-.8l-.5-.7a1.8 1.8 0 0 0-1.5-.8H4a1.8 1.8 0 0 0-1.8 1.8v6.6A1.8 1.8 0 0 0 4 12.5Z" />
+    <path d="M19.5 21.5h-5A1.5 1.5 0 0 1 13 20v-8a1.5 1.5 0 0 1 1.5-1.5H18l3 3V20a1.5 1.5 0 0 1-1.5 1.5Z" />
+    <path d="M18 10.5V14h3" />
+  </Icon>
+);
 export const FileIcon = (p) => (
   <Icon {...p}>
     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />

@@ -28,54 +28,17 @@ import {
   useCopied,
 } from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
-import { ViewToggle } from "./fileBrowser";
+import { KindToggle, ViewToggle } from "./fileBrowser";
 import ChatDock from "./chatDock";
 import SearchPanel from "./search";
-import { ContextMenu } from "./menus";
-import { useTransfers } from "./useTransfers";
-import { usePdfScrollRestore } from "./usePdfScrollRestore";
+import { ContextMenu, MenuSelect } from "./menus";
 import {
-  ActivityIcon,
-  AlertCircleIcon,
-  ArrowLeftIcon,
-  CheckIcon,
-  CopyIcon,
-  DatabaseIcon,
-  DownloadIcon,
-  ExportIcon,
-  ExternalLinkIcon,
-  EyeIcon,
-  FileGlyph,
-  FileIcon,
-  FileTextIcon,
-  FitWidthIcon,
-  FolderGlyph,
-  FolderIcon,
-  FolderOpenIcon,
-  FolderPlusIcon,
-  HomeIcon,
-  ImportIcon,
-  InfoIcon,
-  LabelIcon,
-  LinkIcon,
-  LogOutIcon,
-  MaximizeIcon,
-  MenuIcon,
-  MinimizeIcon,
-  PinIcon,
-  PlusIcon,
-  RectSelectIcon,
-  SearchIcon,
-  SettingsIcon,
-  SparklesIcon,
-  TextCursorIcon,
-  TrashIcon,
-  UploadIcon,
-  UserIcon,
-  UsersIcon,
-  XIcon,
-  ZoomInIcon,
-  ZoomOutIcon,
+  ActivityIcon, AlertCircleIcon, ArrowLeftIcon, CheckIcon, CopyIcon, DatabaseIcon, DownloadIcon, ExportIcon,
+  ExternalLinkIcon, EyeIcon, FileGlyph, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
+  FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
+  LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PenIcon, PinIcon, PlusIcon,
+  RectSelectIcon, SearchIcon, SettingsIcon, SparklesIcon, TextCursorIcon, TrashIcon, TypeIcon, UploadIcon,
+  UserIcon, UsersIcon, XIcon, ZoomInIcon, ZoomOutIcon,
 } from "./icons";
 
 import {
@@ -151,6 +114,16 @@ function useIsPhone() {
 
 // Drag payload prefix marking a folder drag (page cards drag their bare id).
 const FOLDER_DRAG = "gamma-folder:";
+
+// Home sort is a per-folder choice: {"": "updated", "readout": "title", …} —
+// a folder without an entry inherits from its nearest ancestor (root = "").
+// Seeded from the old global gamma-home-sort key so an existing choice sticks.
+const HOME_SORT_CODEC = {
+  parse: (raw) => { try { const v = JSON.parse(raw); return v && typeof v === "object" ? v : undefined; } catch { return undefined; } },
+  serialize: JSON.stringify,
+};
+let HOME_SORT_DEFAULT = {};
+try { const old = localStorage.getItem("gamma-home-sort"); if (old) HOME_SORT_DEFAULT = { "": old }; } catch {}
 
 // Folder uploads tag each PDF with its directory path as a folder label:
 // "papers/readout/x.pdf" → "papers/readout" (the picked/dropped root included).
@@ -544,15 +517,26 @@ export default function App() {
   const [extraFolders, setExtraFolders] = useState([]);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
-  // Home feed: sort criterion + how many rows are rendered (grows on scroll).
-  const [homeSort, changeHomeSort] = usePersistedState("gamma-home-sort", "updated");
+  // Home feed: per-folder sort criterion + how many rows are rendered (grows
+  // on scroll). Changing the sort only pins it for the folder being viewed;
+  // folders without an explicit choice inherit from their nearest ancestor.
+  const [homeSortMap, setHomeSortMap] = usePersistedState("gamma-home-sort-map", HOME_SORT_DEFAULT, HOME_SORT_CODEC);
+  const homeSort = useMemo(() => {
+    let p = folderFilter;
+    for (;;) {
+      if (homeSortMap[p]) return homeSortMap[p];
+      if (!p) return "updated";
+      p = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+    }
+  }, [homeSortMap, folderFilter]);
+  function changeHomeSort(v) { setHomeSortMap((m) => ({ ...m, [folderFilter]: v })); }
   // Home layout: "list" (block-style rows) or "grid" (icon tiles).
   const [homeView, changeHomeView] = usePersistedState("gamma-home-view", "list");
+  // Kind filter: "all" (folders + files), "folders", or "files".
+  const [homeKinds, changeHomeKinds] = usePersistedState("gamma-home-kinds", "all");
   const HOME_PAGE_CHUNK = 30;
   const [homeShowCount, setHomeShowCount] = useState(HOME_PAGE_CHUNK);
-  useEffect(() => {
-    setHomeShowCount(HOME_PAGE_CHUNK);
-  }, [folderFilter, homeSort]);
+  useEffect(() => { setHomeShowCount(HOME_PAGE_CHUNK); }, [folderFilter, homeSort, homeKinds]);
   const loadMoreRef = useRef(null);
   function updateExtraFolders(updater) {
     setExtraFolders((prev) => {
@@ -4716,33 +4700,61 @@ export default function App() {
     }
     return [...set].sort((a, b) => a.localeCompare(b));
   }, [allFolderPaths, folderFilter]);
-  const folderCounts = useMemo(() => {
+  // Device-local view history as a lookup ({pageId → ISO time}, capped at 24
+  // entries) — feeds the "Recently viewed" sort; unviewed pages have no entry.
+  const viewedAtById = useMemo(() => new Map(recentViews.map((r) => [r.id, r.at])), [recentViews]);
+  // Per-folder rollup: page count + latest contained-page timestamps, so
+  // folders can sort on the same criteria as files.
+  const folderMeta = useMemo(() => {
     const m = {};
     for (const f of childFolders) {
-      m[f] = pageBlocks.filter((b) =>
-        b._folders.some((t) => t === f || t.startsWith(f + "/")),
-      ).length;
+      let count = 0, updated = "", created = "", viewed = "";
+      for (const b of pageBlocks) {
+        if (!b._folders.some((t) => t === f || t.startsWith(f + "/"))) continue;
+        count++;
+        if (b._updatedAt > updated) updated = b._updatedAt;
+        if (b._createdAt > created) created = b._createdAt;
+        const v = viewedAtById.get(b._pageId) || "";
+        if (v > viewed) viewed = v;
+      }
+      m[f] = { count, updated, created, viewed };
     }
     return m;
-  }, [childFolders, pageBlocks]);
-  // What the home list shows: inside a folder → pages tagged exactly that
-  // path (deeper ones live in the subfolder rows); at root → EVERY page as a
-  // sortable recents feed, loaded incrementally.
-  const homeSortedPages = useMemo(() => {
-    const arr = folderFilter
-      ? pageBlocks.filter((b) => b._folders.includes(folderFilter))
-      : [...pageBlocks];
-    const cmp =
-      homeSort === "title"
-        ? (a, b) => a.content.localeCompare(b.content)
-        : homeSort === "created"
-          ? (a, b) => (b._createdAt || "").localeCompare(a._createdAt || "")
-          : (a, b) => (b._updatedAt || "").localeCompare(a._updatedAt || "");
-    return arr.sort(cmp);
-  }, [pageBlocks, folderFilter, homeSort]);
+  }, [childFolders, pageBlocks, viewedAtById]);
+  // What the home list shows: folders and files as ONE sorted listing —
+  // inside a folder → its subfolders + pages tagged exactly that path; at
+  // root → top-level folders + EVERY page as a recents feed, loaded
+  // incrementally. Date sorts rank a folder by its most recent content; an
+  // empty folder has no timestamps and sinks to the bottom.
+  const homeItems = useMemo(() => {
+    const items = homeKinds === "files" ? [] : childFolders.map((f) => ({
+      kind: "folder", key: `folder:${f}`, folder: f,
+      _title: f.slice(f.lastIndexOf("/") + 1),
+      _updatedAt: folderMeta[f]?.updated || "", _createdAt: folderMeta[f]?.created || "",
+      _viewedAt: folderMeta[f]?.viewed || "",
+    }));
+    const pages = homeKinds === "folders" ? []
+      : folderFilter ? pageBlocks.filter((b) => b._folders.includes(folderFilter)) : pageBlocks;
+    for (const b of pages) {
+      items.push({
+        kind: "page", key: b._pageId, block: b, _title: b.content,
+        _updatedAt: b._updatedAt, _createdAt: b._createdAt,
+        _viewedAt: viewedAtById.get(b._pageId) || "",
+      });
+    }
+    // "viewed" falls back to modified time so the never-viewed tail (the view
+    // history keeps only the last 24 opens) still has a sensible order.
+    const cmp = homeSort === "title" ? (a, b) => a._title.localeCompare(b._title)
+      : homeSort === "created" ? (a, b) => (b._createdAt || "").localeCompare(a._createdAt || "")
+      : homeSort === "viewed" ? (a, b) => ((b._viewedAt || "").localeCompare(a._viewedAt || "") || (b._updatedAt || "").localeCompare(a._updatedAt || ""))
+      : (a, b) => (b._updatedAt || "").localeCompare(a._updatedAt || "");
+    return items.sort(cmp);
+  }, [pageBlocks, folderFilter, childFolders, folderMeta, viewedAtById, homeSort, homeKinds]);
+  const homeVisibleItems = useMemo(() => homeItems.slice(0, homeShowCount), [homeItems, homeShowCount]);
+  // Page-shaped view of the visible slice (shift-range selection, BlockTree).
   const homeVisiblePages = useMemo(
-    () => homeSortedPages.slice(0, homeShowCount),
-    [homeSortedPages, homeShowCount],
+    () => homeVisibleItems.filter((it) => it.kind === "page").map((it) => it.block),
+    [homeVisibleItems]
   );
   // Pinned papers — shown as a favorites strip at the library root. Most
   // recently pinned first.
@@ -4790,7 +4802,7 @@ export default function App() {
     });
     obs.observe(el);
     return () => obs.disconnect();
-  }, [homeVisiblePages.length, homeSortedPages.length, homeMode]);
+  }, [homeVisibleItems.length, homeItems.length, homeMode]);
   // Identity-stable: every keystroke in a note replaces `blocks`, but the
   // derived highlights rarely change — returning the previous array when the
   // content is identical keeps the viewer's per-page memo effective (otherwise
@@ -5773,440 +5785,315 @@ export default function App() {
             </div>
           </div>
         ) : null}
-        {homeMode && !categoryFilter ? (
-          <div className="folderBrowser">
-            {folderFilter ? (
-              <>
-                <div
-                  className={`folderRow folderBackRow ${folderDragOver === "__up__" ? "dragOver" : ""}`}
-                  onClick={() => {
-                    const parent = folderFilter.includes("/")
-                      ? folderFilter.slice(0, folderFilter.lastIndexOf("/"))
-                      : "";
-                    setFolderFilter(parent);
-                    window.history.replaceState(
-                      null,
-                      "",
-                      parent ? `/?folder=${encodeURIComponent(parent)}` : "/",
-                    );
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setFolderDragOver("__up__");
-                  }}
-                  onDragLeave={() => setFolderDragOver(null)}
-                  onDrop={(e) => {
-                    const parent = folderFilter.includes("/")
-                      ? folderFilter.slice(0, folderFilter.lastIndexOf("/"))
-                      : "";
-                    dropOnFolder(e, parent, (ids) => removePagesFromFolder(ids, folderFilter));
-                  }}
-                  title="Back — or drop a paper or folder here to move it out of this folder"
-                >
-                  <ArrowLeftIcon size={14} />
-                  <span className="folderName">
-                    {folderFilter.includes("/")
-                      ? folderFilter.slice(0, folderFilter.lastIndexOf("/"))
-                      : "All files"}
-                  </span>
-                  <span className="folderHint">drop here to move out of this folder</span>
-                </div>
-                <div className="folderCurrent">
-                  <FolderOpenIcon size={15} />
-                  {/* Breadcrumb: every path segment navigates to its level */}
-                  {folderFilter.split("/").map((seg, i, segs) => {
-                    const prefix = segs.slice(0, i + 1).join("/");
-                    return (
-                      <span key={prefix}>
-                        {i > 0 ? <span className="crumbSep">/</span> : null}
-                        <button
-                          className="crumbBtn"
-                          onClick={() => {
-                            setFolderFilter(prefix);
-                            window.history.replaceState(
-                              null,
-                              "",
-                              `/?folder=${encodeURIComponent(prefix)}`,
-                            );
-                          }}
-                        >
-                          {seg}
-                        </button>
-                      </span>
-                    );
-                  })}
-                </div>
-              </>
-            ) : null}
-            {homeView === "list" ? (
-              <>
-                {childFolders.map((f) => (
-                  <div
-                    key={f}
-                    className={`folderRow ${folderDragOver === f ? "dragOver" : ""} ${selectedFolders.has(f) ? "selected" : ""}`}
-                    draggable={folderRenaming?.name !== f}
-                    onDragStart={(e) => { e.dataTransfer.setData("text/plain", FOLDER_DRAG + f); e.dataTransfer.effectAllowed = "move"; }}
-                    onClick={(e) => handleFolderClick(f, e)}
-                    onDoubleClick={() => { if (folderRenaming?.name !== f) openFolder(f); }}
-                    onContextMenu={openTagMenu("folder", f)}
-                    onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
-                    onDragLeave={() => setFolderDragOver(null)}
-                    onDrop={(e) => dropOnFolder(e, f)}
-                    title="Click to select · double-click to open · right-click to rename or delete · drop a paper or folder to move it in"
-                  >
-                    <FolderIcon size={15} />
-                    {folderRenaming?.name === f ? (
-                      <input
-                        autoFocus
-                        className="folderNewInput"
-                        value={folderRenaming.draft}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => setFolderRenaming({ name: f, draft: e.target.value })}
-                        onKeyDown={(e) => {
-                          if (isEnterCommit(e)) renameFolder(f, folderRenaming.draft);
-                          else if (e.key === "Escape") setFolderRenaming(null);
-                        }}
-                        onBlur={() => renameFolder(f, folderRenaming.draft)}
-                      />
-                    ) : (
-                      <span className="folderName">{f.slice(f.lastIndexOf("/") + 1)}</span>
-                    )}
-                    <span className="folderCount">{folderCounts[f] || 0}</span>
-                  </div>
-                ))}
-                {newFolderOpen ? (
-                  <div className="folderRow folderNewRow">
-                    <FolderPlusIcon size={15} />
-                    <input
-                      autoFocus
-                      className="folderNewInput"
-                      value={newFolderName}
-                      onChange={(e) => setNewFolderName(e.target.value)}
-                      placeholder="Folder name…"
-                      onKeyDown={(e) => {
-                        if (isEnterCommit(e)) {
-                          e.preventDefault();
-                          commitNewFolder();
-                        } else if (e.key === "Escape") {
-                          setNewFolderOpen(false);
-                          setNewFolderName("");
-                        }
-                      }}
-                      onBlur={commitNewFolder}
-                    />
-                  </div>
-                ) : (
-                  <button
-                    className="folderRow folderNewBtn"
-                    onClick={() => {
-                      setNewFolderName("");
-                      setNewFolderOpen(true);
-                    }}
-                  >
-                    <FolderPlusIcon size={15} />
-                    <span className="folderName">New folder</span>
-                  </button>
-                )}
-              </>
-            ) : null}
-          </div>
-        ) : null}
-        {homeMode && !categoryFilter ? (
-          <div className="homeListBar">
-            <span className="homeListLabel">{folderFilter ? "Files" : "All files"}</span>
-            <span className="homeListSpacer" />
-            <select
-              className="homeSortSelect"
-              value={homeSort}
-              onChange={(e) => changeHomeSort(e.target.value)}
-              title="Sort files"
-            >
-              <option value="updated">Recently modified</option>
-              <option value="created">Recently added</option>
-              <option value="title">Title A–Z</option>
-            </select>
-            <ViewToggle view={homeView} onChange={changeHomeView} />
-          </div>
-        ) : null}
-        {homeMode && !categoryFilter && homeView === "grid" ? (
-          childFolders.length === 0 && homeVisiblePages.length === 0 && !newFolderOpen ? (
-            <div className="empty">
-              {folderFilter
-                ? "This folder is empty — drag papers onto it from the library."
-                : "No pages yet — use the + button above to open a PDF or start a note page."}
-            </div>
-          ) : (
-            <>
-              <div
-                className="fileGrid"
-                onClick={(e) => {
-                  if (e.target.classList.contains("fileGrid")) clearSelection();
-                }}
-              >
-                {childFolders.map((f) => (
-                  <div
-                    key={f}
-                    className={`folderTile ${folderDragOver === f ? "dragOver" : ""} ${selectedFolders.has(f) ? "selected" : ""}`}
-                    draggable={folderRenaming?.name !== f}
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData("text/plain", FOLDER_DRAG + f);
-                      e.dataTransfer.effectAllowed = "move";
-                    }}
-                    onClick={(e) => handleFolderClick(f, e)}
-                    onDoubleClick={() => {
-                      if (folderRenaming?.name !== f) openFolder(f);
-                    }}
-                    onContextMenu={openTagMenu("folder", f)}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setFolderDragOver(f);
-                    }}
-                    onDragLeave={() => setFolderDragOver(null)}
-                    onDrop={(e) => dropOnFolder(e, f)}
-                    title="Click to select · double-click to open · drop a paper or folder to move it in"
-                  >
-                    <FolderGlyph />
-                    {folderRenaming?.name === f ? (
-                      <input
-                        autoFocus
-                        className="tileRenameInput"
-                        defaultValue={f.slice(f.lastIndexOf("/") + 1)}
-                        onClick={(e) => e.stopPropagation()}
-                        onKeyDown={(e) => {
-                          if (isEnterCommit(e)) renameFolder(f, e.currentTarget.value);
-                          else if (e.key === "Escape") setFolderRenaming(null);
-                        }}
-                        onBlur={(e) => renameFolder(f, e.currentTarget.value)}
-                      />
-                    ) : (
-                      <span className="tileName">{f.slice(f.lastIndexOf("/") + 1)}</span>
-                    )}
-                    <span className="tileFolderCount">{folderCounts[f] || 0}</span>
-                  </div>
-                ))}
-                {homeVisiblePages.map((b) => {
-                  const id = b._pageId;
-                  const isPinned = !!b._pinned;
-                  const isEditing = homeEditingId === id;
-                  return (
+            {homeMode && !categoryFilter && folderFilter ? (
+              <div className="folderBrowser">
                     <div
-                      key={id}
-                      className={`fileTile ${selectedPages.has(id) ? "selected" : ""}`}
-                      draggable={!isEditing}
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData("text/plain", id);
-                        e.dataTransfer.effectAllowed = "move";
+                      className={`folderRow folderBackRow ${folderDragOver === "__up__" ? "dragOver" : ""}`}
+                      onClick={() => {
+                        const parent = folderFilter.includes("/") ? folderFilter.slice(0, folderFilter.lastIndexOf("/")) : "";
+                        setFolderFilter(parent);
+                        window.history.replaceState(null, "", parent ? `/?folder=${encodeURIComponent(parent)}` : "/");
                       }}
-                      onClick={(e) => handlePageClick(b, e)}
-                      onDoubleClick={() => {
-                        if (!isEditing) openPage(id);
+                      onDragOver={(e) => { e.preventDefault(); setFolderDragOver("__up__"); }}
+                      onDragLeave={() => setFolderDragOver(null)}
+                      onDrop={(e) => {
+                        const parent = folderFilter.includes("/") ? folderFilter.slice(0, folderFilter.lastIndexOf("/")) : "";
+                        dropOnFolder(e, parent, (ids) => removePagesFromFolder(ids, folderFilter));
                       }}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setSelectedPages((prev) => (prev.has(id) ? prev : new Set([id])));
-                        lastPageClickRef.current = id;
-                        setHomeMenu({
-                          kind: "page",
-                          id,
-                          name: b.content,
-                          x: e.clientX,
-                          y: e.clientY,
-                        });
-                      }}
-                      title={`${b.content}\nClick to select · double-click to open`}
+                      title="Back — or drop a paper or folder here to move it out of this folder"
                     >
-                      <button
-                        className={`pinBtn tilePinBtn ${isPinned ? "pinned" : ""}`}
-                        title={isPinned ? "Unpin" : "Pin to top"}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPagesPinned([id], !isPinned);
-                        }}
+                      <ArrowLeftIcon size={14} />
+                      <span className="folderName">{folderFilter.includes("/") ? folderFilter.slice(0, folderFilter.lastIndexOf("/")) : "All files"}</span>
+                      <span className="folderHint">drop here to move out of this folder</span>
+                    </div>
+                    <div className="folderCurrent">
+                      <FolderOpenIcon size={15} />
+                      {/* Breadcrumb: every path segment navigates to its level */}
+                      {folderFilter.split("/").map((seg, i, segs) => {
+                        const prefix = segs.slice(0, i + 1).join("/");
+                        return (
+                          <span key={prefix}>
+                            {i > 0 ? <span className="crumbSep">/</span> : null}
+                            <button
+                              className="crumbBtn"
+                              onClick={() => { setFolderFilter(prefix); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(prefix)}`); }}
+                            >{seg}</button>
+                          </span>
+                        );
+                      })}
+                    </div>
+              </div>
+            ) : null}
+            {homeMode && !categoryFilter ? (
+              <div className="homeListBar">
+                <span className="homeListLabel">{folderFilter ? "Contents" : "Library"}</span>
+                <span className="homeListSpacer" />
+                <MenuSelect
+                  label={folderFilter ? "Sort this folder — subfolders inherit it" : "Sort the library — folders inherit it"}
+                  value={homeSort}
+                  onChange={changeHomeSort}
+                  options={[
+                    ["updated", "Recently modified", PenIcon],
+                    ["created", "Recently added", PlusIcon],
+                    ["viewed", "Recently viewed", EyeIcon],
+                    ["title", "Title A–Z", TypeIcon],
+                  ]}
+                />
+                <KindToggle value={homeKinds} onChange={changeHomeKinds} />
+                <ViewToggle view={homeView} onChange={changeHomeView} />
+              </div>
+            ) : null}
+            {homeMode && !categoryFilter && homeView === "grid" ? (
+                <>
+                  {homeItems.length === 0 && !newFolderOpen ? (
+                    <div className="empty">{folderFilter ? "This folder is empty — drag papers onto it from the library." : "No pages yet — use the + button above to open a PDF or start a note page."}</div>
+                  ) : null}
+                  <div className="fileGrid" onClick={(e) => { if (e.target.classList.contains("fileGrid")) clearSelection(); }}>
+                    {homeVisibleItems.map((item) => {
+                      if (item.kind === "folder") { const f = item.folder; return (
+                      <div
+                        key={item.key}
+                        className={`folderTile ${folderDragOver === f ? "dragOver" : ""} ${selectedFolders.has(f) ? "selected" : ""}`}
+                        draggable={folderRenaming?.name !== f}
+                        onDragStart={(e) => { e.dataTransfer.setData("text/plain", FOLDER_DRAG + f); e.dataTransfer.effectAllowed = "move"; }}
+                        onClick={(e) => handleFolderClick(f, e)}
+                        onDoubleClick={() => { if (folderRenaming?.name !== f) openFolder(f); }}
+                        onContextMenu={openTagMenu("folder", f)}
+                        onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
+                        onDragLeave={() => setFolderDragOver(null)}
+                        onDrop={(e) => dropOnFolder(e, f)}
+                        title="Click to select · double-click to open · drop a paper or folder to move it in"
                       >
-                        <PinIcon filled={isPinned} size={12} />
-                      </button>
-                      <FileGlyph isPdf={!!b._sourceUrl} />
-                      {isEditing ? (
+                        <FolderGlyph />
+                        {folderRenaming?.name === f ? (
+                          <input
+                            autoFocus
+                            className="tileRenameInput"
+                            defaultValue={f.slice(f.lastIndexOf("/") + 1)}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              if (isEnterCommit(e)) renameFolder(f, e.currentTarget.value);
+                              else if (e.key === "Escape") setFolderRenaming(null);
+                            }}
+                            onBlur={(e) => renameFolder(f, e.currentTarget.value)}
+                          />
+                        ) : (
+                          <span className="tileName">{f.slice(f.lastIndexOf("/") + 1)}</span>
+                        )}
+                        <span className="tileFolderCount">{folderMeta[f]?.count || 0}</span>
+                      </div>
+                      ); }
+                      const b = item.block;
+                      const id = b._pageId;
+                      const isPinned = !!b._pinned;
+                      const isEditing = homeEditingId === id;
+                      return (
+                        <div
+                          key={id}
+                          className={`fileTile ${selectedPages.has(id) ? "selected" : ""}`}
+                          draggable={!isEditing}
+                          onDragStart={(e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; }}
+                          onClick={(e) => handlePageClick(b, e)}
+                          onDoubleClick={() => { if (!isEditing) openPage(id); }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setSelectedPages((prev) => (prev.has(id) ? prev : new Set([id])));
+                            lastPageClickRef.current = id;
+                            setHomeMenu({ kind: "page", id, name: b.content, x: e.clientX, y: e.clientY });
+                          }}
+                          title={`${b.content}\nClick to select · double-click to open`}
+                        >
+                          <button
+                            className={`pinBtn tilePinBtn ${isPinned ? "pinned" : ""}`}
+                            title={isPinned ? "Unpin" : "Pin to top"}
+                            onClick={(e) => { e.stopPropagation(); setPagesPinned([id], !isPinned); }}
+                          ><PinIcon filled={isPinned} size={12} /></button>
+                          <FileGlyph isPdf={!!b._sourceUrl} />
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              className="tileRenameInput"
+                              defaultValue={b.content}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => {
+                                if (isEnterCommit(e)) commitPageRename(id, e.currentTarget.value);
+                                else if (e.key === "Escape") setHomeEditingId(null);
+                              }}
+                              onBlur={(e) => commitPageRename(id, e.currentTarget.value)}
+                            />
+                          ) : (
+                            <span className="tileName">{b.content || "Untitled"}</span>
+                          )}
+                          <span className="tileKind">{b._sourceUrl ? "PDF" : "Note"}</span>
+                        </div>
+                      );
+                    })}
+                    {homeKinds === "files" ? null : newFolderOpen ? (
+                      <div className="folderTile folderTileNew">
+                        <FolderGlyph />
                         <input
                           autoFocus
                           className="tileRenameInput"
-                          defaultValue={b.content}
+                          value={newFolderName}
+                          placeholder="Folder name…"
                           onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => setNewFolderName(e.target.value)}
                           onKeyDown={(e) => {
-                            if (isEnterCommit(e)) commitPageRename(id, e.currentTarget.value);
-                            else if (e.key === "Escape") setHomeEditingId(null);
+                            if (isEnterCommit(e)) { e.preventDefault(); commitNewFolder(); }
+                            else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
                           }}
-                          onBlur={(e) => commitPageRename(id, e.currentTarget.value)}
+                          onBlur={commitNewFolder}
                         />
-                      ) : (
-                        <span className="tileName">{b.content || "Untitled"}</span>
-                      )}
-                      <span className="tileKind">{b._sourceUrl ? "PDF" : "Note"}</span>
-                    </div>
-                  );
-                })}
-                {newFolderOpen ? (
-                  <div className="folderTile folderTileNew">
-                    <FolderGlyph />
-                    <input
-                      autoFocus
-                      className="tileRenameInput"
-                      value={newFolderName}
-                      placeholder="Folder name…"
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => setNewFolderName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (isEnterCommit(e)) {
-                          e.preventDefault();
-                          commitNewFolder();
-                        } else if (e.key === "Escape") {
-                          setNewFolderOpen(false);
-                          setNewFolderName("");
-                        }
-                      }}
-                      onBlur={commitNewFolder}
-                    />
+                      </div>
+                    ) : (
+                      <button className="folderTile folderTileAdd" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }} title="New folder">
+                        <FolderPlusIcon className="tileGlyph" size={null} strokeWidth={1.5} />
+                        <span className="tileName">New folder</span>
+                      </button>
+                    )}
                   </div>
-                ) : (
-                  <button
-                    className="folderTile folderTileAdd"
-                    onClick={() => {
-                      setNewFolderName("");
-                      setNewFolderOpen(true);
-                    }}
-                    title="New folder"
-                  >
-                    <FolderPlusIcon className="tileGlyph" size={null} strokeWidth={1.5} />
-                    <span className="tileName">New folder</span>
-                  </button>
-                )}
-              </div>
-              {homeSortedPages.length > homeVisiblePages.length ? (
-                <button
-                  ref={loadMoreRef}
-                  className="loadMoreBtn"
-                  onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}
-                >
-                  Showing {homeVisiblePages.length} of {homeSortedPages.length} — load more
-                </button>
-              ) : null}
-            </>
-          )
-        ) : homeMode && !categoryFilter && homeView === "list" ? (
-          homeVisiblePages.length === 0 ? (
-            <div className="empty">
-              {folderFilter
-                ? "This folder is empty — drag papers onto it from the library."
-                : "No pages yet — use the + button above to open a PDF or start a note page."}
-            </div>
-          ) : (
-            <>
-              <div
-                className="fileList"
-                onClick={(e) => {
-                  if (e.target.classList.contains("fileList")) clearSelection();
-                }}
-              >
-                {homeVisiblePages.map((b) => {
-                  const id = b._pageId;
-                  const isPinned = !!b._pinned;
-                  const isEditing = homeEditingId === id;
-                  return (
-                    <div
-                      key={id}
-                      className={`fileRow ${selectedPages.has(id) ? "selected" : ""}`}
-                      draggable={!isEditing}
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData("text/plain", id);
-                        e.dataTransfer.effectAllowed = "move";
-                      }}
-                      onClick={(e) => handlePageClick(b, e)}
-                      onDoubleClick={() => {
-                        if (!isEditing) openPage(id);
-                      }}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        setSelectedPages((prev) => (prev.has(id) ? prev : new Set([id])));
-                        lastPageClickRef.current = id;
-                        setHomeMenu({
-                          kind: "page",
-                          id,
-                          name: b.content,
-                          x: e.clientX,
-                          y: e.clientY,
-                        });
-                      }}
-                      title={`${b.content}\nClick to select · double-click to open`}
-                    >
-                      <span className="fileRowIcon">
-                        <FileGlyph isPdf={!!b._sourceUrl} />
-                      </span>
-                      {isEditing ? (
+                  {homeItems.length > homeVisibleItems.length ? (
+                    <button ref={loadMoreRef} className="loadMoreBtn" onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}>
+                      Showing {homeVisibleItems.length} of {homeItems.length} — load more
+                    </button>
+                  ) : null}
+                </>
+            ) : homeMode && !categoryFilter && homeView === "list" ? (
+                <>
+                  {homeItems.length === 0 && !newFolderOpen ? (
+                    <div className="empty">{folderFilter ? "This folder is empty — drag papers onto it from the library." : "No pages yet — use the + button above to open a PDF or start a note page."}</div>
+                  ) : null}
+                  <div className="fileList" onClick={(e) => { if (e.target.classList.contains("fileList")) clearSelection(); }}>
+                    {homeVisibleItems.map((item) => {
+                      if (item.kind === "folder") { const f = item.folder; return (
+                      <div
+                        key={item.key}
+                        className={`folderRow ${folderDragOver === f ? "dragOver" : ""} ${selectedFolders.has(f) ? "selected" : ""}`}
+                        draggable={folderRenaming?.name !== f}
+                        onDragStart={(e) => { e.dataTransfer.setData("text/plain", FOLDER_DRAG + f); e.dataTransfer.effectAllowed = "move"; }}
+                        onClick={(e) => handleFolderClick(f, e)}
+                        onDoubleClick={() => { if (folderRenaming?.name !== f) openFolder(f); }}
+                        onContextMenu={openTagMenu("folder", f)}
+                        onDragOver={(e) => { e.preventDefault(); setFolderDragOver(f); }}
+                        onDragLeave={() => setFolderDragOver(null)}
+                        onDrop={(e) => dropOnFolder(e, f)}
+                        title="Click to select · double-click to open · right-click to rename or delete · drop a paper or folder to move it in"
+                      >
+                        <FolderIcon size={15} />
+                        {folderRenaming?.name === f ? (
+                          <input
+                            autoFocus
+                            className="folderNewInput"
+                            value={folderRenaming.draft}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => setFolderRenaming({ name: f, draft: e.target.value })}
+                            onKeyDown={(e) => {
+                              if (isEnterCommit(e)) renameFolder(f, folderRenaming.draft);
+                              else if (e.key === "Escape") setFolderRenaming(null);
+                            }}
+                            onBlur={() => renameFolder(f, folderRenaming.draft)}
+                          />
+                        ) : (
+                          <span className="folderName">{f.slice(f.lastIndexOf("/") + 1)}</span>
+                        )}
+                        <span className="folderCount">{folderMeta[f]?.count || 0}</span>
+                      </div>
+                      ); }
+                      const b = item.block;
+                      const id = b._pageId;
+                      const isPinned = !!b._pinned;
+                      const isEditing = homeEditingId === id;
+                      return (
+                        <div
+                          key={id}
+                          className={`fileRow ${selectedPages.has(id) ? "selected" : ""}`}
+                          draggable={!isEditing}
+                          onDragStart={(e) => { e.dataTransfer.setData("text/plain", id); e.dataTransfer.effectAllowed = "move"; }}
+                          onClick={(e) => handlePageClick(b, e)}
+                          onDoubleClick={() => { if (!isEditing) openPage(id); }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setSelectedPages((prev) => (prev.has(id) ? prev : new Set([id])));
+                            lastPageClickRef.current = id;
+                            setHomeMenu({ kind: "page", id, name: b.content, x: e.clientX, y: e.clientY });
+                          }}
+                          title={`${b.content}\nClick to select · double-click to open`}
+                        >
+                          <span className="fileRowIcon"><FileGlyph isPdf={!!b._sourceUrl} /></span>
+                          {isEditing ? (
+                            <input
+                              autoFocus
+                              className="fileRowRename"
+                              defaultValue={b.content}
+                              onClick={(e) => e.stopPropagation()}
+                              onKeyDown={(e) => {
+                                if (isEnterCommit(e)) commitPageRename(id, e.currentTarget.value);
+                                else if (e.key === "Escape") setHomeEditingId(null);
+                              }}
+                              onBlur={(e) => commitPageRename(id, e.currentTarget.value)}
+                            />
+                          ) : (
+                            <span className="fileRowName">{b.content || "Untitled"}</span>
+                          )}
+                          {(b._folders?.length || b._labels?.length) ? (
+                            <span className="fileRowLabels">
+                              {b._folders?.map((f) => (
+                                <span key={`f:${f}`} className="folderTagBadge" title={`In folder ${f}`}>
+                                  <FolderIcon size={10} />
+                                  {f}
+                                </span>
+                              ))}
+                              {b._labels?.map((l) => (
+                                <span
+                                  key={`l:${l}`}
+                                  className="labelTagBadge"
+                                  title={`Label: ${l} — right-click to rename or delete`}
+                                  onContextMenu={openTagMenu("label", l)}
+                                >
+                                  <LabelIcon size={10} />
+                                  {l}
+                                </span>
+                              ))}
+                            </span>
+                          ) : null}
+                          <span className="fileRowKind">{b._sourceUrl ? "PDF" : "Note"}</span>
+                          <button
+                            className={`pinBtn fileRowPin ${isPinned ? "pinned" : ""}`}
+                            title={isPinned ? "Unpin" : "Pin to top"}
+                            onClick={(e) => { e.stopPropagation(); setPagesPinned([id], !isPinned); }}
+                          ><PinIcon filled={isPinned} size={12} /></button>
+                        </div>
+                      );
+                    })}
+                    {homeKinds === "files" ? null : newFolderOpen ? (
+                      <div className="folderRow folderNewRow">
+                        <FolderPlusIcon size={15} />
                         <input
                           autoFocus
-                          className="fileRowRename"
-                          defaultValue={b.content}
-                          onClick={(e) => e.stopPropagation()}
+                          className="folderNewInput"
+                          value={newFolderName}
+                          onChange={(e) => setNewFolderName(e.target.value)}
+                          placeholder="Folder name…"
                           onKeyDown={(e) => {
-                            if (isEnterCommit(e)) commitPageRename(id, e.currentTarget.value);
-                            else if (e.key === "Escape") setHomeEditingId(null);
+                            if (isEnterCommit(e)) { e.preventDefault(); commitNewFolder(); }
+                            else if (e.key === "Escape") { setNewFolderOpen(false); setNewFolderName(""); }
                           }}
-                          onBlur={(e) => commitPageRename(id, e.currentTarget.value)}
+                          onBlur={commitNewFolder}
                         />
-                      ) : (
-                        <span className="fileRowName">{b.content || "Untitled"}</span>
-                      )}
-                      {b._folders?.length || b._labels?.length ? (
-                        <span className="fileRowLabels">
-                          {b._folders?.map((f) => (
-                            <span
-                              key={`f:${f}`}
-                              className="folderTagBadge"
-                              title={`In folder ${f}`}
-                            >
-                              <FolderIcon size={10} />
-                              {f}
-                            </span>
-                          ))}
-                          {b._labels?.map((l) => (
-                            <span
-                              key={`l:${l}`}
-                              className="labelTagBadge"
-                              title={`Label: ${l} — right-click to rename or delete`}
-                              onContextMenu={openTagMenu("label", l)}
-                            >
-                              <LabelIcon size={10} />
-                              {l}
-                            </span>
-                          ))}
-                        </span>
-                      ) : null}
-                      <span className="fileRowKind">{b._sourceUrl ? "PDF" : "Note"}</span>
-                      <button
-                        className={`pinBtn fileRowPin ${isPinned ? "pinned" : ""}`}
-                        title={isPinned ? "Unpin" : "Pin to top"}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setPagesPinned([id], !isPinned);
-                        }}
-                      >
-                        <PinIcon filled={isPinned} size={12} />
+                      </div>
+                    ) : (
+                      <button className="folderRow folderNewBtn" onClick={() => { setNewFolderName(""); setNewFolderOpen(true); }}>
+                        <FolderPlusIcon size={15} />
+                        <span className="folderName">New folder</span>
                       </button>
-                    </div>
-                  );
-                })}
-              </div>
-              {homeSortedPages.length > homeVisiblePages.length ? (
-                <button
-                  ref={loadMoreRef}
-                  className="loadMoreBtn"
-                  onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}
-                >
-                  Showing {homeVisiblePages.length} of {homeSortedPages.length} — load more
-                </button>
-              ) : null}
-            </>
-          )
+                    )}
+                  </div>
+                  {homeItems.length > homeVisibleItems.length ? (
+                    <button ref={loadMoreRef} className="loadMoreBtn" onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}>
+                      Showing {homeVisibleItems.length} of {homeItems.length} — load more
+                    </button>
+                  ) : null}
+                </>
         ) : homeMode && categoryFilter ? null : (homeMode ? homeVisiblePages : visibleBlocks)
             .length === 0 ? (
           <>
@@ -6484,13 +6371,13 @@ export default function App() {
                   rowProps={rowProps}
                 />
                 {addNoteButton}
-                {homeMode && homeSortedPages.length > homeVisiblePages.length ? (
+                {homeMode && homeItems.length > homeVisibleItems.length ? (
                   <button
                     ref={loadMoreRef}
                     className="loadMoreBtn"
                     onClick={() => setHomeShowCount((c) => c + HOME_PAGE_CHUNK)}
                   >
-                    Showing {homeVisiblePages.length} of {homeSortedPages.length} — load more
+                    Showing {homeVisibleItems.length} of {homeItems.length} — load more
                   </button>
                 ) : null}
                 <BlockDropIndicator target={dropTarget} />
