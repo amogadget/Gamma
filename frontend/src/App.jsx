@@ -33,7 +33,7 @@ import ChatDock from "./chatDock";
 import SearchPanel from "./search";
 import { ContextMenu, MenuSelect } from "./menus";
 import {
-  ActivityIcon, AlertCircleIcon, ArrowLeftIcon, CheckIcon, CopyIcon, DatabaseIcon, DownloadIcon, ExportIcon,
+  ActivityIcon, AlertCircleIcon, ArrowLeftIcon, ArrowUpDownIcon, CheckIcon, CopyIcon, DatabaseIcon, DownloadIcon, ExportIcon,
   ExternalLinkIcon, EyeIcon, FileGlyph, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
   FolderIcon, FolderOpenIcon, FolderPlusIcon, HomeIcon, ImportIcon, InfoIcon, LabelIcon,
   LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PenIcon, PinIcon, PlusIcon,
@@ -5924,6 +5924,7 @@ export default function App() {
                 <span className="homeListLabel">{folderFilter ? "Contents" : "Library"}</span>
                 <span className="homeListSpacer" />
                 <MenuSelect
+                  icon={ArrowUpDownIcon}
                   label={folderFilter ? "Sort this folder — subfolders inherit it" : "Sort the library — folders inherit it"}
                   value={homeSort}
                   onChange={changeHomeSort}

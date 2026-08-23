@@ -17,6 +17,7 @@ from gamma.ai_client import (
     sse_events,
     wire_protocol,
 )
+from gamma.ai_context import TOOL_REPLAY_BUDGET, build_messages
 from gamma.ai_tools import agent_system, agent_tools, run_agent_tool
 
 ALL_TOOLS = agent_tools("folder")  # the full registry, for the wire tests
@@ -538,3 +539,149 @@ def test_chat_without_agent_scope_gets_no_tools(org, monkeypatch):
     r = c.post("/api/ai/chat", json={"prompt": "hello", "agent_scope": "page", "stream": True})
     assert r.status_code == 200
     assert seen["tools"] is None
+
+
+# --- list_pages filters ------------------------------------------------------
+
+def test_list_pages_filters_and_labels_mode(org):
+    c, ids = org
+
+    def page(content, props):
+        r = c.post("/api/blocks", json={"parent_id": "root", "content": content, "properties": props})
+        assert r.status_code == 200, r.text
+        return r.json()["id"]
+
+    jeff1 = page("erasure paper", {"folder": "labtest", "category": "Jeff, Yb"})
+    jeff2 = page("tweezer gates", {"folder": "labtest/sub", "category": "jeff"})
+    other = page("ldpc paper", {"folder": "labtest", "category": "qec"})
+    # Exact label match, case-insensitive; only matching pages come back.
+    text, action = run_agent_tool("organizer", _folder("labtest"), "list_pages", {"label": "jeff"})
+    assert "2 pages" in action["summary"] and "jeff" in action["summary"]
+    assert jeff1 in text and jeff2 in text and other not in text
+    # Title substring filter.
+    text, _ = run_agent_tool("organizer", _folder("labtest"), "list_pages",
+                             {"title_contains": "LDPC"})
+    assert other in text and jeff1 not in text
+    # Relative subfolder filter resolves inside the scope.
+    text, _ = run_agent_tool("organizer", _folder("labtest"), "list_pages", {"folder": "sub"})
+    assert jeff2 in text and jeff1 not in text
+    # No matches is a clear answer, not an empty-library claim.
+    text, _ = run_agent_tool("organizer", _folder("labtest"), "list_pages", {"label": "nope"})
+    assert "No pages match" in text
+    # Labels mode: the vocabulary with counts, not page lines.
+    text, action = run_agent_tool("organizer", _folder("labtest"), "list_pages",
+                                  {"list_labels": True})
+    assert "labels" in action["summary"]
+    assert '- label "Jeff": 1 page' in text and '- label "jeff": 1 page' in text
+    assert '- label "qec": 1 page' in text and '- folder "labtest": 2 pages' in text
+    assert jeff1 not in text
+
+
+# --- tool-history replay -----------------------------------------------------
+
+def _payload(history):
+    from types import SimpleNamespace
+    return SimpleNamespace(history=history, prompt="now do it", selection="")
+
+
+def test_build_messages_replays_tool_history():
+    history = [
+        {"role": "user", "text": "rename them"},
+        {"role": "ai", "text": "Done.", "actions": [
+            {"kind": "list", "tool": "list_pages", "args": {}, "result": "Pages (2): …"},
+            {"kind": "rename", "tool": "rename_page",
+             "args": {"page_id": "p1", "title": "New"}, "result": "ok — renamed"},
+        ]},
+    ]
+    messages = build_messages(_payload(history), "", with_tools=True)
+    roles = [m["role"] for m in messages]
+    assert roles == ["user", "assistant", "tool", "tool", "assistant", "user"]
+    calls = messages[1]["tool_calls"]
+    assert [c["name"] for c in calls] == ["list_pages", "rename_page"]
+    assert calls[1]["arguments"] == {"page_id": "p1", "title": "New"}
+    # Result turns pair with the synthesized call ids.
+    assert messages[2]["call_id"] == calls[0]["id"] and messages[2]["content"] == "Pages (2): …"
+    assert messages[4]["content"] == "Done."
+    # Plain chats must not replay tool turns (providers reject them untooled).
+    plain = build_messages(_payload(history), "", with_tools=False)
+    assert [m["role"] for m in plain] == ["user", "assistant", "user"]
+
+
+def test_build_messages_replay_edge_cases():
+    # Tool-only reply (no prose) still leaves its calls; chips saved before
+    # tool recording existed (no "tool" field) are skipped entirely.
+    history = [
+        {"role": "user", "text": "go"},
+        {"role": "ai", "text": "", "actions": [
+            {"kind": "rename", "tool": "rename_page", "args": {"page_id": "p"}, "result": "ok"}]},
+        {"role": "user", "text": "and this old one"},
+        {"role": "ai", "text": "old reply", "actions": [{"kind": "list", "summary": "Listed 68"}]},
+    ]
+    messages = build_messages(_payload(history), "", with_tools=True)
+    roles = [m["role"] for m in messages]
+    assert roles == ["user", "assistant", "tool", "user", "assistant", "user"]
+    assert not messages[4].get("tool_calls")
+
+
+def test_build_messages_elides_old_results_over_budget():
+    big = "x" * (TOOL_REPLAY_BUDGET - 100)
+    history = [
+        {"role": "user", "text": "a"},
+        {"role": "ai", "text": "one", "actions": [
+            {"kind": "read", "tool": "read_page", "args": {"page_id": "p1"}, "result": big}]},
+        {"role": "user", "text": "b"},
+        {"role": "ai", "text": "two", "actions": [
+            {"kind": "read", "tool": "read_page", "args": {"page_id": "p2"}, "result": big}]},
+    ]
+    messages = build_messages(_payload(history), "", with_tools=True)
+    tool_turns = [m for m in messages if m["role"] == "tool"]
+    assert len(tool_turns) == 2
+    assert "elided" in tool_turns[0]["content"]  # older result dropped…
+    assert tool_turns[1]["content"] == big       # …newest kept in full
+
+
+def test_anthropic_folds_user_turn_after_tool_only_reply():
+    messages = [
+        {"role": "user", "content": "go"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "name": "rename_page", "arguments": {"page_id": "p"}}]},
+        {"role": "tool", "call_id": "c1", "content": "ok"},
+        {"role": "user", "content": "thanks, next"},
+    ]
+    req = anthropic_request(_CONF, messages, "sys", "m", tools=ALL_TOOLS)
+    wire = json.loads(req.data)["messages"]
+    assert [m["role"] for m in wire] == ["user", "assistant", "user"]  # roles alternate
+    assert wire[2]["content"] == [
+        {"type": "tool_result", "tool_use_id": "c1", "content": "ok"},
+        {"type": "text", "text": "thanks, next"}]
+
+
+def test_chat_agent_history_replay_reaches_provider(org, monkeypatch):
+    c, _ = org
+    import gamma.routers.ai as ai_mod
+
+    seen = {}
+
+    def fake_open(messages, system, entry, rt, pdf_b64s=None, **kw):
+        seen["messages"] = messages
+        return _FakeResp([{"type": "content_block_delta",
+                           "delta": {"type": "text_delta", "text": "hi"}}])
+
+    monkeypatch.setattr(ai_mod, "_open_ai", fake_open)
+    history = [
+        {"role": "user", "text": "list please"},
+        {"role": "ai", "text": "Found 2.", "actions": [
+            {"kind": "list", "tool": "list_pages", "args": {}, "result": "Pages (2): …"}]},
+    ]
+    r = c.post("/api/ai/chat", json={"prompt": "now rename", "history": history,
+                                     "agent_scope": "folder", "folder": "readout",
+                                     "stream": True})
+    assert r.status_code == 200
+    replayed = [m for m in seen["messages"] if m.get("tool_calls") or m["role"] == "tool"]
+    assert [m["role"] for m in replayed] == ["assistant", "tool"]
+    assert replayed[0]["tool_calls"][0]["name"] == "list_pages"
+    # The same history in a plain chat replays nothing.
+    seen.clear()
+    r = c.post("/api/ai/chat", json={"prompt": "hello", "history": history, "stream": True})
+    assert r.status_code == 200
+    assert all(not m.get("tool_calls") and m["role"] != "tool" for m in seen["messages"])

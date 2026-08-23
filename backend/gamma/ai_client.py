@@ -103,7 +103,18 @@ def _anthropic_messages(messages) -> list:
                         for c in m["tool_calls"]]
             out.append({"role": "assistant", "content": content})
         else:
-            out.append({"role": m["role"], "content": m["content"]})
+            prev = out[-1] if out else None
+            if (m["role"] == "user" and prev and prev["role"] == "user"
+                    and isinstance(prev["content"], list)
+                    and prev["content"] and prev["content"][0].get("type") == "tool_result"):
+                # A tool-only assistant reply leaves its results as the last
+                # user turn; fold the next real user message into it so roles
+                # keep alternating. Attachment turns already carry block lists.
+                prev["content"].extend(
+                    m["content"] if isinstance(m["content"], list)
+                    else [{"type": "text", "text": m["content"]}])
+            else:
+                out.append({"role": m["role"], "content": m["content"]})
     return out
 
 

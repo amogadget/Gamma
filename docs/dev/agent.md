@@ -15,7 +15,7 @@ This document describes exactly what it can see and do.
 
 | Tool | Permission | Scope | What it does |
 |---|---|---|---|
-| `list_pages` | List pages | folder | List the folder's pages: id, title, kind (pdf/note), folder paths, labels, cached metadata (first author, year, venue), last-update date |
+| `list_pages` | List pages | folder | List the folder's pages: id, title, kind (pdf/note), folder paths, labels, cached metadata (first author, year, venue), last-update date. Can filter by label, subfolder, or title, or list just the label/folder vocabulary with counts |
 | `read_page` | Read papers & notes | folder + paper | Read one page: an excerpt of the paper's extracted PDF text (up to 20 000 characters) plus your highlighted passages and notes |
 | `search_pdfs` | Search PDF text | folder + paper | Full-text search over the reachable PDFs (the same index behind Ctrl+F), returning snippets with page numbers |
 | `rename_page` | Rename pages | folder | Change a page's title |
@@ -69,7 +69,10 @@ its reach.
    normally; every tool call — reads, changes, and failures alike — appears in
    the chat as a chip you can click to see the exact arguments and the output
    the model got back.
-3. When the loop finishes with changes applied, the library view refreshes.
+3. Within one conversation the agent remembers its earlier tool calls and
+   their results (recent results in full, older ones trimmed), so it doesn't
+   re-list or re-read what it already saw.
+4. When the loop finishes with changes applied, the library view refreshes.
 
 Folder conversations follow folder renames and moves, and are deleted with
 their folder.

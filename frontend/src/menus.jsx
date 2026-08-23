@@ -84,16 +84,26 @@ function useDropdown() {
 // the current one with a check. `block` stretches the trigger into a field.
 // Options are [value, label] or [value, label, Icon] tuples — with an Icon the
 // pill and the menu items lead with the glyph (same look as ActionMenu items).
-function MenuSelect({ value, onChange, options, label, block }) {
+// `icon` collapses the trigger to that fixed glyph + chevron (no value label) —
+// the current choice rides in the tooltip instead. Used where the pill's text
+// width doesn't fit, e.g. the home toolbar's sort control on a phone.
+function MenuSelect({ value, onChange, options, label, block, icon: TriggerIcon }) {
   const [menu, close, triggerProps, triggerRef] = useDropdown();
   const current = options.find(([v]) => v === value) || options[0];
   const CurrentIcon = current?.[2];
+  const title = TriggerIcon ? `${current?.[1]} — ${label}` : label;
   return (
     <>
       <button type="button" className={`uiBtn sm uiSelectBtn ${block ? "block" : ""}`}
-        aria-label={label} title={label} {...triggerProps}>
-        {CurrentIcon ? <CurrentIcon size={13} /> : null}
-        <span className="uiSelectLabel">{current?.[1]}</span>
+        aria-label={title} title={title} {...triggerProps}>
+        {TriggerIcon ? (
+          <TriggerIcon size={13} />
+        ) : (
+          <>
+            {CurrentIcon ? <CurrentIcon size={13} /> : null}
+            <span className="uiSelectLabel">{current?.[1]}</span>
+          </>
+        )}
         <ChevronDownIcon size={13} className="uiSelectChev" />
       </button>
       {menu ? (

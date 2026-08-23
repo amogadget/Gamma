@@ -297,7 +297,9 @@
 .aiProvSelectable { cursor: pointer; }
 /* The row is avatar · meta · actions — meta takes the slack so the text starts
    right after the glyph instead of floating in the middle of the row. */
-.aiProvRow .aiProvMeta { flex: 1; }
+/* min-width is the wrap trigger: below it the actions move to their own
+   line rather than squeezing the name/description text (see .aiProvRow). */
+.aiProvRow .aiProvMeta { flex: 1; min-width: 170px; }
 .aiProvRadio { margin: 0 2px 0 0; flex-shrink: 0; accent-color: var(--accent); align-self: center; }
 /* Leading glyph tile — same language as .setIcon, one size up for a list row. */
 .aiProvAvatar {
@@ -394,16 +396,26 @@
     flex: 0 0 auto;
     flex-direction: row;
     align-items: center;
-    gap: 4px;
+    gap: 2px;
     overflow-x: auto;
-    padding: 8px;
+    padding: 8px 6px;
+    /* keep the strip clear of the floating × — without this the last nav
+       icons render under the close button and a tap there closes the dialog */
+    margin-right: 40px;
     border-right: none;
     border-bottom: 1px solid var(--border);
   }
   .settingsSideTitle, .settingsNavGroup { display: none; }
-  .settingsNavBtn { padding: 7px 9px; }
+  .settingsNavBtn { padding: 7px 6px; flex: none; }
   .settingsNavBtn span { display: none; }
   .settingsPane { padding: 14px 14px 20px; }
   .setStats { gap: 6px; }
   .setRange { display: none; }
+  /* status table: slim the fixed columns so the title keeps real width
+     (at the desktop widths 24+84+76+76 the 1fr title column collapses to 0) */
+  .metaStatRow {
+    grid-template-columns: 18px minmax(0, 1fr) 58px 58px 58px 24px;
+    padding: 3px 6px;
+    font-size: 11px;
+  }
 }

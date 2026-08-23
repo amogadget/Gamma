@@ -2593,6 +2593,9 @@ button.pdfOutlineChevron:hover {
 .aiProvRow {
   position: relative;
   display: flex;
+  /* narrow panes: the action buttons drop to their own line instead of
+     crushing the text column to a few px (one-character-per-line wrapping) */
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -2615,7 +2618,7 @@ button.pdfOutlineChevron:hover {
 .aiProvRow:hover { background: var(--bg-hover); }
 .aiProvName { font-size: 12.5px; font-weight: 600; color: var(--text-primary); }
 .aiProvDesc { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
-.aiProvActions { display: flex; gap: 6px; flex-shrink: 0; }
+.aiProvActions { display: flex; gap: 6px; flex-shrink: 0; margin-left: auto; }
 
 /* Storage meter (QuotaMeter): thin cloud-drive-style usage bar. */
 .quotaMeter {

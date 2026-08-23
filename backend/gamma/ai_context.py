@@ -68,13 +68,68 @@ def final_prompt(payload) -> str:
     return prompt
 
 
-def build_messages(payload, context: str) -> list[dict]:
-    """Build common chat messages, injecting context once before a user turn."""
+# Replayed tool results across the whole history share this char budget
+# (newest first); older results are elided so long agent sessions don't grow
+# each request without bound. The calls themselves are always kept — they are
+# what stops the model from repeating work it already did.
+TOOL_REPLAY_BUDGET = 8000
+_ELIDED_RESULT = "(older result elided to save space — call the tool again if needed)"
+
+
+def _replayable(history_item: dict) -> list[dict]:
+    """The saved actions of one AI reply that carry the raw call (chips saved
+    before tool recording existed have no tool/result and can't be replayed)."""
+    if history_item.get("role") != "ai":
+        return []
+    return [a for a in (history_item.get("actions") or [])
+            if isinstance(a, dict) and a.get("tool")]
+
+
+def _elide_old_results(history: list) -> dict[int, set]:
+    """Pick which replayed tool results keep their text: walk newest-first
+    under TOOL_REPLAY_BUDGET; everything older is elided. Returns
+    {history_index: {action_index, ...}} of the elided ones."""
+    elided: dict[int, set] = {}
+    budget = TOOL_REPLAY_BUDGET
+    for i in range(len(history) - 1, -1, -1):
+        for j, action in reversed(list(enumerate(_replayable(history[i])))):
+            budget -= len(str(action.get("result") or ""))
+            if budget < 0:
+                elided.setdefault(i, set()).add(j)
+    return elided
+
+
+def build_messages(payload, context: str, with_tools: bool = False) -> list[dict]:
+    """Build common chat messages, injecting context once before a user turn.
+
+    With ``with_tools`` (an agent chat), each saved reply's tool calls are
+    replayed as assistant ``tool_calls`` + ``role:"tool"`` result turns — the
+    same common shapes the wire builders translate for the live loop — so the
+    model remembers what it already listed/read/changed instead of repeating
+    the calls each turn. Plain chats must not replay them: providers reject
+    tool blocks without tool definitions in the request.
+    """
+    history = payload.history or []
+    elided = _elide_old_results(history) if with_tools else {}
     messages = []
     context_used = False
-    for history_item in payload.history or []:
+    for i, history_item in enumerate(history):
         role = "assistant" if history_item.get("role") == "ai" else "user"
         content = history_item.get("text", "")
+        if with_tools:
+            actions = _replayable(history_item)
+            if actions:
+                # Calls first, then their results, then the reply prose — the
+                # order the turn actually happened in. Synthetic call ids only
+                # need to pair within this one request.
+                messages.append({"role": "assistant", "content": "", "tool_calls": [
+                    {"id": f"call_h{i}_{j}", "name": a["tool"], "arguments": a.get("args") or {}}
+                    for j, a in enumerate(actions)]})
+                for j, a in enumerate(actions):
+                    result = (_ELIDED_RESULT if j in elided.get(i, ())
+                              else str(a.get("result") or ""))
+                    messages.append({"role": "tool", "call_id": f"call_h{i}_{j}",
+                                     "content": result or "(empty result)"})
         if not content.strip():
             # An organizer reply can be tool actions with no prose; providers
             # (Anthropic especially) reject empty content blocks.

@@ -895,7 +895,9 @@ def ai_chat(payload: AIChatRequest, request: Request):
 
     def prepared(allow_native):
         pdf_b64s, context = _gather_inputs(user, payload, allow_native)
-        messages = _build_messages(payload, context)
+        # Agent chats replay each saved reply's tool calls/results so the
+        # model keeps what it already listed/read/changed across turns.
+        messages = _build_messages(payload, context, with_tools=bool(tools))
         # A custom prompt always applies; the built-in one only when there's a document
         system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
         if tools:

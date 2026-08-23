@@ -60,7 +60,9 @@ AGENT_PROMPT = (
     "organize, apply an explicit bulk instruction (e.g. a naming scheme) to every "
     "matching page without asking again; ask first when the request is ambiguous. "
     "You cannot delete anything or edit labels. After making changes, finish with "
-    "a short summary of what you changed."
+    "a short summary of what you changed. Your earlier tool calls and their "
+    "results stay in this conversation — don't repeat a call whose output you "
+    "already have; call again only when the library may have changed since."
 )
 
 
@@ -144,6 +146,16 @@ def _scope_docs(conn, scope: dict) -> dict:
 
 def _run_list_pages(conn, user: str, scope: dict, args: dict):
     path = _scope_folder(scope)
+    # Optional filters, so "papers labeled X" is one small call instead of a
+    # full dump the model has to sift by eye.
+    label = str(args.get("label") or "").strip().lower()
+    title_q = str(args.get("title_contains") or "").strip().lower()
+    sub = clean_path(str(args.get("folder") or ""))
+    if path and sub and not _in_scope(sub, path):
+        sub = f"{path}/{sub}"  # relative folder filters resolve inside the scope
+    want_labels = bool(args.get("list_labels"))
+    label_counts: dict[str, int] = {}
+    folder_counts: dict[str, int] = {}
     lines = []
     for page_id, content, props_raw, updated in conn.execute(
             "SELECT id, content, properties, updated_at FROM unified_blocks "
@@ -155,14 +167,26 @@ def _run_list_pages(conn, user: str, scope: dict, args: dict):
         tags = parse_tags(props.get("folder"))
         if not _page_in_scope(scope, page_id, tags):
             continue
+        page_labels = parse_tags(props.get("category"))
+        if want_labels:
+            for lab in page_labels:
+                label_counts[lab] = label_counts.get(lab, 0) + 1
+            for tag in tags:
+                folder_counts[tag] = folder_counts.get(tag, 0) + 1
+            continue
+        if label and label not in (lab.lower() for lab in page_labels):
+            continue
+        if sub and not any(_in_scope(t, sub) for t in tags):
+            continue
+        if title_q and title_q not in (content or "Untitled").lower():
+            continue
         bits = [f"id={page_id}",
                 f'title="{(content or "Untitled")[:120]}"',
                 "pdf" if props.get("doc_id") else "note"]
         if tags:
             bits.append("folders=[" + ", ".join(tags) + "]")
-        labels = parse_tags(props.get("category"))
-        if labels:
-            bits.append("labels=[" + ", ".join(labels) + "]")
+        if page_labels:
+            bits.append("labels=[" + ", ".join(page_labels) + "]")
         meta = props.get("meta") or {}
         authors = [a for a in (meta.get("authors") or []) if str(a).strip()]
         if authors or meta.get("year") or meta.get("venue"):
@@ -174,11 +198,25 @@ def _run_list_pages(conn, user: str, scope: dict, args: dict):
             bits.append(f"updated {str(updated)[:10]}")
         lines.append("- " + " | ".join(bits))
     where = f"“{path}”" if path else "the library"
+    if want_labels:
+        out_lines = ([f'- label "{lab}": {n} page{"s" if n != 1 else ""}'
+                      for lab, n in sorted(label_counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+                     + [f'- folder "{f}": {n} page{"s" if n != 1 else ""}'
+                        for f, n in sorted(folder_counts.items(), key=lambda kv: (-kv[1], kv[0]))])
+        action = {"kind": "list", "summary": f"Listed {len(label_counts)} labels in {where}"}
+        if not out_lines:
+            return "No labels or folders in scope.", action
+        return "Labels and folders in scope (with page counts):\n" + "\n".join(out_lines), action
+    filters = "".join([f' labeled "{label}"' if label else "",
+                       f' titled ~"{title_q}"' if title_q else ""])
+    where_full = (f"“{sub}”" if sub else where) + filters
     action = {"kind": "list",
-              "summary": f"Listed {len(lines)} page{'s' if len(lines) != 1 else ''} in {where}"}
+              "summary": f"Listed {len(lines)} page{'s' if len(lines) != 1 else ''} in {where_full}"}
     if not lines:
-        return ("The folder is empty." if path else "The library is empty."), action
-    header = f'Pages in "{path}"' if path else "Pages in the library"
+        no = "No pages match those filters." if (label or title_q or sub) else (
+            "The folder is empty." if path else "The library is empty.")
+        return no, action
+    header = f"Pages in {where_full}"
     tail = f"\n(+{len(lines) - _LIST_CAP} more not shown)" if len(lines) > _LIST_CAP else ""
     return f"{header} ({len(lines)}):\n" + "\n".join(lines[:_LIST_CAP]) + tail, action
 
@@ -304,8 +342,22 @@ TOOLS = [
                 "List the pages (papers and notes) in the folder the user is viewing, one "
                 "per line: id, title, kind (pdf/note), folder paths, labels, cached paper "
                 "metadata (first author, year, venue) and last-update date. Call this "
-                "before any other tool — never guess page ids."),
-            "parameters": {"type": "object", "properties": {}, "required": []},
+                "before any other tool — never guess page ids. Prefer the filters over "
+                "listing everything: `label` (exact label, case-insensitive), `folder` "
+                "(a subfolder path), `title_contains` (title substring). "
+                "`list_labels: true` instead returns every label and folder in scope "
+                "with page counts — use it to answer questions about the labels "
+                "themselves or to find a label's exact spelling."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {"type": "string"},
+                    "folder": {"type": "string"},
+                    "title_contains": {"type": "string"},
+                    "list_labels": {"type": "boolean"},
+                },
+                "required": [],
+            },
         },
     },
     {
