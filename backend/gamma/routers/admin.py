@@ -149,7 +149,7 @@ async def create_user(payload: UserCreateRequest, request: Request):
 
 
 class UserUpdateRequest(BaseModel):
-    password: str | None = None  # set a new password (never invalidates sessions)
+    password: str | None = None   # set a new password (revokes the user's sessions)
     is_admin: bool | None = None  # grant/revoke the admin privilege
     # storage-limit overrides: omitted = unchanged, explicit null = inherit the
     # server default again (model_fields_set tells the two apart)
@@ -172,6 +172,9 @@ async def update_user(username: str, payload: UserUpdateRequest, request: Reques
             password = _check_password(payload.password)
             pwhash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
             conn.execute("UPDATE users SET password_hash = ? WHERE username = ?", (pwhash, username))
+            # Revoke existing sessions so a changed/leaked password can't be
+            # ridden by an already-open session (incl. an attacker's).
+            conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
         if payload.is_admin is not None:
             if not payload.is_admin and row[2] and _admin_count(conn) <= 1:
                 raise HTTPException(status_code=400, detail="cannot demote the last admin")

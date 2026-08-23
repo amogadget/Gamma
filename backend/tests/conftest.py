@@ -28,6 +28,16 @@ import pytest  # noqa: E402  (must follow the env/sys.path setup above)
 from fastapi.testclient import TestClient  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _reset_ratelimit():
+    """The whole suite shares one TestClient source IP, so the per-IP login
+    throttle would trip mid-run. Clear counters before each test — production
+    behavior is unchanged."""
+    from gamma import ratelimit
+    ratelimit._buckets.clear()
+    yield
+
+
 @pytest.fixture(scope="session")
 def client():
     from gamma.app import app

@@ -18,10 +18,43 @@ SESSION_MAX_AGE = 365 * 24 * 3600
 _AUTH_PATHS = {"/api/login", "/api/login-guest", "/api/logout", "/api/session"}
 
 
+def _session_expired(created_at: str) -> bool:
+    """True if a session row is older than SESSION_MAX_AGE. Unparseable
+    timestamps are treated as expired (fail closed)."""
+    try:
+        created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return True
+    return (datetime.now(timezone.utc) - created).total_seconds() > SESSION_MAX_AGE
+
+
+def _is_https(request: Request) -> bool:
+    """True when the client's connection to us (or the TLS-terminating proxy in
+    front) is HTTPS. Used to add Secure/HSTS only when they won't break the
+    plain-HTTP LAN access this app also supports."""
+    if request.url.scheme == "https":
+        return True
+    return request.headers.get("x-forwarded-proto", "").split(",")[0].strip() == "https"
+
+
+def _apply_security_headers(request: Request, response) -> None:
+    """Baseline hardening headers on every response. Deliberately conservative:
+    a resource-restricting CSP would break the SPA, so we only set
+    frame-ancestors (clickjacking) plus nosniff / referrer / (conditional) HSTS."""
+    h = response.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("X-Frame-Options", "SAMEORIGIN")
+    h.setdefault("Referrer-Policy", "no-referrer")
+    h.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
+    if _is_https(request):
+        h.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
+
 def _finish_request_log(request: Request, response, started: float, expected: str | None, reason: str = ""):
     """Correlate browser diagnostics with useful, low-noise CLI context."""
     request_id = request.state.request_id
     response.headers["X-Gamma-Request-ID"] = request_id
+    _apply_security_headers(request, response)
     elapsed_ms = (time.perf_counter() - started) * 1000
     status = response.status_code
     path = request.url.path
@@ -48,8 +81,14 @@ def _finish_request_log(request: Request, response, started: float, expected: st
     return response
 
 
-def set_session_cookie(response, token: str):
-    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", max_age=SESSION_MAX_AGE)
+def set_session_cookie(response, token: str, request: Request | None = None):
+    # Secure only when the connection is HTTPS — this app is also reached over
+    # plain HTTP on the LAN, where a Secure cookie would never be sent and login
+    # would silently fail. Behind TLS (or a proxy sending X-Forwarded-Proto) the
+    # flag turns on automatically.
+    secure = bool(request is not None and _is_https(request))
+    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax",
+                        max_age=SESSION_MAX_AGE, secure=secure)
 
 
 async def session_middleware(request: Request, call_next):
@@ -68,12 +107,18 @@ async def session_middleware(request: Request, call_next):
     if token:
         with sqlite3.connect(str(USERS_DB)) as conn:
             row = conn.execute(
-                "SELECT u.username, u.is_guest, u.is_admin, s.guest_date FROM sessions s "
+                "SELECT u.username, u.is_guest, u.is_admin, s.guest_date, s.created_at FROM sessions s "
                 "JOIN users u ON s.username = u.username WHERE s.token = ?",
                 (token,),
             ).fetchone()
+            if row and _session_expired(row[4]):
+                # Server-side expiry: a stolen token can't outlive its window
+                # even though the browser cookie's Max-Age is long.
+                conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+                conn.commit()
+                row = None
             if row:
-                username, is_guest, is_admin, guest_date = row
+                username, is_guest, is_admin, guest_date, _created = row
                 if is_guest:
                     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                     if guest_date != today:
@@ -109,7 +154,7 @@ async def session_middleware(request: Request, call_next):
         return _finish_request_log(request, resp, started, expected, "session-mismatch")
     response = await call_next(request)
     if new_session_token:
-        set_session_cookie(response, new_session_token)
+        set_session_cookie(response, new_session_token, request)
     return _finish_request_log(request, response, started, expected)
 
 

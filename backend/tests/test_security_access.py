@@ -119,3 +119,53 @@ def test_safe_doc_id_rejects_traversal():
         with pytest.raises(ValueError):
             safe_doc_id(bad)
     assert safe_doc_id("e2e4c5cdf215c8ab6bb6c249") == "e2e4c5cdf215c8ab6bb6c249"
+
+
+# --- 4. SVG stored-XSS neutralized ------------------------------------------
+
+def test_svg_served_as_attachment_not_inline(guest):
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
+    up = guest.post("/api/upload-image", files={"file": ("x.svg", svg, "image/svg+xml")})
+    assert up.status_code == 200, up.text
+    url = up.json()["url"]
+    r = guest.get(url)
+    assert r.status_code == 200
+    assert r.headers.get("content-disposition", "").startswith("attachment")
+    assert "sandbox" in r.headers.get("content-security-policy", "")
+    assert r.headers.get("x-content-type-options") == "nosniff"
+
+
+# --- 5. security headers ----------------------------------------------------
+
+def test_security_headers_present(client):
+    r = client.get("/api/health")
+    assert r.headers.get("x-content-type-options") == "nosniff"
+    assert r.headers.get("x-frame-options") == "SAMEORIGIN"
+    assert "frame-ancestors" in r.headers.get("content-security-policy", "")
+
+
+# --- 6. login throttling ----------------------------------------------------
+
+def test_login_rate_limited(client):
+    make_user("throttle_me", "correcthorse1")
+    last = None
+    for _ in range(15):
+        last = client.post("/api/login", json={"username": "throttle_me", "password": "wrong"})
+    assert last.status_code == 429
+    assert last.headers.get("retry-after")
+
+
+# --- 7. password change revokes sessions ------------------------------------
+
+def test_password_change_revokes_sessions(client):
+    make_user("revoke_me", "origpw123456")
+    make_user("revoke_admin", "adminpw123456", is_admin=1)
+    victim = login("revoke_me", "origpw123456")
+    assert victim.get("/api/session").json()["user"] == "revoke_me"
+
+    admin = login("revoke_admin", "adminpw123456")
+    r = admin.put("/api/admin/users/revoke_me", json={"password": "brandnewpw123"})
+    assert r.status_code == 200, r.text
+
+    # the victim's still-held cookie is now dead
+    assert victim.get("/api/session").json()["user"] is None

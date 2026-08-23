@@ -16,7 +16,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
+from .. import ratelimit
 from ..auth import require_user, set_session_cookie
+from ..ratelimit import client_ip
 from ..blocks_store import BLOCK_COLUMNS, fetch_subtree, last_child_position
 from ..config import USERS_DIR
 from ..db import connect_users_db, page_now
@@ -285,7 +287,12 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/login")
-async def login(payload: LoginRequest):
+async def login(payload: LoginRequest, request: Request):
+    # Throttle guessing: per-IP and per-username fixed windows. bcrypt is slow
+    # by design, but that alone doesn't stop distributed/patient guessing.
+    ip = client_ip(request)
+    ratelimit.check(f"login:ip:{ip}", max_hits=10, window_seconds=300)
+    ratelimit.check(f"login:user:{payload.username}", max_hits=10, window_seconds=300)
     with connect_users_db() as conn:
         row = conn.execute(
             "SELECT username, password_hash, is_guest FROM users WHERE username = ?",
@@ -295,6 +302,8 @@ async def login(payload: LoginRequest):
         raise HTTPException(status_code=401, detail="invalid credentials")
     if not bcrypt.checkpw(payload.password.encode(), row[1].encode()):
         raise HTTPException(status_code=401, detail="invalid credentials")
+    ratelimit.reset(f"login:ip:{ip}")
+    ratelimit.reset(f"login:user:{payload.username}")
     token = secrets.token_urlsafe(32)
     with connect_users_db() as conn:
         conn.execute(
@@ -303,7 +312,7 @@ async def login(payload: LoginRequest):
         )
         conn.commit()
     resp = JSONResponse({"ok": True, "username": row[0]})
-    set_session_cookie(resp, token)
+    set_session_cookie(resp, token, request)
     return resp
 
 
@@ -328,9 +337,12 @@ async def get_session(request: Request):
 
 
 @router.post("/login-guest")
-async def login_guest():
+async def login_guest(request: Request):
     from datetime import datetime, timezone
 
+    # Each call mints a permanent session row; cap the rate so a public instance
+    # can't be flooded into unbounded session-table growth.
+    ratelimit.check(f"guest:ip:{client_ip(request)}", max_hits=20, window_seconds=300)
     ensure_guest_user()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     token = secrets.token_urlsafe(32)
@@ -344,5 +356,5 @@ async def login_guest():
     if not (USERS_DIR / "guest" / "pages.db").exists():
         reset_guest_data()
     resp = JSONResponse({"ok": True, "username": "guest"})
-    set_session_cookie(resp, token)
+    set_session_cookie(resp, token, request)
     return resp

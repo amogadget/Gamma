@@ -20,6 +20,10 @@ from .db import connect_users_db, page_now, user_uploads_dir
 MB = 1024 * 1024
 DEFAULT_MAX_UPLOAD_MB = MAX_UPLOAD_BYTES // MB
 DEFAULT_QUOTA_MB = 0  # unlimited
+# The guest workspace is shared and reachable by anyone on the internet, so it
+# gets a bounded default quota (an admin can still override it per-account).
+# Applied only when no explicit per-user override is set.
+GUEST_DEFAULT_QUOTA_MB = 200
 UPLOAD_MB_MIN, UPLOAD_MB_MAX = 1, 2048
 QUOTA_MB_MIN, QUOTA_MB_MAX = 0, 1024 * 1024  # 0 = unlimited, cap 1 TB
 
@@ -85,6 +89,10 @@ def user_limits(username: str) -> dict:
         row = conn.execute("SELECT max_upload_mb, quota_mb FROM users WHERE username = ?", (username,)).fetchone()
     upload_override = row[0] if row else None
     quota_override = row[1] if row else None
+    # Guest falls back to a bounded quota rather than the (often unlimited)
+    # server default, unless an admin has set an explicit override.
+    if username == "guest" and quota_override is None and default_quota == 0:
+        default_quota = GUEST_DEFAULT_QUOTA_MB
     return {
         "max_upload_mb": _parse(upload_override, default_upload, UPLOAD_MB_MIN, UPLOAD_MB_MAX),
         "quota_mb": _parse(quota_override, default_quota, QUOTA_MB_MIN, QUOTA_MB_MAX),

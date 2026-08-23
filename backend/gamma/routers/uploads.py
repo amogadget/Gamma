@@ -131,4 +131,13 @@ async def serve_upload(filename: str, request: Request):
         raise HTTPException(status_code=404, detail="not found")
     # Filenames are content hashes (or URL hashes the server only writes once),
     # so a given name can never serve different bytes — cache hard for a month.
-    return FileResponse(path, media_type=media_type, headers={"Cache-Control": "public, max-age=2592000, immutable"})
+    headers = {"Cache-Control": "public, max-age=2592000, immutable",
+               "X-Content-Type-Options": "nosniff"}
+    # An SVG opened as a top-level document runs its inline <script> in this
+    # origin (stored XSS). Force a download on direct navigation and sandbox it
+    # if a browser renders it anyway; <img>/<object> embedding still works, so
+    # inline note images are unaffected.
+    if ext == ".svg":
+        headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    return FileResponse(path, media_type=media_type, headers=headers)
