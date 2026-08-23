@@ -28,11 +28,13 @@ from ..ai_client import (
     wire_protocol as _wire_protocol,
 )
 from ..ai_tools import (
+    AGENT_PROMPT,
     MAX_TOOL_ACTIONS,
     MAX_TOOL_ROUNDS,
-    folder_tools,
-    organizer_system,
-    run_folder_tool,
+    MUTATING_TOOLS,
+    agent_system,
+    agent_tools,
+    run_agent_tool,
 )
 from ..ai_context import (
     build_messages as _build_messages,
@@ -85,17 +87,21 @@ class AIChatRequest(BaseModel):
     images: list = Field(default_factory=list)  # pasted figures as data URLs
     files: list = Field(default_factory=list)  # uploaded PDFs as {name, data} data URLs
     stream: bool = False  # NDJSON stream of {"delta": …} lines instead of one JSON body
-    # Home/folder-view chat: give the model the folder-agent tools
-    # (gamma/ai_tools.py), scoped to `folder` ("" = library root). Mutations
-    # come back as {"action": …} NDJSON lines alongside the text deltas.
-    # allow_read/allow_write mirror the Settings → Assistant permission
-    # toggles (read: list/read/search papers; write: rename/move); both off
-    # degrades to a plain chat. tool_rounds overrides the agent round budget
-    # (0 = server default).
-    organize: bool = False
+    # Agent chat (gamma/ai_tools.py): agent_scope declares what this chat's
+    # tools reach — "folder" (the home/folder view; `folder` is the path,
+    # "" = library root) or "page" (the per-paper chat; `page_id` is the
+    # focused page — read tools only). "" = plain chat. Every tool call comes
+    # back as an {"action": …} NDJSON line alongside the text deltas.
+    # `permissions` is the Settings → Assistant per-tool map ({list, read,
+    # search, rename, move}; missing key = allowed) — everything off degrades
+    # to a plain chat. agent_system overrides the base agent prompt (the
+    # scope/permission lines are always appended); tool_rounds overrides the
+    # agent round budget (0 = server default).
+    agent_scope: str = ""
     folder: str = ""
-    allow_read: bool = True
-    allow_write: bool = True
+    page_id: str = ""
+    permissions: dict = Field(default_factory=dict)
+    agent_system: str = ""
     tool_rounds: int = Field(default=0, ge=0, le=100)
     context_char_limit: int = Field(default=8000, ge=100, le=1_000_000)
     multi_context_char_limit: int = Field(default=18000, ge=100, le=1_000_000)
@@ -195,6 +201,7 @@ async def ai_models(request: Request):
         "default_prompt": _SYSTEM_PROMPT,  # shown in the prompt editor
         "metadata_prompt": METADATA_PROMPT,  # AI metadata-extraction fallback
         "cite_prompt": CITE_PROMPT,  # PPT-style citation generator
+        "agent_prompt": AGENT_PROMPT,  # library-agent base role prompt
     }
 
 
@@ -876,8 +883,12 @@ def ai_chat(payload: AIChatRequest, request: Request):
     effort = _resolve_effort(payload.effort)
     images = _parse_images(payload.images)
     custom_system = (payload.system or "").strip()[:8000]
-    # Permission toggles pick the armed tool subset; neither on = plain chat.
-    tools = (folder_tools(payload.allow_read, payload.allow_write) or None) if payload.organize else None
+    # The scope decides which tools exist; the permission toggles pick the
+    # armed subset — an empty result (or no scope) is a plain chat.
+    scope = {"type": payload.agent_scope, "folder": payload.folder, "page_id": payload.page_id}
+    valid_scope = payload.agent_scope in ("folder", "page") and (
+        payload.agent_scope != "page" or payload.page_id)
+    tools = (agent_tools(payload.agent_scope, payload.permissions) or None) if valid_scope else None
     # The conversation the agent loop grows across tool rounds (agent mode).
     state = {}
 
@@ -888,7 +899,8 @@ def ai_chat(payload: AIChatRequest, request: Request):
         system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
         if tools:
             system = ((system + "\n\n" if system else "")
-                      + organizer_system(payload.folder, payload.allow_read, payload.allow_write))
+                      + agent_system(scope, payload.permissions,
+                                     (payload.agent_system or "").strip()[:8000]))
         return pdf_b64s, messages, system
 
     def open_with_fallback(stream):
@@ -941,14 +953,17 @@ def ai_chat(payload: AIChatRequest, request: Request):
                 if call["name"] not in armed:
                     result, action = ("error: tool not enabled — the user's permission "
                                       "settings do not allow it", None)
-                elif actions >= MAX_TOOL_ACTIONS:
+                elif call["name"] in MUTATING_TOOLS and actions >= MAX_TOOL_ACTIONS:
                     result, action = ("error: change limit for one message reached — "
                                       "stop and tell the user", None)
                 else:
-                    result, action = run_folder_tool(user, payload.folder,
-                                                     call["name"], call["arguments"])
+                    result, action = run_agent_tool(user, scope,
+                                                    call["name"], call["arguments"])
                 if action:
-                    actions += 1
+                    # Reads render as chips too, but only mutations count
+                    # against the change budget.
+                    if call["name"] in MUTATING_TOOLS:
+                        actions += 1
                     yield ("action", action)
                 messages.append({"role": "tool", "call_id": call["id"], "content": result})
             if round_no == max_rounds - 1:

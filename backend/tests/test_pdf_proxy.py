@@ -31,6 +31,14 @@ class FakeUpstream:
     def close(self):
         self.closed = True
 
+    # resolve-pdf consumes urlopen as a context manager
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
 
 def _fake(monkeypatch, **kwargs):
     made = []
@@ -122,6 +130,36 @@ def test_pdf_text_status_extracts_text(guest):
     # preview returns the text itself
     r2 = guest.get("/api/pdf-text-status", params={"doc_id": doc_id, "preview": 200})
     assert "Attention is all you need" in r2.json()["text"]
+
+
+def test_identifier_to_url():
+    """Bare arXiv ids and DOIs pasted into the open-by-URL box become URLs;
+    anything already URL-shaped passes through untouched."""
+    f = pdf_mod._identifier_to_url
+    assert f("2301.12345") == "https://arxiv.org/pdf/2301.12345"
+    assert f("arXiv:2301.12345v2") == "https://arxiv.org/pdf/2301.12345v2"
+    assert f("hep-th/9901001") == "https://arxiv.org/pdf/hep-th/9901001"
+    assert f("math.GT/0309136") == "https://arxiv.org/pdf/math.GT/0309136"
+    assert f("10.1103/PhysRevLett.130.123601") == "https://doi.org/10.1103/PhysRevLett.130.123601"
+    assert f("doi:10.1038/s41586-023-06096-3") == "https://doi.org/10.1038/s41586-023-06096-3"
+    # untouched: real URLs, page titles, random text
+    assert f("https://example.org/a.pdf") == "https://example.org/a.pdf"
+    assert f("attention is all you need") == "attention is all you need"
+
+
+def test_resolve_pdf_accepts_bare_arxiv_id(guest, monkeypatch):
+    _fake(monkeypatch)
+    r = guest.post("/api/resolve-pdf", json={"source_url": "arXiv:2301.12345"})
+    assert r.status_code == 200, r.text
+    assert r.json()["source_url"] == "https://arxiv.org/pdf/2301.12345"
+
+
+def test_resolve_pdf_bare_arxiv_doi_goes_to_arxiv(guest, monkeypatch):
+    """A pasted arXiv DOI (10.48550/arXiv.…) short-circuits to arxiv.org."""
+    _fake(monkeypatch)
+    r = guest.post("/api/resolve-pdf", json={"source_url": "10.48550/arXiv.2301.12345"})
+    assert r.status_code == 200, r.text
+    assert r.json()["source_url"] == "https://arxiv.org/pdf/2301.12345"
 
 
 def test_proxy_rejects_non_pdf(guest, monkeypatch):

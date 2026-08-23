@@ -15,12 +15,26 @@ import {
   ChevronUpIcon,
   CopyIcon,
   FileIcon,
+  FolderIcon,
+  ListIcon,
   MicIcon,
   PaperclipIcon,
   PencilIcon,
+  SearchIcon,
   StopIcon,
   XIcon,
 } from "./icons";
+
+// Folder-agent tool chips: icon per action kind. Only rename/move mutate the
+// library and require a home-feed refresh.
+const ACTION_ICONS = {
+  rename: PencilIcon,
+  move: FolderIcon,
+  search: SearchIcon,
+  read: BookIcon,
+  list: ListIcon,
+};
+const MUTATING_KINDS = new Set(["rename", "move"]);
 
 export default function ChatDock({
   docId,
@@ -50,12 +64,11 @@ export default function ChatDock({
   setOpenPopover,
   setStatus,
   // Home/folder view: the folder path being viewed ("" = library root) —
-  // enables the folder-agent tools; null in the paper view. Permissions arm
-  // read/search and rename/move tools independently.
+  // enables folder-agent tools; paper view gets scoped read tools.
   organizeFolder = null,
   toolRounds,
-  agentRead = true,
-  agentWrite = true,
+  agentPerms,
+  agentSystem,
   onLibraryChange,
   onGrip,
   onGripDoubleClick,
@@ -72,6 +85,9 @@ export default function ChatDock({
   // Chat history is per page; the home view buckets per folder so switching
   // folders cannot leak one organizer conversation into another.
   const chatKey = focusedBlockId || (organizeFolder ? `home:${organizeFolder}` : "home");
+  const perm = (key) => agentPerms?.[key] !== false;
+  const agentReads = perm("list") || perm("read") || perm("search");
+  const agentWrites = perm("rename") || perm("move");
   const chatKeyRef = useRef(chatKey);
   chatKeyRef.current = chatKey;
   // Which conversation the in-flight request belongs to (typing indicator
@@ -358,15 +374,23 @@ export default function ChatDock({
           context_char_limit: chatContextChars,
           multi_context_char_limit: multiContextChars,
           stream: true,
-          ...(organizeFolder != null && (agentRead || agentWrite)
+          ...(organizeFolder != null && (agentReads || agentWrites)
             ? {
-                organize: true,
+                agent_scope: "folder",
                 folder: organizeFolder,
                 tool_rounds: toolRounds || 0,
-                allow_read: !!agentRead,
-                allow_write: !!agentWrite,
+                permissions: agentPerms || {},
+                agent_system: agentSystem || "",
               }
-            : {}),
+            : focusedBlockId && (perm("read") || perm("search"))
+              ? {
+                  agent_scope: "page",
+                  page_id: focusedBlockId,
+                  tool_rounds: toolRounds || 0,
+                  permissions: agentPerms || {},
+                  agent_system: agentSystem || "",
+                }
+              : {}),
         }),
       });
       if (!res.ok) {
@@ -415,8 +439,8 @@ export default function ChatDock({
       setChatLoading(false);
       setChatLoadingKey("");
       chatAbortRef.current = null;
-      // Organizer tools renamed/moved/labeled pages — reload the home feed.
-      if (actions.length) onLibraryChange?.();
+      // Read-only tool calls render as chips but do not change the library.
+      if (actions.some((action) => MUTATING_KINDS.has(action.kind))) onLibraryChange?.();
     }
   }
 
@@ -823,9 +847,9 @@ export default function ChatDock({
                 )
               ) : focusedBlockId ? (
                 "Ask AI about this page…"
-              ) : organizeFolder != null && agentWrite ? (
-                `Ask AI anything — it can ${agentRead ? "read, search and " : ""}organize ${organizeFolder ? "this folder" : "your library"} (rename papers, file them into folders)…`
-              ) : organizeFolder != null && agentRead ? (
+              ) : organizeFolder != null && agentWrites ? (
+                `Ask AI anything — it can ${agentReads ? "read, search and " : ""}organize ${organizeFolder ? "this folder" : "your library"} (rename papers, file them into folders)…`
+              ) : organizeFolder != null && agentReads ? (
                 `Ask AI across ${organizeFolder ? "this folder's papers" : "your library"} — it can read, search and summarize them…`
               ) : (
                 "Ask AI anything, or generate a report from your pages…"
@@ -918,6 +942,23 @@ export default function ChatDock({
                       ) : (
                         <ChatMarkdown text={m.text} />
                       )}
+                      {!isUser && m.actions?.length ? (
+                        <div className="chatToolActions">
+                          {m.actions.map((action, actionIndex) => {
+                            const Icon = ACTION_ICONS[action.kind] || FolderIcon;
+                            return (
+                              <div
+                                key={actionIndex}
+                                className="chatToolAction"
+                                title={action.summary}
+                              >
+                                <Icon size={11} />
+                                <span>{action.summary}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
                     </div>
                     <div className="chatMsgActions">
                       <button
@@ -1167,8 +1208,8 @@ export default function ChatDock({
                           : "Ask about the selection…"
                         : chatDocs.length
                           ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…`
-                          : organizeFolder != null && (agentRead || agentWrite)
-                            ? agentWrite
+                          : organizeFolder != null && (agentReads || agentWrites)
+                            ? agentWrites
                               ? `Ask, or organize ${organizeFolder ? "this folder" : "your library"}…`
                               : `Ask across ${organizeFolder ? "this folder" : "your library"}…`
                             : "Ask…"

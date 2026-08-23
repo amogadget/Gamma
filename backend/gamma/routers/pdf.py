@@ -1,6 +1,7 @@
 """External PDF resolution and proxying (with optional local caching).
 
-Resolution handles the common academic-link shapes: arXiv abstract URLs are
+Resolution handles the common academic-link shapes: bare arXiv ids and DOIs
+pasted without a URL are promoted to one first, arXiv abstract URLs are
 rewritten to their PDF, DOI links that land on paywalled/bot-blocking publisher
 pages fall back to an open-access copy via the Unpaywall API, and failures come
 back as human-readable messages (publishers like APS return 403 to any
@@ -45,6 +46,27 @@ _ARXIV_ABS_RE = re.compile(r"arxiv\.org/abs/([0-9]{4}\.[0-9]{4,5}(?:v\d+)?)", re
 _ARXIV_DOI_RE = re.compile(r"10\.48550/arxiv\.([0-9]{4}\.[0-9]{4,5})", re.I)
 _DOI_URL_RE = re.compile(r"(?:dx\.)?doi\.org/(10\.\d{4,9}/[^\s?#]+)", re.I)
 
+# Bare identifiers pasted straight from a paper: "2301.12345" / "arXiv:2301.12345v2"
+# (plus old-style "hep-th/9901001") and "10.1103/PhysRevLett…" / "doi:10.…".
+_BARE_ARXIV_RE = re.compile(
+    r"^(?:arxiv:\s*)?([0-9]{4}\.[0-9]{4,5}(?:v\d+)?|[a-z][a-z-]*(?:\.[a-z]{2})?/[0-9]{7}(?:v\d+)?)$", re.I)
+_BARE_DOI_RE = re.compile(r"^(?:doi:\s*)?(10\.\d{4,9}/\S+)$", re.I)
+
+
+def _identifier_to_url(text: str) -> str:
+    """Turn a pasted bare identifier into a fetchable URL: an arXiv id goes
+    straight to its PDF, a DOI through doi.org (whose page then feeds the
+    citation_pdf_url / Unpaywall fallbacks). URL-shaped input is untouched."""
+    if "://" in text:
+        return text
+    m = _BARE_ARXIV_RE.match(text)
+    if m:
+        return f"https://arxiv.org/pdf/{m.group(1)}"
+    m = _BARE_DOI_RE.match(text)
+    if m:
+        return f"https://doi.org/{m.group(1)}"
+    return text
+
 
 def _meta_content(html: str, name: str) -> str:
     """Value of a <meta name=... content=...> tag (either attribute order)."""
@@ -84,7 +106,7 @@ class ResolvePdfRequest(BaseModel):
 @router.post("/resolve-pdf")
 def resolve_pdf(payload: ResolvePdfRequest, request: Request):
     require_user(request)
-    url = (payload.source_url or "").strip()
+    url = _identifier_to_url((payload.source_url or "").strip())
 
     # arXiv abstract pages (and arXiv DOIs) go straight to the PDF
     m = _ARXIV_ABS_RE.search(url) or _ARXIV_DOI_RE.search(url)

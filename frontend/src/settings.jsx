@@ -63,6 +63,7 @@ const NAV_GROUPS = [
   ["AI", [
     ["ai", "Providers", KeyIcon],
     ["assistant", "Assistant", SparklesIcon],
+    ["prompts", "Prompts", MessageSquareIcon],
   ]],
   ["Account", [
     ["users", "Users", UsersIcon], // relabelled "You" for non-admins (see SettingsDialog)
@@ -72,7 +73,7 @@ const NAV_GROUPS = [
 // Older entry points (and anything that remembered a pane id) still resolve.
 const PANE_ALIASES = {
   papers: "general",
-  prompts: "assistant", context: "assistant",
+  context: "assistant",
   diagnostics: "advanced", account: "users",
 };
 
@@ -1208,7 +1209,9 @@ function PromptAccordion({ items }) {
   );
 }
 
-function AssistantSettings({ value }) {
+// Prompts pane: the three editable prompts as a collapsed accordion, with one
+// Save button for all of them.
+function PromptsSettings({ value }) {
   const prompts = [
     { key: "chat", label: "Chat system prompt", icon: MessageSquareIcon,
       draft: value.promptDraft, setDraft: value.setPromptDraft,
@@ -1219,11 +1222,46 @@ function AssistantSettings({ value }) {
     { key: "cite", label: "PPT citation", icon: TypeIcon,
       draft: value.citePromptDraft, setDraft: value.setCitePromptDraft,
       defaultValue: value.aiInfo?.cite_prompt, custom: !!value.citePrompt, saved: value.citePrompt },
+    { key: "agent", label: "Library agent", icon: SparklesIcon,
+      draft: value.agentPromptDraft, setDraft: value.setAgentPromptDraft,
+      defaultValue: value.aiInfo?.agent_prompt, custom: !!value.agentSystem, saved: value.agentSystem },
   ];
   // A stored "" means "use the default", so the effective saved text is the
   // custom one or the default — that is what a draft is dirty against.
   const dirty = prompts.some((p) => (p.draft || "").trim() !== (p.saved || p.defaultValue || "").trim());
+  return (
+    <>
+      <PaneHead icon={MessageSquareIcon} title="Prompts">
+        What each AI job is told. Empty or unchanged means the built-in default.
+      </PaneHead>
+      <Section
+        title="Prompts"
+        action={
+          <button className={`uiBtn sm ${dirty ? "primary" : ""}`} disabled={!dirty} onClick={value.savePrompts}>
+            {dirty ? "Save prompts" : "Saved"}
+          </button>
+        }
+      >
+        <PromptAccordion items={prompts} />
+      </Section>
+    </>
+  );
+}
 
+// The folder agent's capabilities, one toggle per tool (see agent.md).
+const AGENT_PERM_ROWS = [
+  ["list", ListIcon, "List pages",
+   "See the folder's page titles, labels and metadata"],
+  ["read", BookIcon, "Read papers & notes",
+   "Read a paper's text plus your highlights and notes"],
+  ["search", SearchIcon, "Search PDF text",
+   "Full-text search across the folder's PDFs"],
+  ["rename", PenIcon, "Rename pages", "Change page titles on request"],
+  ["move", FolderIcon, "Move pages",
+   "File pages into folders (a new path creates the folder)"],
+];
+
+function AssistantSettings({ value }) {
   const limits = [
     [FileTextIcon, "Single paper", "Read from the open paper for one chat message",
       value.chatContextChars, value.setChatContextChars],
@@ -1236,7 +1274,7 @@ function AssistantSettings({ value }) {
   return (
     <>
       <PaneHead icon={SparklesIcon} title="Assistant">
-        Which model runs each AI job, how much of a paper it sees, and what it is told.
+        Which model runs each AI job, how much of a paper it sees, and what the folder agent may do.
       </PaneHead>
       <Section title="Models">
         <Row icon={PaperIcon} label="Metadata model"
@@ -1266,22 +1304,14 @@ function AssistantSettings({ value }) {
         </Row>
       </Section>
       <Section title="Folder agent">
-        <Toggle
-          icon={BookIcon}
-          label="Read papers & notes"
-          hint="The folder chat may list, read and search your papers"
-          title="Lets the home/folder chat list the folder's pages, read a paper's extracted text plus your highlights and notes, and full-text-search the folder's PDFs — e.g. to compare papers or write a summary. Content is sent to your configured AI provider."
-          checked={value.agentRead}
-          onChange={value.setAgentRead}
-        />
-        <Toggle
-          icon={FolderIcon}
-          label="Organize files"
-          hint="The folder chat may rename pages and move them between folders"
-          title="Lets the home/folder chat rename pages and file them into folders on request. It can never delete anything or edit your notes; every change is shown in the reply. Turn both permissions off for a plain chat."
-          checked={value.agentWrite}
-          onChange={value.setAgentWrite}
-        />
+        {AGENT_PERM_ROWS.map(([key, icon, label, hint]) => (
+          <Toggle
+            key={key} icon={icon} label={label} hint={hint}
+            title={`What the home/folder chat is allowed to do with the folder you are viewing (see agent.md). ${hint}. Whatever tools return is sent to your configured AI provider; every tool call is shown in the reply. Turn everything off for a plain chat.`}
+            checked={value.agentPerms?.[key] !== false}
+            onChange={(v) => value.setAgentPerms((p) => ({ ...p, [key]: v }))}
+          />
+        ))}
         <Row icon={RefreshIcon} label="Tool rounds"
           hint="AI ↔ tool round-trips per message"
           title="Each round-trip lets the model issue more tool calls. This is a runaway guard — actual work is separately capped at 200 changes per message.">
@@ -1312,16 +1342,6 @@ function AssistantSettings({ value }) {
             <CharSlider value={current} onChange={setCurrent} />
           </Row>
         ))}
-      </Section>
-      <Section
-        title="Prompts"
-        action={
-          <button className={`uiBtn sm ${dirty ? "primary" : ""}`} disabled={!dirty} onClick={value.savePrompts}>
-            {dirty ? "Save prompts" : "Saved"}
-          </button>
-        }
-      >
-        <PromptAccordion items={prompts} />
       </Section>
     </>
   );
@@ -1956,6 +1976,7 @@ export default function SettingsDialog({
               aiModels: papers.aiModels,
             }} />
           ) : null}
+          {pane === "prompts" ? <PromptsSettings value={prompts} /> : null}
           {pane === "users" && users ? <UsersSettings value={users} /> : null}
           {pane === "advanced" ? <AdvancedSettings value={diagnostics} /> : null}
         </div>

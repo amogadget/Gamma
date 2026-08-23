@@ -1,18 +1,28 @@
-"""Folder-agent tools for the AI chat opened from the home/folder view.
+"""Agent tools for the AI chat — a scope-agnostic tool registry.
 
-A chat that is not tied to an open paper acts as an agent over the folder the
-user is looking at.  Two permission groups, toggled in Settings → Assistant:
+Every chat has a *scope* deciding what its tools can touch:
 
-- read  — list the folder's pages, read a paper (extracted PDF text plus the
-  user's highlights and notes), and full-text-search the folder's PDFs via
-  the existing FTS index (multi-paper questions, summaries, reports).
-- write — rename pages and file them into (sub)folders.
+- ``{"type": "folder", "folder": path}`` — the home/folder chat; tools reach
+  the pages in that folder ("" = the whole library).
+- ``{"type": "page", "page_id": id}`` — the per-paper chat; tools reach only
+  that paper.
 
-Deliberately NOT offered under any permission: deleting anything, editing
-note/highlight content, rewriting flat labels, or touching pages outside the
-current folder — every mutation is reversible with another tool call, and each
-one is streamed back to the UI as an ``action`` event so the user sees exactly
-what changed.  The human-facing description of all this lives in ``agent.md``.
+Each TOOLS entry declares its wire spec, the Settings permission key
+(Settings → Assistant → Folder agent), the scopes it exists in, whether it
+mutates, and its executor — so arming a chat is one filter
+(:func:`agent_tools`) and dispatch is one lookup (:func:`run_agent_tool`),
+with the in-scope check shared by every executor.
+
+Reads: list the pages (folder scope only); read a paper (extracted PDF text
+plus the user's highlights and notes); full-text-search PDF contents via the
+existing FTS index.  Writes (folder scope only): rename pages; file them into
+(sub)folders.  Deliberately NOT offered under any permission: deleting
+anything, editing note/highlight content, rewriting flat labels, or touching
+pages outside the scope — every mutation is reversible with another tool call,
+and every successful call is streamed back to the UI as an ``action`` event so
+the user sees exactly what the agent did.  The human-facing description lives
+in ``agent.md``; the base role prompt (AGENT_PROMPT) is user-editable in the
+prompt editor, the scope/permission lines are appended mechanically.
 
 Folder semantics mirror ``frontend/src/libraryUtils.js``: ``properties.folder``
 is a comma-separated list of ``/``-nested paths, folders exist only through the
@@ -29,131 +39,27 @@ from .logbuf import log
 from .textnorm import INDEX_VERSION
 
 # Runaway guards for the tool loop, not workload caps: MAX_TOOL_ACTIONS bounds
-# the real work, while the round limit only stops a loop that never converges.
-# Rounds are generous because some models issue one call per round-trip even
-# with parallel tool calls enabled.
+# the real work (mutations only), while the round limit stops a loop that
+# never converges. Rounds are generous because some models issue one call per
+# round-trip even with parallel tool calls enabled.
 MAX_TOOL_ROUNDS = 32    # provider round-trips per user message
 MAX_TOOL_ACTIONS = 200  # mutations per user message (bulk renames are legit)
 _LIST_CAP = 400         # pages listed per list_pages call
 _TITLE_MAX = 300
 
-READ_TOOLS = [
-    {
-        "name": "list_pages",
-        "description": (
-            "List the pages (papers and notes) in the folder the user is viewing, one per "
-            "line: id, title, kind (pdf/note), folder paths, labels, cached paper metadata "
-            "(first author, year, venue) and last-update date. Call this before any other "
-            "tool — never guess page ids."
-        ),
-        "parameters": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "name": "read_page",
-        "description": (
-            "Read one page: an excerpt of the paper's extracted PDF text plus the user's "
-            "highlighted passages and notes. Use it to answer questions about specific "
-            "papers or to write summaries/reports across several. `pdf_chars` sets how "
-            "much document text to include (default 6000, up to 20000; 0 = notes only)."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "page_id": {"type": "string"},
-                "pdf_chars": {"type": "integer"},
-            },
-            "required": ["page_id"],
-        },
-    },
-    {
-        "name": "search_pdfs",
-        "description": (
-            "Full-text search over the PDF contents of the papers in the current folder "
-            "(pre-built index; snippets with page numbers). Use it to find which papers "
-            "discuss a topic before read_page-ing the relevant ones."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string"},
-                "limit": {"type": "integer", "description": "max hits, default 12"},
-            },
-            "required": ["query"],
-        },
-    },
-]
-
-WRITE_TOOLS = [
-    {
-        "name": "rename_page",
-        "description": "Set a page's title. Use exact page ids from list_pages.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "page_id": {"type": "string"},
-                "title": {"type": "string", "description": "the new title"},
-            },
-            "required": ["page_id", "title"],
-        },
-    },
-    {
-        "name": "move_page",
-        "description": (
-            'File a page into a folder. `folder` is a path like "readout/nondestructive" — '
-            "'/' nests and a new path creates the folder. Paths outside the current folder "
-            'are resolved as its subfolders; "" moves the page to the current folder itself '
-            "(at the library root: out of every folder). Folder memberships outside the "
-            "current folder are kept — folders are labels, a page can be in several."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "page_id": {"type": "string"},
-                "folder": {"type": "string"},
-            },
-            "required": ["page_id", "folder"],
-        },
-    },
-]
-
-FOLDER_TOOLS = READ_TOOLS + WRITE_TOOLS
-
-
-def folder_tools(read: bool = True, write: bool = True) -> list:
-    """The armed tool set for the user's permission toggles ([] = no agent)."""
-    return (READ_TOOLS if read else []) + (WRITE_TOOLS if write else [])
-
-
-def organizer_system(scope: str, read: bool = True, write: bool = True) -> str:
-    """System-prompt addendum describing the agent role, scope and permissions."""
-    scope = clean_path(scope)
-    where = f'the folder "{scope}"' if scope else "the root of their library"
-    text = (
-        "You are also the user's library agent. They are viewing " + where + " in "
-        "Gamma, their PDF/notes library. Pages carry nested folder paths ('/' nests; a "
-        "page may be in several folders) and flat labels; folders appear the moment a "
-        "page is filed into them. Call list_pages before any other tool — never guess "
-        "page ids. Only pages in this folder are reachable.\n"
-    )
-    if read:
-        text += (
-            "To answer questions about the papers themselves, use search_pdfs to find "
-            "which papers discuss a topic and read_page for a paper's text and the "
-            "user's highlights/notes — e.g. to compare papers or write a summary.\n"
-        )
-    if write:
-        text += (
-            "When asked to organize, use rename_page / move_page. Apply an explicit "
-            "bulk instruction (e.g. a naming scheme) to every matching page without "
-            "asking again; ask first when the request is ambiguous. You cannot delete "
-            "anything or edit labels. Finish with a short summary of what you changed.\n"
-        )
-    else:
-        text += ("Renaming and moving pages is disabled in the user's settings — "
-                 "suggest changes instead of attempting them.\n")
-    if not read:
-        text += "Reading paper contents is disabled in the user's settings.\n"
-    return text.rstrip()
+# Base role prompt — the user-editable part (prompt editor, "Library agent");
+# agent_system() appends the mechanical scope/permission lines to it.
+AGENT_PROMPT = (
+    "You are also the user's library agent in Gamma, their PDF/notes library. "
+    "Pages carry nested folder paths ('/' nests; a page may be in several folders) "
+    "and flat labels; folders appear the moment a page is filed into them. Never "
+    "guess page ids. Use the reading tools to answer questions about the papers "
+    "themselves — e.g. to compare papers or write a summary. When asked to "
+    "organize, apply an explicit bulk instruction (e.g. a naming scheme) to every "
+    "matching page without asking again; ask first when the request is ambiguous. "
+    "You cannot delete anything or edit labels. After making changes, finish with "
+    "a short summary of what you changed."
+)
 
 
 # --- folder-tag helpers (keep in sync with frontend/src/libraryUtils.js) ------
@@ -175,29 +81,77 @@ def _add_tag(tags: list[str], path: str) -> list[str]:
     return [t for t in tags if t != path and not path.startswith(t + "/")] + [path]
 
 
-def _in_scope(tag: str, scope: str) -> bool:
-    return tag == scope or tag.startswith(scope + "/")
+def _in_scope(tag: str, scope_path: str) -> bool:
+    return tag == scope_path or tag.startswith(scope_path + "/")
 
 
-def _page_in_scope(tags: list[str], scope: str) -> bool:
-    return not scope or any(_in_scope(t, scope) for t in tags)
+# --- scope ---------------------------------------------------------------------
+
+def _scope_folder(scope: dict) -> str:
+    return clean_path(scope.get("folder") or "")
 
 
-# --- execution ----------------------------------------------------------------
+def _page_in_scope(scope: dict, page_id: str, tags: list[str]) -> bool:
+    if scope.get("type") == "page":
+        return page_id == scope.get("page_id")
+    path = _scope_folder(scope)
+    return not path or any(_in_scope(t, path) for t in tags)
 
-def _list_pages(conn, scope: str) -> str:
-    rows = conn.execute(
-        "SELECT id, content, properties, updated_at FROM unified_blocks "
-        "WHERE parent_id = 'root' ORDER BY updated_at DESC"
-    ).fetchall()
+
+def _load_scoped_page(conn, scope: dict, args: dict):
+    """Fetch the target page and enforce the scope. Returns
+    ``((page_id, title, props, tags), error)`` — exactly one side is set."""
+    page_id = str(args.get("page_id") or "").strip()
+    row = conn.execute(
+        "SELECT parent_id, content, properties FROM unified_blocks WHERE id = ?",
+        (page_id,),
+    ).fetchone()
+    if not row or row[0] != "root":
+        return None, "error: no such page — use exact page ids"
+    props = json.loads(row[2] or "{}")
+    tags = parse_tags(props.get("folder"))
+    if not _page_in_scope(scope, page_id, tags):
+        return None, "error: page is outside this chat's scope"
+    return (page_id, row[1] or "Untitled", props, tags), None
+
+
+def _scope_docs(conn, scope: dict) -> dict:
+    """doc_id → title for every PDF paper the scope can reach."""
+    if scope.get("type") == "page":
+        loaded, error = _load_scoped_page(conn, scope, {"page_id": scope.get("page_id")})
+        if error:
+            return {}
+        _, title, props, _ = loaded
+        return {props["doc_id"]: title} if props.get("doc_id") else {}
+    docs = {}
+    for _, content, props_raw in conn.execute(
+            "SELECT id, content, properties FROM unified_blocks WHERE parent_id = 'root'"):
+        try:
+            props = json.loads(props_raw or "{}")
+        except ValueError:
+            continue
+        if props.get("doc_id") and _page_in_scope(scope, "", parse_tags(props.get("folder"))):
+            docs[props["doc_id"]] = content or "Untitled"
+    return docs
+
+
+# --- executors -----------------------------------------------------------------
+# Each returns (result_text, action): result_text goes back to the model;
+# action is the {kind, summary} event streamed to the UI and saved with the
+# chat message, for every successful call (reads included); errors carry None.
+
+def _run_list_pages(conn, user: str, scope: dict, args: dict):
+    path = _scope_folder(scope)
     lines = []
-    for page_id, content, props_raw, updated in rows:
+    for page_id, content, props_raw, updated in conn.execute(
+            "SELECT id, content, properties, updated_at FROM unified_blocks "
+            "WHERE parent_id = 'root' ORDER BY updated_at DESC"):
         try:
             props = json.loads(props_raw or "{}")
         except ValueError:
             props = {}
         tags = parse_tags(props.get("folder"))
-        if not _page_in_scope(tags, scope):
+        if not _page_in_scope(scope, page_id, tags):
             continue
         bits = [f"id={page_id}",
                 f'title="{(content or "Untitled")[:120]}"',
@@ -217,35 +171,46 @@ def _list_pages(conn, scope: str) -> str:
         if updated:
             bits.append(f"updated {str(updated)[:10]}")
         lines.append("- " + " | ".join(bits))
+    where = f"“{path}”" if path else "the library"
+    action = {"kind": "list",
+              "summary": f"Listed {len(lines)} page{'s' if len(lines) != 1 else ''} in {where}"}
     if not lines:
-        return "The folder is empty." if scope else "The library is empty."
-    header = f'Pages in "{scope}"' if scope else "Pages in the library"
+        return ("The folder is empty." if path else "The library is empty."), action
+    header = f'Pages in "{path}"' if path else "Pages in the library"
     tail = f"\n(+{len(lines) - _LIST_CAP} more not shown)" if len(lines) > _LIST_CAP else ""
-    return f"{header} ({len(lines)}):\n" + "\n".join(lines[:_LIST_CAP]) + tail
+    return f"{header} ({len(lines)}):\n" + "\n".join(lines[:_LIST_CAP]) + tail, action
 
 
-def _search_pdfs(conn, user: str, scope: str, query: str, limit) -> str:
+def _run_read_page(conn, user: str, scope: dict, args: dict):
+    loaded, error = _load_scoped_page(conn, scope, args)
+    if error:
+        return error, None
+    page_id, title, _, _ = loaded
+    try:
+        budget = max(0, min(int(args.get("pdf_chars", 6000)), 20000))
+    except (TypeError, ValueError):
+        budget = 6000
+    section = page_report_section(conn, user, page_id, budget)
+    if not section:
+        return f'"{title}" has no readable content', None
+    return section, {"kind": "read", "page_id": page_id, "summary": f"Read “{title[:60]}”"}
+
+
+def _run_search_pdfs(conn, user: str, scope: dict, args: dict):
     """FTS snippets from the in-scope papers' PDF text (same index and query
     rules as /api/pdf-search); un-indexed papers are kicked to the background
     indexer and reported so the model knows results may be incomplete."""
-    query = (query or "").strip()
+    query = str(args.get("query") or "").strip()
     if not query:
-        return "error: empty query"
+        return "error: empty query", None
     try:
-        limit = max(1, min(int(limit or 12), 30))
+        limit = max(1, min(int(args.get("limit") or 12), 30))
     except (TypeError, ValueError):
         limit = 12
-    docs = {}
-    for _, content, props_raw in conn.execute(
-            "SELECT id, content, properties FROM unified_blocks WHERE parent_id = 'root'"):
-        try:
-            props = json.loads(props_raw or "{}")
-        except ValueError:
-            continue
-        if props.get("doc_id") and _page_in_scope(parse_tags(props.get("folder")), scope):
-            docs[props["doc_id"]] = content or "Untitled"
+    docs = _scope_docs(conn, scope)
     if not docs:
-        return "No papers with PDFs in the current folder."
+        return ("No PDF papers are reachable from this chat.",
+                {"kind": "search", "summary": f"Searched PDFs for “{query[:60]}” — no papers"})
     # Local import: keep gamma.* module load free of the routers package.
     from .routers.search import _ensure_schema, _fts_query, _index_missing_async
     lines = []
@@ -275,80 +240,184 @@ def _search_pdfs(conn, user: str, scope: str, query: str, limit) -> str:
     if missing:
         out += (f"\n({len(missing)} paper(s) not indexed yet — indexing started, "
                 "search again shortly for complete results)")
-    return out
+    return out, {"kind": "search",
+                 "summary": f"Searched PDFs for “{query[:60]}” — "
+                            f"{len(lines)} hit{'s' if len(lines) != 1 else ''}"}
 
 
-def run_folder_tool(user: str, scope: str, name: str, args: dict) -> tuple[str, dict | None]:
-    """Execute one organizer tool call.
+def _run_rename_page(conn, user: str, scope: dict, args: dict):
+    loaded, error = _load_scoped_page(conn, scope, args)
+    if error:
+        return error, None
+    page_id, title, _, _ = loaded
+    new = re.sub(r"\s+", " ", str(args.get("title") or "")).strip()[:_TITLE_MAX]
+    if not new:
+        return "error: empty title", None
+    if new == title:
+        return "ok — title already is that", None
+    conn.execute("UPDATE unified_blocks SET content = ?, updated_at = ? WHERE id = ?",
+                 (new, page_now(), page_id))
+    conn.commit()
+    return (f'ok — renamed to "{new}"',
+            {"kind": "rename", "page_id": page_id, "summary": f"Renamed “{title}” → “{new}”"})
 
-    Returns ``(result_text, action)`` — result_text goes back to the model,
-    action (mutations only) is the ``{kind, summary}`` event streamed to the UI
-    and saved with the chat message.
+
+def _run_move_page(conn, user: str, scope: dict, args: dict):
+    loaded, error = _load_scoped_page(conn, scope, args)
+    if error:
+        return error, None
+    page_id, title, props, tags = loaded
+    path = _scope_folder(scope)
+    target = clean_path(str(args.get("folder") or ""))
+    if path and target and not _in_scope(target, path):
+        target = f"{path}/{target}"  # relative paths land inside the scope
+    elif path and not target:
+        target = path
+    kept = [t for t in tags if path and not _in_scope(t, path)]
+    new_tags = _add_tag(kept, target) if target else kept
+    if new_tags == tags:
+        return "ok — page is already there", None
+    props["folder"] = ", ".join(new_tags)
+    conn.execute("UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
+                 (json.dumps(props), page_now(), page_id))
+    conn.commit()
+    where = target or "the library root"
+    return (f'ok — moved to "{where}"',
+            {"kind": "move", "page_id": page_id, "summary": f"Moved “{title}” → {where}"})
+
+
+# --- registry ------------------------------------------------------------------
+# One entry per tool: wire spec, Settings permission key, the scopes the tool
+# exists in, whether it mutates the library, and its executor.
+
+_PAGE_ID_ARG = {"page_id": {"type": "string"}}
+
+TOOLS = [
+    {
+        "perm": "list", "scopes": ("folder",), "mutating": False, "run": _run_list_pages,
+        "spec": {
+            "name": "list_pages",
+            "description": (
+                "List the pages (papers and notes) in the folder the user is viewing, one "
+                "per line: id, title, kind (pdf/note), folder paths, labels, cached paper "
+                "metadata (first author, year, venue) and last-update date. Call this "
+                "before any other tool — never guess page ids."),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "perm": "read", "scopes": ("folder", "page"), "mutating": False, "run": _run_read_page,
+        "spec": {
+            "name": "read_page",
+            "description": (
+                "Read one page this chat can reach: an excerpt of the paper's extracted "
+                "PDF text plus the user's highlighted passages and notes. Use it to answer "
+                "questions about specific papers or to write summaries/reports across "
+                "several. `pdf_chars` sets how much document text to include (default "
+                "6000, up to 20000; 0 = notes only)."),
+            "parameters": {
+                "type": "object",
+                "properties": {**_PAGE_ID_ARG, "pdf_chars": {"type": "integer"}},
+                "required": ["page_id"],
+            },
+        },
+    },
+    {
+        "perm": "search", "scopes": ("folder", "page"), "mutating": False, "run": _run_search_pdfs,
+        "spec": {
+            "name": "search_pdfs",
+            "description": (
+                "Full-text search over the PDF contents of the papers this chat can reach "
+                "(pre-built index; snippets with page numbers). Use it to find where a "
+                "topic is discussed before read_page-ing the relevant pages."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer", "description": "max hits, default 12"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "perm": "rename", "scopes": ("folder",), "mutating": True, "run": _run_rename_page,
+        "spec": {
+            "name": "rename_page",
+            "description": "Set a page's title. Use exact page ids from list_pages.",
+            "parameters": {
+                "type": "object",
+                "properties": {**_PAGE_ID_ARG,
+                               "title": {"type": "string", "description": "the new title"}},
+                "required": ["page_id", "title"],
+            },
+        },
+    },
+    {
+        "perm": "move", "scopes": ("folder",), "mutating": True, "run": _run_move_page,
+        "spec": {
+            "name": "move_page",
+            "description": (
+                'File a page into a folder. `folder` is a path like '
+                '"readout/nondestructive" — \'/\' nests and a new path creates the '
+                "folder. Paths outside the current folder are resolved as its "
+                'subfolders; "" moves the page to the current folder itself (at the '
+                "library root: out of every folder). Folder memberships outside the "
+                "current folder are kept — folders are labels, a page can be in several."),
+            "parameters": {
+                "type": "object",
+                "properties": {**_PAGE_ID_ARG, "folder": {"type": "string"}},
+                "required": ["page_id", "folder"],
+            },
+        },
+    },
+]
+
+_BY_NAME = {t["spec"]["name"]: t for t in TOOLS}
+MUTATING_TOOLS = {t["spec"]["name"] for t in TOOLS if t["mutating"]}
+
+
+def agent_tools(scope_type: str, perms: dict | None = None) -> list:
+    """The armed tool specs for a chat scope and the user's per-tool permission
+    map (missing key = allowed, so new tools default on). [] = plain chat."""
+    perms = perms if isinstance(perms, dict) else {}
+    return [t["spec"] for t in TOOLS
+            if scope_type in t["scopes"] and perms.get(t["perm"], True)]
+
+
+def agent_system(scope: dict, perms: dict | None = None, base: str = "") -> str:
+    """System-prompt addendum: the (user-editable) base role prompt plus
+    mechanical lines describing this chat's scope and armed tools."""
+    armed = agent_tools(scope.get("type") or "", perms)
+    names = [t["name"] for t in armed]
+    text = (base.strip() or AGENT_PROMPT) + "\n"
+    if scope.get("type") == "page":
+        text += (f'This chat is about one page (page_id "{scope.get("page_id")}") — '
+                 "the tools reach only it.\n")
+    else:
+        path = _scope_folder(scope)
+        where = f'the folder "{path}"' if path else "the root of their library"
+        text += f"The user is viewing {where}; only pages in it are reachable.\n"
+    text += f"Available tools: {', '.join(names)}. Any other tool is disabled in the user's settings."
+    if not any(n in MUTATING_TOOLS for n in names):
+        text += " Renaming and moving pages is not available here — suggest changes instead of attempting them."
+    return text
+
+
+def run_agent_tool(user: str, scope: dict, name: str, args: dict) -> tuple[str, dict | None]:
+    """Execute one agent tool call against the chat's scope.
+
+    Returns ``(result_text, action)`` — result_text goes back to the model;
+    action is the ``{kind, summary}`` UI event for every successful call
+    (reads included, so the user sees each tool use); errors carry no action.
     """
-    scope = clean_path(scope)
+    tool = _BY_NAME.get(name)
+    if not tool or (scope.get("type") or "") not in tool["scopes"]:
+        return f"error: unknown tool {name}", None
     args = args if isinstance(args, dict) else {}
     try:
         with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-            if name == "list_pages":
-                return _list_pages(conn, scope), None
-            if name == "search_pdfs":
-                return _search_pdfs(conn, user, scope,
-                                    str(args.get("query") or ""), args.get("limit")), None
-            if name not in ("read_page", "rename_page", "move_page"):
-                return f"error: unknown tool {name}", None
-
-            page_id = str(args.get("page_id") or "").strip()
-            row = conn.execute(
-                "SELECT parent_id, content, properties FROM unified_blocks WHERE id = ?",
-                (page_id,),
-            ).fetchone()
-            if not row or row[0] != "root":
-                return "error: no such page — use ids from list_pages", None
-            title = row[1] or "Untitled"
-            props = json.loads(row[2] or "{}")
-            tags = parse_tags(props.get("folder"))
-            if not _page_in_scope(tags, scope):
-                return "error: page is outside the current folder", None
-
-            if name == "read_page":
-                try:
-                    budget = max(0, min(int(args.get("pdf_chars", 6000)), 20000))
-                except (TypeError, ValueError):
-                    budget = 6000
-                section = page_report_section(conn, user, page_id, budget)
-                return section or f'"{title}" has no readable content', None
-
-            if name == "rename_page":
-                new = re.sub(r"\s+", " ", str(args.get("title") or "")).strip()[:_TITLE_MAX]
-                if not new:
-                    return "error: empty title", None
-                if new == title:
-                    return "ok — title already is that", None
-                conn.execute("UPDATE unified_blocks SET content = ?, updated_at = ? WHERE id = ?",
-                             (new, page_now(), page_id))
-                conn.commit()
-                return (f'ok — renamed to "{new}"',
-                        {"kind": "rename", "page_id": page_id,
-                         "summary": f"Renamed “{title}” → “{new}”"})
-
-            # move_page
-            target = clean_path(str(args.get("folder") or ""))
-            if scope and target and not _in_scope(target, scope):
-                target = f"{scope}/{target}"  # relative paths land inside the scope
-            elif scope and not target:
-                target = scope
-            kept = [t for t in tags if scope and not _in_scope(t, scope)]
-            new_tags = _add_tag(kept, target) if target else kept
-            if new_tags == tags:
-                return "ok — page is already there", None
-            props["folder"] = ", ".join(new_tags)
-            conn.execute("UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-                         (json.dumps(props), page_now(), page_id))
-            conn.commit()
-            where = target or "the library root"
-            return (f'ok — moved to "{where}"',
-                    {"kind": "move", "page_id": page_id,
-                     "summary": f"Moved “{title}” → {where}"})
+            return tool["run"](conn, user, scope, args)
     except Exception as e:  # a tool failure must never kill the chat stream
         log.warning(f"[ai_tools] {name} failed: {e}")
         return f"error: {e}", None
