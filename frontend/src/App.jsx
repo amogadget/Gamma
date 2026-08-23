@@ -132,6 +132,14 @@ const CONTEXT_CHARS_CODEC = {
   },
 };
 
+// Organizer tool-round budget (home/folder chat agent loop), 1–100.
+const TOOL_ROUNDS_CODEC = {
+  parse: (raw) => {
+    const value = Number.parseInt(raw, 10);
+    return Number.isFinite(value) && value >= 1 && value <= 100 ? value : undefined;
+  },
+};
+
 // Phone detection: below 700px the desktop dock system is unusable, so the
 // workspace switches to a single full-width panel with a bottom tab bar. The
 // second clause keeps a rotated (landscape) phone in the phone layout — the
@@ -2009,6 +2017,8 @@ export default function App() {
   // the horizontal position it started from, so the text column doesn't wander
   // sideways as you read down the page.
   const [snapVertical, setSnapVertical] = usePersistedFlag("gamma-snap-vertical", true);
+  // Flip page colors: display-only inverted (night) rendering of the PDF canvas.
+  const [pdfDarkPage, setPdfDarkPage] = usePersistedFlag("gamma-pdf-dark", false);
   // Embedded PDF annotations (burned in by a Gamma export or another viewer)
   // would render twice once imported as blocks — canvas + overlay. "hide"
   // keeps them out of the canvas; "strip" removes them from the stored file
@@ -6584,6 +6594,9 @@ export default function App() {
           openPopover={openPopover}
           setOpenPopover={setOpenPopover}
           setStatus={setStatus}
+          organizeFolder={!focusedBlockId && !readOnly ? folderFilter : null}
+          toolRounds={toolRounds}
+          onLibraryChange={fetchHomeBlocks}
         />
       );
     }
@@ -7642,6 +7655,8 @@ export default function App() {
           setEmbAnnots,
           snapVertical,
           setSnapVertical,
+          pdfDarkPage,
+          setPdfDarkPage,
           metaModel,
           setMetaModel,
           aiModels: scopedAiModels,
@@ -7727,6 +7742,8 @@ export default function App() {
           setMetaContextChars,
           multiContextChars,
           setMultiContextChars,
+          toolRounds,
+          setToolRounds,
           reset: () => {
             setChatContextChars(8000);
             setMetaContextChars(6000);

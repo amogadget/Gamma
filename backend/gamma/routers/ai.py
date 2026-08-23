@@ -23,7 +23,16 @@ from ..ai_client import (
     protocol as _protocol,
     read_reply as _read_reply,
     sse_deltas as _sse_deltas,
+    sse_events as _sse_events,
     upstream_detail as _upstream_detail,
+    wire_protocol as _wire_protocol,
+)
+from ..ai_tools import (
+    FOLDER_TOOLS,
+    MAX_TOOL_ACTIONS,
+    MAX_TOOL_ROUNDS,
+    organizer_system,
+    run_folder_tool,
 )
 from ..ai_context import (
     build_messages as _build_messages,
@@ -76,6 +85,13 @@ class AIChatRequest(BaseModel):
     images: list = Field(default_factory=list)  # pasted figures as data URLs
     files: list = Field(default_factory=list)  # uploaded PDFs as {name, data} data URLs
     stream: bool = False  # NDJSON stream of {"delta": …} lines instead of one JSON body
+    # Home/folder-view chat: give the model the library-organizer tools
+    # (gamma/ai_tools.py), scoped to `folder` ("" = library root). Mutations
+    # come back as {"action": …} NDJSON lines alongside the text deltas.
+    # tool_rounds overrides the agent round budget (0 = server default).
+    organize: bool = False
+    folder: str = ""
+    tool_rounds: int = Field(default=0, ge=0, le=100)
     context_char_limit: int = Field(default=8000, ge=100, le=1_000_000)
     multi_context_char_limit: int = Field(default=18000, ge=100, le=1_000_000)
 
@@ -855,12 +871,17 @@ def ai_chat(payload: AIChatRequest, request: Request):
     effort = _resolve_effort(payload.effort)
     images = _parse_images(payload.images)
     custom_system = (payload.system or "").strip()[:8000]
+    tools = FOLDER_TOOLS if payload.organize else None
+    # The conversation the agent loop grows across tool rounds (organize mode).
+    state = {}
 
     def prepared(allow_native):
         pdf_b64s, context = _gather_inputs(user, payload, allow_native)
         messages = _build_messages(payload, context)
         # A custom prompt always applies; the built-in one only when there's a document
         system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
+        if payload.organize:
+            system = (system + "\n\n" if system else "") + organizer_system(payload.folder)
         return pdf_b64s, messages, system
 
     def open_with_fallback(stream):
@@ -872,22 +893,76 @@ def ai_chat(payload: AIChatRequest, request: Request):
         for native in attempts:
             pdf_b64s, messages, system = prepared(native)
             try:
-                resp = _open_ai(
-                    messages, system, entry, rt, pdf_b64s, effort=effort, timeout=180, images=images, stream=stream
-                )
+                resp = _open_ai(messages, system, entry, rt, pdf_b64s,
+                                effort=effort, timeout=180, images=images, stream=stream,
+                                tools=tools)
                 if not native and True in attempts:
                     _NATIVE_PDF_REJECTED.add(entry["provider"])
+                state.update(messages=messages, system=system, pdf_b64s=pdf_b64s)
                 return resp
             except UpstreamError as e:
                 if not (native and pdf_b64s and _protocol(rt, entry) == "chatgpt" and 400 <= e.status < 500):
                     raise
                 log.warning(f"[ai_chat] chatgpt rejected native PDF parts, retrying as text: {e}")
 
+    def agent_events(first_resp):
+        """Organizer tool loop: yield ("delta", text) / ("action", dict) events.
+        Each round streams one provider turn; tool calls are executed here and
+        their results appended before the next round re-opens the provider."""
+        proto = _wire_protocol(rt, entry, tools)  # tools may reroute openai → /v1/responses
+        messages, system, pdf_b64s = state["messages"], state["system"], state["pdf_b64s"]
+        resp = first_resp
+        actions = 0
+        max_rounds = payload.tool_rounds or MAX_TOOL_ROUNDS
+        for round_no in range(max_rounds):
+            calls, text_parts = [], []
+            try:
+                for kind, data in _sse_events(resp, proto):
+                    if kind == "text":
+                        text_parts.append(data)
+                        yield ("delta", data)
+                    else:
+                        calls.append(data)
+            finally:
+                resp.close()
+            if not calls:
+                return
+            messages.append({"role": "assistant", "content": "".join(text_parts),
+                             "tool_calls": calls})
+            for call in calls:
+                if actions >= MAX_TOOL_ACTIONS:
+                    result, action = ("error: change limit for one message reached — "
+                                      "stop and tell the user", None)
+                else:
+                    result, action = run_folder_tool(user, payload.folder,
+                                                     call["name"], call["arguments"])
+                if action:
+                    actions += 1
+                    yield ("action", action)
+                messages.append({"role": "tool", "call_id": call["id"], "content": result})
+            if round_no == max_rounds - 1:
+                yield ("delta", "\n\n*(stopped: tool-round limit reached — "
+                                "raise it in Settings → Assistant)*")
+                return
+            resp = _open_ai(messages, system, entry, rt, pdf_b64s, effort=effort,
+                            timeout=180, images=images, stream=True, tools=tools)
+
     try:
         if payload.stream:
             # Open upstream eagerly: connection/auth errors still become a
             # proper HTTP error instead of dying inside a committed stream.
             resp = open_with_fallback(True)
+
+            if payload.organize:
+                def agent_ndjson():
+                    try:
+                        for kind, data in agent_events(resp):
+                            yield json.dumps({"delta" if kind == "delta" else "action": data}) + "\n"
+                    except Exception as e:
+                        log.warning(f"[ai_chat] agent stream error: {e}")
+                        yield json.dumps({"error": f"AI call failed: {e}"}) + "\n"
+
+                return StreamingResponse(agent_ndjson(), media_type="application/x-ndjson")
 
             def ndjson():
                 try:
@@ -900,6 +975,13 @@ def ai_chat(payload: AIChatRequest, request: Request):
                     resp.close()
 
             return StreamingResponse(ndjson(), media_type="application/x-ndjson")
+        if payload.organize:
+            # The tool loop is SSE-based on every protocol; join it for
+            # non-stream callers and return the actions alongside the text.
+            parts, actions = [], []
+            for kind, data in agent_events(open_with_fallback(True)):
+                (parts if kind == "delta" else actions).append(data)
+            return {"response": "".join(parts), "actions": actions}
         with open_with_fallback(False) as resp2:
             text = _read_reply(resp2, _protocol(rt, entry))
         return {"response": text}

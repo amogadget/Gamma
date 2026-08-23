@@ -14,20 +14,29 @@ import uuid
 from .logbuf import log
 
 
+# Tools are declared once in a common shape ({name, description, parameters})
+# — see gamma/ai_tools.py — and translated per wire protocol here. Messages may
+# carry two agentic extensions beyond {role, content-str}: an assistant message
+# with `tool_calls` ([{id, name, arguments-dict}]) and a {"role": "tool",
+# "call_id", "content"} result entry; each builder maps them to its wire shape.
+
+def _attach_index(messages) -> int:
+    """Index of the message attachments ride on: the last plain user turn
+    (tool-result entries can follow it in agent rounds)."""
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index]["role"] == "user":
+            return index
+    return len(messages) - 1
+
+
 def anthropic_request(
-    conf,
-    messages,
-    system,
-    model,
-    pdf_b64s=None,
-    effort="",
-    max_tokens=8192,
-    images=None,
-    stream=False,
+    conf, messages, system, model, pdf_b64s=None, effort="",
+    max_tokens=8192, images=None, stream=False, tools=None,
 ):
     """Build an Anthropic Messages API request."""
+    messages = [dict(m) for m in messages]  # attachment injection must not mutate the caller's turn list
     if pdf_b64s or images:
-        last = messages[-1]
+        last = messages[_attach_index(messages)]
         last["content"] = [
             *[
                 {
@@ -53,8 +62,11 @@ def anthropic_request(
         "model": model,
         "max_tokens": max_tokens,
         "system": system,
-        "messages": messages,
+        "messages": _anthropic_messages(messages),
     }
+    if tools:
+        body["tools"] = [{"name": t["name"], "description": t["description"],
+                          "input_schema": t["parameters"]} for t in tools]
     if effort:
         body["output_config"] = {"effort": effort}
     if stream:
@@ -70,6 +82,31 @@ def anthropic_request(
     )
 
 
+def _anthropic_messages(messages) -> list:
+    """Map the common turn list to Anthropic content blocks: tool results are
+    tool_result blocks in a user turn (consecutive ones coalesced — they must
+    directly follow the assistant's tool_use turn), tool calls become tool_use
+    blocks after the assistant's text."""
+    out = []
+    for m in messages:
+        if m["role"] == "tool":
+            block = {"type": "tool_result", "tool_use_id": m["call_id"], "content": m["content"]}
+            prev = out[-1] if out else None
+            if (prev and prev["role"] == "user" and isinstance(prev["content"], list)
+                    and prev["content"] and prev["content"][0].get("type") == "tool_result"):
+                prev["content"].append(block)
+            else:
+                out.append({"role": "user", "content": [block]})
+        elif m["role"] == "assistant" and m.get("tool_calls"):
+            content = [{"type": "text", "text": m["content"]}] if (m.get("content") or "").strip() else []
+            content += [{"type": "tool_use", "id": c["id"], "name": c["name"], "input": c["arguments"]}
+                        for c in m["tool_calls"]]
+            out.append({"role": "assistant", "content": content})
+        else:
+            out.append({"role": m["role"], "content": m["content"]})
+    return out
+
+
 def _anthropic_extract(data) -> str:
     text = "".join(item.get("text", "") for item in data.get("content", []) if item.get("type") == "text")
     if not text.strip():
@@ -78,19 +115,13 @@ def _anthropic_extract(data) -> str:
 
 
 def openai_request(
-    conf,
-    messages,
-    system,
-    model,
-    pdf_b64s=None,
-    effort="",
-    max_tokens=8192,
-    images=None,
-    stream=False,
+    conf, messages, system, model, pdf_b64s=None, effort="",
+    max_tokens=8192, images=None, stream=False, tools=None,
 ):
     """Build an OpenAI Chat Completions API request."""
+    messages = [dict(m) for m in messages]
     if pdf_b64s or images:
-        last = messages[-1]
+        last = messages[_attach_index(messages)]
         last["content"] = [
             *[
                 {
@@ -111,15 +142,29 @@ def openai_request(
             ],
             {"type": "text", "text": last["content"]},
         ]
-    if system:
-        messages = [{"role": "system", "content": system}] + messages
+    wire = [{"role": "system", "content": system}] if system else []
+    for m in messages:
+        if m["role"] == "tool":
+            wire.append({"role": "tool", "tool_call_id": m["call_id"], "content": m["content"]})
+        elif m["role"] == "assistant" and m.get("tool_calls"):
+            wire.append({"role": "assistant", "content": m.get("content") or None,
+                         "tool_calls": [{"id": c["id"], "type": "function",
+                                         "function": {"name": c["name"],
+                                                      "arguments": json.dumps(c["arguments"])}}
+                                        for c in m["tool_calls"]]})
+        else:
+            wire.append({"role": m["role"], "content": m["content"]})
     body = {
         "model": model,
         # Current OpenAI models use max_completion_tokens. The cap includes
         # hidden reasoning tokens, so leave a generous default.
         "max_completion_tokens": max_tokens,
-        "messages": messages,
+        "messages": wire,
     }
+    if tools:
+        body["tools"] = [{"type": "function",
+                          "function": {"name": t["name"], "description": t["description"],
+                                       "parameters": t["parameters"]}} for t in tools]
     if effort:
         body["reasoning_effort"] = effort
     if stream:
@@ -146,32 +191,27 @@ def _openai_extract(data) -> str:
     return text
 
 
-def chatgpt_request(
-    conf,
-    messages,
-    system,
-    model,
-    pdf_b64s=None,
-    effort="",
-    max_tokens=8192,
-    images=None,
-    stream=False,
-):
-    """Build a ChatGPT subscription Responses API request.
-
-    The backend only streams SSE, including for callers that want a complete
-    reply.  :func:`read_reply` joins those deltas for non-stream callers.
-    """
+def _responses_input(messages, pdf_b64s=None, images=None) -> list:
+    """Map the common turn list to Responses API input items (shared by the
+    ChatGPT/codex backend and OpenAI's platform /v1/responses)."""
     items = []
     for message in messages:
-        if message["role"] == "assistant":
-            content = [{"type": "output_text", "text": message["content"]}]
-            items.append({"type": "message", "role": "assistant", "content": content})
+        if message["role"] == "tool":
+            items.append({"type": "function_call_output", "call_id": message["call_id"],
+                          "output": message["content"]})
+        elif message["role"] == "assistant":
+            if message.get("content") or not message.get("tool_calls"):
+                content = [{"type": "output_text", "text": message["content"]}]
+                items.append({"type": "message", "role": "assistant", "content": content})
+            for call in message.get("tool_calls") or []:
+                items.append({"type": "function_call", "call_id": call["id"],
+                              "name": call["name"], "arguments": json.dumps(call["arguments"])})
         else:
             content = [{"type": "input_text", "text": message["content"]}]
             items.append({"type": "message", "role": "user", "content": content})
     if pdf_b64s or images:
-        last = items[-1]
+        last = next((item for item in reversed(items)
+                     if item.get("type") == "message" and item.get("role") == "user"), items[-1])
         last["content"] = [
             *[
                 {
@@ -187,13 +227,33 @@ def chatgpt_request(
             ],
             *last["content"],
         ]
+    return items
+
+
+def _responses_tools(tools) -> list:
+    # Responses API uses a flattened function-tool shape (no "function" nesting).
+    return [{"type": "function", "name": t["name"], "description": t["description"],
+             "parameters": t["parameters"], "strict": False} for t in (tools or [])]
+
+
+def chatgpt_request(
+    conf, messages, system, model, pdf_b64s=None, effort="",
+    max_tokens=8192, images=None, stream=False, tools=None,
+):
+    """Build a ChatGPT subscription Responses API request.
+
+    The backend only streams SSE, including for callers that want a complete
+    reply.  :func:`read_reply` joins those deltas for non-stream callers.
+    """
     body = {
         "model": model,
         "instructions": system or "You are a helpful research assistant.",
-        "input": items,
-        "tools": [],
+        "input": _responses_input(messages, pdf_b64s, images),
+        "tools": _responses_tools(tools),
         "tool_choice": "auto",
-        "parallel_tool_calls": False,
+        # Batched calls (e.g. renaming a whole folder in one round) — a call
+        # per round-trip would eat the tool-round budget one page at a time.
+        "parallel_tool_calls": bool(tools),
         "store": False,
         "stream": True,
         "include": [],
@@ -215,9 +275,46 @@ def chatgpt_request(
     )
 
 
+def openai_responses_request(
+    conf, messages, system, model, pdf_b64s=None, effort="",
+    max_tokens=8192, images=None, stream=False, tools=None,
+):
+    """Build an OpenAI platform /v1/responses request.
+
+    Used instead of Chat Completions when a call carries function tools:
+    reasoning models (gpt-5.x) reject tools + reasoning_effort on
+    /v1/chat/completions and OpenAI's guidance is to use the Responses API.
+    Always streamed — the tool loop consumes SSE on every protocol.
+    """
+    body = {
+        "model": model,
+        "input": _responses_input(messages, pdf_b64s, images),
+        "tools": _responses_tools(tools),
+        "tool_choice": "auto",
+        "parallel_tool_calls": bool(tools),
+        "store": False,
+        "stream": True,
+        "max_output_tokens": max_tokens,
+    }
+    if system:
+        body["instructions"] = system
+    if effort:
+        body["reasoning"] = {"effort": effort}
+    return urllib.request.Request(
+        f"{conf['base_url']}/v1/responses",
+        data=json.dumps(body).encode(),
+        headers={
+            "Authorization": f"Bearer {conf['api_key']}",
+            "Accept": "text/event-stream",
+            "Content-Type": "application/json",
+        },
+    )
+
+
 _WIRE = {
     "anthropic": (anthropic_request, _anthropic_extract),
     "openai": (openai_request, _openai_extract),
+    "openai-responses": (openai_responses_request, None),
     "chatgpt": (chatgpt_request, None),
 }
 
@@ -225,6 +322,19 @@ _WIRE = {
 def protocol(runtime, entry) -> str:
     """Return the wire protocol for a model registry entry."""
     return runtime["providers"][entry["provider"]]["protocol"]
+
+
+def wire_protocol(runtime, entry, tools=None) -> str:
+    """The wire dialect a call actually uses. OpenAI-protocol calls that carry
+    function tools go over the platform Responses API (reasoning models reject
+    tools on chat completions) — but only against the official endpoint:
+    OpenAI-compatible gateways behind a custom base URL may not implement
+    /v1/responses, and chat-completions tools still work there."""
+    conf = runtime["providers"][entry["provider"]]
+    if (tools and conf["protocol"] == "openai"
+            and conf["base_url"].startswith("https://api.openai.com")):
+        return "openai-responses"
+    return conf["protocol"]
 
 
 class UpstreamError(RuntimeError):
@@ -246,30 +356,15 @@ def upstream_detail(error: urllib.error.HTTPError, cap: int = 500) -> str:
 
 
 def open_ai(
-    messages,
-    system,
-    entry,
-    runtime,
-    pdf_b64s=None,
-    effort="",
-    max_tokens=8192,
-    timeout=60,
-    images=None,
-    stream=False,
+    messages, system, entry, runtime, pdf_b64s=None, effort="",
+    max_tokens=8192, timeout=60, images=None, stream=False, tools=None,
 ):
     """Open a provider call without consuming response bytes."""
     conf = runtime["providers"][entry["provider"]]
-    build_request = _WIRE[conf["protocol"]][0]
+    build_request = _WIRE[wire_protocol(runtime, entry, tools)][0]
     request = build_request(
-        conf,
-        messages,
-        system,
-        entry["model"],
-        pdf_b64s,
-        effort,
-        max_tokens,
-        images,
-        stream,
+        conf, messages, system, entry["model"], pdf_b64s,
+        effort, max_tokens, images, stream, tools,
     )
     try:
         return urllib.request.urlopen(request, timeout=timeout)
@@ -281,7 +376,7 @@ def open_ai(
 
 def read_reply(response, provider_protocol) -> str:
     """Read the full reply text from an open provider response."""
-    if provider_protocol == "chatgpt":
+    if provider_protocol in ("chatgpt", "openai-responses"):
         return "".join(sse_deltas(response, provider_protocol))
     return _WIRE[provider_protocol][1](json.loads(response.read()))
 
@@ -314,8 +409,27 @@ def call_ai(
 
 def sse_deltas(response, provider_protocol):
     """Yield text deltas from a provider's SSE response."""
-    got_text = False
+    for kind, data in sse_events(response, provider_protocol):
+        if kind == "text":
+            yield data
+
+
+def _parse_tool_args(raw) -> dict:
+    try:
+        parsed = json.loads(raw or "{}")
+    except ValueError:
+        parsed = None
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def sse_events(response, provider_protocol):
+    """Yield ``("text", delta)`` and ``("tool", {id, name, arguments})`` events
+    from a provider's SSE response. Raises on a fully empty response (neither
+    text nor tool calls) with the stop reason attached."""
+    got = False
     stop = ""
+    tool = None    # anthropic: {id, name, json} tool_use block being accumulated
+    pending = {}   # openai: index -> {id, name, args} accumulated across deltas
     for raw in response:
         line = raw.decode("utf-8", "replace").strip()
         if not line.startswith("data:"):
@@ -329,22 +443,43 @@ def sse_deltas(response, provider_protocol):
             continue
         if provider_protocol == "anthropic":
             kind = event.get("type")
-            if kind == "content_block_delta":
-                text = (event.get("delta") or {}).get("text") or ""
-                if text:
-                    got_text = True
-                    yield text
+            if kind == "content_block_start":
+                block = event.get("content_block") or {}
+                if block.get("type") == "tool_use":
+                    tool = {"id": block.get("id") or "", "name": block.get("name") or "", "json": ""}
+            elif kind == "content_block_delta":
+                delta = event.get("delta") or {}
+                if delta.get("type") == "input_json_delta" and tool is not None:
+                    tool["json"] += delta.get("partial_json") or ""
+                else:
+                    text = delta.get("text") or ""
+                    if text:
+                        got = True
+                        yield ("text", text)
+            elif kind == "content_block_stop":
+                if tool is not None:
+                    got = True
+                    yield ("tool", {"id": tool["id"], "name": tool["name"],
+                                    "arguments": _parse_tool_args(tool["json"])})
+                    tool = None
             elif kind == "message_delta":
                 stop = (event.get("delta") or {}).get("stop_reason") or stop
             elif kind == "error":
                 raise RuntimeError((event.get("error") or {}).get("message") or "stream error")
-        elif provider_protocol == "chatgpt":
+        elif provider_protocol in ("chatgpt", "openai-responses"):
             kind = event.get("type") or ""
             if kind == "response.output_text.delta":
                 text = event.get("delta") or ""
                 if text:
-                    got_text = True
-                    yield text
+                    got = True
+                    yield ("text", text)
+            elif kind == "response.output_item.done":
+                item = event.get("item") or {}
+                if item.get("type") == "function_call":
+                    got = True
+                    yield ("tool", {"id": item.get("call_id") or item.get("id") or "",
+                                    "name": item.get("name") or "",
+                                    "arguments": _parse_tool_args(item.get("arguments"))})
             elif kind == "response.completed":
                 stop = (event.get("response") or {}).get("status") or "completed"
             elif kind in ("response.failed", "error"):
@@ -354,12 +489,26 @@ def sse_deltas(response, provider_protocol):
             if event.get("error"):
                 raise RuntimeError((event["error"] or {}).get("message") or "stream error")
             choice = (event.get("choices") or [{}])[0]
-            text = (choice.get("delta") or {}).get("content") or ""
+            delta = choice.get("delta") or {}
+            text = delta.get("content") or ""
             if text:
-                got_text = True
-                yield text
+                got = True
+                yield ("text", text)
+            for tc in delta.get("tool_calls") or []:
+                slot = pending.setdefault(tc.get("index", 0), {"id": "", "name": "", "args": ""})
+                if tc.get("id"):
+                    slot["id"] = tc["id"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    slot["name"] = fn["name"]
+                slot["args"] += fn.get("arguments") or ""
             stop = choice.get("finish_reason") or stop
-    if not got_text:
+    # OpenAI announces tool calls piecewise; emit them once the stream ends.
+    for _, slot in sorted(pending.items()):
+        got = True
+        yield ("tool", {"id": slot["id"], "name": slot["name"],
+                        "arguments": _parse_tool_args(slot["args"])})
+    if not got:
         raise RuntimeError(
             f"empty response (stop reason={stop or 'unknown'} — a reasoning model may have spent "
             "the whole token budget thinking; try effort: low or a shorter request)"

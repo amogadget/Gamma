@@ -13,6 +13,7 @@ import {
   EyeOffIcon,
   FileIcon,
   FileTextIcon,
+  FolderIcon,
   GlobeIcon,
   HardDriveIcon,
   HighlightIcon,
@@ -319,6 +320,14 @@ function GeneralSettings({ value }) {
             ]}
           />
         </Row>
+        <Toggle
+          icon={MoonIcon}
+          label="Flip page colors"
+          hint="Dark PDF pages — light text on a dark background"
+          title="Render PDF pages inverted for reading in the dark. Display-only: highlights, exports and the stored file keep their real colors. Figures and photos come out as negatives, so scanned papers may look better with this off."
+          checked={value.pdfDarkPage}
+          onChange={value.setPdfDarkPage}
+        />
       </Section>
       <Section title="Papers">
         <Toggle
@@ -1164,9 +1173,10 @@ const DICTATION_LANGS = [
 
 // One accordion instead of three stacked textareas: only the prompt being
 // edited takes up space, and Restore default lights up only when it would
-// change something.
+// change something. Everything starts collapsed — the section reads as a
+// category list until a prompt is opened.
 function PromptAccordion({ items }) {
-  const [open, setOpen] = React.useState(items[0].key);
+  const [open, setOpen] = React.useState(null);
   return (
     <div className="setAccList">
       {items.map(({ key, label, icon: Icon, draft, setDraft, defaultValue, custom }) => {
@@ -1256,6 +1266,15 @@ function AssistantSettings({ value }) {
         </Row>
       </Section>
       <Section title="Chat">
+        <Row icon={FolderIcon} label="Organizer tool rounds"
+          hint="AI ↔ tool round-trips per message in home/folder chat"
+          title="The home/folder chat can rename and re-file pages via tools; each round-trip lets the model issue more tool calls. This is a runaway guard — actual work is separately capped at 200 changes per message.">
+          <UnitInput value={value.toolRounds} unit="rounds" min={1}
+            onChange={(raw) => {
+              const n = Number.parseInt(raw, 10);
+              if (Number.isFinite(n)) value.setToolRounds(Math.max(1, Math.min(100, n)));
+            }} />
+        </Row>
         <Toggle
           icon={RectSelectIcon}
           label="Clear snapshots on click"

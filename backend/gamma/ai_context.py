@@ -75,6 +75,10 @@ def build_messages(payload, context: str) -> list[dict]:
     for history_item in payload.history or []:
         role = "assistant" if history_item.get("role") == "ai" else "user"
         content = history_item.get("text", "")
+        if not content.strip():
+            # An organizer reply can be tool actions with no prose; providers
+            # (Anthropic especially) reject empty content blocks.
+            continue
         if role == "user" and context and not context_used:
             content = f"Here is the PDF text:\n\n{context}\n\nUser question: {content}"
             context_used = True

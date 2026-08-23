@@ -40,6 +40,8 @@
   --drag-accent: #64b5f6;
   --scrollbar-bg: #1a1a1a;
   --scrollbar-thumb: #3f3f3f;
+  /* Native chrome (scrollbars, form controls) follows the app theme. */
+  color-scheme: dark;
   --radius-control: 6px;
   --radius-surface: 10px;
   --shadow-surface: 0 8px 24px rgba(0, 0, 0, 0.28);
@@ -84,6 +86,7 @@
   --drag-accent: #1565c0;
   --scrollbar-bg: #f5f5f5;
   --scrollbar-thumb: #cccccc;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -3126,10 +3129,19 @@ button.pdfOutlineChevron:hover {
   max-width: 100%;
   overflow: hidden;
 }
-.chatBubble.ai .chatPdfChip {
-  background: var(--bg-raised);
+.chatBubble.ai .chatPdfChip { background: var(--bg-raised); color: var(--text-muted); }
+/* Organizer tool actions (home/folder chat): one row per applied change. */
+.chatToolActions { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; }
+.chatToolAction {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
   color: var(--text-muted);
+  min-width: 0;
 }
+.chatToolAction svg { flex: none; }
+.chatToolAction span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chatPdfToggle {
   gap: 3px;
   font-size: 10px;
@@ -3407,6 +3419,17 @@ button.pdfOutlineChevron:hover {
 }
 
 /* Ctrl held: dragging draws a rectangle, so cue it over everything on the page. */
+/* Flip page colors (Settings → Reading → PDF viewer): display-only night
+   rendering. The canvas is inverted (hue-rotate keeps colors' hue, so figures
+   come out as negatives but diagrams stay recognizable); overlays are NOT
+   inverted, but their multiply blend would vanish on a dark page, so
+   highlights and find marks switch to screen — multiply's dark-background
+   dual. !important because both the wrap background and the blend modes are
+   inline styles in pdfViewer.jsx. */
+.pdfViewer.pdfDark { background: #181818; color-scheme: dark; } /* dark surround + scrollbar even in the light theme */
+.pdfViewer.pdfDark .pdfPageWrap { background: #101010 !important; }
+.pdfViewer.pdfDark .pdfPageWrap > canvas { filter: invert(0.94) hue-rotate(180deg); }
+.pdfViewer.pdfDark .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }
 .pdfViewer.areaCursor .pdfPageWrap,
 .pdfViewer.areaCursor .textLayer,
 .pdfViewer.areaCursor .textLayer span {

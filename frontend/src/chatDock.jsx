@@ -325,6 +325,8 @@ export default function ChatDock({
     const ctrl = new AbortController();
     chatAbortRef.current = ctrl;
     let acc = ""; // streamed reply so far — kept on Stop
+    const actions = []; // organizer mutations streamed for this reply
+    const aiMsg = (extra = {}) => ({ role: "ai", text: acc, ...(actions.length ? { actions: [...actions] } : {}), ...extra });
     try {
       const res = await fetch(`${API}/ai/chat`, {
         method: "POST",
@@ -347,6 +349,9 @@ export default function ChatDock({
           context_char_limit: chatContextChars,
           multi_context_char_limit: multiContextChars,
           stream: true,
+          ...(organizeFolder != null
+            ? { organize: true, folder: organizeFolder, tool_rounds: toolRounds || 0 }
+            : {}),
         }),
       });
       if (!res.ok) {
@@ -370,11 +375,12 @@ export default function ChatDock({
           if (!line.trim()) continue;
           const ev = JSON.parse(line);
           if (ev.error) throw new Error(ev.error);
+          if (ev.action) { actions.push(ev.action); continue; }
           acc += ev.delta || "";
         }
-        if (acc) showReply({ role: "ai", text: acc, partial: true });
+        if (acc || actions.length) showReply(aiMsg({ partial: true }));
       }
-      showReply({ role: "ai", text: acc || "(no response)" }, true);
+      showReply(aiMsg({ text: acc || (actions.length ? "" : "(no response)") }), true);
     } catch (err) {
       const stopped = err?.name === "AbortError";
       showReply(
@@ -394,6 +400,8 @@ export default function ChatDock({
       setChatLoading(false);
       setChatLoadingKey("");
       chatAbortRef.current = null;
+      // Organizer tools renamed/moved/labeled pages — reload the home feed.
+      if (actions.length) onLibraryChange?.();
     }
   }
 

@@ -19,11 +19,15 @@
     </script>
     <style>
       html, body, #root { margin: 0; height: 100%; background: #111; }
+      html { color-scheme: dark; }
       @media (prefers-color-scheme: light) {
         html, body, #root { background: #f6f6f4; }
+        html { color-scheme: light; }
       }
       html[data-theme="light"], html[data-theme="light"] body, html[data-theme="light"] #root { background: #f6f6f4; }
+      html[data-theme="light"] { color-scheme: light; }
       html[data-theme="dark"], html[data-theme="dark"] body, html[data-theme="dark"] #root { background: #111; }
+      html[data-theme="dark"] { color-scheme: dark; }
       /* First-load splash: index.html is tiny and paints immediately, while
          the app bundle (~450 kB gzipped) downloads and parses — without this
          that window is a pure blank page. Lives inside #root, so React's
