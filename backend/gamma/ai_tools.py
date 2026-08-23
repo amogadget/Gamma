@@ -21,7 +21,7 @@ anything, editing note/highlight content, rewriting flat labels, or touching
 pages outside the scope — every mutation is reversible with another tool call,
 and every successful call is streamed back to the UI as an ``action`` event so
 the user sees exactly what the agent did.  The human-facing description lives
-in ``agent.md``; the base role prompt (AGENT_PROMPT) is user-editable in the
+in ``docs/dev/agent.md``; the base role prompt (AGENT_PROMPT) is user-editable in the
 prompt editor, the scope/permission lines are appended mechanically.
 
 Folder semantics mirror ``frontend/src/libraryUtils.js``: ``properties.folder``

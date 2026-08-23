@@ -88,6 +88,36 @@ export default function ChatDock({
   const perm = (key) => agentPerms?.[key] !== false;
   const agentReads = perm("list") || perm("read") || perm("search");
   const agentWrites = perm("rename") || perm("move");
+  const agentPayload = () => {
+    const scope =
+      organizeFolder != null && (agentReads || agentWrites)
+        ? { agent_scope: "folder", folder: organizeFolder }
+        : focusedBlockId && (perm("read") || perm("search"))
+          ? { agent_scope: "page", page_id: focusedBlockId }
+          : null;
+    return scope
+      ? {
+          ...scope,
+          tool_rounds: toolRounds || 0,
+          permissions: agentPerms || {},
+          agent_system: agentSystem || "",
+        }
+      : {};
+  };
+  const agentScopeName = organizeFolder ? "this folder" : "your library";
+  const agentIntro =
+    organizeFolder == null
+      ? null
+      : agentWrites
+        ? `Ask AI anything — it can ${agentReads ? "read, search and " : ""}organize ${agentScopeName} (rename papers, file them into folders)…`
+        : agentReads
+          ? `Ask AI across ${organizeFolder ? "this folder's papers" : "your library"} — it can read, search and summarize them…`
+          : null;
+  const agentAsk = agentIntro
+    ? agentWrites
+      ? `Ask, or organize ${agentScopeName}…`
+      : `Ask across ${agentScopeName}…`
+    : null;
   const chatKeyRef = useRef(chatKey);
   chatKeyRef.current = chatKey;
   // Which conversation the in-flight request belongs to (typing indicator
@@ -374,23 +404,7 @@ export default function ChatDock({
           context_char_limit: chatContextChars,
           multi_context_char_limit: multiContextChars,
           stream: true,
-          ...(organizeFolder != null && (agentReads || agentWrites)
-            ? {
-                agent_scope: "folder",
-                folder: organizeFolder,
-                tool_rounds: toolRounds || 0,
-                permissions: agentPerms || {},
-                agent_system: agentSystem || "",
-              }
-            : focusedBlockId && (perm("read") || perm("search"))
-              ? {
-                  agent_scope: "page",
-                  page_id: focusedBlockId,
-                  tool_rounds: toolRounds || 0,
-                  permissions: agentPerms || {},
-                  agent_system: agentSystem || "",
-                }
-              : {}),
+          ...agentPayload(),
         }),
       });
       if (!res.ok) {
@@ -847,12 +861,8 @@ export default function ChatDock({
                 )
               ) : focusedBlockId ? (
                 "Ask AI about this page…"
-              ) : organizeFolder != null && agentWrites ? (
-                `Ask AI anything — it can ${agentReads ? "read, search and " : ""}organize ${organizeFolder ? "this folder" : "your library"} (rename papers, file them into folders)…`
-              ) : organizeFolder != null && agentReads ? (
-                `Ask AI across ${organizeFolder ? "this folder's papers" : "your library"} — it can read, search and summarize them…`
               ) : (
-                "Ask AI anything, or generate a report from your pages…"
+                agentIntro || "Ask AI anything, or generate a report from your pages…"
               )}
             </div>
           ) : (
@@ -1208,11 +1218,7 @@ export default function ChatDock({
                           : "Ask about the selection…"
                         : chatDocs.length
                           ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…`
-                          : organizeFolder != null && (agentReads || agentWrites)
-                            ? agentWrites
-                              ? `Ask, or organize ${organizeFolder ? "this folder" : "your library"}…`
-                              : `Ask across ${organizeFolder ? "this folder" : "your library"}…`
-                            : "Ask…"
+                          : agentAsk || "Ask…"
                 }
               />
               {chatLoading ? (
