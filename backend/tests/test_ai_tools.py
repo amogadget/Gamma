@@ -113,17 +113,20 @@ def test_rename_page(org):
     assert text.startswith("ok"), text
     assert action["kind"] == "rename" and "Ada2019 — Cavity readout" in action["summary"]
     assert _props(c, ids["a"])["content"] == "Ada2019 — Cavity readout"
-    # No-op rename mutates nothing and reports no action.
+    # No-op rename mutates nothing, but still shows as a (non-error) chip.
     text, action = run_agent_tool("organizer", _folder("readout"), "rename_page",
                                   {"page_id": ids["a"], "title": "Ada2019 — Cavity readout"})
-    assert action is None
+    assert action["kind"] == "rename" and not action.get("error")
+    # Every chip carries the raw call so the chat can expand it.
+    assert action["tool"] == "rename_page" and action["result"] == text
+    assert action["args"]["title"] == "Ada2019 — Cavity readout"
 
 
 def test_scope_blocks_outside_pages(org):
     c, ids = org
     text, action = run_agent_tool("organizer", _folder("readout"), "rename_page",
                                   {"page_id": ids["note"], "title": "hijack"})
-    assert text.startswith("error") and action is None
+    assert text.startswith("error") and action["error"] and action["kind"] == "error"
     assert _props(c, ids["note"])["content"] == "loose note"
     text, _ = run_agent_tool("organizer", _folder("readout"), "rename_page",
                              {"page_id": "nope", "title": "x"})
@@ -158,9 +161,9 @@ def test_move_at_root_replaces_all_folders(org):
 
 def test_unknown_or_out_of_scope_tools_error(org):
     text, action = run_agent_tool("organizer", _folder(""), "delete_page", {"page_id": "x"})
-    assert text.startswith("error") and action is None
+    assert text.startswith("error") and action["error"] and action["result"] == text
     text, action = run_agent_tool("organizer", _folder(""), "set_labels", {"page_id": "x"})
-    assert text.startswith("error") and action is None
+    assert text.startswith("error") and action["error"]
     # Write tools don't exist in page scope — same error as an unknown tool.
     text, _ = run_agent_tool("organizer", {"type": "page", "page_id": "x"},
                              "rename_page", {"page_id": "x", "title": "y"})
@@ -402,6 +405,10 @@ def test_chat_agent_loop_streams_actions(org, monkeypatch):
     text = "".join(item.get("delta", "") for item in lines)
     assert len(opened) == 2
     assert actions and actions[0]["kind"] == "rename"
+    # The chip carries the raw call so the chat can expand the tool output.
+    assert actions[0]["tool"] == "rename_page"
+    assert actions[0]["args"]["title"] == "Ada2019 cavity"
+    assert actions[0]["result"].startswith("ok")
     assert text == "Renamed it."
     assert _props(c, ids["a"])["content"] == "Ada2019 cavity"
 

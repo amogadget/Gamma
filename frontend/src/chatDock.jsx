@@ -25,16 +25,23 @@ import {
   XIcon,
 } from "./icons";
 
-// Folder-agent tool chips: icon per action kind. Only rename/move mutate the
-// library and require a home-feed refresh.
+// Folder-agent tool chips expose the arguments and result the model saw.
 const ACTION_ICONS = {
   rename: PencilIcon,
   move: FolderIcon,
   search: SearchIcon,
   read: BookIcon,
   list: ListIcon,
+  error: XIcon,
 };
 const MUTATING_KINDS = new Set(["rename", "move"]);
+const toolCallText = (action) => {
+  const args = Object.entries(action.args || {})
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(", ");
+  const head = `${action.tool || action.kind}(${args})`;
+  return [head, action.result].filter(Boolean).join("\n\n");
+};
 
 export default function ChatDock({
   docId,
@@ -128,6 +135,14 @@ export default function ChatDock({
   // like pdfSelections — so the PDF viewer can attach into it.
   const [editingMsg, setEditingMsg] = useState(null); // {idx, text} — editing a sent user message
   const [copiedMsgIdx, flashCopiedMsg] = useCopied(1200);
+  const [openActions, setOpenActions] = useState(() => new Set());
+  const toggleAction = (key) =>
+    setOpenActions((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   const [chatFindOpen, setChatFindOpen] = useState(false);
   const [chatFind, setChatFind] = useState("");
   const [chatFindIdx, setChatFindIdx] = useState(0);
@@ -956,14 +971,38 @@ export default function ChatDock({
                         <div className="chatToolActions">
                           {m.actions.map((action, actionIndex) => {
                             const Icon = ACTION_ICONS[action.kind] || FolderIcon;
+                            const hasDetail = Boolean(action.tool || action.result);
+                            const actionKey = `${i}:${actionIndex}`;
+                            const open = openActions.has(actionKey);
                             return (
                               <div
                                 key={actionIndex}
-                                className="chatToolAction"
-                                title={action.summary}
+                                className={`chatToolAction${action.error ? " err" : ""}`}
                               >
-                                <Icon size={11} />
-                                <span>{action.summary}</span>
+                                {hasDetail ? (
+                                  <button
+                                    type="button"
+                                    className="chatToolActionHead"
+                                    onClick={() => toggleAction(actionKey)}
+                                    title={open ? "Hide tool output" : "Show tool output"}
+                                  >
+                                    <Icon size={11} />
+                                    <span>{action.summary}</span>
+                                    {open ? (
+                                      <ChevronUpIcon size={10} />
+                                    ) : (
+                                      <ChevronDownIcon size={10} />
+                                    )}
+                                  </button>
+                                ) : (
+                                  <div className="chatToolActionHead plain" title={action.summary}>
+                                    <Icon size={11} />
+                                    <span>{action.summary}</span>
+                                  </div>
+                                )}
+                                {open ? (
+                                  <pre className="chatToolDetail">{toolCallText(action)}</pre>
+                                ) : null}
                               </div>
                             );
                           })}

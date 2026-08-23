@@ -3134,18 +3134,44 @@ button.pdfOutlineChevron:hover {
   overflow: hidden;
 }
 .chatBubble.ai .chatPdfChip { background: var(--bg-raised); color: var(--text-muted); }
-/* Organizer tool actions (home/folder chat): one row per applied change. */
+/* Agent tool calls (folder/paper chat): one row per call, click to expand the
+   arguments and the output the model got back. */
 .chatToolActions { display: flex; flex-direction: column; gap: 3px; margin-bottom: 6px; }
-.chatToolAction {
+.chatToolAction { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.chatToolActionHead {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 11px;
+  font-family: inherit;
   color: var(--text-muted);
+  background: none;
+  border: 0;
+  padding: 0;
   min-width: 0;
+  text-align: left;
+  cursor: pointer;
 }
-.chatToolAction svg { flex: none; }
-.chatToolAction span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chatToolActionHead.plain { cursor: default; }
+.chatToolActionHead:hover:not(.plain) { color: var(--text); }
+.chatToolAction.err .chatToolActionHead { color: var(--danger); }
+.chatToolActionHead svg { flex: none; }
+.chatToolActionHead span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chatToolDetail {
+  margin: 0 0 2px;
+  padding: 6px 8px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .chatPdfToggle {
   gap: 3px;
   font-size: 10px;

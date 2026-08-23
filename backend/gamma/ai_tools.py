@@ -46,6 +46,8 @@ MAX_TOOL_ROUNDS = 32    # provider round-trips per user message
 MAX_TOOL_ACTIONS = 200  # mutations per user message (bulk renames are legit)
 _LIST_CAP = 400         # pages listed per list_pages call
 _TITLE_MAX = 300
+_DETAIL_CAP = 4000      # chars of a tool's output kept for the chat's expandable chip
+_ARG_CAP = 400          # chars per argument value in that chip
 
 # Base role prompt — the user-editable part (prompt editor, "Library agent");
 # agent_system() appends the mechanical scope/permission lines to it.
@@ -287,14 +289,15 @@ def _run_move_page(conn, user: str, scope: dict, args: dict):
 
 
 # --- registry ------------------------------------------------------------------
-# One entry per tool: wire spec, Settings permission key, the scopes the tool
-# exists in, whether it mutates the library, and its executor.
+# One entry per tool: wire spec, Settings permission key, the action kind its
+# chip carries, the scopes the tool exists in, whether it mutates the library,
+# and its executor.
 
 _PAGE_ID_ARG = {"page_id": {"type": "string"}}
 
 TOOLS = [
     {
-        "perm": "list", "scopes": ("folder",), "mutating": False, "run": _run_list_pages,
+        "perm": "list", "kind": "list", "scopes": ("folder",), "mutating": False, "run": _run_list_pages,
         "spec": {
             "name": "list_pages",
             "description": (
@@ -306,7 +309,7 @@ TOOLS = [
         },
     },
     {
-        "perm": "read", "scopes": ("folder", "page"), "mutating": False, "run": _run_read_page,
+        "perm": "read", "kind": "read", "scopes": ("folder", "page"), "mutating": False, "run": _run_read_page,
         "spec": {
             "name": "read_page",
             "description": (
@@ -323,7 +326,7 @@ TOOLS = [
         },
     },
     {
-        "perm": "search", "scopes": ("folder", "page"), "mutating": False, "run": _run_search_pdfs,
+        "perm": "search", "kind": "search", "scopes": ("folder", "page"), "mutating": False, "run": _run_search_pdfs,
         "spec": {
             "name": "search_pdfs",
             "description": (
@@ -341,7 +344,7 @@ TOOLS = [
         },
     },
     {
-        "perm": "rename", "scopes": ("folder",), "mutating": True, "run": _run_rename_page,
+        "perm": "rename", "kind": "rename", "scopes": ("folder",), "mutating": True, "run": _run_rename_page,
         "spec": {
             "name": "rename_page",
             "description": "Set a page's title. Use exact page ids from list_pages.",
@@ -354,7 +357,7 @@ TOOLS = [
         },
     },
     {
-        "perm": "move", "scopes": ("folder",), "mutating": True, "run": _run_move_page,
+        "perm": "move", "kind": "move", "scopes": ("folder",), "mutating": True, "run": _run_move_page,
         "spec": {
             "name": "move_page",
             "description": (
@@ -404,20 +407,50 @@ def agent_system(scope: dict, perms: dict | None = None, base: str = "") -> str:
     return text
 
 
-def run_agent_tool(user: str, scope: dict, name: str, args: dict) -> tuple[str, dict | None]:
+def tool_action(kind: str, summary: str, name: str, args: dict, result: str,
+                error: bool = False, **extra) -> dict:
+    """Build the UI event for one tool call: the chip's icon/summary plus the
+    raw call the chat can expand — the arguments and the output the model got,
+    both truncated (chips are streamed AND saved with the message)."""
+    trimmed = {}
+    for key, value in (args or {}).items():
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        trimmed[key] = text if len(text) <= _ARG_CAP else text[:_ARG_CAP] + "…"
+    out = {"kind": kind, "summary": summary, "tool": name, "args": trimmed,
+           "result": result if len(result) <= _DETAIL_CAP
+                     else result[:_DETAIL_CAP] + f"\n… (+{len(result) - _DETAIL_CAP} more chars)"}
+    if error:
+        out["error"] = True
+    return {**out, **extra}
+
+
+def run_agent_tool(user: str, scope: dict, name: str, args: dict) -> tuple[str, dict]:
     """Execute one agent tool call against the chat's scope.
 
     Returns ``(result_text, action)`` — result_text goes back to the model;
-    action is the ``{kind, summary}`` UI event for every successful call
-    (reads included, so the user sees each tool use); errors carry no action.
+    action is the ``{kind, summary, tool, args, result}`` UI event for EVERY
+    call (reads and failures included), so nothing the agent does is invisible.
+    Failures carry ``error: True``; the executors' own actions are enriched
+    with the same raw-call fields.
     """
     tool = _BY_NAME.get(name)
-    if not tool or (scope.get("type") or "") not in tool["scopes"]:
-        return f"error: unknown tool {name}", None
     args = args if isinstance(args, dict) else {}
+    if not tool or (scope.get("type") or "") not in tool["scopes"]:
+        result = f"error: unknown tool {name}"
+        return result, tool_action("error", result[:200], name, args, result, error=True)
     try:
         with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-            return tool["run"](conn, user, scope, args)
+            result, action = tool["run"](conn, user, scope, args)
     except Exception as e:  # a tool failure must never kill the chat stream
         log.warning(f"[ai_tools] {name} failed: {e}")
-        return f"error: {e}", None
+        result, action = f"error: {e}", None
+    if action is None:
+        # No-op or refused call (empty title, page out of scope, …): still show
+        # it, tagged as an error only when the tool actually failed.
+        failed = result.startswith("error")
+        action = {"kind": "error" if failed else tool["kind"],
+                  "summary": result.split("\n")[0][:200], "error": failed}
+    return result, tool_action(action["kind"], action["summary"], name, args, result,
+                               error=bool(action.get("error")),
+                               **{k: v for k, v in action.items()
+                                  if k not in ("kind", "summary", "error")})

@@ -35,6 +35,7 @@ from ..ai_tools import (
     agent_system,
     agent_tools,
     run_agent_tool,
+    tool_action,
 )
 from ..ai_context import (
     build_messages as _build_messages,
@@ -951,20 +952,23 @@ def ai_chat(payload: AIChatRequest, request: Request):
                              "tool_calls": calls})
             for call in calls:
                 if call["name"] not in armed:
-                    result, action = ("error: tool not enabled — the user's permission "
-                                      "settings do not allow it", None)
+                    result = ("error: tool not enabled — the user's permission "
+                              "settings do not allow it")
+                    action = tool_action("error", f'{call["name"]} — blocked by permissions',
+                                         call["name"], call["arguments"], result, error=True)
                 elif call["name"] in MUTATING_TOOLS and actions >= MAX_TOOL_ACTIONS:
-                    result, action = ("error: change limit for one message reached — "
-                                      "stop and tell the user", None)
+                    result = ("error: change limit for one message reached — "
+                              "stop and tell the user")
+                    action = tool_action("error", f'{call["name"]} — change limit reached',
+                                         call["name"], call["arguments"], result, error=True)
                 else:
                     result, action = run_agent_tool(user, scope,
                                                     call["name"], call["arguments"])
-                if action:
-                    # Reads render as chips too, but only mutations count
-                    # against the change budget.
-                    if call["name"] in MUTATING_TOOLS:
-                        actions += 1
-                    yield ("action", action)
+                # Reads and failures render as chips too, but only applied
+                # mutations count against the change budget.
+                if call["name"] in MUTATING_TOOLS and not action.get("error"):
+                    actions += 1
+                yield ("action", action)
                 messages.append({"role": "tool", "call_id": call["id"], "content": result})
             if round_no == max_rounds - 1:
                 yield ("delta", "\n\n*(stopped: tool-round limit reached — "

@@ -13,6 +13,7 @@ import {
   BugIcon,
   CloudDownloadIcon,
   CornerDownLeftIcon,
+  EyeIcon,
   EyeOffIcon,
   FileIcon,
   FileTextIcon,
@@ -111,6 +112,14 @@ function GeneralSettings({ value }) {
           title="Render PDF pages inverted for reading in the dark. Display-only: highlights, exports and the stored file keep their real colors. Figures and photos come out as negatives, so scanned papers may look better with this off."
           checked={value.pdfDarkPage}
           onChange={value.setPdfDarkPage}
+        />
+        <Toggle
+          icon={EyeIcon}
+          label="Recents thumbnails"
+          hint="Page snapshots on the Recently-viewed cards"
+          title="Show each recently-viewed paper as a small snapshot of the page where you left off, captured on this device while you read. Off hides the covers and stops capturing new ones."
+          checked={value.recentThumbs}
+          onChange={value.setRecentThumbs}
         />
       </Section>
       <Section title="Papers">

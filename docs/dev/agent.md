@@ -66,7 +66,9 @@ its reach.
    conversation.
 2. The model runs a loop: call tools → the Gamma server executes them → the
    results go back to the model → repeat, until it answers. Text streams
-   normally; tool calls stream as action lines.
+   normally; every tool call — reads, changes, and failures alike — appears in
+   the chat as a chip you can click to see the exact arguments and the output
+   the model got back.
 3. When the loop finishes with changes applied, the library view refreshes.
 
 Folder conversations follow folder renames and moves, and are deleted with

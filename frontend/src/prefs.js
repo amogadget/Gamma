@@ -42,6 +42,9 @@ export function useAppPrefs() {
   });
   // Flip page colors: display-only inverted (night) rendering of the PDF canvas.
   const [pdfDarkPage, setPdfDarkPage] = usePersistedFlag("gamma-pdf-dark", false);
+  // Recently-viewed cards on the home page: cover thumbnails (a snapshot of
+  // the PDF at the last-read spot). Off also stops capturing new ones.
+  const [recentThumbs, setRecentThumbs] = usePersistedFlag("gamma-recent-thumbs", true);
 
   // --- Papers (Settings → General) ---
   const [oaFallback, setOaFallback] = usePersistedFlag("gamma-oa-fallback", true);
@@ -110,7 +113,7 @@ export function useAppPrefs() {
   const [chatImgAutoClear, setChatImgAutoClear] = usePersistedFlag("gamma-chat-img-autoclear", false);
 
   return {
-    theme, setTheme, pdfDarkPage, setPdfDarkPage,
+    theme, setTheme, pdfDarkPage, setPdfDarkPage, recentThumbs, setRecentThumbs,
     oaFallback, setOaFallback, metaAutoFetch, setMetaAutoFetch, pdfSaveLocal, setPdfSaveLocal,
     snapVertical, setSnapVertical, embAnnots, setEmbAnnots,
     searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper,
