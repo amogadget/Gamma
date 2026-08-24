@@ -102,6 +102,45 @@ def flatten_tree(tree, parent_id, result, now):
         flatten_tree(node.get("children") or [], node_id, result, now)
 
 
+def page_root_id(conn, block_id: str) -> str | None:
+    """Walk parents up to the top-level page block that contains block_id
+    (whose parent is 'root'). Returns the page id, or None if block_id is
+    unknown. Cycle-guarded."""
+    cur = block_id
+    for _ in range(10000):
+        row = conn.execute(
+            "SELECT parent_id FROM unified_blocks WHERE id = ?", (cur,)
+        ).fetchone()
+        if not row:
+            return None
+        parent = row[0]
+        if parent in (None, "root"):
+            return cur
+        cur = parent
+    return None
+
+
+def block_doc_id(conn, block_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks WHERE id = ?",
+        (block_id,),
+    ).fetchone()
+    return row[0] if row and row[0] else None
+
+
+def assert_block_in_doc(conn, block_id: str, scope_doc_id) -> None:
+    """For a share-scoped request (scope_doc_id set), raise 403 unless block_id
+    lives inside the page identified by scope_doc_id. No-op for full-access
+    session users (scope_doc_id is None)."""
+    if scope_doc_id is None:
+        return
+    from fastapi import HTTPException
+
+    root = page_root_id(conn, block_id)
+    if not root or block_doc_id(conn, root) != scope_doc_id:
+        raise HTTPException(status_code=403, detail="not accessible via this share link")
+
+
 def ancestor_chains(conn, block_ids: list[str]):
     """Return {block_id: [{id, content}, ...]} ancestor chains (root-first, excluding 'root')
     and {block_id: page_root_id} for a set of blocks, in one recursive CTE."""

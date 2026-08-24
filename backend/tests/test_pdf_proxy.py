@@ -40,7 +40,9 @@ def _fake(monkeypatch, **kwargs):
         made.append(up)
         return up
 
-    monkeypatch.setattr(pdf_mod, "urlopen", fake_urlopen)
+    # Patch the SSRF-guarded fetch wholesale so tests don't hit the network or
+    # the URL validator (which would try to resolve the fake host).
+    monkeypatch.setattr(pdf_mod, "guarded_urlopen", fake_urlopen)
     return made
 
 
@@ -64,7 +66,7 @@ def test_proxy_save_writes_complete_file_then_redirects(guest, monkeypatch):
     saved = user_uploads_dir("guest") / f"{doc_id}.pdf"
     assert saved.read_bytes() == PDF_BYTES
     # Second request must not hit upstream at all: it redirects to the saved copy.
-    monkeypatch.setattr(pdf_mod, "urlopen", None)
+    monkeypatch.setattr(pdf_mod, "guarded_urlopen", None)
     r2 = guest.get("/api/pdf", params={"source_url": url}, follow_redirects=False)
     assert r2.status_code == 302
     assert r2.headers["location"] == f"/api/uploads/{doc_id}.pdf"

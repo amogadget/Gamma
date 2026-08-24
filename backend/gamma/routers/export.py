@@ -12,9 +12,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from starlette.background import BackgroundTask
 
-from ..auth import resolve_user
-from ..blocks_store import BLOCK_COLUMNS, block_to_dict, fetch_subtree
-from ..db import user_db_path, user_uploads_dir
+from ..auth import resolve_user, share_scope_doc
+from ..blocks_store import BLOCK_COLUMNS, assert_block_in_doc, block_to_dict, fetch_subtree
+from ..db import pdf_upload_path, safe_doc_id, user_db_path, user_uploads_dir
 from ..logseq_graph_export import (
     CONFIG_EDN,
     collect_highlights,
@@ -86,7 +86,12 @@ def _graph_page_parts(page, uploads_dir, include_pdf):
     inline ``![](../assets/<stem>.pdf)`` links stay valid Markdown."""
     stem = slugify(page.get("content"), page["id"]).replace(" ", "_")
     doc_id = (page.get("properties") or {}).get("doc_id")
-    pdf_path = uploads_dir / f"{doc_id}.pdf" if doc_id else None
+    pdf_path = None
+    if doc_id:
+        try:
+            pdf_path = uploads_dir / f"{safe_doc_id(doc_id)}.pdf"
+        except ValueError:
+            pdf_path = None
     has_pdf = bool(include_pdf and pdf_path and pdf_path.is_file())
 
     md, assets = collect_and_rewrite(render_graph_page_md(page, stem, has_pdf), include_pdf=False, prefix="../assets/")
@@ -111,7 +116,9 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
     file-based Logseq directly and convertible by the DB version's "File to DB
     graph" importer."""
     user = resolve_user(request)
+    scope = share_scope_doc(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        assert_block_in_doc(conn, block_id, scope)
         rows = fetch_subtree(conn, block_id)
     if not rows:
         raise HTTPException(status_code=404, detail="page not found")
@@ -137,7 +144,9 @@ def export_page_pdf(block_id: str, request: Request):
     annotations (notes become the annotation popup text), so they survive in
     any external PDF viewer."""
     user = resolve_user(request)
+    scope = share_scope_doc(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        assert_block_in_doc(conn, block_id, scope)
         rows = fetch_subtree(conn, block_id)
     if not rows:
         raise HTTPException(status_code=404, detail="page not found")
@@ -146,7 +155,10 @@ def export_page_pdf(block_id: str, request: Request):
     doc_id = root["properties"].get("doc_id")
     if not doc_id:
         raise HTTPException(status_code=400, detail="page has no PDF")
-    pdf_path = user_uploads_dir(user) / f"{doc_id}.pdf"
+    try:
+        pdf_path = pdf_upload_path(user, doc_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid document id")
     if not pdf_path.is_file():
         raise HTTPException(status_code=404, detail="PDF not stored on the server")
 
@@ -205,6 +217,9 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
     name = (name or "").strip().strip("/")
     if not name:
         raise HTTPException(status_code=400, detail="folder name required")
+    # A share link is scoped to one document, never a whole folder.
+    if share_scope_doc(request) is not None:
+        raise HTTPException(status_code=403, detail="not accessible via this share link")
     user = resolve_user(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
         roots = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = 'root'").fetchall()

@@ -2,9 +2,7 @@
 
 from pathlib import Path
 
-from fastapi import Request
-
-from .config import USERS_DIR
+from .db import user_uploads_dir
 
 ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
 IMAGE_EXTENSIONS = {
@@ -24,26 +22,20 @@ IMAGE_MEDIA_TYPES = {
 }
 
 
-def find_upload_file(filename: str, request: Request) -> Path | None:
-    """Search for an uploaded file. Checks session user first, then ?user= param, then all users."""
-    user = request.state.user
-    if user:
-        path = USERS_DIR / user / "uploads" / filename
-        if path.is_file():
-            return path
-    param_user = request.query_params.get("user")
-    if param_user:
-        path = USERS_DIR / param_user / "uploads" / filename
-        if path.is_file():
-            return path
-    # Fallback: search all user directories (for shared links without ?user=)
-    if USERS_DIR.exists():
-        for d in USERS_DIR.iterdir():
-            if d.is_dir():
-                path = d / "uploads" / filename
-                if path.is_file():
-                    return path
-    return None
+def find_upload_file(filename: str, user: str) -> Path | None:
+    """The uploaded file `filename` in `user`'s uploads dir, or None.
+
+    Deliberately scoped to the single named user — the caller resolves who that
+    is (session user or a validated share owner). No cross-user fallback: that
+    let anyone read any account's files by guessing a content hash.
+    """
+    if not user:
+        return None
+    try:
+        path = user_uploads_dir(user) / filename
+    except ValueError:
+        return None
+    return path if path.is_file() else None
 
 
 def cleanup_orphan_uploads(conn, uploads_dir: Path):

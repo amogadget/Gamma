@@ -27,6 +27,10 @@ from ..pdf_text import PDF_EXTRACT_FAILED
 from ..textnorm import INDEX_VERSION
 from .ai import CITE_PROMPT, METADATA_PROMPT, _resolve_model
 
+# Guards the doc-id → filename join below (defense in depth: doc ids come from
+# block properties a user can set). Mirrors gamma.db._DOC_ID_RE.
+_DOC_ID_OK = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
 router = APIRouter(prefix="/api", tags=["metadata"])
 
 _ARXIV_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5})", re.I)
@@ -243,7 +247,8 @@ def metadata_status(request: Request):
                 "title": (meta or {}).get("title") or content or "Untitled",
                 "updated_at": updated_at,
                 "doc_id": doc_id,
-                "has_file": bool(doc_id and (uploads / f"{doc_id}.pdf").exists()),
+                "has_file": bool(doc_id and _DOC_ID_OK.match(doc_id)
+                                 and (uploads / f"{doc_id}.pdf").exists()),
                 "has_meta": bool(meta),
                 "meta_source": (meta or {}).get("source", ""),
                 "meta_error": (props.get("meta_error") or {}).get("detail", ""),

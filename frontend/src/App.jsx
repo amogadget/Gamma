@@ -3538,17 +3538,18 @@ export default function App() {
     try {
       const data = await apiJson(`${API}/share/${token}`);
       shareOwnerRef.current = data.username || "";
-      const userParam = data.username ? `?user=${encodeURIComponent(data.username)}` : "";
+      shareTokenRef.current = token;
+      // Read access rides on the share token itself (scoped to this one
+      // document), never a bare ?user= (which used to grant whole-account reads).
+      const shareParam = `?share=${encodeURIComponent(token)}`;
 
       let block = null;
-      try {
-        block = await apiJson(`${API}/blocks/by-doc/${data.doc_id}${userParam}`);
-      } catch {}
+      try { block = await apiJson(`${API}/blocks/by-doc/${data.doc_id}${shareParam}`); } catch {}
 
       let childBlocks = [];
       if (block) {
         try {
-          const subtreeData = await apiJson(`${API}/blocks/${block.id}/subtree${userParam}`);
+          const subtreeData = await apiJson(`${API}/blocks/${block.id}/subtree${shareParam}`);
           childBlocks = normalizeBlocks(subtreeData.block?.children || []);
         } catch {}
       }
@@ -3557,10 +3558,8 @@ export default function App() {
       const src = props.source_url || props.sourceUrl || "";
       const isLocal = src.startsWith("/api/");
       const proxiedUrl = isLocal
-        ? src
-        : src
-          ? `${API}/pdf?source_url=${encodeURIComponent(src)}${userParam ? "&" + userParam.slice(1) : ""}`
-          : "";
+        ? `${src}${src.includes("?") ? "&" : "?"}share=${encodeURIComponent(token)}`
+        : src ? `${API}/pdf?source_url=${encodeURIComponent(src)}&share=${encodeURIComponent(token)}` : "";
 
       suppressAutosaveRef.current = true;
       setFocusedBlockId(block?.id || "");
@@ -4110,10 +4109,11 @@ export default function App() {
   // instead of silently swapping the SPA for an error page.
   async function downloadExport(path, fallbackName) {
     setStatus("Exporting page…");
-    // Shared (read-only) views: every export resolves the owner's data from
-    // ?user= (auth.resolve_user) — applied here so no call site can forget it.
-    const userQ = shareUserQuery();
-    if (userQ && !path.includes("user=")) path += (path.includes("?") ? "&" : "?") + userQ;
+    // Shared (read-only) views: every export carries the scoped share token, so
+    // the backend confines it to this document — applied here so no call site
+    // can forget it.
+    const shareQ = shareTokenQuery();
+    if (shareQ && !path.includes("share=")) path += (path.includes("?") ? "&" : "?") + shareQ;
     try {
       const res = await fetch(`${API}${path}`, { credentials: "include" });
       if (!res.ok) {
@@ -4148,10 +4148,12 @@ export default function App() {
     }
   }
 
-  // Owner of a shared (read-only) view — downloadExport appends it as ?user=.
+  // Shared (read-only) view — exports and asset fetches carry the scoped share
+  // token (?share=), which the backend validates and confines to this document.
   const shareOwnerRef = useRef("");
-  const shareUserQuery = () =>
-    readOnly && shareOwnerRef.current ? `user=${encodeURIComponent(shareOwnerRef.current)}` : "";
+  const shareTokenRef = useRef("");
+  const shareTokenQuery = () =>
+    readOnly && shareTokenRef.current ? `share=${encodeURIComponent(shareTokenRef.current)}` : "";
 
   async function exportPage(mode = "readable") {
     const id = focusedBlock?.id;

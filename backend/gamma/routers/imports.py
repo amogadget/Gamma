@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from fractional_indexing import generate_key_between, generate_n_keys_between
 
 from ..auth import require_user
-from ..db import page_now, user_db_path, user_uploads_dir
+from ..db import page_now, pdf_upload_path, user_db_path, user_uploads_dir
 from ..server_settings import check_upload_allowed
 from ..blocks_store import last_child_position
 from ..logbuf import log
@@ -343,7 +343,10 @@ class PdfAnnotsRequest(BaseModel):
 @router.post("/import/pdf-annotations")
 def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
     user = require_user(request)
-    pdf_path = user_uploads_dir(user) / f"{payload.doc_id}.pdf"
+    try:
+        pdf_path = pdf_upload_path(user, payload.doc_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid document id")
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not stored on the server")
     try:

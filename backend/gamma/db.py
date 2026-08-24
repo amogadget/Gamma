@@ -1,6 +1,7 @@
 """SQLite helpers: schema, connections, per-user paths, timestamps."""
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,6 +12,27 @@ from .config import USERS_DB, USERS_DIR
 def page_now() -> str:
     # UTC ISO string with Z suffix so clients parse it correctly.
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+# Identifiers that become a single path segment. Both exclude '/' and '\', so a
+# validated value can never introduce a path separator; '.'/'..' are rejected
+# outright so they can't climb out of the user's directory either. These guard
+# every filesystem path built from a username or doc id — the last line of
+# defense against traversal even after upstream auth checks.
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+_DOC_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
+
+def safe_username(username: str) -> str:
+    if not isinstance(username, str) or username in (".", "..") or not _USERNAME_RE.match(username):
+        raise ValueError(f"unsafe username: {username!r}")
+    return username
+
+
+def safe_doc_id(doc_id: str) -> str:
+    if not isinstance(doc_id, str) or doc_id in (".", "..") or not _DOC_ID_RE.match(doc_id):
+        raise ValueError(f"unsafe doc id: {doc_id!r}")
+    return doc_id
 
 
 USERS_SCHEMA = [
@@ -121,8 +143,14 @@ def connect_users_db() -> sqlite3.Connection:
 
 
 def user_db_path(username: str, db_name: str) -> str:
-    return str(USERS_DIR / username / db_name)
+    return str(USERS_DIR / safe_username(username) / db_name)
 
 
 def user_uploads_dir(username: str) -> Path:
-    return USERS_DIR / username / "uploads"
+    return USERS_DIR / safe_username(username) / "uploads"
+
+
+def pdf_upload_path(username: str, doc_id: str) -> Path:
+    """Validated path to a document's stored PDF. Use instead of joining an
+    untrusted doc id into a filename by hand."""
+    return user_uploads_dir(username) / f"{safe_doc_id(doc_id)}.pdf"

@@ -1,12 +1,14 @@
 """PDF/image uploads (content-hash deduped) and upload serving."""
 
 import hashlib
+import sqlite3
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from ..auth import require_user
-from ..db import user_uploads_dir
+from ..auth import require_user, share_grant
+from ..blocks_store import fetch_subtree
+from ..db import user_db_path, user_uploads_dir
 from .. import flatten_queue
 from ..server_settings import check_upload_allowed, usage_bytes, user_limits
 from ..storage import ALLOWED_IMAGE_TYPES, IMAGE_EXTENSIONS, IMAGE_MEDIA_TYPES, find_upload_file
@@ -76,6 +78,23 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     }
 
 
+def _share_can_read_upload(user: str, scope_doc_id: str, filename: str) -> bool:
+    """A share link may read only its own document's PDF (``<doc_id>.pdf``) or a
+    file its subtree references (embedded images)."""
+    if filename == f"{scope_doc_id}.pdf":
+        return True
+    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        root = conn.execute(
+            "SELECT id FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?",
+            (scope_doc_id,),
+        ).fetchone()
+        if not root:
+            return False
+        rows = fetch_subtree(conn, root[0])
+    needle = f"/api/uploads/{filename}"
+    return any(needle in (r[3] or "") or needle in (r[4] or "") for r in rows)
+
+
 @router.get("/uploads/{filename}")
 async def serve_upload(filename: str, request: Request):
     # Sanitize: only allow [hex].ext pattern, no path traversal
@@ -94,7 +113,20 @@ async def serve_upload(filename: str, request: Request):
     bare = stem[: -len(flatten_queue.FLAT_SUFFIX)] if stem.endswith(flatten_queue.FLAT_SUFFIX) else stem
     if not bare or not all(c in "0123456789abcdef" for c in bare):
         raise HTTPException(status_code=400, detail="invalid filename")
-    path = find_upload_file(filename, request)
+
+    # Resolve who may read this: the session user (their own dir), or a valid
+    # ?share= token scoped to its one document. No bare ?user= access.
+    user = request.state.user
+    scope_doc_id = None
+    if not user:
+        grant = share_grant(request)
+        if not grant:
+            raise HTTPException(status_code=401)
+        user, scope_doc_id = grant
+    if scope_doc_id is not None and not _share_can_read_upload(user, scope_doc_id, filename):
+        raise HTTPException(status_code=403, detail="not accessible via this share link")
+
+    path = find_upload_file(filename, user)
     if not path:
         raise HTTPException(status_code=404, detail="not found")
     # Filenames are content hashes (or URL hashes the server only writes once),

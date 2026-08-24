@@ -4,11 +4,12 @@ import base64
 import json
 import re
 import sqlite3
-from urllib.request import Request as URLRequest, urlopen
+from urllib.request import Request as URLRequest
 
 from .blocks_store import fetch_subtree
-from .db import user_db_path, user_uploads_dir
+from .db import pdf_upload_path, user_db_path, user_uploads_dir
 from .logbuf import log
+from .net_guard import guarded_urlopen
 from .pdf_text import PDF_EXTRACT_FAILED, extract_text
 from .server_settings import can_store
 
@@ -104,7 +105,7 @@ def _download_pdf_from_source(user: str, doc_id: str, pdf_path) -> None:
             source,
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/pdf,*/*;q=0.8"},
         )
-        with urlopen(request, timeout=30) as response:
+        with guarded_urlopen(request, timeout=30) as response:
             pdf_data = response.read()
         if not can_store(user, len(pdf_data)):
             log.info(f"[ai_chat] not caching {doc_id} ({len(pdf_data)} bytes): over storage limits")
@@ -118,7 +119,10 @@ def _download_pdf_from_source(user: str, doc_id: str, pdf_path) -> None:
 
 def pdf_path(user: str, doc_id: str):
     """Return a document's local PDF path, downloading it when possible."""
-    path = user_uploads_dir(user) / f"{doc_id}.pdf"
+    try:
+        path = pdf_upload_path(user, doc_id)
+    except ValueError:
+        return None
     if not path.exists():
         _download_pdf_from_source(user, doc_id, path)
     return path if path.exists() else None
