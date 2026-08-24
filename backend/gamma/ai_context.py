@@ -7,7 +7,7 @@ import sqlite3
 from urllib.request import Request as URLRequest
 
 from .blocks_store import fetch_subtree
-from .db import pdf_upload_path, user_db_path, user_uploads_dir
+from .db import pdf_upload_path, user_db_path
 from .logbuf import log
 from .net_guard import guarded_urlopen
 from .pdf_text import PDF_EXTRACT_FAILED, extract_text

@@ -156,7 +156,7 @@ def page_dims(doc_id: str, request: Request):
 
     cached = dims_path(user, doc_id)
     if not cached.exists():
-        pdf_path = find_upload_file(f"{doc_id}.pdf", request)
+        pdf_path = find_upload_file(f"{doc_id}.pdf", user)
         if not pdf_path:
             raise HTTPException(status_code=404, detail="not found")
         if not ensure_dims(user, doc_id, pdf_path):
@@ -181,7 +181,7 @@ def page_image(doc_id: str, page: int, request: Request, w: int = 1280):
 
     cached = _cache_path(user, doc_id, page, width)
     if not cached.exists():
-        pdf_path = find_upload_file(f"{doc_id}.pdf", request)
+        pdf_path = find_upload_file(f"{doc_id}.pdf", user)
         if not pdf_path:
             raise HTTPException(status_code=404, detail="not found")
         try:

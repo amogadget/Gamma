@@ -54,6 +54,31 @@ def guest(client):
     return client
 
 
+def make_user(username, password, is_admin=0):
+    """Create (idempotently) a password account plus its per-user DBs."""
+    import bcrypt
+    from gamma.db import connect_users_db, page_now
+    from gamma.seed import create_user_dbs
+
+    with connect_users_db() as conn:
+        if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
+            conn.execute(
+                "INSERT INTO users (username, password_hash, is_guest, is_admin, created_at) VALUES (?, ?, 0, ?, ?)",
+                (username, bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode(), is_admin, page_now()),
+            )
+            conn.commit()
+    create_user_dbs(username)
+
+
+def login(username, password):
+    """A fresh TestClient logged in as the account (cookie persists on it)."""
+    from gamma.app import app
+    c = TestClient(app)
+    r = c.post("/api/login", json={"username": username, "password": password})
+    assert r.status_code == 200, r.text
+    return c
+
+
 def make_page(guest, title="Test page", properties=None):
     r = guest.post("/api/blocks", json={"parent_id": "root", "content": title})
     assert r.status_code == 200, r.text
