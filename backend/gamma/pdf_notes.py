@@ -652,11 +652,11 @@ def _page_occupancy(pdfium_page, to_display, disp_w, disp_h) -> _Space:
         # and nested objects' bounds are in the form's space, not the page's.
         for obj in pdfium_page.get_objects(max_depth=1):
             try:
-                l, b, r, t = obj.get_bounds()
+                left, bottom, right, top = obj.get_bounds()
             except Exception:
                 continue
-            x0, y0 = to_display(l, t)
-            x1, y1 = to_display(r, b)
+            x0, y0 = to_display(left, top)
+            x1, y1 = to_display(right, bottom)
             box = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
             if (box[2] - box[0]) * (box[3] - box[1]) > 0.6 * area:
                 continue        # page-sized background fill, not content

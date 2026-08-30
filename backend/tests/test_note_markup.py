@@ -1,6 +1,5 @@
 """Note markdown/LaTeX → drawable spans, and uploads → PDF image XObjects."""
 
-import io
 import zlib
 
 import pytest
