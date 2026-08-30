@@ -446,7 +446,16 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, onCancel, onExport }) 
 function ImportDialog({ hasPdf, stripDefault, busy, onCancel, onImport }) {
   const [source, setSource] = React.useState(hasPdf ? "annots" : "logseq");
   const [strip, setStrip] = React.useState(stripDefault);
-  const isAnnots = hasPdf && source === "annots";
+  const src = !hasPdf && source === "annots" ? "logseq" : source;
+  // Zotero's reader annotations arrive embedded in the exported PDF copies,
+  // so the strip switch applies to that source exactly like to "this PDF".
+  const stripApplies = src !== "logseq";
+
+  const hints = {
+    annots: "Highlights, notes and boxes saved inside this PDF (a Gamma export, SumatraPDF, Acrobat…) become regular blocks. Importing twice adds nothing — each annotation is matched to the block it already made.",
+    logseq: "Pick a Logseq .pdf and its .edn (a .md of notes is optional). The paper and its highlights land in your library as a new page.",
+    zotero: "Zip your Zotero File → Export Library → “Zotero RDF” export (check “Export Files” and “Export Notes”) and pick the .zip. Papers with metadata, collections as folders, tags, notes, and the annotations inside the PDFs land in your library; importing again updates instead of duplicating.",
+  };
 
   return (
     <div className="reportOverlay" onClick={onCancel}>
@@ -454,37 +463,34 @@ function ImportDialog({ hasPdf, stripDefault, busy, onCancel, onImport }) {
         <div className="reportModalTitle">Import</div>
         <DialogRow icon={ImportIcon} label="Import from">
           <MenuSelect
-            label="Import from" value={isAnnots ? "annots" : "logseq"}
+            label="Import from" value={src}
             onChange={setSource}
             options={[
               ...(hasPdf ? [["annots", "Annotations in this PDF"]] : []),
               ["logseq", "Logseq highlights (.pdf + .edn)"],
+              ["zotero", "Zotero library (.zip)"],
             ]}
           />
         </DialogRow>
         <SwitchRow
           icon={ScissorsIcon}
           label="Strip the originals"
-          hint={isAnnots
-            ? "Rewrite the stored PDF without them"
+          hint={stripApplies
+            ? src === "annots" ? "Rewrite the stored PDF without them" : "Rewrite the imported PDFs without them"
             : "Only for annotations inside a PDF"}
           title="Rewrite the stored file without the annotations you're importing, so only Gamma's copies remain. Off: they stay in the file and the viewer hides them."
-          checked={isAnnots ? strip : false}
-          disabled={!isAnnots}
+          checked={stripApplies ? strip : false}
+          disabled={!stripApplies}
           onChange={setStrip}
         />
-        <div className="reportModalHint">
-          {isAnnots
-            ? "Highlights, notes and boxes saved inside this PDF (a Gamma export, SumatraPDF, Acrobat…) become regular blocks. Importing twice adds nothing — each annotation is matched to the block it already made."
-            : "Pick a Logseq .pdf and its .edn (a .md of notes is optional). The paper and its highlights land in your library as a new page."}
-        </div>
+        <div className="reportModalHint">{hints[src]}</div>
         <div className="reportModalBtns">
           <button className="uiBtn" onClick={onCancel}>Cancel</button>
           <button
             className="uiBtn primary" disabled={busy}
-            onClick={() => onImport(isAnnots ? { source: "annots", strip } : { source: "logseq" })}
+            onClick={() => onImport(src === "logseq" ? { source: "logseq" } : { source: src, strip })}
           >
-            {isAnnots ? "Import" : "Choose files…"}
+            {src === "annots" ? "Import" : src === "zotero" ? "Choose .zip…" : "Choose files…"}
           </button>
         </div>
       </div>

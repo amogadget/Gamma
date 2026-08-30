@@ -1,15 +1,18 @@
-"""Import Logseq PDF-highlight exports (PDF + EDN + optional MD), and
-annotations embedded in the PDF itself (e.g. saved by SumatraPDF/Acrobat)."""
+"""Import Logseq PDF-highlight exports (PDF + EDN + optional MD), annotations
+embedded in the PDF itself (e.g. saved by SumatraPDF/Acrobat/Zotero), and whole
+Zotero libraries (a zip of the "Zotero RDF" export)."""
 
 import hashlib
 import json
 import os
+import posixpath
 import re
 import secrets
 import sqlite3
 import tempfile
+import zipfile
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from fractional_indexing import generate_key_between, generate_n_keys_between
 
@@ -26,8 +29,56 @@ from ..logseq_import import (
     parse_edn,
     parse_logseq_md,
 )
+from ..zotero_import import clean_folder_path, find_zip_entry, parse_zotero_rdf, zip_name_map
 
 router = APIRouter(prefix="/api", tags=["import"])
+
+_MAX_ZOTERO_MEMBERS = 20_000
+_MAX_ZOTERO_RDF_BYTES = 16 * 1024 * 1024
+_MAX_ZOTERO_PDF_BYTES = 2 * 1024 * 1024 * 1024
+_MAX_ZOTERO_COMPRESSION_RATIO = 1_000
+
+
+def _zotero_pdf_digest(zf: zipfile.ZipFile, name: str) -> tuple[str, int]:
+    """Hash and validate one PDF member without loading it into memory."""
+    info = zf.getinfo(name)
+    if info.file_size > _MAX_ZOTERO_PDF_BYTES:
+        raise ValueError("PDF archive member is too large")
+    if (
+        info.file_size > 10 * 1024 * 1024
+        and info.file_size > max(1, info.compress_size) * _MAX_ZOTERO_COMPRESSION_RATIO
+    ):
+        raise ValueError("suspicious PDF compression ratio")
+    digest = hashlib.sha256()
+    total = 0
+    first = b""
+    with zf.open(info) as source:
+        while chunk := source.read(1024 * 1024):
+            if not first:
+                first = chunk[:4]
+            total += len(chunk)
+            if total > _MAX_ZOTERO_PDF_BYTES:
+                raise ValueError("PDF archive member is too large")
+            digest.update(chunk)
+    if first != b"%PDF":
+        raise ValueError("not a PDF")
+    return digest.hexdigest()[:24], total
+
+
+def _store_zotero_pdf(zf: zipfile.ZipFile, name: str, target) -> None:
+    """Stream an already-validated member into place atomically."""
+    fd, temporary = tempfile.mkstemp(suffix=".pdf", dir=str(target.parent))
+    try:
+        with zf.open(name) as source, os.fdopen(fd, "wb") as output:
+            while chunk := source.read(1024 * 1024):
+                output.write(chunk)
+        os.replace(temporary, target)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
 
 
 @router.post("/import/logseq")
@@ -339,45 +390,29 @@ class PdfAnnotsRequest(BaseModel):
     strip: bool = False
 
 
-# Sync endpoint: PyPDF2 parsing is CPU-bound; the threadpool keeps the loop free.
-@router.post("/import/pdf-annotations")
-def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
-    user = require_user(request)
-    try:
-        pdf_path = pdf_upload_path(user, payload.doc_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="invalid document id")
-    if not pdf_path.exists():
-        raise HTTPException(status_code=404, detail="PDF not stored on the server")
-    try:
-        from PyPDF2 import PdfReader
-
-        reader = PdfReader(str(pdf_path))
-        found = _extract_pdf_annotations(reader)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"could not read PDF annotations: {e}")
+def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool) -> dict:
+    """Extract the annotations embedded in the stored PDF and add the missing
+    ones as highlight blocks under ``block_id`` (idempotent via the stable
+    ``imported_annot`` key), then optionally strip the originals from the file.
+    Shared by the per-paper endpoint below and the Zotero library import."""
+    from PyPDF2 import PdfReader
+    reader = PdfReader(str(pdf_path))
+    found = _extract_pdf_annotations(reader)
     if not found:
-        return {"ok": True, "found": 0, "imported": 0, "stripped": 0}
+        return {"found": 0, "imported": 0, "stripped": 0}
 
     now = page_now()
     inserted = 0
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        if not conn.execute("SELECT 1 FROM unified_blocks WHERE id=?", (payload.block_id,)).fetchone():
+        if not conn.execute("SELECT 1 FROM unified_blocks WHERE id=?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="page block not found")
         # Idempotent: each embedded annotation carries a stable key
-        existing = {
-            r[0]
-            for r in conn.execute(
-                "SELECT json_extract(properties,'$.imported_annot') FROM unified_blocks WHERE parent_id=?",
-                (payload.block_id,),
-            ).fetchall()
-            if r[0]
-        }
+        existing = {r[0] for r in conn.execute(
+            "SELECT json_extract(properties,'$.imported_annot') FROM unified_blocks WHERE parent_id=?",
+            (block_id,)).fetchall() if r[0]}
         todo = [f for f in found if f["key"] not in existing]
         if todo:
-            positions = generate_n_keys_between(last_child_position(conn, payload.block_id), None, n=len(todo))
+            positions = generate_n_keys_between(last_child_position(conn, block_id), None, n=len(todo))
             for f, pos in zip(todo, positions):
                 bid = secrets.token_urlsafe(9)
                 props = {
@@ -391,20 +426,20 @@ def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
                 conn.execute(
                     "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
                     "VALUES (?,?,?,?,?,?,?)",
-                    (bid, payload.block_id, pos, f["content"], json.dumps(props), now, now),
+                    (bid, block_id, pos, f["content"], json.dumps(props), now, now),
                 )
                 inserted += 1
-            conn.execute("UPDATE unified_blocks SET updated_at=? WHERE id=?", (now, payload.block_id))
+            conn.execute("UPDATE unified_blocks SET updated_at=? WHERE id=?", (now, block_id))
             conn.commit()
 
     # Strip AFTER the blocks are committed: if the rewrite fails the file is
     # untouched and the import still stands; a re-run can strip again.
     stripped = 0
-    if payload.strip:
+    if strip:
         try:
             stripped = _strip_embedded_annotations(pdf_path)
         except Exception as e:
-            log.warning(f"[pdf-annots] could not strip annotations from {payload.doc_id}: {e}")
+            log.warning(f"[pdf-annots] could not strip annotations from {pdf_path.name}: {e}")
         if stripped:
             # The embedded originals are gone from the file, so PDF export must
             # start writing these blocks again (it skips imported ones only
@@ -413,11 +448,234 @@ def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
                 rows = conn.execute(
                     "SELECT id, properties FROM unified_blocks WHERE parent_id=? "
                     "AND json_extract(properties,'$.imported_annot') IS NOT NULL",
-                    (payload.block_id,),
-                ).fetchall()
+                    (block_id,)).fetchall()
                 for bid, props_json in rows:
                     props = json.loads(props_json or "{}")
                     props["annot_stripped"] = True
                     conn.execute("UPDATE unified_blocks SET properties=? WHERE id=?", (json.dumps(props), bid))
                 conn.commit()
-    return {"ok": True, "found": len(found), "imported": inserted, "stripped": stripped}
+    return {"found": len(found), "imported": inserted, "stripped": stripped}
+
+
+# Sync endpoint: PyPDF2 parsing is CPU-bound; the threadpool keeps the loop free.
+@router.post("/import/pdf-annotations")
+def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
+    user = require_user(request)
+    try:
+        pdf_path = pdf_upload_path(user, payload.doc_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid document id")
+    if not pdf_path.exists():
+        raise HTTPException(status_code=404, detail="PDF not stored on the server")
+    try:
+        result = import_embedded_annotations(user, payload.block_id, pdf_path, payload.strip)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"could not read PDF annotations: {e}")
+    return {"ok": True, **result}
+
+
+# --- Zotero library import ----------------------------------------------------
+# A zip of Zotero's File → Export Library → "Zotero RDF" (with "Export Files",
+# "Export Notes" and "Include Annotations"). Items become pages, collections
+# folder labels, tags flat labels, item notes child blocks; reader annotations
+# arrive embedded in the exported PDF copies and go through
+# import_embedded_annotations above. Idempotent: pages are keyed by the file
+# hash and by properties.zotero_key (export bytes change between exports —
+# Zotero re-embeds annotations — so the item key is what survives a re-export).
+
+
+def _split_tags(raw: str) -> list[str]:
+    """Mirror of frontend parseFolderTags: comma-separated folder/label lists."""
+    return [t.strip() for t in (raw or "").split(",") if t.strip()]
+
+
+def _merge_tags(existing_raw: str, new_tags: list[str]) -> str:
+    merged = _split_tags(existing_raw)
+    for t in new_tags:
+        if t not in merged:
+            merged.append(t)
+    return ", ".join(merged)
+
+
+def _zotero_item_page(conn, user, uploads, zf, names, base, item, prefix, now, report):
+    """Store the item's PDF (if any), find-or-create its page, merge metadata,
+    labels and notes. Returns (block_id, pdf_path) when embedded annotations
+    should be imported afterwards, else None."""
+    pdf_member = digest = None
+    pdf_size = 0
+    for path in item["pdf_paths"]:
+        real = find_zip_entry(names, base, path)
+        if not real:
+            report["warnings"].append({"title": item["title"], "reason": f"file not in zip: {path}"})
+            continue
+        try:
+            digest, pdf_size = _zotero_pdf_digest(zf, real)
+        except ValueError as error:
+            report["warnings"].append({"title": item["title"], "reason": f"{error}: {path}"})
+            continue
+        # First stored PDF becomes the page's file; extra attachments are left out.
+        pdf_member = real
+        if len(item["pdf_paths"]) > 1:
+            report["warnings"].append({"title": item["title"],
+                                       "reason": f"only the first of {len(item['pdf_paths'])} PDFs imported"})
+        break
+
+    # Find the page: by file hash first, then by the Zotero item key (a
+    # re-export produces different bytes, so the key is the durable identity).
+    row = None
+    if digest:
+        row = conn.execute(
+            "SELECT id, properties FROM unified_blocks WHERE parent_id='root' "
+            "AND json_extract(properties,'$.doc_id') = ?", (digest,)).fetchone()
+    if row is None and item["key"]:
+        row = conn.execute(
+            "SELECT id, properties FROM unified_blocks WHERE parent_id='root' "
+            "AND json_extract(properties,'$.zotero_key') = ?", (item["key"],)).fetchone()
+
+    created = row is None
+    if created:
+        block_id, props = secrets.token_urlsafe(9), {}
+    else:
+        block_id, props = row[0], json.loads(row[1] or "{}")
+
+    # Attach the file only when the page doesn't already have one — a page
+    # found by zotero_key keeps its existing PDF (and the highlights tied to it).
+    if digest and not props.get("doc_id"):
+        target = pdf_upload_path(user, digest)
+        if not target.exists():
+            # Dedup first: limits only gate genuinely new persistent bytes.
+            check_upload_allowed(user, pdf_size)
+            _store_zotero_pdf(zf, pdf_member, target)
+            report["pdfs_stored"] += 1
+        props["doc_id"] = digest
+        props["source_url"] = f"/api/uploads/{digest}.pdf"
+
+    if item["meta"]["title"] and not props.get("meta"):
+        props["meta"] = item["meta"]
+        if not props.get("bibtex"):
+            from .metadata import _build_bibtex
+            props["bibtex"] = _build_bibtex(item["meta"])
+    props["zotero_key"] = item["key"]
+
+    folders = [f"{prefix}/{p}" if prefix else p for p in item["folders"]]
+    if prefix and not folders:
+        folders = [prefix]
+    if folders:
+        props["folder"] = _merge_tags(props.get("folder"), folders)
+    if item["tags"]:
+        props["category"] = _merge_tags(props.get("category"), item["tags"])
+
+    if created:
+        pos = generate_key_between(last_child_position(conn, "root"), None)
+        conn.execute(
+            "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
+            "VALUES (?,'root',?,?,?,?,?)",
+            (block_id, pos, item["title"], json.dumps(props), now, now))
+        report["pages_created"] += 1
+    else:
+        conn.execute("UPDATE unified_blocks SET properties=?, updated_at=? WHERE id=?",
+                     (json.dumps(props), now, block_id))
+        report["pages_merged"] += 1
+    report["pages"].append({"id": block_id, "title": item["title"], "created": created})
+
+    if item["notes"]:
+        existing = {r[0] for r in conn.execute(
+            "SELECT json_extract(properties,'$.zotero_note') FROM unified_blocks WHERE parent_id=?",
+            (block_id,)).fetchall() if r[0]}
+        todo = [n for n in item["notes"] if n["key"] not in existing]
+        if todo:
+            positions = generate_n_keys_between(last_child_position(conn, block_id), None, n=len(todo))
+            for note, pos in zip(todo, positions):
+                conn.execute(
+                    "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (secrets.token_urlsafe(9), block_id, pos, note["text"],
+                     json.dumps({"zotero_note": note["key"]}), now, now))
+                report["notes_imported"] += 1
+
+    doc_id = props.get("doc_id")
+    if doc_id:
+        try:
+            stored_pdf = pdf_upload_path(user, doc_id)
+        except ValueError:
+            report["warnings"].append({
+                "title": item["title"],
+                "reason": "invalid stored document id",
+            })
+        else:
+            if stored_pdf.exists():
+                return block_id, stored_pdf
+    return None
+
+
+# Sync endpoint: zip + PyPDF2 work is CPU-bound; the threadpool keeps the loop free.
+@router.post("/import/zotero")
+def import_zotero(request: Request, file: UploadFile = File(...),
+                  strip: bool = Form(False), folder: str = Form("")):
+    user = require_user(request)
+    try:
+        zf = zipfile.ZipFile(file.file)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400,
+                            detail="not a zip file — zip the exported folder and upload that")
+    with zf:
+        members = zf.infolist()
+        if len(members) > _MAX_ZOTERO_MEMBERS:
+            raise HTTPException(status_code=400, detail="zip contains too many entries")
+        rdf_names = [entry.filename for entry in members if entry.filename.lower().endswith(".rdf")]
+        if not rdf_names:
+            raise HTTPException(status_code=400,
+                                detail='no .rdf file in the zip — export from Zotero as "Zotero RDF" with "Export Files"')
+        # The shallowest .rdf is the export manifest; z:path values resolve
+        # relative to it (users zip either the folder or its contents).
+        rdf_name = min(rdf_names, key=lambda n: (n.replace("\\", "/").count("/"), len(n)))
+        rdf_info = zf.getinfo(rdf_name)
+        if rdf_info.file_size > _MAX_ZOTERO_RDF_BYTES:
+            raise HTTPException(status_code=400, detail="Zotero RDF is too large")
+        base = posixpath.dirname(rdf_name.replace("\\", "/"))
+        try:
+            items = parse_zotero_rdf(zf.read(rdf_info).decode("utf-8"))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"could not parse the Zotero RDF: {e}")
+        if not items:
+            raise HTTPException(status_code=400, detail="no importable items in the export")
+
+        names = zip_name_map(zf)
+        prefix = clean_folder_path(folder)
+        uploads = user_uploads_dir(user)
+        uploads.mkdir(parents=True, exist_ok=True)
+        now = page_now()
+        report = {"items": len(items), "pages_created": 0, "pages_merged": 0,
+                  "pdfs_stored": 0, "annotations_imported": 0, "notes_imported": 0,
+                  "pages": [], "skipped": [], "warnings": []}
+        annot_jobs = []
+        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+            for item in items:
+                try:
+                    job = _zotero_item_page(conn, user, uploads, zf, names, base,
+                                            item, prefix, now, report)
+                    if job:
+                        annot_jobs.append(job)
+                except HTTPException as e:  # per-file quota (413/507) skips the item
+                    report["skipped"].append({"title": item["title"], "reason": str(e.detail)})
+                except Exception as e:
+                    log.warning(f"[zotero] item '{item['title'][:80]}' failed: {e}")
+                    report["skipped"].append({"title": item["title"], "reason": str(e)})
+            conn.commit()
+
+    # Annotations after the page transaction is committed and closed —
+    # import_embedded_annotations opens its own connections.
+    for block_id, pdf_path in annot_jobs:
+        try:
+            result = import_embedded_annotations(user, block_id, pdf_path, strip)
+            report["annotations_imported"] += result["imported"]
+        except Exception as e:
+            log.warning(f"[zotero] annotations for {pdf_path.name} failed: {e}")
+            report["warnings"].append({"title": pdf_path.name, "reason": f"annotations: {e}"})
+
+    log.info(f"[zotero] import: {report['items']} items, "
+             f"{report['pages_created']} new, {report['pages_merged']} merged, "
+             f"{report['annotations_imported']} annotations, {len(report['skipped'])} skipped")
+    return {"ok": True, **report}

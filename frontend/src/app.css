@@ -2603,7 +2603,10 @@ button.pdfOutlineChevron:hover {
 .uiSelectBtn.block { width: 100%; justify-content: space-between; }
 .uiSelectBtn.block .uiSelectLabel { max-width: none; }
 /* Checkmark on the selected row of a dropdown menu. */
-.ctxMenuCheck { margin-left: auto; padding-left: 14px; color: var(--text-primary); flex-shrink: 0; }
+/* Trailing check on the current choice. Spacing is margin, never padding:
+   with the global border-box, padding on an <svg> eats its own content
+   box and the glyph renders at zero width (i.e. invisibly). */
+.ctxMenuCheck { margin-left: auto; color: var(--text-primary); flex-shrink: 0; }
 /* Selected state for a button that is a choice rather than an action —
    segmented groups (Settings) light the active option this way. */
 .uiBtn.on {
@@ -3763,6 +3766,8 @@ button.pdfOutlineChevron:hover {
 .ctxMenuIcon {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  width: 15px;
   color: var(--text-muted);
   flex-shrink: 0;
 }

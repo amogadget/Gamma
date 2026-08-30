@@ -86,6 +86,7 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 |---|---|---|
 | POST | `/import/logseq` | Logseq .pdf + .edn import |
 | POST | `/import/pdf-annotations` | import annotations embedded in the PDF (idempotent; optional `strip`) |
+| POST | `/import/zotero` | Zotero library import: zip of a "Zotero RDF" export (multipart `file`; `strip`, optional `folder` prefix). Items→pages+metadata, collections→folders, tags→labels, notes→blocks; embedded annotations via the same importer. Idempotent by file hash / `zotero_key` |
 | GET | `/pages/{id}/export` | Markdown export (`?mode=readable&highlights=&notes=&pdf=`) |
 | GET | `/pages/{id}/export-pdf` | PDF with annotations written back (`?highlights=&notes=`) |
 | GET | `/folders/export` | Logseq-graph export |

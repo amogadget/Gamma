@@ -362,15 +362,82 @@ function StorageCard() {
   );
 }
 
+// Whole-library import from Zotero: the user zips their File → Export Library
+// → "Zotero RDF" folder (with files, notes and annotations) and uploads it.
+// Collections become folders, tags labels, notes child blocks; annotations ride
+// inside the exported PDFs and reuse the embedded-annotations importer (the
+// strip-vs-hide choice follows the standing Settings → PDF viewer preference).
+function ZoteroImportRow({ value, onDone }) {
+  const fileRef = React.useRef(null);
+  const [busy, setBusy] = React.useState(false);
+  async function run(file) {
+    setBusy(true);
+    value.setStatus("Importing Zotero library — this can take a while for big exports…");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("strip", value.stripAnnots ? "true" : "false");
+      const data = await apiJson(`${API}/import/zotero`, { method: "POST", body: fd });
+      const problems = (data.skipped?.length || 0) + (data.warnings?.length || 0);
+      if (problems) {
+        [...(data.skipped || []), ...(data.warnings || [])].forEach((s) =>
+          console.warn(`Zotero import: ${s.title} — ${s.reason}`));
+      }
+      const bits = [
+        `${data.pages_created} new page${data.pages_created === 1 ? "" : "s"}`,
+        data.pages_merged ? `${data.pages_merged} updated` : "",
+        data.annotations_imported ? `${data.annotations_imported} annotations` : "",
+        data.notes_imported ? `${data.notes_imported} notes` : "",
+        problems ? `${problems} issue${problems === 1 ? "" : "s"} (see browser console)` : "",
+      ].filter(Boolean).join(" · ");
+      value.setStatus(`Zotero import: ${bits}.`);
+      onDone?.();
+    } catch (err) {
+      value.setStatus(`Zotero import failed: ${err.message}`);
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+  return (
+    <Row
+      icon={BookIcon}
+      label="Zotero library"
+      hint={"Zip of a “Zotero RDF” export, with files and notes"}
+      title={'In Zotero: File → Export Library → format "Zotero RDF", check "Export Files" and "Export Notes" (annotations are included in the PDFs). Zip the exported folder and upload it here. Collections become folders, tags become labels, notes become blocks; re-importing updates instead of duplicating.'}
+    >
+      <input
+        ref={fileRef} type="file" accept=".zip,application/zip" hidden
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) run(f); }}
+      />
+      <button className="uiBtn sm" disabled={busy} onClick={() => fileRef.current?.click()}>
+        {busy ? "Importing…" : "Choose .zip…"}
+      </button>
+    </Row>
+  );
+}
+
 function LibrarySettings({ value }) {
+  // bumping this after an import re-fetches the Papers table below
+  const [importNonce, setImportNonce] = React.useState(0);
   return (
     <>
       <PaneHead icon={ListIcon} title="Library">
-        Storage, and per-paper health of metadata, extracted text and the search index.
+        Storage, importing, and per-paper health of metadata, extracted text and the search index.
       </PaneHead>
       <Section title="Storage">
         <StorageCard />
         {value.isAdmin ? <ServerLimitRows setStatus={value.setStatus} refreshQuota={value.refreshQuota} /> : null}
+      </Section>
+      <Section title="Import">
+        <ZoteroImportRow
+          value={value}
+          onDone={() => {
+            setImportNonce((n) => n + 1);
+            value.refreshQuota?.();
+            value.onLibraryChange?.();
+          }}
+        />
       </Section>
       <Section title="Index">
         <Row
@@ -384,7 +451,7 @@ function LibrarySettings({ value }) {
           </button>
         </Row>
       </Section>
-      <MetaStatusSection value={value} />
+      <MetaStatusSection value={value} refreshNonce={importNonce} />
     </>
   );
 }
@@ -393,7 +460,7 @@ function LibrarySettings({ value }) {
 // yielded extractable text, and whether the search index covers it — with
 // batch retry for the metadata lookups. Text and index state come from the FTS
 // index, so "unknown" means not visited yet, not broken; Reindex fills it in.
-function MetaStatusSection({ value }) {
+function MetaStatusSection({ value, refreshNonce = 0 }) {
   const [papers, setPapers] = React.useState(null); // null = loading
   const [error, setError] = React.useState("");
   const [selected, setSelected] = React.useState(() => new Set());
@@ -412,7 +479,7 @@ function MetaStatusSection({ value }) {
       setPapers((prev) => prev || []);
     }
   }
-  React.useEffect(() => { refresh(); }, []);
+  React.useEffect(() => { refresh(); }, [refreshNonce]);
 
   // Indexing runs in a background thread server-side, so after scheduling we
   // re-poll the table a few times to let the dots fill in. A newer poll (or
@@ -744,13 +811,15 @@ const AGENT_PERM_ROWS = [
 ];
 
 function AssistantSettings({ value }) {
+  const shared = "Extracted PDF text is measured in characters. Larger budgets can improve answers but cost more tokens.";
   const limits = [
     [FileTextIcon, "Single paper", "Read from the open paper for one chat message",
-      value.chatContextChars, value.setChatContextChars],
+      value.chatContextChars, value.setChatContextChars,
+      `${shared} When you ask about selected passages, this budget is spent around them (a grounding slice from the start plus text around each selection's page) instead of only the start of the paper.`],
     [PaperIcon, "Metadata extraction", "Read while detecting identifiers and extracting fields",
-      value.metaContextChars, value.setMetaContextChars],
+      value.metaContextChars, value.setMetaContextChars, shared],
     [BookIcon, "Multi-paper total", "Shared evenly by every selected paper",
-      value.multiContextChars, value.setMultiContextChars],
+      value.multiContextChars, value.setMultiContextChars, shared],
   ];
 
   return (
@@ -823,9 +892,9 @@ function AssistantSettings({ value }) {
         title="Context size"
         action={<button className="uiBtn sm" onClick={value.reset} title="Back to 8000 / 6000 / 18000 characters">Reset</button>}
       >
-        {limits.map(([icon, label, hint, current, setCurrent]) => (
+        {limits.map(([icon, label, hint, current, setCurrent, title]) => (
           <Row key={label} icon={icon} label={label} hint={`${hint} · ${approxPages(current)}`}
-            title="Extracted PDF text is measured in characters. Larger budgets can improve answers but cost more tokens.">
+            title={title}>
             <CharSlider value={current} onChange={setCurrent} />
           </Row>
         ))}
