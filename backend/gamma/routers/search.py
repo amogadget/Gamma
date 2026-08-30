@@ -28,7 +28,7 @@ from .. import flatten_queue
 from ..auth import require_user
 from ..db import page_now, user_db_path
 from ..logbuf import log
-from ..pdf_text import extract_pages
+from ..pdf_text import MAX_PAGES, extract_pages
 from ..textnorm import INDEX_VERSION, normalize_text
 
 router = APIRouter(prefix="/api", tags=["search"])
@@ -38,8 +38,8 @@ _FTS_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS pdf_fts_docs (doc_id TEXT PRIMARY KEY, indexed_at TEXT NOT NULL, pages INTEGER, ver INTEGER NOT NULL DEFAULT 0)",
 )
 
-_MAX_PAGES = 400  # per document
-_MAX_PAGE_CHARS = 20000  # per page
+_MAX_PAGES = MAX_PAGES    # per document (the shared extractor's ceiling)
+_MAX_PAGE_CHARS = 20000   # per page
 
 _index_threads: dict[str, threading.Thread] = {}
 _index_progress: dict[str, dict] = {}  # user -> {"total": n, "done": m}

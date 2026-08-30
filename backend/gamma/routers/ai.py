@@ -161,11 +161,22 @@ def pdf_text_status(doc_id: str, request: Request, preview: int = 0):
         return {"found": True, "ok": False, "chars": 0, **index}
 
 
+# The grounding clause is deliberate: the document text below this prompt is
+# usually a small head excerpt of a long paper, and without being told so the
+# model answers detail questions from its memory of similar papers — inventing
+# plausible, wrong numbers and attributing them to the user's paper. Scoped to
+# claims ABOUT the paper, so background explanations still work.
 _SYSTEM_PROMPT = (
     "You are a research assistant helping the user understand a PDF they are reading. "
-    "The user may ask questions about the document. Be concise and reference specific "
-    "parts of the text when relevant."
-)
+    "The document text you are given is usually an EXCERPT, not the whole paper. "
+    "Anything you state as being in THIS paper — a number, a parameter, a method, a "
+    "result — must come from text you have actually read here. Never fill such a gap "
+    "from your knowledge of similar papers: a value you half-remember from elsewhere "
+    "is worse than no answer. If the text you have does not contain it, say so plainly "
+    "(and look it up first if you have tools). General background the user asks you to "
+    "explain is fine to answer from your own knowledge — just make clear it is "
+    "background, not something this paper states. Be concise, and cite the PDF page "
+    "for specific values you attribute to the paper.")
 
 # Default prompt for AI-based metadata extraction (used when neither an arXiv id
 # nor a DOI identifies the paper). Editable per-user in the frontend prompt editor.

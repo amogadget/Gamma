@@ -10,7 +10,7 @@ from .blocks_store import fetch_subtree
 from .db import pdf_upload_path, user_db_path
 from .logbuf import log
 from .net_guard import guarded_urlopen
-from .pdf_text import PDF_EXTRACT_FAILED, extract_pages, extract_text
+from .pdf_text import PDF_EXTRACT_FAILED, extract_pages, extract_text, page_count
 from .server_settings import can_store
 from .textnorm import normalize_text
 
@@ -193,15 +193,60 @@ def truncate(text: str, limit: int) -> str:
 
 
 def extract_pdf_context(user: str, doc_id: str, limit: int = 8000) -> str:
+    """The head of a document's text, labelled with how little of it that is.
+
+    Without the label the model reads "Here is the PDF text:" as the whole
+    paper and answers detail questions from memory rather than looking them
+    up — measurably the biggest source of confident wrong answers.
+    """
     path = pdf_path(user, doc_id)
     if not path:
         log.warning("[ai_chat] PDF still not found after download attempt")
         return ""
     try:
-        return truncate(extract_text(str(path), limit), limit)
+        text = extract_text(str(path), limit)
     except Exception as error:
         log.warning(f"[ai_chat] extraction error: {error}")
         return PDF_EXTRACT_FAILED
+    if len(text) <= limit:
+        return text  # the whole document fits — no caveat needed
+    pages = page_count(str(path))
+    where = f" of this {pages}-page PDF" if pages else ""
+    return (f"[EXCERPT — the first {limit:,} characters{where}. The rest of the "
+            f"document is NOT shown below. Anything outside this excerpt has to "
+            f"be looked up before you can answer about it.]\n\n"
+            + truncate(text, limit))
+
+
+# One line per PDF page, read from the search index (which already holds the
+# per-page text) so building it costs a query rather than a re-parse. It tells
+# the agent where things are, so it can jump to a page instead of guessing —
+# in testing this cut tool calls and stopped it settling for a plausible but
+# wrong neighbouring page.
+MAP_BUDGET = 2400
+
+
+def document_map(user: str, doc_id: str, budget: int = MAP_BUDGET) -> str:
+    """How each PDF page starts, as a compact outline. "" when the document
+    isn't indexed yet (search is unavailable then too)."""
+    try:
+        with sqlite3.connect(user_db_path(user, "data.db")) as connection:
+            rows = connection.execute(
+                "SELECT page, substr(content, 1, 90) FROM pdf_fts "
+                "WHERE doc_id = ? ORDER BY page", (doc_id,)).fetchall()
+    except sqlite3.OperationalError:
+        return ""  # index tables don't exist yet
+    if len(rows) < 3:
+        return ""  # too short to need a map
+    step = max(1, len(rows) * 100 // budget)
+    lines = [f"  p.{page}: {' '.join((head or '').split())[:80]}"
+             for page, head in rows[::step] if (head or "").strip()]
+    if not lines:
+        return ""
+    every = "" if step == 1 else f", every {step}th page"
+    return (f"[DOCUMENT MAP — how each page of this {rows[-1][0]}-page PDF starts"
+            f"{every}. Use it to pick the page to read: "
+            f"read_page(pdf_page=N).]\n" + "\n".join(lines))
 
 
 def pdf_excerpt(user: str, doc_id: str, limit: int, offset: int = 0,
@@ -433,6 +478,12 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
                 text = extract_pdf_context(user, payload.doc_id, limit=payload.context_char_limit)
             if text:
                 context_sections.append(text)
+            # Only for a paper chat with tools: the map is worth its tokens
+            # when the model can act on it (read_page), not in plain chat.
+            if getattr(payload, "agent_scope", "") == "page":
+                outline = document_map(user, payload.doc_id)
+                if outline:
+                    context_sections.append(outline)
 
     for index, data in enumerate(parse_files(payload.files)):
         if allow_native:

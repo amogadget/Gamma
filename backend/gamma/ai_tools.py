@@ -280,15 +280,10 @@ def _run_search_pdfs(conn, user: str, scope: dict, args: dict):
                 {"kind": "search", "summary": f"Searched PDFs for “{query[:60]}” — no papers"})
     # Local import: keep gamma.* module load free of the routers package.
     from .routers.search import _ensure_schema, _fts_query, _index_missing_async
-    lines = []
-    with sqlite3.connect(user_db_path(user, "data.db")) as database:
-        _ensure_schema(database)
-        current = {r[0] for r in database.execute(
-            "SELECT doc_id FROM pdf_fts_docs WHERE ver = ?", (INDEX_VERSION,))}
-        missing = [d for d in docs if d not in current]
-        if missing:
-            _index_missing_async(user, missing)
-        match = _fts_query(query)
+
+    def fts(database, text):
+        match = _fts_query(text)
+        found = []
         if match:
             try:
                 for doc_id, page, snippet in database.execute(
@@ -297,19 +292,53 @@ def _run_search_pdfs(conn, user: str, scope: dict, args: dict):
                     title = docs.get(doc_id)
                     if not title:
                         continue  # out-of-scope or deleted paper
-                    lines.append(f'- "{title[:80]}" p.{page}: {snippet}')
-                    if len(lines) >= limit:
+                    found.append(f'- "{title[:80]}" p.{page}: {snippet}')
+                    if len(found) >= limit:
                         break
             except sqlite3.OperationalError:
                 pass  # malformed MATCH — treat as no results
-    out = (f'PDF text matches for "{query}" ({len(lines)}):\n' + "\n".join(lines)
-           if lines else f'No PDF text matches for "{query}".')
+        return found
+
+    relaxed = ""
+    with sqlite3.connect(user_db_path(user, "data.db")) as database:
+        _ensure_schema(database)
+        current = {r[0] for r in database.execute(
+            "SELECT doc_id FROM pdf_fts_docs WHERE ver = ?", (INDEX_VERSION,))}
+        missing = [d for d in docs if d not in current]
+        if missing:
+            _index_missing_async(user, missing)
+        lines = fts(database, query)
+        if not lines:
+            # The MATCH ANDs every term, and agents write long natural-language
+            # queries — one word the page doesn't use turns a findable passage
+            # into zero hits, which the model reads as "the paper is silent".
+            # Retry with only the longest words (they carry the meaning) so a
+            # miss still points somewhere, clearly labelled as approximate.
+            terms = sorted((t for t in re.split(r"[\s,]+", query) if len(t) > 2),
+                           key=len, reverse=True)
+            for keep in range(min(3, len(terms)), 0, -1):
+                lines = fts(database, " ".join(terms[:keep]))
+                if lines:
+                    relaxed = " ".join(terms[:keep])
+                    break
+    if lines and relaxed:
+        out = (f'No page contains all of "{query}". Closest hits for '
+               f'"{relaxed}" ({len(lines)}) — verify them by reading before '
+               "trusting them:\n" + "\n".join(lines))
+    elif lines:
+        out = f'PDF text matches for "{query}" ({len(lines)}):\n' + "\n".join(lines)
+    else:
+        out = (f'No PDF text matches for "{query}" or any part of it. Try the exact '
+               "words the paper would use, or read the likely pages directly. If you "
+               "still cannot find it, tell the user it is not in this document — do "
+               "not answer from your own knowledge.")
     if missing:
         out += (f"\n({len(missing)} paper(s) not indexed yet — indexing started, "
                 "search again shortly for complete results)")
+    about = "≈" if relaxed else ""
     return out, {"kind": "search",
                  "summary": f"Searched PDFs for “{query[:60]}” — "
-                            f"{len(lines)} hit{'s' if len(lines) != 1 else ''}"}
+                            f"{about}{len(lines)} hit{'s' if len(lines) != 1 else ''}"}
 
 
 def _run_rename_page(conn, user: str, scope: dict, args: dict):
@@ -418,9 +447,12 @@ TOOLS = [
             "name": "search_pdfs",
             "description": (
                 "Full-text search over the PDF contents of the papers this chat can reach "
-                "(pre-built index; snippets with page numbers). Use it to find where a "
-                "topic is discussed, then read_page with pdf_page set to a hit's page "
-                "number to read the passage in context."),
+                "(pre-built index; snippets with page numbers). Matching is literal — a "
+                "page must contain every word of the query — so prefer 2-4 words the "
+                "page would actually use. When nothing matches all words, the closest "
+                "hits for a subset of them are returned, clearly labelled. Use it to "
+                "find where a topic is discussed, then read_page with pdf_page set to "
+                "a hit's page number to read the passage in context."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -502,6 +534,23 @@ def agent_system(scope: dict, perms: dict | None = None, base: str = "") -> str:
         where = f'the folder "{path}"' if path else "the root of their library"
         text += f"The user is viewing {where}; only pages in it are reachable.\n"
     text += f"Available tools: {', '.join(names)}. Any other tool is disabled in the user's settings."
+    if "read_page" in names or "search_pdfs" in names:
+        text += (
+            "\nFor any question about a paper's details — a number, a parameter, a "
+            "method, a figure — look the answer up with the tools before answering, "
+            "even if you think you know it: the excerpt in this conversation is only "
+            "part of the document.")
+        if "search_pdfs" in names:
+            text += (
+                " search_pdfs is literal keyword matching, so use words that would "
+                "appear on the page; if it finds nothing, retry with fewer or "
+                "different words rather than concluding the paper is silent."
+                + (" Follow a hit with read_page(pdf_page=N) and read neighbouring "
+                   "pages if the answer looks incomplete."
+                   if "read_page" in names else ""))
+        text += (
+            " Report only what you actually read; if you cannot find it, say it is "
+            "not in the document — never present a value from memory as the paper's.")
     if not any(n in MUTATING_TOOLS for n in names):
         text += " Renaming and moving pages is not available here — suggest changes instead of attempting them."
     return text

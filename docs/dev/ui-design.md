@@ -72,7 +72,10 @@ Settings panes are built only from
 Three states: System (default, tracks `prefers-color-scheme` live) or pinned
 Light/Dark — `gamma-theme` in localStorage, applied as `data-theme` on the
 root element. An inline script in `index.html` applies a pinned theme before
-first paint; `color-scheme` follows so scrollbars and native controls match.
+first paint; `color-scheme` follows so native controls match. Scrollbars are
+themed rather than left to the OS: a global `scrollbar-width: thin` +
+`scrollbar-color: var(--scrollbar-thumb) transparent` (with a
+`::-webkit-scrollbar` fallback for older WebKit/Blink) in `app.css`.
 "Flip page colors" (`gamma-pdf-dark`) is separate and display-only: it
 inverts the PDF canvas (`.pdfDark`), swaps highlight blending from multiply
 to screen, and darkens the scroller surround.

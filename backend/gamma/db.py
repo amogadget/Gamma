@@ -87,7 +87,15 @@ PAGES_SCHEMA = [
 DATA_SCHEMA = [
     "CREATE TABLE IF NOT EXISTS chats (block_id TEXT PRIMARY KEY, messages TEXT NOT NULL, updated_at TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS prefs (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    # page_snaps = the recents-card cover thumbnails (small JPEG data URLs
+    # captured client-side from the rendered viewer), synced across devices.
+    # Too big for the prefs KV, hence their own table + /api/page-snaps.
+    "CREATE TABLE IF NOT EXISTS page_snaps (page_id TEXT PRIMARY KEY, img TEXT NOT NULL, at TEXT NOT NULL)",
 ]
+
+# Snapshots exist only to cover the (24-entry) recents queue; keep a few
+# spares so multi-device merge timing never evicts a still-live cover.
+PAGE_SNAPS_CAP = 30
 
 
 def connect_data_db(username: str) -> sqlite3.Connection:
@@ -120,6 +128,43 @@ def set_pref(username: str, key: str, value) -> str:
         )
         db.commit()
     return now
+
+
+def get_page_snaps(username: str, after: str = "") -> dict:
+    """{page_id: {img, at}} — optionally only entries newer than `after`."""
+    with connect_data_db(username) as db:
+        rows = db.execute(
+            "SELECT page_id, img, at FROM page_snaps WHERE at > ? ORDER BY at DESC",
+            (after or "",),
+        ).fetchall()
+    return {pid: {"img": img, "at": at} for pid, img, at in rows}
+
+
+def set_page_snap(username: str, page_id: str, img: str, at: str = "") -> str:
+    """Store a snapshot (newest `at` wins) and prune past the cap; returns the stored at."""
+    at = at or page_now()
+    with connect_data_db(username) as db:
+        row = db.execute("SELECT at FROM page_snaps WHERE page_id = ?", (page_id,)).fetchone()
+        if row and row[0] >= at:
+            return row[0]  # a newer capture (another device) already landed
+        db.execute(
+            "INSERT INTO page_snaps (page_id, img, at) VALUES (?, ?, ?) "
+            "ON CONFLICT(page_id) DO UPDATE SET img = excluded.img, at = excluded.at",
+            (page_id, img, at),
+        )
+        db.execute(
+            "DELETE FROM page_snaps WHERE page_id NOT IN "
+            "(SELECT page_id FROM page_snaps ORDER BY at DESC LIMIT ?)",
+            (PAGE_SNAPS_CAP,),
+        )
+        db.commit()
+    return at
+
+
+def delete_page_snap(username: str, page_id: str):
+    with connect_data_db(username) as db:
+        db.execute("DELETE FROM page_snaps WHERE page_id = ?", (page_id,))
+        db.commit()
 
 
 def connect_users_db() -> sqlite3.Connection:

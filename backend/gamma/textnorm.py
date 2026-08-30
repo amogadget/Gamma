@@ -11,7 +11,7 @@ import unicodedata
 
 # One bump forces every user's PDF index to be rebuilt lazily (extraction or
 # normalization changes make old rows stale).
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 
 _DASHES = "‐‑‒–—―"
 # Thousands separators PDFs use inside numbers: comma, nbsp, narrow nbsp, thin space

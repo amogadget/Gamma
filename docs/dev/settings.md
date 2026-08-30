@@ -7,7 +7,7 @@ Where every setting lives, and how the Settings dialog is built.
 | Layer | Storage | Examples |
 |---|---|---|
 | Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/prefs.js](../../frontend/src/prefs.js)) | theme, PDF viewer behavior, context budgets, agent permissions, prompts |
-| Per account, synced | `/api/prefs/{key}` (small JSON KV in the user's `data.db`) | open tabs (`open-tabs`), active AI key (`ai-provider`) — server wins on load, localStorage is the instant-paint cache |
+| Per account, synced | `/api/prefs/{key}` (small JSON KV in the user's `data.db`) | open tabs (`open-tabs`), the recently-viewed queue (`recent-views`), active AI key (`ai-provider`) — server wins on load, localStorage is the instant-paint cache. The recents-card cover thumbnails sync too, but through their own `/api/page-snaps` store (`page_snaps` table — over the prefs size cap) |
 | Per account, server-only | AI provider entries (keys/OAuth tokens) under the reserved `ai-settings` prefs key, managed via `/api/ai/providers*`; the browser only ever sees a masked hint | API keys, ChatGPT OAuth |
 | Server-wide (admin) | `settings` KV in `users.db` via `GET/PUT /api/admin/settings`, plus nullable per-user override columns | default max upload size, default storage quota |
 

@@ -42,8 +42,8 @@
   --accent-bg: rgba(42, 79, 122, 0.3);
   --accent-bg-light: rgba(90, 155, 213, 0.1);
   --drag-accent: #64b5f6;
-  --scrollbar-bg: #1a1a1a;
   --scrollbar-thumb: #3f3f3f;
+  --scrollbar-thumb-hover: #565656;
   /* Native chrome (scrollbars, form controls) follows the app theme. */
   color-scheme: dark;
   --radius-control: 6px;
@@ -90,12 +90,40 @@
   --accent-bg: rgba(74, 144, 226, 0.12);
   --accent-bg-light: rgba(74, 144, 226, 0.06);
   --drag-accent: #1565c0;
-  --scrollbar-bg: #f5f5f5;
-  --scrollbar-thumb: #cccccc;
+  --scrollbar-thumb: #cbcbcb;
+  --scrollbar-thumb-hover: #a8a8a8;
   color-scheme: light;
 }
 
 * { box-sizing: border-box; }
+
+/* Scrollbars are part of the theme, not OS chrome: a thin bar on a transparent
+   track (so it reads as whatever surface it sits on) with a muted thumb.
+   Firefox and Chromium 121+ take the standard properties; the @supports
+   fallback covers older WebKit/Blink, where the pseudo-elements additionally
+   drop the stepper buttons and give the thumb a hover state. Scrollers that
+   hide their bar entirely (.tabStrip, .carouselTrack) override this from
+   their own class rule. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+@supports not (scrollbar-width: thin) {
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track,
+  ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-button { display: none; }
+  /* The transparent border + content-box clip is the padding that keeps the
+     thumb off the edges; background alone would fill the full track width. */
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    background-clip: content-box;
+    border: 2px solid transparent;
+    border-radius: 8px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); background-clip: content-box; }
+}
 
 /* Shared visual primitives. Components keep their layout and sizing rules,
    while these groups own the recurring surface, field, and hover language. */
@@ -2066,6 +2094,13 @@ button.pdfOutlineChevron:hover {
   display: flex;
   background: var(--bg-surface);
 }
+/* Inactive overlay: laid out (so its scroll offsets survive) but invisible
+   and click-through. display:none would destroy the layout box and reset
+   every scroller inside it back to the top. */
+.phonePanel.phonePanelHidden {
+  visibility: hidden;
+  pointer-events: none;
+}
 .phonePanel .dockWindow { border-left: none; }
 .phonePanel .dockGrip { cursor: default; }
 /* One bar along the bottom: view tabs on the left, the topbar's action
@@ -3467,7 +3502,8 @@ button.pdfOutlineChevron:hover {
    highlights and find marks switch to screen — multiply's dark-background
    dual. !important because both the wrap background and the blend modes are
    inline styles in pdfViewer.jsx. */
-.pdfViewer.pdfDark { background: #181818; color-scheme: dark; } /* dark surround + scrollbar even in the light theme */
+.pdfViewer.pdfDark { background: #181818; color-scheme: dark;
+  --scrollbar-thumb: #3f3f3f; --scrollbar-thumb-hover: #565656; } /* dark surround + scrollbar even in the light theme */
 .pdfViewer.pdfDark .pdfPageWrap { background: #101010 !important; }
 .pdfViewer.pdfDark .pdfPageWrap > canvas { filter: invert(0.94) hue-rotate(180deg); }
 .pdfViewer.pdfDark .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }

@@ -227,8 +227,9 @@ def test_read_page_pdf_page_jumps_to_a_search_hit(org, monkeypatch):
 
     c, ids = org
     pages = [f"(page {i}) " + f"p{i}-body " * 10 for i in range(1, 6)]
-    monkeypatch.setattr("gamma.pdf_text.iter_page_texts",
-                        lambda src, max_pages=400: iter(pages))
+    monkeypatch.setattr(
+        "gamma.pdf_text.iter_page_texts",
+        lambda src, max_pages=None, start_page=1: iter(pages[start_page - 1:]))
     monkeypatch.setattr("gamma.ai_context.extract_text", extract_text)
     monkeypatch.setattr("gamma.ai_context.pdf_path", lambda u, d: "fake.pdf")
     scope = _folder("readout")

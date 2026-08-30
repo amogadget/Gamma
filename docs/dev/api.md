@@ -93,7 +93,10 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 ### Prefs (`prefs.py`)
 | Method | Path | Purpose |
 |---|---|---|
-| GET/PUT | `/prefs/{key}` | small synced JSON KV (`open-tabs`, `ai-provider`, …); refuses the reserved `ai-settings` key |
+| GET/PUT | `/prefs/{key}` | small synced JSON KV (`open-tabs`, `recent-views`, `ai-provider`, …); refuses the reserved `ai-settings` key |
+| GET | `/page-snaps` | all recents-card cover thumbnails `{snaps: {pageId: {img, at}}}`; `?after=<iso>` returns only newer ones (the focus-pull delta) |
+| PUT | `/page-snaps/{page_id}` | store a cover (JPEG data URL body `{img, at}`; per-page newest-`at` wins, count-capped server-side) |
+| DELETE | `/page-snaps/{page_id}` | drop a cover (the recents card's ×) |
 
 ### Admin (`admin.py`, prefix `/api/admin`)
 | Method | Path | Purpose |
