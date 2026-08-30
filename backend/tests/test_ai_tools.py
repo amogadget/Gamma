@@ -315,9 +315,9 @@ def test_chat_agent_loop_streams_actions(org, monkeypatch):
         "organize": True, "folder": "readout", "stream": True,
     })
     assert r.status_code == 200, r.text
-    lines = [json.loads(l) for l in r.text.splitlines() if l.strip()]
-    actions = [l["action"] for l in lines if "action" in l]
-    text = "".join(l.get("delta", "") for l in lines)
+    lines = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    actions = [item["action"] for item in lines if "action" in item]
+    text = "".join(item.get("delta", "") for item in lines)
     assert len(opened) == 2
     assert actions and actions[0]["kind"] == "rename"
     assert text == "Renamed it."
@@ -346,7 +346,11 @@ def test_chat_agent_round_budget_and_folder_switch(org, monkeypatch):
     r = c.post("/api/ai/chat", json={"prompt": "tidy", "organize": True,
                                      "folder": "cooling", "stream": True, "tool_rounds": 1})
     assert r.status_code == 200
-    text = "".join(json.loads(l).get("delta", "") for l in r.text.splitlines() if l.strip())
+    text = "".join(
+        json.loads(line).get("delta", "")
+        for line in r.text.splitlines()
+        if line.strip()
+    )
     assert len(systems) == 1  # budget of 1: no second round opened
     assert "tool-round limit" in text
     assert '"cooling"' in systems[0]  # same conversation, new folder → new scope
