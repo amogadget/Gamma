@@ -28,10 +28,12 @@
   display: none;
 }
 /* The shared home card (PageCard in fileBrowser.jsx): a cover — page snapshot
-   when available, else the file/folder glyph — over a bottom-stuck footer of
-   title + label chips + kind/time. The container sizes it: fixed width inside
-   a carousel, fluid track inside .fileGrid; the cover absorbs any extra
-   height so footers line up across a row. */
+   when available, else the file/folder glyph — over a footer of title + label
+   chips + kind/time. ONE geometry for every surface (both carousels, the
+   pinned strip, the grid): a 16/10 cover, two reserved title lines and one
+   reserved chip line, so cards are the same height and their cover/footer
+   divider lines up wherever they are shown. The container only picks the
+   width — fixed inside a carousel, a fluid track inside .fileGrid. */
 .pageCard {
   position: relative;
   display: flex;
@@ -48,8 +50,11 @@
   font: inherit;
   transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
-.carouselTrack .pageCard {
-  flex: 0 0 150px;
+/* One width for every fixed-width strip card, and the grid's minimum track —
+   so a card is the same card wherever it is shown. */
+:root { --card-w: 150px; }
+.carouselTrack .pageCard, .pinnedStrip .pageCard {
+  flex: 0 0 var(--card-w);
   scroll-snap-align: start;
 }
 .pageCard:hover {
@@ -67,8 +72,8 @@
   border-style: dashed;
 }
 .pageCardCover {
-  flex: 1 1 88px;
-  min-height: 88px;
+  flex: 0 0 auto;
+  aspect-ratio: 16 / 10;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -95,6 +100,7 @@
   padding: 8px 10px 9px;
 }
 .pageCardTitle {
+  min-height: 2.6em;
   font-size: 12.5px;
   line-height: 1.3;
   font-weight: 500;
@@ -119,8 +125,11 @@
   border-radius: 999px;
   padding: 0 7px;
 }
-/* Label + folder chips: one clipped line, never wraps or grows the card. */
+/* Label + folder chips: one clipped line, never wraps or grows the card.
+   The line is reserved even when a card has no chips (CardLabels renders the
+   span empty), so footers stay the same height. */
 .cardLabels {
+  min-height: 15px;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -129,13 +138,6 @@
 }
 .cardLabels .folderTagBadge,
 .cardLabels .labelTagBadge { margin-left: 0; flex: 0 0 auto; }
-/* Library grid cards share one geometry so the cover/footer divider lines up
-   across every row: a fixed-ratio glyph cover (snapshots stay on the recents
-   strip), two reserved title lines, and — when the chips are enabled — one
-   reserved chip line (the empty .cardLabels span from reserveLabels). */
-.fileGrid .pageCardCover { flex: 0 0 auto; aspect-ratio: 16 / 10; min-height: 0; }
-.fileGrid .pageCardTitle { min-height: 2.6em; }
-.fileGrid .cardLabels { min-height: 15px; }
 /* The new-folder placeholder + add-folder cards. */
 .pageCardAdd { border-style: dashed; background: none; color: var(--text-muted); }
 .pageCardAdd .pageCardCover { background: none; border-bottom-style: dashed; }
@@ -545,7 +547,7 @@
 /* file/folder grid: fluid pageCard tracks — cards flex with the window */
 .fileGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--card-w), 1fr));
   gap: 8px;
   padding: 4px;
   align-content: start;

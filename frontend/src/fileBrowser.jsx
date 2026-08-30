@@ -10,13 +10,13 @@ import { FileIcon, FolderFilesIcon, FolderIcon, GridIcon, ListIcon, LabelIcon } 
 // Folder + label chips for a page, filtered by the Settings → General "File
 // labels" preference ("off" | "labels" | "folders" | "both"). Purely
 // informational — chips don't navigate; `onLabelMenu(name)` optionally wires
-// the label rename/delete context menu where the caller offers one. `reserve`
-// keeps an empty chip line when there is nothing to show, so grid cards with
-// and without tags keep the same footer geometry.
-function CardLabels({ folders, labels, mode = "both", onLabelMenu, reserve = false, className = "cardLabels" }) {
+// the label rename/delete context menu where the caller offers one. With the
+// chips enabled the span always renders, empty or not: on a card it is the
+// reserved chip line that keeps every footer the same height.
+function CardLabels({ folders, labels, mode = "both", onLabelMenu, className = "cardLabels" }) {
+  if (mode === "off") return null;
   const showFolders = (mode === "both" || mode === "folders") && folders?.length > 0;
   const showLabels = (mode === "both" || mode === "labels") && labels?.length > 0;
-  if (!showFolders && !showLabels) return reserve ? <span className={className} /> : null;
   return (
     <span className={className}>
       {showFolders ? folders.map((f) => (
@@ -42,14 +42,14 @@ function CardLabels({ folders, labels, mode = "both", onLabelMenu, reserve = fal
 
 // The one home-library card: a cover (page snapshot when available, else the
 // file/folder glyph) over a bottom-stuck footer of title + labels + kind/time.
-// Used by the Recently-viewed carousel, the category carousel and the grid
-// listing — the container decides the size (fixed width in a carousel, fluid
-// grid track in .fileGrid). Purely presentational: click/drag/context-menu
-// handlers arrive via rootProps, overlay buttons (pin, remove ×) and rename
-// inputs as nodes.
+// Used by every card surface — both carousels, the pinned strip and the grid
+// listing — and it renders the SAME geometry everywhere; the container only
+// decides the width (fixed in a carousel, fluid grid track in .fileGrid).
+// Purely presentational: click/drag/context-menu handlers arrive via
+// rootProps, overlay buttons (pin, remove ×) and rename inputs as nodes.
 function PageCard({
   glyph, snap, title, tip, renameNode, kind, count, time,
-  folders, labels, labelMode, onLabelMenu, reserveLabels = false,
+  folders, labels, labelMode, onLabelMenu,
   className = "", children, ...rootProps
 }) {
   return (
@@ -59,7 +59,7 @@ function PageCard({
       </div>
       <div className="pageCardBody">
         {renameNode || <div className="pageCardTitle">{title || "Untitled"}</div>}
-        <CardLabels folders={folders} labels={labels} mode={labelMode} onLabelMenu={onLabelMenu} reserve={reserveLabels} />
+        <CardLabels folders={folders} labels={labels} mode={labelMode} onLabelMenu={onLabelMenu} />
         {kind || count != null || time ? (
           <div className="pageCardMeta">
             {kind ? <span className="pageCardKind">{kind}</span> : null}

@@ -31,7 +31,11 @@
   --border-hover: #555;
   --border-subtle: #3f3f3f;
   --ok: #4caf7d;
+  /* One red for every destructive affordance — solid fill, outline, and the
+     tinted hover/backdrop behind it. */
   --danger: #e05c5c;
+  --danger-bg: rgba(224, 92, 92, 0.14);
+  --danger-border: rgba(224, 92, 92, 0.45);
   --accent: #5b9bd5;
   --accent-dark: #3a7bd5;
   --accent-bright: #7ab8f5;
@@ -78,6 +82,8 @@
   --border-subtle: #e0e0e0;
   --ok: #2f8f57;
   --danger: #c23b3b;
+  --danger-bg: rgba(194, 59, 59, 0.1);
+  --danger-border: rgba(194, 59, 59, 0.38);
   --accent: var(--accent-dark);
   --accent-dark: #3a7bd5;
   --accent-bright: #2b6bcb;
@@ -2574,9 +2580,9 @@ button.pdfOutlineChevron:hover {
 .uiBtn.primary { background: var(--accent-dark); border-color: transparent; color: #fff; }
 .uiBtn.primary:hover:not(:disabled) { background: #3568a0; color: #fff; }
 .uiBtn.danger:hover:not(:disabled) {
-  color: #e5534b;
-  border-color: rgba(229, 83, 75, 0.5);
-  background: rgba(229, 83, 75, 0.08);
+  color: var(--danger);
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
 }
 /* inline link-style button inside the chat empty-state hint */
 .chatEmptyLink {
@@ -2811,6 +2817,7 @@ button.pdfOutlineChevron:hover {
 }
 .reportModalBtns {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }
@@ -3723,6 +3730,35 @@ button.pdfOutlineChevron:hover {
   color: var(--text-muted);
   flex-shrink: 0;
 }
+/* Label column of an iconed row — long folder paths ellipsize instead of
+   stretching the menu across the screen (the full path stays in the title). */
+.ctxMenuText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Destructive rows (Delete) — same red language as .uiBtn.danger. */
+.ctxMenuItem.danger:hover { background: var(--danger-bg); color: var(--danger); }
+.ctxMenuItem.danger:hover .ctxMenuIcon { color: var(--danger); }
+.ctxMenuItem:disabled { opacity: 0.45; cursor: default; }
+.ctxMenuItem:disabled:hover { background: none; }
+
+/* --- nested flyout (SubMenuItem) --- */
+.ctxSubWrap { position: relative; }
+.ctxSubChev { margin-left: auto; color: var(--text-dim); flex-shrink: 0; }
+.ctxSubTrigger.open { background: var(--bg-hover); }
+/* The panel rides inside the parent menu (see SubMenuItem) — absolute, not
+   the fixed positioning .ctxMenu gives every other menu surface. */
+.ctxSubMenu {
+  position: absolute;
+  min-width: 190px;
+  max-width: 320px;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
 /* --- block-ref autocomplete popup (shared surface recipe) --- */
 .refPopup {
@@ -3830,17 +3866,48 @@ button.pdfOutlineChevron:hover {
 }
 
 /* --- confirm / link dialogs --- */
-.confirmModal { width: min(400px, calc(100vw - 32px)); }
+/* Same shape as a settings PaneHead: an icon chip leading a title + one line
+   of explanation, over a right-aligned action row. */
+.confirmModal { width: min(420px, calc(100vw - 32px)); padding: 18px; gap: 14px; }
+.confirmHead { display: flex; align-items: flex-start; gap: 11px; }
+.confirmIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--accent-bg-light);
+  color: var(--accent);
+}
+.confirmIcon.danger { background: var(--danger-bg); color: var(--danger); }
+.confirmHead .reportModalTitle { font-size: 15px; }
+.confirmHead .settingText { gap: 4px; }
+/* Equal-width actions so Cancel and the confirm button read as a pair. */
+.reportModalBtns .uiBtn { min-width: 84px; }
 /* Export dialog: rows are the shared settingRow, so it only needs a width and
    a little air between the switches and the buttons. */
 .exportModal { width: min(460px, calc(100vw - 32px)); gap: 4px; }
 .exportModal .reportModalTitle { margin-bottom: 4px; }
 .exportModal .reportModalHint { margin-top: 6px; }
 .exportModal .reportModalBtns { margin-top: 8px; }
-.confirmMessage { font-size: 13px; color: var(--text-secondary); }
-.linkPromptUrl { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.uiBtn.primary.dangerBtn { background: #b93c3c; }
-.uiBtn.primary.dangerBtn:hover:not(:disabled) { background: #d04848; }
+.confirmMessage { font-size: 12px; color: var(--text-secondary); line-height: 1.5; }
+.linkPromptUrl {
+  word-break: break-all;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  background: var(--bg-block);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: 8px 10px;
+  max-height: 6.5em;
+  overflow-y: auto;
+}
+.uiBtn.primary.dangerBtn { background: var(--danger); border-color: transparent; color: #fff; }
+.uiBtn.primary.dangerBtn:hover:not(:disabled) { background: var(--danger); filter: brightness(1.08); color: #fff; }
 /* secondary danger (e.g. the confirm dialog's alternative action): outlined red */
-.uiBtn.dangerBtn:not(.primary) { color: #c24a4a; border-color: rgba(190, 70, 70, 0.5); }
-.uiBtn.dangerBtn:not(.primary):hover:not(:disabled) { background: rgba(190, 70, 70, 0.1); border-color: #c24a4a; }
+.uiBtn.dangerBtn:not(.primary) { color: var(--danger); border-color: var(--danger-border); }
+.uiBtn.dangerBtn:not(.primary):hover:not(:disabled) { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
