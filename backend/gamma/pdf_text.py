@@ -70,12 +70,17 @@ def extract_pages(src, max_pages: int = 400) -> list[str]:
     return list(iter_page_texts(src, max_pages))
 
 
-def extract_text(src, char_limit: int, empty_page_cap: int = 50) -> str:
+def extract_text(src, char_limit: int, empty_page_cap: int = 50,
+                 start_page: int = 1) -> str:
     """Concatenated text for AI context. Stops early once char_limit is
     gathered, or after empty_page_cap consecutive textless pages — a scanned
-    book shouldn't cost a full parse just to learn it has no text."""
+    book shouldn't cost a full parse just to learn it has no text.
+    start_page (1-based) skips the pages before it, so a read can jump
+    straight to where a search hit landed."""
     parts, total, empties = [], 0, 0
-    for t in iter_page_texts(src):
+    for page_no, t in enumerate(iter_page_texts(src), start=1):
+        if page_no < start_page:
+            continue
         if t.strip():
             empties = 0
             parts.append(t)

@@ -97,13 +97,15 @@ class AIChatRequest(BaseModel):
     # search, rename, move}; missing key = allowed) — everything off degrades
     # to a plain chat. agent_system overrides the base agent prompt (the
     # scope/permission lines are always appended); tool_rounds overrides the
-    # agent round budget (0 = server default).
+    # agent round budget and read_char_limit the per-read_page-call document
+    # text cap (both 0 = server default).
     agent_scope: str = ""
     folder: str = ""
     page_id: str = ""
     permissions: dict = Field(default_factory=dict)
     agent_system: str = ""
     tool_rounds: int = Field(default=0, ge=0, le=100)
+    read_char_limit: int = Field(default=0, ge=0, le=1_000_000)
     context_char_limit: int = Field(default=8000, ge=100, le=1_000_000)
     multi_context_char_limit: int = Field(default=18000, ge=100, le=1_000_000)
 
@@ -886,10 +888,12 @@ def ai_chat(payload: AIChatRequest, request: Request):
     custom_system = (payload.system or "").strip()[:8000]
     # The scope decides which tools exist; the permission toggles pick the
     # armed subset — an empty result (or no scope) is a plain chat.
-    scope = {"type": payload.agent_scope, "folder": payload.folder, "page_id": payload.page_id}
+    scope = {"type": payload.agent_scope, "folder": payload.folder,
+             "page_id": payload.page_id, "read_chars": payload.read_char_limit}
     valid_scope = payload.agent_scope in ("folder", "page") and (
         payload.agent_scope != "page" or payload.page_id)
-    tools = (agent_tools(payload.agent_scope, payload.permissions) or None) if valid_scope else None
+    tools = (agent_tools(payload.agent_scope, payload.permissions,
+                         payload.read_char_limit) or None) if valid_scope else None
     # The conversation the agent loop grows across tool rounds (agent mode).
     state = {}
 

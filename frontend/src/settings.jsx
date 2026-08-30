@@ -24,6 +24,7 @@ import {
   HomeIcon,
   ImportIcon,
   KeyIcon,
+  LabelIcon,
   LayoutIcon,
   ListIcon,
   MessageSquareIcon,
@@ -117,10 +118,28 @@ function GeneralSettings({ value }) {
           icon={EyeIcon}
           label="Recents thumbnails"
           hint="Page snapshots on the Recently-viewed cards"
-          title="Show each recently-viewed paper as a small snapshot of the page where you left off, captured on this device while you read. Off hides the covers and stops capturing new ones."
+          title="Show each recently-viewed paper as a small snapshot of the page where you left off, captured on this device while you read. Off shows the file icon instead and stops capturing new snapshots. Library cards always use the plain file icon."
           checked={value.recentThumbs}
           onChange={value.setRecentThumbs}
         />
+        <Row
+          icon={LabelIcon}
+          label="File labels"
+          hint="Folder and label chips on library cards and rows"
+          title="Show each page's folders and labels as small chips on the home library — the file list, the grid cards and the Recently-viewed strip. Chips are informational; labels are still edited from the paper view or the right-click menus."
+        >
+          <MenuSelect
+            label="File labels"
+            value={value.fileLabels}
+            onChange={value.setFileLabels}
+            options={[
+              ["both", "Folders & labels"],
+              ["folders", "Folders only"],
+              ["labels", "Labels only"],
+              ["off", "Hidden"],
+            ]}
+          />
+        </Row>
       </Section>
       <Section title="Papers">
         <Toggle
@@ -783,6 +802,11 @@ function AssistantSettings({ value }) {
               const n = Number.parseInt(raw, 10);
               if (Number.isFinite(n)) value.setToolRounds(Math.max(1, Math.min(100, n)));
             }} />
+        </Row>
+        <Row icon={BookIcon} label="Read window"
+          hint={`Document text per read tool call · ${approxPages(value.agentReadChars)}`}
+          title="The most extracted PDF text one read_page tool call may return. The agent reads a long paper in windows of this size, continuing where the last call stopped — a larger window means fewer calls but more tokens per message.">
+          <CharSlider value={value.agentReadChars} onChange={value.setAgentReadChars} />
         </Row>
       </Section>
       <Section title="Chat">

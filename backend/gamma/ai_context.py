@@ -10,8 +10,9 @@ from .blocks_store import fetch_subtree
 from .db import pdf_upload_path, user_db_path
 from .logbuf import log
 from .net_guard import guarded_urlopen
-from .pdf_text import PDF_EXTRACT_FAILED, extract_text
+from .pdf_text import PDF_EXTRACT_FAILED, extract_pages, extract_text
 from .server_settings import can_store
+from .textnorm import normalize_text
 
 
 # 55 MB overflows the context window even on gpt-5.6-sol; 40 MB is the
@@ -203,6 +204,32 @@ def extract_pdf_context(user: str, doc_id: str, limit: int = 8000) -> str:
         return PDF_EXTRACT_FAILED
 
 
+def pdf_excerpt(user: str, doc_id: str, limit: int, offset: int = 0,
+                start_page: int = 1):
+    """Slice ``[offset, offset+limit)`` of a document's extracted text so long
+    papers can be read in successive windows; start_page (1-based) starts the
+    extraction at that PDF page — the shape search hits come in — and offset
+    then counts from there. Returns ``(text, next_offset, seen)``: next_offset
+    is where a follow-up read should continue (None = the extraction ended
+    inside this window), seen is how many chars were extracted in total — when
+    offset points past the end, that's the full extracted length (from
+    start_page on)."""
+    path = pdf_path(user, doc_id)
+    if not path:
+        log.warning("[ai_chat] PDF still not found after download attempt")
+        return "", None, 0
+    try:
+        # extract_text stops after the page that crosses the limit, so a
+        # longer-than-requested result means more pages remain.
+        full = extract_text(str(path), offset + limit, start_page=start_page)
+    except Exception as error:
+        log.warning(f"[ai_chat] extraction error: {error}")
+        return PDF_EXTRACT_FAILED, None, 0
+    text = full[offset:offset + limit]
+    next_offset = offset + limit if len(full) > offset + limit else None
+    return text, next_offset, len(full)
+
+
 def load_pdf_b64(user: str, doc_id: str) -> str | None:
     """Return a size-limited document PDF as base64."""
     path = pdf_path(user, doc_id)
@@ -224,7 +251,72 @@ def pdf_text_from_b64(data: str, limit: int = 8000) -> str:
         return ""
 
 
-def page_report_section(connection, user: str, page_id: str, pdf_budget: int) -> str | None:
+def _locate_passage(pages: list[str], passage: str) -> int | None:
+    """1-based PDF page a selected passage starts on (None = not found).
+    Matches the passage's head on normalized text (textnorm rules — the same
+    canon the pdf.js text layer and the extractors converge to), so viewer
+    selections find their spot despite ligature/whitespace differences."""
+    needle = normalize_text(passage).lower()[:200]
+    if len(needle) < 12:  # too short to be a trustworthy anchor
+        return None
+    previous = None
+    for page_no, page in enumerate(pages, start=1):
+        if needle in normalize_text(page).lower():
+            return page_no
+        # A selection starting near the bottom of a page continues onto the
+        # next — normalize the seam as one string (so hyphenated line breaks
+        # across the boundary re-join) and credit the page it starts on.
+        if previous is not None:
+            seam = normalize_text(previous[-500:] + "\n" + page[:500]).lower()
+            if needle in seam:
+                return page_no - 1
+        previous = page
+    return None
+
+
+def selection_context(user: str, doc_id: str, selection: str, budget: int) -> str | None:
+    """Chat context for selected passages: a small head slice (title/abstract
+    grounding) plus text around each passage's PDF page — instead of spending
+    the whole budget on the start of the paper, which rarely covers what the
+    selection is about. Labels carry the page numbers so the model knows where
+    each passage sits. None = nothing located (caller falls back to the plain
+    head-of-document context)."""
+    path = pdf_path(user, doc_id)
+    if not path:
+        return None
+    try:
+        pages = extract_pages(str(path))
+    except Exception as error:
+        log.warning(f"[ai_chat] selection-context extraction error: {error}")
+        return None
+    # The chat UI joins multiple selections with "---" on its own line.
+    passages = [p.strip() for p in re.split(r"\n\s*---\s*\n", selection) if p.strip()][:6]
+    located = [(p, page_no) for p in passages
+               if (page_no := _locate_passage(pages, p))]
+    if not located:
+        return None
+    sections = []
+    head = min(2000, budget // 4)
+    head_text = "\n\n".join(pages)[:head].strip()
+    if head_text:
+        sections.append(f"Start of the document (for grounding):\n{head_text}")
+    share = max(1, (budget - head) // len(located))
+    windows = 0
+    seen = set()
+    for _, page_no in located:
+        if page_no in seen:  # passages on one page share a window
+            continue
+        seen.add(page_no)
+        window = "\n\n".join(pages[page_no - 1:])[:share].strip()
+        if window:
+            windows += 1
+            sections.append("Text around the selected passage "
+                            f"(starting at PDF page {page_no}):\n{window}")
+    return "\n\n".join(sections) if windows else None
+
+
+def page_report_section(connection, user: str, page_id: str, pdf_budget: int,
+                        pdf_offset: int = 0, pdf_page: int = 1) -> str | None:
     """Render a page's PDF excerpt, highlights, and nested notes as context."""
     rows = fetch_subtree(connection, page_id)
     if not rows:
@@ -262,9 +354,25 @@ def page_report_section(connection, user: str, page_id: str, pdf_budget: int) ->
     if properties.get("summary"):
         sections.append(f"Summary: {properties['summary']}")
     if properties.get("doc_id") and pdf_budget > 0:
-        excerpt = extract_pdf_context(user, properties["doc_id"], limit=pdf_budget)
+        excerpt, next_offset, seen = pdf_excerpt(
+            user, properties["doc_id"], pdf_budget, pdf_offset, pdf_page)
+        at_page = f"pdf_page={pdf_page}, " if pdf_page > 1 else ""
         if excerpt:
-            sections.append(f"Document text (excerpt):\n{excerpt}")
+            where = ([f"from PDF page {pdf_page}"] if pdf_page > 1 else []) + \
+                    ([f"from char {pdf_offset}"] if pdf_offset else [])
+            label = (f"Document text ({', '.join(where)}):" if where
+                     else "Document text (excerpt):")
+            if next_offset:
+                excerpt += ("\n…[more text remains — call read_page again with "
+                            f"{at_page}pdf_offset={next_offset} to continue]")
+            sections.append(f"{label}\n{excerpt}")
+        elif pdf_offset and seen:
+            source = (f"the text from PDF page {pdf_page} on" if pdf_page > 1
+                      else "the extracted text")
+            sections.append(f"Document text: pdf_offset {pdf_offset} is past the "
+                            f"end — {source} is ~{seen} chars long.")
+        elif pdf_page > 1:
+            sections.append(f"Document text: no text at or after PDF page {pdf_page}.")
     if highlights:
         sections.append("User's highlighted passages:\n" + "\n".join(highlights))
     if notes:
@@ -314,7 +422,15 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
             if data:
                 pdf_b64s.append(data)
         if not pdf_b64s:
-            text = extract_pdf_context(user, payload.doc_id, limit=payload.context_char_limit)
+            # With a selection, center the budget on the selected passages
+            # (located by page) instead of the start of the paper; fall back
+            # to the plain head excerpt when nothing could be located.
+            selection = (payload.selection or "").strip()[:24000]
+            text = (selection_context(user, payload.doc_id, selection,
+                                      payload.context_char_limit)
+                    if selection else None)
+            if not text:
+                text = extract_pdf_context(user, payload.doc_id, limit=payload.context_char_limit)
             if text:
                 context_sections.append(text)
 

@@ -179,6 +179,7 @@ body,
 .blockEditor,
 .carouselTrack,
 .recentCard,
+.pageCard,
 .categoryFrontmatter,
 .backlinksPanel {
   transition:

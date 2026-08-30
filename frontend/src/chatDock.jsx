@@ -74,6 +74,7 @@ export default function ChatDock({
   // enables folder-agent tools; paper view gets scoped read tools.
   organizeFolder = null,
   toolRounds,
+  agentReadChars,
   agentPerms,
   agentSystem,
   onLibraryChange,
@@ -106,6 +107,7 @@ export default function ChatDock({
       ? {
           ...scope,
           tool_rounds: toolRounds || 0,
+          read_char_limit: agentReadChars || 0,
           permissions: agentPerms || {},
           agent_system: agentSystem || "",
         }

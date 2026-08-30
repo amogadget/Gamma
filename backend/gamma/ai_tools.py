@@ -46,6 +46,13 @@ MAX_TOOL_ROUNDS = 32    # provider round-trips per user message
 MAX_TOOL_ACTIONS = 200  # mutations per user message (bulk renames are legit)
 _LIST_CAP = 400         # pages listed per list_pages call
 _TITLE_MAX = 300
+# read_page's document-text window: what one call returns when the model
+# doesn't ask (default) and the most it may ask for (cap). The cap is the
+# Settings → Assistant "Read window" preference — requests carry it as
+# read_char_limit and it rides in the scope dict; these are the fallbacks.
+READ_CHARS_DEFAULT = 6000
+READ_CHARS_CAP = 20000
+READ_CHARS_MAX = 1_000_000  # sanity ceiling, matches the settings slider's range
 _DETAIL_CAP = 4000      # chars of a tool's output kept for the chat's expandable chip
 _ARG_CAP = 400          # chars per argument value in that chip
 
@@ -221,16 +228,36 @@ def _run_list_pages(conn, user: str, scope: dict, args: dict):
     return f"{header} ({len(lines)}):\n" + "\n".join(lines[:_LIST_CAP]) + tail, action
 
 
+def _read_cap(value) -> int:
+    """The effective per-call document-text cap: the request's user preference
+    when sane, READ_CHARS_CAP otherwise (0/None = not set)."""
+    try:
+        cap = int(value or 0)
+    except (TypeError, ValueError):
+        cap = 0
+    return cap if 0 < cap <= READ_CHARS_MAX else READ_CHARS_CAP
+
+
 def _run_read_page(conn, user: str, scope: dict, args: dict):
     loaded, error = _load_scoped_page(conn, scope, args)
     if error:
         return error, None
     page_id, title, _, _ = loaded
+    cap = _read_cap(scope.get("read_chars"))
+    default = min(READ_CHARS_DEFAULT, cap)
     try:
-        budget = max(0, min(int(args.get("pdf_chars", 6000)), 20000))
+        budget = max(0, min(int(args.get("pdf_chars", default)), cap))
     except (TypeError, ValueError):
-        budget = 6000
-    section = page_report_section(conn, user, page_id, budget)
+        budget = default
+    try:
+        offset = max(0, int(args.get("pdf_offset", 0)))
+    except (TypeError, ValueError):
+        offset = 0
+    try:
+        page = max(1, int(args.get("pdf_page", 1)))
+    except (TypeError, ValueError):
+        page = 1
+    section = page_report_section(conn, user, page_id, budget, offset, page)
     if not section:
         return f'"{title}" has no readable content', None
     return section, {"kind": "read", "page_id": page_id, "summary": f"Read “{title[:60]}”"}
@@ -369,10 +396,18 @@ TOOLS = [
                 "PDF text plus the user's highlighted passages and notes. Use it to answer "
                 "questions about specific papers or to write summaries/reports across "
                 "several. `pdf_chars` sets how much document text to include (default "
-                "6000, up to 20000; 0 = notes only)."),
+                "{read_default}, up to {read_cap}; 0 = notes only — ask only for what "
+                "you need). A long paper doesn't fit in one call: `pdf_page` (1-based) "
+                "starts the excerpt at that PDF page — pass a search_pdfs hit's page "
+                "number to read around the match — and `pdf_offset` starts it that "
+                "many characters further in; when more text remains the excerpt ends "
+                "by naming the next offset, so keep calling to read as far as you "
+                "need."),
             "parameters": {
                 "type": "object",
-                "properties": {**_PAGE_ID_ARG, "pdf_chars": {"type": "integer"}},
+                "properties": {**_PAGE_ID_ARG, "pdf_chars": {"type": "integer"},
+                               "pdf_offset": {"type": "integer"},
+                               "pdf_page": {"type": "integer"}},
                 "required": ["page_id"],
             },
         },
@@ -384,7 +419,8 @@ TOOLS = [
             "description": (
                 "Full-text search over the PDF contents of the papers this chat can reach "
                 "(pre-built index; snippets with page numbers). Use it to find where a "
-                "topic is discussed before read_page-ing the relevant pages."),
+                "topic is discussed, then read_page with pdf_page set to a hit's page "
+                "number to read the passage in context."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -432,12 +468,24 @@ _BY_NAME = {t["spec"]["name"]: t for t in TOOLS}
 MUTATING_TOOLS = {t["spec"]["name"] for t in TOOLS if t["mutating"]}
 
 
-def agent_tools(scope_type: str, perms: dict | None = None) -> list:
+def agent_tools(scope_type: str, perms: dict | None = None, read_chars: int = 0) -> list:
     """The armed tool specs for a chat scope and the user's per-tool permission
-    map (missing key = allowed, so new tools default on). [] = plain chat."""
+    map (missing key = allowed, so new tools default on). [] = plain chat.
+    read_chars is the request's read-window preference — the specs that name
+    the cap are formatted with the effective value so the model knows what it
+    may ask for (the registry's stored specs are never mutated)."""
     perms = perms if isinstance(perms, dict) else {}
-    return [t["spec"] for t in TOOLS
-            if scope_type in t["scopes"] and perms.get(t["perm"], True)]
+    cap = _read_cap(read_chars)
+    specs = []
+    for t in TOOLS:
+        if scope_type not in t["scopes"] or not perms.get(t["perm"], True):
+            continue
+        spec = t["spec"]
+        if "{read_cap}" in spec.get("description", ""):
+            spec = {**spec, "description": spec["description"].format(
+                read_cap=cap, read_default=min(READ_CHARS_DEFAULT, cap))}
+        specs.append(spec)
+    return specs
 
 
 def agent_system(scope: dict, perms: dict | None = None, base: str = "") -> str:
@@ -470,7 +518,9 @@ def tool_action(kind: str, summary: str, name: str, args: dict, result: str,
         trimmed[key] = text if len(text) <= _ARG_CAP else text[:_ARG_CAP] + "…"
     out = {"kind": kind, "summary": summary, "tool": name, "args": trimmed,
            "result": result if len(result) <= _DETAIL_CAP
-                     else result[:_DETAIL_CAP] + f"\n… (+{len(result) - _DETAIL_CAP} more chars)"}
+                     else result[:_DETAIL_CAP]
+                          + f"\n… (+{len(result) - _DETAIL_CAP} more chars not kept "
+                            "in chat history — call the tool again if they're needed)"}
     if error:
         out["error"] = True
     return {**out, **extra}

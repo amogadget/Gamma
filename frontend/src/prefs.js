@@ -42,9 +42,14 @@ export function useAppPrefs() {
   });
   // Flip page colors: display-only inverted (night) rendering of the PDF canvas.
   const [pdfDarkPage, setPdfDarkPage] = usePersistedFlag("gamma-pdf-dark", false);
-  // Recently-viewed cards on the home page: cover thumbnails (a snapshot of
-  // the PDF at the last-read spot). Off also stops capturing new ones.
+  // Recently-viewed cards on the home page (only — library cards always use
+  // the glyph): cover thumbnails (a snapshot of the PDF at the last-read
+  // spot). Off shows the file icon instead and stops capturing new ones.
   const [recentThumbs, setRecentThumbs] = usePersistedFlag("gamma-recent-thumbs", true);
+  // Folder/label chips on home file cards and list rows.
+  const [fileLabels, setFileLabels] = usePersistedState("gamma-home-file-labels", "both", {
+    parse: (raw) => (raw === "off" || raw === "labels" || raw === "folders" || raw === "both" ? raw : undefined),
+  });
 
   // --- Papers (Settings → General) ---
   const [oaFallback, setOaFallback] = usePersistedFlag("gamma-oa-fallback", true);
@@ -104,6 +109,8 @@ export function useAppPrefs() {
   const [metaContextChars, setMetaContextChars] = usePersistedState("gamma-meta-context-chars", 6000, CONTEXT_CHARS_CODEC);
   const [multiContextChars, setMultiContextChars] = usePersistedState("gamma-multi-context-chars", 18000, CONTEXT_CHARS_CODEC);
   const [toolRounds, setToolRounds] = usePersistedState("gamma-ai-tool-rounds", 32, TOOL_ROUNDS_CODEC);
+  // Per-read_page-call cap on document text the folder/paper agent may pull.
+  const [agentReadChars, setAgentReadChars] = usePersistedState("gamma-ai-read-chars", 20000, CONTEXT_CHARS_CODEC);
   const [agentPerms, setAgentPerms] = usePersistedState("gamma-ai-agent-perms", AGENT_PERMS_DEFAULT, AGENT_PERMS_CODEC);
 
   // --- Chat behavior (Settings → Assistant) ---
@@ -114,6 +121,7 @@ export function useAppPrefs() {
 
   return {
     theme, setTheme, pdfDarkPage, setPdfDarkPage, recentThumbs, setRecentThumbs,
+    fileLabels, setFileLabels,
     oaFallback, setOaFallback, metaAutoFetch, setMetaAutoFetch, pdfSaveLocal, setPdfSaveLocal,
     snapVertical, setSnapVertical, embAnnots, setEmbAnnots,
     searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper,
@@ -125,7 +133,7 @@ export function useAppPrefs() {
     metaPrompt, setMetaPrompt, citePrompt, setCitePrompt,
     chatContextChars, setChatContextChars, metaContextChars, setMetaContextChars,
     multiContextChars, setMultiContextChars,
-    toolRounds, setToolRounds, agentPerms, setAgentPerms,
+    toolRounds, setToolRounds, agentReadChars, setAgentReadChars, agentPerms, setAgentPerms,
     chatImgAutoClear, setChatImgAutoClear,
   };
 }

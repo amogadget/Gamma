@@ -20,12 +20,14 @@ scatter `usePersistedState` calls through App.jsx.
 Nine panes in four rail groups (`NAV_GROUPS` in
 [frontend/src/settings.jsx](../../frontend/src/settings.jsx)):
 
-- **Workspace** — General (theme, flip page colors, paper-fetching prefs),
+- **Workspace** — General (theme, flip page colors, home-card thumbnails and
+  folder/label chips, paper-fetching prefs),
   Library (storage usage/limits, search index, per-paper metadata health table)
 - **Reading** — PDF viewer (snap scrolling, embedded annotations), Search
   (auto-expand defaults), Notes (Enter behavior, note badges)
 - **AI** — Providers (API keys, in [settingsAi.jsx](../../frontend/src/settingsAi.jsx)),
-  Assistant (models, folder-agent permissions, tool rounds, context budgets),
+  Assistant (models, folder-agent permissions, tool rounds, agent read window,
+  context budgets),
   Prompts (the four editable prompts, as an accordion)
 - **Account** — Users (admin account management / "You" for non-admins, in
   [settingsUsers.jsx](../../frontend/src/settingsUsers.jsx)), Advanced (status

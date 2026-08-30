@@ -183,6 +183,105 @@ def test_read_page_returns_notes_and_respects_scope(org):
     assert text.startswith("error")
 
 
+def test_read_page_pdf_offset_pages_through_long_documents(org, monkeypatch):
+    """A long paper is read in windows: pdf_offset starts the excerpt there and
+    the excerpt names the next offset while more text remains."""
+    c, ids = org
+    doc = "".join(f"[{i:04d}]" for i in range(200))  # 1200 chars, self-locating
+
+    def fake_extract(src, char_limit, empty_page_cap=50, start_page=1):
+        # Like the real extractor: stops after the "page" that crosses the
+        # limit, so the result can overshoot char_limit a little.
+        return doc if len(doc) <= char_limit else doc[:char_limit + 7]
+
+    monkeypatch.setattr("gamma.ai_context.extract_text", fake_extract)
+    monkeypatch.setattr("gamma.ai_context.pdf_path", lambda u, d: "fake.pdf")
+    scope = _folder("readout")
+
+    text, _ = run_agent_tool("organizer", scope, "read_page",
+                             {"page_id": ids["a"], "pdf_chars": 100})
+    assert "[0000]" in text and "[0020]" not in text  # first window only
+    assert "pdf_offset=100" in text  # continuation hint
+
+    text, _ = run_agent_tool("organizer", scope, "read_page",
+                             {"page_id": ids["a"], "pdf_chars": 100, "pdf_offset": 100})
+    assert "Document text (from char 100):" in text
+    assert "[0017]" in text and "[0000]" not in text  # window slides
+    assert "pdf_offset=200" in text
+
+    # A window reaching the end has no continuation marker.
+    text, _ = run_agent_tool("organizer", scope, "read_page",
+                             {"page_id": ids["a"], "pdf_chars": 20000})
+    assert "[0199]" in text and "more text remains" not in text
+
+    # An offset past the end reports the document's extracted length.
+    text, _ = run_agent_tool("organizer", scope, "read_page",
+                             {"page_id": ids["a"], "pdf_offset": 5000})
+    assert "past the end" in text and "1200" in text
+
+
+def test_read_page_pdf_page_jumps_to_a_search_hit(org, monkeypatch):
+    """pdf_page starts the excerpt at that PDF page (the shape search_pdfs
+    hits come in), so the agent can read around a match with a small window."""
+    from gamma.pdf_text import extract_text
+
+    c, ids = org
+    pages = [f"(page {i}) " + f"p{i}-body " * 10 for i in range(1, 6)]
+    monkeypatch.setattr("gamma.pdf_text.iter_page_texts",
+                        lambda src, max_pages=400: iter(pages))
+    monkeypatch.setattr("gamma.ai_context.extract_text", extract_text)
+    monkeypatch.setattr("gamma.ai_context.pdf_path", lambda u, d: "fake.pdf")
+    scope = _folder("readout")
+
+    text, _ = run_agent_tool("organizer", scope, "read_page",
+                             {"page_id": ids["a"], "pdf_page": 4, "pdf_chars": 60})
+    assert "Document text (from PDF page 4):" in text
+    assert "(page 4)" in text and "(page 3)" not in text
+    assert "pdf_page=4, pdf_offset=60" in text  # continuation keeps the page anchor
+
+    # Continuing from that page with an offset labels and slices from there.
+    text, _ = run_agent_tool("organizer", scope, "read_page",
+                             {"page_id": ids["a"], "pdf_page": 4, "pdf_offset": 60,
+                              "pdf_chars": 20000})
+    assert "from PDF page 4, from char 60" in text and "(page 5)" in text
+    assert "more text remains" not in text  # pages 4-5 end inside the window
+
+    # A page past the end of the document says so instead of going silent.
+    text, _ = run_agent_tool("organizer", scope, "read_page",
+                             {"page_id": ids["a"], "pdf_page": 40})
+    assert "no text at or after PDF page 40" in text
+
+
+def test_read_window_cap_is_user_tunable(org, monkeypatch):
+    """The scope's read_chars (the Settings "Read window" preference) caps
+    pdf_chars per call, and the armed spec advertises the effective cap."""
+    c, ids = org
+    doc = "".join(f"[{i:04d}]" for i in range(200))
+    monkeypatch.setattr("gamma.ai_context.extract_text",
+                        lambda src, char_limit, empty_page_cap=50, start_page=1: doc[:char_limit + 7])
+    monkeypatch.setattr("gamma.ai_context.pdf_path", lambda u, d: "fake.pdf")
+
+    scope = {**_folder("readout"), "read_chars": 150}
+    text, _ = run_agent_tool("organizer", scope, "read_page",
+                             {"page_id": ids["a"], "pdf_chars": 99999})
+    assert "[0020]" in text and "[0030]" not in text  # clamped to ~150 chars
+    assert "pdf_offset=150" in text
+    # Unset / absurd values fall back to the stock 20000 cap.
+    for bad in ({}, {"read_chars": 0}, {"read_chars": "x"}, {"read_chars": 10**9}):
+        text, _ = run_agent_tool("organizer", {**_folder("readout"), **bad},
+                                 "read_page", {"page_id": ids["a"], "pdf_chars": 99999})
+        assert "[0199]" in text  # the whole 1200-char doc fits under 20000
+
+    # The armed tool spec names the effective cap (and a default under it).
+    spec = next(t for t in agent_tools("folder", read_chars=50000) if t["name"] == "read_page")
+    assert "up to 50000" in spec["description"] and "default 6000" in spec["description"]
+    spec = next(t for t in agent_tools("folder", read_chars=1500) if t["name"] == "read_page")
+    assert "up to 1500" in spec["description"] and "default 1500" in spec["description"]
+    spec = next(t for t in agent_tools("folder") if t["name"] == "read_page")
+    assert "up to 20000" in spec["description"]
+    assert "{read_cap}" not in spec["description"]  # template never leaks
+
+
 def test_search_pdfs_scoped_snippets(org):
     import sqlite3 as sq
     from gamma.db import page_now, user_db_path

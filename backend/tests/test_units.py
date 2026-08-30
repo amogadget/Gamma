@@ -119,3 +119,47 @@ def test_extract_pdf_annotations_resolves_indirects():
     # y flipped to top-left origin: 792 - 720 = 72
     assert abs(a["position"]["boundingRect"]["y1"] - 72.0) < 0.01
     assert a["color"].startswith("rgba(255, 229,")
+
+
+# --- selection-centered chat context (gamma/ai_context.py) -------------------
+
+def test_selection_context_centers_on_the_selected_page(monkeypatch):
+    from gamma import ai_context
+
+    pages = [f"(page {i}) " + f"filler{i} " * 30 for i in range(1, 8)]
+    pages[4] = "(page 5) The modulation index was 0.7 at 1013 nm. " + "detail " * 30
+    monkeypatch.setattr(ai_context, "pdf_path", lambda u, d: "fake.pdf")
+    monkeypatch.setattr(ai_context, "extract_pages", lambda src: pages)
+
+    ctx = ai_context.selection_context(
+        "u", "d" * 24, "The modulation index was 0.7 at 1013 nm.", 4000)
+    assert "Start of the document (for grounding):" in ctx and "(page 1)" in ctx
+    assert "Text around the selected passage (starting at PDF page 5):" in ctx
+    assert "modulation index was 0.7" in ctx
+
+    # Ligature/whitespace differences between the viewer and the extractor
+    # don't break the locate — matching is on normalized text.
+    ctx = ai_context.selection_context("u", "d" * 24, "modulation   index was 0.7", 4000)
+    assert "PDF page 5" in ctx
+
+    # Multiple passages ("---"-joined by the chat UI) each get a window.
+    ctx = ai_context.selection_context(
+        "u", "d" * 24, "filler2 filler2 filler2\n\n---\n\nThe modulation index was 0.7", 6000)
+    assert "PDF page 2" in ctx and "PDF page 5" in ctx
+
+    # Unlocatable selections (rewritten text, too short) → None, caller falls
+    # back to the head-of-document context.
+    assert ai_context.selection_context("u", "d" * 24, "not in the paper at all", 4000) is None
+    assert ai_context.selection_context("u", "d" * 24, "short", 4000) is None
+
+
+def test_selection_context_finds_page_seam_matches(monkeypatch):
+    from gamma import ai_context
+
+    pages = ["intro " * 20 + "the qubit was measured non-",
+             "destructively with high fidelity. " + "tail " * 20]
+    monkeypatch.setattr(ai_context, "pdf_path", lambda u, d: "fake.pdf")
+    monkeypatch.setattr(ai_context, "extract_pages", lambda src: pages)
+    ctx = ai_context.selection_context(
+        "u", "d" * 24, "the qubit was measured nondestructively with high", 4000)
+    assert ctx and "starting at PDF page 1" in ctx
