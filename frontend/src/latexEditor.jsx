@@ -438,7 +438,7 @@ export function caretClientPos(ta, index) {
 // Keystroke-hot path: memoize renders (the preview re-renders the same
 // candidates constantly while the user types).
 const _kcache = new Map();
-function renderKatex(tex, displayMode) {
+export function renderKatex(tex, displayMode) {
   const key = (displayMode ? "D:" : "I:") + tex;
   let html = _kcache.get(key);
   if (html === undefined) {
@@ -453,6 +453,24 @@ function renderKatex(tex, displayMode) {
   return html;
 }
 
+// DOM widgets should not assign HTML strings themselves. KaTeX owns the DOM
+// construction with trust disabled, so future renderer changes cannot turn a
+// cached string into an accidental raw-HTML sink.
+export function renderKatexInto(element, tex, displayMode) {
+  try {
+    katex.render(tex, element, {
+      displayMode,
+      throwOnError: false,
+      strict: false,
+      trust: false,
+    });
+    return true;
+  } catch (_) {
+    element.textContent = tex;
+    return false;
+  }
+}
+
 const sampleFor = (c) =>
   c.sample ||
   (c.args === 2 ? `\\${c.name}{a}{b}` : c.args === 1 ? `\\${c.name}{a}` : `\\${c.name}`);
@@ -461,7 +479,7 @@ const sampleFor = (c) =>
 // worst-case clamp against max-width shoved narrow tips far left of the
 // caret near the right window edge) and keep it inside the viewport.
 // useLayoutEffect runs pre-paint, so the off-screen first pass never shows.
-function useCaretAnchored(anchor, preferAbove, deps) {
+export function useCaretAnchored(anchor, preferAbove, deps) {
   const ref = useRef(null);
   const [style, setStyle] = useState({ left: -9999, top: 0 });
   useLayoutEffect(() => {

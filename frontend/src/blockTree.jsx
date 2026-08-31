@@ -9,20 +9,36 @@ import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
 import { COLORS } from "./pdfViewer";
-import { AutoGrowTextarea, handleMarkdownCopy } from "./widgets";
+import { handleMarkdownCopy } from "./widgets";
 import { isEnterCommit } from "./utils";
 import { FolderIcon, LinkIcon } from "./icons";
 import {
-  caretClientPos,
   findMathAtCursor,
   insertionFor,
   latexCompletions,
   LatexAcPopup,
   MathLivePreview,
 } from "./latexEditor";
+import { BlockCmEditor } from "./blockCmEditor";
+import { remarkCallouts } from "./callouts";
+import { filterSlashCommands } from "./slashCommands";
+import { SlashMenuPopup } from "./slashMenu";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
+
+function rehypeTaskIndexes() {
+  return function indexTasks(tree) {
+    let idx = 0;
+    function walk(node) {
+      if (node.type === "element" && node.tagName === "input" && node.properties?.type === "checkbox") {
+        node.properties["data-task-index"] = String(idx++);
+      }
+      for (const child of node.children || []) walk(child);
+    }
+    walk(tree);
+  };
+}
 
 // A block's rendered markdown, memoized: any edit re-renders the whole tree
 // (setBlocks replaces it), and without the memo one keystroke re-ran
@@ -32,13 +48,13 @@ const _dragState = { draggingId: null, dropTarget: null };
 // check. onBlockRefClick is deliberately excluded from the comparison — the
 // caller passes an identity-stable wrapper.
 const BlockMarkdown = React.memo(
-  function BlockMarkdown({ content, refLabels, onBlockRefClick }) {
+  function BlockMarkdown({ content, refLabels, onBlockRefClick, onTaskToggle }) {
     return (
       <ReactMarkdown
         // remark-breaks: a single Enter inside a note renders as a real line
         // break (the editor lets you type them), not markdown's soft-break space.
-        remarkPlugins={[remarkGfm, remarkMath, remarkBreaks]}
-        rehypePlugins={[rehypeRaw, rehypeKatex]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkCallouts, remarkBreaks]}
+        rehypePlugins={[rehypeTaskIndexes, rehypeRaw, rehypeKatex]}
         urlTransform={(url) => (url.startsWith("blockref:") ? url : defaultUrlTransform(url))}
         components={{
           a: ({ href, children }) => {
@@ -67,6 +83,25 @@ const BlockMarkdown = React.memo(
               </a>
             );
           },
+          input: ({ type, checked, ...props }) => {
+            if (type !== "checkbox") return <input type={type} {...props} />;
+            const idx = Number(props["data-task-index"] ?? props.dataTaskIndex);
+            return (
+              <input
+                type="checkbox"
+                className="mdTaskCheckbox"
+                checked={!!checked}
+                disabled={!onTaskToggle}
+                onChange={() => {}}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (Number.isInteger(idx)) onTaskToggle?.(idx, !checked);
+                }}
+              />
+            );
+          },
         }}
       >
         {content
@@ -80,6 +115,7 @@ const BlockMarkdown = React.memo(
   },
   (prev, next) =>
     prev.content === next.content &&
+    !!prev.onTaskToggle === !!next.onTaskToggle &&
     Object.keys(prev.refLabels).length === Object.keys(next.refLabels).length &&
     Object.entries(next.refLabels).every(
       ([id, r]) =>
@@ -184,6 +220,25 @@ function BlockRow({
   const refClickRef = useRef(null);
   refClickRef.current = onBlockRefClick;
   const stableRefClick = useRef((id) => refClickRef.current?.(id)).current;
+  // Flip the nth GFM task marker. The boundary after `]` mirrors GFM so a
+  // malformed `- [x]no-space` cannot shift every later checkbox's index.
+  const taskToggleRef = useRef(null);
+  taskToggleRef.current = (idx, checked) => {
+    let current = -1;
+    const newValue = (block.content || "").replace(
+      /(^|\n)([ \t]*(?:[-*+]|\d+\.)[ \t]+\[)([ xX])(\])(?=\s|$)/g,
+      (match, lineStart, prefix, _mark, suffix) => {
+        current += 1;
+        return current === idx
+          ? lineStart + prefix + (checked ? "x" : " ") + suffix
+          : match;
+      },
+    );
+    if (newValue !== block.content) onChangeText(block.id, newValue);
+  };
+  const stableTaskToggle = useRef(
+    (idx, checked) => taskToggleRef.current?.(idx, checked),
+  ).current;
   // Resolve [[ref]] chip labels here (cheap per render) so BlockMarkdown's
   // memo can compare them as strings instead of depending on allBlocks,
   // whose identity changes on every edit.
@@ -202,6 +257,8 @@ function BlockRow({
   // edit AND caret move (onSelect) — the preview must track the caret.
   const [mathUi, setMathUi] = useState(null);
   const [mathAcIdx, setMathAcIdx] = useState(0);
+  const [slashMenu, setSlashMenu] = useState(null); // {start, items, anchor}
+  const [slashIdx, setSlashIdx] = useState(0);
   const [searchResults, setSearchResults] = useState([]);
   const [imageDragOver, setImageDragOver] = useState(false);
   const uploadingRef = useRef(false);
@@ -278,7 +335,7 @@ function BlockRow({
     const next = {
       tex: ta.value.slice(seg.start, seg.end),
       display: seg.display,
-      anchor: caretClientPos(ta, cursor),
+      anchor: ta.caretCoords(cursor),
       ac: null,
     };
     setMathUi((prev) => {
@@ -309,65 +366,89 @@ function BlockRow({
     });
   }
 
+  function updateSlashMenu(ta, typing) {
+    const cursor = ta.selectionStart;
+    if (cursor !== ta.selectionEnd) {
+      setSlashMenu(null);
+      return;
+    }
+    const match = ta.value.slice(0, cursor).match(/(?:^|\s)\/([a-zA-Z0-9-]*)$/);
+    if (!match || findMathAtCursor(ta.value, cursor)) {
+      setSlashMenu(null);
+      return;
+    }
+    const start = cursor - match[1].length - 1;
+    const items = filterSlashCommands(match[1]);
+    if (!items.length) {
+      setSlashMenu(null);
+      return;
+    }
+    const anchor = ta.caretCoords(start);
+    setSlashMenu((previous) => {
+      if (!typing && previous?.start !== start) return null;
+      return { start, items, anchor };
+    });
+    if (typing) setSlashIdx(0);
+  }
+
+  function runSlashCommand(command) {
+    const ta = ref.current;
+    if (!ta || !slashMenu) return;
+    const start = slashMenu.start;
+    const value = ta.value;
+    const cursor = ta.selectionStart;
+    setSlashMenu(null);
+    command.run({
+      value,
+      start,
+      cursor,
+      setText: (newValue, selectionStart, selectionEnd) => {
+        onChangeText(block.id, newValue);
+        requestAnimationFrame(() => {
+          try {
+            ta.setSelectionRange(selectionStart, selectionEnd ?? selectionStart);
+          } catch (_) {}
+          ta.focus();
+          updateMathUi(ta, false);
+        });
+      },
+      openRefPopup: () => {
+        requestAnimationFrame(() => {
+          setRefPopup({ query: "", rect: ta.getBoundingClientRect() });
+          setRefSelectedIdx(0);
+        });
+      },
+      pickImage: () => {
+        // The native file dialog may blur/unmount this editor. Capture source
+        // now and apply the eventual URL without consulting a stale CM view.
+        const base = value.slice(0, start) + value.slice(cursor);
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = "image/*";
+        input.onchange = async () => {
+          const url = await uploadImage(input.files?.[0]);
+          if (url) onChangeText(block.id, (base ? `${base}\n` : "") + `![](${url})`);
+        };
+        input.click();
+      },
+    });
+  }
+
   useEffect(() => {
     registerRef(block.id, ref);
   }, [block.id, registerRef]);
 
+  // CodeMirror maps the captured row click to a document position on mount.
+  // Clear it after edit mode commits so later renders cannot reuse stale coordinates.
   useEffect(() => {
-    if (!block.editMode) return;
-    const el = ref.current;
-    if (!el) return;
-    const pos = clickPosRef.current;
-    clickPosRef.current = null;
-    if (!pos) {
-      // No click coords (e.g., entered edit via Enter/Tab) — default cursor to end
-      return;
-    }
-    // Ask the browser which character offset in the textarea corresponds to (x, y).
-    // Different browsers: caretPositionFromPoint (Firefox), caretRangeFromPoint (WebKit/Chromium).
-    let offset = null;
-    try {
-      if (document.caretPositionFromPoint) {
-        const cp = document.caretPositionFromPoint(pos.x, pos.y);
-        if (cp && cp.offsetNode === el) offset = cp.offset;
-      } else if (document.caretRangeFromPoint) {
-        const range = document.caretRangeFromPoint(pos.x, pos.y);
-        if (range && range.startContainer === el) offset = range.startOffset;
-      }
-    } catch (_) {
-      // ignore
-    }
-    if (offset == null) {
-      // Fallback: estimate from vertical line + horizontal fraction using the textarea's metrics
-      const rect = el.getBoundingClientRect();
-      const relY = Math.max(
-        0,
-        pos.y - rect.top - parseFloat(getComputedStyle(el).paddingTop || "0"),
-      );
-      const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 20;
-      const lineIndex = Math.floor(relY / lineHeight);
-      const lines = (el.value || "").split("\n");
-      const targetLine = Math.min(lines.length - 1, Math.max(0, lineIndex));
-      const lineStart = lines.slice(0, targetLine).reduce((n, l) => n + l.length + 1, 0);
-      const relX = Math.max(
-        0,
-        pos.x - rect.left - parseFloat(getComputedStyle(el).paddingLeft || "0"),
-      );
-      // Approximate char width from font size
-      const fontSize = parseFloat(getComputedStyle(el).fontSize) || 14;
-      const charW = fontSize * 0.55;
-      const col = Math.min(lines[targetLine]?.length || 0, Math.round(relX / charW));
-      offset = lineStart + col;
-    }
-    try {
-      el.setSelectionRange(offset, offset);
-    } catch (_) {}
+    if (block.editMode) clickPosRef.current = null;
   }, [block.editMode]);
 
   const isHighlight = !!block.highlightId;
   const hasChildren = (block.children?.length || 0) > 0;
 
   function handleImageDragOver(e) {
+    if (readOnly) return;
     if (!e.dataTransfer?.types || !Array.from(e.dataTransfer.types).includes("Files")) return;
     if (!e.dataTransfer?.items) return;
     const hasImage = Array.from(e.dataTransfer.items).some((item) =>
@@ -405,6 +486,7 @@ function BlockRow({
   }
 
   async function handleImageDrop(e) {
+    if (readOnly) return;
     e.preventDefault();
     e.stopPropagation();
     setImageDragOver(false);
@@ -415,6 +497,7 @@ function BlockRow({
   // Paste an image (screenshot) while editing → upload it and insert the
   // markdown at the cursor. Text pastes fall through to the browser default.
   async function handleEditorPaste(e) {
+    if (readOnly) return;
     const file = Array.from(e.clipboardData?.items || [])
       .find((it) => it.type?.startsWith("image/"))
       ?.getAsFile();
@@ -476,7 +559,7 @@ function BlockRow({
         }
         onMouseDown={(e) => {
           if (e.button !== 0) return; // right-click is the context menu's
-          if (e.target.closest("button, textarea, input, a")) return;
+          if (e.target.closest("button, textarea, input, a, .cm-editor")) return;
           setFocusedId(block.id);
           // Clicking anywhere on a highlight's card jumps the PDF to it —
           // not just the little colored dot. Ctrl+click appends the quote to
@@ -498,7 +581,7 @@ function BlockRow({
         onClick={
           homeMode && block._pageId && typeof onPageOpen === "function"
             ? (e) => {
-                if (e.target.closest("button, textarea, input, a")) return;
+                if (e.target.closest("button, textarea, input, a, .cm-editor")) return;
                 if (!block.editMode) onPageOpen(block, e);
               }
             : undefined
@@ -581,7 +664,7 @@ function BlockRow({
             <span className="pageBulletDot" />
           </button>
         ) : (
-          <span className="dotSlot dotSlotEmpty" />
+          <span className="dotSlot dotSlotEmpty"><span className="noteBulletDot" /></span>
         )}
 
         <div className="blockBody">
@@ -602,11 +685,14 @@ function BlockRow({
           </div>
 
           {!readOnly && block.editMode ? (
-            <AutoGrowTextarea
+            <BlockCmEditor
               ref={ref}
               autoFocus
-              className="blockEditor"
-              data-block-id={block.id}
+              className="blockEditor blockEditorCm"
+              dataBlockId={block.id}
+              clickPos={clickPosRef.current}
+              refLabels={refLabels}
+              livePreview
               value={block.content || ""}
               onChange={(e) => {
                 onChangeText(block.id, e.target.value);
@@ -620,11 +706,16 @@ function BlockRow({
                   setRefPopup(null);
                 }
                 updateMathUi(e.target, true);
+                updateSlashMenu(e.target, true);
               }}
-              onSelect={(e) => updateMathUi(e.target, false)}
+              onSelect={(e) => {
+                updateMathUi(e.target, false);
+                updateSlashMenu(e.target, false);
+              }}
               onBlur={() => {
                 onStartEdit(block.id, false);
                 setMathUi(null);
+                setSlashMenu(null);
                 setTimeout(() => setRefPopup(null), 120);
               }}
               onPaste={handleEditorPaste}
@@ -651,6 +742,29 @@ function BlockRow({
                     return;
                   }
                 }
+                if (slashMenu) {
+                  const count = slashMenu.items.length;
+                  if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    setSlashIdx((idx) => Math.min(idx + 1, count - 1));
+                    return;
+                  }
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    setSlashIdx((idx) => Math.max(idx - 1, 0));
+                    return;
+                  }
+                  if (isEnterCommit(e) || e.key === "Tab") {
+                    e.preventDefault();
+                    runSlashCommand(slashMenu.items[slashIdx]);
+                    return;
+                  }
+                  if (e.key === "Escape") {
+                    e.preventDefault();
+                    setSlashMenu(null);
+                    return;
+                  }
+                }
                 if (mathUi?.ac) {
                   const n = mathUi.ac.items.length;
                   if (e.key === "ArrowDown") {
@@ -663,7 +777,7 @@ function BlockRow({
                     setMathAcIdx((i) => Math.max(i - 1, 0));
                     return;
                   }
-                  if (e.key === "Tab" || e.key === "Enter") {
+                  if (e.key === "Tab" || isEnterCommit(e)) {
                     e.preventDefault();
                     acceptLatexAc(mathUi.ac.items[mathAcIdx]);
                     return;
@@ -682,6 +796,41 @@ function BlockRow({
                 if (isEnterCommit(e) && newNoteKey) {
                   e.preventDefault();
                   onEnterSibling(block.id);
+                } else if (isEnterCommit(e)) {
+                  // Plain line-break Enter continues Markdown markers. The same
+                  // IME guard as sibling creation is mandatory: composition
+                  // confirmation must never create/remove a list marker.
+                  const ta = ref.current;
+                  const cursor = ta?.selectionStart;
+                  if (ta && cursor === ta.selectionEnd) {
+                    const value = ta.value;
+                    const lineStart = value.lastIndexOf("\n", cursor - 1) + 1;
+                    const lineText = value.slice(lineStart, cursor);
+                    const markerMatch = lineText.match(
+                      /^(\s*)([-*+] \[[ xX]\] |[-*+] |\d+\. |> )/,
+                    );
+                    if (markerMatch) {
+                      e.preventDefault();
+                      if (lineText.length === markerMatch[0].length) {
+                        ta.view?.dispatch({
+                          changes: { from: lineStart, to: cursor, insert: "" },
+                          selection: { anchor: lineStart },
+                          userEvent: "delete",
+                        });
+                      } else {
+                        let marker = markerMatch[0].replace(/\[[xX]\]/, "[ ]");
+                        const numbered = marker.match(/^(\s*)(\d+)\. $/);
+                        if (numbered) {
+                          marker = `${numbered[1]}${Number(numbered[2]) + 1}. `;
+                        }
+                        ta.view?.dispatch({
+                          changes: { from: cursor, to: cursor, insert: `\n${marker}` },
+                          selection: { anchor: cursor + 1 + marker.length },
+                          userEvent: "input",
+                        });
+                      }
+                    }
+                  }
                 } else if (e.key === "Tab" && !e.shiftKey) {
                   e.preventDefault();
                   onIndent(block.id);
@@ -711,7 +860,7 @@ function BlockRow({
                   onDelete(block.id);
                 }
               }}
-              placeholder="Type..."
+              placeholder="Type — '/' for commands"
             />
           ) : (
             <div className="blockRendered" onCopy={handleMarkdownCopy}>
@@ -720,6 +869,7 @@ function BlockRow({
                   content={block.content || ""}
                   refLabels={refLabels}
                   onBlockRefClick={stableRefClick}
+                  onTaskToggle={readOnly ? undefined : stableTaskToggle}
                 />
               ) : (
                 <div className="blockPlaceholder">(empty)</div>
@@ -773,6 +923,14 @@ function BlockRow({
             />
           ) : null}
         </>
+      ) : null}
+      {!readOnly && block.editMode && slashMenu ? (
+        <SlashMenuPopup
+          items={slashMenu.items}
+          selected={slashIdx}
+          anchor={slashMenu.anchor}
+          onPick={runSlashCommand}
+        />
       ) : null}
       {refPopup && searchResults.length > 0 && (
         <div

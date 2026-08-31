@@ -247,7 +247,12 @@ async function resolvePdfUrl(rawUrl, allowOa = true) {
 // exposes `nativeEvent.isComposing`; the 229 keyCode is the legacy signal
 // browsers still send for the same case.
 function isEnterCommit(e) {
-  return e.key === "Enter" && !e.nativeEvent?.isComposing && e.keyCode !== 229;
+  return (
+    e.key === "Enter" &&
+    !e.isComposing &&
+    !e.nativeEvent?.isComposing &&
+    e.keyCode !== 229
+  );
 }
 
 export {

@@ -104,6 +104,10 @@ to screen, and darkens the scroller surround.
 | `pdfViewer.jsx` | the custom pdf.js viewer |
 | `search.jsx` | workspace search (Ctrl+F) |
 | `blockTree.jsx`, `logseqPdfModel.js` | outliner rendering / pure tree ops |
+| `blockCmEditor.jsx` | CodeMirror 6 block editor with a textarea-compatible facade and live math, `[[ref]]`, Markdown, task, and callout decorations; the construct touched by the caret stays as editable source |
+| `slashCommands.js`, `slashMenu.jsx` | pure `/` command catalog and caret-anchored popup; `blockTree.jsx` owns trigger detection and key priority |
+| `callouts.js` | remark plugin for `> [!note] Title` callouts and canonical type aliases shared with live editor decorations |
+| `latexEditor.jsx` | caret-anchored LaTeX preview/autocomplete plus shared safe KaTeX rendering and popup positioning helpers |
 | `libraryUtils.js` | folder-tag semantics (mirrored by `backend/gamma/ai_tools.py`) |
 | `widgets.jsx`, `menus.jsx`, `icons.jsx` | shared components |
 | `menuAim.js` | pointer-trajectory ("safe triangle") hover intent for hierarchical menus — UI-agnostic, consumed by `menus.jsx` |

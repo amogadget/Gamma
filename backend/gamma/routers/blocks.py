@@ -88,6 +88,16 @@ async def block_search(
                 f"SELECT id, content, parent_id, properties FROM unified_blocks WHERE id IN ({placeholders})",
                 id_list,
             ).fetchall()
+        elif not q and not regex:
+            # Initial [[ref]] and /link suggestions: recent non-empty blocks
+            # from the authenticated user's own DB. Clamp here so an empty
+            # query cannot be turned into an unbounded workspace enumeration.
+            recent_limit = max(1, min(limit, 50))
+            rows = conn.execute(
+                "SELECT id, content, parent_id, properties FROM unified_blocks "
+                "WHERE content != '' AND id != 'root' ORDER BY updated_at DESC LIMIT ?",
+                (recent_limit,),
+            ).fetchall()
         else:
             # Scan in Python: separator-tolerant matching ("3000" hits
             # "3,000-qubit") and the VSCode-style options can't be expressed

@@ -1,7 +1,9 @@
 """Core data model: block CRUD, tree replacement, ordering, search,
 and the cleanup that must happen on delete."""
 
-from conftest import make_page
+from fastapi.testclient import TestClient
+
+from conftest import login, make_page, make_user
 
 
 def test_create_and_subtree(guest):
@@ -61,6 +63,46 @@ def test_block_search(guest):
     # case-sensitive: no match for wrong case
     r = guest.get("/api/block-search", params={"q": "ZORBLY", "case": 1})
     assert not any("zorbly" in b["content"] for b in r.json()["blocks"])
+
+
+def test_empty_block_search_returns_bounded_recent_blocks(guest):
+    older = make_page(guest, "Recent older page")
+    newer = make_page(guest, "Recent newer page")
+    guest.post("/api/blocks", json={"parent_id": newer["id"], "content": ""})
+
+    r = guest.get("/api/block-search", params={"q": "", "limit": 1})
+    assert r.status_code == 200
+    assert [b["id"] for b in r.json()["blocks"]] == [newer["id"]]
+
+    # Negative and excessive limits remain bounded rather than invoking
+    # SQLite's negative-LIMIT "no limit" behavior.
+    assert len(guest.get("/api/block-search", params={"limit": -1}).json()["blocks"]) >= 1
+    assert len(guest.get("/api/block-search", params={"limit": 5000}).json()["blocks"]) <= 50
+    assert older["id"] != newer["id"]
+
+
+def test_empty_block_search_requires_auth_and_is_user_scoped(client):
+    make_user("recent_a", "recent-a-password")
+    make_user("recent_b", "recent-b-password")
+    alice = login("recent_a", "recent-a-password")
+    bob = login("recent_b", "recent-b-password")
+    try:
+        make_page(alice, "Alice recent secret")
+        make_page(bob, "Bob recent secret")
+
+        anon = TestClient(alice.app)
+        try:
+            assert anon.get("/api/block-search").status_code == 401
+        finally:
+            anon.close()
+
+        alice_text = [b["content"] for b in alice.get("/api/block-search").json()["blocks"]]
+        bob_text = [b["content"] for b in bob.get("/api/block-search").json()["blocks"]]
+        assert "Alice recent secret" in alice_text and "Bob recent secret" not in alice_text
+        assert "Bob recent secret" in bob_text and "Alice recent secret" not in bob_text
+    finally:
+        alice.close()
+        bob.close()
 
 
 def test_block_search_is_separator_tolerant(guest):

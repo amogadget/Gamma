@@ -41,6 +41,12 @@
   --accent-bright: #7ab8f5;
   --accent-bg: rgba(42, 79, 122, 0.3);
   --accent-bg-light: rgba(90, 155, 213, 0.1);
+  --callout-note: #4a90e2;
+  --callout-tip: #3fa66b;
+  --callout-warning: #d9931e;
+  --callout-danger: #d95757;
+  --callout-important: #8a63d2;
+  --callout-quote: #8d8d8d;
   --drag-accent: #64b5f6;
   --scrollbar-thumb-dark: #3f3f3f;
   --scrollbar-thumb-dark-hover: #565656;
@@ -129,7 +135,7 @@
 
 /* Shared visual primitives. Components keep their layout and sizing rules,
    while these groups own the recurring surface, field, and hover language. */
-:is(.plainTip, .popover, .ctxMenu, .refPopup, .pdfNoteTip, .mathPreviewTip, .latexAcPopup) {
+:is(.plainTip, .popover, .ctxMenu, .refPopup, .pdfNoteTip, .mathPreviewTip, .latexAcPopup, .slashMenu) {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-surface);
@@ -545,8 +551,9 @@ body {
 }
 
 .blockMeta {
-  color: #8d8d8d;
+  color: var(--text-dim);
   font-size: 10px;
+  letter-spacing: 0.02em;
   margin-bottom: 2px;
 }
 
@@ -563,6 +570,87 @@ body {
   font-size: 15px;
   line-height: 1.45;
   padding: 0;
+}
+
+/* CodeMirror keeps the textarea's transparent, auto-growing geometry while
+   the rules below style its optional live Markdown decorations. */
+.blockEditorCm { min-height: 28px; overflow: visible; }
+.blockEditorCm .cm-editor { background: transparent; }
+.blockEditorCm .cm-editor.cm-focused { outline: none; }
+.blockEditorCm .cm-scroller {
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.45;
+  overflow: visible;
+}
+.blockEditorCm .cm-content {
+  padding: 0;
+  color: var(--text-primary);
+  caret-color: var(--text-primary);
+}
+.blockEditorCm .cm-line { padding: 0; }
+.blockEditorCm .cm-placeholder { color: var(--text-muted); font-style: italic; }
+
+.cmMathWidget {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0 1px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.cmMathWidget:hover { background: var(--accent-bg-light); box-shadow: 0 0 0 1px var(--border-subtle); }
+.cmMathWidget.cmMathDisplay {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+  text-align: center;
+}
+.cmMathWidget .katex-display { margin: 0; }
+.cmRefChip { max-width: 180px; }
+.blockEditorCm .cm-line.cmHeadLine { font-weight: 650; line-height: 1.3; }
+.blockEditorCm .cm-line.cmH1 { font-size: 1.45em; }
+.blockEditorCm .cm-line.cmH2 { font-size: 1.25em; }
+.blockEditorCm .cm-line.cmH3 { font-size: 1.1em; }
+.blockEditorCm .cm-line.cmQuoteLine {
+  padding-left: 10px;
+  border-left: 3px solid var(--border);
+  color: var(--text-secondary);
+}
+.blockEditorCm .cmStrong { font-weight: 700; }
+.blockEditorCm .cmEm { font-style: italic; }
+.blockEditorCm .cmStrike { text-decoration: line-through; }
+.blockEditorCm .cmInlineCode {
+  padding: 1px 3px;
+  border-radius: 4px;
+  background: var(--bg-input);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}
+.blockEditorCm .cmLinkText { color: var(--accent-bright); text-decoration: underline; }
+.blockEditorCm .cm-line.cmCalloutLine {
+  --co-color: var(--callout-note);
+  padding-left: 10px;
+  border-left: 3px solid var(--co-color);
+  background: color-mix(in srgb, var(--co-color) 8%, transparent);
+  color: var(--text-primary);
+}
+.blockEditorCm .cm-line.cmCallout-tip { --co-color: var(--callout-tip); }
+.blockEditorCm .cm-line.cmCallout-warning { --co-color: var(--callout-warning); }
+.blockEditorCm .cm-line.cmCallout-danger { --co-color: var(--callout-danger); }
+.blockEditorCm .cm-line.cmCallout-important { --co-color: var(--callout-important); }
+.blockEditorCm .cm-line.cmCallout-quote { --co-color: var(--callout-quote); }
+.blockEditorCm .cm-line.cmCalloutFirst { border-radius: 6px 6px 0 0; }
+.blockEditorCm .cm-line.cmCalloutLast { border-radius: 0 0 6px 6px; }
+.blockEditorCm .cm-line.cmCalloutFirst.cmCalloutLast { border-radius: 6px; }
+.blockEditorCm .cmCalloutTitle { color: var(--co-color); font-weight: 650; }
+.blockEditorCm .cm-line.cmTaskDone { color: var(--text-muted); }
+.blockEditorCm .cmBulletDot { color: var(--text-muted); cursor: text; }
+.blockEditorCm .cmHrLine {
+  display: block;
+  margin: 8px 0;
+  border-top: 1px solid var(--border);
+  cursor: text;
 }
 
 .blockRowWrap.imageDragOver > .blockRow {
@@ -607,6 +695,71 @@ body {
   overflow: auto;
 }
 
+.blockRendered :is(h1, h2, h3, h4, h5, h6) {
+  margin: 4px 0;
+  line-height: 1.3;
+  font-weight: 650;
+}
+.blockRendered h1 { font-size: 1.45em; }
+.blockRendered h2 { font-size: 1.25em; }
+.blockRendered h3 { font-size: 1.1em; }
+.blockRendered :is(h4, h5, h6) { font-size: 1em; }
+.blockRendered hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 8px 0;
+}
+.blockRendered blockquote {
+  margin: 6px 0;
+  padding: 2px 10px;
+  border-left: 3px solid var(--border);
+  color: var(--text-secondary);
+}
+.blockRendered blockquote.callout {
+  --co-color: var(--callout-note);
+  border-left: 3px solid var(--co-color);
+  border-radius: 6px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--co-color) 8%, transparent);
+  color: var(--text-primary);
+}
+.blockRendered .callout-tip { --co-color: var(--callout-tip); }
+.blockRendered .callout-warning { --co-color: var(--callout-warning); }
+.blockRendered .callout-danger { --co-color: var(--callout-danger); }
+.blockRendered .callout-important { --co-color: var(--callout-important); }
+.blockRendered .callout-quote { --co-color: var(--callout-quote); }
+.blockRendered .calloutTitle {
+  margin: 0 0 2px;
+  color: var(--co-color);
+  font-weight: 650;
+}
+.blockRendered blockquote.callout p:last-child { margin-bottom: 0; }
+.blockRendered table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 6px 0;
+  font-size: 0.95em;
+}
+.blockRendered :is(th, td) {
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  text-align: left;
+}
+.blockRendered th { background: var(--bg-block); font-weight: 600; }
+.blockRendered .katex-display { margin: 6px 0; overflow-x: auto; overflow-y: hidden; }
+.blockRendered li:has(> .mdTaskCheckbox) { margin-left: -18px; list-style: none; }
+.mdTaskCheckbox {
+  width: 14px;
+  height: 14px;
+  margin: 0 6px 0 0;
+  vertical-align: -2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.mdTaskCheckbox:disabled { cursor: default; }
+
 .blockPlaceholder {
   color: var(--text-muted);
   font-style: italic;
@@ -636,24 +789,27 @@ body {
 
 .blockRefChip {
   display: inline-block;
-  background: #1e3a5a;
-  color: #7ec8f0;
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 0.9em;
-  cursor: pointer;
-  border: 1px solid #2a5a8a;
+  max-width: 260px;
   margin: 0 1px;
-  white-space: nowrap;
-  max-width: 220px;
+  padding: 0 4px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: baseline;
+  border: none;
+  border-radius: 4px;
+  background: var(--accent-bg-light);
+  color: var(--accent-bright);
+  font-size: 0.95em;
+  font-weight: 500;
+  line-height: inherit;
   text-decoration: none;
+  text-overflow: ellipsis;
+  vertical-align: -3px;
+  white-space: nowrap;
+  cursor: pointer;
 }
 .blockRefChip:hover {
-  background: var(--accent-dark);
-  border-color: #4a8abf;
+  background: var(--accent-bg);
+  color: var(--accent-bright);
+  text-decoration: none;
 }
 
 .blockQuote {
@@ -893,7 +1049,15 @@ body {
 
 /* equal-width dot slot for alignment between highlight and non-highlight blocks */
 .dotSlot { width: 16px; min-width: 16px; display: inline-flex; align-items: center; justify-content: center; }
-.dotSlotEmpty { height: 16px; }
+.dotSlotEmpty { height: 16px; margin-top: 2px; }
+.noteBulletDot {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--text-dim);
+  opacity: 0.6;
+}
 .pageBulletBtn { color: var(--text-bright); }
 .pageBulletBtn:hover { color: var(--accent-bright); }
 .pageBulletDot { display: inline-block; width: 10px; height: 10px; border-radius: 999px; background: currentColor; }
@@ -3802,6 +3966,51 @@ button.pdfOutlineChevron:hover {
   max-height: min(60vh, 420px);
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+/* --- slash-command popup (shared surface recipe) --- */
+.slashMenu {
+  position: fixed;
+  z-index: var(--z-refpopup);
+  min-width: 240px;
+  max-height: 288px;
+  overflow-y: auto;
+  padding: 3px;
+}
+.slashMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.slashMenuItem:hover { background: var(--bg-hover); }
+.slashMenuItem.selected { background: var(--accent-bg); }
+.slashMenuGlyph {
+  min-width: 30px;
+  padding: 3px 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  text-align: center;
+}
+.slashMenuLabel { font-size: 13px; }
+.slashMenuHint {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 /* --- block-ref autocomplete popup (shared surface recipe) --- */
