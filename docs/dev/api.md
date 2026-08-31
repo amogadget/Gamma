@@ -89,7 +89,8 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 | POST | `/import/zotero` | Zotero library import: zip of a "Zotero RDF" export (multipart `file`; `strip`, optional `folder` prefix). Items→pages+metadata, collections→folders, tags→labels, notes→blocks; embedded annotations via the same importer. Idempotent by file hash / `zotero_key` |
 | GET | `/pages/{id}/export` | page export (`?mode=readable\|logseq-graph\|zotero-rdf` plus `highlights=&notes=&pdf=`); share tokens remain document-scoped |
 | GET | `/pages/{id}/export-pdf` | PDF with annotations written back (`?highlights=&notes=`) |
-| GET | `/folders/export` | authenticated folder export in the same three modes (`?name=`); Zotero maps subfolders to collections |
+| GET | `/folders/export` | authenticated folder export in the same three modes (`?name=`); optional `op` enables operation-scoped progress; Zotero maps subfolders to collections |
+| GET | `/folders/export-progress` | progress for the authenticated user's exact `?op=` (`{active,total,done,title}`); concurrent operations are isolated |
 
 ### Prefs (`prefs.py`)
 | Method | Path | Purpose |

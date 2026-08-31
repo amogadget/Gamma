@@ -37,6 +37,27 @@ def _sub(parent, prefix, tag, text=None, **attrs):
     return element
 
 
+# Only content-addressed local upload references are eligible. The filename
+# grammar excludes separators and traversal before any filesystem lookup.
+MD_IMAGE_RE = re.compile(
+    r"!\[[^\]]*\]\(/api/uploads/([0-9a-fA-F]+\.[A-Za-z0-9]+)\)"
+)
+IMAGE_MIME = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "svg": "image/svg+xml",
+    "bmp": "image/bmp",
+}
+
+
+def strip_image_md(text: str) -> str:
+    """Replace images in plain PDF annotation comments with readable text."""
+    return MD_IMAGE_RE.sub(lambda match: f"(image: {match.group(1)})", text or "")
+
+
 def _inline_html(text: str) -> str:
     """Escape block text and retain the small Markdown subset notes support."""
     escaped = html_mod.escape(text, quote=False)
@@ -45,7 +66,24 @@ def _inline_html(text: str) -> str:
     return escaped.replace("\n", "<br/>")
 
 
-def note_html(node) -> str:
+def _content_html(text: str, resolve_image) -> str:
+    """Render text safely, resolving eligible image refs between escaped spans."""
+    parts = []
+    last = 0
+    for match in MD_IMAGE_RE.finditer(text):
+        parts.append(_inline_html(text[last:match.start()]))
+        data = resolve_image(match.group(1)) if resolve_image else None
+        if data:
+            mime, encoded = data
+            parts.append(f'<img src="data:{mime};base64,{encoded}"/>')
+        else:
+            parts.append(f"(image: {match.group(1)})")
+        last = match.end()
+    parts.append(_inline_html(text[last:]))
+    return "".join(parts)
+
+
+def note_html(node, resolve_image=None) -> str:
     """Convert one free-note block subtree to Zotero Memo HTML."""
 
     def items(children):
@@ -55,13 +93,17 @@ def note_html(node) -> str:
             nested = items(child.get("children") or [])
             if not content and not nested:
                 continue
-            output += f"<li>{_inline_html(content)}" + (f"<ul>{nested}</ul>" if nested else "") + "</li>"
+            output += (
+                f"<li>{_content_html(content, resolve_image)}"
+                + (f"<ul>{nested}</ul>" if nested else "")
+                + "</li>"
+            )
         return output
 
     output = ""
     content = (node.get("content") or "").strip()
     if content:
-        output += f"<p>{_inline_html(content)}</p>"
+        output += f"<p>{_content_html(content, resolve_image)}</p>"
     children = items(node.get("children") or [])
     if children:
         output += f"<ul>{children}</ul>"
@@ -135,6 +177,20 @@ def build_rdf(items: list[dict]) -> str:
             _sub(attachment, "z", "path", rdf_resource=item["pdf_path"])
             _sub(attachment, "dc", "title", "PDF")
             _sub(attachment, "link", "type", "application/pdf")
+
+        for image_number, image in enumerate(item.get("images") or [], 1):
+            image_key = f"#image_{number}_{image_number}"
+            _sub(element, "link", "link", rdf_resource=image_key)
+            attachment = _sub(root, "z", "Attachment", rdf_about=image_key)
+            _sub(attachment, "z", "itemType", "attachment")
+            _sub(attachment, "z", "path", rdf_resource=image["path"])
+            _sub(attachment, "dc", "title", image.get("title") or "Image")
+            _sub(
+                attachment,
+                "link",
+                "type",
+                image.get("mime") or "application/octet-stream",
+            )
 
         for note_number, note in enumerate(item.get("notes") or [], 1):
             if isinstance(note, dict):

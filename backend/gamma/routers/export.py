@@ -2,10 +2,13 @@
 page references uploaded assets (Notion-style: bare file vs. bundle decided by
 whether there's anything to bundle)."""
 
+import base64
 import os
 import re
 import sqlite3
 import tempfile
+import threading
+import time
 import zipfile
 from urllib.parse import quote
 
@@ -33,7 +36,13 @@ from ..markdown_export import (
 )
 from ..pdf_export import annotate_pdf, highlight_note_text, zotero_annot_key
 from ..pdf_notes import render_notes
-from ..zotero_export import build_rdf, note_html
+from ..zotero_export import (
+    IMAGE_MIME,
+    MD_IMAGE_RE,
+    build_rdf,
+    note_html,
+    strip_image_md,
+)
 
 router = APIRouter(prefix="/api", tags=["export"])
 
@@ -43,6 +52,11 @@ _ZOTERO_MAX_PDF_BYTES = 128 * 1024 * 1024
 _ZOTERO_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 _ZOTERO_MAX_RDF_BYTES = 16 * 1024 * 1024
 _EXPORT_MODES = {"readable", "logseq-graph", "zotero-rdf"}
+_EXPORT_OP_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_FOLDER_PROGRESS_TTL = 5 * 60
+_FOLDER_PROGRESS_MAX = 64
+_folder_export_progress: dict[tuple[str, str], dict] = {}
+_folder_progress_lock = threading.Lock()
 
 
 def _content_disposition(filename: str) -> str:
@@ -122,6 +136,51 @@ def _check_export_mode(mode: str):
         raise HTTPException(status_code=400, detail="unsupported export mode")
 
 
+def _progress_key(user: str, operation: str) -> tuple[str, str]:
+    if not _EXPORT_OP_RE.fullmatch(operation or ""):
+        raise HTTPException(status_code=400, detail="invalid export operation id")
+    return user, operation
+
+
+def _prune_folder_progress(now: float):
+    expired = [
+        key for key, value in _folder_export_progress.items()
+        if now - value.get("updated", now)
+        > (60 * 60 if value.get("active") else _FOLDER_PROGRESS_TTL)
+    ]
+    for key in expired:
+        _folder_export_progress.pop(key, None)
+    if len(_folder_export_progress) > _FOLDER_PROGRESS_MAX:
+        oldest = sorted(
+            _folder_export_progress,
+            key=lambda key: (
+                bool(_folder_export_progress[key].get("active")),
+                _folder_export_progress[key].get("updated", 0),
+            ),
+        )
+        for key in oldest[: len(_folder_export_progress) - _FOLDER_PROGRESS_MAX]:
+            _folder_export_progress.pop(key, None)
+
+
+def _set_folder_progress(key: tuple[str, str], **patch):
+    now = time.monotonic()
+    with _folder_progress_lock:
+        _prune_folder_progress(now)
+        current = _folder_export_progress.get(key, {})
+        _folder_export_progress[key] = {**current, **patch, "updated": now}
+        _prune_folder_progress(now)
+
+
+def _get_folder_progress(key: tuple[str, str]) -> dict:
+    now = time.monotonic()
+    with _folder_progress_lock:
+        _prune_folder_progress(now)
+        value = _folder_export_progress.get(key)
+        if not value:
+            return {"active": False, "total": 0, "done": 0, "title": ""}
+        return {name: value.get(name) for name in ("active", "total", "done", "title")}
+
+
 def _collect_marks(blocks) -> list[dict]:
     """Convert stored highlight blocks to safe PDF annotation marks."""
     children_by_id: dict = {}
@@ -146,13 +205,51 @@ def _collect_marks(blocks) -> list[dict]:
     return marks
 
 
+_EMBED_IMAGE_CAP = 4_000_000
+_INLINE_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "bmp"}
+
+
+def _zotero_image_path(uploads_dir, filename: str):
+    """Return one contained, regular image upload path or ``None``."""
+    extension = filename.rsplit(".", 1)[-1].lower()
+    if extension not in IMAGE_MIME:
+        return None
+    path = uploads_dir / filename
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        path.resolve().relative_to(uploads_dir.resolve())
+    except ValueError:
+        return None
+    return path
+
+
+def _image_resolver(uploads_dir):
+    """Resolve small raster uploads for safe inline Memo data URIs."""
+    def resolve(filename):
+        extension = filename.rsplit(".", 1)[-1].lower()
+        path = _zotero_image_path(uploads_dir, filename)
+        if (
+            extension not in _INLINE_IMAGE_EXTENSIONS
+            or path is None
+            or path.stat().st_size > _EMBED_IMAGE_CAP
+        ):
+            return None
+        return IMAGE_MIME[extension], base64.b64encode(path.read_bytes()).decode("ascii")
+
+    return resolve
+
+
 def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
                           folder_scope: str | None, include_taxonomy: bool,
-                          include_pdf: bool, highlights: bool, notes: bool):
+                          include_pdf: bool, highlights: bool, notes: bool,
+                          progress=None):
     """Build bounded Zotero RDF entries and local/annotated PDF payloads."""
     if len(roots) > _ZOTERO_MAX_PAGES:
         raise HTTPException(status_code=413, detail="too many pages for Zotero export")
 
+    uploads_dir = user_uploads_dir(user)
+    resolve_image = _image_resolver(uploads_dir)
     items, files, blobs = [], [], []
     output_bytes = 0
     block_count = 0
@@ -165,6 +262,8 @@ def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
         props = page.get("properties") or {}
         meta = props.get("meta") if isinstance(props.get("meta"), dict) else {}
         title = re.sub(r"\s+", " ", page.get("content") or "").strip() or "Untitled"
+        if progress:
+            progress(title=title)
 
         pdf_arc = None
         doc_id = props.get("doc_id")
@@ -183,6 +282,8 @@ def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
                     pdf_leaf = "paper"
                 pdf_arc = f"files/{number}/{pdf_leaf}.pdf"
                 marks = _collect_marks([block_to_dict(row) for row in rows]) if highlights else []
+                for mark in marks:
+                    mark["note"] = strip_image_md(mark["note"])
                 if marks:
                     try:
                         data, _ = annotate_pdf(pdf_path.read_bytes(), marks, author=user)
@@ -203,13 +304,38 @@ def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
                 if output_bytes > _ZOTERO_MAX_ARCHIVE_BYTES:
                     raise HTTPException(status_code=413, detail="Zotero export is too large")
 
+        images = []
+        if include_pdf:
+            seen_images = set()
+            for row in rows:
+                content = block_to_dict(row).get("content") or ""
+                for match in MD_IMAGE_RE.finditer(content):
+                    filename = match.group(1)
+                    if filename in seen_images:
+                        continue
+                    seen_images.add(filename)
+                    path = _zotero_image_path(uploads_dir, filename)
+                    if path is None:
+                        continue
+                    size = path.stat().st_size
+                    output_bytes += size
+                    if output_bytes > _ZOTERO_MAX_ARCHIVE_BYTES:
+                        raise HTTPException(status_code=413, detail="Zotero export is too large")
+                    arcname = f"files/{number}/{filename}"
+                    files.append((f"{base}/{arcname}", path))
+                    images.append({
+                        "path": arcname,
+                        "title": filename,
+                        "mime": IMAGE_MIME[filename.rsplit(".", 1)[-1].lower()],
+                    })
+
         memo_html = []
         if notes:
             for child in page.get("children") or []:
                 child_props = child.get("properties") or {}
                 if child_props.get("highlight_id") or child_props.get("link_url"):
                     continue
-                html = note_html(child)
+                html = note_html(child, resolve_image=resolve_image)
                 if html:
                     memo_html.append({
                         "key": child_props.get("zotero_note")
@@ -236,8 +362,11 @@ def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
                      if include_taxonomy else []),
             "folders": folders,
             "pdf_path": pdf_arc,
+            "images": images,
             "notes": memo_html,
         })
+        if progress:
+            progress(done=number)
 
     rdf = build_rdf(items)
     if len(rdf.encode("utf-8")) > _ZOTERO_MAX_RDF_BYTES:
@@ -382,9 +511,15 @@ def _page_in_folder(props: dict, name: str) -> bool:
     return False
 
 
+@router.get("/folders/export-progress")
+def folder_export_progress(request: Request, op: str):
+    user = require_user(request)
+    return _get_folder_progress(_progress_key(user, op))
+
+
 @router.get("/folders/export")
 def export_folder(request: Request, name: str, mode: str = "readable", pdf: int = 1,
-                  highlights: int = 1, notes: int = 1):
+                  highlights: int = 1, notes: int = 1, op: str = ""):
     """Export one authenticated owner's folder and descendants as an archive."""
     _check_export_mode(mode)
     name = (name or "").strip().strip("/")
@@ -397,60 +532,102 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
     folder_slug = slugify(name.replace("/", "-"), "")
     if folder_slug in {"", ".", ".."}:
         raise HTTPException(status_code=400, detail="invalid folder name for export")
+    progress_key = _progress_key(user, op) if op else None
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        roots = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = 'root'").fetchall()
-        matches = [block_to_dict(r) for r in roots]
-        matches = [b for b in matches if _page_in_folder(b["properties"], name)]
-        if not matches:
-            raise HTTPException(status_code=404, detail="no pages in that folder")
+        roots = conn.execute(
+            f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = 'root'"
+        ).fetchall()
+    matches = [block_to_dict(row) for row in roots]
+    matches = [block for block in matches if _page_in_folder(block["properties"], name)]
+    if not matches:
+        raise HTTPException(status_code=404, detail="no pages in that folder")
 
-        if mode == "zotero-rdf":
-            entries, files, blobs = _zotero_export_parts(
-                conn,
-                user,
-                matches,
-                folder_slug,
-                name,
-                include_taxonomy=True,
-                include_pdf=bool(pdf),
-                highlights=bool(highlights),
-                notes=bool(notes),
-            )
+    if progress_key:
+        _set_folder_progress(
+            progress_key,
+            active=True,
+            total=len(matches),
+            done=0,
+            title="",
+        )
+
+    def report(**patch):
+        if progress_key:
+            _set_folder_progress(progress_key, **patch)
+
+    try:
+        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+            if mode == "zotero-rdf":
+                entries, files, blobs = _zotero_export_parts(
+                    conn,
+                    user,
+                    matches,
+                    folder_slug,
+                    name,
+                    include_taxonomy=True,
+                    include_pdf=bool(pdf),
+                    highlights=bool(highlights),
+                    notes=bool(notes),
+                    progress=report,
+                )
+                return _zip_response(
+                    entries,
+                    set(),
+                    user_uploads_dir(user),
+                    f"{folder_slug}-zotero.zip",
+                    files=files,
+                    blobs=blobs,
+                )
+
+            entries, assets, used = [], set(), set()
+            files, blobs = [], []
+            for number, root in enumerate(matches, 1):
+                rows = fetch_subtree(conn, root["id"])
+                page = build_tree(rows, root["id"])
+                report(title=(page.get("content") or "Untitled"))
+                if mode == "logseq-graph":
+                    page_entries, page_files, page_blobs, page_assets = _graph_page_parts(
+                        page,
+                        user_uploads_dir(user),
+                        bool(pdf),
+                    )
+                    entries += page_entries
+                    files += page_files
+                    blobs += page_blobs
+                    assets |= page_assets
+                else:
+                    markdown, page_assets = collect_and_rewrite(
+                        render_readable(
+                            page,
+                            highlights=bool(highlights),
+                            notes=bool(notes),
+                        ),
+                        include_pdf=bool(pdf),
+                    )
+                    assets |= page_assets
+                    slug = slugify(page.get("content"), root["id"])
+                    arcname = f"{slug}.md"
+                    while arcname in used:
+                        arcname = f"{slug}-{len(used)}.md"
+                    used.add(arcname)
+                    entries.append((arcname, markdown))
+                report(done=number)
+
+        if mode == "logseq-graph":
+            entries.append(("logseq/config.edn", CONFIG_EDN))
             return _zip_response(
                 entries,
-                set(),
+                assets,
                 user_uploads_dir(user),
-                f"{folder_slug}-zotero.zip",
-                files=files,
-                blobs=blobs,
+                f"{folder_slug}-logseq.zip",
+                files,
+                blobs,
             )
-
-        entries, assets, used = [], set(), set()
-        files, blobs = [], []
-        for root in matches:
-            rows = fetch_subtree(conn, root["id"])
-            page = build_tree(rows, root["id"])
-            if mode == "logseq-graph":
-                p_entries, p_files, p_blobs, p_assets = _graph_page_parts(page, user_uploads_dir(user), bool(pdf))
-                entries += p_entries
-                files += p_files
-                blobs += p_blobs
-                assets |= p_assets
-                continue
-            md, page_assets = collect_and_rewrite(
-                render_readable(page, highlights=bool(highlights), notes=bool(notes)),
-                include_pdf=bool(pdf),
-            )
-            assets |= page_assets
-            slug = slugify(page.get("content"), root["id"])
-            arcname = f"{slug}.md"
-            # id suffix makes collisions near-impossible, but guard anyway.
-            while arcname in used:
-                arcname = f"{slug}-{len(used)}.md"
-            used.add(arcname)
-            entries.append((arcname, md))
-
-    if mode == "logseq-graph":
-        entries.append(("logseq/config.edn", CONFIG_EDN))
-        return _zip_response(entries, assets, user_uploads_dir(user), f"{folder_slug}-logseq.zip", files, blobs)
-    return _zip_response(entries, assets, user_uploads_dir(user), f"{folder_slug}.zip")
+        return _zip_response(
+            entries,
+            assets,
+            user_uploads_dir(user),
+            f"{folder_slug}.zip",
+        )
+    finally:
+        report(active=False)

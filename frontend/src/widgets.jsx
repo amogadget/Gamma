@@ -431,15 +431,23 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, onCancel, onEx
           <SwitchRow
             icon={PaperclipIcon}
             label="Bundle the files"
-            hint={isZotero ? "Include PDF files" : "Pack the PDF and images into the .zip"}
+            hint={isZotero ? "Include PDF and note image files" : "Pack the PDF and images into the .zip"}
             title={isZotero
-              ? "Include each locally stored PDF so Zotero imports the files too."
+              ? "Include locally stored PDFs and images referenced by notes so Zotero imports those files too."
               : "Pack the PDF and any pasted images into the .zip. Off: they stay as links back to this server."}
             checked={opts.bundle}
             onChange={(v) => set({ bundle: v })}
           />
         )}
-        <div className="reportModalHint">{summary}</div>
+        {isZotero ? (
+          <div className="reportModalHint">
+            <div><strong>1.</strong> Download the .zip.</div>
+            <div><strong>2.</strong> Unzip it, keeping the .rdf and files/ folder together.</div>
+            <div><strong>3.</strong> In Zotero choose File → Import… → A file, then select the .rdf—not the .zip.</div>
+          </div>
+        ) : (
+          <div className="reportModalHint">{summary}</div>
+        )}
         <div className="reportModalBtns">
           <button className="uiBtn" onClick={onCancel}>Cancel</button>
           <button

@@ -132,6 +132,52 @@ def test_page_zotero_export_roundtrips_metadata_notes_and_pdf(guest):
     assert pdf.startswith(b"%PDF") and b"/Highlight" in pdf
 
 
+_PNG = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
+    "1f15c4890000000d49444154789c626001000000ffff03000006000557"
+    "bfabd40000000049454e44ae426082"
+)
+
+
+def test_zotero_export_note_images_are_safe_and_bounded(guest):
+    from PyPDF2 import PdfReader
+
+    page = _paper(guest, "zeaimg")
+    uploaded = guest.post(
+        "/api/upload-image",
+        files={"file": ("figure.png", _PNG, "image/png")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    image_url = uploaded.json()["url"]
+    image_name = image_url.rsplit("/", 1)[-1]
+    _put_children(guest, page["id"], [
+        _positioned("zeaimg-h", "quoted", note=f"see ![figure]({image_url})"),
+        {
+            "id": "zeaimg-note",
+            "content": f"<script>alert(1)</script> figure: ![figure]({image_url})",
+            "properties": {},
+            "children": [],
+        },
+    ])
+
+    archive = _zip(guest.get(
+        f"/api/pages/{page['id']}/export",
+        params={"mode": "zotero-rdf"},
+    ))
+    rdf_name, rdf, items = _rdf(archive)
+    base = rdf_name.rsplit("/", 1)[0]
+    assert archive.read(f"{base}/files/1/{image_name}") == _PNG
+    assert f"files/1/{image_name}" in rdf and "image/png" in rdf
+    assert "data:image/png;base64," in rdf
+    assert "<script>" not in rdf and "&amp;lt;script&amp;gt;" in rdf
+
+    pdf = archive.read(f"{base}/{items[0]['pdf_paths'][0]}")
+    annotations = PdfReader(io.BytesIO(pdf)).pages[0]["/Annots"]
+    contents = [str(annotation.get_object().get("/Contents") or "") for annotation in annotations]
+    assert any(f"(image: {image_name})" in content for content in contents)
+    assert not any("![figure]" in content for content in contents)
+
+
 def test_zotero_export_switches(guest):
     page = _paper(guest, "zeb")
     archive = _zip(guest.get(
@@ -281,6 +327,56 @@ def test_zotero_export_rejects_unsafe_folder_and_bounds(guest, monkeypatch):
     response = guest.get(
         "/api/folders/export",
         params={"name": "zeh-bound", "mode": "zotero-rdf"},
+    )
+    assert response.status_code == 413
+
+
+def test_folder_export_progress_is_operation_scoped(guest):
+    make_page(guest, "Zep one", properties={"folder": "zep-one"})
+    make_page(guest, "Zep two a", properties={"folder": "zep-two"})
+    make_page(guest, "Zep two b", properties={"folder": "zep-two"})
+
+    assert guest.get(
+        "/api/folders/export",
+        params={"name": "zep-one", "mode": "zotero-rdf", "op": "op-one"},
+    ).status_code == 200
+    assert guest.get(
+        "/api/folders/export",
+        params={"name": "zep-two", "mode": "zotero-rdf", "op": "op-two"},
+    ).status_code == 200
+
+    first = guest.get("/api/folders/export-progress", params={"op": "op-one"}).json()
+    second = guest.get("/api/folders/export-progress", params={"op": "op-two"}).json()
+    assert first == {"active": False, "total": 1, "done": 1, "title": "Zep one"}
+    assert second["active"] is False and second["total"] == second["done"] == 2
+    assert guest.get("/api/folders/export-progress", params={"op": "../bad"}).status_code == 400
+
+    make_user("zprogress", "password12345")
+    other = login("zprogress", "password12345")
+    assert other.get("/api/folders/export-progress", params={"op": "op-one"}).json() == {
+        "active": False, "total": 0, "done": 0, "title": "",
+    }
+    assert TestClient(app).get(
+        "/api/folders/export-progress", params={"op": "op-one"}
+    ).status_code == 401
+
+
+def test_zotero_image_attachment_counts_toward_archive_limit(guest, monkeypatch):
+    page = make_page(guest, "Zeq image cap")
+    uploaded = guest.post(
+        "/api/upload-image",
+        files={"file": ("cap.png", _PNG, "image/png")},
+    )
+    _put_children(guest, page["id"], [{
+        "id": "zeq-image",
+        "content": f"![cap]({uploaded.json()['url']})",
+        "properties": {},
+        "children": [],
+    }])
+    monkeypatch.setattr("gamma.routers.export._ZOTERO_MAX_ARCHIVE_BYTES", 1)
+    response = guest.get(
+        f"/api/pages/{page['id']}/export",
+        params={"mode": "zotero-rdf"},
     )
     assert response.status_code == 413
 

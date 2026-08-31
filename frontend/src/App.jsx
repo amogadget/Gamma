@@ -4595,8 +4595,9 @@ export default function App() {
   // whichever comes back, taking the filename from Content-Disposition. Using
   // fetch+blob (not a plain navigation) so a 404/401 surfaces as a message
   // instead of silently swapping the SPA for an error page.
-  async function downloadExport(path, fallbackName) {
-    setStatus("Exporting page…");
+  async function downloadExport(path, fallbackName, options = {}) {
+    const { transferId = null, status = "Exporting page…" } = options;
+    setStatus(status);
     // Shared (read-only) views: every export carries the scoped share token, so
     // the backend confines it to this document — applied here so no call site
     // can forget it.
@@ -4617,6 +4618,7 @@ export default function App() {
       // If the SPA fallback served index.html, the export route isn't live yet.
       if (ctype.includes("text/html"))
         throw new Error("export route not found — restart the backend");
+      if (transferId) updateTransfer(transferId, { info: "downloading…" });
       const blob = await res.blob();
       const cd = res.headers.get("Content-Disposition") || "";
       const star = /filename\*=UTF-8''([^;]+)/i.exec(cd);
@@ -4630,11 +4632,53 @@ export default function App() {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
+      if (transferId) updateTransfer(transferId, { status: "done", info: fmtBytes(blob.size) });
       setStatus(`Exported ${filename}`);
       return filename;
     } catch (err) {
+      if (transferId) {
+        updateTransfer(transferId, {
+          status: "error",
+          info: String(err.message || err).slice(0, 60),
+        });
+      }
       setStatus(`Export failed: ${err.message}`);
       return null;
+    }
+  }
+
+  async function downloadFolderExport(path, fallbackName, folderName) {
+    const operation = makeId();
+    const transferId = addTransfer({
+      name: `Export folder — ${folderName}`.slice(0, 60),
+      kind: "download",
+      info: "preparing…",
+    });
+    path += `${path.includes("?") ? "&" : "?"}op=${encodeURIComponent(operation)}`;
+    let finished = false;
+    const poll = setInterval(async () => {
+      try {
+        const progress = await apiJson(
+          `${API}/folders/export-progress?op=${encodeURIComponent(operation)}`,
+        );
+        if (!finished && progress.active && progress.total) {
+          const percent = Math.min(99, Math.floor((progress.done / progress.total) * 100));
+          const info = `${progress.done}/${progress.total} papers · ${percent}%`;
+          updateTransfer(transferId, { info });
+          setStatus(`Exporting “${folderName}” — ${info}…`);
+        }
+      } catch {
+        // Progress is best-effort; the download request remains authoritative.
+      }
+    }, 500);
+    try {
+      return await downloadExport(path, fallbackName, {
+        transferId,
+        status: `Preparing “${folderName}” export…`,
+      });
+    } finally {
+      finished = true;
+      clearInterval(poll);
     }
   }
 
@@ -4681,15 +4725,24 @@ export default function App() {
     if (exportFolder) {
       const base = `/folders/export?name=${encodeURIComponent(exportFolder)}`;
       if (o.format === "logseq") {
-        await downloadExport(`${base}&mode=logseq-graph&${bundle}`, "graph.zip");
+        await downloadFolderExport(
+          `${base}&mode=logseq-graph&${bundle}`,
+          "graph.zip",
+          exportFolder,
+        );
       } else if (o.format === "zotero") {
-        const saved = await downloadExport(
+        const saved = await downloadFolderExport(
           `${base}&mode=zotero-rdf&${flags}&${bundle}`,
           "zotero.zip",
+          exportFolder,
         );
         if (saved) setStatus("Zotero library saved — unzip it, then import the .rdf file in Zotero.");
       } else {
-        await downloadExport(`${base}&mode=readable&${flags}&${bundle}`, "folder.zip");
+        await downloadFolderExport(
+          `${base}&mode=readable&${flags}&${bundle}`,
+          "folder.zip",
+          exportFolder,
+        );
       }
       return;
     }
@@ -4732,7 +4785,11 @@ export default function App() {
   async function quickExportFolder(name) {
     if (!name) return;
     setHomeMenu(null);
-    await downloadExport(`/folders/export?name=${encodeURIComponent(name)}`, "folder.zip");
+    await downloadFolderExport(
+      `/folders/export?name=${encodeURIComponent(name)}`,
+      "folder.zip",
+      name,
+    );
   }
 
   // Ask the AI for the document's title and fill it into the page name.
