@@ -2278,6 +2278,8 @@ export default function App() {
   // Export dialog: one "Export…" menu entry, the shape of the export chosen
   // here. Remembered across sessions — most people export the same way twice.
   const [exportOpen, setExportOpen] = useState(false);
+  // null exports the focused page; a folder path exports that whole subtree.
+  const [exportFolder, setExportFolder] = useState(null);
   const [exportOpts, setExportOpts] = usePersistedState(
     "gamma-export-opts",
     { format: "pdf", highlights: true, notes: true, bundle: true },
@@ -4629,8 +4631,10 @@ export default function App() {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
       setStatus(`Exported ${filename}`);
+      return filename;
     } catch (err) {
       setStatus(`Export failed: ${err.message}`);
+      return null;
     }
   }
 
@@ -4672,17 +4676,40 @@ export default function App() {
   // works for PDFs that only exist behind the proxy).
   async function runExport(o) {
     setExportOpen(false);
+    const flags = `highlights=${o.highlights ? 1 : 0}&notes=${o.notes ? 1 : 0}`;
+    const bundle = `pdf=${o.bundle ? 1 : 0}`;
+    if (exportFolder) {
+      const base = `/folders/export?name=${encodeURIComponent(exportFolder)}`;
+      if (o.format === "logseq") {
+        await downloadExport(`${base}&mode=logseq-graph&${bundle}`, "graph.zip");
+      } else if (o.format === "zotero") {
+        const saved = await downloadExport(
+          `${base}&mode=zotero-rdf&${flags}&${bundle}`,
+          "zotero.zip",
+        );
+        if (saved) setStatus("Zotero library saved — unzip it, then import the .rdf file in Zotero.");
+      } else {
+        await downloadExport(`${base}&mode=readable&${flags}&${bundle}`, "folder.zip");
+      }
+      return;
+    }
     const id = focusedBlock?.id;
     if (!id) { setStatus("Open a page first to export it."); return; }
-    const flags = `highlights=${o.highlights ? 1 : 0}&notes=${o.notes ? 1 : 0}`;
     if (o.format === "pdf") {
       if (!o.highlights && !o.notes) { await exportRawPdf(); return; }
       await downloadExport(`/pages/${id}/export-pdf?${flags}`, "export.pdf");
       return;
     }
-    const bundle = `pdf=${o.bundle ? 1 : 0}`;
     if (o.format === "logseq") {
       await downloadExport(`/pages/${id}/export?mode=logseq-graph&${bundle}`, "graph.zip");
+      return;
+    }
+    if (o.format === "zotero") {
+      const saved = await downloadExport(
+        `/pages/${id}/export?mode=zotero-rdf&${flags}&${bundle}`,
+        "zotero.zip",
+      );
+      if (saved) setStatus("Zotero export saved — unzip it, then import the .rdf file in Zotero.");
       return;
     }
     await downloadExport(`/pages/${id}/export?mode=readable&${flags}&${bundle}`, "page.md");
@@ -4701,10 +4728,8 @@ export default function App() {
     await downloadExport(path, name);
   }
 
-  // Download every page tagged into a folder (and its subfolders) as one
-  // Markdown bundle — the server decides bare .md vs .zip by whether any page
-  // references uploaded assets, same as the single-page export.
-  async function exportFolder(name) {
+  // Preserve the folder menu's one-click Markdown export alongside Export as….
+  async function quickExportFolder(name) {
     if (!name) return;
     setHomeMenu(null);
     await downloadExport(`/folders/export?name=${encodeURIComponent(name)}`, "folder.zip");
@@ -6834,13 +6859,19 @@ export default function App() {
               Import…
             </button>
           ) : null}
-          {focusedBlock && !homeMode ? (
+          {(focusedBlock && !homeMode) || (homeMode && folderFilter) ? (
             <>
               <div className="popoverDivider" />
               <button
                 className="popoverItem"
-                onClick={() => { setOpenPopover(null); setExportOpen(true); }}
-                title="Download this page — the PDF with highlights and notes, Markdown, or a Logseq graph"
+                onClick={() => {
+                  setOpenPopover(null);
+                  setExportFolder(homeMode ? folderFilter : null);
+                  setExportOpen(true);
+                }}
+                title={homeMode
+                  ? `Download the “${folderFilter}” folder as Markdown, a Logseq graph, or a Zotero library`
+                  : "Download this page as PDF, Markdown, a Logseq graph, or a Zotero library"}
               >
                 <ExportIcon className="popoverItemIcon" size={15} />
                 Export…
@@ -7579,8 +7610,9 @@ export default function App() {
         <ExportDialog
           opts={exportOpts}
           setOpts={setExportOpts}
-          hasPdf={!!pdfUrl}
+          hasPdf={!!pdfUrl && !exportFolder}
           pdfStored={!!docId}
+          folder={exportFolder}
           onCancel={() => setExportOpen(false)}
           onExport={runExport}
         />
@@ -8028,7 +8060,17 @@ export default function App() {
               <>
                 <MenuItem icon={FolderOpenIcon} onClick={() => { const name = homeMenu.name; setHomeMenu(null); if (!homeMode) goHome(); setFolderFilter(name); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(name)}`); }}>Open</MenuItem>
                 <MenuItem icon={PenIcon} onClick={() => { setHomeMenu(null); setFolderRenaming({ name: homeMenu.name, draft: homeMenu.name }); }}>Rename</MenuItem>
-                <MenuItem icon={ExportIcon} onClick={() => { const name = homeMenu.name; setHomeMenu(null); exportFolder(name); }}>Export</MenuItem>
+                <MenuItem icon={ExportIcon} onClick={() => quickExportFolder(homeMenu.name)}>Export</MenuItem>
+                <MenuItem
+                  icon={ExportIcon}
+                  title="Choose Markdown, Logseq, or Zotero RDF options"
+                  onClick={() => {
+                    const name = homeMenu.name;
+                    setHomeMenu(null);
+                    setExportFolder(name);
+                    setExportOpen(true);
+                  }}
+                >Export as…</MenuItem>
                 <MenuItem icon={TrashIcon} danger onClick={() => { setHomeMenu(null); deleteFolderByName(homeMenu.name); }}>Delete</MenuItem>
               </>
             )}

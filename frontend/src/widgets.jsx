@@ -312,6 +312,7 @@ const EXPORT_FORMATS = [
   ["pdf", "PDF"],
   ["markdown", "Markdown (.md)"],
   ["logseq", "Logseq graph (.zip)"],
+  ["zotero", "Zotero RDF (.zip)"],
 ];
 
 // Same row dialect as the settings panes (settings.jsx Row/Toggle): icon tile ·
@@ -343,12 +344,14 @@ function SwitchRow({ checked, onChange, disabled, label, ...row }) {
   );
 }
 
-function ExportDialog({ opts, setOpts, hasPdf, pdfStored, onCancel, onExport }) {
-  // A note page has no PDF to export; a PDF opened from a URL and not saved
-  // here has no server copy to annotate. Both fall back to Markdown.
-  const format = hasPdf || opts.format !== "pdf" ? opts.format : "markdown";
+function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, onCancel, onExport }) {
+  // Folder exports cannot be one PDF; unavailable remembered choices fall back
+  // to Markdown without overwriting the user's standing preference.
+  const allowPdf = hasPdf && !folder;
+  const format = allowPdf || opts.format !== "pdf" ? opts.format : "markdown";
   const isPdf = format === "pdf";
   const isGraph = format === "logseq";
+  const isZotero = format === "zotero";
   const set = (patch) => setOpts((o) => ({ ...o, ...patch }));
 
   // A graph is defined by carrying both layers, so its switches are pinned on.
@@ -359,25 +362,27 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, onCancel, onExport }) 
 
   const summary = isGraph
     ? "A Logseq graph: the notes page plus native PDF highlights (hls page + .edn)."
-    : isPdf
-      ? noPdfCopy
-        ? "This PDF isn't stored on the server, so only the file itself can be exported."
-        : rawPdf
-          ? "The PDF file exactly as stored, with nothing added."
-          : `The PDF with ${highlights ? "highlight annotations" : "no annotations"}${notes ? " and every note printed onto the page" : ""}.`
-      : highlights || notes
-        ? `Markdown with ${highlights ? "quoted highlights" : "no quotes"}${notes ? " and your notes" : ""}.`
-        : "Markdown with the title and metadata only — both switches are off.";
+    : isZotero
+      ? `A Zotero RDF library with metadata, tags${folder ? " and subfolders as collections" : ""}${opts.bundle ? `, PDF${folder ? "s" : ""}${highlights ? " with highlights embedded" : ""}` : ""}${notes ? ", and notes" : ""}. Unzip it before importing the .rdf.`
+      : isPdf
+        ? noPdfCopy
+          ? "This PDF isn't stored on the server, so only the file itself can be exported."
+          : rawPdf
+            ? "The PDF file exactly as stored, with nothing added."
+            : `The PDF with ${highlights ? "highlight annotations" : "no annotations"}${notes ? " and every note printed onto the page" : ""}.`
+        : highlights || notes
+          ? `Markdown with ${highlights ? "quoted highlights" : "no quotes"}${notes ? " and your notes" : ""}.`
+          : "Markdown with the title and metadata only — both switches are off.";
 
   return (
     <div className="reportOverlay" onClick={onCancel}>
       <div className="reportModal exportModal" onClick={(event) => event.stopPropagation()}>
-        <div className="reportModalTitle">Export</div>
+        <div className="reportModalTitle">{folder ? `Export “${folder}”` : "Export"}</div>
         <DialogRow icon={FileTextIcon} label="Format">
           <MenuSelect
             label="Export format" value={format}
             onChange={(format) => set({ format })}
-            options={EXPORT_FORMATS.filter(([id]) => id !== "pdf" || hasPdf)}
+            options={EXPORT_FORMATS.filter(([id]) => id !== "pdf" || allowPdf)}
           />
         </DialogRow>
         <SwitchRow
@@ -387,12 +392,16 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, onCancel, onExport }) 
             ? "Standard PDF annotations"
             : isGraph
               ? "Always in a graph (hls page + .edn)"
-              : "Blockquotes with page numbers"}
+              : isZotero
+                ? "Embedded into exported PDF copies"
+                : "Blockquotes with page numbers"}
           title={isPdf
             ? "Burned in as standard PDF annotations — they survive in Acrobat, SumatraPDF, browsers."
             : isGraph
               ? "Always included: a graph's highlights are its hls page and .edn."
-              : "Each highlighted passage as a blockquote with its page number."}
+              : isZotero
+                ? "Written into PDF copies as standard annotations that Zotero imports."
+                : "Each highlighted passage as a blockquote with its page number."}
           checked={highlights}
           disabled={isGraph || noPdfCopy}
           onChange={(v) => set({ highlights: v })}
@@ -404,12 +413,16 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, onCancel, onExport }) 
             ? "Printed onto the page in free space"
             : isGraph
               ? "Always in a graph"
-              : "Nested under their highlights"}
+              : isZotero
+                ? "Zotero notes attached to each item"
+                : "Nested under their highlights"}
           title={isPdf
             ? "Printed onto the page in nearby free space, with a line back to the highlight. Off: they stay in the annotation popups."
             : isGraph
               ? "Always included: the graph's notes page."
-              : "Your own writing, nested under the highlight it belongs to."}
+              : isZotero
+                ? "Top-level notes become Zotero notes; highlight writing travels in annotation popups."
+                : "Your own writing, nested under the highlight it belongs to."}
           checked={notes}
           disabled={isGraph || noPdfCopy}
           onChange={(v) => set({ notes: v })}
@@ -418,8 +431,10 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, onCancel, onExport }) 
           <SwitchRow
             icon={PaperclipIcon}
             label="Bundle the files"
-            hint="Pack the PDF and images into the .zip"
-            title="Pack the PDF and any pasted images into the .zip. Off: they stay as links back to this server."
+            hint={isZotero ? "Include PDF files" : "Pack the PDF and images into the .zip"}
+            title={isZotero
+              ? "Include each locally stored PDF so Zotero imports the files too."
+              : "Pack the PDF and any pasted images into the .zip. Off: they stay as links back to this server."}
             checked={opts.bundle}
             onChange={(v) => set({ bundle: v })}
           />

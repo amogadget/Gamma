@@ -15,6 +15,7 @@ the marker look for /Highlight annotations from /QuadPoints + /C, and the
 outline for /Square from /Rect + /C + /BS.
 """
 
+import hashlib
 import io
 import re
 
@@ -100,9 +101,17 @@ def _highlight_annotation(rects, color, note, author):
     return _finish_annotation(annot, color, note, author)
 
 
-def _square_annotation(rects, color, note, author):
-    """Area note → /Square: a stroked rectangle (no interior fill — it would
-    obscure the figure underneath) over the bounding box of the rects."""
+_ZOTERO_KEY_CHARS = "23456789ABCDEFGHIJKLMNPQRSTUVWXZ"
+
+
+def zotero_annot_key(highlight_id: str) -> str:
+    """Return a deterministic Zotero-style key for an area annotation."""
+    digest = hashlib.sha1((highlight_id or "").encode("utf-8")).digest()
+    return "".join(_ZOTERO_KEY_CHARS[byte & 31] for byte in digest[:8])
+
+
+def _square_annotation(rects, color, note, author, highlight_id=""):
+    """Area note → /Square with the stable /NM id Zotero requires."""
     xs = [v for x1, _, x2, _ in rects for v in (x1, x2)]
     ys = [v for _, y1, _, y2 in rects for v in (y1, y2)]
     annot = DictionaryObject(
@@ -118,6 +127,10 @@ def _square_annotation(rects, color, note, author):
             ),
         }
     )
+    if highlight_id:
+        annot[NameObject("/NM")] = TextStringObject(
+            f"Zotero-{zotero_annot_key(highlight_id)}"
+        )
     return _finish_annotation(annot, color, note, author)
 
 
@@ -170,8 +183,17 @@ def annotate_pdf(pdf_bytes: bytes, highlights, author: str = "") -> tuple[bytes,
         except Exception:
             rotation = 0
         pdf_rects = [_viewer_rect_to_pdf(r, rotation, crop) for r in viewer_rects]
-        make = _square_annotation if pos.get("area") else _highlight_annotation
-        annot = make(pdf_rects, parse_css_color(h.get("color")), h.get("note") or "", author)
+        color = parse_css_color(h.get("color"))
+        if pos.get("area"):
+            annot = _square_annotation(
+                pdf_rects,
+                color,
+                h.get("note") or "",
+                author,
+                highlight_id=h.get("id") or "",
+            )
+        else:
+            annot = _highlight_annotation(pdf_rects, color, h.get("note") or "", author)
         writer.add_annotation(page_number=page_num - 1, annotation=annot)
         written += 1
 

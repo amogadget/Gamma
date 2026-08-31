@@ -97,7 +97,8 @@ def test_annotate_area_as_square():
     pos["area"] = True
     out, written = annotate_pdf(
         _blank_pdf(),
-        [{"position": pos, "color": "rgba(155, 205, 255, 0.65)", "note": "figure note"}],
+        [{"position": pos, "color": "rgba(155, 205, 255, 0.65)", "note": "figure note",
+          "id": "myarea1"}],
         author="tester",
     )
     assert written == 1
@@ -111,6 +112,8 @@ def test_annotate_area_as_square():
     assert str(obj["/T"]) == "tester"
     assert float(obj["/CA"]) == 0.65
     assert int(obj["/BS"]["/W"]) == 2
+    from gamma.pdf_export import zotero_annot_key
+    assert str(obj["/NM"]) == f"Zotero-{zotero_annot_key('myarea1')}"
 
     # And it round-trips: the importer reads the /Square back as an area
     # highlight (position carries area: true) with the exact color.

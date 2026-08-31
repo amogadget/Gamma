@@ -3,6 +3,7 @@ page references uploaded assets (Notion-style: bare file vs. bundle decided by
 whether there's anything to bundle)."""
 
 import os
+import re
 import sqlite3
 import tempfile
 import zipfile
@@ -12,9 +13,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from starlette.background import BackgroundTask
 
-from ..auth import resolve_user, share_scope_doc
+from ..auth import require_user, resolve_user, share_scope_doc
 from ..blocks_store import BLOCK_COLUMNS, assert_block_in_doc, block_to_dict, fetch_subtree
 from ..db import pdf_upload_path, safe_doc_id, user_db_path, user_uploads_dir
+from ..logbuf import log
 from ..logseq_graph_export import (
     CONFIG_EDN,
     collect_highlights,
@@ -29,10 +31,18 @@ from ..markdown_export import (
     render_readable,
     slugify,
 )
-from ..pdf_export import annotate_pdf, highlight_note_text
+from ..pdf_export import annotate_pdf, highlight_note_text, zotero_annot_key
 from ..pdf_notes import render_notes
+from ..zotero_export import build_rdf, note_html
 
 router = APIRouter(prefix="/api", tags=["export"])
+
+_ZOTERO_MAX_PAGES = 500
+_ZOTERO_MAX_BLOCKS = 100_000
+_ZOTERO_MAX_PDF_BYTES = 128 * 1024 * 1024
+_ZOTERO_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
+_ZOTERO_MAX_RDF_BYTES = 16 * 1024 * 1024
+_EXPORT_MODES = {"readable", "logseq-graph", "zotero-rdf"}
 
 
 def _content_disposition(filename: str) -> str:
@@ -107,6 +117,142 @@ def _graph_page_parts(page, uploads_dir, include_pdf):
     return entries, files, blobs, assets
 
 
+def _check_export_mode(mode: str):
+    if mode not in _EXPORT_MODES:
+        raise HTTPException(status_code=400, detail="unsupported export mode")
+
+
+def _collect_marks(blocks) -> list[dict]:
+    """Convert stored highlight blocks to safe PDF annotation marks."""
+    children_by_id: dict = {}
+    for block in sorted(blocks, key=lambda item: item["position"] or ""):
+        children_by_id.setdefault(block["parent_id"], []).append(block)
+
+    marks = []
+    for block in blocks:
+        props = block["properties"]
+        if not props.get("highlight_id") or not props.get("pdf_position"):
+            continue
+        if props.get("imported_annot") and not props.get("annot_stripped"):
+            continue
+        if props.get("link_url") or props.get("link_page_id"):
+            continue
+        marks.append({
+            "position": props["pdf_position"],
+            "color": props.get("color"),
+            "note": highlight_note_text(block, children_by_id),
+            "id": props["highlight_id"],
+        })
+    return marks
+
+
+def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
+                          folder_scope: str | None, include_taxonomy: bool,
+                          include_pdf: bool, highlights: bool, notes: bool):
+    """Build bounded Zotero RDF entries and local/annotated PDF payloads."""
+    if len(roots) > _ZOTERO_MAX_PAGES:
+        raise HTTPException(status_code=413, detail="too many pages for Zotero export")
+
+    items, files, blobs = [], [], []
+    output_bytes = 0
+    block_count = 0
+    for number, root in enumerate(roots, 1):
+        rows = fetch_subtree(conn, root["id"])
+        block_count += len(rows)
+        if block_count > _ZOTERO_MAX_BLOCKS:
+            raise HTTPException(status_code=413, detail="too many blocks for Zotero export")
+        page = build_tree(rows, root["id"])
+        props = page.get("properties") or {}
+        meta = props.get("meta") if isinstance(props.get("meta"), dict) else {}
+        title = re.sub(r"\s+", " ", page.get("content") or "").strip() or "Untitled"
+
+        pdf_arc = None
+        doc_id = props.get("doc_id")
+        if include_pdf and doc_id:
+            try:
+                pdf_path = pdf_upload_path(user, doc_id)
+            except ValueError:
+                log.warning("[zotero-export] skipping invalid document id on page %s", root["id"])
+                pdf_path = None
+            if pdf_path and pdf_path.is_file():
+                size = pdf_path.stat().st_size
+                if size > _ZOTERO_MAX_PDF_BYTES:
+                    raise HTTPException(status_code=413, detail="PDF too large for Zotero export")
+                pdf_leaf = slugify(title, "")
+                if pdf_leaf in {"", ".", ".."}:
+                    pdf_leaf = "paper"
+                pdf_arc = f"files/{number}/{pdf_leaf}.pdf"
+                marks = _collect_marks([block_to_dict(row) for row in rows]) if highlights else []
+                if marks:
+                    try:
+                        data, _ = annotate_pdf(pdf_path.read_bytes(), marks, author=user)
+                    except Exception as error:
+                        log.warning(
+                            "[zotero-export] annotation failed for page %s; using bare PDF: %s",
+                            root["id"],
+                            error,
+                        )
+                        output_bytes += size
+                        files.append((f"{base}/{pdf_arc}", pdf_path))
+                    else:
+                        output_bytes += len(data)
+                        blobs.append((f"{base}/{pdf_arc}", data))
+                else:
+                    output_bytes += size
+                    files.append((f"{base}/{pdf_arc}", pdf_path))
+                if output_bytes > _ZOTERO_MAX_ARCHIVE_BYTES:
+                    raise HTTPException(status_code=413, detail="Zotero export is too large")
+
+        memo_html = []
+        if notes:
+            for child in page.get("children") or []:
+                child_props = child.get("properties") or {}
+                if child_props.get("highlight_id") or child_props.get("link_url"):
+                    continue
+                html = note_html(child)
+                if html:
+                    memo_html.append({
+                        "key": child_props.get("zotero_note")
+                               or f"#gamma_note_{zotero_annot_key(child['id'])}",
+                        "html": html,
+                    })
+
+        folders = []
+        if include_taxonomy:
+            folders = [path.strip() for path in (props.get("folder") or "").split(",") if path.strip()]
+            if folder_scope:
+                folders = [
+                    path for path in folders
+                    if path == folder_scope or path.startswith(folder_scope + "/")
+                ]
+        arxiv = str(meta.get("arxiv_id") or "").strip()
+        items.append({
+            "key": props.get("zotero_key")
+                   or (f"https://arxiv.org/abs/{arxiv}" if arxiv
+                       else f"#gamma_item_{zotero_annot_key(root['id'])}"),
+            "title": title,
+            "meta": meta,
+            "tags": ([tag.strip() for tag in (props.get("category") or "").split(",") if tag.strip()]
+                     if include_taxonomy else []),
+            "folders": folders,
+            "pdf_path": pdf_arc,
+            "notes": memo_html,
+        })
+
+    rdf = build_rdf(items)
+    if len(rdf.encode("utf-8")) > _ZOTERO_MAX_RDF_BYTES:
+        raise HTTPException(status_code=413, detail="Zotero metadata is too large")
+    readme = (
+        "Import into Zotero\n"
+        "==================\n\n"
+        f"1. Extract this zip and keep {base}.rdf and files/ together.\n"
+        f"2. In Zotero choose File -> Import... -> A file, then select {base}.rdf.\n\n"
+        "Do not select the zip itself; Zotero imports the extracted RDF file.\n"
+    )
+    entries = [(f"{base}/{base}.rdf", rdf), (f"{base}/README.txt", readme)]
+    return entries, files, blobs
+
+
 # Sync on purpose: rendering + zipping runs in FastAPI's threadpool.
 @router.get("/pages/{block_id}/export")
 def export_page(block_id: str, request: Request, mode: str = "readable", pdf: int = 1,
@@ -118,7 +264,9 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
     file graph (pages/ + assets/ + logseq/config.edn, highlights as native
     hls__ page + EDN) — openable by file-based Logseq directly and convertible
     by the DB version's "File to DB graph" importer; a graph is defined by both
-    layers, so the two switches don't apply to it."""
+    layers, so the two switches don't apply to it. ``mode=zotero-rdf`` returns
+    a one-page Zotero RDF library archive."""
+    _check_export_mode(mode)
     user = resolve_user(request)
     scope = share_scope_doc(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
@@ -129,6 +277,28 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
 
     page = build_tree(rows, block_id)
     slug = slugify(page.get("content"), block_id)
+
+    if mode == "zotero-rdf":
+        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+            entries, files, blobs = _zotero_export_parts(
+                conn,
+                user,
+                [{"id": block_id}],
+                slug,
+                None,
+                include_taxonomy=scope is None,
+                include_pdf=bool(pdf),
+                highlights=bool(highlights),
+                notes=bool(notes),
+            )
+        return _zip_response(
+            entries,
+            set(),
+            user_uploads_dir(user),
+            f"{slug}-zotero.zip",
+            files=files,
+            blobs=blobs,
+        )
 
     if mode == "logseq-graph":
         entries, files, blobs, assets = _graph_page_parts(page, user_uploads_dir(user), bool(pdf))
@@ -172,27 +342,7 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
     if not pdf_path.is_file():
         raise HTTPException(status_code=404, detail="PDF not stored on the server")
 
-    children_by_id: dict = {}
-    for b in sorted(blocks, key=lambda b: b["position"] or ""):
-        children_by_id.setdefault(b["parent_id"], []).append(b)
-
-    marks = []  # not "highlights": that name is the query flag now
-    for b in blocks:
-        props = b["properties"]
-        if not props.get("highlight_id") or not props.get("pdf_position"):
-            continue
-        # Skip annotations that came from the PDF itself and are STILL embedded
-        # in it (annot_stripped marks ones the import removed from the file),
-        # and link regions (Gamma navigation aids, not annotations).
-        if props.get("imported_annot") and not props.get("annot_stripped"):
-            continue
-        if props.get("link_url") or props.get("link_page_id"):
-            continue
-        marks.append({
-            "position": props["pdf_position"],
-            "color": props.get("color"),
-            "note": highlight_note_text(b, children_by_id),
-        })
+    marks = _collect_marks(blocks)
 
     written = 0
     pdf_bytes = pdf_path.read_bytes()
@@ -233,22 +383,47 @@ def _page_in_folder(props: dict, name: str) -> bool:
 
 
 @router.get("/folders/export")
-def export_folder(request: Request, name: str, mode: str = "readable", pdf: int = 1):
-    """Every page tagged into folder ``name`` (or a subfolder of it) → a single
-    .zip: one .md per page at the root, a shared assets/ folder (deduped)."""
+def export_folder(request: Request, name: str, mode: str = "readable", pdf: int = 1,
+                  highlights: int = 1, notes: int = 1):
+    """Export one authenticated owner's folder and descendants as an archive."""
+    _check_export_mode(mode)
     name = (name or "").strip().strip("/")
     if not name:
         raise HTTPException(status_code=400, detail="folder name required")
-    # A share link is scoped to one document, never a whole folder.
+    # Folder exports are owner-only; a public share is scoped to one page.
     if share_scope_doc(request) is not None:
         raise HTTPException(status_code=403, detail="not accessible via this share link")
-    user = resolve_user(request)
+    user = require_user(request)
+    folder_slug = slugify(name.replace("/", "-"), "")
+    if folder_slug in {"", ".", ".."}:
+        raise HTTPException(status_code=400, detail="invalid folder name for export")
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
         roots = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = 'root'").fetchall()
         matches = [block_to_dict(r) for r in roots]
         matches = [b for b in matches if _page_in_folder(b["properties"], name)]
         if not matches:
             raise HTTPException(status_code=404, detail="no pages in that folder")
+
+        if mode == "zotero-rdf":
+            entries, files, blobs = _zotero_export_parts(
+                conn,
+                user,
+                matches,
+                folder_slug,
+                name,
+                include_taxonomy=True,
+                include_pdf=bool(pdf),
+                highlights=bool(highlights),
+                notes=bool(notes),
+            )
+            return _zip_response(
+                entries,
+                set(),
+                user_uploads_dir(user),
+                f"{folder_slug}-zotero.zip",
+                files=files,
+                blobs=blobs,
+            )
 
         entries, assets, used = [], set(), set()
         files, blobs = [], []
@@ -262,7 +437,10 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
                 blobs += p_blobs
                 assets |= p_assets
                 continue
-            md, page_assets = collect_and_rewrite(render_readable(page), include_pdf=bool(pdf))
+            md, page_assets = collect_and_rewrite(
+                render_readable(page, highlights=bool(highlights), notes=bool(notes)),
+                include_pdf=bool(pdf),
+            )
             assets |= page_assets
             slug = slugify(page.get("content"), root["id"])
             arcname = f"{slug}.md"
@@ -272,7 +450,6 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
             used.add(arcname)
             entries.append((arcname, md))
 
-    folder_slug = slugify(name.replace("/", "-"), "")
     if mode == "logseq-graph":
         entries.append(("logseq/config.edn", CONFIG_EDN))
         return _zip_response(entries, assets, user_uploads_dir(user), f"{folder_slug}-logseq.zip", files, blobs)
