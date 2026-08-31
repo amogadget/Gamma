@@ -55,6 +55,8 @@ READ_CHARS_CAP = 20000
 READ_CHARS_MAX = 1_000_000  # sanity ceiling, matches the settings slider's range
 _DETAIL_CAP = 4000      # chars of a tool's output kept for the chat's expandable chip
 _ARG_CAP = 400          # chars per argument value in that chip
+_RELAX_MIN_TERM_LEN = 3
+_RELAX_MAX_TERMS = 3
 
 # Base role prompt — the user-editable part (prompt editor, "Library agent");
 # agent_system() appends the mechanical scope/permission lines to it.
@@ -314,9 +316,12 @@ def _run_search_pdfs(conn, user: str, scope: dict, args: dict):
             # into zero hits, which the model reads as "the paper is silent".
             # Retry with only the longest words (they carry the meaning) so a
             # miss still points somewhere, clearly labelled as approximate.
-            terms = sorted((t for t in re.split(r"[\s,]+", query) if len(t) > 2),
+            tokens = [t for t in re.split(r"[\s,]+", query) if t]
+            terms = sorted((t for t in tokens if len(t) >= _RELAX_MIN_TERM_LEN),
                            key=len, reverse=True)
-            for keep in range(min(3, len(terms)), 0, -1):
+            for keep in range(min(_RELAX_MAX_TERMS, len(terms)), 0, -1):
+                if keep == len(tokens):
+                    continue  # do not repeat the identical query that just missed
                 lines = fts(database, " ".join(terms[:keep]))
                 if lines:
                     relaxed = " ".join(terms[:keep])

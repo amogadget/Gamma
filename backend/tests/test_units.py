@@ -121,7 +121,22 @@ def test_extract_pdf_annotations_resolves_indirects():
     assert a["color"].startswith("rgba(255, 229,")
 
 
-# --- selection-centered chat context (gamma/ai_context.py) -------------------
+# --- AI PDF context (gamma/ai_context.py) ------------------------------------
+
+def test_extract_pdf_context_labels_incomplete_excerpt(monkeypatch):
+    from gamma import ai_context
+
+    monkeypatch.setattr(ai_context, "pdf_excerpt", lambda u, d, limit: ("head", limit, limit + 1))
+    monkeypatch.setattr(ai_context, "pdf_path", lambda u, d: "fake.pdf")
+    monkeypatch.setattr(ai_context, "page_count", lambda src: 12)
+
+    context = ai_context.extract_pdf_context("u", "d" * 24, 100)
+    assert "EXCERPT" in context and "12-page PDF" in context
+    assert context.endswith("head\n…[truncated]")
+
+    monkeypatch.setattr(ai_context, "pdf_excerpt", lambda u, d, limit: ("whole", None, 5))
+    assert ai_context.extract_pdf_context("u", "d" * 24, 100) == "whole"
+
 
 def test_selection_context_centers_on_the_selected_page(monkeypatch):
     from gamma import ai_context

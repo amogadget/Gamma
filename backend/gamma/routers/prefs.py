@@ -24,7 +24,7 @@ from pydantic import BaseModel
 
 from ..ai_settings import AI_SETTINGS_PREF_KEY
 from ..auth import require_user
-from ..db import delete_page_snap, get_page_snaps, get_pref, set_page_snap, set_pref
+from ..db import delete_page_snap, get_page_snaps, get_pref, safe_doc_id, set_page_snap, set_pref
 
 router = APIRouter(prefix="/api", tags=["prefs"])
 
@@ -63,13 +63,12 @@ async def write_pref(key: str, payload: PrefWriteRequest, request: Request):
 
 # 320×480 max at JPEG q0.55 is a few tens of KB base64; anything bigger is a bug.
 MAX_SNAP_CHARS = 200 * 1024
-# Guards the page-id key (block ids come from the client). Mirrors db._DOC_ID_RE.
-_SNAP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
-
-
 def _check_snap_id(page_id: str):
-    if page_id in (".", "..") or not _SNAP_ID_RE.match(page_id or ""):
-        raise HTTPException(status_code=400, detail="invalid page id")
+    """Validate client-provided page ids with the shared safe-id guard."""
+    try:
+        safe_doc_id(page_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid page id") from None
 
 
 class SnapWriteRequest(BaseModel):
@@ -78,7 +77,7 @@ class SnapWriteRequest(BaseModel):
 
 
 @router.get("/page-snaps")
-async def read_page_snaps(request: Request, after: str = ""):
+def read_page_snaps(request: Request, after: str = ""):
     """All stored covers, or (with ?after=<iso>) only ones newer than that —
     the cheap focus-pull form: clients send their newest local `at`."""
     user = require_user(request)
@@ -86,7 +85,7 @@ async def read_page_snaps(request: Request, after: str = ""):
 
 
 @router.put("/page-snaps/{page_id}")
-async def write_page_snap(page_id: str, payload: SnapWriteRequest, request: Request):
+def write_page_snap(page_id: str, payload: SnapWriteRequest, request: Request):
     user = require_user(request)
     _check_snap_id(page_id)
     img = payload.img or ""
@@ -99,7 +98,7 @@ async def write_page_snap(page_id: str, payload: SnapWriteRequest, request: Requ
 
 
 @router.delete("/page-snaps/{page_id}")
-async def remove_page_snap(page_id: str, request: Request):
+def remove_page_snap(page_id: str, request: Request):
     user = require_user(request)
     _check_snap_id(page_id)
     delete_page_snap(user, page_id)

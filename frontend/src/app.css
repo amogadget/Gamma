@@ -42,8 +42,10 @@
   --accent-bg: rgba(42, 79, 122, 0.3);
   --accent-bg-light: rgba(90, 155, 213, 0.1);
   --drag-accent: #64b5f6;
-  --scrollbar-thumb: #3f3f3f;
-  --scrollbar-thumb-hover: #565656;
+  --scrollbar-thumb-dark: #3f3f3f;
+  --scrollbar-thumb-dark-hover: #565656;
+  --scrollbar-thumb: var(--scrollbar-thumb-dark);
+  --scrollbar-thumb-hover: var(--scrollbar-thumb-dark-hover);
   /* Native chrome (scrollbars, form controls) follows the app theme. */
   color-scheme: dark;
   --radius-control: 6px;
@@ -3506,7 +3508,8 @@ button.pdfOutlineChevron:hover {
    dual. !important because both the wrap background and the blend modes are
    inline styles in pdfViewer.jsx. */
 .pdfViewer.pdfDark { background: #181818; color-scheme: dark;
-  --scrollbar-thumb: #3f3f3f; --scrollbar-thumb-hover: #565656; } /* dark surround + scrollbar even in the light theme */
+  --scrollbar-thumb: var(--scrollbar-thumb-dark);
+  --scrollbar-thumb-hover: var(--scrollbar-thumb-dark-hover); } /* dark surround + scrollbar even in the light theme */
 .pdfViewer.pdfDark .pdfPageWrap { background: #101010 !important; }
 .pdfViewer.pdfDark .pdfPageWrap > canvas { filter: invert(0.94) hue-rotate(180deg); }
 .pdfViewer.pdfDark .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }

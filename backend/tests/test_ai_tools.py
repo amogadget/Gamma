@@ -308,6 +308,24 @@ def test_search_pdfs_scoped_snippets(org):
     assert text == "No PDF papers are reachable from this chat."
 
 
+def test_search_pdfs_does_not_repeat_identical_relaxed_query(org, monkeypatch):
+    from gamma.routers import search
+
+    calls = []
+    original = search._fts_query
+
+    def recording_query(text):
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(search, "_fts_query", recording_query)
+    run_agent_tool("organizer", _folder("readout"), "search_pdfs",
+                   {"query": "absent words"})
+
+    assert calls.count("absent words") == 1
+    assert len(calls) == 2  # exact query, then one distinct shorter fallback
+
+
 def test_page_scope_reaches_only_its_paper(org):
     c, ids = org
     scope = {"type": "page", "page_id": ids["a"]}

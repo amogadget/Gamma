@@ -6225,7 +6225,7 @@ export default function App() {
                     })}
                     {homeKinds === "files" ? null : newFolderOpen ? (
                       <PageCard
-                        className="pageCardNew"
+                        className="pageCardAdd"
                         glyph={<FolderGlyph />}
                         kind="Folder"
                         labelMode={fileLabels}
