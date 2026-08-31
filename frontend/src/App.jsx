@@ -249,6 +249,7 @@ export default function App() {
   // App-level UI state used across many domains — declared early so domain
   // hooks can read it regardless of their position in this file.
   const [openPopover, setOpenPopover] = useState(null); // "menu" | "share" | "user" | "search"
+  const [searchRestoreContext, setSearchRestoreContext] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(null); // null | "papers" | "library" | "ai" | "prompts" | "search" | "account"
 
   // This tab's real signed-in user — null while loading, logged out, or in a
@@ -819,11 +820,25 @@ export default function App() {
     setSelectedPages(new Set([id]));
   }
 
-  // Double-click / Enter / context-menu "Open": the old single-click behavior.
+  function currentHomeOrigin(kind = "home") {
+    if (kind === "search") {
+      return {
+        kind: "search",
+        folder: categoryFilter ? undefined : folderFilter || undefined,
+        label: categoryFilter || undefined,
+      };
+    }
+    if (categoryFilter) return { kind: "label", label: categoryFilter };
+    if (folderFilter) return { kind: "folder", folder: folderFilter };
+    return { kind: "root" };
+  }
+
+  // Double-click / Enter / context-menu "Open": remember which library view
+  // launched the page. Tab switches omit origin, so they never overwrite it.
   function openPage(id) {
     if (!id) return;
     clearSelection();
-    openBlock(id, { restoreScroll: true });
+    openBlock(id, { restoreScroll: true, origin: currentHomeOrigin() });
   }
 
   // Folder single-click selects (Ctrl toggles); double-click navigates in.
@@ -1399,7 +1414,9 @@ export default function App() {
       return next;
     });
   }
-  // Open tabs (Chrome-style): [{id, title}], stored PER USER. localStorage is
+  // Open tabs (Chrome-style): [{id, title, origin?}], stored PER USER. origin
+  // is the library/search context that explicitly opened this tab; switching
+  // tabs never rewrites it. localStorage is
   // only a cache for instant paint — the server (/api/prefs/open-tabs) is the
   // source of truth, so tabs follow the account across browsers. Local changes
   // are debounce-pushed; regaining focus pulls the latest stored state.
@@ -4059,6 +4076,23 @@ export default function App() {
       const block = subtreeData.block;
       if (!block) throw new Error("Block not found");
       const props = block.properties || {};
+      if (opts?.origin) {
+        updateTabs((prev) => {
+          const existing = prev.find((tab) => tab.id === blockId);
+          if (existing) {
+            return prev.map((tab) => (
+              tab.id === blockId
+                ? { ...tab, title: (block.content || "Untitled").slice(0, 60), origin: opts.origin }
+                : tab
+            ));
+          }
+          return [...prev, {
+            id: blockId,
+            title: (block.content || "Untitled").slice(0, 60),
+            origin: opts.origin,
+          }];
+        });
+      }
       const childBlocks = normalizeBlocks(block.children || []);
 
       suppressAutosaveRef.current = true;
@@ -4399,15 +4433,38 @@ export default function App() {
     window.history.replaceState({}, "", window.location.pathname);
   }
 
-  function closeTab(id) {
-    const idx = openTabs.findIndex((t) => t.id === id);
-    const next = openTabs.filter((t) => t.id !== id);
-    updateTabs(next);
-    if (id === focusedBlockId) {
-      const neighbor = next[Math.min(idx, next.length - 1)];
-      if (neighbor) openBlock(neighbor.id, { restoreScroll: true });
-      else goHome();
+  function restoreTabOrigin(origin) {
+    goHome();
+    if (!origin || origin.kind === "root") return;
+    const labelExists = origin.label && homeBlocks.some((block) =>
+      parseFolderTags(block.properties?.category).includes(origin.label),
+    );
+    const folderExists = origin.folder && allFolderPaths.includes(origin.folder);
+    if (labelExists) {
+      setCategoryFilter(origin.label);
+      window.history.replaceState(
+        null,
+        "",
+        `/?category=${encodeURIComponent(origin.label)}`,
+      );
+    } else if (folderExists) {
+      setFolderFilter(origin.folder);
+      window.history.replaceState(
+        null,
+        "",
+        `/?folder=${encodeURIComponent(origin.folder)}`,
+      );
     }
+    if (origin.kind === "search") {
+      setSearchRestoreContext(origin);
+      setOpenPopover("search");
+    }
+  }
+
+  function closeTab(id) {
+    const closed = openTabs.find((tab) => tab.id === id);
+    updateTabs((prev) => prev.filter((tab) => tab.id !== id));
+    if (id === focusedBlockId) restoreTabOrigin(closed?.origin);
   }
 
   // Drag any window by its grip; drop zones dock it left, right, or bottom.
@@ -6100,7 +6157,7 @@ export default function App() {
                         <PageCard key={b.id} title={b.content} glyph={<FileGlyph isPdf={!!b.properties?.source_url} />}
                           kind={b.properties?.source_url ? "PDF" : "Note"} time={formatRelativeTime(b.updated_at)}
                           folders={parseFolderTags(b.properties?.folder)} labels={parseFolderTags(b.properties?.category)}
-                          labelMode={fileLabels} onClick={() => openBlock(b.id)}
+                          labelMode={fileLabels} onClick={() => openPage(b.id)}
                           className={selectedPages.has(b.id) ? "selected" : ""}
                           onContextMenu={(e) => {
                             e.preventDefault();
@@ -7102,6 +7159,9 @@ export default function App() {
         homeBlocks={homeBlocks}
         allFolderPaths={allFolderPaths}
         openBlock={openBlock}
+        originBase={currentHomeOrigin("search")}
+        restoreContext={searchRestoreContext}
+        onRestoreContext={setSearchRestoreContext}
         pendingBlockScrollRef={pendingBlockScrollRef}
         pdfSearchRef={pdfSearchRef}
         scrollToRef={scrollToRef}
@@ -8094,7 +8154,7 @@ export default function App() {
               return (
                 <>
                   {!many ? (
-                    <MenuItem icon={ExternalLinkIcon} onClick={() => { setHomeMenu(null); clearSelection(); openBlock(homeMenu.id, { restoreScroll: true }); }}>Open</MenuItem>
+                    <MenuItem icon={ExternalLinkIcon} onClick={() => { setHomeMenu(null); openPage(homeMenu.id); }}>Open</MenuItem>
                   ) : null}
                   {!many ? (
                     <MenuItem icon={PenIcon} onClick={() => { setHomeMenu(null); clearSelection(); setHomeEditingId(homeMenu.id); }}>Rename</MenuItem>

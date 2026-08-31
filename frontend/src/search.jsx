@@ -184,6 +184,9 @@ export default function SearchPanel({
   homeBlocks,
   allFolderPaths,
   openBlock,
+  originBase,
+  restoreContext,
+  onRestoreContext,
   pendingBlockScrollRef,
   pdfSearchRef,
   scrollToRef,
@@ -210,6 +213,28 @@ export default function SearchPanel({
   const pendingFindRef = useRef(null); // {page, sinceNonce} — jump here once the target doc renders
 
   const q = query.trim();
+  const searchOrigin = () => ({
+    ...originBase,
+    kind: "search",
+    query,
+    labels,
+  });
+
+  useEffect(() => {
+    if (!restoreContext) return;
+    setQuery(typeof restoreContext.query === "string" ? restoreContext.query : "");
+    setLabels(
+      Array.isArray(restoreContext.labels)
+        ? restoreContext.labels.filter(
+            (label) =>
+              label &&
+              (label.kind === "folder" || label.kind === "label") &&
+              typeof label.name === "string",
+          )
+        : [],
+    );
+    onRestoreContext?.();
+  }, [restoreContext, onRestoreContext]);
 
   useEffect(() => {
     if (open) setPinned(false);
@@ -460,7 +485,7 @@ export default function SearchPanel({
       return;
     }
     pendingFindRef.current = { page: r.page, sinceNonce: docNonce };
-    openBlock(r.block_id).then(() => {
+    openBlock(r.block_id, { origin: searchOrigin() }).then(() => {
       let tries = 0;
       const go = () => {
         if (!pendingFindRef.current) return; // the exact-match jump already happened
@@ -481,7 +506,7 @@ export default function SearchPanel({
   function openNoteHit(r) {
     onOpenChange(false);
     if (r.page_root_id && r.page_root_id !== r.id) pendingBlockScrollRef.current = r.id;
-    openBlock(r.page_root_id || r.id);
+    openBlock(r.page_root_id || r.id, { origin: searchOrigin() });
   }
 
   // ---- result grouping: titles → this paper (notes, then PDF text) →
@@ -549,7 +574,7 @@ export default function SearchPanel({
       className="searchResult"
       onClick={() => {
         onOpenChange(false);
-        openBlock(b.id, { restoreScroll: true });
+        openBlock(b.id, { restoreScroll: true, origin: searchOrigin() });
       }}
     >
       <span className="searchResultPage">{b.content || "Untitled"}</span>
