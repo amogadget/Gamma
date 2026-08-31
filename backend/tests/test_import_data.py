@@ -79,7 +79,7 @@ def test_corrupt_pages_db_rejected_before_touching_data(receiver):
     assert receiver.get(f"/api/blocks/{marker['id']}").status_code == 200
 
 
-def test_nested_or_dotted_upload_names_are_skipped(receiver, donor):
+def test_nested_or_dotted_upload_names_are_rejected(receiver, donor):
     backup = zipfile.ZipFile(io.BytesIO(donor.get("/api/export").content))
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
@@ -88,8 +88,9 @@ def test_nested_or_dotted_upload_names_are_skipped(receiver, donor):
         z.writestr("uploads/.hidden", b"dotfile")
         z.writestr("uploads/sub/dir.pdf", b"nested")
     r = _import(receiver, buf.getvalue())
-    assert r.status_code == 200, r.text
-    assert r.json()["uploads_in_backup"] == 0
+    assert r.status_code == 400
+    from gamma.db import user_uploads_dir
+    assert not (user_uploads_dir("receiver") / "evil.txt").exists()
 
 
 def test_export_progress_side_channel(donor):

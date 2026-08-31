@@ -87,9 +87,10 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 | POST | `/import/logseq` | Logseq .pdf + .edn import |
 | POST | `/import/pdf-annotations` | import annotations embedded in the PDF (idempotent; optional `strip`) |
 | POST | `/import/zotero` | Zotero library import: zip of a "Zotero RDF" export (multipart `file`; `strip`, optional `folder` prefix). Items→pages+metadata, collections→folders, tags→labels, notes→blocks; embedded annotations via the same importer. Idempotent by file hash / `zotero_key` |
-| GET | `/pages/{id}/export` | page export (`?mode=readable\|logseq-graph\|zotero-rdf` plus `highlights=&notes=&pdf=`); Zotero image-bearing highlight comments use a plain PDF placeholder and, when `notes=1`, a linked Memo with page/quote context; share tokens remain document-scoped |
+| POST | `/import-data?mode=merge` | additive import for full backups and scoped Gamma exports; scoped archives reject replace mode, validate DB/chat/upload scope, and never overwrite existing pages, chats, or files |
+| GET | `/pages/{id}/export` | page export (`?mode=readable\|logseq-graph\|zotero-rdf\|gamma` plus format flags); `gamma` is an authenticated-owner-only scoped `gamma-backup-1` ZIP containing exactly that page subtree, its chat, and referenced local uploads, for additive `mode=merge` import; other share-capable modes remain document-scoped |
 | GET | `/pages/{id}/export-pdf` | PDF with annotations written back (`?highlights=&notes=`) |
-| GET | `/folders/export` | authenticated folder export in the same three modes (`?name=`); optional `op` enables operation-scoped progress; Zotero maps subfolders to collections |
+| GET | `/folders/export` | authenticated folder export (`?name=&mode=readable\|logseq-graph\|zotero-rdf\|gamma`); Gamma contains matching page subtrees, page chats, matching `home:<folder>` chat buckets, and referenced uploads; optional `op` enables operation-scoped progress |
 | GET | `/folders/export-progress` | progress for the authenticated user's exact `?op=` (`{active,total,done,title}`); concurrent operations are isolated |
 
 ### Prefs (`prefs.py`)

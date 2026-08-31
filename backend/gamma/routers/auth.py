@@ -2,10 +2,13 @@
 
 import json
 import os
+import re
 import secrets
 import shutil
 import sqlite3
+import stat
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -32,6 +35,78 @@ router = APIRouter(prefix="/api", tags=["auth"])
 # dict keyed by user: worker thread writes, poll requests read (GIL-safe);
 # a stale entry from a crashed export is simply overwritten by the next one.
 _export_progress: dict[str, dict] = {}
+_IMPORT_MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
+_IMPORT_MAX_ENTRIES = 10_010
+_IMPORT_MAX_UNCOMPRESSED_BYTES = 1280 * 1024 * 1024
+_IMPORT_MAX_DB_BYTES = 256 * 1024 * 1024
+_IMPORT_MAX_MANIFEST_BYTES = 1024 * 1024
+_IMPORT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
+_IMPORT_MAX_SECONDS = 120
+_IMPORT_CHUNK_BYTES = 1024 * 1024
+_GAMMA_IMPORT_MAX_PAGES = 500
+_GAMMA_IMPORT_MAX_BLOCKS = 100_000
+_IMPORT_UPLOAD_RE = re.compile(
+    r"^[0-9a-fA-F]{8,64}(?:-flat)?\.(?:pdf|png|jpe?g|gif|webp|svg|bmp)$"
+)
+_IMPORT_UPLOAD_REF_RE = re.compile(r"/api/uploads/([^\s\"')\]}>,]+)")
+
+
+def _copy_limited(source, output, limit: int, deadline: float) -> int:
+    """Copy a stream while enforcing bytes and wall-clock work limits."""
+    total = 0
+    while True:
+        if time.monotonic() > deadline:
+            raise HTTPException(status_code=413, detail="backup import work limit exceeded")
+        chunk = source.read(_IMPORT_CHUNK_BYTES)
+        if not chunk:
+            return total
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail="backup import is too large")
+        output.write(chunk)
+
+
+def _validated_backup_members(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
+    """Validate every archive member before extracting any of them."""
+    infos = archive.infolist()
+    if len(infos) > _IMPORT_MAX_ENTRIES:
+        raise HTTPException(status_code=413, detail="too many files in backup")
+    members = {}
+    total_size = 0
+    upload_size = 0
+    for info in infos:
+        name = info.filename
+        if name in members:
+            raise HTTPException(status_code=400, detail="duplicate filename in backup")
+        if (
+            not name
+            or name.startswith("/")
+            or "\\" in name
+            or info.is_dir()
+            or any(part in {"", ".", ".."} for part in name.split("/"))
+        ):
+            raise HTTPException(status_code=400, detail="invalid filename in backup")
+        mode = (info.external_attr >> 16) & 0o170000
+        if mode == stat.S_IFLNK or info.flag_bits & 0x1:
+            raise HTTPException(status_code=400, detail="unsafe file in backup")
+        if name not in {"manifest.json", "pages.db", "data.db"}:
+            if not name.startswith("uploads/") or name.count("/") != 1:
+                raise HTTPException(status_code=400, detail="unexpected file in backup")
+            upload_name = name.split("/", 1)[1]
+            if not _IMPORT_UPLOAD_RE.fullmatch(upload_name):
+                raise HTTPException(status_code=400, detail="invalid upload filename in backup")
+            upload_size += info.file_size
+        if name in {"pages.db", "data.db"} and info.file_size > _IMPORT_MAX_DB_BYTES:
+            raise HTTPException(status_code=413, detail=f"{name} in backup is too large")
+        if name == "manifest.json" and info.file_size > _IMPORT_MAX_MANIFEST_BYTES:
+            raise HTTPException(status_code=413, detail="manifest in backup is too large")
+        total_size += info.file_size
+        if total_size > _IMPORT_MAX_UNCOMPRESSED_BYTES:
+            raise HTTPException(status_code=413, detail="expanded backup is too large")
+        if upload_size > _IMPORT_MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="uploads in backup are too large")
+        members[name] = info
+    return members
 
 
 def _target_user(request: Request, target: str | None) -> tuple[str, bool]:
@@ -130,6 +205,186 @@ def export_data(request: Request, uploads: int = 1, user: str | None = None):
     )
 
 
+def _validate_scoped_backup(
+    tdir: Path,
+    manifest: dict,
+    upload_names: list[str],
+    deadline: float,
+):
+    """Validate scoped DB contents before additive merge touches live data."""
+    scope = manifest.get("scope")
+    uploads = manifest.get("uploads")
+    if not isinstance(scope, dict) or not isinstance(uploads, dict):
+        raise HTTPException(status_code=400, detail="invalid scoped backup manifest")
+    scope_type = scope.get("type")
+    folder = scope.get("folder")
+    manifest_page_ids = scope.get("page_ids")
+    folder_parts = folder.split("/") if isinstance(folder, str) else []
+    valid_folder = bool(
+        folder_parts
+        and len(folder) <= 512
+        and folder == folder.strip().strip("/")
+        and all(part and part not in {".", ".."} for part in folder_parts)
+        and not any(ord(char) < 32 for char in folder)
+    )
+    if (
+        scope_type not in {"page", "folder"}
+        or (scope_type == "page" and folder is not None)
+        or (scope_type == "folder" and not valid_folder)
+        or not isinstance(manifest_page_ids, list)
+        or not all(isinstance(value, str) for value in manifest_page_ids)
+        or len(set(manifest_page_ids)) != len(manifest_page_ids)
+        or scope.get("pages") != len(manifest_page_ids)
+    ):
+        raise HTTPException(status_code=400, detail="invalid scoped backup scope")
+    included = uploads.get("included")
+    missing = uploads.get("missing")
+    if (
+        not isinstance(included, list)
+        or not isinstance(missing, list)
+        or not all(_IMPORT_UPLOAD_RE.fullmatch(value or "") for value in included + missing)
+        or len(set(included)) != len(included)
+        or len(set(missing)) != len(missing)
+        or set(included) & set(missing)
+        or set(included) != set(upload_names)
+    ):
+        raise HTTPException(status_code=400, detail="invalid scoped upload manifest")
+
+    pages_path = tdir / "pages.db"
+    with sqlite3.connect(f"file:{pages_path}?mode=ro", uri=True) as connection:
+        connection.execute("PRAGMA query_only = ON")
+        if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise HTTPException(status_code=400, detail="pages.db failed integrity check")
+        objects = {
+            (row[0], row[1])
+            for row in connection.execute(
+                "SELECT type, name FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%'"
+            )
+        }
+        if any(kind in {"trigger", "view"} for kind, _ in objects):
+            raise HTTPException(status_code=400, detail="unsafe schema in scoped pages.db")
+        tables = {name for kind, name in objects if kind == "table"}
+        if tables != {"unified_blocks"}:
+            raise HTTPException(status_code=400, detail="unexpected table in scoped pages.db")
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(unified_blocks)")
+        }
+        required = {
+            "id", "parent_id", "position", "content", "properties",
+            "created_at", "updated_at",
+        }
+        if not required <= columns:
+            raise HTTPException(status_code=400, detail="invalid scoped pages.db schema")
+        rows = connection.execute(
+            "SELECT id, parent_id, content, properties FROM unified_blocks "
+            "LIMIT ?",
+            (_GAMMA_IMPORT_MAX_BLOCKS + 1,),
+        ).fetchall()
+    if len(rows) > _GAMMA_IMPORT_MAX_BLOCKS:
+        raise HTTPException(status_code=413, detail="too many blocks in scoped backup")
+    if time.monotonic() > deadline:
+        raise HTTPException(status_code=413, detail="backup import work limit exceeded")
+    parents = {}
+    root_ids = []
+    referenced_uploads = set()
+    for block_id, parent_id, content, properties_text in rows:
+        if (
+            not isinstance(block_id, str)
+            or not block_id
+            or len(block_id) > 256
+            or block_id in parents
+            or not isinstance(parent_id, str)
+        ):
+            raise HTTPException(status_code=400, detail="invalid block id in scoped backup")
+        try:
+            properties = json.loads(properties_text or "{}")
+        except (TypeError, json.JSONDecodeError):
+            raise HTTPException(status_code=400, detail="invalid block properties in scoped backup")
+        if not isinstance(properties, dict):
+            raise HTTPException(status_code=400, detail="invalid block properties in scoped backup")
+        for text in (content or "", properties_text or ""):
+            matches = _IMPORT_UPLOAD_REF_RE.findall(text)
+            if "/api/uploads/" in text and not matches:
+                raise HTTPException(
+                    status_code=400,
+                    detail="invalid upload reference in scoped backup",
+                )
+            if any(not _IMPORT_UPLOAD_RE.fullmatch(name) for name in matches):
+                raise HTTPException(
+                    status_code=400,
+                    detail="invalid upload reference in scoped backup",
+                )
+            referenced_uploads.update(matches)
+        doc_id = properties.get("doc_id")
+        if doc_id:
+            pdf_name = f"{doc_id}.pdf"
+            if not _IMPORT_UPLOAD_RE.fullmatch(pdf_name):
+                raise HTTPException(status_code=400, detail="invalid document id in scoped backup")
+            referenced_uploads.add(pdf_name)
+        parents[block_id] = parent_id
+        if parent_id == "root":
+            root_ids.append(block_id)
+    if referenced_uploads != set(included) | set(missing):
+        raise HTTPException(
+            status_code=400,
+            detail="scoped upload manifest does not match pages.db",
+        )
+    if len(root_ids) > _GAMMA_IMPORT_MAX_PAGES or set(root_ids) != set(manifest_page_ids):
+        raise HTTPException(status_code=400, detail="scoped page manifest does not match pages.db")
+    for block_id, parent_id in parents.items():
+        if parent_id != "root" and parent_id not in parents:
+            raise HTTPException(status_code=400, detail="orphan block in scoped backup")
+    state = {}
+    for block_id in parents:
+        current = block_id
+        trail = []
+        while current != "root" and state.get(current, 0) == 0:
+            state[current] = 1
+            trail.append(current)
+            current = parents[current]
+        if current != "root" and state.get(current) == 1:
+            raise HTTPException(status_code=400, detail="block cycle in scoped backup")
+        for value in trail:
+            state[value] = 2
+
+    data_path = tdir / "data.db"
+    if not data_path.exists():
+        return
+    with sqlite3.connect(f"file:{data_path}?mode=ro", uri=True) as connection:
+        connection.execute("PRAGMA query_only = ON")
+        if connection.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+            raise HTTPException(status_code=400, detail="data.db failed integrity check")
+        objects = {
+            (row[0], row[1])
+            for row in connection.execute(
+                "SELECT type, name FROM sqlite_master "
+                "WHERE name NOT LIKE 'sqlite_%'"
+            )
+        }
+        if objects != {("table", "chats")}:
+            raise HTTPException(status_code=400, detail="unexpected schema in scoped data.db")
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(chats)")}
+        if not {"block_id", "messages", "updated_at"} <= columns:
+            raise HTTPException(status_code=400, detail="invalid scoped data.db schema")
+        chat_rows = connection.execute("SELECT block_id, messages FROM chats").fetchall()
+    page_ids = set(manifest_page_ids)
+    folder_key = f"home:{folder}" if folder else None
+    for chat_id, messages in chat_rows:
+        allowed = chat_id in page_ids or bool(
+            folder_key
+            and (chat_id == folder_key or chat_id.startswith(folder_key + "/"))
+        )
+        if not allowed:
+            raise HTTPException(status_code=400, detail="out-of-scope chat in scoped backup")
+        try:
+            parsed = json.loads(messages)
+        except (TypeError, json.JSONDecodeError):
+            raise HTTPException(status_code=400, detail="invalid chat in scoped backup")
+        if not isinstance(parsed, list):
+            raise HTTPException(status_code=400, detail="invalid chat in scoped backup")
+
+
 def _merge_backup(user_dir: Path, tdir: Path) -> dict:
     """Additive import: pages from the backup that don't exist locally (by
     block id, or by doc_id for PDF pages) are appended to the library; pages
@@ -219,41 +474,56 @@ def import_data(request: Request, file: UploadFile = File(...), mode: str = "rep
     if mode not in ("replace", "merge"):
         raise HTTPException(status_code=400, detail="mode must be 'replace' or 'merge'")
 
+    deadline = time.monotonic() + _IMPORT_MAX_SECONDS
     with tempfile.TemporaryDirectory(prefix="gamma-import-") as td:
         tdir = Path(td)
         zpath = tdir / "backup.zip"
         with open(zpath, "wb") as out:
-            shutil.copyfileobj(file.file, out)
+            _copy_limited(file.file, out, _IMPORT_MAX_ARCHIVE_BYTES, deadline)
         try:
             zf = zipfile.ZipFile(zpath)
         except zipfile.BadZipFile:
             raise HTTPException(status_code=400, detail="not a zip file")
 
         with zf:
-            names = set(zf.namelist())
+            members = _validated_backup_members(zf)
+            names = set(members)
+            manifest = {}
             if "manifest.json" in names:
                 try:
-                    fmt = json.loads(zf.read("manifest.json")).get("format")
+                    manifest = json.loads(zf.read("manifest.json"))
+                    fmt = manifest.get("format")
                 except Exception:
                     fmt = None
                 if fmt != "gamma-backup-1":
                     raise HTTPException(status_code=400, detail="unsupported backup format")
+                if manifest.get("kind") not in {None, "scoped"}:
+                    raise HTTPException(status_code=400, detail="unsupported backup kind")
+                if manifest.get("kind") == "scoped" and mode != "merge":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="scoped Gamma exports must be imported with mode=merge",
+                    )
             if "pages.db" not in names:
                 raise HTTPException(status_code=400, detail="not a Gamma backup (no pages.db in the zip)")
             for dbname in ("pages.db", "data.db"):
                 if dbname in names:
-                    with zf.open(dbname) as src, open(tdir / dbname, "wb") as out:
-                        shutil.copyfileobj(src, out)
+                    with zf.open(members[dbname]) as src, open(tdir / dbname, "wb") as out:
+                        _copy_limited(src, out, _IMPORT_MAX_DB_BYTES, deadline)
             (tdir / "uploads").mkdir()
             upload_names = []
-            for n in sorted(names):
-                base = os.path.basename(n)
-                # Accept flat uploads/<file> entries only — the exporter never
-                # writes nested paths or dotfiles (also a zip-slip guard).
-                if n != f"uploads/{base}" or not base or base.startswith("."):
+            extracted_upload_bytes = 0
+            for name in sorted(names):
+                if not name.startswith("uploads/"):
                     continue
-                with zf.open(n) as src, open(tdir / "uploads" / base, "wb") as out:
-                    shutil.copyfileobj(src, out)
+                base = name.split("/", 1)[1]
+                with zf.open(members[name]) as src, open(tdir / "uploads" / base, "wb") as out:
+                    extracted_upload_bytes += _copy_limited(
+                        src,
+                        out,
+                        _IMPORT_MAX_UPLOAD_BYTES - extracted_upload_bytes,
+                        deadline,
+                    )
                 upload_names.append(base)
 
         # Validate before touching live data. data.db needs no table check:
@@ -272,6 +542,9 @@ def import_data(request: Request, file: UploadFile = File(...), mode: str = "rep
                 raise HTTPException(status_code=400, detail=f"{dbname} in the zip is not a valid SQLite database")
             if required_table and required_table not in tables:
                 raise HTTPException(status_code=400, detail=f"{dbname} in the zip has no {required_table} table")
+
+        if manifest.get("kind") == "scoped":
+            _validate_scoped_backup(tdir, manifest, upload_names, deadline)
 
         user_dir = Path(USERS_DIR) / user
         if not (user_dir / "pages.db").exists():

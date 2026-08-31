@@ -3,6 +3,7 @@ page references uploaded assets (Notion-style: bare file vs. bundle decided by
 whether there's anything to bundle)."""
 
 import base64
+import json
 import os
 import re
 import sqlite3
@@ -10,6 +11,7 @@ import tempfile
 import threading
 import time
 import zipfile
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
@@ -18,7 +20,15 @@ from starlette.background import BackgroundTask
 
 from ..auth import require_user, resolve_user, share_scope_doc
 from ..blocks_store import BLOCK_COLUMNS, assert_block_in_doc, block_to_dict, fetch_subtree
-from ..db import pdf_upload_path, safe_doc_id, user_db_path, user_uploads_dir
+from ..db import (
+    PAGES_SCHEMA,
+    connect_data_db,
+    page_now,
+    pdf_upload_path,
+    safe_doc_id,
+    user_db_path,
+    user_uploads_dir,
+)
 from ..logbuf import log
 from ..logseq_graph_export import (
     CONFIG_EDN,
@@ -52,7 +62,17 @@ _ZOTERO_MAX_BLOCKS = 100_000
 _ZOTERO_MAX_PDF_BYTES = 128 * 1024 * 1024
 _ZOTERO_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 _ZOTERO_MAX_RDF_BYTES = 16 * 1024 * 1024
-_EXPORT_MODES = {"readable", "logseq-graph", "zotero-rdf"}
+_GAMMA_MAX_PAGES = 500
+_GAMMA_MAX_BLOCKS = 100_000
+_GAMMA_MAX_UPLOADS = 10_000
+_GAMMA_MAX_UPLOAD_BYTES = 512 * 1024 * 1024
+_GAMMA_MAX_ARCHIVE_BYTES = 640 * 1024 * 1024
+_GAMMA_MAX_SECONDS = 60
+_EXPORT_MODES = {"readable", "logseq-graph", "zotero-rdf", "gamma"}
+_SCOPED_UPLOAD_NAME_RE = re.compile(
+    r"^[0-9a-fA-F]{8,64}(?:-flat)?\.(?:pdf|png|jpe?g|gif|webp|svg|bmp)$"
+)
+_SCOPED_UPLOAD_REF_RE = re.compile(r"/api/uploads/([^\s\"')\]}>,]+)")
 _EXPORT_OP_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _FOLDER_PROGRESS_TTL = 5 * 60
 _FOLDER_PROGRESS_MAX = 64
@@ -74,14 +94,23 @@ def _md_response(md: str, slug: str) -> Response:
     )
 
 
-def _zip_response(entries, assets, uploads_dir, download_name: str, files=(), blobs=()) -> FileResponse:
+def _zip_response(
+    entries,
+    assets,
+    uploads_dir,
+    download_name: str,
+    files=(),
+    blobs=(),
+    compression=zipfile.ZIP_DEFLATED,
+    max_bytes=None,
+) -> FileResponse:
     """entries: list of (arcname, text). assets: set of upload filenames, written
     once under assets/ (deduped by content-addressed name). files: (arcname,
     disk path) pairs; blobs: (arcname, bytes) pairs."""
     tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
     tmp.close()
     try:
-        with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as z:
+        with zipfile.ZipFile(tmp.name, "w", compression) as z:
             for arcname, text in entries:
                 z.writestr(arcname, text)
             for filename in sorted(assets):
@@ -93,6 +122,8 @@ def _zip_response(entries, assets, uploads_dir, download_name: str, files=(), bl
                     z.write(path, arcname)
             for arcname, data in blobs:
                 z.writestr(arcname, data)
+        if max_bytes is not None and os.path.getsize(tmp.name) > max_bytes:
+            raise HTTPException(status_code=413, detail="export archive is too large")
     except Exception:
         os.unlink(tmp.name)
         raise
@@ -135,6 +166,37 @@ def _graph_page_parts(page, uploads_dir, include_pdf):
 def _check_export_mode(mode: str):
     if mode not in _EXPORT_MODES:
         raise HTTPException(status_code=400, detail="unsupported export mode")
+
+
+def _scoped_upload_refs(text: str) -> set[str]:
+    """Extract validated local upload names, rejecting malformed references."""
+    if "/api/uploads/" not in (text or ""):
+        return set()
+    matches = _SCOPED_UPLOAD_REF_RE.findall(text)
+    if not matches:
+        raise HTTPException(status_code=400, detail="invalid upload reference")
+    names = set()
+    for name in matches:
+        if not _SCOPED_UPLOAD_NAME_RE.fullmatch(name):
+            raise HTTPException(status_code=400, detail="invalid upload reference")
+        names.add(name)
+    return names
+
+
+def _scoped_upload_path(uploads_dir, filename: str):
+    """Resolve one regular, contained upload path; missing files return None."""
+    if not _SCOPED_UPLOAD_NAME_RE.fullmatch(filename):
+        raise HTTPException(status_code=400, detail="invalid upload filename")
+    path = uploads_dir / filename
+    if not path.exists():
+        return None
+    if path.is_symlink() or not path.is_file():
+        raise HTTPException(status_code=400, detail="unsafe upload path")
+    try:
+        path.resolve().relative_to(uploads_dir.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="unsafe upload path")
+    return path
 
 
 def _progress_key(user: str, operation: str) -> tuple[str, str]:
@@ -433,6 +495,170 @@ def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
     return entries, files, blobs
 
 
+def _gamma_export_response(
+    conn,
+    user: str,
+    roots: list[dict],
+    base: str,
+    folder_scope: str | None,
+    progress=None,
+):
+    """Build one bounded, owner-only scoped ``gamma-backup-1`` archive."""
+    if len(roots) > _GAMMA_MAX_PAGES:
+        raise HTTPException(status_code=413, detail="too many pages for Gamma export")
+    deadline = time.monotonic() + _GAMMA_MAX_SECONDS
+
+    def check_deadline():
+        if time.monotonic() > deadline:
+            raise HTTPException(status_code=413, detail="Gamma export work limit exceeded")
+
+    uploads_dir = user_uploads_dir(user)
+    upload_names = set()
+    page_ids = []
+    block_count = 0
+    with tempfile.TemporaryDirectory(prefix="gamma-scoped-export-") as temp_name:
+        temp_dir = Path(temp_name)
+        pages_path = temp_dir / "pages.db"
+        pages_db = sqlite3.connect(pages_path)
+        try:
+            for statement in PAGES_SCHEMA:
+                pages_db.execute(statement)
+            for number, root in enumerate(roots, 1):
+                check_deadline()
+                rows = fetch_subtree(conn, root["id"])
+                if not rows:
+                    continue
+                root_row = next((row for row in rows if row[0] == root["id"]), None)
+                if root_row is None or root_row[1] != "root":
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Gamma export requires a page root",
+                    )
+                block_count += len(rows)
+                if block_count > _GAMMA_MAX_BLOCKS:
+                    raise HTTPException(
+                        status_code=413,
+                        detail="too many blocks for Gamma export",
+                    )
+                for row in rows:
+                    pages_db.execute(
+                        f"INSERT OR IGNORE INTO unified_blocks ({BLOCK_COLUMNS}) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        tuple(row),
+                    )
+                    upload_names.update(_scoped_upload_refs(row[3] or ""))
+                    upload_names.update(_scoped_upload_refs(row[4] or ""))
+                try:
+                    root_properties = json.loads(root_row[4] or "{}")
+                except (TypeError, json.JSONDecodeError):
+                    raise HTTPException(status_code=400, detail="invalid page properties")
+                doc_id = root_properties.get("doc_id")
+                if doc_id:
+                    pdf_name = f"{doc_id}.pdf"
+                    if not _SCOPED_UPLOAD_NAME_RE.fullmatch(pdf_name):
+                        raise HTTPException(status_code=400, detail="invalid document id")
+                    upload_names.add(pdf_name)
+                page_ids.append(root["id"])
+                if progress:
+                    progress(title=(root_row[3] or "Untitled"), done=number)
+            pages_db.commit()
+        finally:
+            pages_db.close()
+
+        check_deadline()
+        chat_rows = {}
+        with connect_data_db(user) as data_db:
+            if page_ids:
+                placeholders = ",".join("?" for _ in page_ids)
+                for row in data_db.execute(
+                    "SELECT block_id, messages, updated_at FROM chats "
+                    f"WHERE block_id IN ({placeholders})",
+                    page_ids,
+                ):
+                    chat_rows[row[0]] = tuple(row)
+            if folder_scope:
+                exact = f"home:{folder_scope}"
+                prefix = f"{exact}/"
+                for row in data_db.execute(
+                    "SELECT block_id, messages, updated_at FROM chats "
+                    "WHERE block_id = ? OR substr(block_id, 1, ?) = ?",
+                    (exact, len(prefix), prefix),
+                ):
+                    chat_rows[row[0]] = tuple(row)
+
+        data_path = None
+        if chat_rows:
+            data_path = temp_dir / "data.db"
+            data_db = sqlite3.connect(data_path)
+            try:
+                data_db.execute(
+                    "CREATE TABLE chats (block_id TEXT PRIMARY KEY, "
+                    "messages TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                )
+                data_db.executemany(
+                    "INSERT INTO chats (block_id, messages, updated_at) "
+                    "VALUES (?, ?, ?)",
+                    chat_rows.values(),
+                )
+                data_db.commit()
+            finally:
+                data_db.close()
+
+        if len(upload_names) > _GAMMA_MAX_UPLOADS:
+            raise HTTPException(status_code=413, detail="too many uploads for Gamma export")
+        included = []
+        missing = []
+        upload_bytes = 0
+        for filename in sorted(upload_names):
+            check_deadline()
+            path = _scoped_upload_path(uploads_dir, filename)
+            if path is None:
+                missing.append(filename)
+                continue
+            upload_bytes += path.stat().st_size
+            if upload_bytes > _GAMMA_MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="uploads are too large for Gamma export")
+            included.append((filename, path))
+
+        manifest = json.dumps(
+            {
+                "format": "gamma-backup-1",
+                "kind": "scoped",
+                "scope": {
+                    "type": "folder" if folder_scope else "page",
+                    "folder": folder_scope,
+                    "page_ids": page_ids,
+                    "pages": len(page_ids),
+                },
+                "uploads": {
+                    "included": [name for name, _ in included],
+                    "missing": missing,
+                },
+                "exported_at": page_now(),
+            },
+            indent=2,
+        )
+        files = [("pages.db", pages_path)]
+        if data_path:
+            files.append(("data.db", data_path))
+        files.extend((f"uploads/{name}", path) for name, path in included)
+        input_bytes = sum(os.path.getsize(path) for _, path in files) + len(
+            manifest.encode("utf-8")
+        )
+        if input_bytes > _GAMMA_MAX_ARCHIVE_BYTES:
+            raise HTTPException(status_code=413, detail="Gamma export is too large")
+        check_deadline()
+        return _zip_response(
+            [("manifest.json", manifest)],
+            set(),
+            uploads_dir,
+            f"{base}-gamma.zip",
+            files=files,
+            compression=zipfile.ZIP_STORED,
+            max_bytes=_GAMMA_MAX_ARCHIVE_BYTES,
+        )
+
+
 # Sync on purpose: rendering + zipping runs in FastAPI's threadpool.
 @router.get("/pages/{block_id}/export")
 def export_page(block_id: str, request: Request, mode: str = "readable", pdf: int = 1,
@@ -447,8 +673,32 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
     layers, so the two switches don't apply to it. ``mode=zotero-rdf`` returns
     a one-page Zotero RDF library archive."""
     _check_export_mode(mode)
-    user = resolve_user(request)
     scope = share_scope_doc(request)
+    if mode == "gamma":
+        if scope is not None:
+            raise HTTPException(
+                status_code=403,
+                detail="Gamma export is not accessible via a share link",
+            )
+        user = require_user(request)
+        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+            row = conn.execute(
+                f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE id = ?",
+                (block_id,),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="page not found")
+            root = block_to_dict(row)
+            slug = slugify(root.get("content"), block_id)
+            return _gamma_export_response(
+                conn,
+                user,
+                [root],
+                slug,
+                None,
+            )
+
+    user = resolve_user(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
         assert_block_in_doc(conn, block_id, scope)
         rows = fetch_subtree(conn, block_id)
@@ -608,6 +858,15 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
 
     try:
         with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+            if mode == "gamma":
+                return _gamma_export_response(
+                    conn,
+                    user,
+                    matches,
+                    folder_slug,
+                    name,
+                    progress=report,
+                )
             if mode == "zotero-rdf":
                 entries, files, blobs = _zotero_export_parts(
                     conn,

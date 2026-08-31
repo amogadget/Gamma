@@ -4698,6 +4698,16 @@ export default function App() {
       importEmbeddedAnnots(focusedBlockId, docId, false, o.strip);
       return;
     }
+    if (o.source === "gamma") {
+      const inp = document.createElement("input");
+      inp.type = "file";
+      inp.accept = ".zip,application/zip";
+      inp.onchange = () => {
+        if (inp.files?.[0]) runBackupImport(inp.files[0], "merge");
+      };
+      inp.click();
+      return;
+    }
     if (o.source === "zotero") {
       const inp = document.createElement("input");
       inp.type = "file";
@@ -4730,6 +4740,13 @@ export default function App() {
           "graph.zip",
           exportFolder,
         );
+      } else if (o.format === "gamma") {
+        const saved = await downloadFolderExport(
+          `${base}&mode=gamma`,
+          "gamma.zip",
+          exportFolder,
+        );
+        if (saved) setStatus("Gamma export saved — import it into another Gamma to merge missing data.");
       } else if (o.format === "zotero") {
         const saved = await downloadFolderExport(
           `${base}&mode=zotero-rdf&${flags}&${bundle}`,
@@ -4755,6 +4772,14 @@ export default function App() {
     }
     if (o.format === "logseq") {
       await downloadExport(`/pages/${id}/export?mode=logseq-graph&${bundle}`, "graph.zip");
+      return;
+    }
+    if (o.format === "gamma") {
+      const saved = await downloadExport(
+        `/pages/${id}/export?mode=gamma`,
+        "gamma.zip",
+      );
+      if (saved) setStatus("Gamma export saved — import it into another Gamma to merge missing data.");
       return;
     }
     if (o.format === "zotero") {
@@ -7659,6 +7684,7 @@ export default function App() {
           hasPdf={!!docId && !!focusedBlockId}
           stripDefault={embAnnots === "strip"}
           busy={loading}
+          allowGamma={!authUser?.is_guest}
           onCancel={() => setImportOpen(false)}
           onImport={runImport}
         />
@@ -7670,6 +7696,7 @@ export default function App() {
           hasPdf={!!pdfUrl && !exportFolder}
           pdfStored={!!docId}
           folder={exportFolder}
+          allowGamma={!readOnly}
           onCancel={() => setExportOpen(false)}
           onExport={runExport}
         />
