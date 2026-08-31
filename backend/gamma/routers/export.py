@@ -40,6 +40,7 @@ from ..zotero_export import (
     IMAGE_MIME,
     MD_IMAGE_RE,
     build_rdf,
+    highlight_memo_html,
     note_html,
     strip_image_md,
 )
@@ -240,6 +241,38 @@ def _image_resolver(uploads_dir):
     return resolve
 
 
+def _image_highlights(root) -> list[dict]:
+    """Return image-bearing highlight subtrees using bounded iterative postorder."""
+    contains_image = {}
+    matches = []
+    stack = [(root, False)]
+    visited = 0
+    while stack:
+        node, expanded = stack.pop()
+        if not expanded:
+            visited += 1
+            if visited > _ZOTERO_MAX_BLOCKS:
+                raise HTTPException(
+                    status_code=413,
+                    detail="too many blocks for Zotero export",
+                )
+            stack.append((node, True))
+            stack.extend(
+                (child, False)
+                for child in reversed(node.get("children") or [])
+            )
+            continue
+        has_image = bool(MD_IMAGE_RE.search(node.get("content") or ""))
+        has_image = has_image or any(
+            contains_image.get(id(child), False)
+            for child in node.get("children") or []
+        )
+        contains_image[id(node)] = has_image
+        if has_image and (node.get("properties") or {}).get("highlight_id"):
+            matches.append(node)
+    return matches
+
+
 def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
                           folder_scope: str | None, include_taxonomy: bool,
                           include_pdf: bool, highlights: bool, notes: bool,
@@ -283,7 +316,10 @@ def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
                 pdf_arc = f"files/{number}/{pdf_leaf}.pdf"
                 marks = _collect_marks([block_to_dict(row) for row in rows]) if highlights else []
                 for mark in marks:
-                    mark["note"] = strip_image_md(mark["note"])
+                    mark["note"] = strip_image_md(
+                        mark["note"],
+                        see_item_notes=bool(notes),
+                    )
                 if marks:
                     try:
                         data, _ = annotate_pdf(pdf_path.read_bytes(), marks, author=user)
@@ -330,6 +366,7 @@ def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
                     })
 
         memo_html = []
+        memo_keys = set()
         if notes:
             for child in page.get("children") or []:
                 child_props = child.get("properties") or {}
@@ -337,11 +374,25 @@ def _zotero_export_parts(conn, user: str, roots: list[dict], base: str,
                     continue
                 html = note_html(child, resolve_image=resolve_image)
                 if html:
-                    memo_html.append({
-                        "key": child_props.get("zotero_note")
-                               or f"#gamma_note_{zotero_annot_key(child['id'])}",
-                        "html": html,
-                    })
+                    memo_key = child_props.get("zotero_note") or (
+                        f"#gamma_note_{zotero_annot_key(child['id'])}"
+                    )
+                    if memo_key not in memo_keys:
+                        memo_html.append({"key": memo_key, "html": html})
+                        memo_keys.add(memo_key)
+            for highlight in _image_highlights(page):
+                html = highlight_memo_html(
+                    highlight,
+                    resolve_image=resolve_image,
+                )
+                if html:
+                    memo_key = (
+                        f"#gamma_highlight_note_"
+                        f"{zotero_annot_key(highlight['id'])}"
+                    )
+                    if memo_key not in memo_keys:
+                        memo_html.append({"key": memo_key, "html": html})
+                        memo_keys.add(memo_key)
 
         folders = []
         if include_taxonomy:

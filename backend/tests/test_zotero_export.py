@@ -150,8 +150,21 @@ def test_zotero_export_note_images_are_safe_and_bounded(guest):
     assert uploaded.status_code == 200, uploaded.text
     image_url = uploaded.json()["url"]
     image_name = image_url.rsplit("/", 1)[-1]
+    uploaded_two = guest.post(
+        "/api/upload-image",
+        files={"file": ("second.png", _PNG + b"second", "image/png")},
+    )
+    image_two_url = uploaded_two.json()["url"]
+    image_two_name = image_two_url.rsplit("/", 1)[-1]
     _put_children(guest, page["id"], [
-        _positioned("zeaimg-h", "quoted", note=f"see ![figure]({image_url})"),
+        _positioned(
+            "zeaimg-h",
+            "<quoted & safe>",
+            note=(
+                f"see ![figure]({image_url}) and again ![same]({image_url}) "
+                f"plus ![second]({image_two_url})"
+            ),
+        ),
         {
             "id": "zeaimg-note",
             "content": f"<script>alert(1)</script> figure: ![figure]({image_url})",
@@ -166,16 +179,143 @@ def test_zotero_export_note_images_are_safe_and_bounded(guest):
     ))
     rdf_name, rdf, items = _rdf(archive)
     base = rdf_name.rsplit("/", 1)[0]
-    assert archive.read(f"{base}/files/1/{image_name}") == _PNG
+    first_arc = f"{base}/files/1/{image_name}"
+    second_arc = f"{base}/files/1/{image_two_name}"
+    assert archive.read(first_arc) == _PNG
+    assert archive.read(second_arc) == _PNG + b"second"
+    assert archive.namelist().count(first_arc) == 1  # repeated refs share one payload
     assert f"files/1/{image_name}" in rdf and "image/png" in rdf
-    assert "data:image/png;base64," in rdf
+    assert rdf.count("data:image/png;base64,") >= 3
     assert "<script>" not in rdf and "&amp;lt;script&amp;gt;" in rdf
+    assert "&amp;lt;quoted &amp;amp; safe&amp;gt;" in rdf
+
+    item_notes = [note["text"] for note in items[0]["notes"]]
+    assert len(item_notes) == 2  # top-level note plus the image-bearing highlight Memo
+    highlight_note = next(note for note in item_notes if "p.1" in note)
+    assert "<quoted & safe>" in highlight_note and "see" in highlight_note
 
     pdf = archive.read(f"{base}/{items[0]['pdf_paths'][0]}")
     annotations = PdfReader(io.BytesIO(pdf)).pages[0]["/Annots"]
     contents = [str(annotation.get_object().get("/Contents") or "") for annotation in annotations]
-    assert any(f"(image: {image_name})" in content for content in contents)
+    assert any(
+        f"(image: {image_name} — see item notes)" in content
+        and f"(image: {image_two_name} — see item notes)" in content
+        for content in contents
+    )
     assert not any("![figure]" in content for content in contents)
+
+    without_notes_archive = _zip(guest.get(
+        f"/api/pages/{page['id']}/export",
+        params={"mode": "zotero-rdf", "notes": 0},
+    ))
+    without_notes_rdf, _, without_notes_items = _rdf(without_notes_archive)
+    without_notes = without_notes_items[0]
+    assert without_notes["notes"] == []
+    without_notes_base = without_notes_rdf.rsplit("/", 1)[0]
+    without_notes_pdf = without_notes_archive.read(
+        f"{without_notes_base}/{without_notes['pdf_paths'][0]}"
+    )
+    disabled_annotations = PdfReader(io.BytesIO(without_notes_pdf)).pages[0]["/Annots"]
+    disabled_contents = [
+        str(annotation.get_object().get("/Contents") or "")
+        for annotation in disabled_annotations
+    ]
+    assert any(f"(image: {image_name})" in content for content in disabled_contents)
+    assert not any("see item notes" in content for content in disabled_contents)
+
+    imported = guest.post(
+        "/api/import/zotero",
+        files={
+            "file": (
+                "highlight-images.zip",
+                io.BytesIO(archive.fp.getvalue()),
+                "application/zip",
+            )
+        },
+    )
+    assert imported.status_code == 200, imported.text
+    assert imported.json()["notes_imported"] == 2
+
+    _, exported_again, items_again = _rdf(_zip(guest.get(
+        f"/api/pages/{page['id']}/export",
+        params={"mode": "zotero-rdf"},
+    )))
+    assert len(items_again[0]["notes"]) == 2
+    assert exported_again.count('rdf:about="#gamma_highlight_note_') == 1
+
+
+def test_highlight_image_memo_missing_and_inline_size_limit(guest, monkeypatch):
+    page = make_page(guest, "Zea missing image")
+    uploaded = guest.post(
+        "/api/upload-image",
+        files={"file": ("large.png", _PNG, "image/png")},
+    )
+    image_url = uploaded.json()["url"]
+    image_name = image_url.rsplit("/", 1)[-1]
+    missing_name = "abcdef0123456789abcdef01.png"
+    _put_children(guest, page["id"], [
+        _positioned(
+            "zea-missing-h",
+            "missing and large",
+            note=(
+                f"missing ![gone](/api/uploads/{missing_name}) "
+                f"large ![large]({image_url})"
+            ),
+        ),
+    ])
+    monkeypatch.setattr("gamma.routers.export._EMBED_IMAGE_CAP", 1)
+    archive = _zip(guest.get(
+        f"/api/pages/{page['id']}/export",
+        params={"mode": "zotero-rdf"},
+    ))
+    rdf_name, rdf, items = _rdf(archive)
+    base = rdf_name.rsplit("/", 1)[0]
+    assert "data:image/png;base64," not in rdf
+    assert archive.read(f"{base}/files/1/{image_name}") == _PNG
+    assert not any(name.endswith(f"/{missing_name}") for name in archive.namelist())
+    note = items[0]["notes"][0]["text"]
+    assert f"(image: {missing_name})" in note
+    assert f"(image: {image_name})" in note
+
+
+def test_deep_highlight_image_notes_use_iterative_traversal():
+    from gamma.routers.export import _image_highlights
+    from gamma.zotero_export import highlight_memo_html, note_html
+
+    root = {
+        "id": "deep-highlight",
+        "content": "root",
+        "properties": {
+            "highlight_id": "deep-highlight",
+            "pdf_page": 9,
+            "quote": "deep quote",
+        },
+        "children": [],
+    }
+    current = root
+    for index in range(1500):
+        child = {
+            "id": f"deep-{index}",
+            "content": "tail" if index == 1499 else "",
+            "properties": {},
+            "children": [],
+        }
+        current["children"] = [child]
+        current = child
+    current["content"] += " ![deep](/api/uploads/abcdef0123456789abcdef01.png)"
+
+    assert _image_highlights(root) == [root]
+    html = highlight_memo_html(root)
+    assert "p.9" in html and "deep quote" in html
+    assert "(image: abcdef0123456789abcdef01.png)" in html
+    assert html.count("<li>") == 1500
+    assert note_html({
+        "content": "kept",
+        "children": [{
+            "content": "",
+            "children": [{"content": "", "children": []}],
+        }],
+    }) == "<p>kept</p>"
 
 
 def test_zotero_export_switches(guest):

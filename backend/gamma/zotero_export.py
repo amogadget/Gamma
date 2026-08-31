@@ -53,9 +53,13 @@ IMAGE_MIME = {
 }
 
 
-def strip_image_md(text: str) -> str:
+def strip_image_md(text: str, see_item_notes: bool = True) -> str:
     """Replace images in plain PDF annotation comments with readable text."""
-    return MD_IMAGE_RE.sub(lambda match: f"(image: {match.group(1)})", text or "")
+    def replacement(match):
+        suffix = " — see item notes" if see_item_notes else ""
+        return f"(image: {match.group(1)}{suffix})"
+
+    return MD_IMAGE_RE.sub(replacement, text or "")
 
 
 def _inline_html(text: str) -> str:
@@ -83,31 +87,88 @@ def _content_html(text: str, resolve_image) -> str:
     return "".join(parts)
 
 
+_NOTE_NODE_CAP = 100_000
+
+
+def _list_html(children, resolve_image=None) -> str:
+    """Render nested list items iteratively so deep notes cannot overflow Python."""
+    roots = list(children or [])
+    meaningful = {}
+    stack = [(child, False) for child in reversed(roots)]
+    visited = 0
+    while stack:
+        node, expanded = stack.pop()
+        if not expanded:
+            visited += 1
+            if visited > _NOTE_NODE_CAP:
+                raise ValueError("note subtree exceeds export node limit")
+            stack.append((node, True))
+            stack.extend(
+                (child, False)
+                for child in reversed(node.get("children") or [])
+            )
+            continue
+        content = (node.get("content") or "").strip()
+        meaningful[id(node)] = bool(content) or any(
+            meaningful.get(id(child), False)
+            for child in node.get("children") or []
+        )
+
+    output = []
+    events = [("node", child) for child in reversed(roots)]
+    while events:
+        event, value = events.pop()
+        if event == "close":
+            output.append("</ul></li>")
+            continue
+        if not meaningful.get(id(value), False):
+            continue
+        content = (value.get("content") or "").strip()
+        nested = [
+            child for child in value.get("children") or []
+            if meaningful.get(id(child), False)
+        ]
+        output.append(f"<li>{_content_html(content, resolve_image)}")
+        if nested:
+            output.append("<ul>")
+            events.append(("close", None))
+            events.extend(("node", child) for child in reversed(nested))
+        else:
+            output.append("</li>")
+    return "".join(output)
+
+
 def note_html(node, resolve_image=None) -> str:
     """Convert one free-note block subtree to Zotero Memo HTML."""
-
-    def items(children):
-        output = ""
-        for child in children:
-            content = (child.get("content") or "").strip()
-            nested = items(child.get("children") or [])
-            if not content and not nested:
-                continue
-            output += (
-                f"<li>{_content_html(content, resolve_image)}"
-                + (f"<ul>{nested}</ul>" if nested else "")
-                + "</li>"
-            )
-        return output
-
     output = ""
     content = (node.get("content") or "").strip()
     if content:
         output += f"<p>{_content_html(content, resolve_image)}</p>"
-    children = items(node.get("children") or [])
+    children = _list_html(node.get("children") or [], resolve_image)
     if children:
         output += f"<ul>{children}</ul>"
     return output
+
+
+def highlight_memo_html(node, resolve_image=None) -> str:
+    """Render an image-bearing highlight note with page and quote context."""
+    props = node.get("properties") or {}
+    page_number = props.get("pdf_page") or (
+        props.get("pdf_position") or {}
+    ).get("pageNumber")
+    quote = re.sub(r"\s+", " ", props.get("quote") or "").strip()
+    header_parts = []
+    if page_number:
+        header_parts.append(f"p.{page_number}")
+    if quote:
+        header_parts.append(f"“{quote[:120]}”")
+    body = note_html(node, resolve_image)
+    if not body:
+        return ""
+    header = " — ".join(header_parts)
+    if not header:
+        return body
+    return f"<p><strong>{html_mod.escape(header, quote=False)}</strong></p>{body}"
 
 
 def _person(sequence, name: str):
