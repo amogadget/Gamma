@@ -1,5 +1,6 @@
 """AI chat, provider settings, model discovery, and ChatGPT OAuth routes."""
 
+import hashlib
 import json
 import re
 import secrets
@@ -7,6 +8,7 @@ import sqlite3
 import threading
 import time
 import urllib.error
+from collections import OrderedDict
 from datetime import datetime
 from urllib.request import Request as URLRequest, urlopen
 
@@ -14,7 +16,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import chatgpt_oauth
+from .. import chatgpt_oauth, ratelimit
 from ..ai_client import (
     UpstreamError,
     call_ai as _call_ai,
@@ -561,6 +563,177 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     except ModelListError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"models": models}
+
+
+# --- PDF translation ----------------------------------------------------------
+# Backs the viewer's translated view: the frontend segments a page into
+# paragraph blocks (frontend/src/pdfTranslate.js) and sends their TEXT here;
+# geometry never leaves the client. Translations are cached per (user, target
+# language, model, source text) — IN MEMORY only, deliberately: nothing is
+# persisted to disk, the cache just makes retries, re-shows and halted-job
+# resumes free until the server restarts.
+#
+# The selected paragraphs are sent to the user's own configured AI provider —
+# the same disclosure that applies to chat. Nothing translates unless the user
+# asks for it, and share/read-only views never expose the endpoint.
+
+# Allowlisted target languages (code → name spliced into the prompt). Mirrored
+# in frontend/src/prefs.js TRANSLATE_LANGS — keep the two in sync.
+TRANSLATE_LANGS = {
+    "en": "English", "zh-CN": "Simplified Chinese", "zh-TW": "Traditional Chinese",
+    "ja": "Japanese", "ko": "Korean", "de": "German", "fr": "French",
+    "es": "Spanish", "pt": "Portuguese", "it": "Italian", "ru": "Russian",
+}
+
+_TRANSLATE_PROMPT = (
+    "You translate paragraphs extracted from an academic paper into {lang}. "
+    "The user message is a JSON array of strings; each string is one paragraph, "
+    "heading, or caption. Reply with ONLY a JSON array of strings of the SAME "
+    "length and order — element i is the translation of element i. No code "
+    "fences, no commentary. Rules: keep inline math, LaTeX, numbers, symbols, "
+    "variable names, citation markers like [12], and URLs exactly as written; "
+    "keep the register of an academic paper; translate headings as headings. "
+    "Return a string unchanged when it is already in the target language or is "
+    "pure math/code."
+)
+
+_TRANSLATE_MAX_TEXTS = 200      # paragraphs per request (a page is ~10–50)
+_TRANSLATE_MAX_CHARS = 60000    # total source chars per request
+# Per-user request ceiling. The viewer caps itself at 8 parallel requests and
+# chunks a page into ~6-paragraph calls, so a whole-document job on a long book
+# stays well inside this; it exists to bound cost/abuse, not normal reading.
+_TRANSLATE_RATE_MAX = 240
+_TRANSLATE_RATE_WINDOW = 60
+# In-memory LRU: key (see _translate_key) → translated text. Process-wide,
+# never written to disk; a restart simply starts cold.
+#
+# NOTE: mutated from FastAPI's threadpool (this route is sync `def`), so
+# concurrent page jobs touch it at once. Reads and writes go through the two
+# helpers below precisely so a lock can be added in one place — the source
+# follow-up commit (f13f028) hardens this; today the operations are individually
+# GIL-atomic and a lost cache line only costs a re-translation.
+_TRANSLATE_CACHE: "OrderedDict[str, str]" = OrderedDict()
+_TRANSLATE_CACHE_CAP = 5000     # cached paragraphs kept in memory (LRU)
+
+
+class AITranslateRequest(BaseModel):
+    texts: list = Field(default_factory=list)  # source paragraphs, viewer order
+    lang: str = "zh-CN"   # target language code (TRANSLATE_LANGS key)
+    model: str = ""       # model registry id; "" = the user's default
+    effort: str = ""      # reasoning effort; "" = provider default (param omitted)
+
+
+def _translate_key(user: str, lang: str, model: str, text: str) -> str:
+    # Keyed on the bare model NAME (not the registry id): registry ids embed
+    # the provider-entry id, which changes when a key is re-added — the cached
+    # translation shouldn't die with it. The username scopes the shared
+    # in-memory dict per account.
+    return hashlib.sha256(f"{user}\x00{lang}\x00{model}\x00{text}".encode()).hexdigest()
+
+
+def _translate_cache_get(keys: list) -> dict:
+    """Cached translations for `keys` (LRU-touched). Single choke point for
+    reads so concurrency hardening lands in one place."""
+    hits = {}
+    for k in keys:
+        if k in _TRANSLATE_CACHE:
+            _TRANSLATE_CACHE.move_to_end(k)  # LRU touch
+            hits[k] = _TRANSLATE_CACHE[k]
+    return hits
+
+
+def _translate_cache_put(key: str, text: str) -> None:
+    """Store one translation and trim to the cap. Single choke point for
+    writes (see the note on _TRANSLATE_CACHE)."""
+    _TRANSLATE_CACHE[key] = text
+    _TRANSLATE_CACHE.move_to_end(key)
+    while len(_TRANSLATE_CACHE) > _TRANSLATE_CACHE_CAP:
+        try:
+            _TRANSLATE_CACHE.popitem(last=False)
+        except KeyError:  # raced empty — nothing left to trim
+            break
+
+
+def _parse_translation_array(reply: str, n: int) -> list:
+    """The model's reply as a list of n strings — tolerates code fences and
+    prose around the array, nothing else."""
+    s = (reply or "").strip()
+    i, j = s.find("["), s.rfind("]")
+    if i < 0 or j <= i:
+        raise ValueError("no JSON array in reply")
+    arr = json.loads(s[i:j + 1])
+    if not isinstance(arr, list) or len(arr) != n:
+        raise ValueError(f"expected {n} translations, got {len(arr) if isinstance(arr, list) else 'non-list'}")
+    return ["" if t is None else str(t) for t in arr]
+
+
+# Sync def: the AI call runs in the threadpool.
+@router.post("/ai/translate")
+def ai_translate(payload: AITranslateRequest, request: Request):
+    user = require_user(request)
+    lang = payload.lang
+    if lang not in TRANSLATE_LANGS:
+        raise HTTPException(status_code=400, detail="unsupported target language")
+    texts = payload.texts
+    if not isinstance(texts, list) or not texts or len(texts) > _TRANSLATE_MAX_TEXTS:
+        raise HTTPException(status_code=400, detail=f"texts must be 1–{_TRANSLATE_MAX_TEXTS} strings")
+    if any(not isinstance(t, str) for t in texts):
+        raise HTTPException(status_code=400, detail="texts must be strings")
+    if sum(len(t) for t in texts) > _TRANSLATE_MAX_CHARS:
+        raise HTTPException(status_code=413, detail="too much text in one request")
+    ratelimit.check(f"ai-translate:{user}", _TRANSLATE_RATE_MAX, _TRANSLATE_RATE_WINDOW)
+
+    rt = require_ai_runtime(user)
+    entry = _resolve_model(rt, payload.model)
+    model_name = entry["model"]
+
+    keys = [_translate_key(user, lang, model_name, t) for t in texts]
+    cached = _translate_cache_get(keys)
+
+    # Whitespace-only paragraphs never reach the model; everything else missing
+    # from the cache goes upstream in ONE call, as a JSON array both ways.
+    miss = [i for i, t in enumerate(texts) if keys[i] not in cached and t.strip()]
+    out = [cached.get(k, texts[i] if not texts[i].strip() else "") for i, k in enumerate(keys)]
+    if miss:
+        miss_texts = [texts[i] for i in miss]
+        system = _TRANSLATE_PROMPT.format(lang=TRANSLATE_LANGS[lang])
+        effort = _resolve_effort(payload.effort)
+
+        def call(batch):
+            # Output roughly tracks input length (CJK ≈ 1 token/char); the
+            # generous floor covers JSON overhead and reasoning models whose
+            # thinking spends from the same budget.
+            max_tokens = min(30000, 8000 + 2 * sum(len(t) for t in batch))
+            return _call_ai(
+                [{"role": "user", "content": json.dumps(batch, ensure_ascii=False)}],
+                system, entry, rt, effort=effort, max_tokens=max_tokens, timeout=180)
+
+        try:
+            reply = call(miss_texts)
+        except Exception as e:
+            log.warning(f"[ai_translate] {e}")
+            raise HTTPException(status_code=502, detail=f"translation failed: {e}")
+        try:
+            translated = _parse_translation_array(reply, len(miss_texts))
+        except ValueError as e:
+            # The provider answered but the array is off — models sometimes
+            # merge or drop an element. Salvage paragraph by paragraph (a
+            # 1-element array can't misalign) instead of failing the chunk;
+            # a paragraph that still won't translate comes back VERBATIM, so
+            # the viewer shows the original there instead of erroring.
+            log.warning(f"[ai_translate] {e} — salvaging per paragraph")
+            translated = []
+            for t in miss_texts:
+                try:
+                    translated.append(_parse_translation_array(call([t]), 1)[0])
+                except Exception as e2:
+                    log.warning(f"[ai_translate] paragraph salvage failed: {e2}")
+                    translated.append(t)
+        for i, t in zip(miss, translated):
+            out[i] = t
+            if t and t != texts[i]:  # identity fallbacks stay uncached so a retry can improve them
+                _translate_cache_put(keys[i], t)
+    return {"translations": out, "model": entry["id"], "cached": not miss}
 
 
 # --- Periodic model-catalog refresh ------------------------------------------

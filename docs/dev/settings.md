@@ -23,7 +23,8 @@ Nine panes in four rail groups (`NAV_GROUPS` in
 - **Workspace** — General (theme, flip page colors, home-card thumbnails and
   folder/label chips, paper-fetching prefs),
   Library (storage usage/limits, search index, per-paper metadata health table)
-- **Reading** — PDF viewer (snap scrolling, embedded annotations), Search
+- **Reading** — PDF viewer (snap scrolling, embedded annotations, translation:
+  button on/off, target language, model, effort, parallel requests), Search
   (auto-expand defaults), Notes (Enter behavior, note badges)
 - **AI** — Providers (API keys, in [settingsAi.jsx](../../frontend/src/settingsAi.jsx)),
   Assistant (models, folder-agent permissions, tool rounds, agent read window,

@@ -71,6 +71,11 @@ def _finish_request_log(request: Request, response, started: float, expected: st
             reason = "server-error"
         elif path in _AUTH_PATHS:
             reason = "session-operation"
+        elif status < 400:
+            # Successful but ≥2s — logged for the duration, not a failure
+            # (AI calls, big downloads). The old fallback stamped these
+            # "request-rejected", which read as an error.
+            reason = "slow-request"
         else:
             reason = "request-rejected"
     log.info(

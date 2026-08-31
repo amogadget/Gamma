@@ -394,6 +394,13 @@ export const GlobeIcon = (p) => (
 export const TypeIcon = (p) => (
   <Icon {...p}><path d="M4 7V5h16v2" /><path d="M12 5v14" /><path d="M9 19h6" /></Icon>
 );
+export const LanguagesIcon = (p) => (
+  <Icon {...p}><path d="m5 8 6 6" /><path d="m4 14 6-6 2-3" /><path d="M2 5h12" /><path d="M7 2h1" /><path d="m22 22-5-10-5 10" /><path d="M14 18h6" /></Icon>
+);
+// Languages icon with a slash: translations exist but are hidden.
+export const LanguagesOffIcon = (p) => (
+  <Icon {...p}><path d="m5 8 6 6" /><path d="m4 14 6-6 2-3" /><path d="M2 5h12" /><path d="M7 2h1" /><path d="m22 22-5-10-5 10" /><path d="M14 18h6" /><path d="M3 3l18 18" /></Icon>
+);
 export const ShieldIcon = (p) => (
   <Icon {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></Icon>
 );

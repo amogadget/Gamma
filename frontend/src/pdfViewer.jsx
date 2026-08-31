@@ -11,6 +11,7 @@ import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import "pdfjs-dist/web/pdf_viewer.css";
 import { createPortal } from "react-dom";
 import { ChevronRightIcon, LinkIcon, MessageSquareIcon, OutlineIcon } from "./icons";
+import { segmentPage } from "./pdfTranslate";
 import { ChatMarkdown } from "./widgets";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 // Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
@@ -319,7 +320,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -352,6 +353,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     onLoadState,
     onZoomTo,
     onAreaSelection,
+    onTranslate,
+    onTranslateState,
   };
   const stableCbs = useMemo(
     () => ({
@@ -361,9 +364,31 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       onHighlightContext: (...a) => cbRef.current.onHighlightContext?.(...a),
       onExternalLink: (...a) => cbRef.current.onExternalLink?.(...a),
       onLinkContext: (...a) => cbRef.current.onLinkContext?.(...a),
+      onTranslate: (...a) => cbRef.current.onTranslate?.(...a),
     }),
     [],
   );
+
+  // Alt held while any page shows its translation = peek at the original:
+  // the overlays hide (CSS visibility, no re-render) until the key is
+  // released. The DOM check keeps the preventDefault (which stops a bare Alt
+  // from focusing the browser menu bar) from firing when nothing is
+  // translated.
+  const [transPeek, setTransPeek] = useState(false);
+  useEffect(() => {
+    const anyTrans = () => !!viewerRef.current?.querySelector(".pdfTransLayer");
+    const kd = (e) => { if (e.key === "Alt" && anyTrans()) { e.preventDefault(); setTransPeek(true); } };
+    const ku = (e) => { if (e.key === "Alt" && anyTrans()) { e.preventDefault(); setTransPeek(false); } };
+    const off = () => setTransPeek(false);
+    window.addEventListener("keydown", kd);
+    window.addEventListener("keyup", ku);
+    window.addEventListener("blur", off);
+    return () => {
+      window.removeEventListener("keydown", kd);
+      window.removeEventListener("keyup", ku);
+      window.removeEventListener("blur", off);
+    };
+  }, []);
 
   // "rendered" only means blank page boxes committed to the DOM — each canvas
   // paints asynchronously after that. Hold the swapped-in url here until the
@@ -1269,6 +1294,164 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     scrollToPositionRef.current?.({ position: { pageNumber: p }, offset: 0 });
   };
 
+  // --- Translation engine ----------------------------------------------------
+  // One queue for the whole document, driven from the host's toolbar button.
+  // A job segments every queued page up front (fast, pure geometry), builds
+  // ONE flat list of small chunks, and lets N workers (Settings → parallel
+  // requests) stream through it — across page boundaries, so the parallel
+  // slots never idle at page ends. Each chunk is retried once; the server
+  // additionally salvages miscounted batches per paragraph. State per page
+  // sits in transMap; PdfPage only *renders* its entry. Halting flips
+  // job.aborted: finished chunks keep their text.
+  //
+  // Placed below curPage/numPages on purpose — curPageRef reads them during
+  // render, so the block must sit after their declarations.
+  const CHUNK_PARAS = 6, CHUNK_CHARS = 1200;
+  const [transMap, setTransMap] = useState(() => new Map()); // pageNo -> {key, paras, texts, done}
+  const [transShown, setTransShown] = useState(true); // show/hide applies to ALL pages at once
+  const [transStatus, setTransStatus] = useState({ running: false, progress: 0, label: "" });
+  const transJobRef = useRef(null); // {aborted} while a job runs
+  const parasCacheRef = useRef(new Map()); // pageNo -> segmented paragraph blocks
+  const transMapRef = useRef(transMap);
+  transMapRef.current = transMap;
+  const translateKeyRef = useRef(translateKey);
+  translateKeyRef.current = translateKey;
+  const translateParallelRef = useRef(3);
+  translateParallelRef.current = Math.max(1, translateParallel || 3);
+  const curPageRef = useRef(1);
+  curPageRef.current = curPage;
+  const numPagesRef = useRef(0);
+  numPagesRef.current = numPages;
+
+  // Everything the host's button needs to know, pushed on every change.
+  useEffect(() => {
+    cbRef.current.onTranslateState?.({ ...transStatus, shown: transShown, pages: transMap.size });
+  }, [transStatus, transShown, transMap]);
+
+  // A document swap invalidates geometry and translations wholesale.
+  useEffect(() => {
+    if (transJobRef.current) transJobRef.current.aborted = true;
+    parasCacheRef.current = new Map();
+    setTransMap(new Map());
+    setTransShown(true);
+    setTransStatus({ running: false, progress: 0, label: "" });
+  }, [docSeq]);
+  useEffect(() => () => { if (transJobRef.current) transJobRef.current.aborted = true; }, []);
+
+  async function ensureParas(pn) {
+    const cache = parasCacheRef.current;
+    if (cache.has(pn)) return cache.get(pn);
+    const doc = displayedDocRef.current;
+    if (!doc) return [];
+    const page = await doc.getPage(pn);
+    const vp = page.getViewport({ scale: 1 });
+    const tc = await page.getTextContent();
+    const runs = tc.items.map((it) => {
+      const tx = pdfjsLib.Util.transform(vp.transform, it.transform);
+      const h = Math.hypot(tx[2], tx[3]) || 10;
+      return { str: it.str || "", x: tx[4], y: tx[5], w: it.width || h, h, font: it.fontName || "" };
+    });
+    const paras = segmentPage(runs);
+    cache.set(pn, paras);
+    return paras;
+  }
+
+  async function runTransJob(pages, label) {
+    if (transJobRef.current || !pages.length) return;
+    const job = { aborted: false };
+    transJobRef.current = job;
+    const key = translateKeyRef.current;
+    setTransShown(true);
+    setTransStatus({ running: true, progress: 0, label });
+    const setPageTrans = (pn, entry) =>
+      setTransMap((prev) => { const m = new Map(prev); m.set(pn, entry); return m; });
+    // Segment everything queued, then chunk it into one flat list.
+    const chunks = [];
+    const pageState = new Map(); // pn -> {paras, out, remaining}
+    let totalChars = 0;
+    for (const pn of pages) {
+      if (job.aborted) break;
+      let paras = [];
+      try { paras = await ensureParas(pn); } catch { /* unreadable page — skip it */ }
+      const texts = paras.filter((p) => p.translate).map((p) => p.text);
+      if (!texts.length) {
+        setPageTrans(pn, { key, paras, texts: [], done: true });
+        continue;
+      }
+      const st = { paras, out: new Array(texts.length).fill(undefined), remaining: 0 };
+      pageState.set(pn, st);
+      setPageTrans(pn, { key, paras, texts: [], done: false });
+      let start = 0, chars = 0;
+      for (let i = 0; i < texts.length; i++) {
+        chars += texts[i].length;
+        totalChars += texts[i].length;
+        if (i + 1 - start >= CHUNK_PARAS || chars >= CHUNK_CHARS || i === texts.length - 1) {
+          chunks.push({ pn, off: start, texts: texts.slice(start, i + 1) });
+          st.remaining += 1;
+          start = i + 1;
+          chars = 0;
+        }
+      }
+    }
+    let doneChars = 0, failed = false;
+    const queue = [...chunks];
+    const worker = async () => {
+      while (queue.length && !job.aborted && !failed) {
+        const c = queue.shift();
+        let res = null;
+        // One client-side retry per chunk (transient network/provider blips);
+        // the server separately salvages miscounted model replies.
+        for (let attempt = 0; attempt < 2 && !res && !job.aborted; attempt++) {
+          res = await Promise.resolve(cbRef.current.onTranslate?.(c.texts)).catch(() => null);
+        }
+        if (job.aborted) return;
+        if (!res) { failed = true; return; }
+        const st = pageState.get(c.pn);
+        res.forEach((t, j) => { st.out[c.off + j] = t; });
+        st.remaining -= 1;
+        setPageTrans(c.pn, { key, paras: st.paras, texts: st.out.slice(), done: st.remaining === 0 });
+        doneChars += c.texts.reduce((n, t) => n + t.length, 0);
+        setTransStatus({ running: true, label, progress: totalChars ? doneChars / totalChars : 1 });
+      }
+    };
+    await Promise.all(Array.from(
+      { length: Math.min(translateParallelRef.current, chunks.length || 1) }, worker));
+    transJobRef.current = null;
+    setTransStatus({ running: false, label, progress: totalChars ? doneChars / totalChars : 1 });
+  }
+
+  // Imperative surface for the host's toolbar button + its menu.
+  // Deliberately dependency-less: re-registered every render so
+  // translatePage/translateDoc always close over current job state.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!translateCtlRef) return;
+    translateCtlRef.current = {
+      running: () => !!transJobRef.current,
+      halt: () => { if (transJobRef.current) transJobRef.current.aborted = true; },
+      setShown: setTransShown,
+      translatePage: () => runTransJob([curPageRef.current], `p.${curPageRef.current}`),
+      translateDoc: () => {
+        const key = translateKeyRef.current;
+        const cur = curPageRef.current;
+        const pages = [];
+        for (let p = 1; p <= numPagesRef.current; p++) {
+          const e = transMapRef.current.get(p);
+          if (!(e && e.done && e.key === key)) pages.push(p);
+        }
+        // The page being read paints first, then outward by distance
+        // (forward before backward at equal distance) — a whole-document job
+        // never keeps the reader waiting on page 1.
+        pages.sort((a, b) =>
+          (Math.abs(a - cur) - Math.abs(b - cur))
+          || ((a < cur ? 1 : 0) - (b < cur ? 1 : 0))
+          || (a - b));
+        runTransJob(pages, "document");
+      },
+    };
+    return () => { translateCtlRef.current = null; };
+  });
+
   // In-PDF link annotations: internal destinations jump within the document.
   async function goToDest(dest) {
     if (!pdfDoc) return;
@@ -1601,7 +1784,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       ) : null}
       {/* overflow-anchor off: the browser's own scroll anchoring would fight
           the zoom re-placement above with adjustments of its own. */}
-      <div ref={viewerRef} className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "") + (darkPage ? " pdfDark" : "")}
+      <div ref={viewerRef} className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "") + (darkPage ? " pdfDark" : "") + (transPeek ? " transPeek" : "")}
         style={{ height: "100%", overflowY: "auto", overflowX: "auto", overflowAnchor: "none" }}
         onScroll={(e) => {
           lastScrollRef.current = e.currentTarget.scrollTop;
@@ -1634,6 +1817,9 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
               }
               reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
               findMarks={marksByPage.get(i + 1) || EMPTY_MARKS}
+              trans={transMap.get(i + 1) || null}
+              transKey={translateKey}
+              transShown={transShown}
               previewBase={previewBase}
               onInternalLink={goToDestStable}
               onExternalLink={stableCbs.onExternalLink}
@@ -1778,6 +1964,41 @@ function NoteBadge({ hlId, text, style, onClick, onContextMenu }) {
   );
 }
 
+// One translated paragraph. Two independent layers inside the block box:
+// masks that cover EXACTLY the original text lines (per-line rects, so a
+// figure the paragraph wraps around is never painted over), and the
+// translated text with an inline background behind each rendered line
+// (box-decoration-break: clone) — so text and mask stay readable even where
+// the browser's line breaks don't coincide with the original's. The text is
+// drawn at the original font size, shrunk in steps until it fits the box —
+// the page layout never reflows. The measured shrink loop runs a handful of
+// synchronous reflows per block; pages have tens of blocks, which is fine.
+function TransPara({ box, lines, baseSize, text }) {
+  const ref = useRef(null); // the text container (the fit-measured element)
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    let size = baseSize;
+    el.style.fontSize = size + "px";
+    let guard = 0;
+    while (guard++ < 24 && size > 6
+        && (el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1)) {
+      size *= 0.93;
+      el.style.fontSize = size + "px";
+    }
+  }, [text, baseSize, box.width, box.height]);
+  return (
+    <div className="pdfTransPara" style={{ left: box.left, top: box.top, width: box.width, height: box.height }}>
+      {lines.map((l, i) => (
+        <div key={i} className="pdfTransMask" style={{ left: l.left, top: l.top, width: l.width, height: l.height }} />
+      ))}
+      <div ref={ref} className="pdfTransText" style={{ fontSize: baseSize }}>
+        <span>{text}</span>
+      </div>
+    </div>
+  );
+}
+
 const PdfPage = React.memo(function PdfPage({
   pageNumber,
   pdfDoc,
@@ -1801,6 +2022,9 @@ const PdfPage = React.memo(function PdfPage({
   areaMode,
   noteBadges,
   hideEmbeddedAnnots,
+  trans,
+  transKey,
+  transShown,
 }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
@@ -1811,6 +2035,9 @@ const PdfPage = React.memo(function PdfPage({
   const [pageSize, setPageSize] = useState(null);
   const [visible, setVisible] = useState(false);
   const [links, setLinks] = useState([]); // link annotations, rects at scale 1
+  // Translation entry for this page (from the viewer's engine) — display
+  // only; the queue and all fetching live in PdfViewer.
+  const transEntry = trans && trans.key === transKey ? trans : null;
   // Painted flips once pdf.js has drawn this page; until then a server preview
   // may stand in for it.
   const [painted, setPainted] = useState(false);
@@ -2060,11 +2287,16 @@ const PdfPage = React.memo(function PdfPage({
     document.addEventListener("pointercancel", onCancel);
   }
 
+  // Whether translated text is on screen: gates the overlay and flips the
+  // wrap class that makes the translation selectable instead of the
+  // (invisible) original.
+  const transActive = transShown && !!transEntry && transEntry.texts.some(Boolean);
+
   return (
     <div
       ref={wrapRef}
       data-page={pageNumber}
-      className="pdfPageWrap"
+      className={"pdfPageWrap" + (transActive ? " transShown" : "")}
       onPointerDown={beginAreaDrag}
       style={{
         margin: `0 auto ${PAGE_GAP}px`,
@@ -2102,6 +2334,45 @@ const PdfPage = React.memo(function PdfPage({
           new size immediately (blurry for a moment) instead of sitting at its
           old size in a resized box until the sharp re-render lands. */}
       <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
+      {/* Translated view: masks + refills sit between the canvas and the text
+          layer, so selecting the (invisible) original text still paints its
+          selection highlight on top of the overlay. pointer-events: none —
+          highlighting, links and search always act on the original. */}
+      {transActive ? (
+        <div className="pdfTransLayer">
+          {(() => {
+            let ti = -1;
+            return transEntry.paras.map((p, i) => {
+              if (!p.translate) return null;
+              ti += 1;
+              const text = transEntry.texts[ti];
+              if (!text || text === p.text) return null; // still in flight, or untranslated — leave the original visible
+              const pad = 1.5;
+              const lns = p.lines || [];
+              return (
+                <TransPara key={i}
+                  box={{
+                    left: p.x1 * scale - pad, top: p.y1 * scale - pad,
+                    width: (p.x2 - p.x1) * scale + 2 * pad, height: (p.y2 - p.y1) * scale + 2 * pad,
+                  }}
+                  lines={lns.map((l, j) => {
+                    // Fill the inter-line leading too: the original's line
+                    // pitch exceeds the glyph-box height, and slivers of the
+                    // original text otherwise peek through between masks.
+                    const next = lns[j + 1];
+                    const bottom = next && next.y1 - l.y2 < p.size * 1.2 ? next.y1 : l.y2;
+                    return {
+                      left: (l.x1 - p.x1) * scale, top: (l.y1 - p.y1) * scale,
+                      width: (l.x2 - l.x1) * scale + 2 * pad,
+                      height: (bottom - l.y1) * scale + 2 * pad,
+                    };
+                  })}
+                  baseSize={p.size * scale} text={text} />
+              );
+            });
+          })()}
+        </div>
+      ) : null}
       <div
         ref={textRef}
         className="textLayer"

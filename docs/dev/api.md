@@ -73,6 +73,7 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 | POST | `/ai/model-catalog` | list models available to a credential |
 | POST | `/ai/oauth/chatgpt/start`, `/complete` | ChatGPT OAuth (PKCE, pasted callback URL) |
 | POST | `/ai/transcribe` | voice dictation |
+| POST | `/ai/translate` | translate PDF paragraphs for the viewer's translated view: `{texts[], lang, model, effort}` → `{translations[], model, cached}`. Authenticated owner only (never share tokens); the selected page text is sent to the user's configured provider. Bounded to 200 paragraphs / 60k chars per call and rate-limited per user; translations are cached in memory only, keyed by user + language + model name + source text. A malformed model reply is salvaged paragraph-by-paragraph, then degrades to the original text rather than erroring |
 | GET | `/pdf-text-status` | whether a doc has extractable text |
 
 ### Chats (`chats.py`, prefix `/api/chats`)

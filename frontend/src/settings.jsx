@@ -7,6 +7,7 @@ import {
 } from "./settingsKit";
 import { AiSettings } from "./settingsAi";
 import { UsersSettings } from "./settingsUsers";
+import { TRANSLATE_LANGS } from "./prefs";
 import {
   ActivityIcon,
   BookIcon,
@@ -25,6 +26,7 @@ import {
   ImportIcon,
   KeyIcon,
   LabelIcon,
+  LanguagesIcon,
   LayoutIcon,
   ListIcon,
   MessageSquareIcon,
@@ -204,7 +206,81 @@ function ViewerSettings({ value }) {
           />
         </Row>
       </Section>
+      <Section title="Translation">
+        <Toggle
+          icon={LanguagesIcon}
+          label="Translation button"
+          hint="The languages button in the viewer's zoom column"
+          title="Show the translate button in the PDF viewer. Click translates the current page (or shows/hides an existing translation); right-click or long-press opens the options, including translating the whole document. Nothing translates until you ask, and the selected page text is sent to your configured AI provider when you do."
+          checked={value.translateEnabled}
+          onChange={value.setTranslateEnabled}
+        />
+        <Row
+          icon={GlobeIcon}
+          label="Translate into"
+          hint="Language for the viewer's translated view"
+          title="The translated view (the languages button in the PDF viewer's zoom column) redraws each paragraph in this language in place — figures and layout stay put, and holding Alt peeks at the original. Paragraph translations are cached per language and model, so re-reading a page is free."
+        >
+          <MenuSelect
+            label="Translation language"
+            value={value.translateLang}
+            onChange={value.setTranslateLang}
+            options={TRANSLATE_LANGS}
+          />
+        </Row>
+        <Row
+          icon={SparklesIcon}
+          label="Translation model"
+          hint="Used when translating pages"
+          title="Model used to translate page text. Translation is a bulk job — a fast, cheap model usually reads fine and costs much less than the chat model."
+        >
+          <TranslateModelSelect value={value} />
+        </Row>
+        <Row
+          icon={ActivityIcon}
+          label="Translation effort"
+          hint="Low makes reasoning models translate much faster"
+          title="Reasoning effort sent with translation calls. Reasoning models spend their thinking budget before writing any output, which is wasted on translation — Low or Minimal typically cuts a page from ~20s to a few seconds. Default omits the parameter (some models reject it)."
+        >
+          <MenuSelect
+            label="Translation effort"
+            value={value.translateEffort}
+            onChange={value.setTranslateEffort}
+            options={[["", "Default"], ["minimal", "Minimal"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]]}
+          />
+        </Row>
+        <Row
+          icon={RefreshIcon}
+          label="Parallel requests"
+          hint="Translation calls in flight at once"
+          title="A page is translated in small chunks, this many at a time; a whole-document job runs page by page and never exceeds it. Higher is faster until your provider's rate limit pushes back."
+        >
+          <MenuSelect
+            label="Parallel requests"
+            value={String(value.translateParallel)}
+            onChange={(v) => value.setTranslateParallel(Number.parseInt(v, 10) || 3)}
+            options={[["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["6", "6"], ["8", "8"]]}
+          />
+        </Row>
+      </Section>
     </>
+  );
+}
+
+// Same shape as MetaModelSelect below: "" = follow the chat model, stale
+// picks fall back.
+function TranslateModelSelect({ value }) {
+  const models = value.aiModels || [];
+  const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
+  const current = value.translateModel && models.some((m) => m.id === value.translateModel) ? value.translateModel : "";
+  return (
+    <MenuSelect
+      label="Translation model" value={current} onChange={value.setTranslateModel}
+      options={[
+        ["", "Same as chat"],
+        ...models.map((m) => [m.id, multiProvider ? `${m.model} · ${m.provider_name || m.provider}` : m.model]),
+      ]}
+    />
   );
 }
 

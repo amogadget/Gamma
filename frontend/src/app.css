@@ -3677,6 +3677,77 @@ button.pdfOutlineChevron:hover {
 .pdfViewer.pdfDark .pdfPageWrap { background: #101010 !important; }
 .pdfViewer.pdfDark .pdfPageWrap > canvas { filter: invert(0.94) hue-rotate(180deg); }
 .pdfViewer.pdfDark .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }
+
+/* --- AI translated view (overlay over the original text runs) ---
+   The layer sits between the canvas and the text layer: each block is an
+   opaque box in the page's background color, refilled with the translation.
+   pointer-events none — selection/highlighting always work on the original
+   text layer above; its ::selection background stays visible over the mask. */
+.pdfTransLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.pdfTransPara {
+  position: absolute;
+  overflow: hidden;
+  box-sizing: border-box;
+  pointer-events: none;
+  font-family: Georgia, "Times New Roman", "Songti SC", SimSun, "Noto Serif CJK SC", serif;
+  line-height: 1.28;
+  text-align: justify;
+}
+/* Masks cover exactly the ORIGINAL text lines (per-line rects) — a figure
+   the paragraph wraps around stays visible. */
+.pdfTransMask {
+  position: absolute;
+  background: #fff;
+}
+/* The translated text is real, selectable text (copy works). Its background
+   is inline, cloned per rendered line, so it stays readable where its line
+   breaks don't coincide with the original's masked lines. */
+.pdfTransText {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  word-break: break-word;
+  color: #1c1c1c;
+  pointer-events: auto;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+.pdfTransText > span {
+  background: #fff;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+/* While a page shows its translation, selection belongs to the TRANSLATED
+   text — the invisible original text layer stands down (it sits above the
+   overlay, so it would otherwise capture every drag). !important beats the
+   inline userSelect style set in pdfViewer.jsx. Highlights and link boxes
+   are separate divs above both and keep working. */
+.pdfPageWrap.transShown .textLayer {
+  pointer-events: none !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+/* Flip-page-colors mode inverts the canvas with a CSS filter the overlay
+   doesn't inherit — paint the masks/text backgrounds to match the inverted
+   page instead. */
+.pdfViewer.pdfDark :is(.pdfTransMask, .pdfTransText > span) { background: #0f0f0f; }
+.pdfViewer.pdfDark .pdfTransText { color: #c9c9c9; }
+/* Alt held = peek at the original (class set by the viewer). */
+.pdfViewer.transPeek .pdfTransLayer { visibility: hidden; }
+/* Tiny percentage under the zoom column's translate button while a job runs. */
+.pdfTransPct {
+  font-size: 9px;
+  color: var(--accent);
+  text-align: center;
+  line-height: 1;
+  padding-bottom: 2px;
+}
 .pdfViewer.areaCursor .pdfPageWrap,
 .pdfViewer.areaCursor .textLayer,
 .pdfViewer.areaCursor .textLayer span {
