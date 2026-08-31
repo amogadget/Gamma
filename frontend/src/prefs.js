@@ -85,7 +85,10 @@ export function useAppPrefs() {
     parse: (raw) => (TRANSLATE_LANGS.some(([code]) => code === raw) ? raw : undefined),
   });
   // Parallel translation requests: chunks of a page are translated this many
-  // at a time — the whole-document queue never exceeds it either.
+  // at a time — the whole-document queue never exceeds it either. Typed in
+  // Settings, clamped to 1–8. (Upstream allows up to 32; this fork keeps the
+  // lower ceiling until real provider rate-limit behavior is measured, since
+  // every extra slot is a concurrent paid request.)
   const [translateParallel, setTranslateParallel] = usePersistedState("gamma-translate-parallel", 3, {
     parse: (raw) => {
       const n = Number.parseInt(raw, 10);

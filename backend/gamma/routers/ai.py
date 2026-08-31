@@ -9,6 +9,7 @@ import threading
 import time
 import urllib.error
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.request import Request as URLRequest, urlopen
 
@@ -605,15 +606,15 @@ _TRANSLATE_MAX_CHARS = 60000    # total source chars per request
 _TRANSLATE_RATE_MAX = 240
 _TRANSLATE_RATE_WINDOW = 60
 # In-memory LRU: key (see _translate_key) → translated text. Process-wide,
-# never written to disk; a restart simply starts cold.
-#
-# NOTE: mutated from FastAPI's threadpool (this route is sync `def`), so
-# concurrent page jobs touch it at once. Reads and writes go through the two
-# helpers below precisely so a lock can be added in one place — the source
-# follow-up commit (f13f028) hardens this; today the operations are individually
-# GIL-atomic and a lost cache line only costs a re-translation.
+# never written to disk; a restart simply starts cold. The lock matters:
+# requests run in FastAPI's threadpool and the viewer fires several in
+# parallel, so touches and evictions would otherwise race.
 _TRANSLATE_CACHE: "OrderedDict[str, str]" = OrderedDict()
 _TRANSLATE_CACHE_CAP = 5000     # cached paragraphs kept in memory (LRU)
+_TRANSLATE_LOCK = threading.Lock()
+# Concurrent single-paragraph retries when a batch reply is miscounted. Bounded
+# so one malformed 200-paragraph batch cannot fan out into 200 provider calls.
+_TRANSLATE_SALVAGE_WORKERS = 4
 
 
 class AITranslateRequest(BaseModel):
@@ -632,26 +633,23 @@ def _translate_key(user: str, lang: str, model: str, text: str) -> str:
 
 
 def _translate_cache_get(keys: list) -> dict:
-    """Cached translations for `keys` (LRU-touched). Single choke point for
-    reads so concurrency hardening lands in one place."""
-    hits = {}
-    for k in keys:
-        if k in _TRANSLATE_CACHE:
-            _TRANSLATE_CACHE.move_to_end(k)  # LRU touch
-            hits[k] = _TRANSLATE_CACHE[k]
-    return hits
+    """LRU-touching lookup: {key: translation} for every key already cached."""
+    with _TRANSLATE_LOCK:
+        hits = {}
+        for k in keys:
+            if k in _TRANSLATE_CACHE:
+                _TRANSLATE_CACHE.move_to_end(k)  # LRU touch
+                hits[k] = _TRANSLATE_CACHE[k]
+        return hits
 
 
 def _translate_cache_put(key: str, text: str) -> None:
-    """Store one translation and trim to the cap. Single choke point for
-    writes (see the note on _TRANSLATE_CACHE)."""
-    _TRANSLATE_CACHE[key] = text
-    _TRANSLATE_CACHE.move_to_end(key)
-    while len(_TRANSLATE_CACHE) > _TRANSLATE_CACHE_CAP:
-        try:
+    """Store one translation and trim to the cap, under the shared lock."""
+    with _TRANSLATE_LOCK:
+        _TRANSLATE_CACHE[key] = text
+        _TRANSLATE_CACHE.move_to_end(key)
+        while len(_TRANSLATE_CACHE) > _TRANSLATE_CACHE_CAP:
             _TRANSLATE_CACHE.popitem(last=False)
-        except KeyError:  # raced empty — nothing left to trim
-            break
 
 
 def _parse_translation_array(reply: str, n: int) -> list:
@@ -688,12 +686,20 @@ def ai_translate(payload: AITranslateRequest, request: Request):
     model_name = entry["model"]
 
     keys = [_translate_key(user, lang, model_name, t) for t in texts]
-    cached = _translate_cache_get(keys)
+    # hits: key → translation, for every paragraph that won't need the model.
+    # Filled from the cache now and from the provider reply below; the final
+    # response reads texts the map doesn't cover (whitespace-only paragraphs)
+    # verbatim.
+    hits = _translate_cache_get(keys)
 
-    # Whitespace-only paragraphs never reach the model; everything else missing
-    # from the cache goes upstream in ONE call, as a JSON array both ways.
-    miss = [i for i, t in enumerate(texts) if keys[i] not in cached and t.strip()]
-    out = [cached.get(k, texts[i] if not texts[i].strip() else "") for i, k in enumerate(keys)]
+    # Whitespace-only paragraphs never reach the model; every other cache miss
+    # goes upstream in ONE call (duplicates collapsed — running headers and
+    # repeated captions are common), as a JSON array both ways.
+    miss, queued = [], set()
+    for i, t in enumerate(texts):
+        if keys[i] not in hits and keys[i] not in queued and t.strip():
+            queued.add(keys[i])
+            miss.append(i)
     if miss:
         miss_texts = [texts[i] for i in miss]
         system = _TRANSLATE_PROMPT.format(lang=TRANSLATE_LANGS[lang])
@@ -720,19 +726,30 @@ def ai_translate(payload: AITranslateRequest, request: Request):
             # merge or drop an element. Salvage paragraph by paragraph (a
             # 1-element array can't misalign) instead of failing the chunk;
             # a paragraph that still won't translate comes back VERBATIM, so
-            # the viewer shows the original there instead of erroring.
+            # the viewer shows the original there instead of erroring. The
+            # single-paragraph calls run concurrently — sequential salvage of a
+            # 6-paragraph chunk would take 6 model round-trips — but the worker
+            # count is capped so a malformed batch can't multiply provider
+            # calls without bound.
             log.warning(f"[ai_translate] {e} — salvaging per paragraph")
-            translated = []
-            for t in miss_texts:
+
+            def salvage(t):
                 try:
-                    translated.append(_parse_translation_array(call([t]), 1)[0])
+                    return _parse_translation_array(call([t]), 1)[0]
                 except Exception as e2:
                     log.warning(f"[ai_translate] paragraph salvage failed: {e2}")
-                    translated.append(t)
+                    return t
+
+            workers = min(_TRANSLATE_SALVAGE_WORKERS, len(miss_texts))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                translated = list(pool.map(salvage, miss_texts))
         for i, t in zip(miss, translated):
-            out[i] = t
+            hits[keys[i]] = t
             if t and t != texts[i]:  # identity fallbacks stay uncached so a retry can improve them
                 _translate_cache_put(keys[i], t)
+    # Duplicates resolve through the shared key map, so a repeated paragraph
+    # gets the one translation that was fetched for it.
+    out = [hits.get(k, texts[i]) for i, k in enumerate(keys)]
     return {"translations": out, "model": entry["id"], "cached": not miss}
 
 

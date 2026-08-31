@@ -252,15 +252,14 @@ function ViewerSettings({ value }) {
         <Row
           icon={RefreshIcon}
           label="Parallel requests"
-          hint="Translation calls in flight at once"
-          title="A page is translated in small chunks, this many at a time; a whole-document job runs page by page and never exceeds it. Higher is faster until your provider's rate limit pushes back."
+          hint="Translation calls in flight at once (1–8)"
+          title="A page is translated in small chunks, this many at a time; a whole-document job streams chunks across pages and never exceeds it. Higher is faster until your provider's rate limit pushes back — every slot is a concurrent paid request."
         >
-          <MenuSelect
-            label="Parallel requests"
-            value={String(value.translateParallel)}
-            onChange={(v) => value.setTranslateParallel(Number.parseInt(v, 10) || 3)}
-            options={[["1", "1"], ["2", "2"], ["3", "3"], ["4", "4"], ["6", "6"], ["8", "8"]]}
-          />
+          <UnitInput value={value.translateParallel} unit="calls" min={1}
+            onChange={(raw) => {
+              const n = Number.parseInt(raw, 10);
+              if (Number.isFinite(n)) value.setTranslateParallel(Math.max(1, Math.min(8, n)));
+            }} />
         </Row>
       </Section>
     </>

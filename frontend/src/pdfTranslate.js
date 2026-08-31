@@ -126,7 +126,9 @@ export function isTranslatable(text) {
   if (cjk >= 2) return true;
   const letters = (t.match(/[A-Za-zÀ-ɏЀ-ӿ]/g) || []).length;
   if (letters < 4 || letters / dense.length < 0.5) return false;
-  return /[A-Za-z]{2}/.test(t);
+  // At least one real word (two adjacent letters, Latin or Cyrillic) — a
+  // scatter of single-letter variables like "x y z p q" isn't prose.
+  return /[A-Za-zÀ-ɏЀ-ӿ]{2}/.test(t);
 }
 
 // A block accumulated too eagerly can wrap AROUND a figure: full-width lines

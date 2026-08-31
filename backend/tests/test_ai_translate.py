@@ -1,6 +1,7 @@
 """/api/ai/translate: validation, the paragraph cache, and the JSON wire."""
 
 import json
+import time
 
 import bcrypt
 import pytest
@@ -142,6 +143,151 @@ def test_translate_cache_is_per_user(carol, dave, monkeypatch):
     # Dave misses the cache entirely — his own call goes upstream.
     assert len(calls) == 2
     assert r.json()["cached"] is False
+
+
+def test_translate_dedupes_within_request(carol, monkeypatch):
+    # The same paragraph appearing twice (running headers, repeated captions)
+    # goes upstream once; the one translation fills both slots.
+    fake, calls = _fake_call(lambda batch: [f"译:{t}" for t in batch])
+    monkeypatch.setattr("gamma.routers.ai._call_ai", fake)
+    r = carol.post("/api/ai/translate",
+                   json={"texts": ["a twin paragraph", "a twin paragraph"], "lang": "it"})
+    assert r.status_code == 200
+    assert r.json()["translations"] == ["译:a twin paragraph", "译:a twin paragraph"]
+    assert calls == [["a twin paragraph"]]
+
+
+def test_translate_dedupes_around_cache_and_blanks(carol, monkeypatch):
+    """Duplicates, whitespace and a cache hit in one request."""
+    fake, calls = _fake_call(lambda batch: [f"译:{t}" for t in batch])
+    monkeypatch.setattr("gamma.routers.ai._call_ai", fake)
+    # Prime the cache with one paragraph.
+    assert carol.post("/api/ai/translate",
+                      json={"texts": ["primed paragraph alpha"], "lang": "pt"}).status_code == 200
+    calls.clear()
+
+    r = carol.post("/api/ai/translate", json={
+        "texts": ["primed paragraph alpha", "fresh twin beta", "   ",
+                  "fresh twin beta", "primed paragraph alpha"],
+        "lang": "pt",
+    })
+    assert r.status_code == 200
+    assert r.json()["translations"] == [
+        "译:primed paragraph alpha", "译:fresh twin beta", "   ",
+        "译:fresh twin beta", "译:primed paragraph alpha",
+    ]
+    # Only the one genuinely new paragraph went upstream.
+    assert calls == [["fresh twin beta"]]
+
+
+def test_translate_cache_is_concurrency_safe(carol, monkeypatch):
+    """Many simultaneous requests hammering the shared LRU must not corrupt it.
+
+    Each thread asks for its own paragraph plus a shared one; every answer must
+    be correct and the cache must stay within its cap.
+    """
+    import threading
+
+    from gamma.routers import ai as ai_router
+
+    def fake(messages, system, entry, rt, **kw):
+        batch = json.loads(messages[-1]["content"])
+        return json.dumps([f"译:{t}" for t in batch], ensure_ascii=False)
+
+    monkeypatch.setattr("gamma.routers.ai._call_ai", fake)
+    # Small cap so eviction runs concurrently with lookups.
+    monkeypatch.setattr(ai_router, "_TRANSLATE_CACHE_CAP", 16)
+    monkeypatch.setattr(ai_router, "_TRANSLATE_RATE_MAX", 10_000)
+
+    results, errors = [], []
+
+    def worker(n):
+        try:
+            r = carol.post("/api/ai/translate", json={
+                "texts": [f"concurrent paragraph {n}", "the shared paragraph"],
+                "lang": "ko",
+            })
+            results.append((n, r.status_code, r.json().get("translations")))
+        except Exception as e:  # pragma: no cover - only on a real race
+            errors.append(repr(e))
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(24)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert not errors, errors
+    assert len(results) == 24
+    for n, status, translations in results:
+        assert status == 200, (n, status)
+        assert translations == [f"译:concurrent paragraph {n}", "译:the shared paragraph"]
+    # The LRU honoured its cap despite concurrent eviction.
+    assert len(ai_router._TRANSLATE_CACHE) <= 16
+
+
+def test_translate_salvage_fanout_is_bounded(carol, monkeypatch):
+    """A malformed batch salvages per paragraph, but not with unbounded
+    concurrency — at most _TRANSLATE_SALVAGE_WORKERS calls run at once."""
+    import threading
+
+    from gamma.routers import ai as ai_router
+
+    lock = threading.Lock()
+    state = {"live": 0, "peak": 0, "singles": 0}
+
+    def fake(messages, system, entry, rt, **kw):
+        batch = json.loads(messages[-1]["content"])
+        if len(batch) > 1:
+            return json.dumps(["merged!"])  # wrong length -> triggers salvage
+        with lock:
+            state["live"] += 1
+            state["singles"] += 1
+            state["peak"] = max(state["peak"], state["live"])
+        time.sleep(0.05)
+        with lock:
+            state["live"] -= 1
+        return json.dumps([f"ok:{batch[0]}"])
+
+    monkeypatch.setattr("gamma.routers.ai._call_ai", fake)
+    texts = [f"bounded salvage paragraph {i}" for i in range(12)]
+    r = carol.post("/api/ai/translate", json={"texts": texts, "lang": "ja"})
+    assert r.status_code == 200
+    assert r.json()["translations"] == [f"ok:{t}" for t in texts]
+    assert state["singles"] == 12
+    assert state["peak"] <= ai_router._TRANSLATE_SALVAGE_WORKERS, state["peak"]
+
+
+def test_translate_partially_valid_output(carol, monkeypatch):
+    """Salvage where only some paragraphs come back parseable: the good ones
+    are translated, the rest fall back to the original verbatim."""
+    def fake(messages, system, entry, rt, **kw):
+        batch = json.loads(messages[-1]["content"])
+        if len(batch) > 1:
+            return "not an array at all"  # forces per-paragraph salvage
+        if "keeps" in batch[0]:
+            return json.dumps([f"译:{batch[0]}"])
+        return "still garbage"  # this paragraph never parses
+
+    monkeypatch.setattr("gamma.routers.ai._call_ai", fake)
+    r = carol.post("/api/ai/translate", json={
+        "texts": ["this one keeps its translation", "this one stays original"],
+        "lang": "ja",
+    })
+    assert r.status_code == 200
+    assert r.json()["translations"] == [
+        "译:this one keeps its translation",
+        "this one stays original",
+    ]
+
+    # The untranslated one was NOT cached, so a later good reply can fix it.
+    def good(messages, system, entry, rt, **kw):
+        return json.dumps([f"besser:{t}" for t in json.loads(messages[-1]["content"])])
+
+    monkeypatch.setattr("gamma.routers.ai._call_ai", good)
+    r = carol.post("/api/ai/translate", json={"texts": ["this one stays original"], "lang": "ja"})
+    assert r.status_code == 200
+    assert r.json()["translations"] == ["besser:this one stays original"]
 
 
 def test_translate_forwards_effort(carol, monkeypatch):

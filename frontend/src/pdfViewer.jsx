@@ -364,7 +364,6 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       onHighlightContext: (...a) => cbRef.current.onHighlightContext?.(...a),
       onExternalLink: (...a) => cbRef.current.onExternalLink?.(...a),
       onLinkContext: (...a) => cbRef.current.onLinkContext?.(...a),
-      onTranslate: (...a) => cbRef.current.onTranslate?.(...a),
     }),
     [],
   );
@@ -1296,13 +1295,15 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
 
   // --- Translation engine ----------------------------------------------------
   // One queue for the whole document, driven from the host's toolbar button.
-  // A job segments every queued page up front (fast, pure geometry), builds
-  // ONE flat list of small chunks, and lets N workers (Settings → parallel
-  // requests) stream through it — across page boundaries, so the parallel
-  // slots never idle at page ends. Each chunk is retried once; the server
-  // additionally salvages miscounted batches per paragraph. State per page
-  // sits in transMap; PdfPage only *renders* its entry. Halting flips
-  // job.aborted: finished chunks keep their text.
+  // A producer segments queued pages in order and feeds ONE flat list of
+  // small chunks; N workers (Settings → parallel requests) start on the
+  // first chunk while later pages are still segmenting, and stream across
+  // page boundaries — the parallel slots never idle at page ends. Each chunk
+  // is retried once; the server additionally salvages miscounted batches per
+  // paragraph. State per page sits in transMap; PdfPage only *renders* its
+  // entry. Halting flips job.aborted AND aborts the job's controller, so
+  // in-flight requests are cancelled rather than waited out; finished chunks
+  // keep their text.
   //
   // Placed below curPage/numPages on purpose — curPageRef reads them during
   // render, so the block must sit after their declarations.
@@ -1310,33 +1311,49 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   const [transMap, setTransMap] = useState(() => new Map()); // pageNo -> {key, paras, texts, done}
   const [transShown, setTransShown] = useState(true); // show/hide applies to ALL pages at once
   const [transStatus, setTransStatus] = useState({ running: false, progress: 0, label: "" });
-  const transJobRef = useRef(null); // {aborted} while a job runs
+  const transJobRef = useRef(null); // {aborted, ctl} while a job runs
   const parasCacheRef = useRef(new Map()); // pageNo -> segmented paragraph blocks
   const transMapRef = useRef(transMap);
   transMapRef.current = transMap;
   const translateKeyRef = useRef(translateKey);
   translateKeyRef.current = translateKey;
   const translateParallelRef = useRef(3);
-  translateParallelRef.current = Math.max(1, translateParallel || 3);
+  translateParallelRef.current = Math.min(8, Math.max(1, translateParallel || 3));
   const curPageRef = useRef(1);
   curPageRef.current = curPage;
   const numPagesRef = useRef(0);
   numPagesRef.current = numPages;
 
+  // Halting a job: flip `aborted` AND abort the controller — the controller
+  // cancels the in-flight fetches, so the job unwinds (and the button frees
+  // up for the next job) immediately instead of waiting out slow requests.
+  const haltTransJob = () => {
+    const j = transJobRef.current;
+    if (j) { j.aborted = true; j.ctl.abort(); }
+  };
+
   // Everything the host's button needs to know, pushed on every change.
+  // `pages` counts only pages with visible translated text under the CURRENT
+  // language/model key — entries from a previous key don't render, and
+  // counting them would leave the button a dead show/hide toggle after a
+  // settings switch instead of translating afresh.
   useEffect(() => {
-    cbRef.current.onTranslateState?.({ ...transStatus, shown: transShown, pages: transMap.size });
-  }, [transStatus, transShown, transMap]);
+    let pages = 0;
+    for (const e of transMap.values()) {
+      if (e.key === translateKey && e.texts.some(Boolean)) pages += 1;
+    }
+    cbRef.current.onTranslateState?.({ ...transStatus, shown: transShown, pages });
+  }, [transStatus, transShown, transMap, translateKey]);
 
   // A document swap invalidates geometry and translations wholesale.
   useEffect(() => {
-    if (transJobRef.current) transJobRef.current.aborted = true;
+    haltTransJob();
     parasCacheRef.current = new Map();
     setTransMap(new Map());
     setTransShown(true);
     setTransStatus({ running: false, progress: 0, label: "" });
   }, [docSeq]);
-  useEffect(() => () => { if (transJobRef.current) transJobRef.current.aborted = true; }, []);
+  useEffect(() => () => haltTransJob(), []);
 
   async function ensureParas(pn) {
     const cache = parasCacheRef.current;
@@ -1358,51 +1375,70 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
 
   async function runTransJob(pages, label) {
     if (transJobRef.current || !pages.length) return;
-    const job = { aborted: false };
+    const job = { aborted: false, ctl: new AbortController() };
     transJobRef.current = job;
     const key = translateKeyRef.current;
     setTransShown(true);
     setTransStatus({ running: true, progress: 0, label });
     const setPageTrans = (pn, entry) =>
       setTransMap((prev) => { const m = new Map(prev); m.set(pn, entry); return m; });
-    // Segment everything queued, then chunk it into one flat list.
-    const chunks = [];
+    // Producer/consumer: the producer segments pages in queue order and
+    // appends chunks; workers pick them up immediately, so the first request
+    // is in flight while later pages are still segmenting. Idle workers wait
+    // on `wake` with a short timeout backstop — the timeout (not an event)
+    // is what lets them notice an abort or a failure, so halting can stay a
+    // plain flag flip everywhere.
+    const queue = [];
     const pageState = new Map(); // pn -> {paras, out, remaining}
-    let totalChars = 0;
-    for (const pn of pages) {
-      if (job.aborted) break;
-      let paras = [];
-      try { paras = await ensureParas(pn); } catch { /* unreadable page — skip it */ }
-      const texts = paras.filter((p) => p.translate).map((p) => p.text);
-      if (!texts.length) {
-        setPageTrans(pn, { key, paras, texts: [], done: true });
-        continue;
-      }
-      const st = { paras, out: new Array(texts.length).fill(undefined), remaining: 0 };
-      pageState.set(pn, st);
-      setPageTrans(pn, { key, paras, texts: [], done: false });
-      let start = 0, chars = 0;
-      for (let i = 0; i < texts.length; i++) {
-        chars += texts[i].length;
-        totalChars += texts[i].length;
-        if (i + 1 - start >= CHUNK_PARAS || chars >= CHUNK_CHARS || i === texts.length - 1) {
-          chunks.push({ pn, off: start, texts: texts.slice(start, i + 1) });
-          st.remaining += 1;
-          start = i + 1;
-          chars = 0;
+    let totalChars = 0, doneChars = 0, failed = false, segDone = false;
+    let wake = null;
+    const notify = () => { const w = wake; wake = null; w?.(); };
+    const producer = async () => {
+      for (const pn of pages) {
+        if (job.aborted || failed) break;
+        let paras = [];
+        try { paras = await ensureParas(pn); } catch { /* unreadable page — skip it */ }
+        const texts = paras.filter((p) => p.translate).map((p) => p.text);
+        if (!texts.length) {
+          setPageTrans(pn, { key, paras, texts: [], done: true });
+          continue;
         }
+        const st = { paras, out: new Array(texts.length).fill(undefined), remaining: 0 };
+        pageState.set(pn, st);
+        setPageTrans(pn, { key, paras, texts: [], done: false });
+        let start = 0, chars = 0;
+        for (let i = 0; i < texts.length; i++) {
+          chars += texts[i].length;
+          totalChars += texts[i].length;
+          if (i + 1 - start >= CHUNK_PARAS || chars >= CHUNK_CHARS || i === texts.length - 1) {
+            queue.push({ pn, off: start, texts: texts.slice(start, i + 1) });
+            st.remaining += 1;
+            start = i + 1;
+            chars = 0;
+          }
+        }
+        notify();
       }
-    }
-    let doneChars = 0, failed = false;
-    const queue = [...chunks];
+      segDone = true;
+      notify();
+    };
     const worker = async () => {
-      while (queue.length && !job.aborted && !failed) {
+      while (!job.aborted && !failed) {
         const c = queue.shift();
+        if (!c) {
+          if (segDone) return;
+          await new Promise((resolve) => {
+            const prev = wake;
+            wake = () => { prev?.(); resolve(); };
+            setTimeout(resolve, 200);
+          });
+          continue;
+        }
         let res = null;
         // One client-side retry per chunk (transient network/provider blips);
         // the server separately salvages miscounted model replies.
         for (let attempt = 0; attempt < 2 && !res && !job.aborted; attempt++) {
-          res = await Promise.resolve(cbRef.current.onTranslate?.(c.texts)).catch(() => null);
+          res = await Promise.resolve(cbRef.current.onTranslate?.(c.texts, job.ctl.signal)).catch(() => null);
         }
         if (job.aborted) return;
         if (!res) { failed = true; return; }
@@ -1411,11 +1447,14 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         st.remaining -= 1;
         setPageTrans(c.pn, { key, paras: st.paras, texts: st.out.slice(), done: st.remaining === 0 });
         doneChars += c.texts.reduce((n, t) => n + t.length, 0);
-        setTransStatus({ running: true, label, progress: totalChars ? doneChars / totalChars : 1 });
+        // While segmentation is still running the denominator is a lower
+        // bound, so cap displayed progress until the total is final.
+        const p = totalChars ? doneChars / totalChars : 1;
+        setTransStatus({ running: true, label, progress: segDone ? p : Math.min(p, 0.95) });
       }
     };
-    await Promise.all(Array.from(
-      { length: Math.min(translateParallelRef.current, chunks.length || 1) }, worker));
+    await Promise.all(
+      [producer()].concat(Array.from({ length: translateParallelRef.current }, worker)));
     transJobRef.current = null;
     setTransStatus({ running: false, label, progress: totalChars ? doneChars / totalChars : 1 });
   }
@@ -1428,7 +1467,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     if (!translateCtlRef) return;
     translateCtlRef.current = {
       running: () => !!transJobRef.current,
-      halt: () => { if (transJobRef.current) transJobRef.current.aborted = true; },
+      halt: haltTransJob,
       setShown: setTransShown,
       translatePage: () => runTransJob([curPageRef.current], `p.${curPageRef.current}`),
       translateDoc: () => {

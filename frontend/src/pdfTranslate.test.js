@@ -33,13 +33,16 @@ test("isTranslatable keeps prose and rejects math, numbers and stray symbols", (
   assert.equal(isTranslatable("量子計算"), true);
 });
 
-test("isTranslatable currently misses pure Cyrillic prose (fixed in f13f028)", () => {
-  // The letter class counts Cyrillic, but the final gate is /[A-Za-z]{2}/ —
-  // ASCII only — so a Russian paragraph is judged untranslatable and stays in
-  // the original. Pinned as CURRENT behavior: the next source milestone
-  // (f13f028, "translate cleanup") explicitly corrects Cyrillic prose
-  // detection, and this assertion must flip there.
-  assert.equal(isTranslatable("Квантовые вычисления сегодня"), false);
+test("isTranslatable accepts non-Latin-script prose", () => {
+  // The final prose gate spans Latin AND Cyrillic, so a Russian paragraph is
+  // translatable. (It used to be ASCII-only, which silently left every
+  // Cyrillic paragraph in the original.)
+  assert.equal(isTranslatable("Квантовые вычисления сегодня"), true);
+  assert.equal(isTranslatable("Мы рассматриваем решёточную модель"), true);
+  // Still not prose: a scatter of single-letter variables has no real word.
+  assert.equal(isTranslatable("x y z p q r"), false);
+  // Accented Latin keeps working.
+  assert.equal(isTranslatable("Nous considérons un modèle réticulaire"), true);
 });
 
 test("segmentPage merges wrapped lines of one paragraph into one block", () => {

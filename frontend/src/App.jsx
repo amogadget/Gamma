@@ -2888,12 +2888,14 @@ export default function App() {
   // chunking, queueing and parallelism live in the viewer's engine; this is
   // just the HTTP wrapper carrying the language/model/effort settings.
   // Returns null on failure (already surfaced on the status pill) — the
-  // engine retries a chunk once before failing the job.
-  async function translateChunk(texts) {
+  // engine retries a chunk once before failing the job. `signal` is the job's
+  // AbortController: halting cancels the requests still in flight.
+  async function translateChunk(texts, signal) {
     try {
       const data = await apiJson(`${API}/ai/translate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal,
         body: JSON.stringify({
           texts, lang: translateLang,
           model: translateSendModel || "", effort: translateEffort || "",
@@ -2901,7 +2903,8 @@ export default function App() {
       });
       return data.translations || null;
     } catch (err) {
-      setStatus(`Translation failed: ${err.message}`);
+      // An aborted request is the user pressing stop, not a failure.
+      if (err.name !== "AbortError") setStatus(`Translation failed: ${err.message}`);
       return null;
     }
   }

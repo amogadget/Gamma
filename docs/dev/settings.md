@@ -24,7 +24,7 @@ Nine panes in four rail groups (`NAV_GROUPS` in
   folder/label chips, paper-fetching prefs),
   Library (storage usage/limits, search index, per-paper metadata health table)
 - **Reading** — PDF viewer (snap scrolling, embedded annotations, translation:
-  button on/off, target language, model, effort, parallel requests), Search
+  button on/off, target language, model, effort, parallel requests 1–8), Search
   (auto-expand defaults), Notes (Enter behavior, note badges)
 - **AI** — Providers (API keys, in [settingsAi.jsx](../../frontend/src/settingsAi.jsx)),
   Assistant (models, folder-agent permissions, tool rounds, agent read window,
