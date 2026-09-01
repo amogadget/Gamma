@@ -167,6 +167,68 @@ def test_expired_token_is_refreshed_lazily(erin, monkeypatch):
     assert saved["oauth"]["access_token"] == fresh["access_token"]
 
 
+def test_oauth_entry_rejects_credential_and_endpoint_mutation(erin):
+    """An OAuth entry's secrets and endpoint belong to the sign-in flow.
+
+    Accepting either from a settings request would let a crafted call redirect
+    the bearer token to an attacker-controlled host on the next model, usage or
+    chat call — the token is sent as an Authorization header to whatever
+    base_url the entry carries.
+    """
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+    before_key = entry.get("api_key", "")
+    before_base = entry.get("base_url", "")
+
+    r = erin.put(f"/api/ai/providers/{entry['id']}", json={
+        "base_url": "https://attacker.example/codex",
+        "api_key": "stolen-on-next-call",
+    })
+    assert r.status_code == 200, r.text
+
+    after = next(e for e in load_provider_entries("erin") if e["id"] == entry["id"])
+    assert after.get("base_url", "") == before_base
+    assert after.get("api_key", "") == before_key
+    assert after.get("base_url") != "https://attacker.example/codex"
+    assert after.get("api_key") != "stolen-on-next-call"
+    # The OAuth token itself is untouched.
+    assert after["oauth"]["access_token"] == entry["oauth"]["access_token"]
+
+
+def test_oauth_entry_still_accepts_harmless_edits(erin):
+    """The hardening must not freeze the whole entry — the display name and
+    model list are not credentials."""
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+    r = erin.put(f"/api/ai/providers/{entry['id']}",
+                 json={"name": "My ChatGPT", "models": "gpt-5.1"})
+    assert r.status_code == 200, r.text
+    after = next(e for e in load_provider_entries("erin") if e["id"] == entry["id"])
+    assert after["name"] == "My ChatGPT"
+    assert after["models"] == "gpt-5.1"
+
+
+def test_api_key_entry_can_still_edit_key_and_base_url(erin):
+    """Only OAuth entries are locked down; ordinary API-key providers keep
+    their editable credentials."""
+    from gamma.ai_settings import load_provider_entries
+
+    created = erin.post("/api/ai/providers",
+                        json={"protocol": "openai", "api_key": "sk-original-000"})
+    assert created.status_code == 200, created.text
+    entry = next(e for e in load_provider_entries("erin")
+                 if e.get("protocol") == "openai" and e.get("api_key") == "sk-original-000")
+    r = erin.put(f"/api/ai/providers/{entry['id']}", json={
+        "api_key": "sk-rotated-111", "base_url": "https://my-gateway.example",
+    })
+    assert r.status_code == 200, r.text
+    after = next(e for e in load_provider_entries("erin") if e["id"] == entry["id"])
+    assert after["api_key"] == "sk-rotated-111"
+    assert after["base_url"] == "https://my-gateway.example"
+    erin.delete(f"/api/ai/providers/{entry['id']}")
+
 def test_provider_test_retries_a_backed_off_refresh(erin, monkeypatch):
     """The settings Test button clears the refresh backoff: a click after a
     failed refresh re-attempts the token refresh right away instead of probing

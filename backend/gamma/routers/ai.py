@@ -287,14 +287,18 @@ class AIProviderRequest(BaseModel):
 
 def _apply_provider_fields(entry: dict, payload: AIProviderRequest):
     """Validate + copy the editable fields of a provider entry in place."""
+    oauth_entry = AI_PROTOCOLS.get(entry.get("protocol"), {}).get("auth") == "oauth"
     if payload.name is not None:
         entry["name"] = str(payload.name).strip()[:MAX_NAME_LEN]
-    if payload.api_key:  # never clears — deleting the entry is the only way to drop a key
+    # OAuth secrets and endpoints are owned by the sign-in flow. In particular,
+    # accepting an arbitrary base URL here would let a crafted API request
+    # redirect the bearer token on the next model, usage or chat call.
+    if payload.api_key and not oauth_entry:  # never clears; delete the entry to drop a key
         key = str(payload.api_key).strip()
         if not key or len(key) > MAX_KEY_LEN or any(c.isspace() for c in key):
             raise HTTPException(status_code=400, detail="invalid API key")
         entry["api_key"] = key
-    if payload.base_url is not None:
+    if payload.base_url is not None and not oauth_entry:
         url = str(payload.base_url).strip().rstrip("/")
         if (url and not re.match(r"^https?://", url)) or len(url) > MAX_URL_LEN:
             raise HTTPException(status_code=400, detail="base URL must start with http(s)://")
