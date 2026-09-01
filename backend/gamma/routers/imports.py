@@ -23,7 +23,7 @@ from ..server_settings import check_upload_allowed
 from ..blocks_store import last_child_position
 from ..logbuf import log
 from ..markdown_import import md_to_blocks, split_frontmatter
-from ..storage import display_filename
+from ..storage import DIGEST_CHARS, display_filename
 from ..logseq_import import (
     edn_highlight_position,
     edn_highlight_to_block,
@@ -65,7 +65,7 @@ def _zotero_pdf_digest(zf: zipfile.ZipFile, name: str) -> tuple[str, int]:
             digest.update(chunk)
     if first != b"%PDF":
         raise ValueError("not a PDF")
-    return digest.hexdigest()[:24], total
+    return digest.hexdigest()[:DIGEST_CHARS], total
 
 
 def _store_zotero_pdf(zf: zipfile.ZipFile, name: str, target) -> None:
@@ -98,7 +98,7 @@ async def import_logseq(
     pdf_bytes = await pdf.read()
     if len(pdf_bytes) < 4 or pdf_bytes[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="not a valid PDF")
-    digest = hashlib.sha256(pdf_bytes).hexdigest()[:24]
+    digest = hashlib.sha256(pdf_bytes).hexdigest()[:DIGEST_CHARS]
     target = uploads / f"{digest}.pdf"
     if not target.exists():
         check_upload_allowed(user, len(pdf_bytes))
@@ -236,7 +236,7 @@ async def import_markdown(request: Request, file: UploadFile = File(...),
     title = (frontmatter_title or fallback).strip()[:500]
     tree = md_to_blocks(body)
     clean_folder = clean_path(folder)
-    digest = hashlib.sha256(raw).hexdigest()[:24]
+    digest = hashlib.sha256(raw).hexdigest()[:DIGEST_CHARS]
     props = {"original_filename": original, "markdown_import": digest}
     if clean_folder:
         props["folder"] = clean_folder

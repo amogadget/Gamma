@@ -35,6 +35,7 @@ import sqlite3
 
 from .ai_context import page_report_section
 from .db import page_now, user_db_path
+from .foldertags import add_tag, clean_path, clean_segment, parse_tags  # noqa: F401  (re-exported)
 from .logbuf import log
 from .textnorm import INDEX_VERSION
 
@@ -75,23 +76,13 @@ AGENT_PROMPT = (
 )
 
 
-# --- folder-tag helpers (keep in sync with frontend/src/libraryUtils.js) ------
+# --- folder-tag helpers -------------------------------------------------------
+# The rules live in foldertags.py so modules that only need the string handling
+# (importers, the extension's clip endpoints) don't pull in the agent machinery.
+# Re-exported here because this module's callers already import them from it.
 
-def parse_tags(raw: str) -> list[str]:
-    return [t.strip() for t in (raw or "").split(",") if t.strip()]
-
-
-def _clean_segment(name: str) -> str:
-    return re.sub(r"\s+", " ", re.sub(r"[,/]", " ", name or "")).strip()
-
-
-def clean_path(path: str) -> str:
-    return "/".join(s for s in (_clean_segment(p) for p in (path or "").split("/")) if s)
-
-
-def _add_tag(tags: list[str], path: str) -> list[str]:
-    """addFolderTag: keep other tags, but refine away ancestors of the new path."""
-    return [t for t in tags if t != path and not path.startswith(t + "/")] + [path]
+_clean_segment = clean_segment
+_add_tag = add_tag
 
 
 def _in_scope(tag: str, scope_path: str) -> bool:

@@ -18,12 +18,12 @@ from ..blocks_store import (
     delete_subtree,
     fetch_subtree,
     flatten_tree,
-    last_child_position,
+    get_or_create_doc_page,
 )
 from ..db import connect_data_db, page_now, user_db_path, user_uploads_dir
 from ..logbuf import log
 from ..markdown_export import build_tree
-from ..storage import cleanup_orphan_uploads, display_filename
+from ..storage import cleanup_orphan_uploads
 from ..textnorm import fuzzy_pattern
 
 router = APIRouter(prefix="/api", tags=["blocks"])
@@ -156,70 +156,8 @@ async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate, request: 
     # Creates a page when absent — a write, so it requires a real session
     # (never the ?share= read principal).
     with sqlite3.connect(user_db_path(require_user(request), "pages.db")) as conn:
-        row = conn.execute(
-            f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE json_extract(properties, '$.doc_id') = ?",
-            (doc_id,),
-        ).fetchone()
-        if row:
-            # Opportunistic backfill of source/filename markers. auto_title is
-            # only set when the page still has the exact title this request
-            # considers automatic, so a re-upload can never mark a user's
-            # custom title as replaceable by the metadata worker.
-            props = json.loads(row[4] or "{}")
-            changed = False
-            if payload.source_url and not props.get("source_url"):
-                props["source_url"] = payload.source_url
-                changed = True
-            original = display_filename(payload.original_filename)
-            if original and not props.get("original_filename"):
-                props["original_filename"] = original
-                changed = True
-            if not props.get("auto_title") and row[3] == (payload.default_title or "").strip():
-                props["auto_title"] = row[3]
-                changed = True
-            if changed:
-                now = page_now()
-                conn.execute(
-                    "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-                    (json.dumps(props), now, row[0]),
-                )
-                conn.commit()
-                row = (*row[:4], json.dumps(props), *row[5:])
-            return block_to_dict(row)
-
-        # Create new block under root
-        block_id = secrets.token_urlsafe(9)
-        original = display_filename(payload.original_filename)
-        # Upload callers provide original_filename; use its leaf as the
-        # authoritative automatic title even if a browser leaked a relative
-        # path into default_title.
-        title = original or (payload.default_title or "").strip() or "Untitled"
-        now = page_now()
-        last_pos = last_child_position(conn, "root")
-        new_pos = generate_key_between(last_pos, None)
-        # auto_title is a compare-and-swap marker consumed by metadata_fetch:
-        # metadata may replace this value, but an explicit rename clears the
-        # marker first (see ub_update_block below).
-        props = {"doc_id": doc_id, "auto_title": title}
-        if payload.source_url:
-            props["source_url"] = payload.source_url
-        if original:
-            props["original_filename"] = original
-        conn.execute(
-            "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
-            "VALUES (?, 'root', ?, ?, ?, ?, ?)",
-            (block_id, new_pos, title, json.dumps(props), now, now),
-        )
-        conn.commit()
-    return {
-        "id": block_id,
-        "parent_id": "root",
-        "position": new_pos,
-        "content": title,
-        "properties": props,
-        "created_at": now,
-        "updated_at": now,
-    }
+        return get_or_create_doc_page(
+            conn, doc_id, payload.default_title, payload.source_url, payload.original_filename)
 
 
 @router.get("/blocks/{block_id}/children")

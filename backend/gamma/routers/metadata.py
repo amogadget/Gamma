@@ -313,8 +313,17 @@ class MetaFetchRequest(BaseModel):
 @router.post("/metadata/fetch")
 def metadata_fetch(payload: MetaFetchRequest, request: Request):
     user = require_user(request)
-    _, props = _load_page(user, payload.block_id)
-    if props.get("meta") and not payload.force:
+    return fetch_page_metadata(user, payload.block_id, prompt=payload.prompt, model=payload.model,
+                               force=payload.force, context_char_limit=payload.context_char_limit)
+
+
+def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str = "",
+                        force: bool = False, context_char_limit: int = 6000) -> dict:
+    """The lookup behind POST /api/metadata/fetch, callable off-request (the
+    extension's /api/clip runs it in a background thread). Raises
+    HTTPException(404) when nothing was found (after negative-caching it)."""
+    _, props = _load_page(user, block_id)
+    if props.get("meta") and not force:
         return {
             "meta": props["meta"],
             "bibtex": props.get("bibtex", ""),
@@ -324,7 +333,7 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
 
     doc_id = props.get("doc_id") or ""
     source_url = props.get("source_url") or props.get("sourceUrl") or ""
-    text = _extract_pdf_context(user, doc_id, limit=payload.context_char_limit) if doc_id else ""
+    text = _extract_pdf_context(user, doc_id, limit=context_char_limit) if doc_id else ""
     if text == PDF_EXTRACT_FAILED:  # nothing for the AI to read
         text = ""
 
@@ -339,7 +348,7 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
                 break
     rt = ai_runtime(user)
     if not meta and rt["enabled"] and text:
-        meta = _ai_extract_meta(text, payload.prompt, payload.model, rt)
+        meta = _ai_extract_meta(text, prompt, model, rt)
         # If the AI surfaced an identifier, prefer the authoritative record
         if meta and meta.get("arxiv_id"):
             meta = _fetch_arxiv(meta["arxiv_id"]) or meta
@@ -351,7 +360,7 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
         # Negative cache: remember the failed attempt on the page so clients
         # stop auto-retrying on every open. Manual ↻ (force) still retries,
         # and a success below clears the marker.
-        _save_props(user, payload.block_id, {
+        _save_props(user, block_id, {
             "meta_error": {"at": page_now(), "detail": "no arXiv id, DOI, or AI match"}})
         raise HTTPException(status_code=404, detail="no metadata found (no arXiv id, DOI, or AI match)")
 
@@ -360,7 +369,7 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
     # ppt_cite is dropped because the metadata it was generated from changed
     title = str(meta.get("title") or "").strip()
     title_updated = _save_props(
-        user, payload.block_id, {"meta": meta, "bibtex": bibtex},
+        user, block_id, {"meta": meta, "bibtex": bibtex},
         remove=("meta_error", "ppt_cite"), auto_title=title,
     )
     return {"meta": meta, "bibtex": bibtex, "source": meta.get("source", ""),

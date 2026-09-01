@@ -11,7 +11,7 @@ from ..blocks_store import fetch_subtree
 from ..db import user_db_path, user_uploads_dir
 from .. import flatten_queue
 from ..server_settings import check_upload_allowed, usage_bytes, user_limits
-from ..storage import ALLOWED_IMAGE_TYPES, IMAGE_EXTENSIONS, IMAGE_MEDIA_TYPES, find_upload_file
+from ..storage import DIGEST_CHARS, ALLOWED_IMAGE_TYPES, IMAGE_EXTENSIONS, IMAGE_MEDIA_TYPES, find_upload_file
 
 router = APIRouter(prefix="/api", tags=["uploads"])
 
@@ -36,7 +36,7 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
     if len(contents) < 4 or contents[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="not a valid PDF (missing %PDF header)")
 
-    digest = hashlib.sha256(contents).hexdigest()[:24]
+    digest = hashlib.sha256(contents).hexdigest()[:DIGEST_CHARS]
     target = uploads / f"{digest}.pdf"
     already_existed = target.exists()
     if not already_existed:
@@ -64,7 +64,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"unsupported image type: {file.content_type}")
     contents = await file.read()
-    digest = hashlib.sha256(contents).hexdigest()[:24]
+    digest = hashlib.sha256(contents).hexdigest()[:DIGEST_CHARS]
     ext = IMAGE_EXTENSIONS[file.content_type]
     target = uploads / f"{digest}{ext}"
     already_existed = target.exists()

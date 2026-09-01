@@ -4,6 +4,11 @@ from pathlib import Path
 
 from .db import user_uploads_dir
 
+# Content-addressed ids are a truncated sha256 hex digest. One constant: the
+# extension's /api/clip recomputes the proxy's id for an external PDF URL to
+# dedup against it, so the two must agree exactly.
+DIGEST_CHARS = 24
+
 ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
 IMAGE_EXTENSIONS = {
     "image/png": ".png",

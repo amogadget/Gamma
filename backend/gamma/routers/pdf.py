@@ -22,9 +22,11 @@ from pydantic import BaseModel
 
 from .. import flatten_queue
 from ..auth import require_user, resolve_user, share_scope_doc
+from ..config import MAX_UPLOAD_BYTES
 from ..db import user_db_path, user_uploads_dir
 from ..logbuf import log
 from ..net_guard import guarded_urlopen
+from ..storage import DIGEST_CHARS
 from ..server_settings import can_store
 
 router = APIRouter(prefix="/api", tags=["pdf"])
@@ -106,7 +108,14 @@ class ResolvePdfRequest(BaseModel):
 @router.post("/resolve-pdf")
 def resolve_pdf(payload: ResolvePdfRequest, request: Request):
     require_user(request)
-    url = _identifier_to_url((payload.source_url or "").strip())
+    return resolve_source(payload.source_url, payload.allow_oa)
+
+
+def resolve_source(source_url: str, allow_oa: bool = True) -> dict:
+    """URL / bare identifier → ``{"source_url": <fetchable PDF url>, "note"?}``,
+    or an HTTPException(400) with a human-readable reason. Shared by the
+    resolve endpoint and the extension's /api/clip."""
+    url = _identifier_to_url((source_url or "").strip())
 
     # arXiv abstract pages (and arXiv DOIs) go straight to the PDF
     m = _ARXIV_ABS_RE.search(url) or _ARXIV_DOI_RE.search(url)
@@ -167,7 +176,7 @@ def resolve_pdf(payload: ResolvePdfRequest, request: Request):
         if not re.match(r"^10\.\d{4,9}/", doi):
             doi = ""
     if doi:
-        if not payload.allow_oa:
+        if not allow_oa:
             raise HTTPException(
                 status_code=400,
                 detail="The publisher's PDF isn't accessible server-side (usually a paywall). "
@@ -212,6 +221,60 @@ def resolve_pdf(payload: ResolvePdfRequest, request: Request):
     )
 
 
+_TOO_LARGE = (f"that PDF is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit — "
+              "download it in your browser and drop it onto Gamma")
+
+
+def download_pdf(source_url: str, want_bytes: bool = True) -> tuple[str, bytes]:
+    """Fetch `source_url` the way the proxy does (browser headers, SSRF guard)
+    and require a PDF content type. Returns ``(final_url, data)``; with
+    ``want_bytes=False`` only the headers are checked and ``data`` is empty.
+    Failures raise HTTPException(400) with the proxy's human-readable texts."""
+    try:
+        req = URLRequest(source_url, headers=BROWSER_HEADERS)
+        resp = guarded_urlopen(req, timeout=30)
+    except HTTPError as e:
+        if e.code in (401, 403):
+            raise HTTPException(
+                status_code=400,
+                detail="This site blocks server-side fetching. Please download the PDF in your browser and drop it onto the page.",
+            )
+        raise HTTPException(status_code=400, detail=f"upstream HTTP error: {e.code}")
+    except URLError as e:
+        raise HTTPException(status_code=400, detail=f"upstream URL error: {e.reason}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"pdf fetch failed: {str(e)}")
+    try:
+        content_type = resp.headers.get("Content-Type", "").lower()
+        if "application/pdf" not in content_type:
+            raise HTTPException(status_code=400, detail=f"final URL is not a PDF: {content_type}")
+        final_url = resp.geturl()
+        # Unlike the streaming proxy, this buffers the whole file in memory
+        # for its caller, so it needs the ceiling a direct upload has — and
+        # enforced while reading, not just from Content-Length, which the
+        # upstream server controls and can understate.
+        declared = resp.headers.get("Content-Length") or ""
+        if declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=_TOO_LARGE)
+        data = b""
+        if want_bytes:
+            chunks, total = [], 0
+            while True:
+                chunk = resp.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail=_TOO_LARGE)
+                chunks.append(chunk)
+            data = b"".join(chunks)
+        return final_url, data
+    finally:
+        resp.close()
+
+
 def _share_allows_source(user: str, scope_doc_id: str, source_url: str) -> bool:
     """A share link may only proxy the exact source URL recorded on its own
     document's page block."""
@@ -232,7 +295,7 @@ def proxy_pdf(source_url: str, request: Request):
     if scope is not None and not _share_allows_source(user, scope, source_url):
         raise HTTPException(status_code=403, detail="not accessible via this share link")
     uploads = user_uploads_dir(user)
-    pdf_doc_id = hashlib.sha256(source_url.encode()).hexdigest()[:24]
+    pdf_doc_id = hashlib.sha256(source_url.encode()).hexdigest()[:DIGEST_CHARS]
     local_path = uploads / f"{pdf_doc_id}.pdf"
     want_save = request.query_params.get("save") == "1"
 

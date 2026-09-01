@@ -59,6 +59,16 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 |---|---|---|
 | GET | `/link-preview?url=` | webpage title for the frontend's link chips (`{url, host, title}`); authenticated, fetch goes through the SSRF guard, only the first 128 KB is read, results cached in-process (TTL 24 h, bounded). A blocked or unreachable URL degrades to a host-only chip rather than erroring |
 
+### Browser extension (`clip.py`) — see [extension.md](extension.md)
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/clip` | one-shot "save this paper": dedup by DOI/arXiv/URL → resolve → fetch + store (`save_copy`) → page (`get_or_create_doc_page`) → folder/labels → metadata in a background thread. Body: `source_url, pdf_url, doi, arxiv_id, doc_id (pre-uploaded bytes), title, folder, labels, allow_oa, save_copy`. Returns `{block_id, doc_id, title, existed, open_url, note?}`; a dead link is a 400 and creates no page |
+| GET | `/library/lookup?doi=&arxiv_id=&url=` | is this paper in the library (`properties.meta`, `source_url`, `web_url`, URL hash)? 404 when not |
+| GET | `/library/folders` | `{folders, labels}` in use (folder paths include their ancestors) — the popup's pickers |
+| POST | `/clip/note` | append `> quote — [title](url)` as the last block of `page_id`, or of the "Web clips" page (created on first use) |
+
+All four are session-only (`require_user`), never share-token readable.
+
 ### Metadata (`metadata.py`)
 | Method | Path | Purpose |
 |---|---|---|
