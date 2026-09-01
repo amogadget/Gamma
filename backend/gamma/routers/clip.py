@@ -128,12 +128,14 @@ def _apply_tags(conn, block: dict, folder: str, labels: list[str]) -> dict:
     return block
 
 
-def _start_metadata(user: str, block_id: str) -> None:
+def _start_metadata(user: str, block_id: str, doi: str = "", arxiv_id: str = "") -> None:
     """Metadata lookup off the request: arXiv → DOI → AI fallback can take
-    seconds to minutes and the extension only needs the page id back."""
+    seconds to minutes and the extension only needs the page id back. The
+    detector's doi/arxiv_id ride along as trusted hints — they come from the
+    publisher page's own meta tags, exactly what the lookup wants."""
     def run():
         try:
-            fetch_page_metadata(user, block_id)
+            fetch_page_metadata(user, block_id, doi=doi, arxiv_id=arxiv_id)
         except HTTPException as e:
             log.info(f"[clip] metadata for {block_id}: {e.detail}")
         except Exception as e:  # a failed lookup must not take the thread down noisily
@@ -263,7 +265,7 @@ def clip(payload: ClipRequest, request: Request):
 
     # 4. Metadata, off the request.
     if payload.fetch_metadata and not (block.get("properties") or {}).get("meta"):
-        _start_metadata(user, block["id"])
+        _start_metadata(user, block["id"], doi=doi, arxiv_id=arxiv_id)
     return _result(block, existed=False, note=note)
 
 

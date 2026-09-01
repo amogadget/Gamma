@@ -158,7 +158,18 @@ const ChatMarkdown = React.memo(function ChatMarkdown({ text }) {
     () =>
       (text || "")
         .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `\n$$\n${m}\n$$\n`)
-        .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`),
+        .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`)
+        // GFM splits table cells on every unescaped "|", including ones
+        // inside $…$ math — so a table with $|\Omega|T$ in a header cell
+        // never parses as a table (header/delimiter cell counts disagree)
+        // and collapses into a paragraph. Spell pipes inside inline math
+        // as \vert/\Vert, which KaTeX renders identically but the table
+        // tokenizer doesn't see.
+        .replace(/\$\$[\s\S]*?\$\$|\$([^$\n]+)\$/g, (m, inner) =>
+          inner == null || !inner.includes("|")
+            ? m
+            : `$${inner.replace(/\\\|/g, "\\Vert ").replace(/\|/g, "\\vert ")}$`,
+        ),
     [text],
   );
   return (

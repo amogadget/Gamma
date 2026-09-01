@@ -122,6 +122,38 @@ def test_verify_upgrades_via_crossref_title_search(monkeypatch):
     assert meta["source"] == "crossref" and meta["doi"] == "10.1000/real456"
 
 
+def test_ai_extract_reports_document_kind(monkeypatch):
+    monkeypatch.setattr(metadata, "_resolve_model", lambda rt, m: "m")
+    monkeypatch.setattr(metadata, "_call_ai",
+                        lambda *a, **kw: '{"title": "QM Lecture 5", "kind": "notes"}')
+    assert metadata._ai_extract_meta("text", "", "", {"enabled": True})["kind"] == "notes"
+    # Unknown kinds fall back to "paper" — the safe (warned) default
+    monkeypatch.setattr(metadata, "_call_ai",
+                        lambda *a, **kw: '{"title": "T", "kind": "mixtape"}')
+    assert metadata._ai_extract_meta("text", "", "", {"enabled": True})["kind"] == "paper"
+
+
+def test_course_notes_keep_their_kind(guest, monkeypatch):
+    """A DOI-less lecture-notes PDF: the AI classifies it as notes; the record
+    stays source "ai" with kind "notes" (the UI shows no red warning for it)
+    and the status endpoint reports the kind."""
+    page = _paper_page(guest, "Lecture 5: perturbation theory. Problem set due Friday.",
+                       monkeypatch, ai_enabled=True)
+    monkeypatch.setattr(metadata, "_resolve_model", lambda rt, m: "m")
+    monkeypatch.setattr(metadata, "_call_ai",
+                        lambda *a, **kw: '{"title": "Lecture 5: perturbation theory", '
+                                         '"authors": ["Prof X"], "kind": "notes"}')
+    monkeypatch.setattr(metadata, "_crossref_search", lambda q, rows=5: [])
+    monkeypatch.setattr(metadata, "_fetch_doi", lambda d: (None, ""))
+    r = guest.post("/api/metadata/fetch", json={"block_id": page["id"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "ai"
+    assert r.json()["meta"]["kind"] == "notes"
+    st = guest.get("/api/metadata/status").json()["papers"]
+    entry = next(p for p in st if p["id"] == page["id"])
+    assert entry["meta_source"] == "ai" and entry["meta_kind"] == "notes"
+
+
 # --- the full fetch chain ----------------------------------------------------
 
 def test_cited_doi_on_page_one_is_not_trusted(guest, monkeypatch):
@@ -252,6 +284,34 @@ def test_title_match_reaches_past_6000_chars():
     """Titles that start beyond the old 6000-char window still confirm."""
     text = "x " * 3500 + ZENO_TITLE + " and then the abstract."
     assert _title_in_text(ZENO_TITLE, text)
+
+
+def test_detector_doi_hint_is_trusted(guest, monkeypatch):
+    """The extension's /api/clip forwards the DOI it read off the publisher
+    page's meta tags — trusted like a URL-derived id, no title match needed
+    (the text here contains neither the DOI nor the title)."""
+    page = _paper_page(guest, "scanned garbage with no identifiers at all", monkeypatch)
+    monkeypatch.setattr(metadata, "_fetch_doi",
+                        lambda d: (ZENO_META, "@article{zeno}") if d == "10.1000/zeno754" else (None, ""))
+    out = metadata.fetch_page_metadata("guest", page["id"], doi="10.1000/zeno754")
+    assert out["meta"]["title"] == ZENO_TITLE
+    assert out["source"] == "doi"
+
+
+def test_web_url_supplies_trusted_doi(guest, monkeypatch):
+    """The publisher page a clip came from (web_url) is scanned for
+    identifiers too, with URL-level trust."""
+    page = make_page(guest, "p", properties={
+        "doc_id": "d" * 24, "web_url": "https://doi.org/10.1000/zeno754"})
+    monkeypatch.setattr(metadata, "_pdf_excerpt",
+                        lambda u, d, limit: ("no identifiers here", None, 19))
+    monkeypatch.setattr(metadata, "_ensure_indexed", lambda u, d: True)
+    monkeypatch.setattr(metadata, "ai_runtime", lambda u: {"enabled": False})
+    monkeypatch.setattr(metadata, "_fetch_doi",
+                        lambda d: (ZENO_META, "@article{zeno}") if d == "10.1000/zeno754" else (None, ""))
+    r = guest.post("/api/metadata/fetch", json={"block_id": page["id"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["meta"]["doi"] == "10.1000/zeno754"
 
 
 def test_arxiv_id_from_source_url_is_trusted(guest, monkeypatch):

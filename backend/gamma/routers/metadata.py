@@ -236,7 +236,7 @@ def _pick_crossref_match(cands: list[dict], text: str, ai_meta: dict | None = No
     return None
 
 
-def _verify_ai_meta(meta: dict, text: str, source_url: str) -> tuple[dict, str]:
+def _verify_ai_meta(meta: dict, text: str, hints: str = "") -> tuple[dict, str]:
     """AI extraction is a last resort and hallucinates plausible records
     (blended author lists, wrong volumes, fabricated DOIs — the prompt's
     "never invent" is not enforcement). Upgrade to the authoritative registry
@@ -244,7 +244,7 @@ def _verify_ai_meta(meta: dict, text: str, source_url: str) -> tuple[dict, str]:
     cross-check the AI title against a Crossref search. An identifier that
     resolves nowhere and doesn't occur in the PDF text is dropped rather than
     stored — a missing DOI is recoverable, a fabricated one poisons BibTeX."""
-    hay = ((source_url or "") + "\n" + (text or "")[:SCAN_CHARS + 4000]).lower()
+    hay = ((hints or "") + "\n" + (text or "")[:SCAN_CHARS + 4000]).lower()
     if meta.get("arxiv_id"):
         better = _fetch_arxiv(meta["arxiv_id"])
         if better:
@@ -267,6 +267,12 @@ def _verify_ai_meta(meta: dict, text: str, source_url: str) -> tuple[dict, str]:
         better, bib = _fetch_doi(cand["doi"])
         return (better or cand), bib
     return meta, ""
+
+
+# Document kinds the AI classifier may report. Anything else (or a missing
+# kind, e.g. records cached before the field existed) is treated as "paper" —
+# the safe default, since only papers get the unverified-metadata warning.
+_DOC_KINDS = ("paper", "notes", "slides", "thesis", "book", "report", "other")
 
 
 def _ai_extract_meta(text: str, prompt: str, model: str, rt: dict) -> dict | None:
@@ -293,6 +299,7 @@ def _ai_extract_meta(text: str, prompt: str, model: str, rt: dict) -> dict | Non
     authors = data.get("authors") or []
     if isinstance(authors, str):
         authors = [a.strip() for a in re.split(r",| and ", authors) if a.strip()]
+    kind = str(data.get("kind") or "").strip().lower()
     return {
         "title": str(data.get("title") or "").strip(),
         "authors": [str(a).strip() for a in authors if str(a).strip()],
@@ -302,6 +309,7 @@ def _ai_extract_meta(text: str, prompt: str, model: str, rt: dict) -> dict | Non
         "pages": str(data.get("pages") or "").strip(),
         "doi": str(data.get("doi") or "").strip(),
         "arxiv_id": str(data.get("arxiv_id") or "").strip(),
+        "kind": kind if kind in _DOC_KINDS else "paper",
         "source": "ai",
     }
 
@@ -429,6 +437,7 @@ def metadata_status(request: Request):
                                  and (uploads / f"{doc_id}.pdf").exists()),
                 "has_meta": bool(meta),
                 "meta_source": (meta or {}).get("source", ""),
+                "meta_kind": (meta or {}).get("kind", ""),
                 "meta_error": (props.get("meta_error") or {}).get("detail", ""),
                 "indexed": bool(entry and entry["ver"] == INDEX_VERSION),
                 "index_stale": bool(entry and entry["ver"] != INDEX_VERSION),
@@ -455,10 +464,14 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
 
 
 def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str = "",
-                        force: bool = False, context_char_limit: int = 6000) -> dict:
+                        force: bool = False, context_char_limit: int = 6000,
+                        doi: str = "", arxiv_id: str = "") -> dict:
     """The lookup behind POST /api/metadata/fetch, callable off-request (the
-    extension's /api/clip runs it in a background thread). Raises
-    HTTPException(404) when nothing was found (after negative-caching it)."""
+    extension's /api/clip runs it in a background thread). doi/arxiv_id are
+    caller-supplied hints — the extension's detector reads them off the
+    publisher page's own meta tags, so they are trusted like URL-derived ids.
+    Raises HTTPException(404) when nothing was found (after negative-caching
+    it)."""
     content, props = _load_page(user, block_id)
     if props.get("meta") and not force:
         return {
@@ -470,6 +483,10 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
 
     doc_id = props.get("doc_id") or ""
     source_url = props.get("source_url") or props.get("sourceUrl") or ""
+    # Identifier sources trusted without a title check: the stored source URL,
+    # the web page the extension clipped from, and the detector hints.
+    hints = "\n".join(filter(None, [
+        source_url, str(props.get("web_url") or ""), doi, arxiv_id]))
     # Raw head text (no excerpt label — this text feeds regexes and matching).
     # The scan window is decoupled from the AI-context pref (see SCAN_CHARS);
     # the AI later gets only the pref-sized head slice.
@@ -500,11 +517,11 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
     # Unconfirmed records are kept only until something confirmed shows up.
     confirmed = False
 
-    arxiv_url_id = _find_arxiv_id(source_url, "")
-    arxiv_id = arxiv_url_id or _find_arxiv_id("", text)
-    if arxiv_id:
-        meta = _fetch_arxiv(arxiv_id)
-        confirmed = bool(meta) and (bool(arxiv_url_id) or _title_in_text(meta["title"], text))
+    trusted_arxiv = (arxiv_id or "").strip() or _find_arxiv_id(hints, "")
+    aid = trusted_arxiv or _find_arxiv_id("", text)
+    if aid:
+        meta = _fetch_arxiv(aid)
+        confirmed = bool(meta) and (bool(trusted_arxiv) or _title_in_text(meta["title"], text))
 
     if not confirmed:
         # The first DOI in the text can belong to a *cited* paper (footnotes
@@ -513,11 +530,11 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
         # an unconfirmed resolution is only a fallback. The tail rides along
         # so an own-DOI printed only in the end trailer is a candidate too.
         fallback = None
-        for doi in _find_doi_candidates(source_url, text + "\n" + tail)[:8]:
-            m, b = _fetch_doi(doi)
+        for cand_doi in _find_doi_candidates(hints, text + "\n" + tail)[:8]:
+            m, b = _fetch_doi(cand_doi)
             if not m:
                 continue
-            if doi.lower() in (source_url or "").lower() or _title_in_text(m["title"], text):
+            if cand_doi.lower() in hints.lower() or _title_in_text(m["title"], text):
                 meta, bibtex, confirmed = m, b, True
                 break
             fallback = fallback or (m, b)
@@ -549,7 +566,7 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
         if meta:
             # Upgrade to a registry record where possible; drop identifiers
             # that resolve nowhere and aren't in the PDF (fabrications).
-            meta, bibtex = _verify_ai_meta(meta, text + "\n" + tail, source_url)
+            meta, bibtex = _verify_ai_meta(meta, text + "\n" + tail, hints)
     if not meta:
         # Negative cache: remember the failed attempt on the page so clients
         # stop auto-retrying on every open. Manual ↻ (force) still retries,

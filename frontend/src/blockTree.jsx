@@ -23,10 +23,10 @@ import { BlockCmEditor, scanMathSpans } from "./blockCmEditor";
 import { fenceInnerAt, highlightCode, scanFences } from "./codeHighlight";
 import { remarkCallouts } from "./callouts";
 import { filterSlashCommands } from "./slashCommands";
-import { SlashMenuPopup } from "./slashMenu";
+import { PasteAsPopup, SlashMenuPopup } from "./slashMenu";
 import { ContextMenu, MenuItem } from "./menus";
 import { copyText } from "./utils";
-import { CopyIcon, OutlineIcon, Trash2Icon } from "./icons";
+import { CheckIcon, CopyIcon, Trash2Icon } from "./icons";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
@@ -186,9 +186,24 @@ function CodePre({ children }) {
   const lang = /language-([\w+#-]+)/.exec(codeProps.className || "")?.[1] || "";
   const raw = textOf(codeProps.children).replace(/\n$/, "");
   const html = useMemo(() => highlightCode(raw, lang), [raw, lang]);
+  const [copied, setCopied] = useState(false);
   return (
     <pre className="codeBlock">
       {lang ? <span className="codeLangBadge">{lang}</span> : null}
+      <button
+        type="button"
+        className="uiClose codeCopyBtn"
+        title="Copy code"
+        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          copyText(raw);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }}
+      >
+        {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+      </button>
       <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
     </pre>
   );
@@ -428,6 +443,11 @@ function BlockRow({
   const [mathAcIdx, setMathAcIdx] = useState(0);
   const [slashMenu, setSlashMenu] = useState(null); // {start, items, anchor}
   const [slashIdx, setSlashIdx] = useState(0);
+  // Notion-style "Paste as" chooser after pasting a URL: the URL text is
+  // already inserted; { start, end, url, items, anchor }. Any further edit,
+  // caret move or blur keeps the URL and dismisses the menu.
+  const [pasteMenu, setPasteMenu] = useState(null);
+  const [pasteIdx, setPasteIdx] = useState(0);
   const [searchResults, setSearchResults] = useState([]);
   const [imageDragOver, setImageDragOver] = useState(false);
   const uploadingRef = useRef(false);
@@ -664,14 +684,88 @@ function BlockRow({
     if (url) onChangeText(block.id, (block.content || "") + "\n" + `![](${url})`);
   }
 
+  // A gamma block link pastes as mention chip / synced embed / plain URL;
+  // any other URL pastes as-is (the link chip) or as a titled markdown link.
+  function pasteAsItems(blockId) {
+    if (blockId) {
+      return [
+        { name: "mention", glyph: "@", label: "Mention", hint: "inline chip", make: () => `[[${blockId}]]` },
+        { name: "synced", glyph: "⧉", label: "Synced block", hint: "live embed", make: () => `![[${blockId}]]` },
+        { name: "url", glyph: "🔗", label: "URL", hint: "keep the link" },
+      ];
+    }
+    return [
+      { name: "url", glyph: "🔗", label: "URL", hint: "link chip" },
+      { name: "titled", glyph: "🔖", label: "Titled link", hint: "fetch the page title" },
+    ];
+  }
+
+  function applyPasteAs(item) {
+    const pm = pasteMenu;
+    setPasteMenu(null);
+    const ta = ref.current;
+    if (!pm || !ta) return;
+    const doReplace = (text) => {
+      // The pasted URL must still be where we left it (typing dismisses the
+      // menu, but an async titled-link fetch can land late).
+      if (ta.value.slice(pm.start, pm.end) !== pm.url) return;
+      ta.view?.dispatch({
+        changes: { from: pm.start, to: pm.end, insert: text },
+        selection: { anchor: pm.start + text.length },
+        userEvent: "input",
+      });
+      ta.focus();
+    };
+    if (item.make) {
+      doReplace(item.make());
+    } else if (item.name === "titled") {
+      fetch(`/api/link-preview?url=${encodeURIComponent(pm.url)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          let label = (d?.title || "").replace(/[[\]\n]/g, " ").trim();
+          if (!label) {
+            try { label = new URL(pm.url).hostname.replace(/^www\./, ""); } catch (_) { label = pm.url; }
+          }
+          doReplace(`[${label}](${pm.url})`);
+        })
+        .catch(() => {});
+    }
+    // "url": keep the pasted text as-is
+  }
+
   // Paste an image (screenshot) while editing → upload it and insert the
-  // markdown at the cursor. Text pastes fall through to the browser default.
+  // markdown at the cursor. A single-URL text paste inserts the URL and opens
+  // the "Paste as" chooser. Other text falls through to the browser default.
   async function handleEditorPaste(e) {
     if (readOnly) return;
     const file = Array.from(e.clipboardData?.items || [])
       .find((it) => it.type?.startsWith("image/"))
       ?.getAsFile();
-    if (!file) return;
+    if (!file) {
+      const text = (e.clipboardData?.getData("text/plain") || "").trim();
+      const ta = ref.current;
+      if (ta && /^https?:\/\/\S+$/i.test(text)) {
+        e.preventDefault();
+        const start = ta.selectionStart;
+        ta.view?.dispatch({
+          changes: { from: start, to: ta.selectionEnd, insert: text },
+          selection: { anchor: start + text.length },
+          userEvent: "input",
+        });
+        let blockId = null;
+        try {
+          const b = new URL(text).searchParams.get("block");
+          if (b && /^[a-zA-Z0-9_-]+$/.test(b)) blockId = b;
+        } catch (_) {}
+        const anchor = ta.caretCoords(start);
+        // After the onChange the dispatch just fired (it clears pasteMenu).
+        requestAnimationFrame(() => {
+          setPasteMenu({ start, end: start + text.length, url: text, items: pasteAsItems(blockId), anchor });
+          setPasteIdx(0);
+        });
+      }
+      return;
+    }
     e.preventDefault();
     const ta = ref.current;
     // Capture the cursor now — the upload takes a beat and focus may move.
@@ -877,19 +971,29 @@ function BlockRow({
                 }
                 updateMathUi(e.target, true);
                 updateSlashMenu(e.target, true);
+                setPasteMenu(null);
               }}
               onSelect={(e) => {
                 updateMathUi(e.target, false);
                 updateSlashMenu(e.target, false);
+                setPasteMenu(null);
               }}
               onBlur={() => {
                 onStartEdit(block.id, false);
                 setMathUi(null);
                 setSlashMenu(null);
+                setPasteMenu(null);
                 setTimeout(() => setRefPopup(null), 120);
               }}
               onPaste={handleEditorPaste}
               onKeyDown={(e) => {
+                if (pasteMenu) {
+                  const n = pasteMenu.items.length;
+                  if (e.key === "ArrowDown") { e.preventDefault(); setPasteIdx((i) => Math.min(i + 1, n - 1)); return; }
+                  if (e.key === "ArrowUp") { e.preventDefault(); setPasteIdx((i) => Math.max(i - 1, 0)); return; }
+                  if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); applyPasteAs(pasteMenu.items[pasteIdx]); return; }
+                  if (e.key === "Escape") { e.preventDefault(); setPasteMenu(null); return; }
+                }
                 if (refPopup && searchResults.length > 0) {
                   if (e.key === "ArrowDown") {
                     e.preventDefault();
@@ -1120,6 +1224,9 @@ function BlockRow({
           onPick={runSlashCommand}
         />
       ) : null}
+      {!readOnly && block.editMode && pasteMenu ? (
+        <PasteAsPopup items={pasteMenu.items} selected={pasteIdx} anchor={pasteMenu.anchor} onPick={applyPasteAs} />
+      ) : null}
       {refPopup && searchResults.length > 0 && (
         <div
           className="refPopup"
@@ -1204,22 +1311,12 @@ function SortableBlockRow({ block, ...rowProps }) {
         <ContextMenu x={handleMenu.x} y={handleMenu.y} onClose={() => setHandleMenu(null)}>
           <MenuItem
             icon={LinkIcon}
-            title="A URL that opens this block (paste it anywhere)"
+            title="Paste it in a note to choose mention / synced block, or open it anywhere"
             onClick={() => copy(
               `${window.location.origin}/?block=${encodeURIComponent(block.id)}`,
-              "Block link copied",
+              "Block link copied — paste into a note for mention / synced block",
             )}
           >Copy link to block</MenuItem>
-          <MenuItem
-            icon={CopyIcon}
-            title="Paste into a note to reference this block as a chip"
-            onClick={() => copy(`[[${block.id}]]`, "Block reference copied — paste into a note")}
-          >Copy block reference</MenuItem>
-          <MenuItem
-            icon={OutlineIcon}
-            title="Paste into a note to show this block's live content there (synced)"
-            onClick={() => copy(`![[${block.id}]]`, "Block embed copied — paste into a note")}
-          >Copy block embed</MenuItem>
           {block.id !== "root" ? (
             <MenuItem
               icon={Trash2Icon}

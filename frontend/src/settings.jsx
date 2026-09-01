@@ -658,7 +658,9 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
   const metaCell = (p) => (
     p.has_meta
       ? p.meta_source === "ai"
-        ? cell("bad", "AI", "AI-extracted, not confirmed by a registry — verify before citing")
+        ? (p.meta_kind || "paper") === "paper"
+          ? cell("bad", "AI", "AI-extracted, not confirmed by a registry — verify before citing")
+          : cell("muted", `AI (${p.meta_kind})`, "AI-extracted; not a published paper, so there is no registry record to verify against")
         : cell("ok", p.meta_source || "yes", "Metadata resolved")
       : p.meta_error
         ? cell("bad", "failed", p.meta_error)

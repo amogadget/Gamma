@@ -185,11 +185,14 @@ _SYSTEM_PROMPT = (
 # Default prompt for AI-based metadata extraction (used when neither an arXiv id
 # nor a DOI identifies the paper). Editable per-user in the frontend prompt editor.
 METADATA_PROMPT = (
-    "You extract bibliographic metadata from the first pages of an academic paper. "
+    "You extract bibliographic metadata from the first pages of an academic document. "
     "Reply with ONLY a JSON object (no code fences, no commentary) with these keys: "
     'title (string), authors (list of "First Last" strings, in order), year (string), '
     'venue (journal or conference name; "arXiv" for preprints), volume (string), '
-    'pages (string, e.g. "173-179"), doi (string), arxiv_id (string, e.g. "1810.11086"). '
+    'pages (string, e.g. "173-179"), doi (string), arxiv_id (string, e.g. "1810.11086"), '
+    'kind (string: "paper" for journal/conference articles and preprints; otherwise '
+    '"notes", "slides", "thesis", "book", "report", or "other" — lecture notes, course '
+    'materials and problem sets are "notes"). '
     "Use empty strings/lists for anything not stated in the text. Never invent a DOI or arXiv id."
 )
 

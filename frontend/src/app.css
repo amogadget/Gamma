@@ -648,7 +648,7 @@ body {
 
 .collapseBtn {
   margin-top: 2px;
-  width: 16px;
+  width: 12px;
   height: 20px;
   border: none;
   background: transparent;
@@ -832,7 +832,20 @@ body {
   color: var(--text-muted);
   user-select: none;
   pointer-events: none;
+  transition: opacity 0.12s ease;
 }
+/* Hover crossfade: the language badge yields its corner to the copy button.
+   Look comes from .uiClose; this only positions it. */
+.codeCopyBtn {
+  position: absolute;
+  top: 3px;
+  right: 5px;
+  border-radius: 5px;
+  opacity: 0;
+  z-index: 1;
+}
+:is(.codeBlock, .cmCodeWidget):hover .codeCopyBtn { opacity: 1; }
+:is(.codeBlock, .cmCodeWidget):hover .codeLangBadge { opacity: 0; }
 
 /* highlight.js token colors, theme-aware (dark: VSCode-ish, light: GitHub-ish).
    Applies to both the editor's code widget and the rendered view. */
@@ -1133,8 +1146,8 @@ body {
 
 .collapseSpacer {
   display: inline-block;
-  width: 16px;
-  min-width: 16px;
+  width: 12px;
+  min-width: 12px;
   height: 20px;
 }
 
@@ -1230,27 +1243,32 @@ body {
   align-items: flex-start;
   gap: 0;
 }
+/* Notion-like handle: invisible at rest, appears on row hover, and gets a
+   rounded pill background when hovered itself (it's also a click target for
+   the block menu). Negative margin tucks the row against it. */
 .sortableBlockWrap > .dragHandle {
   flex: 0 0 auto;
-  width: 14px;
-  min-height: 24px;
+  width: 18px;
+  height: 22px;
   padding: 0;
-  margin-top: 0;
-  margin-right: 0;
+  margin-top: 1px;
+  margin-right: -6px;
+  border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   background: transparent;
   border: none;
-  color: var(--text-primary);
-  font-size: 20px;
+  color: var(--text-muted);
+  font-size: 17px;
   font-weight: 700;
   line-height: 1;
   cursor: grab;
-  opacity: 0.85;
+  opacity: 0;
   transition:
     opacity 120ms ease,
-    color 120ms ease;
+    color 120ms ease,
+    background 120ms ease;
   user-select: none;
   -webkit-user-drag: element;
 }
@@ -1258,6 +1276,9 @@ body {
 .sortableBlockWrap:focus-within > .dragHandle,
 .sortableBlockWrap:has(:hover) > .dragHandle {
   opacity: 1;
+}
+.sortableBlockWrap > .dragHandle:hover {
+  background: var(--bg-subtle);
   color: var(--text-bright);
 }
 .sortableBlockWrap > .dragHandle:active {
@@ -1688,6 +1709,7 @@ button.pdfOutlineChevron:hover {
 
 /* Attach mode */
 .attachModeBtn {
+  width: auto;
   font-size: 14px;
   color: var(--accent);
   padding: 0 3px;
@@ -4548,6 +4570,58 @@ button.pdfOutlineChevron:hover {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* "/" command menu in the block editor (slashMenu.jsx). */
+.slashMenu {
+  position: fixed;
+  z-index: var(--z-refpopup);
+  min-width: 240px;
+  max-height: 288px;
+  overflow-y: auto;
+  padding: 3px;
+}
+/* "Paste as" chooser (URL paste) — a slashMenu with a quiet section title. */
+.pasteAsTitle {
+  padding: 4px 9px 3px;
+  font-size: 10px;
+  color: var(--text-dim);
+  user-select: none;
+}
+.slashMenuItem {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+  font: inherit;
+}
+.slashMenuItem:hover { background: var(--bg-hover); }
+.slashMenuItem.selected { background: var(--accent-bg); }
+.slashMenuGlyph {
+  min-width: 30px;
+  padding: 3px 2px;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+.slashMenuLabel { font-size: 13px; }
+.slashMenuHint {
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
   white-space: nowrap;
 }
 

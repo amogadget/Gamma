@@ -3004,6 +3004,11 @@ export default function App() {
   // and doesn't spin for a fetch that belongs to a different page.
   const [metaFetchingIds, setMetaFetchingIds] = useState(() => new Set());
   const metaBusy = metaFetchingIds.has(focusedBlockId);
+  // Unverified-paper warning (red "!"): AI-extracted metadata that claims to
+  // be a paper. Non-paper kinds (course notes, slides… — meta.kind from the
+  // AI classifier) have no registry record to verify, so no warning; records
+  // cached before the kind field existed count as papers (the safe default).
+  const metaUnverifiedPaper = pageMeta?.source === "ai" && (pageMeta.kind || "paper") === "paper";
   const [pptCite, setPptCite] = useState("");
   const [pptCiteBusy, setPptCiteBusy] = useState(false);
   const [metaPopPos, setMetaPopPos] = useState({ top: 0, right: 0 }); // fixed-position anchor for the metadata popover
@@ -6229,7 +6234,7 @@ export default function App() {
                     title={
                       metaBusy
                         ? "Fetching paper metadata…"
-                        : pageMeta?.source === "ai"
+                        : metaUnverifiedPaper
                           ? "Metadata was AI-extracted and could not be verified against a registry — check it before citing"
                           : "Paper metadata (authors, venue, DOI, source file…)"
                     }
@@ -6256,7 +6261,7 @@ export default function App() {
                   </button>
                   {/* AI-extracted metadata never passed a registry check —
                       flag it so nobody cites it unverified. */}
-                  {!metaBusy && pageMeta?.source === "ai" ? (
+                  {!metaBusy && metaUnverifiedPaper ? (
                     <span className="metaWarnDot" aria-hidden="true">!</span>
                   ) : null}
                   {openPopover === "meta" ? (

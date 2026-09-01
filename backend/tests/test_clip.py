@@ -59,7 +59,8 @@ def upstream(monkeypatch):
 @pytest.fixture
 def meta_calls(monkeypatch):
     calls = []
-    monkeypatch.setattr(clip_mod, "_start_metadata", lambda user, block_id: calls.append((user, block_id)))
+    monkeypatch.setattr(clip_mod, "_start_metadata",
+                        lambda user, block_id, doi="", arxiv_id="": calls.append((user, block_id, doi, arxiv_id)))
     return calls
 
 
@@ -88,7 +89,17 @@ def test_clip_url_creates_filed_page_and_stores_pdf(guest, upstream, meta_calls)
     assert props["source_url"] == url
     assert props["web_url"] == "https://example.org/papers/clip-one"
     assert props["folder"] == "reading/2026" and props["category"] == "to-read"
-    assert meta_calls == [("guest", body["block_id"])]
+    assert meta_calls == [("guest", body["block_id"], "", "")]
+
+
+def test_clip_forwards_detected_identifiers_to_metadata(guest, upstream, meta_calls):
+    r = guest.post("/api/clip", json={
+        "source_url": "https://journal.example/article",
+        "pdf_url": "https://journal.example/article-file.pdf",
+        "doi": "10.1234/abc.def",
+    })
+    assert r.status_code == 200, r.text
+    assert meta_calls[0][2] == "10.1234/abc.def"
 
 
 def test_clip_dedups_by_doi_and_adds_folder(guest, upstream, meta_calls):

@@ -151,8 +151,11 @@ Server side (`clip.py`, sync `def` — it downloads):
 5. **Folder + labels** — `properties.folder` / `properties.category` comma
    lists, cleaned by `foldertags`.
 6. **Metadata** — `metadata.fetch_page_metadata()` (extracted from
-   `/api/metadata/fetch`) in a daemon thread; arXiv/DOI paths need no AI
-   provider. Skipped when `meta` already exists or `fetch_metadata: false`.
+   `/api/metadata/fetch`) in a daemon thread; the detector's `doi`/`arxiv_id`
+   ride along as trusted hints (they come from the publisher page's own meta
+   tags, so the lookup resolves them directly instead of re-mining the PDF
+   text); arXiv/DOI paths need no AI provider. Skipped when `meta` already
+   exists or `fetch_metadata: false`.
 
 Companions: `GET /api/library/lookup?doi=&arxiv_id=&url=` (404 when absent;
 identifiers are also extracted from `url`), `GET /api/library/folders` →

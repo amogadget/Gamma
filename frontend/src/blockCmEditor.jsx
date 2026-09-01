@@ -15,6 +15,12 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { findMathAtCursor, renderKatexInto } from "./latexEditor";
 import { calloutType } from "./callouts";
 import { highlightCode, scanFences } from "./codeHighlight";
+import { copyText } from "./utils";
+
+// Inline SVGs for the code card's copy button (the widget is vanilla DOM,
+// so the React icons in icons.jsx can't be used here).
+const COPY_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const CHECK_SVG = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
 
 // All CLOSED math spans in the text: [{from, to, display}] with from/to
 // including the delimiters. Same tokenizer as latexEditor's findMathAtCursor
@@ -153,6 +159,21 @@ class CodeBlockWidget extends WidgetType {
       badge.textContent = this.lang;
       span.appendChild(badge);
     }
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "uiClose codeCopyBtn";
+    btn.title = "Copy code";
+    btn.innerHTML = COPY_SVG;
+    // stopPropagation: the widget's own mousedown places the caret inside —
+    // copying must not enter edit-the-fence mode.
+    btn.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      copyText(this.code);
+      btn.innerHTML = CHECK_SVG;
+      setTimeout(() => { btn.innerHTML = COPY_SVG; }, 1200);
+    });
+    span.appendChild(btn);
     span.appendChild(pre);
     span.addEventListener("mousedown", (e) => {
       e.preventDefault();
