@@ -158,6 +158,12 @@
   /* The PDF page ground (Solarized base3). Not a --bg-* token: it is the
      paper, not a surface, and the .pdfViewer rules multiply the canvas onto it. */
   --pdf-paper: #fdf6e3;
+  /* Canvas opacity under that multiply — see the .pdfPageWrap > canvas rule.
+     A token so the value is tunable per theme instead of buried in a
+     selector. Measured on text, vector swatches, a photo and a scan: paper
+     stays exactly --pdf-paper, black ink lifts to ~#2e2c29 (12.9:1, well
+     above the 7:1 AAA body-text bar) and colour only washes ~18%. */
+  --pdf-ink-alpha: 0.82;
   color-scheme: light;
 }
 
@@ -3753,7 +3759,15 @@ button.pdfOutlineChevron:hover {
   background: var(--pdf-paper) !important;
   isolation: isolate;
 }
-[data-theme="sepia"] .pdfViewer:not(.pdfDark) .pdfPageWrap > canvas { mix-blend-mode: multiply; }
+/* Soft ink: under multiply, canvas opacity composes as a*(canvas*paper) +
+   (1-a)*paper — white areas are exactly paper either way (paper invariant),
+   while black ink lifts to (1-a)*paper: a warm charcoal derived from the
+   ground itself, without a contrast() filter, which would darken the paper
+   too. Figures fade toward paper by the same amount, a mild wash. */
+[data-theme="sepia"] .pdfViewer:not(.pdfDark) .pdfPageWrap > canvas {
+  mix-blend-mode: multiply;
+  opacity: var(--pdf-ink-alpha, 1);
+}
 
 /* --- AI translated view (overlay over the original text runs) ---
    The layer sits between the canvas and the text layer: each block is an
@@ -3818,6 +3832,9 @@ button.pdfOutlineChevron:hover {
 /* Same for the eye-comfort ground: the masks are opaque divs above the
    canvas, so the page tint's blend never reaches them. */
 [data-theme="sepia"] .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
+/* Translated text is a real DOM layer, so it never passes through the
+   canvas blend — match the softened ink colour explicitly. */
+[data-theme="sepia"] .pdfViewer:not(.pdfDark) .pdfTransText { color: #2e2c29; }
 /* Alt held = peek at the original (class set by the viewer). */
 .pdfViewer.transPeek .pdfTransLayer { visibility: hidden; }
 /* Tiny percentage under the zoom column's translate button while a job runs. */
