@@ -35,8 +35,9 @@ Edge and other Chromium browsers load it the same way. Firefox needs a
 - On a paper's landing page or PDF tab the icon shows **PDF / arX / DOI**;
   click it, pick a folder and labels, **Save to Gamma**. ✓ means the paper
   is already in your library — clicking opens it.
-- **Upload the PDF from this tab** sends the bytes your browser can see
-  (institutional login) when the server can't fetch them itself.
+- Paywalled PDF your browser can see (institutional login)? The bytes are
+  uploaded from your browser automatically when the server can't fetch them
+  itself.
 - Right-click: *Save link to Gamma*, *Save page to Gamma*, *Clip selection
   to Gamma* (a quoted block under the matching paper, else a "Web clips" page).
 - <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> saves the current page.

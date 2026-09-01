@@ -93,12 +93,33 @@
     } catch {}
   }
 
+  // Download a PDF from inside the page: a same-origin fetch with the page's
+  // Referer and Sec-Fetch headers, which publisher bot checks accept where
+  // they 403 the same fetch from the extension's service worker.
+  async function fetchPdfForWorker(url) {
+    const res = await fetch(url, { credentials: "include" });
+    console.info(`[gamma] in-page PDF fetch ${url} → ${res.status} ${res.headers.get("content-type") || ""}`);
+    if (!res.ok) return { ok: false, status: res.status };
+    const blob = await res.blob();
+    if (blob.size > 60 * 1024 * 1024) return { ok: false, error: "the PDF is too large to relay from this tab" };
+    const dataUrl = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(new Error("could not read the downloaded PDF"));
+      r.readAsDataURL(blob);
+    });
+    return { ok: true, base64: dataUrl.slice(dataUrl.indexOf(",") + 1) };
+  }
+
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg && msg.type === "get-detection") {
       if (!last) { try { last = detect(); } catch { last = null; } }
       sendResponse(last);
     } else if (msg && msg.type === "get-selection") {
       sendResponse({ text: String(window.getSelection && window.getSelection() || "") });
+    } else if (msg && msg.type === "fetch-pdf") {
+      fetchPdfForWorker(msg.url).then(sendResponse, (err) => sendResponse({ ok: false, error: err.message || String(err) }));
+      return true; // async sendResponse
     }
   });
 

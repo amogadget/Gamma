@@ -16,9 +16,10 @@ and text selections. Server side: `gamma/routers/clip.py`. No build step
    folder picker and labels → **Save to Gamma** → *Open in Gamma*
    (`/?block=<id>`).
 2. **Save the PDF you are looking at.** The tab *is* a PDF, possibly behind
-   an institutional login the server can't reach: *Upload the PDF from this
-   tab* fetches the bytes with the browser's session → `POST /api/uploads` →
-   `POST /api/clip {doc_id}`. Checked by default on PDF tabs.
+   an institutional login the server can't reach: the bytes are fetched with
+   the browser's session → `POST /api/uploads` → `POST /api/clip {doc_id}`,
+   automatically — browser-first on PDF tabs, and as a fallback on any page
+   whose PDF the server fails to fetch (no checkbox; see the pipeline below).
 3. **Right-click**: *Save link to Gamma* (link), *Save page to Gamma* (page),
    *Clip selection to Gamma* (selection → a `> quote — [title](url)` block
    under the paper matching this tab, else under a "Web clips" note page).
@@ -54,7 +55,7 @@ helpers — never re-implement it in the extension.
 |---|---|
 | `manifest.json` | MV3: module service worker, `<all_urls>` content script, popup, options, `save-to-gamma` command. `host_permissions: ["<all_urls>"]` — the same install warning the content script already carries, and it makes cookie-carrying fetches to the (user-configured) server origin and the PDF-from-tab fetch work without runtime permission prompts |
 | `worker.js` | per-tab state in `chrome.storage.session` (`tab:<id>` → `{candidate, hit, auth, saving, error}`), badge/icon, `lookup`, the save pipeline, context menus, keyboard command, notifications, and the message API (`get-state`, `save`, `clip-selection`, `auth-changed`, `open`) |
-| `detect.js` | content script (`document_idle`): identifier extraction, re-run on SPA URL changes; answers `get-detection` / `get-selection` |
+| `detect.js` | content script (`document_idle`): identifier extraction, re-run on SPA URL changes; answers `get-detection` / `get-selection` / `fetch-pdf` (downloads a PDF from inside the page and relays it base64 — publisher bot checks that 403 the worker's fetch accept the page's own same-origin request) |
 | `api.js` | settings (`chrome.storage.sync`: `server, folder, labels, allowOa, saveCopy`), `api()` fetch wrapper (`credentials: "include"`, JSON `detail` → `ApiError{status}`), `login/logout/whoAmI` |
 | `popup.html/js/css` | setup (no server) → sign-in → main view; `?tab=<id>` targets a specific tab when opened as a page (tests) |
 | `options.html/js` | server + host permission, account, saving defaults |
@@ -92,10 +93,24 @@ Popup → `save` message → `savePaper()` in the worker (so it survives the pop
 closing; progress is written to the tab state and the popup renders it):
 
 ```
-uploadFromTab?  fetch(pdf_url, {credentials:"include"}) → %PDF check → POST /api/uploads → doc_id
+PDF tab?  fetch bytes in the browser → %PDF check → POST /api/uploads → doc_id   (best-effort)
 POST /api/clip { source_url, pdf_url, doi, arxiv_id, doc_id?, title, folder, labels, allow_oa, save_copy }
+  └─ 400 and no doc_id yet? → fetch bytes in the browser → POST /api/uploads → retry /api/clip with doc_id
 → { block_id, doc_id, title, existed, open_url, folder, labels, note? }
 ```
+
+Browser-side downloads are automatic, no checkbox: PDF tabs upload their bytes
+up front (the browser already has them; the server may be paywalled out), and
+any other save that fails server-side with a 400 retries through the browser
+when a `pdf_url` was detected. If the browser fetch fails too, the server's
+error (paywall explanation) is the one shown. "Fetch bytes in the browser"
+itself is two attempts: the worker's direct `fetch(url,
+{credentials:"include"})` first, then — publisher bot checks (science.org
+& co.) 403 requests with an extension origin and no Referer — the tab's
+content script via `fetch-pdf`, a same-origin fetch from the page's own
+context, indistinguishable from the reader loading the PDF, relayed back
+base64 (capped at 60 MB). Raw PDF tabs have no content script, so there the
+direct fetch is the only (and working) path.
 
 Server side (`clip.py`, sync `def` — it downloads):
 

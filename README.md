@@ -14,10 +14,16 @@
 
 Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma finds the PDF) or drag the file in. Then:
 
-- **Highlight** — select text, pick a color, add a comment. Each highlight becomes a block.
+- **Highlight** — select text or drag a box around a figure, pick a color, add a comment. Each highlight becomes a block.
 - **Outliner notes** — highlights and free notes are the same kind of block: nest them, drag-reorder, `[[link]]` between them, write markdown + math. Click a note to jump the PDF to it (and back).
-- **Ask the AI** — chat about the open paper (or pick several at once) with Anthropic or OpenAI models, or just sign in with your ChatGPT subscription — no API key. Paste figures, or attach the whole PDF so the model sees tables and plots.
+- **Ask the AI** — chat about the open paper (or pick several at once) with Anthropic or OpenAI models, or just sign in with your ChatGPT subscription — no API key. Paste figures, dictate by voice, or attach the whole PDF so the model sees tables and plots.
 - **Dockable panels** — drag any window's grip to the left, right, or bottom; double-click to collapse.
+
+## An agent in your library
+
+<!-- Demo GIF slot ➜ record: home chat "Organize my library…", tool chips streaming (List/Read/Move), folders appearing in the list. Save as docs/demo-agent.gif (recorder: .claude/skills/readme-media/record-agent.mjs) -->
+
+Ask the chat to tidy up: it can list, read, and search your papers, rename them, and file them into folders — every step shown as it runs, scoped to the folder you're in.
 
 ## 🔗 Link and organize
 
@@ -29,6 +35,12 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 - **Search everything** — `Ctrl+F` searches across notes, highlights, and the full text of every PDF at once, with match-case / whole-word / regex toggles. Narrow the scope with chips for **both** labels (exact match, e.g. an author) and folders (prefix match, so `qc` pulls in everything beneath it). Matching is forgiving: "3000" finds "3,000-qubit" across a line break.
 
 <!-- Demo GIF slot ➜ record: dragging a paper into a folder, then a Ctrl+F search lighting up matches. Save as docs/demo-library.gif -->
+
+## Save from your browser
+
+<!-- Demo GIF slot ➜ record: arXiv abs page, the Connector popup saving into a folder, then Open in Gamma. Save as docs/demo-connector.gif (recorder: .claude/skills/readme-media/record-connector.mjs — needs xvfb-run; headless Chromium loads no MV3 extension) -->
+
+The **Gamma Connector** extension ([extension/](./extension/)) saves the paper you're reading in one click — PDF, metadata, folder, and labels — straight from the arXiv / DOI / publisher tab. Right-click clips a link or a text selection into your notes.
 
 ---
 

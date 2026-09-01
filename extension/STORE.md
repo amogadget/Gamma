@@ -48,7 +48,7 @@ metadata (title, authors, venue, DOI) is resolved automatically.
 - Shows ✓ when the paper is already in your library and opens it instead of
   making a duplicate.
 - Behind a paywall your browser can see through (institutional login)?
-  "Upload the PDF from this tab" sends the bytes your browser already has.
+  The bytes your browser already has are uploaded automatically.
 - Right-click a link, a page, or selected text: Save to Gamma / Clip to Gamma
   (a quoted block with its source link).
 - Ctrl+Shift+S saves the current page.
@@ -65,7 +65,7 @@ Gamma server.
 
 | Permission | Justification |
 |---|---|
-| `host_permissions: <all_urls>` | The user's Gamma server is self-hosted at an address only they know (LAN, Tailscale, or a personal domain), so it cannot be listed in the manifest; the same permission lets the content script detect papers on any site and lets "Upload the PDF from this tab" fetch a PDF with the user's own browser session. Page data is only sent, to the user's server, when the user clicks Save. |
+| `host_permissions: <all_urls>` | The user's Gamma server is self-hosted at an address only they know (LAN, Tailscale, or a personal domain), so it cannot be listed in the manifest; the same permission lets the content script detect papers on any site and lets the save flow fetch a paywalled PDF with the user's own browser session. Page data is only sent, to the user's server, when the user clicks Save. |
 | `storage` | Remembers the server address, the default folder/labels, and per-tab detection state. |
 | `contextMenus` | "Save link / page / selection to Gamma" items. |
 | `activeTab`, `tabs` | Read the current tab's URL/title for detection and the badge. |

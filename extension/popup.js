@@ -58,12 +58,6 @@ async function showMain(st) {
 
   if (st.hit) $("title").textContent = st.hit.title || $("title").textContent;
 
-  // Upload-from-tab: the tab is a PDF, or the PDF link lives on this site.
-  let sameSitePdf = false;
-  try { sameSitePdf = !!c.pdf_url && new URL(c.pdf_url).origin === new URL(c.source_url).origin; } catch {}
-  show("upload-row", !st.hit && (c.is_pdf_tab || sameSitePdf));
-  $("upload").checked = !!c.is_pdf_tab;
-
   await fillPickers(st.settings);
 }
 
@@ -100,18 +94,18 @@ async function doSave({ candidate, force } = {}) {
   const c = candidate || state.candidate;
   const folder = chosenFolder();
   const labels = chosenLabels();
-  const uploadFromTab = !$("upload-row").classList.contains("hidden") && $("upload").checked;
   $("save").disabled = true; $("save-anyway").disabled = true;
   show("result", false);
   show("progress"); $("progress-text").textContent = "starting…";
   try {
-    if (uploadFromTab) {
-      const url = c.pdf_url || c.source_url;
-      const granted = await chrome.permissions.request({ origins: [originPattern(new URL(url).origin)] });
-      if (!granted) throw new Error("permission to read this site was declined");
-    }
+    // The worker may need to download the PDF in the browser (PDF tab, or
+    // fallback when the server can't get past a paywall) — secure the host
+    // permission while we still have the user's click. Best-effort: normally
+    // <all_urls> is already granted and this resolves silently.
+    const fetchUrl = c.pdf_url || (c.is_pdf_tab ? c.source_url : "");
+    if (fetchUrl) { try { await chrome.permissions.request({ origins: [originPattern(new URL(fetchUrl).origin)] }); } catch {} }
     await setSettings({ folder, labels });
-    const out = await send({ type: "save", tabId: tab.id, candidate: c, folder, labels, uploadFromTab, source_url: force ? (tab && tab.url) : undefined });
+    const out = await send({ type: "save", tabId: tab.id, candidate: c, folder, labels, source_url: force ? (tab && tab.url) : undefined });
     show("progress", false);
     const r = $("result");
     r.className = "msg " + (out.note ? "warn" : "ok");
