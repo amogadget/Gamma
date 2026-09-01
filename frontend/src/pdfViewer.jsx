@@ -364,6 +364,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       onHighlightContext: (...a) => cbRef.current.onHighlightContext?.(...a),
       onExternalLink: (...a) => cbRef.current.onExternalLink?.(...a),
       onLinkContext: (...a) => cbRef.current.onLinkContext?.(...a),
+      onTranslateRegion: (...a) => translateRegionRef.current?.(...a),
     }),
     [],
   );
@@ -373,6 +374,9 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // released. The DOM check keeps the preventDefault (which stops a bare Alt
   // from focusing the browser menu bar) from firing when nothing is
   // translated.
+  // translateRegion is declared further down (it needs the engine's state), so
+  // the stable callback dispatches through a ref, like cbRef does.
+  const translateRegionRef = useRef(null);
   const [transPeek, setTransPeek] = useState(false);
   useEffect(() => {
     const anyTrans = () => !!viewerRef.current?.querySelector(".pdfTransLayer");
@@ -1373,7 +1377,11 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     return paras;
   }
 
-  async function runTransJob(pages, label) {
+  // `only` (optional): Map<pageNo, Set<ordinal>> restricting the job to some
+  // paragraphs — the ordinal is the index among a page's translatable blocks,
+  // which is exactly what the render path uses, so a partial result renders
+  // with the untouched paragraphs still showing their original text.
+  async function runTransJob(pages, label, only = null) {
     if (transJobRef.current || !pages.length) return;
     const job = { aborted: false, ctl: new AbortController() };
     transJobRef.current = job;
@@ -1406,14 +1414,23 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         const st = { paras, out: new Array(texts.length).fill(undefined), remaining: 0 };
         pageState.set(pn, st);
         setPageTrans(pn, { key, paras, texts: [], done: false });
-        let start = 0, chars = 0;
-        for (let i = 0; i < texts.length; i++) {
+        const wanted = only ? only.get(pn) : null;
+        const idxs = texts.map((_, i) => i).filter((i) => !wanted || wanted.has(i));
+        if (!idxs.length) {
+          setPageTrans(pn, { key, paras, texts: [], done: true });
+          pageState.delete(pn);
+          continue;
+        }
+        let batch = [], chars = 0;
+        for (let k = 0; k < idxs.length; k++) {
+          const i = idxs[k];
+          batch.push(i);
           chars += texts[i].length;
           totalChars += texts[i].length;
-          if (i + 1 - start >= CHUNK_PARAS || chars >= CHUNK_CHARS || i === texts.length - 1) {
-            queue.push({ pn, off: start, texts: texts.slice(start, i + 1) });
+          if (batch.length >= CHUNK_PARAS || chars >= CHUNK_CHARS || k === idxs.length - 1) {
+            queue.push({ pn, idxs: batch, texts: batch.map((j) => texts[j]) });
             st.remaining += 1;
-            start = i + 1;
+            batch = [];
             chars = 0;
           }
         }
@@ -1443,7 +1460,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         if (job.aborted) return;
         if (!res) { failed = true; return; }
         const st = pageState.get(c.pn);
-        res.forEach((t, j) => { st.out[c.off + j] = t; });
+        if (!st) continue;
+        res.forEach((t, j) => { st.out[c.idxs[j]] = t; });
         st.remaining -= 1;
         setPageTrans(c.pn, { key, paras: st.paras, texts: st.out.slice(), done: st.remaining === 0 });
         doneChars += c.texts.reduce((n, t) => n + t.length, 0);
@@ -1459,6 +1477,35 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     setTransStatus({ running: false, label, progress: totalChars ? doneChars / totalChars : 1 });
   }
 
+  // Option/Alt + drag a box over a page → translate just the paragraphs it
+  // touches. `rect` arrives in page-wrapper pixels at the current scale; the
+  // segmentation is in scale-1 viewport units, so divide before comparing.
+  async function translateRegion(pn, rect, scaleAtDrag) {
+    if (transJobRef.current) return;
+    let paras = [];
+    try { paras = await ensureParas(pn); } catch { /* unreadable page */ }
+    const sc = scaleAtDrag || 1;
+    const box = { x1: rect.x1 / sc, y1: rect.y1 / sc, x2: rect.x2 / sc, y2: rect.y2 / sc };
+    const hit = new Set();
+    let ordinal = -1;
+    for (const p of paras) {
+      if (!p.translate) continue;
+      ordinal += 1;
+      // Any overlap counts — dragging across a column should catch the
+      // paragraphs it clips, not only the ones fully enclosed.
+      if (p.x1 < box.x2 && p.x2 > box.x1 && p.y1 < box.y2 && p.y2 > box.y1) hit.add(ordinal);
+    }
+    if (!hit.size) {
+      cbRef.current.onTranslateState?.({ ...transStatus, shown: transShown, pages: transMap.size,
+                                        note: "no text in that region" });
+      return;
+    }
+    runTransJob([pn], `selection (${hit.size} para${hit.size > 1 ? "s" : ""})`,
+                new Map([[pn, hit]]));
+  }
+
+  translateRegionRef.current = translateRegion;
+
   // Imperative surface for the host's toolbar button + its menu.
   // Deliberately dependency-less: re-registered every render so
   // translatePage/translateDoc always close over current job state.
@@ -1470,6 +1517,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       halt: haltTransJob,
       setShown: setTransShown,
       translatePage: () => runTransJob([curPageRef.current], `p.${curPageRef.current}`),
+      translateRegion: translateRegion,
       translateDoc: () => {
         const key = translateKeyRef.current;
         const cur = curPageRef.current;
@@ -1859,6 +1907,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
               trans={transMap.get(i + 1) || null}
               transKey={translateKey}
               transShown={transShown}
+              onTranslateRegion={onTranslate ? stableCbs.onTranslateRegion : undefined}
               previewBase={previewBase}
               onInternalLink={goToDestStable}
               onExternalLink={stableCbs.onExternalLink}
@@ -2064,6 +2113,7 @@ const PdfPage = React.memo(function PdfPage({
   trans,
   transKey,
   transShown,
+  onTranslateRegion,
 }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
@@ -2226,7 +2276,7 @@ const PdfPage = React.memo(function PdfPage({
   // keeps working.
   const [marquee, setMarquee] = useState(null); // live drag rect, current-render px
   function beginAreaDrag(e) {
-    if (readOnly || !onAreaSelected) return;
+    if (readOnly) return;
     if (e.button !== 0) return;
     // Cmd (macOS) or Ctrl (Windows/Linux) + drag = area screenshot. macOS
     // maps Ctrl+click to right-click, so Mac users reach for Cmd instead.
@@ -2235,7 +2285,18 @@ const PdfPage = React.memo(function PdfPage({
       (e.ctrlKey || e.metaKey) &&
       !e.shiftKey &&
       !e.altKey;
-    if (!areaMode && !viaMod) return;
+    // Alt (Option on macOS) + drag = translate the paragraphs the box touches.
+    // Same rubber band, different action on release. Alt held *without* a drag
+    // stays the peek-at-the-original gesture.
+    const viaTranslate =
+      e.pointerType === "mouse" &&
+      e.altKey &&
+      !e.shiftKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !!onTranslateRegion;
+    if (!viaTranslate && !onAreaSelected) return;
+    if (!areaMode && !viaMod && !viaTranslate) return;
     const wrap = wrapRef.current;
     if (!wrap) return;
     e.preventDefault(); // keep the text layer from starting a selection
@@ -2291,6 +2352,10 @@ const PdfPage = React.memo(function PdfPage({
       };
       document.addEventListener("click", swallow, { capture: true, once: true });
       setTimeout(() => document.removeEventListener("click", swallow, { capture: true }), 0);
+      if (viaTranslate) {
+        onTranslateRegion(pageNumber, r, scale);
+        return;
+      }
       // Crop the region out of the rendered canvas (backing resolution, so
       // the snapshot stays sharp) — it doubles as a chat attachment.
       let image = null;
