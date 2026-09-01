@@ -67,6 +67,8 @@ import {
 import { loadSession, saveSession, clearSession } from "./sessionState";
 import { AuthLoading, LoginPage, SessionConflictPage } from "./LoginPage";
 import { TRANSLATE_LANGS, useAppPrefs } from "./prefs";
+import { useTransfers } from "./useTransfers";
+import { usePdfScrollRestore } from "./usePdfScrollRestore";
 import SettingsDialog from "./settings";
 import { QuotaMeter } from "./settingsKit";
 import {
