@@ -1,10 +1,14 @@
 """Paper metadata + citations.
 
 Lookup order: arXiv API (id from the source URL or the PDF text) → DOI via
-doi.org content negotiation (Crossref/DataCite) → AI extraction from the first
-pages as a fallback. There is deliberately no Google Scholar call — Scholar has
-no official API and scraping it violates its ToS. Results are cached on the
-page block (properties.meta / properties.bibtex).
+doi.org content negotiation (Crossref/DataCite) → Crossref bibliographic
+search on the text head → AI extraction from the first pages as a last resort.
+A registry record found via the *text* (not the source URL) is only trusted
+outright when its title actually appears in the PDF — the first DOI on page 1
+can belong to a cited paper, and AI output can be a plausible hallucination.
+There is deliberately no Google Scholar call — Scholar has no official API and
+scraping it violates its ToS. Results are cached on the page block
+(properties.meta / properties.bibtex).
 """
 
 import json
@@ -13,20 +17,24 @@ import sqlite3
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+from difflib import SequenceMatcher
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..ai_client import call_ai as _call_ai
 from ..ai_context import ensure_indexed as _ensure_indexed
-from ..ai_context import extract_pdf_context as _extract_pdf_context
+from ..ai_context import pdf_excerpt as _pdf_excerpt
+from ..ai_context import pdf_path as _pdf_path
 from ..ai_settings import ai_runtime, require_ai_runtime
 from ..auth import require_user
 from ..db import page_now, user_db_path, user_uploads_dir
 from ..logbuf import log
 from ..pdf_text import PDF_EXTRACT_FAILED
-from ..textnorm import INDEX_VERSION
+from ..pdf_text import page_count as _page_count
+from ..textnorm import INDEX_VERSION, normalize_text
 from .ai import CITE_PROMPT, METADATA_PROMPT, _resolve_model
+from .pdf import CONTACT_EMAIL
 
 # Guards the doc-id → filename join below (defense in depth: doc ids come from
 # block properties a user can set). Mirrors gamma.db._DOC_ID_RE.
@@ -34,8 +42,16 @@ _DOC_ID_OK = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
 
 router = APIRouter(prefix="/api", tags=["metadata"])
 
-_ARXIV_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5})", re.I)
-_ARXIV_TEXT_RE = re.compile(r"arXiv:\s*([0-9]{4}\.[0-9]{4,5})", re.I)
+# How much text identifier scans and title matching read. Decoupled from the
+# AI context pref: an issue-clipped Science PDF starts with the *previous*
+# article's tail, and the paper's own title/DOI can sit 7k+ chars in — a
+# window sized for AI cost must not starve the free regex/matching steps.
+SCAN_CHARS = 20000
+
+# New-style (2101.01234) and old-style (cond-mat/0501234) arXiv ids
+_ARXIV_ID = r"([0-9]{4}\.[0-9]{4,5}|[a-z][a-z.-]*/[0-9]{7})"
+_ARXIV_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/" + _ARXIV_ID, re.I)
+_ARXIV_TEXT_RE = re.compile(r"arXiv:\s*" + _ARXIV_ID, re.I)
 _DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s\"'<>]+)")
 _ATOM = "{http://www.w3.org/2005/Atom}"
 _ARXIV_NS = "{http://arxiv.org/schemas/atom}"
@@ -51,23 +67,53 @@ def _http_get(url: str, accept: str = "", timeout: int = 20) -> bytes:
 
 
 def _find_arxiv_id(source_url: str, text: str) -> str:
-    m = _ARXIV_URL_RE.search(source_url or "") or _ARXIV_TEXT_RE.search((text or "")[:4000])
+    m = _ARXIV_URL_RE.search(source_url or "") or _ARXIV_TEXT_RE.search(text or "")
     return m.group(1) if m else ""
 
 
-def _find_doi_candidates(source_url: str, text: str) -> list[str]:
-    """DOI candidates, most likely first. PDF text extraction often glues the
-    following word straight onto the DOI ("…-0478-8Physics Department"), so a
-    trailing all-letters run after a digit yields a second, trimmed candidate."""
-    m = _DOI_RE.search(source_url or "") or _DOI_RE.search((text or "")[:4000])
-    if not m:
-        return []
-    doi = m.group(1).rstrip(".,;)]}’”")
-    cands = [doi]
+def _doi_variants(doi: str) -> list[str]:
+    """A DOI plus a trimmed variant when PDF text extraction glued the next
+    word straight onto it ("…-0478-8Physics Department"): a trailing
+    all-letters run after a digit yields the second, trimmed candidate."""
+    doi = doi.rstrip(".,;)]}’”")
+    out = [doi]
     glued = re.match(r"^(.*\d)([A-Za-z]{3,})$", doi)
-    if glued and glued.group(1) not in cands:
-        cands.append(glued.group(1))
+    if glued and glued.group(1) not in out:
+        out.append(glued.group(1))
+    return out
+
+
+def _find_doi_candidates(source_url: str, text: str) -> list[str]:
+    """Every DOI in the source URL and text head, most likely first (URL before
+    text, then reading order), each followed by its glued-suffix trim."""
+    cands: list[str] = []
+    for hay in (source_url or "", text or ""):
+        for m in _DOI_RE.finditer(hay):
+            for cand in _doi_variants(m.group(1)):
+                if cand not in cands:
+                    cands.append(cand)
+            if len(cands) >= 8:
+                return cands
     return cands
+
+
+def _norm_match(s: str) -> str:
+    """Case/punctuation/ligature/line-break-insensitive form for title
+    matching (normalize_text folds ligatures and unwraps hyphenated breaks)."""
+    return " ".join(re.findall(r"[a-z0-9]+", normalize_text(s or "").lower()))
+
+
+def _title_in_text(title: str, text: str) -> bool:
+    """Does this (registry) title literally appear in the PDF's text head?
+    The strongest evidence a looked-up record describes *this* paper. Short
+    titles are too generic to count."""
+    t = _norm_match(title)
+    return len(t) >= 15 and t in _norm_match((text or "")[:SCAN_CHARS])
+
+
+def _years_compatible(a, b) -> bool:
+    ma, mb = re.search(r"\d{4}", str(a or "")), re.search(r"\d{4}", str(b or ""))
+    return not ma or not mb or abs(int(ma.group()) - int(mb.group())) <= 1
 
 
 def _fetch_arxiv(arxiv_id: str) -> dict | None:
@@ -133,11 +179,101 @@ def _fetch_doi(doi: str) -> tuple[dict | None, str]:
     return meta, bibtex
 
 
+def _crossref_search(query: str, rows: int = 5) -> list[dict]:
+    """Bibliographic search against the Crossref REST API, returning candidate
+    meta dicts in Crossref's relevance order. Candidates are NOT trusted as-is
+    — _pick_crossref_match decides whether one matches this paper."""
+    if not (query or "").strip():
+        return []
+    url = ("https://api.crossref.org/works?rows=%d" % rows
+           + "&select=DOI,title,author,container-title,volume,page,issued"
+           + "&mailto=" + urllib.parse.quote(CONTACT_EMAIL)
+           + "&query.bibliographic=" + urllib.parse.quote(query[:400]))
+    try:
+        items = json.loads(_http_get(url)).get("message", {}).get("items", [])
+    except Exception as e:
+        log.warning(f"[metadata] crossref search failed: {e}")
+        return []
+    out = []
+    for it in items:
+        title = (it.get("title") or [""])[0]
+        if not title:
+            continue
+        date_parts = ((it.get("issued") or {}).get("date-parts") or [[None]])[0]
+        out.append({
+            "title": re.sub(r"\s+", " ", str(title)).strip(),
+            "authors": [
+                " ".join(filter(None, [a.get("given"), a.get("family")])).strip()
+                for a in (it.get("author") or [])
+            ],
+            "year": str(date_parts[0] or ""),
+            "venue": str((it.get("container-title") or [""])[0] or ""),
+            "volume": str(it.get("volume") or ""),
+            "pages": str(it.get("page") or ""),
+            "doi": str(it.get("DOI") or ""),
+            "arxiv_id": "",
+            "source": "crossref",
+        })
+    return out
+
+
+def _pick_crossref_match(cands: list[dict], text: str, ai_meta: dict | None = None) -> dict | None:
+    """Accept a Crossref search hit only on strong evidence: its exact title
+    appears in the PDF text, or it is near-identical to the AI-extracted title
+    with a compatible year. Anything weaker is rejected — wrong-but-plausible
+    metadata is worse than none."""
+    head = _norm_match((text or "")[:SCAN_CHARS])
+    ai_title = _norm_match((ai_meta or {}).get("title", ""))
+    for cand in cands:
+        t = _norm_match(cand["title"])
+        if len(t) < 15:
+            continue  # "Editorial", "Errata" — too generic to trust
+        if head and t in head:
+            return cand
+        if (ai_title and SequenceMatcher(None, t, ai_title).ratio() >= 0.92
+                and _years_compatible(cand.get("year"), (ai_meta or {}).get("year"))):
+            return cand
+    return None
+
+
+def _verify_ai_meta(meta: dict, text: str, source_url: str) -> tuple[dict, str]:
+    """AI extraction is a last resort and hallucinates plausible records
+    (blended author lists, wrong volumes, fabricated DOIs — the prompt's
+    "never invent" is not enforcement). Upgrade to the authoritative registry
+    record when an identifier the AI produced actually resolves; otherwise
+    cross-check the AI title against a Crossref search. An identifier that
+    resolves nowhere and doesn't occur in the PDF text is dropped rather than
+    stored — a missing DOI is recoverable, a fabricated one poisons BibTeX."""
+    hay = ((source_url or "") + "\n" + (text or "")[:SCAN_CHARS + 4000]).lower()
+    if meta.get("arxiv_id"):
+        better = _fetch_arxiv(meta["arxiv_id"])
+        if better:
+            return better, ""
+        if meta["arxiv_id"].lower() not in hay:
+            log.info(f"[metadata] dropping unresolvable AI arXiv id {meta['arxiv_id']!r}")
+            meta["arxiv_id"] = ""
+    if meta.get("doi"):
+        for doi in _doi_variants(meta["doi"]):
+            better, bib = _fetch_doi(doi)
+            if better:
+                return better, bib
+        if meta["doi"].lower() not in hay:
+            log.info(f"[metadata] dropping unresolvable AI DOI {meta['doi']!r}")
+            meta["doi"] = ""
+    query = " ".join(filter(None, [meta.get("title"), *(meta.get("authors") or [])[:3],
+                                   meta.get("year")]))
+    cand = _pick_crossref_match(_crossref_search(query), text, ai_meta=meta)
+    if cand:
+        better, bib = _fetch_doi(cand["doi"])
+        return (better or cand), bib
+    return meta, ""
+
+
 def _ai_extract_meta(text: str, prompt: str, model: str, rt: dict) -> dict | None:
     system = (prompt or METADATA_PROMPT).strip()[:4000]
     try:
         raw = _call_ai(
-            [{"role": "user", "content": f"First pages of the paper:\n\n{text[:6000]}"}],
+            [{"role": "user", "content": f"First pages of the paper:\n\n{text}"}],
             # Generous cap: reasoning models spend invisible tokens before the JSON
             system,
             _resolve_model(rt, model),
@@ -323,7 +459,7 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
     """The lookup behind POST /api/metadata/fetch, callable off-request (the
     extension's /api/clip runs it in a background thread). Raises
     HTTPException(404) when nothing was found (after negative-caching it)."""
-    _, props = _load_page(user, block_id)
+    content, props = _load_page(user, block_id)
     if props.get("meta") and not force:
         return {
             "meta": props["meta"],
@@ -334,10 +470,24 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
 
     doc_id = props.get("doc_id") or ""
     source_url = props.get("source_url") or props.get("sourceUrl") or ""
-    text = _extract_pdf_context(user, doc_id, limit=context_char_limit) if doc_id else ""
-    if text == PDF_EXTRACT_FAILED:  # nothing for the AI to read
-        text = ""
+    # Raw head text (no excerpt label — this text feeds regexes and matching).
+    # The scan window is decoupled from the AI-context pref (see SCAN_CHARS);
+    # the AI later gets only the pref-sized head slice.
+    text, tail = "", ""
     if doc_id:
+        text, next_offset, _ = _pdf_excerpt(user, doc_id, max(context_char_limit, SCAN_CHARS))
+        if text == PDF_EXTRACT_FAILED:  # nothing to read or match against
+            text, next_offset = "", None
+        if next_offset is not None:
+            # The document continues past the scan window. The paper's own DOI
+            # is often printed only in the end-of-article trailer (Science
+            # issue-clipped PDFs), so scan the last page too.
+            path = _pdf_path(user, doc_id)
+            npages = _page_count(str(path)) if path else 0
+            if npages > 1:
+                tail = _pdf_excerpt(user, doc_id, 4000, start_page=npages)[0]
+                if tail == PDF_EXTRACT_FAILED:
+                    tail = ""
         # The paper is being set up — index it now (background) so search,
         # the AI document map and the library-wide Ctrl+F don't wait for the
         # first search to discover it. After our own head extraction: pdfium
@@ -345,31 +495,68 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
         _ensure_indexed(user, doc_id)
 
     meta, bibtex = None, ""
-    arxiv_id = _find_arxiv_id(source_url, text)
+    # "confirmed" = the record demonstrably describes THIS paper: its id came
+    # from the source URL, or the registry's title appears in the PDF text.
+    # Unconfirmed records are kept only until something confirmed shows up.
+    confirmed = False
+
+    arxiv_url_id = _find_arxiv_id(source_url, "")
+    arxiv_id = arxiv_url_id or _find_arxiv_id("", text)
     if arxiv_id:
         meta = _fetch_arxiv(arxiv_id)
-    if not meta:
-        for doi in _find_doi_candidates(source_url, text):
-            meta, bibtex = _fetch_doi(doi)
-            if meta:
+        confirmed = bool(meta) and (bool(arxiv_url_id) or _title_in_text(meta["title"], text))
+
+    if not confirmed:
+        # The first DOI in the text can belong to a *cited* paper (footnotes
+        # on page 1, a previous article's trailer in an issue-clipped PDF), so
+        # resolve candidates until one's registrar title appears in the text;
+        # an unconfirmed resolution is only a fallback. The tail rides along
+        # so an own-DOI printed only in the end trailer is a candidate too.
+        fallback = None
+        for doi in _find_doi_candidates(source_url, text + "\n" + tail)[:8]:
+            m, b = _fetch_doi(doi)
+            if not m:
+                continue
+            if doi.lower() in (source_url or "").lower() or _title_in_text(m["title"], text):
+                meta, bibtex, confirmed = m, b, True
                 break
+            fallback = fallback or (m, b)
+        if not confirmed and not meta and fallback:
+            meta, bibtex = fallback
+
+    if not confirmed:
+        # No trustworthy identifier — Crossref bibliographic search, accepted
+        # only when the hit's exact title appears in the PDF. Deterministic,
+        # and it keeps most publisher PDFs off the AI fallback. Queried with
+        # the page title first (users often title pages with the paper name;
+        # uploads may auto-carry a title-like filename), then the text head.
+        queries = []
+        page_title = re.sub(r"\.pdf$", "", (content or "").strip(), flags=re.I)
+        if text and len(page_title.split()) >= 3:
+            queries.append(page_title[:300])
+        if text:
+            queries.append(_norm_match(text[:1500])[:500])
+        for q in queries:
+            cand = _pick_crossref_match(_crossref_search(q), text)
+            if cand:
+                better, bib = _fetch_doi(cand["doi"])
+                meta, bibtex, confirmed = (better or cand), bib, True
+                break
+
     rt = ai_runtime(user)
     if not meta and rt["enabled"] and text:
-        meta = _ai_extract_meta(text, prompt, model, rt)
-        # If the AI surfaced an identifier, prefer the authoritative record
-        if meta and meta.get("arxiv_id"):
-            meta = _fetch_arxiv(meta["arxiv_id"]) or meta
-        elif meta and meta.get("doi"):
-            better, bib = _fetch_doi(meta["doi"])
-            if better:
-                meta, bibtex = better, bib
+        meta = _ai_extract_meta(text[:context_char_limit], prompt, model, rt)
+        if meta:
+            # Upgrade to a registry record where possible; drop identifiers
+            # that resolve nowhere and aren't in the PDF (fabrications).
+            meta, bibtex = _verify_ai_meta(meta, text + "\n" + tail, source_url)
     if not meta:
         # Negative cache: remember the failed attempt on the page so clients
         # stop auto-retrying on every open. Manual ↻ (force) still retries,
         # and a success below clears the marker.
         _save_props(user, block_id, {
-            "meta_error": {"at": page_now(), "detail": "no arXiv id, DOI, or AI match"}})
-        raise HTTPException(status_code=404, detail="no metadata found (no arXiv id, DOI, or AI match)")
+            "meta_error": {"at": page_now(), "detail": "no arXiv id, DOI, Crossref, or AI match"}})
+        raise HTTPException(status_code=404, detail="no metadata found (no arXiv id, DOI, Crossref, or AI match)")
 
     if not bibtex:
         bibtex = _build_bibtex(meta)

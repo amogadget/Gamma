@@ -512,11 +512,19 @@
 .pinnedLabel svg {
   color: var(--accent);
 }
+/* Scrolls like .carouselTrack: wheel pans it (useWheelPan in App.jsx),
+   touch swipes natively, no visible scrollbar. */
 .pinnedStrip {
   display: flex;
   gap: 8px;
   overflow-x: auto;
+  scroll-snap-type: x proximity;
   padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.pinnedStrip::-webkit-scrollbar {
+  display: none;
 }
 
 /* file/folder grid: fluid pageCard tracks — cards flex with the window */

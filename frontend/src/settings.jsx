@@ -657,7 +657,9 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
   );
   const metaCell = (p) => (
     p.has_meta
-      ? cell("ok", p.meta_source === "ai" ? "AI" : p.meta_source || "yes", "Metadata resolved")
+      ? p.meta_source === "ai"
+        ? cell("bad", "AI", "AI-extracted, not confirmed by a registry — verify before citing")
+        : cell("ok", p.meta_source || "yes", "Metadata resolved")
       : p.meta_error
         ? cell("bad", "failed", p.meta_error)
         : cell("muted", "none", "No metadata yet")

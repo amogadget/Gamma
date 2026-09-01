@@ -160,7 +160,17 @@ const fromSlider = (s) => {
   return Math.min(SLIDER_MAX, Math.max(SLIDER_MIN, Math.round(raw / step) * step));
 };
 
+// The number box commits on blur/Enter, not per keystroke — the range clamp
+// must not fight half-typed values (typing "20000" would snap to 100 at "2").
+// The slider stays live; grabbing it blurs the box, committing any draft first.
 export function CharSlider({ value, onChange }) {
+  const [draft, setDraft] = React.useState(null); // non-null only while the box is being edited
+  const commit = () => {
+    if (draft == null) return;
+    const next = Number.parseInt(draft, 10);
+    if (Number.isFinite(next)) onChange(Math.min(SLIDER_MAX, Math.max(SLIDER_MIN, next)));
+    setDraft(null);
+  };
   return (
     <span className="setSlider">
       <input
@@ -170,11 +180,10 @@ export function CharSlider({ value, onChange }) {
       />
       <input
         className="aiKeyInput setNum" type="number" min={SLIDER_MIN} max={SLIDER_MAX} step="1000"
-        value={value}
-        onChange={(event) => {
-          const next = Number.parseInt(event.target.value, 10);
-          if (Number.isFinite(next)) onChange(Math.min(SLIDER_MAX, Math.max(SLIDER_MIN, next)));
-        }}
+        value={draft ?? value}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
       />
     </span>
   );

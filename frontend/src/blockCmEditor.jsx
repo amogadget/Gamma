@@ -6,14 +6,15 @@
 // moving the caret into it (arrow keys, or clicking the rendered chip)
 // expands it back to source.
 import React, { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef } from "react";
-import { Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
+import { Compartment, EditorState, Prec, StateField, Transaction } from "@codemirror/state";
 import {
-  Decoration, EditorView, ViewPlugin, WidgetType, keymap,
+  Decoration, EditorView, WidgetType, keymap,
   placeholder as cmPlaceholder,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { renderKatexInto } from "./latexEditor";
+import { findMathAtCursor, renderKatexInto } from "./latexEditor";
 import { calloutType } from "./callouts";
+import { highlightCode, scanFences } from "./codeHighlight";
 
 // All CLOSED math spans in the text: [{from, to, display}] with from/to
 // including the delimiters. Same tokenizer as latexEditor's findMathAtCursor
@@ -127,6 +128,40 @@ class BulletWidget extends WidgetType {
   }
 }
 
+// A closed ``` fence the caret isn't touching renders as a highlighted code
+// card (same in-place idiom as math). Clicking drops the caret at the start
+// of the code so the fence expands back to source.
+class CodeBlockWidget extends WidgetType {
+  constructor(code, lang, caretOffset) {
+    super();
+    this.code = code;
+    this.lang = lang;
+    this.caretOffset = caretOffset;
+  }
+  eq(other) { return other.code === this.code && other.lang === this.lang; }
+  toDOM(view) {
+    const span = document.createElement("span");
+    span.className = "cmCodeWidget";
+    const pre = document.createElement("pre");
+    const codeEl = document.createElement("code");
+    codeEl.className = "hljs";
+    codeEl.innerHTML = highlightCode(this.code, this.lang);
+    pre.appendChild(codeEl);
+    if (this.lang) {
+      const badge = document.createElement("span");
+      badge.className = "codeLangBadge";
+      badge.textContent = this.lang;
+      span.appendChild(badge);
+    }
+    span.appendChild(pre);
+    span.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      placeCaretInside(view, span, this.caretOffset);
+    });
+    return span;
+  }
+}
+
 class HrWidget extends WidgetType {
   eq() { return true; }
   toDOM(view) {
@@ -163,12 +198,79 @@ function buildInlineDecos(state, labelsRef) {
   const overlapsClaimed = (from, to) => claimed.some(([a, b]) => from < b && to > a);
   const touched = (from, to) => sel.from <= to && sel.to >= from;
 
+  // ``` fences claim their range FIRST — a "$" or "**" inside code is code.
+  // A closed, untouched fence renders as a highlighted card; a touched or
+  // still-open one stays raw and gets mono/tinted line styling below.
+  const fences = text.includes("```") ? scanFences(text) : [];
+  const rawFences = [];
+  for (const f of fences) {
+    claimed.push([f.from, f.to]);
+    if (f.closed && !touched(f.from, f.to)) {
+      const code = f.innerTo > f.innerFrom ? text.slice(f.innerFrom, f.innerTo - 1) : "";
+      ranges.push(Decoration.replace({
+        widget: new CodeBlockWidget(code, f.lang, f.innerFrom - f.from),
+      }).range(f.from, f.to));
+    } else {
+      rawFences.push(f);
+    }
+  }
+
+  // Raw (caret-touched) math spans collect here for the bracket rainbow pass.
+  const rawMath = [];
   const mathSpans = text.includes("$") ? scanMathSpans(text) : [];
   for (const s of mathSpans) {
+    if (overlapsClaimed(s.from, s.to)) continue;
     claimed.push([s.from, s.to]);
-    if (touched(s.from, s.to)) continue;
-    const tex = text.slice(s.from + (s.display ? 2 : 1), s.to - (s.display ? 2 : 1));
+    const dlen = s.display ? 2 : 1;
+    if (touched(s.from, s.to)) {
+      rawMath.push({ from: s.from + dlen, to: s.to - dlen });
+      continue;
+    }
+    const tex = text.slice(s.from + dlen, s.to - dlen);
     ranges.push(Decoration.replace({ widget: new MathWidget(tex, s.display) }).range(s.from, s.to));
+  }
+  // An UNCLOSED math span being typed at the caret is raw too — its brackets
+  // should light up while the formula is only half-written.
+  if (sel.empty) {
+    const um = findMathAtCursor(text, sel.head);
+    if (um
+      && !mathSpans.some((s) => um.start >= s.from && um.end <= s.to)
+      && !fences.some((f) => um.start >= f.from && um.start < f.to)) {
+      rawMath.push({ from: um.start, to: um.end });
+    }
+  }
+
+  // VSCode-style bracket pair colorization inside raw math: ( [ { colored by
+  // nesting depth (3-color cycle), the innermost pair enclosing the caret
+  // lifted, unmatched brackets flagged.
+  const OPENERS = "([{", CLOSERS = ")]}";
+  for (const r of rawMath) {
+    const stack = [], pairs = [], loose = [];
+    for (let p = r.from; p < r.to; p++) {
+      const oi = OPENERS.indexOf(text[p]);
+      if (oi >= 0) { stack.push({ p, t: oi }); continue; }
+      const ci = CLOSERS.indexOf(text[p]);
+      if (ci < 0) continue;
+      const top = stack[stack.length - 1];
+      if (top && top.t === ci) {
+        stack.pop();
+        pairs.push({ open: top.p, close: p, depth: stack.length });
+      } else loose.push(p);
+    }
+    for (const s of stack) loose.push(s.p);
+    let active = null;
+    if (sel.empty) {
+      for (const pr of pairs) {
+        if (pr.open < sel.head && sel.head <= pr.close
+          && (!active || pr.open > active.open)) active = pr;
+      }
+    }
+    for (const pr of pairs) {
+      const cls = `cmBk${pr.depth % 3}${pr === active ? " cmBkActive" : ""}`;
+      ranges.push(Decoration.mark({ class: cls }).range(pr.open, pr.open + 1));
+      ranges.push(Decoration.mark({ class: cls }).range(pr.close, pr.close + 1));
+    }
+    for (const p of loose) ranges.push(Decoration.mark({ class: "cmBkErr" }).range(p, p + 1));
   }
 
   for (const m of text.matchAll(/!?\[\[([a-zA-Z0-9_-]+)\]\]/g)) {
@@ -260,6 +362,22 @@ function buildInlineDecos(state, labelsRef) {
   };
   for (let i = 1; i <= doc.lines; i++) {
     const line = doc.line(i);
+    // Lines inside a ``` fence are code, not markdown: no headings, bullets
+    // or rules. Raw (caret-touched / unclosed) fences get mono styling with
+    // dimmed marker lines; widget-replaced ones need no line decorations.
+    const cf = fences.length
+      ? fences.find((f) => line.from >= f.from && line.to <= f.to)
+      : null;
+    if (cf) {
+      flushQuoteRun();
+      if (rawFences.includes(cf)) {
+        let cls = "cmCodeLine";
+        if (line.from === cf.from) cls += " cmCodeFenceLine cmCodeTop";
+        else if (cf.closed && line.from === cf.innerTo) cls += " cmCodeFenceLine cmCodeBot";
+        ranges.push(Decoration.line({ class: cls }).range(line.from));
+      }
+      continue;
+    }
     const lineTouched = touched(line.from, line.to);
     const q = /^> ?/.exec(line.text);
     if (q) {
@@ -306,13 +424,17 @@ function buildInlineDecos(state, labelsRef) {
   return Decoration.set(ranges, true);
 }
 
-function inlineRenderPlugin(labelsRef) {
-  return ViewPlugin.fromClass(class {
-    constructor(view) { this.decorations = buildInlineDecos(view.state, labelsRef); }
-    update(u) {
-      if (u.docChanged || u.selectionSet) this.decorations = buildInlineDecos(u.state, labelsRef);
-    }
-  }, { decorations: (v) => v.decorations });
+// A StateField, not a ViewPlugin: replace decorations that hide line breaks
+// (multi-line $$math$$, ``` fences) are only allowed from state-level
+// decoration sources — a plugin throws "Decorations that replace line breaks
+// may not be specified via plugins".
+function inlineRenderField(labelsRef) {
+  return StateField.define({
+    create: (state) => buildInlineDecos(state, labelsRef),
+    update: (deco, tr) =>
+      tr.docChanged || tr.selection ? buildInlineDecos(tr.state, labelsRef) : deco,
+    provide: (f) => EditorView.decorations.from(f),
+  });
 }
 
 // Textarea-compatible facade + component. blockTree talks to ref.current
@@ -387,7 +509,7 @@ const BlockCmEditor = React.forwardRef(function BlockCmEditor({
         })),
         keymap.of([...historyKeymap, ...defaultKeymap]),
         cmPlaceholder(placeholder || ""),
-        chipCompartment.of(livePreview ? inlineRenderPlugin(labelsRef) : []),
+        chipCompartment.of(livePreview ? inlineRenderField(labelsRef) : []),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) cbRef.current.onChange?.({ target: api });
           else if (u.selectionSet) cbRef.current.onSelect?.({ target: api });
@@ -443,7 +565,7 @@ const BlockCmEditor = React.forwardRef(function BlockCmEditor({
     const view = viewRef.current;
     if (!view) return;
     view.dispatch({
-      effects: chipCompartment.reconfigure(livePreview ? inlineRenderPlugin(labelsRef) : []),
+      effects: chipCompartment.reconfigure(livePreview ? inlineRenderField(labelsRef) : []),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [labelsKey, livePreview]);

@@ -180,10 +180,11 @@ the recents strip shows snapshot covers; library cards always use the glyph.
 | `pdfViewer.jsx` | the custom pdf.js viewer |
 | `search.jsx` | workspace search (Ctrl+F) |
 | `blockTree.jsx`, `logseqPdfModel.js` | outliner rendering / pure tree ops |
-| `blockCmEditor.jsx` | CodeMirror 6 block editor with a textarea-compatible facade and live math, `[[ref]]`, Markdown, task, and callout decorations; the construct touched by the caret stays as editable source |
-| `slashCommands.js`, `slashMenu.jsx` | pure `/` command catalog and caret-anchored popup; `blockTree.jsx` owns trigger detection and key priority |
-| `callouts.js` | remark plugin for `> [!note] Title` callouts and canonical type aliases shared with live editor decorations |
-| `latexEditor.jsx` | caret-anchored LaTeX preview/autocomplete plus shared safe KaTeX rendering and popup positioning helpers |
+| `blockCmEditor.jsx` | the CodeMirror 6 block editor (textarea-compatible facade) with live in-place rendering of closed `$…$`/`$$…$$` spans, ``` ``` ``` fences (highlight.js cards), `[[ref]]`/`![[embed]]` chips, and markdown (headings, `**`/`*`/`` ` ``/`~~`/`==`, links + bare URLs, clickable `- [ ]` checkboxes, `- ` bullets, `---` rules, quote lines and full `> [!type]` callout boxes) — the construct the caret touches stays raw source (line-level touch for heading/quote prefixes, marker-only touch for list markers so a todo's checkbox survives editing its text). Raw math gets VSCode-style bracket-pair colorization (depth-cycled `--bracket-*` colors, enclosing pair boxed). Decorations come from a `StateField`, not a ViewPlugin — plugin decorations may not replace line breaks (multi-line fences/`$$` would throw) |
+| `slashMenu.jsx` | the "/" command catalog + popup (link, embed, equations, highlight, headings, to-do, lists, quote, callout, code, divider, table, image, date); blockTree owns trigger detection and key handling |
+| `callouts.js` | remark plugin for `> [!note] Title` callouts (type aliases → note/tip/warning/danger/important/quote; colors in app.css) |
+| `codeHighlight.js` | fenced ``` ``` ``` code helpers shared by editor + renderer: `scanFences` (region scanner, mirrored in mdPreprocess exclusions and blockTree's Enter/Tab-in-fence handling), `fenceInnerAt`, and the highlight.js (`lib/common`) wrapper; token colors are theme-aware `.hljs-*` rules in app.css |
+| `latexEditor.jsx` | LaTeX aids while editing: caret-anchored live preview, `\command` autocomplete, `renderKatex`/`useCaretAnchored` shared helpers |
 | `libraryUtils.js` | folder-tag semantics (mirrored by `backend/gamma/ai_tools.py`) |
 | `fileBrowser.jsx` | home-listing pieces: the shared `PageCard`, the view/kind toggles, the listing search box, card chips |
 | `widgets.jsx`, `menus.jsx`, `icons.jsx` | shared components |

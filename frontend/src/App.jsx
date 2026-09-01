@@ -238,13 +238,14 @@ function captureViewerSnapshot() {
   try { return out.toDataURL("image/jpeg", 0.55); } catch { return null; }
 }
 
-// Horizontal card strip. No arrow chrome: a mouse wheel scrolls it sideways
-// (native non-passive listener — React's synthetic onWheel can't
-// preventDefault), touch swipes pan natively via overflow-x.
-function CardCarousel({ label, children }) {
-  const trackRef = useRef(null);
-  useEffect(() => {
-    const el = trackRef.current;
+// Wheel-to-horizontal-pan for a card strip (native non-passive listener —
+// React's synthetic onWheel can't preventDefault); touch swipes pan natively
+// via overflow-x. Returns a callback ref (not a plain one) so the listener
+// follows the element through conditional mounts.
+function useWheelPan() {
+  const cleanupRef = useRef(null);
+  return useCallback((el) => {
+    if (cleanupRef.current) { cleanupRef.current(); cleanupRef.current = null; }
     if (!el) return;
     function onWheel(e) {
       // Real horizontal input (trackpads, tilt wheels) already works; pinch
@@ -255,10 +256,15 @@ function CardCarousel({ label, children }) {
       e.preventDefault();
     }
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    cleanupRef.current = () => el.removeEventListener("wheel", onWheel);
   }, []);
+}
+
+// Horizontal card strip. No arrow chrome: the wheel pans it sideways.
+function CardCarousel({ label, children, className }) {
+  const trackRef = useWheelPan();
   return (
-    <div className="carouselRow">
+    <div className={"carouselRow" + (className ? " " + className : "")}>
       {label ? <div className="carouselLabel">{label}</div> : null}
       <div className="carouselTrack" ref={trackRef}>{children}</div>
     </div>
@@ -2384,6 +2390,14 @@ export default function App() {
         // Focus in the chat window → ChatDock's own listener opens find-in-chat
         if (document.activeElement?.closest?.(".chatPanel")) return;
         e.preventDefault();
+        // On the home library, plain Ctrl+F targets the listing search box
+        // (only rendered there — DOM presence stands in for homeMode, which
+        // this once-mounted listener can't read). Ctrl+Shift+F still opens
+        // the full search panel.
+        if (!e.shiftKey) {
+          const homeFind = document.querySelector(".homeFindInput");
+          if (homeFind) { homeFind.focus(); homeFind.select(); return; }
+        }
         setOpenPopover((p) => (p === "search" && !e.shiftKey ? null : "search"));
       } else if (e.altKey && e.key === "ArrowLeft") {
         e.preventDefault();
@@ -5691,7 +5705,8 @@ export default function App() {
     [homeVisibleItems]
   );
   // Pinned papers — shown as a favorites strip at the library root. Most
-  // recently pinned first.
+  // recently pinned first. Scrolls like the recents carousel: wheel pans it.
+  const pinnedStripRef = useWheelPan();
   const pinnedPages = useMemo(
     () =>
       pageBlocks
@@ -6214,7 +6229,9 @@ export default function App() {
                     title={
                       metaBusy
                         ? "Fetching paper metadata…"
-                        : "Paper metadata (authors, venue, DOI, source file…)"
+                        : pageMeta?.source === "ai"
+                          ? "Metadata was AI-extracted and could not be verified against a registry — check it before citing"
+                          : "Paper metadata (authors, venue, DOI, source file…)"
                     }
                     aria-label="Paper metadata"
                     onClick={(e) => {
@@ -6237,6 +6254,11 @@ export default function App() {
                         becomes a spinner while a fetch is running. */}
                     {metaBusy ? <span className="pillSpin" aria-hidden="true" /> : <InfoIcon size={15} />}
                   </button>
+                  {/* AI-extracted metadata never passed a registry check —
+                      flag it so nobody cites it unverified. */}
+                  {!metaBusy && pageMeta?.source === "ai" ? (
+                    <span className="metaWarnDot" aria-hidden="true">!</span>
+                  ) : null}
                   {openPopover === "meta" ? (
                     <div
                       className="popover sourcePopover metaPopover"
@@ -6331,9 +6353,14 @@ export default function App() {
                         {pageMeta?.source ? (
                           <div className="metaRow">
                             <span className="metaKey">Source</span>
-                            <span className="metaVal">
+                            <span
+                              className={pageMeta.source === "ai" ? "metaVal metaValWarn" : "metaVal"}
+                              title={pageMeta.source === "ai"
+                                ? "Extracted by AI from the PDF text and not confirmed by arXiv/Crossref — fields may be wrong, verify before citing"
+                                : undefined}
+                            >
                               {pageMeta.source === "ai"
-                                ? "AI-extracted"
+                                ? "AI-extracted — verify before citing"
                                 : pageMeta.source === "manual"
                                   ? "edited by hand"
                                   : pageMeta.source}
@@ -6606,7 +6633,7 @@ export default function App() {
             {homeMode && !categoryFilter && !folderFilter && pinnedPages.length > 0 ? (
               <div className="pinnedSection">
                 <div className="pinnedLabel"><PinIcon filled size={12} /> Pinned</div>
-                <div className="pinnedStrip">
+                <div className="pinnedStrip" ref={pinnedStripRef}>
                   {pinnedPages.map((b) => (
                     <PageCard
                       key={b._pageId}
@@ -7175,6 +7202,7 @@ export default function App() {
                 const next = toggleCollapsed(blocks, id);
                 setBlocks(next);
               },
+              onStatus: (msg) => setStatus(msg),
               onDelete: (id) => {
                 if (readOnly) return;
                 if (homeMode) {

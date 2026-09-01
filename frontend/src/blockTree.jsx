@@ -20,9 +20,13 @@ import {
   MathLivePreview,
 } from "./latexEditor";
 import { BlockCmEditor, scanMathSpans } from "./blockCmEditor";
+import { fenceInnerAt, highlightCode, scanFences } from "./codeHighlight";
 import { remarkCallouts } from "./callouts";
 import { filterSlashCommands } from "./slashCommands";
 import { SlashMenuPopup } from "./slashMenu";
+import { ContextMenu, MenuItem } from "./menus";
+import { copyText } from "./utils";
+import { CopyIcon, OutlineIcon, Trash2Icon } from "./icons";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
@@ -59,6 +63,9 @@ function applyOutsideSpans(text, spans, fn) {
 
 function mdPreprocess(content, nested) {
   const spans = scanMathSpans(content).map((s) => ({ from: s.from, to: s.to }));
+  // ``` fences claim first (sorted by from, earlier span wins in
+  // applyOutsideSpans) — a [[ref]] or == inside code must stay literal.
+  for (const f of scanFences(content)) spans.push({ from: f.from, to: f.to });
   for (const m of content.matchAll(/`[^`\n]+`/g)) {
     spans.push({ from: m.index, to: m.index + m[0].length });
   }
@@ -171,6 +178,22 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick }) {
   );
 }
 
+// Fenced code in the rendered view: react-markdown hands us
+// <pre><code class="language-x">text</code></pre>; re-render it through
+// highlight.js with a small language badge. Inline `code` is untouched.
+function CodePre({ children }) {
+  const codeProps = React.Children.toArray(children).find((c) => c?.props)?.props || {};
+  const lang = /language-([\w+#-]+)/.exec(codeProps.className || "")?.[1] || "";
+  const raw = textOf(codeProps.children).replace(/\n$/, "");
+  const html = useMemo(() => highlightCode(raw, lang), [raw, lang]);
+  return (
+    <pre className="codeBlock">
+      {lang ? <span className="codeLangBadge">{lang}</span> : null}
+      <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+    </pre>
+  );
+}
+
 // A block's rendered markdown, memoized: any edit re-renders the whole tree
 // (setBlocks replaces it), and without the memo one keystroke re-ran
 // ReactMarkdown + KaTeX for every rendered block on the page. Re-parses only
@@ -251,6 +274,7 @@ const BlockMarkdown = React.memo(
               />
             );
           },
+          pre: CodePre,
         }}
       >
         {mdPreprocess(content, nested)}
@@ -465,7 +489,8 @@ function BlockRow({
       setMathUi(null);
       return;
     }
-    const seg = findMathAtCursor(ta.value, cursor);
+    // A "$" inside a ``` fence is code (shell vars), never math.
+    const seg = fenceInnerAt(ta.value, cursor) ? null : findMathAtCursor(ta.value, cursor);
     if (!seg) {
       setMathUi(null);
       return;
@@ -518,7 +543,7 @@ function BlockRow({
       return;
     }
     const match = ta.value.slice(0, cursor).match(/(?:^|\s)\/([a-zA-Z0-9-]*)$/);
-    if (!match || findMathAtCursor(ta.value, cursor)) {
+    if (!match || findMathAtCursor(ta.value, cursor) || fenceInnerAt(ta.value, cursor)) {
       setSlashMenu(null);
       return;
     }
@@ -933,6 +958,24 @@ function BlockRow({
                     return;
                   }
                 }
+                // Inside a ``` fence the outliner keys turn code-editor:
+                // any Enter is a line break (never a new note) and Tab
+                // indents with spaces instead of nesting the block.
+                if ((e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) && ref.current
+                  && (ref.current.value || "").includes("```")) {
+                  const ta = ref.current;
+                  const selStart = ta.selectionStart, selEnd = ta.selectionEnd;
+                  if (fenceInnerAt(ta.value, selStart)) {
+                    e.preventDefault();
+                    const ins = e.key === "Enter" ? "\n" : "  ";
+                    ta.view?.dispatch({
+                      changes: { from: selStart, to: selEnd, insert: ins },
+                      selection: { anchor: selStart + ins.length },
+                      userEvent: "input",
+                    });
+                    return;
+                  }
+                }
                 // Which Enter starts a new note is a preference (Settings →
                 // Notes); the other one falls through to a plain line break.
                 // Page-title rows on the home library always create on Enter —
@@ -1111,18 +1154,38 @@ function BlockRow({
 
 function SortableBlockRow({ block, ...rowProps }) {
   const depth = rowProps.depth || 0;
+  // Notion-style handle: drag moves the block, a plain click opens the block
+  // menu (copy link / reference / embed, delete).
+  const [handleMenu, setHandleMenu] = useState(null); // {x, y}
+  const draggedRef = useRef(false);
 
   function onDragStart(e) {
     e.dataTransfer.setData("text/plain", block.id);
     e.dataTransfer.effectAllowed = "move";
     _dragState.draggingId = block.id;
+    draggedRef.current = true;
   }
 
   function onDragEnd() {
     _dragState.draggingId = null;
     _dragState.dropTarget = null;
     window._gammaSetDropTarget?.(null);
+    // Clear AFTER any click the drop gesture might synthesize.
+    setTimeout(() => { draggedRef.current = false; }, 0);
   }
+
+  function onHandleClick(e) {
+    if (draggedRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setHandleMenu({ x: e.clientX, y: e.clientY });
+  }
+
+  const copy = (text, msg) => {
+    setHandleMenu(null);
+    copyText(text);
+    rowProps.onStatus?.(msg);
+  };
 
   return (
     <div className="sortableBlockWrap" data-block-id={block.id} data-depth={depth}>
@@ -1131,11 +1194,41 @@ function SortableBlockRow({ block, ...rowProps }) {
         draggable="true"
         onDragStart={onDragStart}
         onDragEnd={onDragEnd}
-        aria-label="Drag to reorder"
-        title="Drag to reorder"
+        onClick={onHandleClick}
+        aria-label="Drag to move, click for menu"
+        title="Drag to move · click for menu"
       >
         ⋮⋮
       </span>
+      {handleMenu ? (
+        <ContextMenu x={handleMenu.x} y={handleMenu.y} onClose={() => setHandleMenu(null)}>
+          <MenuItem
+            icon={LinkIcon}
+            title="A URL that opens this block (paste it anywhere)"
+            onClick={() => copy(
+              `${window.location.origin}/?block=${encodeURIComponent(block.id)}`,
+              "Block link copied",
+            )}
+          >Copy link to block</MenuItem>
+          <MenuItem
+            icon={CopyIcon}
+            title="Paste into a note to reference this block as a chip"
+            onClick={() => copy(`[[${block.id}]]`, "Block reference copied — paste into a note")}
+          >Copy block reference</MenuItem>
+          <MenuItem
+            icon={OutlineIcon}
+            title="Paste into a note to show this block's live content there (synced)"
+            onClick={() => copy(`![[${block.id}]]`, "Block embed copied — paste into a note")}
+          >Copy block embed</MenuItem>
+          {block.id !== "root" ? (
+            <MenuItem
+              icon={Trash2Icon}
+              danger
+              onClick={() => { setHandleMenu(null); rowProps.onDelete?.(block.id); }}
+            >Delete</MenuItem>
+          ) : null}
+        </ContextMenu>
+      ) : null}
       <BlockRow block={block} {...rowProps} />
     </div>
   );

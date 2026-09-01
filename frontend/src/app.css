@@ -766,6 +766,98 @@ body {
   cursor: text;
 }
 
+/* --- bracket pair colorization in raw $math$ (VSCode-style) --------------- */
+:root {
+  --bracket-1: #ffd700;
+  --bracket-2: #da70d6;
+  --bracket-3: #66c7ff;
+  --bracket-err: #f14c4c;
+  --bracket-active-bg: rgba(90, 140, 255, 0.28);
+  --bracket-active-ring: rgba(140, 170, 255, 0.65);
+}
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) {
+  --bracket-1: #0431fa;
+  --bracket-2: #319331;
+  --bracket-3: #7b3814;
+  --bracket-err: #e51400;
+  --bracket-active-bg: rgba(11, 89, 214, 0.12);
+  --bracket-active-ring: rgba(11, 89, 214, 0.45);
+}
+.blockEditorCm .cmBk0 { color: var(--bracket-1); }
+.blockEditorCm .cmBk1 { color: var(--bracket-2); }
+.blockEditorCm .cmBk2 { color: var(--bracket-3); }
+.blockEditorCm .cmBkErr { color: var(--bracket-err); text-decoration: underline wavy var(--bracket-err); }
+/* The innermost pair enclosing the caret. */
+.blockEditorCm .cmBkActive {
+  background: var(--bracket-active-bg);
+  box-shadow: 0 0 0 1px var(--bracket-active-ring);
+  border-radius: 2px;
+  font-weight: 700;
+}
+
+/* --- ``` code blocks in the editor ---------------------------------------- */
+/* Raw (caret-touched) fence: mono, tinted lines; the ``` marker lines dim. */
+.blockEditorCm .cm-line.cmCodeLine {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em;
+  background: var(--bg-input);
+  padding: 0 8px;
+}
+.blockEditorCm .cm-line.cmCodeFenceLine { color: var(--text-muted); }
+.blockEditorCm .cm-line.cmCodeTop { border-top-left-radius: 6px; border-top-right-radius: 6px; }
+.blockEditorCm .cm-line.cmCodeBot { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+/* Closed fence rendered in place (same idiom as the math widget). */
+.cmCodeWidget { display: inline-block; width: 100%; position: relative; cursor: text; }
+.cmCodeWidget pre {
+  margin: 2px 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.cmCodeWidget code {
+  display: block;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em;
+  line-height: 1.5;
+  white-space: pre;
+}
+.codeLangBadge {
+  position: absolute;
+  top: 5px;
+  right: 9px;
+  font-size: 10px;
+  font-family: var(--font-ui, inherit);
+  color: var(--text-muted);
+  user-select: none;
+  pointer-events: none;
+}
+
+/* highlight.js token colors, theme-aware (dark: VSCode-ish, light: GitHub-ish).
+   Applies to both the editor's code widget and the rendered view. */
+.hljs { background: transparent; color: var(--text-primary); }
+.hljs-comment, .hljs-quote { color: #6a9955; font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag { color: #569cd6; }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_ { color: #ce9178; }
+.hljs-number, .hljs-symbol, .hljs-bullet { color: #b5cea8; }
+.hljs-title, .hljs-section { color: #dcdcaa; }
+.hljs-title.class_, .hljs-type, .hljs-built_in { color: #4ec9b0; }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-params { color: #9cdcfe; }
+.hljs-meta, .hljs-selector-id, .hljs-selector-class, .hljs-name { color: #c586c0; }
+.hljs-deletion { color: #f14c4c; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-comment, .hljs-quote) { color: #6e7781; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag) { color: #cf222e; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_) { color: #0a3069; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-number, .hljs-symbol, .hljs-bullet) { color: #0550ae; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-title, .hljs-section) { color: #8250df; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-title.class_, .hljs-type, .hljs-built_in) { color: #953800; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-params) { color: #0550ae; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-meta, .hljs-selector-id, .hljs-selector-class, .hljs-name) { color: #116329; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .hljs-deletion { color: #e51400; }
+
 .blockRowWrap.imageDragOver > .blockRow {
   outline: 2px dashed var(--drag-accent);
   outline-offset: -2px;
@@ -808,6 +900,22 @@ body {
   overflow: auto;
 }
 
+/* Fenced code cards (CodePre): bordered, badge-labelled, hljs-colored. */
+.blockRendered pre.codeBlock {
+  position: relative;
+  margin: 4px 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+}
+.blockRendered pre.codeBlock code {
+  background: none;
+  font-size: 0.88em;
+  line-height: 1.5;
+}
+
+/* Notion-ish typography inside rendered notes: compact headings, quiet
+   rules, quotes and tables — enough hierarchy without shouting. */
 .blockRendered :is(h1, h2, h3, h4, h5, h6) {
   margin: 4px 0;
   line-height: 1.3;
@@ -2608,6 +2716,24 @@ button.pdfOutlineChevron:hover {
 }
 .pageActionBtn:disabled { opacity: 0.6; cursor: default; }
 .pageActionBtn.pageDeleteBtn:hover { color: #d05050; }
+/* Unverified (AI-extracted) metadata: red "!" pinned to the metadata button */
+.metaWarnDot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 2px;
+  border-radius: 6px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+.metaValWarn { color: var(--danger); }
 .sourcePopover { min-width: 300px; right: 0; }
 
 .searchResult.active { background: color-mix(in srgb, var(--accent-dark) 14%, transparent); }
