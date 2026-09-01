@@ -158,32 +158,6 @@
   .pageCardClose { opacity: 0.7; }
 }
 
-.categoryBackBtn {
-  display: inline-block;
-  background: transparent;
-  border: 1px solid var(--border-subtle);
-  color: var(--text-muted);
-  padding: 6px 14px;
-  border-radius: 6px;
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  margin-bottom: 12px;
-  transition:
-    background 120ms ease,
-    color 120ms ease;
-}
-.categoryBackBtn:hover {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
-.categoryFilterHeading {
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--accent);
-  margin-bottom: 16px;
-}
-
 /* --- file-browser home: folders --- */
 .folderBrowser {
   display: flex;
@@ -211,6 +185,10 @@
 .folderRow svg {
   color: var(--accent);
   flex-shrink: 0;
+}
+/* a label row is the flat mirror of a folder row — same shape, quieter icon */
+.folderRow.labelRow svg {
+  color: var(--text-secondary);
 }
 .folderRow:hover {
   background: var(--bg-block);
@@ -336,6 +314,36 @@
 .homeListSpacer {
   flex: 1;
 }
+/* listing filter box — matches float to the top, the rest dim in place */
+.homeFindBox {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  /* same surface as the sort pill / toggle buttons next to it */
+  background: var(--bg-elevated);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  color: var(--text-dim);
+}
+.homeFindBox:focus-within { border-color: var(--text-dim); }
+.homeFindBox.active { color: var(--accent); }
+.homeFindInput {
+  width: 110px;
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+.homeFindInput:focus { outline: none; box-shadow: none; }
+.homeFindClear { flex-shrink: 0; }
+/* non-matching rows/cards stay in place, just out of the way */
+.homeDim { opacity: 0.34; }
+.homeDim:hover { opacity: 0.75; }
 /* the sort trigger (a uiBtn sm, ~26px from its padding) sits between the
    28px-tall toggle groups — pin its height so the toolbar reads as one row */
 .homeListBar .uiSelectBtn { height: 28px; padding-top: 0; padding-bottom: 0; }
@@ -521,6 +529,7 @@
 }
 .tileGlyph { width: 52px; height: 52px; flex-shrink: 0; }
 .folderGlyph { color: var(--accent); }
+.labelGlyph { color: var(--text-secondary); }
 .fileGlyph { color: var(--text-muted); }
 .tileRenameInput {
   width: 100%;

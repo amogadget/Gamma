@@ -5,7 +5,7 @@
 // icons. All interaction (selection, drag, rename, context menus) stays wired
 // in App.jsx alongside the shared handlers.
 import React from "react";
-import { FileIcon, FolderFilesIcon, FolderIcon, GridIcon, ListIcon, LabelIcon } from "./icons";
+import { FileIcon, FolderFilesIcon, FolderIcon, GridIcon, ListIcon, LabelIcon, SearchIcon } from "./icons";
 
 // Folder + label chips for a page, filtered by the Settings → General "File
 // labels" preference ("off" | "labels" | "folders" | "both"). Purely
@@ -97,15 +97,18 @@ function ViewToggle({ view, onChange }) {
   );
 }
 
-// What the listing shows: folders + files, folders only, or files only.
-function KindToggle({ value, onChange }) {
+// What the listing shows: folders + files, folders only, files only, or the
+// labels in scope (labels browse exactly like folders — see LabelRow/openLabel
+// in App.jsx).
+function KindToggle({ value, onChange, scopeLabel }) {
   const kinds = [
     ["all", "Folders & files", FolderFilesIcon],
     ["folders", "Folders only", FolderIcon],
     ["files", "Files only", FileIcon],
+    ["labels", "Labels", LabelIcon],
   ];
   return (
-    <div className="homeViewToggle" role="group" aria-label="Shown items">
+    <div className="homeViewToggle" role="group" aria-label={scopeLabel || "Shown items"} title={scopeLabel || undefined}>
       {kinds.map(([val, label, Icon]) => (
         <button
           key={val}
@@ -121,4 +124,26 @@ function KindToggle({ value, onChange }) {
   );
 }
 
-export { ViewToggle, KindToggle, CardLabels, PageCard };
+// Listing search box: matching items float to the top of the current sort,
+// the rest stay put but dimmed. Live as you type — the caller debounces
+// nothing, the listing is already memoized.
+function ListFindBox({ value, onChange, placeholder = "Search…" }) {
+  return (
+    <div className={`homeFindBox ${value ? "active" : ""}`}>
+      <SearchIcon size={13} />
+      <input
+        className="homeFindInput"
+        value={value}
+        placeholder={placeholder}
+        aria-label="Search this listing"
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Escape" && value) { e.stopPropagation(); onChange(""); } }}
+      />
+      {value ? (
+        <button className="uiClose uiCloseSm homeFindClear" title="Clear search" aria-label="Clear search" onClick={() => onChange("")}>×</button>
+      ) : null}
+    </div>
+  );
+}
+
+export { ViewToggle, KindToggle, ListFindBox, CardLabels, PageCard };

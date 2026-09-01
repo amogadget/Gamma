@@ -126,6 +126,48 @@ extend that list, don't add another copy.
 - Icons are hand-rolled SVGs in [icons.jsx](../../frontend/src/icons.jsx) —
   add there, keep the stroke style.
 
+## The home library
+
+Folders and files render as ONE merged sorted listing (list and grid): date
+sorts rank a folder by its most recent contained page, Title A–Z intermixes by
+name. A `KindToggle` picks what the listing shows — folders + files, folders
+only, files only, or **labels**.
+
+Sort and kind are both per-VIEW — localStorage `gamma-home-sort-map` /
+`gamma-home-kinds-map`, keyed by folder path with `""` = root and `"#<label>"`
+for a label view, seeded from the older global `gamma-home-sort` /
+`gamma-home-kinds` keys. A view without an entry of its own inherits from its
+nearest ancestor folder; labels are flat, so a label view inherits the root's.
+
+**The label view** is the flat mirror of the folder view, not a separate
+surface: the toggle's Labels mode lists the labels carried by the pages in
+scope (`labelMeta`, the label twin of `folderMeta` — count plus latest
+modified/added/viewed, so labels sort by the same clock), drawn with the same
+rows and cards folders use. Click selects, double-click opens, a paper dropped
+on one gets that label, right-click is the existing label rename/delete menu.
+Opening a label KEEPS the folder scope — `?folder=…` and `?category=…` can both
+be in the URL (`homeUrlFor`) — so a label opened inside a folder reads as "this
+folder, narrowed to that label". Its browse bar is the same back row and
+breadcrumb, ending in a label crumb, and dropping a paper on that back row
+takes the label off. Inside a label there are only papers, so the KindToggle
+hides.
+
+A search box sits left of the sort pill (`ListFindBox`, live as you type, per
+view, not persisted). It never drops anything: matching items float to the top
+of the current sort and the rest stay in place dimmed (`.homeDim`). A page
+matches on its title plus its folder/label chips; matching is
+case/diacritic-folded and every whitespace-separated term must appear.
+
+New folder is the FIRST item of the listing itself, not a toolbar button (a
+`folderNewBtn` row / `pageCardAdd` tile that becomes its own name input in
+place — Enter or blur commits, Escape cancels); it hides when the listing is
+filtered to files-only or labels, and inside a label view. Toolbar order:
+search box → sort → kind → list/grid.
+
+One shared card (`PageCard`) renders every home surface — the "Recently viewed"
+strip, the pinned strip, and the grid listing's files, folders AND labels. Only
+the recents strip shows snapshot covers; library cards always use the glyph.
+
 ## File map (frontend/src)
 
 | File | Owns |
@@ -142,5 +184,6 @@ extend that list, don't add another copy.
 | `callouts.js` | remark plugin for `> [!note] Title` callouts and canonical type aliases shared with live editor decorations |
 | `latexEditor.jsx` | caret-anchored LaTeX preview/autocomplete plus shared safe KaTeX rendering and popup positioning helpers |
 | `libraryUtils.js` | folder-tag semantics (mirrored by `backend/gamma/ai_tools.py`) |
+| `fileBrowser.jsx` | home-listing pieces: the shared `PageCard`, the view/kind toggles, the listing search box, card chips |
 | `widgets.jsx`, `menus.jsx`, `icons.jsx` | shared components |
 | `menuAim.js` | pointer-trajectory ("safe triangle") hover intent for hierarchical menus — UI-agnostic, consumed by `menus.jsx` |
