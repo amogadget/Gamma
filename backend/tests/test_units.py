@@ -126,7 +126,9 @@ def test_extract_pdf_annotations_resolves_indirects():
 def test_extract_pdf_context_labels_incomplete_excerpt(monkeypatch):
     from gamma import ai_context
 
-    monkeypatch.setattr(ai_context, "pdf_excerpt", lambda u, d, limit: ("head", limit, limit + 1))
+    # pdf_excerpt gained with_pages (the page span the coverage report needs).
+    monkeypatch.setattr(ai_context, "pdf_excerpt",
+                        lambda u, d, limit, **kw: ("head", limit, limit + 1, 9))
     monkeypatch.setattr(ai_context, "pdf_path", lambda u, d: "fake.pdf")
     monkeypatch.setattr(ai_context, "page_count", lambda src: 12)
 
@@ -134,8 +136,19 @@ def test_extract_pdf_context_labels_incomplete_excerpt(monkeypatch):
     assert "EXCERPT" in context and "12-page PDF" in context
     assert context.endswith("head\n…[truncated]")
 
-    monkeypatch.setattr(ai_context, "pdf_excerpt", lambda u, d, limit: ("whole", None, 5))
+    # head_context reports the same excerpt plus what the user is told about it.
+    text, cover = ai_context.head_context("u", "d" * 24, 100)
+    assert text == context
+    # chars is the document text the model got ("head"), not the caveat wrapper.
+    assert cover == {"partial": True, "chars": 4, "pages": 12, "pages_shown": 9}
+
+    monkeypatch.setattr(ai_context, "pdf_excerpt",
+                        lambda u, d, limit, **kw: ("whole", None, 5, 3))
     assert ai_context.extract_pdf_context("u", "d" * 24, 100) == "whole"
+    text, cover = ai_context.head_context("u", "d" * 24, 100)
+    assert text == "whole"
+    # Nothing truncated: no caveat, and the span is what was actually read.
+    assert cover == {"partial": False, "chars": 5, "pages": 3, "pages_shown": 3}
 
 
 def test_selection_context_centers_on_the_selected_page(monkeypatch):

@@ -8,6 +8,7 @@ import { API, apiJson, isEnterCommit, copyText, isPdfFile } from "./utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied } from "./widgets";
 import { MenuSelect } from "./menus";
 import {
+  AlertCircleIcon,
   ArrowUpIcon,
   BookIcon,
   BrainIcon,
@@ -17,6 +18,7 @@ import {
   CopyIcon,
   FileIcon,
   FolderIcon,
+  InfoIcon,
   ListIcon,
   MicIcon,
   PaperclipIcon,
@@ -36,6 +38,44 @@ const ACTION_ICONS = {
   list: ListIcon,
   error: XIcon,
 };
+
+// What the model was given for a reply, per document — streamed by
+// /api/ai/chat as its first line and saved on the message. Shown only when
+// it matters: the paper was truncated, or the PDF file was requested but the
+// provider refused it (text went instead). A full native attachment or a
+// paper that fit whole stays silent.
+function ContextCoverage({ items }) {
+  const notes = items.map((c) => {
+    const refused = c.native_requested && !c.native;
+    if (!refused && !c.partial) return null;
+    const span = c.pages_shown && c.pages
+      ? `pages 1–${Math.min(c.pages_shown, c.pages)} of ${c.pages}`
+      : c.selection ? "selected passages + head" : `${(c.chars || 0).toLocaleString()} characters`;
+    const what = c.title ? `“${c.title.slice(0, 48)}${c.title.length > 48 ? "…" : ""}”` : "the PDF";
+    const short = refused && !c.partial
+      ? `PDF file not accepted — sent as text`
+      : refused
+        ? `PDF file not accepted — text only, ${span}`
+        : `Model saw ${span}`;
+    const long = (refused ? "This provider does not accept PDF files, so the document went as extracted text. " : "")
+      + (c.partial
+        ? `Only ${span} of ${what} fit the context budget — the rest was not visible to the model. Raise the budget in Settings → Assistant → Context, or turn on Tools so it can read and search the whole paper.`
+        : `${what} was sent as extracted text.`);
+    return { short, long, refused };
+  }).filter(Boolean);
+  if (!notes.length) return null;
+  return (
+    <div className="chatMsgPdfs">
+      {notes.map((n, i) => (
+        <span key={i} className="chatPdfChip" title={n.long}>
+          {n.refused ? <AlertCircleIcon size={11} /> : <InfoIcon size={11} />}
+          {n.short}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 const MUTATING_KINDS = new Set(["rename", "move"]);
 const toolCallText = (action) => {
   const args = Object.entries(action.args || {})
@@ -180,6 +220,20 @@ export default function ChatDock({
   // derived from the loaded history below, so a refresh can't re-enable it
   // after the PDF was already sent (re-sending re-bills the whole file).
   const [attachPdf, setAttachPdf] = useState(false);
+  // Whether the active model's provider takes the PDF file itself. The
+  // ChatGPT sign-in wire (Codex backend) refuses file parts — the server
+  // falls back to extracted text — so there the PDF button must not
+  // default on, and turning it on by hand gets a warning, not silence.
+  const activeModel = (aiInfo?.models || []).find((m) => m.id === chatModel) || null;
+  const nativePdf = activeModel ? activeModel.native_pdf !== false : true;
+  const nativePdfNote = nativePdf ? "" :
+    `${activeModel?.provider_name || "This provider"} does not accept PDF files — the PDF is sent as extracted text instead (first ${(chatContextChars || 0).toLocaleString()} characters; Settings → Assistant → Context).`;
+  const attachPdfManualRef = useRef(false); // the user toggled the PDF button themselves
+  useEffect(() => {
+    // A provider without native PDF input: drop the automatic "send the file
+    // once" default. A deliberate manual switch-on stays (with its warning).
+    if (!nativePdf && !attachPdfManualRef.current) setAttachPdf(false);
+  }, [nativePdf]);
   // Extra chat context: selected PDF pages + whether to include notes/highlights.
   const [chatDocs, setChatDocs] = useState([]);
   const [chatIncludeNotes, setChatIncludeNotes] = useState(false);
@@ -219,7 +273,8 @@ export default function ChatDock({
             ? (docId && m.pdfDocs.includes(docId)) || m.pdfDocs.some((d) => chatDocs.includes(d))
             : m.pdfs?.length,
         );
-        setAttachPdf(!sent);
+        attachPdfManualRef.current = false;
+        setAttachPdf(!sent && nativePdf);
       })
       .catch(() => {
         if (!cancelled) chatLoadedForRef.current = chatKey;
@@ -249,7 +304,8 @@ export default function ChatDock({
 
   function clearChat() {
     setChatMessages([]);
-    setAttachPdf(true); // new chat: first question carries the full PDF again
+    attachPdfManualRef.current = false;
+    setAttachPdf(nativePdf); // new chat: first question carries the full PDF again (where the provider takes it)
     resetToolConfig();
     fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
       method: "DELETE",
@@ -427,7 +483,13 @@ export default function ChatDock({
     chatAbortRef.current = ctrl;
     let acc = ""; // streamed reply so far — kept on Stop
     const actions = []; // organizer mutations streamed for this reply
-    const aiMsg = (extra = {}) => ({ role: "ai", text: acc, ...(actions.length ? { actions: [...actions] } : {}), ...extra });
+    let coverage = null; // {"context": [...]} — what the model was given, per document
+    const aiMsg = (extra = {}) => ({
+      role: "ai", text: acc,
+      ...(actions.length ? { actions: [...actions] } : {}),
+      ...(coverage ? { context: coverage } : {}),
+      ...extra,
+    });
     try {
       const res = await fetch(`${API}/ai/chat`, {
         method: "POST",
@@ -475,6 +537,7 @@ export default function ChatDock({
           const ev = JSON.parse(line);
           if (ev.error) throw new Error(ev.error);
           if (ev.action) { actions.push(ev.action); continue; }
+          if (ev.context) { coverage = ev.context; continue; }
           acc += ev.delta || "";
         }
         if (acc || actions.length) showReply(aiMsg({ partial: true }));
@@ -1039,6 +1102,9 @@ export default function ChatDock({
                       ) : (
                         <ChatMarkdown text={m.text} />
                       )}
+                      {!isUser && m.context?.length ? (
+                        <ContextCoverage items={m.context} />
+                      ) : null}
                       {!isUser && m.actions?.length ? (
                         <div className="chatToolActions">
                           {m.actions.map((action, actionIndex) => {
@@ -1152,9 +1218,13 @@ export default function ChatDock({
               <span
                 key={i}
                 className="chatFileChip"
-                title={`${f.name} — sent with your next message`}
+                title={
+                  nativePdf
+                    ? `${f.name} — sent with your next message`
+                    : `${f.name} — ${nativePdfNote}`
+                }
               >
-                <FileIcon size={12} />
+                {nativePdf ? <FileIcon size={12} /> : <AlertCircleIcon size={12} />}
                 <span className="chatFileChipName">{f.name}</span>
                 <button
                   type="button"
@@ -1296,9 +1366,14 @@ export default function ChatDock({
                 type="button"
                 className={`chatAttachToggle chatPdfToggle ${attachPdf ? "on" : ""}`}
                 disabled={!docId && !chatDocs.length}
-                onClick={() => setAttachPdf((v) => !v)}
+                onClick={() => {
+                  attachPdfManualRef.current = true;
+                  setAttachPdf((v) => !v);
+                }}
                 title={
-                  attachPdf
+                  !nativePdf
+                    ? `${attachPdf ? "On, but: " : ""}${nativePdfNote}`
+                    : attachPdf
                     ? "Full PDF file is sent with each message (model sees figures & tables). Click to switch to extracted text only."
                     : "Send the full PDF file with your messages so the model sees figures & tables (uses more tokens). Click to enable."
                 }
@@ -1306,6 +1381,17 @@ export default function ChatDock({
                 <FileIcon size={12} />
                 PDF
               </button>
+              {attachPdf && !nativePdf ? (
+                <button
+                  type="button"
+                  className="chatAttachToggle chatPdfToggle chatPdfWarn"
+                  onClick={() => setStatus(nativePdfNote)}
+                  title={nativePdfNote}
+                  aria-label="This provider cannot accept PDF files"
+                >
+                  <AlertCircleIcon size={12} />
+                </button>
+              ) : null}
               <AutoGrowTextarea
                 className="chatInput chatInputArea"
                 rows={1}

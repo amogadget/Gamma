@@ -101,9 +101,18 @@ def extract_text(src, char_limit: int, empty_page_cap: int = 50,
     book shouldn't cost a full parse just to learn it has no text.
     start_page (1-based) skips the pages before it, so a read can jump
     straight to where a search hit landed."""
-    parts, total, empties = [], 0, 0
+    return extract_text_pages(src, char_limit, empty_page_cap, start_page)[0]
+
+
+def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
+                       start_page: int = 1) -> tuple[str, int]:
+    """extract_text plus how many PDF pages the text spans (counted from
+    start_page, empty pages included) — what the chat's coverage report
+    tells the user: "pages 1–9 of 22"."""
+    parts, total, empties, pages = [], 0, 0, 0
     with _lock:
         for t in iter_page_texts(src, start_page=start_page):
+            pages += 1
             if t.strip():
                 empties = 0
                 parts.append(t)
@@ -114,7 +123,7 @@ def extract_text(src, char_limit: int, empty_page_cap: int = 50,
                 empties += 1
                 if empties >= empty_page_cap:
                     break
-    return "\n\n".join(parts)
+    return "\n\n".join(parts), pages
 
 
 def page_count(src) -> int:

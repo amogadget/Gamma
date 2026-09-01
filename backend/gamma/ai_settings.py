@@ -224,7 +224,12 @@ def ai_runtime(user: str) -> dict:
         for model in entry_names:
             mid = f"{pid}:{model}"
             if mid not in [m["id"] for m in models]:
-                models.append({"id": mid, "provider": pid, "provider_name": name, "model": model})
+                models.append({"id": mid, "provider": pid, "provider_name": name, "model": model,
+                               # Whether the provider takes the PDF file itself
+                               # (native document part). The ChatGPT sign-in wire
+                               # is the Codex backend, which refuses input_file
+                               # parts — the chat falls back to extracted text.
+                               "native_pdf": protocol != "chatgpt"})
     if dirty:
         save_provider_entries(user, entries)
     return {

@@ -10,7 +10,7 @@ from .blocks_store import fetch_subtree
 from .db import pdf_upload_path, user_db_path
 from .logbuf import log
 from .net_guard import guarded_urlopen
-from .pdf_text import PDF_EXTRACT_FAILED, extract_pages, extract_text, page_count
+from .pdf_text import PDF_EXTRACT_FAILED, extract_pages, extract_text, extract_text_pages, page_count
 from .server_settings import can_store
 from .textnorm import normalize_text
 
@@ -201,16 +201,25 @@ def extract_pdf_context(user: str, doc_id: str, limit: int = 8000) -> str:
     paper and answers detail questions from memory rather than looking them
     up — measurably the biggest source of confident wrong answers.
     """
-    text, next_offset, _ = pdf_excerpt(user, doc_id, limit)
+    return head_context(user, doc_id, limit)[0]
+
+
+def head_context(user: str, doc_id: str, limit: int) -> tuple[str, dict]:
+    """extract_pdf_context plus its coverage: ``{"partial", "chars",
+    "pages", "pages_shown"}`` — what the chat reports back to the user so a
+    truncated paper is visible in the UI, not only in the prompt label."""
+    text, next_offset, _, pages_shown = pdf_excerpt(user, doc_id, limit, with_pages=True)
+    cover = {"partial": next_offset is not None, "chars": len(text),
+             "pages": pages_shown, "pages_shown": pages_shown}
     if next_offset is None:
-        return text  # the whole document fits (or extraction failed)
+        return text, cover  # the whole document fits (or extraction failed)
     path = pdf_path(user, doc_id)
-    pages = page_count(str(path)) if path else 0
+    pages = cover["pages"] = page_count(str(path)) if path else 0
     where = f" of this {pages}-page PDF" if pages else ""
     return (f"[EXCERPT — the first {limit:,} characters{where}. The rest of the "
             f"document is NOT shown below. Anything outside this excerpt has to "
             f"be looked up before you can answer about it.]\n\n"
-            f"{text}\n…[truncated]")
+            f"{text}\n…[truncated]"), cover
 
 
 # One line per PDF page, read from the search index (which already holds the
@@ -221,9 +230,36 @@ def extract_pdf_context(user: str, doc_id: str, limit: int = 8000) -> str:
 MAP_BUDGET = 2400
 
 
+def ensure_indexed(user: str, doc_id: str) -> bool:
+    """Kick the background indexer for a paper the search index doesn't hold
+    at the current version. Returns True when the paper is already current.
+
+    A paper chat needs the index for its document map and search_pdfs, but
+    until now only a search_pdfs call started indexing — a fresh paper whose
+    chat only ever used read_page (or ran with tools off) never got indexed,
+    so the map never appeared and the model kept paging blind."""
+    # Local import: keep gamma.* module load free of the routers package.
+    from .routers.search import _ensure_schema, _index_missing_async
+    from .textnorm import INDEX_VERSION
+    try:
+        with sqlite3.connect(user_db_path(user, "data.db")) as connection:
+            _ensure_schema(connection)
+            current = connection.execute(
+                "SELECT 1 FROM pdf_fts_docs WHERE doc_id = ? AND ver = ?",
+                (doc_id, INDEX_VERSION)).fetchone()
+    except sqlite3.OperationalError as e:
+        log.warning(f"[ai_context] index check for {doc_id} failed: {e}")
+        return False
+    if current:
+        return True
+    _index_missing_async(user, [doc_id])
+    return False
+
+
 def document_map(user: str, doc_id: str, budget: int = MAP_BUDGET) -> str:
     """How each PDF page starts, as a compact outline. "" when the document
-    isn't indexed yet (search is unavailable then too)."""
+    isn't indexed yet (search is unavailable then too; ensure_indexed kicks
+    the indexer so the next turn has both)."""
     try:
         with sqlite3.connect(user_db_path(user, "data.db")) as connection:
             rows = connection.execute(
@@ -245,7 +281,7 @@ def document_map(user: str, doc_id: str, budget: int = MAP_BUDGET) -> str:
 
 
 def pdf_excerpt(user: str, doc_id: str, limit: int, offset: int = 0,
-                start_page: int = 1):
+                start_page: int = 1, with_pages: bool = False):
     """Slice ``[offset, offset+limit)`` of a document's extracted text so long
     papers can be read in successive windows; start_page (1-based) starts the
     extraction at that PDF page — the shape search hits come in — and offset
@@ -253,21 +289,25 @@ def pdf_excerpt(user: str, doc_id: str, limit: int, offset: int = 0,
     is where a follow-up read should continue (None = the extraction ended
     inside this window), seen is how many chars were extracted in total — when
     offset points past the end, that's the full extracted length (from
-    start_page on)."""
+    start_page on). with_pages=True appends how many PDF pages the
+    extraction spanned (from start_page) as a fourth value."""
     path = pdf_path(user, doc_id)
     if not path:
         log.warning("[ai_chat] PDF still not found after download attempt")
-        return "", None, 0
+        return ("", None, 0, 0) if with_pages else ("", None, 0)
     try:
         # extract_text stops after the page that crosses the limit, so a
         # longer-than-requested result means more pages remain.
-        full = extract_text(str(path), offset + limit, start_page=start_page)
+        if with_pages:
+            full, pages = extract_text_pages(str(path), offset + limit, start_page=start_page)
+        else:
+            full, pages = extract_text(str(path), offset + limit, start_page=start_page), 0
     except Exception as error:
         log.warning(f"[ai_chat] extraction error: {error}")
-        return PDF_EXTRACT_FAILED, None, 0
+        return (PDF_EXTRACT_FAILED, None, 0, 0) if with_pages else (PDF_EXTRACT_FAILED, None, 0)
     text = full[offset:offset + limit]
     next_offset = offset + limit if len(full) > offset + limit else None
-    return text, next_offset, len(full)
+    return (text, next_offset, len(full), pages) if with_pages else (text, next_offset, len(full))
 
 
 def load_pdf_b64(user: str, doc_id: str) -> str | None:
@@ -284,11 +324,22 @@ def load_pdf_b64(user: str, doc_id: str) -> str | None:
 
 def pdf_text_from_b64(data: str, limit: int = 8000) -> str:
     """Extract text from a base64 PDF when native attachment is unavailable."""
+    return pdf_text_cover_from_b64(data, limit)[0]
+
+
+def pdf_text_cover_from_b64(data: str, limit: int) -> tuple[str, dict]:
+    """pdf_text_from_b64 plus the coverage dict head_context reports."""
     try:
-        return truncate(extract_text(base64.standard_b64decode(data), limit), limit)
+        raw = base64.standard_b64decode(data)
+        full, pages_shown = extract_text_pages(raw, limit)
+        partial = len(full) > limit
+        return (truncate(full, limit),
+                {"partial": partial, "chars": min(len(full), limit),
+                 "pages": page_count(raw) if partial else pages_shown,
+                 "pages_shown": pages_shown})
     except Exception as error:
         log.warning(f"[ai_chat] uploaded-PDF extraction failed: {error}")
-        return ""
+        return "", {"partial": False, "chars": 0, "pages": 0, "pages_shown": 0}
 
 
 _ANCHOR_CHARS = 200
@@ -441,11 +492,25 @@ def page_report_section(connection, user: str, page_id: str, pdf_budget: int,
     return "\n\n".join(sections)
 
 
-def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], str]:
-    """Collect native PDF attachments and extracted text for a chat request."""
+def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], str, list[dict]]:
+    """Collect native PDF attachments and extracted text for a chat request.
+
+    The third value is the coverage report the chat streams back as its
+    first `{"context": [...]}` line — one entry per document: ``{"title",
+    "doc_id", "native" (the file itself went), "native_requested" (the user
+    asked for that; requested but not native = the provider refused it and
+    text went instead), "partial", "chars", "pages", "pages_shown"}`` — so
+    the UI can say "the model saw pages 1–9 of 22" instead of leaving the
+    user to guess."""
     pdf_b64s = []
     context_sections = []
+    coverage = []
     attach = payload.attach_pdf and allow_native
+    none = {"partial": False, "chars": 0, "pages": 0, "pages_shown": 0}
+
+    def report(title, doc_id, native, cover=None):
+        coverage.append({"title": title, "doc_id": doc_id, "native": native,
+                         "native_requested": bool(payload.attach_pdf), **(cover or none)})
 
     page_ids = [str(page) for page in (payload.pages or []) if page][:6]
     if page_ids:
@@ -469,8 +534,11 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
                         pdf_b64s.append(data)
                         total_b64 += len(data)
                         attached = True
-                if doc_id and not attached:
-                    text = extract_pdf_context(user, doc_id, limit=text_budget)
+                if doc_id and attached:
+                    report(title, doc_id, True)
+                elif doc_id:
+                    text, cover = head_context(user, doc_id, limit=text_budget)
+                    report(title, doc_id, False, cover)
                     if text:
                         context_sections.append(f"### {title}\n{text}")
                 if payload.include_notes:
@@ -482,6 +550,11 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
             data = load_pdf_b64(user, payload.doc_id)
             if data:
                 pdf_b64s.append(data)
+                report(_doc_title(user, payload.doc_id), payload.doc_id, True)
+        # Index the paper (background) so the map and search_pdfs exist for
+        # the next turn — the first chat on a fresh paper otherwise runs
+        # without them for as long as the model never calls search_pdfs.
+        ensure_indexed(user, payload.doc_id)
         if not pdf_b64s:
             # With a selection, center the budget on the selected passages
             # (located by page) instead of the start of the paper; fall back
@@ -490,8 +563,14 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
             text = (selection_context(user, payload.doc_id, selection,
                                       payload.context_char_limit)
                     if selection else None)
-            if not text:
-                text = extract_pdf_context(user, payload.doc_id, limit=payload.context_char_limit)
+            if text:
+                # Selection-centred context: the budget went to windows
+                # around the passages, so there is no head page span.
+                report(_doc_title(user, payload.doc_id), payload.doc_id, False,
+                       {**none, "partial": True, "chars": len(text), "selection": True})
+            else:
+                text, cover = head_context(user, payload.doc_id, limit=payload.context_char_limit)
+                report(_doc_title(user, payload.doc_id), payload.doc_id, False, cover)
             if text:
                 context_sections.append(text)
             # Only for a paper chat with tools: the map is worth its tokens
@@ -501,12 +580,31 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
                 if outline:
                     context_sections.append(outline)
 
+    names = [str(f.get("name") or "") for f in (payload.files or []) if isinstance(f, dict)]
     for index, data in enumerate(parse_files(payload.files)):
+        title = (names[index] if index < len(names) else "") or f"Attached PDF {index + 1}"
         if allow_native:
             pdf_b64s.append(data)
+            coverage.append({"title": title, "doc_id": "", "native": True,
+                             "native_requested": True, **none})
         else:
-            text = pdf_text_from_b64(data)
+            # Uploaded files get the single-paper budget, like the open paper.
+            text, cover = pdf_text_cover_from_b64(data, payload.context_char_limit)
+            coverage.append({"title": title, "doc_id": "", "native": False,
+                             "native_requested": True, **cover})
             if text:
-                context_sections.append(f"### Attached PDF {index + 1}\n{text}")
+                context_sections.append(f"### {title}\n{text}")
 
-    return pdf_b64s, "\n\n---\n\n".join(context_sections)
+    return pdf_b64s, "\n\n---\n\n".join(context_sections), coverage
+
+
+def _doc_title(user: str, doc_id: str) -> str:
+    """The library title of a paper, "" when the doc isn't a page."""
+    try:
+        with sqlite3.connect(user_db_path(user, "pages.db")) as connection:
+            row = connection.execute(
+                "SELECT content FROM unified_blocks WHERE parent_id = 'root' "
+                "AND json_extract(properties, '$.doc_id') = ? LIMIT 1", (doc_id,)).fetchone()
+        return (row[0] or "") if row else ""
+    except sqlite3.Error:
+        return ""

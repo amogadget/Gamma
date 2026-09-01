@@ -8651,9 +8651,9 @@ export default function App() {
           pdfToolsDefault,
           setPdfToolsDefault,
           reset: () => {
-            setChatContextChars(8000);
+            setChatContextChars(60000);
             setMetaContextChars(6000);
-            setMultiContextChars(18000);
+            setMultiContextChars(120000);
             setStatus("AI context limits reset.");
           },
         }}

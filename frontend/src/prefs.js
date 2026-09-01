@@ -157,9 +157,9 @@ export function useAppPrefs() {
   const [citePrompt, setCitePrompt] = usePersistedState("gamma-cite-prompt", "");
 
   // --- Context budgets + folder agent (Settings → Assistant) ---
-  const [chatContextChars, setChatContextChars] = usePersistedState("gamma-chat-context-chars", 8000, CONTEXT_CHARS_CODEC);
+  const [chatContextChars, setChatContextChars] = usePersistedState("gamma-chat-context-chars", 60000, CONTEXT_CHARS_CODEC);
   const [metaContextChars, setMetaContextChars] = usePersistedState("gamma-meta-context-chars", 6000, CONTEXT_CHARS_CODEC);
-  const [multiContextChars, setMultiContextChars] = usePersistedState("gamma-multi-context-chars", 18000, CONTEXT_CHARS_CODEC);
+  const [multiContextChars, setMultiContextChars] = usePersistedState("gamma-multi-context-chars", 120000, CONTEXT_CHARS_CODEC);
   const [toolRounds, setToolRounds] = usePersistedState("gamma-ai-tool-rounds", 32, TOOL_ROUNDS_CODEC);
   // Per-read_page-call cap on document text the folder/paper agent may pull.
   const [agentReadChars, setAgentReadChars] = usePersistedState("gamma-ai-read-chars", 20000, CONTEXT_CHARS_CODEC);

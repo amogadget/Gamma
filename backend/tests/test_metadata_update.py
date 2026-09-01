@@ -68,6 +68,25 @@ def test_update_missing_page_404(guest):
     assert r.status_code == 404
 
 
+def test_fetch_kicks_search_indexing_for_the_paper(guest, monkeypatch):
+    """Setting a paper up (metadata fetch) starts indexing its PDF in the
+    background, so search and the AI document map don't wait for the first
+    search to notice it."""
+    import gamma.routers.search as search_mod
+    kicked = []
+    monkeypatch.setattr(search_mod, "_index_missing_async",
+                        lambda user, doc_ids: kicked.append(list(doc_ids)) or True)
+    doc_id = "f" * 24
+    page = make_page(guest, "Paper without a file yet", {"doc_id": doc_id})
+    r = guest.post("/api/metadata/fetch", json={"block_id": page["id"]})
+    assert r.status_code == 404  # no file, no ids, no AI — but the kick happened
+    assert kicked == [[doc_id]]
+    # A notes page (no doc_id) has nothing to index.
+    note = make_page(guest, "Just notes")
+    guest.post("/api/metadata/fetch", json={"block_id": note["id"]})
+    assert kicked == [[doc_id]]
+
+
 def test_failed_fetch_is_negative_cached_and_cleared_by_update(guest):
     # No doc_id / source_url and AI unconfigured — the lookup finds nothing.
     page = make_page(guest, "No meta anywhere")

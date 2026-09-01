@@ -35,6 +35,7 @@ from ..ai_tools import (
     MAX_TOOL_ACTIONS,
     MAX_TOOL_ROUNDS,
     MUTATING_TOOLS,
+    READ_CHARS_MAX,
     agent_system,
     agent_tools,
     run_agent_tool,
@@ -108,9 +109,9 @@ class AIChatRequest(BaseModel):
     permissions: dict = Field(default_factory=dict)
     agent_system: str = ""
     tool_rounds: int = Field(default=0, ge=0, le=100)
-    read_char_limit: int = Field(default=0, ge=0, le=1_000_000)
-    context_char_limit: int = Field(default=8000, ge=100, le=1_000_000)
-    multi_context_char_limit: int = Field(default=18000, ge=100, le=1_000_000)
+    read_char_limit: int = Field(default=0, ge=0, le=READ_CHARS_MAX)
+    context_char_limit: int = Field(default=60000, ge=100, le=1_000_000)
+    multi_context_char_limit: int = Field(default=120000, ge=100, le=1_000_000)
 
 
 def _resolve_model(rt: dict, requested: str) -> dict:
@@ -1368,7 +1369,8 @@ def ai_chat(payload: AIChatRequest, request: Request):
     state = {}
 
     def prepared(allow_native):
-        pdf_b64s, context = _gather_inputs(user, payload, allow_native)
+        pdf_b64s, context, coverage = _gather_inputs(user, payload, allow_native)
+        state["coverage"] = coverage
         # Agent chats replay each saved reply's tool calls/results so the
         # model keeps what it already listed/read/changed across turns.
         messages = _build_messages(payload, context, with_tools=bool(tools))
@@ -1459,9 +1461,16 @@ def ai_chat(payload: AIChatRequest, request: Request):
             # proper HTTP error instead of dying inside a committed stream.
             resp = open_with_fallback(True)
 
+            # First line: what the model was given (per-document coverage,
+            # native file vs text) so the UI can show "pages 1–9 of 22" and
+            # "provider refused the PDF file" instead of leaving it implicit.
+            head = (json.dumps({"context": state["coverage"]}) + "\n") if state.get("coverage") else ""
+
             if tools:
                 def agent_ndjson():
                     try:
+                        if head:
+                            yield head
                         for kind, data in agent_events(resp):
                             yield json.dumps({"delta" if kind == "delta" else "action": data}) + "\n"
                     except Exception as e:
@@ -1472,6 +1481,8 @@ def ai_chat(payload: AIChatRequest, request: Request):
 
             def ndjson():
                 try:
+                    if head:
+                        yield head
                     for text in _sse_deltas(resp, _protocol(rt, entry)):
                         yield json.dumps({"delta": text}) + "\n"
                 except Exception as e:
@@ -1487,10 +1498,11 @@ def ai_chat(payload: AIChatRequest, request: Request):
             parts, actions = [], []
             for kind, data in agent_events(open_with_fallback(True)):
                 (parts if kind == "delta" else actions).append(data)
-            return {"response": "".join(parts), "actions": actions}
+            return {"response": "".join(parts), "actions": actions,
+                    "context": state.get("coverage") or []}
         with open_with_fallback(False) as resp2:
             text = _read_reply(resp2, _protocol(rt, entry))
-        return {"response": text}
+        return {"response": text, "context": state.get("coverage") or []}
     except HTTPException:
         raise
     except Exception as e:

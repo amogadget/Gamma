@@ -945,7 +945,7 @@ function AssistantSettings({ value }) {
       </Section>
       <Section
         title="Context size"
-        action={<button className="uiBtn sm" onClick={value.reset} title="Back to 8000 / 6000 / 18000 characters">Reset</button>}
+        action={<button className="uiBtn sm" onClick={value.reset} title="Back to 60000 / 6000 / 120000 characters">Reset</button>}
       >
         {limits.map(([icon, label, hint, current, setCurrent, title]) => (
           <Row key={label} icon={icon} label={label} hint={`${hint} · ${approxPages(current)}`}

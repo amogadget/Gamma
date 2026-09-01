@@ -595,6 +595,131 @@ def test_chat_page_scope_arms_read_tools(org, monkeypatch):
     assert reads and reads[0]["kind"] == "read"
 
 
+def test_paper_chat_kicks_indexing_for_unindexed_doc(org, monkeypatch):
+    """A paper chat (tools on or off) starts background indexing for a paper
+    the FTS index doesn't hold, so the document map and search_pdfs exist by
+    the next turn instead of only after the model happens to call search."""
+    c, ids = org
+    import gamma.ai_context as ctx
+    import gamma.routers.ai as ai_mod
+    import gamma.routers.search as search_mod
+    from gamma.db import page_now, user_db_path
+    from gamma.textnorm import INDEX_VERSION
+
+    # A provider so the chat runs (idempotent: earlier tests may have added one).
+    assert c.post("/api/ai/providers",
+                  json={"protocol": "anthropic", "api_key": "sk-test-key-123",
+                        "models": "claude-solo"}).status_code == 200
+    kicked = []
+    monkeypatch.setattr(search_mod, "_index_missing_async",
+                        lambda user, doc_ids: kicked.append((user, list(doc_ids))) or True)
+    monkeypatch.setattr(ai_mod, "_open_ai", lambda *a, **kw: _FakeResp([
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ok"}}]))
+    doc = "e" * 24
+    # Plain (tools off) chat still kicks it — the index is what a later
+    # tools-on turn needs, and it costs one query to check.
+    r = c.post("/api/ai/chat", json={"prompt": "hi", "doc_id": doc, "stream": True})
+    assert r.status_code == 200 and '"delta": "ok"' in r.text
+    assert kicked == [("organizer", [doc])]
+    # Already indexed at the current version: nothing to kick.
+    with __import__("sqlite3").connect(user_db_path("organizer", "data.db")) as db:
+        search_mod._ensure_schema(db)
+        db.execute("INSERT OR REPLACE INTO pdf_fts_docs (doc_id, indexed_at, pages, ver) "
+                   "VALUES (?, ?, 1, ?)", (doc, page_now(), INDEX_VERSION))
+        db.commit()
+    assert ctx.ensure_indexed("organizer", doc) is True
+    assert len(kicked) == 1
+    # A stale index version counts as missing.
+    with __import__("sqlite3").connect(user_db_path("organizer", "data.db")) as db:
+        db.execute("UPDATE pdf_fts_docs SET ver = ? WHERE doc_id = ?", (INDEX_VERSION - 1, doc))
+        db.commit()
+    assert ctx.ensure_indexed("organizer", doc) is False
+    assert kicked[-1] == ("organizer", [doc])
+
+
+def test_chat_reports_context_coverage(org, monkeypatch):
+    """The stream's first line says what the model was given: a truncated
+    paper reports pages shown / total, a native attachment reports native."""
+    c, ids = org
+    import gamma.routers.ai as ai_mod
+    import gamma.routers.search as search_mod
+
+    assert c.post("/api/ai/providers",
+                  json={"protocol": "anthropic", "api_key": "sk-test-key-123",
+                        "models": "claude-solo"}).status_code == 200
+    monkeypatch.setattr(search_mod, "_index_missing_async", lambda user, doc_ids: True)
+    monkeypatch.setattr(ai_mod, "_open_ai", lambda *a, **kw: _FakeResp([
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ok"}}]))
+    doc = "".join(f"[{i:04d}]" for i in range(200))  # 1200 chars
+    monkeypatch.setattr("gamma.ai_context.pdf_path", lambda u, d: "fake.pdf")
+    monkeypatch.setattr("gamma.ai_context.extract_text_pages",
+                        lambda src, limit, empty_page_cap=50, start_page=1:
+                        (doc if len(doc) <= limit else doc[:limit + 7], 3))
+    monkeypatch.setattr("gamma.ai_context.page_count", lambda src: 22)
+    doc_id = "d" * 24  # page a's doc_id
+
+    r = c.post("/api/ai/chat", json={"prompt": "hi", "doc_id": doc_id, "stream": True,
+                                     "context_char_limit": 500})
+    assert r.status_code == 200
+    lines = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+    assert "context" in lines[0]
+    (cover,) = lines[0]["context"]
+    assert cover["doc_id"] == doc_id and cover["title"]  # page a's title
+    assert cover["partial"] is True and cover["pages"] == 22 and cover["pages_shown"] == 3
+    assert cover["native"] is False and cover["native_requested"] is False
+    assert cover["chars"] == 500
+    assert [line for line in lines if "delta" in line]
+
+    # Fits whole: no truncation reported.
+    r = c.post("/api/ai/chat", json={"prompt": "hi", "doc_id": doc_id, "stream": True,
+                                     "context_char_limit": 5000})
+    (cover,) = [json.loads(line) for line in r.text.splitlines() if line.strip()][0]["context"]
+    assert cover["partial"] is False and cover["pages_shown"] == 3
+
+    # Native attachment on a provider that takes it.
+    monkeypatch.setattr("gamma.ai_context.load_pdf_b64", lambda u, d: "UERG")
+    r = c.post("/api/ai/chat", json={"prompt": "hi", "doc_id": doc_id, "stream": True,
+                                     "attach_pdf": True})
+    (cover,) = [json.loads(line) for line in r.text.splitlines() if line.strip()][0]["context"]
+    assert cover["native"] is True and cover["native_requested"] is True
+
+    # Non-stream callers get the same report in the JSON body.
+    class _Ctx(_FakeResp):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(ai_mod, "_open_ai", lambda *a, **kw: _Ctx([
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ok"}}]))
+    monkeypatch.setattr(ai_mod, "_read_reply", lambda resp, proto: "ok")
+    r = c.post("/api/ai/chat", json={"prompt": "hi", "doc_id": doc_id, "stream": False,
+                                     "context_char_limit": 500})
+    assert r.status_code == 200 and r.json()["context"][0]["partial"] is True
+
+
+def test_models_flag_native_pdf_capability(org):
+    """The chat UI keys the PDF button's default on native_pdf: API-key
+    providers take the file, the ChatGPT sign-in (Codex backend) does not."""
+    c, _ = org
+    from gamma.ai_settings import ai_runtime
+    rt = ai_runtime("organizer")
+    assert rt["models"] and all(m["native_pdf"] is True for m in rt["models"])
+    import gamma.ai_settings as st
+    entries = st.load_provider_entries("organizer")
+    entries.append({"id": "oauth1", "protocol": "chatgpt", "models": "gpt-x",
+                    "oauth": {"access_token": "tok", "expires_at": 9_999_999_999}})
+    st.save_provider_entries("organizer", entries)
+    try:
+        flags = {m["id"]: m["native_pdf"] for m in ai_runtime("organizer")["models"]}
+        assert flags["oauth1:gpt-x"] is False
+        r = c.get("/api/ai/models")
+        assert {m["id"]: m["native_pdf"] for m in r.json()["models"]} == flags
+    finally:
+        st.save_provider_entries("organizer", [e for e in entries if e["id"] != "oauth1"])
+
+
 def test_chat_permissions_gate_tools_and_execution(org, monkeypatch):
     c, ids = org
     import gamma.routers.ai as ai_mod

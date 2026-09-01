@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from ..ai_client import call_ai as _call_ai
+from ..ai_context import ensure_indexed as _ensure_indexed
 from ..ai_context import extract_pdf_context as _extract_pdf_context
 from ..ai_settings import ai_runtime, require_ai_runtime
 from ..auth import require_user
@@ -336,6 +337,12 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
     text = _extract_pdf_context(user, doc_id, limit=context_char_limit) if doc_id else ""
     if text == PDF_EXTRACT_FAILED:  # nothing for the AI to read
         text = ""
+    if doc_id:
+        # The paper is being set up — index it now (background) so search,
+        # the AI document map and the library-wide Ctrl+F don't wait for the
+        # first search to discover it. After our own head extraction: pdfium
+        # is serialized behind one lock and the lookup needs its text now.
+        _ensure_indexed(user, doc_id)
 
     meta, bibtex = None, ""
     arxiv_id = _find_arxiv_id(source_url, text)
