@@ -29,3 +29,7 @@ docker-compose.yml
 run-local.bat
 SCROLL-HANDOFF.md
 SESSION-20260806.md
+# Session/process notes — not part of the product (STATUS.md is above)
+docs/dev/backport-plan.md
+docs/dev/backport-handoff.md
+docs/sync.md
