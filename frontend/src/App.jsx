@@ -10,6 +10,7 @@ import {
   ALT_LABEL,
   isPdfFile,
   isMarkdownFile,
+  isUnverifiedPaperMeta,
   resolvePdfUrl,
   pdfProxyUrl,
   probePdfUrl,
@@ -3004,11 +3005,9 @@ export default function App() {
   // and doesn't spin for a fetch that belongs to a different page.
   const [metaFetchingIds, setMetaFetchingIds] = useState(() => new Set());
   const metaBusy = metaFetchingIds.has(focusedBlockId);
-  // Unverified-paper warning (red "!"): AI-extracted metadata that claims to
-  // be a paper. Non-paper kinds (course notes, slides… — meta.kind from the
-  // AI classifier) have no registry record to verify, so no warning; records
-  // cached before the kind field existed count as papers (the safe default).
-  const metaUnverifiedPaper = pageMeta?.source === "ai" && (pageMeta.kind || "paper") === "paper";
+  // Unverified-paper warning (red "!") — shared predicate with the Settings →
+  // Library status table, see isUnverifiedPaperMeta in utils.js.
+  const metaUnverifiedPaper = !!pageMeta && isUnverifiedPaperMeta(pageMeta.source, pageMeta.kind);
   const [pptCite, setPptCite] = useState("");
   const [pptCiteBusy, setPptCiteBusy] = useState(false);
   const [metaPopPos, setMetaPopPos] = useState({ top: 0, right: 0 }); // fixed-position anchor for the metadata popover

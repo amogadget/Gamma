@@ -5,6 +5,8 @@ const show = (id, on = true) => $(id).classList.toggle("hidden", !on);
 
 let tab = null;
 let state = null;
+let picker = { folders: [], labels: [] };  // from GET /api/library/folders
+let folderValue = "";                      // "" = library root, "__new__" = the new-folder input
 
 async function send(msg) {
   const r = await chrome.runtime.sendMessage(msg);
@@ -21,24 +23,58 @@ function openPath(path) {
   send({ type: "open", path }).then(() => window.close());
 }
 
+// ---------- icons (mirrors frontend/src/icons.jsx — 24×24 stroke glyphs) ----------
+
+const ICON_PATHS = {
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  folderPlus: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M12 10v6"/><path d="M9 13h6"/>',
+  tag: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+};
+
+function icon(name, cls = "", size = 13, strokeWidth = 2) {
+  const span = document.createElement("span");
+  span.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round"${cls ? ` class="${cls}"` : ""}>${ICON_PATHS[name]}</svg>`;
+  return span.firstChild;
+}
+
 // ---------- views ----------
 
+const VIEWS = ["view-setup", "view-offline", "view-login", "view-main"];
+function view(id) { for (const v of VIEWS) show(v, v === id); }
+
+function setConn(cls, title) {
+  const el = $("conn");
+  el.className = "connDot " + cls;
+  el.title = title;
+}
+
 function showSetup() {
-  show("view-setup"); show("view-login", false); show("view-main", false);
+  view("view-setup");
   $("setup-server").focus();
 }
 
+function showOffline(st) {
+  view("view-offline");
+  $("offline-server").textContent = st.origin;
+  // st.error already reads "Can't reach <origin> (…)" (api.js).
+  $("offline-msg").textContent = `${st.error || `Can't reach ${st.origin}`}. Is the server running, and the address right?`;
+  $("offline-foot").textContent = hostOf(st.origin);
+}
+
 function showLogin(st) {
-  show("view-setup", false); show("view-login"); show("view-main", false);
-  $("login-server").textContent = st.error ? `Can't reach ${st.origin}: ${st.error}` : st.origin;
+  view("view-login");
+  $("login-server").textContent = st.origin;
   $("login-foot").textContent = hostOf(st.origin);
   $("login-user").focus();
 }
 
 async function showMain(st) {
-  show("view-setup", false); show("view-login", false); show("view-main");
+  view("view-main");
   const c = st.candidate || { kind: "none" };
   $("foot").textContent = `${hostOf(st.origin)} · ${st.user}`;
+  setConn("ok", `Connected to ${st.origin} — signed in as ${st.user}`);
 
   const kindLabel = { pdf: "PDF", arxiv: "arXiv", doi: "DOI", maybe: "possible paper", none: "" }[c.kind] || "";
   const idText = c.arxiv_id ? `arXiv:${c.arxiv_id}` : c.doi ? `doi:${c.doi}` : "";
@@ -61,27 +97,83 @@ async function showMain(st) {
   await fillPickers(st.settings);
 }
 
+// ---------- folder + label pickers (MenuSelect / ctxMenu style, plain JS) ----------
+
 async function fillPickers(settings) {
-  const sel = $("folder");
-  sel.innerHTML = "";
-  const add = (value, text) => { const o = document.createElement("option"); o.value = value; o.textContent = text; sel.appendChild(o); return o; };
-  add("", "Library root");
-  let folders = [], labels = [];
-  try { ({ folders = [], labels = [] } = await api("/library/folders")); } catch {}
+  try { const r = await api("/library/folders"); picker = { folders: r.folders || [], labels: r.labels || [] }; }
+  catch { picker = { folders: [], labels: [] }; }
   const remembered = settings.folder || "";
-  if (remembered && !folders.includes(remembered)) folders.unshift(remembered);
-  for (const f of folders) add(f, f);
-  add("__new__", "New folder…");
-  sel.value = folders.includes(remembered) ? remembered : "";
+  if (remembered && !picker.folders.includes(remembered)) picker.folders.unshift(remembered);
+  folderValue = picker.folders.includes(remembered) ? remembered : "";
+  renderFolderBtn();
   show("folder-new-row", false);
   $("labels").value = (settings.labels || []).join(", ");
-  $("label-list").innerHTML = "";
-  for (const l of labels) { const o = document.createElement("option"); o.value = l; $("label-list").appendChild(o); }
+}
+
+function renderFolderBtn() {
+  const btn = $("folder-btn");
+  btn.innerHTML = "";
+  const ic = document.createElement("span"); ic.className = "ctxMenuIcon";
+  ic.appendChild(icon(folderValue === "__new__" ? "folderPlus" : "folder"));
+  const label = document.createElement("span"); label.className = "uiSelectLabel";
+  label.textContent = folderValue === "__new__" ? "New folder…" : (folderValue || "Library root");
+  btn.title = label.textContent;
+  btn.append(ic, label, icon("chevronDown", "uiSelectChev"));
+}
+
+function menuRow(text, iconName, selected, onPick) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "ctxMenuItem ctxMenuItemIconed";
+  const ic = document.createElement("span"); ic.className = "ctxMenuIcon"; ic.appendChild(icon(iconName));
+  const t = document.createElement("span"); t.className = "ctxMenuText"; t.textContent = text; t.title = text;
+  b.append(ic, t);
+  if (selected) b.appendChild(icon("check", "ctxMenuCheck", 13, 2.4));
+  // mousedown, not click: keeps focus where it is (the labels input relies on this).
+  b.addEventListener("mousedown", (e) => e.preventDefault());
+  b.addEventListener("click", onPick);
+  return b;
+}
+
+function openFolderMenu() {
+  const menu = $("folder-menu");
+  menu.innerHTML = "";
+  const pick = (value) => () => {
+    folderValue = value;
+    renderFolderBtn();
+    show("folder-menu", false);
+    show("folder-new-row", value === "__new__");
+    if (value === "__new__") $("folder-new").focus();
+  };
+  menu.appendChild(menuRow("Library root", "folder", folderValue === "", pick("")));
+  for (const f of picker.folders) menu.appendChild(menuRow(f, "folder", folderValue === f, pick(f)));
+  menu.appendChild(menuRow("New folder…", "folderPlus", folderValue === "__new__", pick("__new__")));
+  show("folder-menu");
+}
+
+// Suggestions for the fragment after the last comma; picking one completes it.
+function updateLabelMenu() {
+  const menu = $("label-menu");
+  const raw = $("labels").value;
+  const cut = raw.lastIndexOf(",");
+  const head = cut >= 0 ? raw.slice(0, cut + 1) : "";
+  const frag = raw.slice(cut + 1).trim().toLowerCase();
+  const chosen = new Set(head.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
+  const items = picker.labels.filter((l) => !chosen.has(l.toLowerCase()) && l.toLowerCase().includes(frag)).slice(0, 8);
+  menu.innerHTML = "";
+  if (!items.length) { show("label-menu", false); return; }
+  for (const l of items) {
+    menu.appendChild(menuRow(l, "tag", false, () => {
+      $("labels").value = (head ? head.replace(/\s*$/, " ") : "") + l + ", ";
+      $("labels").focus();
+      updateLabelMenu();
+    }));
+  }
+  show("label-menu");
 }
 
 function chosenFolder() {
-  const v = $("folder").value;
-  return v === "__new__" ? $("folder-new").value.trim() : v;
+  return folderValue === "__new__" ? $("folder-new").value.trim() : folderValue;
 }
 
 function chosenLabels() {
@@ -170,6 +262,7 @@ async function doLogin(e) {
 async function refresh(forceAuth = false) {
   state = await send({ type: "get-state", tabId: tab && tab.id, forceAuth });
   if (!state.configured) showSetup();
+  else if (state.auth === null) showOffline(state);   // configured but unreachable
   else if (!state.auth) showLogin(state);
   else await showMain(state);
 }
@@ -181,12 +274,26 @@ document.addEventListener("DOMContentLoaded", async () => {
   const wanted = new URLSearchParams(location.search).get("tab");
   if (wanted) { try { tab = await chrome.tabs.get(Number(wanted)); } catch {} }
   if (!tab) [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  for (const g of document.querySelectorAll(".gearBtn")) {
+    g.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><use href="#icon-gear"/></svg>';
+    g.onclick = () => chrome.runtime.openOptionsPage();
+  }
   $("setup-connect").onclick = doConnect;
   $("setup-server").addEventListener("keydown", (e) => { if (e.key === "Enter") doConnect(); });
   $("login-form").addEventListener("submit", doLogin);
   $("login-btn").onclick = doLogin;
-  $("gear").onclick = $("gear-login").onclick = () => chrome.runtime.openOptionsPage();
-  $("folder").onchange = () => { show("folder-new-row", $("folder").value === "__new__"); if ($("folder").value === "__new__") $("folder-new").focus(); };
+  $("offline-retry").onclick = () => refresh(true);
+  $("folder-btn").onclick = () => { $("folder-menu").classList.contains("hidden") ? openFolderMenu() : show("folder-menu", false); };
+  $("labels").addEventListener("input", updateLabelMenu);
+  $("labels").addEventListener("focus", updateLabelMenu);
+  $("labels").addEventListener("blur", () => show("label-menu", false));
+  document.addEventListener("pointerdown", (e) => {
+    if (!e.target.closest("#folder-wrap")) show("folder-menu", false);
+    if (!e.target.closest("#labels-wrap")) show("label-menu", false);
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { show("folder-menu", false); show("label-menu", false); }
+  });
   $("save").onclick = () => doSave();
   $("save-anyway").onclick = () => doSave({ candidate: { kind: "none", source_url: tab.url, title: tab.title }, force: true });
   $("open-existing").onclick = () => openPath(state.hit.open_url);
@@ -203,7 +310,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   try {
     const settings = await getSettings();
     if (settings.server) $("setup-server").value = settings.server;
-    await refresh();
+    // Force a fresh session check so the footer's connection dot is truthful.
+    await refresh(true);
   } catch (err) {
     showSetup();
     $("setup-msg").textContent = err.message; show("setup-msg");

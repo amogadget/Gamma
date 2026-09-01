@@ -1,5 +1,5 @@
 import React from "react";
-import { ALT_LABEL, API, apiJson, fmtBytes, copyText } from "./utils";
+import { ALT_LABEL, API, apiJson, fmtBytes, copyText, isUnverifiedPaperMeta } from "./utils";
 import { MenuSelect } from "./menus";
 import {
   PaneHead, Section, Row, Toggle, Segmented, UnitInput, CharSlider, approxPages,
@@ -597,7 +597,7 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
   // "Unverified": AI-extracted metadata claiming to be a paper — the same
   // records the red "!" flags on the metadata button. Missing metadata and
   // unverified records are what a batch (re)fetch can actually fix.
-  const unverifiedPaper = (p) => p.has_meta && p.meta_source === "ai" && (p.meta_kind || "paper") === "paper";
+  const unverifiedPaper = (p) => p.has_meta && isUnverifiedPaperMeta(p.meta_source, p.meta_kind);
   const fetchable = (p) => !p.has_meta || unverifiedPaper(p);
   const noText = (p) => p.text_chars !== null && !textOk(p);
   const missing = list.filter((p) => !p.has_meta);

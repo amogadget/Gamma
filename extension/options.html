@@ -10,8 +10,8 @@
     <h2>Server</h2>
     <p>The address you open Gamma at. Self-hosted, plain-HTTP LAN and Tailscale addresses all work.</p>
     <div class="inline">
-      <input id="server" type="url" placeholder="http://host:9001" autocomplete="url">
-      <button id="connect" class="btn">Connect</button>
+      <input id="server" class="field" type="url" placeholder="http://host:9001" autocomplete="url">
+      <button id="connect" class="uiBtn">Connect</button>
     </div>
     <div id="server-status" class="status"></div>
   </div>
@@ -19,16 +19,16 @@
   <div class="section" id="account">
     <h2>Account</h2>
     <div id="signed-out">
-      <p>Sign in with your Gamma username and password. The session is shared with Gamma's own tab.</p>
+      <p>Sign in with your Gamma username and password. The session is shared with Gamma's own tab — if you're already signed in there, the extension is signed in too.</p>
       <form id="login-form" class="form" style="padding:0">
-        <div class="row"><label for="user">User</label><input id="user" type="text" autocomplete="username" required></div>
-        <div class="row"><label for="pass">Password</label><input id="pass" type="password" autocomplete="current-password" required></div>
+        <div class="row"><label for="user">User</label><input id="user" class="field" type="text" autocomplete="username" required></div>
+        <div class="row"><label for="pass">Password</label><input id="pass" class="field" type="password" autocomplete="current-password" required></div>
       </form>
-      <div class="actions" style="padding:8px 0 0"><button id="login" class="btn primary">Sign in</button></div>
+      <div class="actions" style="padding:8px 0 0"><button id="login" class="uiBtn primary">Sign in</button></div>
     </div>
     <div id="signed-in" class="hidden">
       <p>Signed in as <b id="who"></b>.</p>
-      <button id="logout" class="btn">Sign out</button>
+      <button id="logout" class="uiBtn">Sign out</button>
     </div>
     <div id="account-status" class="status"></div>
   </div>
@@ -36,8 +36,8 @@
   <div class="section">
     <h2>Saving</h2>
     <div class="form" style="padding:0">
-      <div class="row"><label for="folder">Folder</label><input id="folder" type="text" placeholder="default folder (empty = library root)"></div>
-      <div class="row"><label for="labels">Labels</label><input id="labels" type="text" placeholder="comma-separated defaults"></div>
+      <div class="row"><label for="folder">Folder</label><input id="folder" class="field" type="text" placeholder="default folder (empty = library root)"></div>
+      <div class="row"><label for="labels">Labels</label><input id="labels" class="field" type="text" placeholder="comma-separated defaults"></div>
     </div>
     <label class="check" style="padding:8px 0 0"><input type="checkbox" id="allow-oa"> <span>Use an open-access copy when the publisher's PDF is paywalled</span></label>
     <label class="check" style="padding:6px 0 0"><input type="checkbox" id="save-copy"> <span>Keep a copy of the PDF on the server (otherwise it's fetched on open)</span></label>

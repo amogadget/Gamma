@@ -50,7 +50,7 @@ Edge and other Chromium browsers load it the same way. Firefox needs a
 | `worker.js` | per-tab detection state + badge, save pipeline, context menus, popup message API |
 | `detect.js` | content script: identifier extraction (meta tags, URL, JSON-LD, DOI fallback) |
 | `api.js` | settings in `chrome.storage.sync` + the fetch wrapper (cookie session, error parsing) |
-| `popup.html/js/css` | the popup (setup → sign-in → save) |
+| `popup.html/js/css` | the popup (setup → offline → sign-in → save); styling mirrors the app's theme tokens and control recipes |
 | `options.html/js` | server, account, saving defaults |
 
 No build step: plain ES modules.

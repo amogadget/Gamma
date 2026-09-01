@@ -530,7 +530,7 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
         # an unconfirmed resolution is only a fallback. The tail rides along
         # so an own-DOI printed only in the end trailer is a candidate too.
         fallback = None
-        for cand_doi in _find_doi_candidates(hints, text + "\n" + tail)[:8]:
+        for cand_doi in _find_doi_candidates(hints, text + "\n" + tail):
             m, b = _fetch_doi(cand_doi)
             if not m:
                 continue

@@ -220,6 +220,13 @@ const IS_MAC = typeof navigator !== "undefined"
   && /Mac|iPhone|iPad|iPod/i.test(`${navigator.platform || ""} ${navigator.userAgent || ""}`);
 const ALT_LABEL = IS_MAC ? "\u2325 Option" : "Alt";
 
+// AI-extracted metadata that claims to be a paper never passed a registry
+// check — the UI flags it (red "!" on the metadata button, red cell in the
+// Settings → Library table) so nobody cites it unverified. Non-paper kinds
+// (notes, slides…) have no registry record to verify against, so no flag;
+// records cached before `kind` existed count as papers (the safe default).
+const isUnverifiedPaperMeta = (source, kind) => source === "ai" && (kind || "paper") === "paper";
+
 const isPdfFile = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
 const isMarkdownFile = (f) => /\.(?:md|markdown)$/i.test(f.name || "")
   || /^(?:text\/markdown|text\/x-markdown)$/i.test(f.type || "");
@@ -301,6 +308,7 @@ export {
   ALT_LABEL,
   isPdfFile,
   isMarkdownFile,
+  isUnverifiedPaperMeta,
   apiJson,
   resolvePdfUrl,
   pdfProxyUrl,

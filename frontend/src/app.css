@@ -4603,8 +4603,8 @@ button.pdfOutlineChevron:hover {
   overflow-y: auto;
   padding: 3px;
 }
-/* "Paste as" chooser (URL paste) — a slashMenu with a quiet section title. */
-.pasteAsTitle {
+/* Quiet section title inside a slashMenu popup (e.g. the "Paste as" chooser). */
+.slashMenuTitle {
   padding: 4px 9px 3px;
   font-size: 10px;
   color: var(--text-dim);

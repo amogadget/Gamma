@@ -20,13 +20,13 @@ import {
   MathLivePreview,
 } from "./latexEditor";
 import { BlockCmEditor, scanMathSpans } from "./blockCmEditor";
-import { fenceInnerAt, highlightCode, scanFences } from "./codeHighlight";
+import { fenceInnerAt, highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
 import { remarkCallouts } from "./callouts";
 import { filterSlashCommands } from "./slashCommands";
-import { PasteAsPopup, SlashMenuPopup } from "./slashMenu";
+import { SlashMenuPopup } from "./slashMenu";
 import { ContextMenu, MenuItem } from "./menus";
 import { API, apiJson, copyText } from "./utils";
-import { CheckIcon, CopyIcon, Trash2Icon } from "./icons";
+import { Trash2Icon } from "./icons";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
@@ -215,29 +215,24 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
 // Fenced code in the rendered view: react-markdown hands us
 // <pre><code class="language-x">text</code></pre>; re-render it through
 // highlight.js with a small language badge. Inline `code` is untouched.
+// The copy button is the shared DOM one (makeCopyButton — same behavior as
+// the editor's code card), mounted once outside React's reconciliation.
 function CodePre({ children }) {
   const codeProps = React.Children.toArray(children).find((c) => c?.props)?.props || {};
   const lang = /language-([\w+#-]+)/.exec(codeProps.className || "")?.[1] || "";
   const raw = textOf(codeProps.children).replace(/\n$/, "");
   const html = useMemo(() => highlightCode(raw, lang), [raw, lang]);
-  const [copied, setCopied] = useState(false);
+  const rawRef = useRef(raw);
+  rawRef.current = raw;
+  const preRef = useRef(null);
+  useEffect(() => {
+    const btn = makeCopyButton(() => rawRef.current);
+    preRef.current?.appendChild(btn);
+    return () => btn.remove();
+  }, []);
   return (
-    <pre className="codeBlock">
+    <pre className="codeBlock" ref={preRef}>
       {lang ? <span className="codeLangBadge">{lang}</span> : null}
-      <button
-        type="button"
-        className="uiClose codeCopyBtn"
-        title="Copy code"
-        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
-        onClick={(e) => {
-          e.stopPropagation();
-          copyText(raw);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1200);
-        }}
-      >
-        {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
-      </button>
       <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
     </pre>
   );
@@ -472,7 +467,7 @@ function BlockRow({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: newContent }),
       }).catch(() => {});
-      onCacheRef?.(refId, { ...(refCache?.[refId] || {}), content: newContent });
+      onCacheRef?.(refId, { content: newContent }); // merge-write keeps page_title etc.
     }
   };
   const stableEmbedEdit = useRef((id, c) => embedEditRef.current?.(id, c)).current;
@@ -1119,19 +1114,17 @@ function BlockRow({
                 // any Enter is a line break (never a new note) and Tab
                 // indents with spaces instead of nesting the block.
                 if ((e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) && ref.current
-                  && (ref.current.value || "").includes("```")) {
+                  && fenceInnerAt(ref.current.value, ref.current.selectionStart)) {
                   const ta = ref.current;
                   const selStart = ta.selectionStart, selEnd = ta.selectionEnd;
-                  if (fenceInnerAt(ta.value, selStart)) {
-                    e.preventDefault();
-                    const ins = e.key === "Enter" ? "\n" : "  ";
-                    ta.view?.dispatch({
-                      changes: { from: selStart, to: selEnd, insert: ins },
-                      selection: { anchor: selStart + ins.length },
-                      userEvent: "input",
-                    });
-                    return;
-                  }
+                  e.preventDefault();
+                  const ins = e.key === "Enter" ? "\n" : "  ";
+                  ta.view?.dispatch({
+                    changes: { from: selStart, to: selEnd, insert: ins },
+                    selection: { anchor: selStart + ins.length },
+                    userEvent: "input",
+                  });
+                  return;
                 }
                 // Which Enter starts a new note is a preference (Settings →
                 // Notes); the other one falls through to a plain line break.
@@ -1279,7 +1272,7 @@ function BlockRow({
         />
       ) : null}
       {!readOnly && block.editMode && pasteMenu ? (
-        <PasteAsPopup items={pasteMenu.items} selected={pasteIdx} anchor={pasteMenu.anchor} onPick={applyPasteAs} />
+        <SlashMenuPopup title="Paste as" items={pasteMenu.items} selected={pasteIdx} anchor={pasteMenu.anchor} onPick={applyPasteAs} />
       ) : null}
       {refPopup && searchResults.length > 0 && (
         <div

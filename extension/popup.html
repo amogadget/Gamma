@@ -6,26 +6,41 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
+  <!-- The gear glyph (the app's SettingsIcon), stamped into the .gearBtn slots by popup.js via <use>. -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <g id="icon-gear"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></g>
+    </defs>
+  </svg>
+
   <!-- no server configured -->
   <div id="view-setup" class="hidden">
     <div class="head"><span class="dot bad"></span><div><div class="t">Connect to your Gamma server</div><div class="s">Enter the address you open Gamma at, e.g. <code>http://gamma.local:9001</code>.</div></div></div>
     <div class="form">
-      <div class="row stack"><label for="setup-server">Server URL</label><input id="setup-server" type="url" placeholder="http://host:9001" autocomplete="url"></div>
+      <div class="row stack"><label for="setup-server">Server URL</label><input id="setup-server" class="field" type="url" placeholder="http://host:9001" autocomplete="url"></div>
     </div>
     <div id="setup-msg" class="msg err hidden"></div>
-    <div class="actions"><button id="setup-connect" class="btn primary">Connect</button></div>
+    <div class="actions"><button id="setup-connect" class="uiBtn primary block">Connect</button></div>
+  </div>
+
+  <!-- server configured but unreachable -->
+  <div id="view-offline" class="hidden">
+    <div class="head"><span class="dot bad"></span><div><div class="t">Can't reach your Gamma server</div><div class="s" id="offline-server"></div></div></div>
+    <div id="offline-msg" class="msg err"></div>
+    <div class="actions"><button id="offline-retry" class="uiBtn primary block">Retry</button></div>
+    <div class="foot"><span class="footStatus"><span class="connDot bad" title="Server unreachable"></span><span id="offline-foot"></span></span><button class="gearBtn" data-gear title="Options"></button></div>
   </div>
 
   <!-- not signed in -->
   <div id="view-login" class="hidden">
     <div class="head"><span class="dot bad"></span><div><div class="t">Sign in to Gamma</div><div class="s" id="login-server"></div></div></div>
     <form id="login-form" class="form">
-      <div class="row"><label for="login-user">User</label><input id="login-user" type="text" autocomplete="username" required></div>
-      <div class="row"><label for="login-pass">Password</label><input id="login-pass" type="password" autocomplete="current-password" required></div>
+      <div class="row"><label for="login-user">User</label><input id="login-user" class="field" type="text" autocomplete="username" required></div>
+      <div class="row"><label for="login-pass">Password</label><input id="login-pass" class="field" type="password" autocomplete="current-password" required></div>
     </form>
     <div id="login-msg" class="msg err hidden"></div>
-    <div class="actions"><button id="login-btn" class="btn primary">Sign in</button></div>
-    <div class="foot"><span id="login-foot"></span><button class="gear" id="gear-login" title="Options">⚙</button></div>
+    <div class="actions"><button id="login-btn" class="uiBtn primary block">Sign in</button></div>
+    <div class="foot"><span class="footStatus"><span class="connDot warn" title="Connected — not signed in"></span><span id="login-foot"></span></span><button class="gearBtn" data-gear title="Options"></button></div>
   </div>
 
   <!-- the main popup -->
@@ -34,35 +49,44 @@
 
     <div id="found" class="hidden">
       <div class="form">
-        <div class="row"><label for="folder">Folder</label>
-          <select id="folder"></select></div>
-        <div class="row hidden" id="folder-new-row"><span class="lbl"></span><input id="folder-new" type="text" placeholder="new folder, e.g. reading/2026"></div>
-        <div class="row"><label for="labels">Labels</label><input id="labels" type="text" list="label-list" placeholder="comma-separated"><datalist id="label-list"></datalist></div>
+        <div class="row"><label id="folder-lbl">Folder</label>
+          <div class="selectWrap" id="folder-wrap">
+            <button id="folder-btn" type="button" class="uiBtn sm uiSelectBtn block" aria-haspopup="menu"></button>
+            <div id="folder-menu" class="ctxMenu hidden" role="menu"></div>
+          </div>
+        </div>
+        <div class="row hidden" id="folder-new-row"><span class="lbl"></span><input id="folder-new" class="field" type="text" placeholder="new folder, e.g. reading/2026"></div>
+        <div class="row"><label for="labels">Labels</label>
+          <div class="selectWrap" id="labels-wrap">
+            <input id="labels" class="field" type="text" placeholder="comma-separated" autocomplete="off">
+            <div id="label-menu" class="ctxMenu hidden" role="menu"></div>
+          </div>
+        </div>
       </div>
-      <div class="actions"><button id="save" class="btn primary">Save to Gamma</button></div>
+      <div class="actions"><button id="save" class="uiBtn primary block">Save to Gamma</button></div>
     </div>
 
     <div id="existing" class="hidden">
       <div class="msg ok">Already in your library.</div>
       <div class="actions">
-        <button id="open-existing" class="btn primary">Open in Gamma</button>
-        <button id="refile" class="btn link">Add to another folder…</button>
+        <button id="open-existing" class="uiBtn primary block">Open in Gamma</button>
+        <button id="refile" class="linkBtn">Add to another folder…</button>
       </div>
     </div>
 
     <div id="nothing" class="hidden">
       <div class="msg info">No paper or PDF detected on this page. You can still save the page's URL — Gamma will look for a PDF behind it.</div>
-      <div class="actions"><button id="save-anyway" class="btn">Save this URL anyway</button></div>
+      <div class="actions"><button id="save-anyway" class="uiBtn block">Save this URL anyway</button></div>
     </div>
 
     <div id="clip-row" class="actions hidden" style="padding-top:0">
-      <button id="clip" class="btn">Clip selected text to Gamma</button>
+      <button id="clip" class="uiBtn block">Clip selected text to Gamma</button>
     </div>
 
     <div id="progress" class="progress hidden"><span class="spinner"></span><span id="progress-text"></span></div>
     <div id="result" class="msg hidden"></div>
 
-    <div class="foot"><span id="foot"></span><button class="gear" id="gear" title="Options">⚙</button></div>
+    <div class="foot"><span class="footStatus"><span id="conn" class="connDot"></span><span id="foot"></span></span><button class="gearBtn" data-gear id="gear" title="Options"></button></div>
   </div>
 
   <script type="module" src="popup.js"></script>
