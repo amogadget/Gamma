@@ -74,8 +74,9 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 | GET | `/ai/models` | model registry + default prompts (feeds the model switchers and prompt editor) |
 | GET | `/ai/settings` | masked provider list (key hints only) |
 | POST/PUT/DELETE | `/ai/providers[/{id}]` | manage provider entries |
-| POST | `/ai/providers/{id}/test` | live probe of one credential |
-| POST | `/ai/providers/{id}/usage` | ChatGPT subscription allowance windows; explicitly unavailable for generic API-key providers. Best-effort: any provider failure degrades to 502 "unavailable" and never returns a token. Uses the protocol-owned base URL, never the saved entry value, and caches per (user, provider) for 60s |
+| POST | `/ai/providers/{id}/test` | live probe of one credential (model: the entry's `test_model`, else the request's `model` — the client sends its metadata model — else the first model); failures carry an `auth` flag for expired/rejected credentials |
+| POST | `/ai/providers/{id}/usage` | ChatGPT subscription allowance windows; explicitly unavailable for generic API-key providers. Best-effort: any provider failure degrades to 502 "unavailable" and never returns a token. Uses the protocol-owned base URL, never the saved entry value, and caches per (user, provider) for 60s; an expired sign-in returns `{available: false, auth: true}` in-body rather than a 502 |
+| POST | `/ai/health` | login connection check of one entry (`{provider_id, mode}`; `""` = first entry): `mode: "ping"` is the free credential check (OAuth → usage endpoint, API key → `/v1/models`; 404/405 = gateway without a listing → ok-but-unverified), `"test"` the tiny live completion; always answers in-body `{configured, ok, auth?, error?}`. Upstream error bodies are summarized before display (`upstream_detail`): JSON → its message field, an HTML error page → its `<title>` |
 | POST | `/ai/model-catalog` | list models available to a credential |
 | POST | `/ai/oauth/chatgpt/start`, `/complete` | ChatGPT OAuth (PKCE, pasted callback URL) |
 | POST | `/ai/transcribe` | voice dictation |

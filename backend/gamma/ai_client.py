@@ -7,6 +7,7 @@ deal in the common ``messages`` representation and call :func:`call_ai` or
 """
 
 import json
+import re
 import urllib.error
 import urllib.request
 import uuid
@@ -356,14 +357,34 @@ class UpstreamError(RuntimeError):
         self.status = status
 
 
+def _summarize_error_body(body: str) -> str:
+    """The human-readable core of a provider error body: JSON errors reduce
+    to their message field, HTML error pages (a proxy's 502 page) to their
+    <title> — never the raw markup, which is noise in any UI."""
+    text = (body or "").strip()
+    if re.match(r"(?i)<(!doctype|html|head|body)\b", text):
+        title = re.search(r"(?is)<title[^>]*>(.*?)</title>", text)
+        return re.sub(r"\s+", " ", title.group(1)).strip() if title else ""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return text
+    for node in (data.get("error"), data.get("detail"), data) if isinstance(data, dict) else ():
+        if isinstance(node, str) and node.strip():
+            return node.strip()
+        if isinstance(node, dict) and isinstance(node.get("message"), str) and node["message"].strip():
+            return node["message"].strip()
+    return text
+
+
 def upstream_detail(error: urllib.error.HTTPError, cap: int = 500) -> str:
     """Return an actionable provider failure including its response body."""
     body = ""
     try:
-        body = error.read().decode("utf-8", "replace")[:cap]
+        body = _summarize_error_body(error.read().decode("utf-8", "replace")[:8192])
     except Exception:
         pass
-    return f"upstream {error.code}: {body or error.reason}"
+    return f"upstream {error.code}: {body[:cap] or error.reason}"
 
 
 def open_ai(

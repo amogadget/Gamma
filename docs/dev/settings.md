@@ -28,7 +28,9 @@ Nine panes in four rail groups (`NAV_GROUPS` in
   button on/off, target language, model, effort, parallel requests 1–8), Search
   (auto-expand defaults), Notes (Enter behavior, note badges)
 - **AI** — Provider and models (credentials, automatic subscription usage,
-  provider model catalogs, metadata and dictation model choices, in
+  provider model catalogs, metadata and dictation model choices, the login
+  connection check — `gamma-ai-login-check`, default the free credential
+  ping — in
   [settingsAi.jsx](../../frontend/src/settingsAi.jsx)),
   Assistant (the folder-agent master switch, folder/PDF per-chat tool
   defaults, per-tool permissions, tool rounds, agent read window, context budgets),

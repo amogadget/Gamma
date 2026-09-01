@@ -218,6 +218,17 @@ function ProviderForm({ value, onCancel }) {
             <button className="searchToggle" title="Retry loading the model list" onClick={loadModelCatalog}><RefreshIcon size={12} /></button>
           </div>
         ) : null}
+        <Field label="Test model" hint="used by the Test button and the login connection check">
+          <MenuSelect
+            label="Test model"
+            value={formModels.includes(aiKeysForm.test_model) ? aiKeysForm.test_model : ""}
+            onChange={(model) => setAiKeysForm((form) => ({ ...form, test_model: model }))}
+            options={[
+              ["", "Auto — metadata model, else first"],
+              ...formModels.map((model) => [model, model]),
+            ]}
+          />
+        </Field>
       </Step>
 
       {aiKeysError ? <div className="settingsPaneHint aiKeysError">{aiKeysError}</div> : null}
@@ -336,12 +347,27 @@ export function AiSettings({ value }) {
                     ))}
                   </span>
                   {test ? (
-                    <span className={`aiProvDesc ${test.busy ? "" : test.ok ? "aiTestOk" : "aiKeysError"}`}>
+                    <span
+                      className={`aiProvDesc ${test.busy ? "" : test.ok ? "aiTestOk" : "aiKeysError"}`}
+                      title={!test.busy && !test.ok ? test.error : undefined}
+                    >
                       {test.busy
                         ? "Testing…"
                         : test.ok
                           ? `✓ working · ${test.model} · ${(test.latency_ms / 1000).toFixed(1)}s`
-                          : `✗ ${test.error}`}
+                          : test.auth ? (
+                            // Broken credential: one clear line + the fix,
+                            // never the upstream body (hover shows the detail).
+                            <>
+                              ✗ {oauth ? "ChatGPT sign-in expired" : "API key rejected"} —{" "}
+                              <button
+                                className="chatEmptyLink"
+                                onClick={(event) => { event.preventDefault(); value.startEditAiProvider(provider); }}
+                              >
+                                {oauth ? "reconnect" : "update the key"}
+                              </button>
+                            </>
+                          ) : `✗ ${test.error}`}
                     </span>
                   ) : null}
                   {usage ? (
@@ -382,6 +408,24 @@ export function AiSettings({ value }) {
             <div className="reportModalBtns settingsAlignStart">
               <button className="uiBtn primary" onClick={value.startAddAiProvider}>+ Add provider</button>
             </div>
+          ) : null}
+          {canEdit ? (
+            <Section title="Connection">
+              <Row icon={RefreshIcon} label="Check at login"
+                hint="Verify the active provider when Gamma opens"
+                title="Runs a connection check on the active provider at login; a failure (expired ChatGPT sign-in, rejected key, unreachable provider) shows a warning in the chat window instead of surfacing as a broken chat later. The credential check is free — OAuth entries query subscription usage, API keys list models; the test request sends a tiny completion (through the provider's test model — by default your metadata model) and spends a few tokens.">
+                <MenuSelect
+                  label="Check at login"
+                  value={value.aiLoginCheck}
+                  onChange={value.setAiLoginCheck}
+                  options={[
+                    ["ping", "Credential check (free)"],
+                    ["test", "Test request (uses tokens)"],
+                    ["off", "Off"],
+                  ]}
+                />
+              </Row>
+            </Section>
           ) : null}
           {value.aiKeysForm ? (
             <SubDialog

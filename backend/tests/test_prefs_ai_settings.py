@@ -191,6 +191,8 @@ def test_provider_test_probe_reports_ok(alice, monkeypatch):
 
 def test_provider_test_reports_upstream_failure_in_body(alice, monkeypatch):
     # A failed probe is a successful test: 200 with the upstream error in-body.
+    # A 401 additionally carries the auth flag — the UI renders "reconnect"
+    # instead of the raw upstream body.
     import gamma.routers.ai as ai_mod
     from gamma.ai_client import UpstreamError
 
@@ -202,11 +204,203 @@ def test_provider_test_reports_upstream_failure_in_body(alice, monkeypatch):
     r = alice.post(f"/api/ai/providers/{pid}/test")
     assert r.status_code == 200
     assert r.json()["ok"] is False
+    assert r.json()["auth"] is True
     assert "401" in r.json()["error"]
+
+
+def test_provider_test_non_auth_failure_is_not_flagged(alice, monkeypatch):
+    import gamma.routers.ai as ai_mod
+    from gamma.ai_client import UpstreamError
+
+    def fake_call(*a, **kw):
+        raise UpstreamError(502, "upstream 502: Bad gateway")
+
+    monkeypatch.setattr(ai_mod, "_call_ai", fake_call)
+    pid = alice.get("/api/ai/settings").json()["providers"][0]["id"]
+    body = alice.post(f"/api/ai/providers/{pid}/test").json()
+    assert body["ok"] is False and body["auth"] is False
 
 
 def test_provider_test_unknown_entry_404(alice):
     assert alice.post("/api/ai/providers/does-not-exist/test").status_code == 404
+
+
+def test_probe_uses_configured_test_model(alice, monkeypatch):
+    # Probe model priority: the entry-level test_model, else the model sent
+    # with the request (the client's effective metadata model), else the first
+    # model. The masked settings echo test_model so the form can edit it.
+    import gamma.routers.ai as ai_mod
+
+    seen = {}
+    monkeypatch.setattr(ai_mod, "_call_ai", lambda m, s, entry, rt, **kw: seen.update(entry))
+    pid = alice.get("/api/ai/settings").json()["providers"][0]["id"]
+    r = alice.put(f"/api/ai/providers/{pid}", json={"test_model": "claude-cheap"})
+    assert r.status_code == 200
+    assert r.json()["providers"][0]["test_model"] == "claude-cheap"
+    assert alice.post(f"/api/ai/providers/{pid}/test").json()["ok"] is True
+    assert seen["model"] == "claude-cheap"
+    # An explicit test_model beats the request's fallback model.
+    alice.post(f"/api/ai/providers/{pid}/test", json={"model": "claude-meta"})
+    assert seen["model"] == "claude-cheap"
+
+    alice.put(f"/api/ai/providers/{pid}", json={"test_model": ""})
+    alice.post(f"/api/ai/providers/{pid}/test")
+    assert seen["model"] == "claude-solo"
+    # With no test_model, the request's metadata-model fallback wins over the
+    # first model.
+    alice.post(f"/api/ai/providers/{pid}/test", json={"model": "claude-meta"})
+    assert seen["model"] == "claude-meta"
+    assert alice.put(f"/api/ai/providers/{pid}", json={"test_model": "x" * 101}).status_code == 400
+
+
+def test_probe_model_fallback_is_length_capped(alice, monkeypatch):
+    """A client-supplied fallback is untrusted input: it reaches the provider
+    as a model name, so it is capped like the stored field."""
+    import gamma.routers.ai as ai_mod
+
+    seen = {}
+    monkeypatch.setattr(ai_mod, "_call_ai", lambda m, s, entry, rt, **kw: seen.update(entry))
+    pid = alice.get("/api/ai/settings").json()["providers"][0]["id"]
+    alice.post(f"/api/ai/providers/{pid}/test", json={"model": "m" * 500})
+    assert len(seen["model"]) == 100
+
+
+# --- upstream error summarization ---------------------------------------------
+
+def _http_error(code, body, reason="err"):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("http://x", code, reason, None, io.BytesIO(body.encode()))
+
+
+def test_upstream_detail_summarizes_noise_bodies():
+    # HTML error pages (a proxy's 502) collapse to their <title>, JSON errors
+    # to their message — a settings row never shows raw markup.
+    from gamma.ai_client import upstream_detail
+
+    html = "<!DOCTYPE html> <html><head><title>xwtim.com | 502:\n Bad gateway</title></head><body>Error</body></html>"
+    assert upstream_detail(_http_error(502, html)) == "upstream 502: xwtim.com | 502: Bad gateway"
+    js = '{"error": {"message": "Provided authentication token is expired.", "code": "token_expired"}}'
+    assert upstream_detail(_http_error(401, js)) == "upstream 401: Provided authentication token is expired."
+    assert upstream_detail(_http_error(500, "plain text failure")) == "upstream 500: plain text failure"
+    assert upstream_detail(_http_error(502, "<html><body>no title</body></html>", "Bad Gateway")) \
+        == "upstream 502: Bad Gateway"
+
+
+def test_upstream_detail_still_caps_length():
+    """Summarizing reads more bytes than it shows — the cap still holds, so a
+    provider cannot push an unbounded string into a settings row."""
+    from gamma.ai_client import upstream_detail
+
+    detail = upstream_detail(_http_error(500, "x" * 9000), cap=100)
+    assert detail == f"upstream 500: {'x' * 100}"
+
+
+def test_upstream_detail_survives_a_malformed_body():
+    from gamma.ai_client import upstream_detail
+
+    # Truncated JSON, unterminated <title>, and an empty body all degrade to
+    # something printable rather than raising inside an error path.
+    assert "upstream 400: " in upstream_detail(_http_error(400, '{"error": {"mess'))
+    assert upstream_detail(_http_error(502, "<html><title>unclosed", "Bad Gateway")) \
+        == "upstream 502: Bad Gateway"
+    assert upstream_detail(_http_error(503, "", "Unavailable")) == "upstream 503: Unavailable"
+
+
+# --- login connection check (/api/ai/health) ----------------------------------
+
+def test_ai_health_reports_unconfigured(guest):
+    r = guest.post("/api/ai/health", json={})
+    assert r.status_code == 200
+    assert r.json() == {"configured": False, "ok": True}
+
+
+def test_ai_health_requires_a_session():
+    from gamma.app import app
+
+    assert TestClient(app).post("/api/ai/health", json={}).status_code == 401
+
+
+def test_ai_health_ping_checks_credential_for_free(alice, monkeypatch):
+    # "ping" mode never runs a completion: API keys are checked via the
+    # provider's model listing; 401 comes back as a broken-credential flag,
+    # 404 (gateway without /v1/models) as ok-but-unverified.
+    import gamma.routers.ai as ai_mod
+
+    pid = alice.get("/api/ai/settings").json()["providers"][0]["id"]
+    seen = {}
+    monkeypatch.setattr(ai_mod, "_call_ai", lambda *a, **kw: pytest.fail("ping must not spend tokens"))
+    monkeypatch.setattr(ai_mod, "_model_catalog_json", lambda req: seen.update(url=req.full_url) or {})
+    body = alice.post("/api/ai/health", json={"provider_id": pid, "mode": "ping"}).json()
+    assert body["configured"] and body["ok"] is True
+    assert "/v1/models" in seen["url"]
+
+    def dead_key(req):
+        raise _http_error(401, '{"error": {"message": "invalid x-api-key"}}')
+    monkeypatch.setattr(ai_mod, "_model_catalog_json", dead_key)
+    body = alice.post("/api/ai/health", json={"provider_id": pid, "mode": "ping"}).json()
+    assert body["ok"] is False and body["auth"] is True
+    assert "invalid x-api-key" in body["error"]
+
+    def no_listing(req):
+        raise _http_error(404, "")
+    monkeypatch.setattr(ai_mod, "_model_catalog_json", no_listing)
+    body = alice.post("/api/ai/health", json={"provider_id": pid, "mode": "ping"}).json()
+    assert body["ok"] is True and body["unverified"] is True
+
+
+def test_ai_health_ping_reports_a_non_auth_failure_without_the_auth_flag(alice, monkeypatch):
+    """A 500 from the provider and an unreachable host are both "connection
+    failed", never "your credential is broken" — the strip says different
+    things and only one of them is actionable by re-entering a key."""
+    import gamma.routers.ai as ai_mod
+
+    def broken(req):
+        raise _http_error(500, "<html><head><title>Bad gateway</title></head></html>")
+    monkeypatch.setattr(ai_mod, "_model_catalog_json", broken)
+    body = alice.post("/api/ai/health", json={"mode": "ping"}).json()
+    assert body["ok"] is False and body["auth"] is False
+    assert "Bad gateway" in body["error"] and "<html" not in body["error"]
+
+    def unreachable(req):
+        raise OSError("timed out")
+    monkeypatch.setattr(ai_mod, "_model_catalog_json", unreachable)
+    body = alice.post("/api/ai/health", json={"mode": "ping"}).json()
+    assert body["ok"] is False and body["auth"] is False and "timed out" in body["error"]
+
+
+def test_ai_health_names_the_entry_it_checked(alice, monkeypatch):
+    """The strip is per-provider: the response carries the id (so a passing
+    Test can clear it) and a display name (so the user knows which entry)."""
+    import gamma.routers.ai as ai_mod
+
+    monkeypatch.setattr(ai_mod, "_model_catalog_json", lambda req: {})
+    entries = alice.get("/api/ai/settings").json()["providers"]
+    body = alice.post("/api/ai/health", json={"provider_id": entries[1]["id"]}).json()
+    assert body["provider_id"] == entries[1]["id"]
+    assert body["provider_name"] and body["mode"] == "ping"
+
+
+def test_ai_health_test_mode_runs_the_probe(alice, monkeypatch):
+    # provider_id "" targets the first entry; "test" mode is the Test button's
+    # tiny live completion.
+    import gamma.routers.ai as ai_mod
+
+    monkeypatch.setattr(ai_mod, "_call_ai", lambda *a, **kw: "ok")
+    body = alice.post("/api/ai/health", json={"mode": "test"}).json()
+    assert body["configured"] and body["ok"] is True
+    assert body["model"] == "claude-solo" and body["provider_name"]
+
+
+def test_ai_health_unknown_provider_id_falls_back_to_the_first_entry(alice, monkeypatch):
+    """A stale saved pick (the entry was deleted) must still report on
+    something rather than silently claiming nothing is configured."""
+    import gamma.routers.ai as ai_mod
+
+    monkeypatch.setattr(ai_mod, "_model_catalog_json", lambda req: {})
+    first = alice.get("/api/ai/settings").json()["providers"][0]["id"]
+    body = alice.post("/api/ai/health", json={"provider_id": "deleted-entry"}).json()
+    assert body["configured"] and body["provider_id"] == first
 
 
 def test_export_stays_owner_only(alice):

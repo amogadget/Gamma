@@ -544,6 +544,72 @@ def test_usage_http_error_reports_upstream_detail(erin, monkeypatch):
     ai_mod._USAGE_CACHE.clear()
 
 
+def test_usage_expired_signin_answers_in_body(erin, monkeypatch):
+    """An expired grant is an expected state, not a server error: the pane
+    shows "sign in again" instead of a 502 with the upstream 401 body."""
+    import gamma.routers.ai as ai_mod
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+    ai_mod._USAGE_CACHE.clear()
+
+    def expired(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {},
+                                     io.BytesIO(b'{"detail":"token expired"}'))
+
+    monkeypatch.setattr(ai_mod, "urlopen", expired)
+    r = erin.post(f"/api/ai/providers/{entry['id']}/usage")
+    assert r.status_code == 200
+    assert r.json()["available"] is False and r.json()["auth"] is True
+    assert "sign in again" in r.json()["reason"]
+    ai_mod._USAGE_CACHE.clear()
+
+
+def test_health_ping_for_oauth_entry_uses_the_protocol_endpoint(erin, monkeypatch):
+    """The login check sends the OAuth bearer to the administrator-controlled
+    ChatGPT usage endpoint — never to a saved entry field, which would let a
+    stored base URL harvest the token."""
+    import gamma.routers.ai as ai_mod
+    from gamma.config import AI_PROTOCOLS
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+    seen = {}
+
+    def capture(req, timeout=0):
+        seen["url"] = req.full_url
+        seen["auth"] = req.headers.get("Authorization")
+        return _FakeResp({})
+
+    monkeypatch.setattr(ai_mod, "urlopen", capture)
+    monkeypatch.setattr(ai_mod, "_call_ai",
+                        lambda *a, **kw: pytest.fail("ping must not spend tokens"))
+    body = erin.post("/api/ai/health", json={"provider_id": entry["id"], "mode": "ping"}).json()
+    assert body["ok"] is True
+    assert seen["url"].startswith(str(AI_PROTOCOLS["chatgpt"]["base_url"]).rsplit("/codex", 1)[0])
+    assert seen["url"].endswith("/wham/usage")
+    assert seen["auth"] == f"Bearer {entry['oauth']['access_token']}"
+
+
+def test_health_ping_reports_a_dead_grant_without_leaking_the_token(erin, monkeypatch):
+    import gamma.routers.ai as ai_mod
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+
+    def expired(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {},
+                                     io.BytesIO(b'{"error":{"message":"token expired"}}'))
+
+    monkeypatch.setattr(ai_mod, "urlopen", expired)
+    r = erin.post("/api/ai/health", json={"provider_id": entry["id"], "mode": "ping"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False and body["auth"] is True
+    assert "token expired" in body["error"]
+    assert entry["oauth"]["access_token"] not in r.text
+
+
 def test_usage_invalid_json_shape_degrades(erin, monkeypatch):
     """A non-dict reply is 'unavailable', not a crash."""
     import gamma.routers.ai as ai_mod

@@ -134,6 +134,14 @@ export function useAppPrefs() {
 
   // --- AI models (Settings → Assistant) ---
   const [chatEffort, setChatEffort] = usePersistedState("gamma-chat-effort", "");
+  // Connection check of the active provider at login (POST /api/ai/health):
+  // "ping" (default) is the free credential check — OAuth entries hit the
+  // usage endpoint, API keys list /v1/models, both 401 on a dead credential
+  // without spending tokens; "test" runs the tiny live completion (the same
+  // probe as the settings Test button, through the entry's test model).
+  const [aiLoginCheck, setAiLoginCheck] = usePersistedState("gamma-ai-login-check", "ping", {
+    parse: (raw) => (["off", "ping", "test"].includes(raw) ? raw : undefined),
+  });
   // Model for AI metadata extraction. "" = follow the chat model; a stale
   // pick (provider/model removed) also falls back.
   const [metaModel, setMetaModel] = usePersistedState("gamma-meta-model", "");
@@ -180,7 +188,7 @@ export function useAppPrefs() {
     searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper,
     enterNewNote, setEnterNewNote, hlNoteBadges, setHlNoteBadges,
     statusBarVisible, setStatusBarVisible,
-    chatEffort, setChatEffort, metaModel, setMetaModel,
+    chatEffort, setChatEffort, aiLoginCheck, setAiLoginCheck, metaModel, setMetaModel,
     dictationModel, setDictationModel, dictationLang, setDictationLang,
     chatSystem, setChatSystem, agentSystem, setAgentSystem,
     metaPrompt, setMetaPrompt, citePrompt, setCitePrompt,

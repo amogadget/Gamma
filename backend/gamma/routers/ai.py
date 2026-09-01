@@ -243,6 +243,7 @@ def _masked_settings(user: str, is_guest: bool) -> dict:
                 "key_hint": f"…{key[-4:]}" if len(key) >= 12 else ("set" if key else ""),
                 "base_url": (e.get("base_url") or "").strip(),
                 "models": (e.get("models") or "").strip(),
+                "test_model": (e.get("test_model") or "").strip(),
                 "created_at": e.get("created_at") or "",
                 # ChatGPT sign-in entries: connection status + account label only,
                 # never the tokens themselves.
@@ -283,11 +284,16 @@ class AIProviderRequest(BaseModel):
     api_key: str | None = None  # required on add; omitted/empty on edit = keep
     base_url: str | None = None  # "" = protocol default
     models: str | None = None  # comma-separated model names; "" = protocol default
+    test_model: str | None = None  # model probes use (Test button / login check); "" = first model
+
+
+def _is_oauth_entry(entry: dict) -> bool:
+    return AI_PROTOCOLS.get(entry.get("protocol"), {}).get("auth") == "oauth"
 
 
 def _apply_provider_fields(entry: dict, payload: AIProviderRequest):
     """Validate + copy the editable fields of a provider entry in place."""
-    oauth_entry = AI_PROTOCOLS.get(entry.get("protocol"), {}).get("auth") == "oauth"
+    oauth_entry = _is_oauth_entry(entry)
     if payload.name is not None:
         entry["name"] = str(payload.name).strip()[:MAX_NAME_LEN]
     # OAuth secrets and endpoints are owned by the sign-in flow. In particular,
@@ -308,6 +314,11 @@ def _apply_provider_fields(entry: dict, payload: AIProviderRequest):
         if len(models) > MAX_MODELS_LEN:
             raise HTTPException(status_code=400, detail="model list too long")
         entry["models"] = models
+    if payload.test_model is not None:
+        test_model = str(payload.test_model).strip()
+        if len(test_model) > 100:
+            raise HTTPException(status_code=400, detail="test model name too long")
+        entry["test_model"] = test_model
 
 
 @router.get("/ai/settings")
@@ -373,26 +384,33 @@ async def ai_provider_delete(provider_id: str, request: Request):
     return _masked_settings(user, request.state.is_guest)
 
 
-# Sync def: the probe call runs in the threadpool.
-@router.post("/ai/providers/{provider_id}/test")
-def ai_provider_test(provider_id: str, request: Request):
-    """One tiny live completion through a saved entry, for the settings list's
-    Test button — answers "does this credential still work" without waiting for
-    a real chat to 502 (the common case: an expired/revoked ChatGPT sign-in).
-    The probe result comes back in-body — a failed probe is a successful test,
-    not an HTTP error."""
-    user = _require_editor(request)
-    entries = load_provider_entries(user)
-    entry = next((e for e in entries if e.get("id") == provider_id), None)
-    if not entry:
-        raise HTTPException(status_code=404, detail="provider not found")
-    # A test click is an explicit retry: drop the refresh backoff so a ChatGPT
-    # entry re-attempts its token refresh now instead of reusing a stale token.
+def _probe_model(entry: dict, fallback: str = "") -> str:
+    """The model probes go through: the entry's configured test model, else
+    the caller's fallback (the client sends its effective metadata model — the
+    cheap utility model), else the entry's first model."""
+    return ((entry.get("test_model") or "").strip()
+            or str(fallback or "").strip()[:100]
+            or entry_models(entry)[0])
+
+
+def _probe_entry(user: str, entry: dict, fallback_model: str = "") -> dict:
+    """One tiny live completion through a saved entry — answers "does this
+    credential still work" without waiting for a real chat to 502. The result
+    is in-body ({ok, model, latency_ms} / {ok: False, error, auth}); `auth`
+    marks a broken credential (expired sign-in / rejected key) so the UI can
+    say "reconnect" instead of dumping the upstream body."""
+    provider_id = entry.get("id")
+    # An explicit probe is an explicit retry: drop the refresh backoff so a
+    # ChatGPT entry re-attempts its token refresh now instead of reusing a
+    # stale token.
     clear_refresh_backoff(user, provider_id)
     rt = ai_runtime(user)
     if provider_id not in rt["providers"]:
-        return {"ok": False, "error": "entry has no usable credential — set an API key or sign in again"}
-    model = entry_models(entry)[0]
+        return {"ok": False, "auth": True,
+                "error": "ChatGPT sign-in expired or disconnected — sign in again"
+                if _is_oauth_entry(entry)
+                else "entry has no usable credential — set an API key or sign in again"}
+    model = _probe_model(entry, fallback_model)
     started = time.time()
     try:
         # Generous cap: reasoning models burn invisible tokens even on "ok".
@@ -400,8 +418,27 @@ def ai_provider_test(provider_id: str, request: Request):
                  "", {"provider": provider_id, "model": model}, rt,
                  max_tokens=2048, timeout=45)
     except Exception as e:
-        return {"ok": False, "model": model, "error": str(e)}
+        auth = isinstance(e, UpstreamError) and e.status in (401, 403)
+        return {"ok": False, "model": model, "error": str(e), "auth": auth}
     return {"ok": True, "model": model, "latency_ms": int((time.time() - started) * 1000)}
+
+
+class AIProviderTestRequest(BaseModel):
+    model: str = ""  # client's preferred probe model (its effective metadata model)
+
+
+# Sync def: the probe call runs in the threadpool.
+@router.post("/ai/providers/{provider_id}/test")
+def ai_provider_test(provider_id: str, request: Request,
+                     payload: AIProviderTestRequest | None = None):
+    """The settings list's Test button: probe one saved entry. A failed probe is
+    a successful test, so the result comes back in-body, not as an HTTP error."""
+    user = _require_editor(request)
+    entries = load_provider_entries(user)
+    entry = next((e for e in entries if e.get("id") == provider_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="provider not found")
+    return _probe_entry(user, entry, payload.model if payload else "")
 
 
 # --- Subscription usage (ChatGPT OAuth only) ----------------------------------
@@ -470,6 +507,23 @@ def _usage_window(raw: dict | None, name: str = "") -> dict | None:
     }
 
 
+def _chatgpt_usage_request(conf: dict) -> URLRequest:
+    """The ChatGPT subscription-usage request (Codex's account client's
+    .../backend-api/wham/usage, sibling of the .../codex model endpoint).
+    Always the administrator-controlled protocol endpoint, never a saved
+    entry value: OAuth entries cannot redirect their bearer token."""
+    base = str(AI_PROTOCOLS["chatgpt"]["base_url"]).rstrip("/")
+    account_base = base[:-len("/codex")] if base.endswith("/codex") else base
+    headers = {
+        "Authorization": f"Bearer {conf['api_key']}",
+        "Accept": "application/json",
+        "User-Agent": "codex-cli",
+    }
+    if conf.get("account_id"):
+        headers["ChatGPT-Account-Id"] = conf["account_id"]
+    return URLRequest(f"{account_base}/wham/usage", headers=headers, method="GET")
+
+
 # Sync def: this read-only account call runs in FastAPI's threadpool.
 @router.post("/ai/providers/{provider_id}/usage")
 def ai_provider_usage(provider_id: str, request: Request):
@@ -496,25 +550,16 @@ def ai_provider_usage(provider_id: str, request: Request):
     rt = ai_runtime(user)
     conf = rt["providers"].get(provider_id)
     if not conf:
-        return {"available": False, "reason": "Sign in with ChatGPT again to query usage."}
-    # Use the administrator-controlled protocol endpoint, never the saved entry
-    # value: OAuth entries cannot redirect their bearer token.
-    base = str(AI_PROTOCOLS["chatgpt"]["base_url"]).rstrip("/")
-    # The model endpoint is .../backend-api/codex; Codex's account client uses
-    # the sibling .../backend-api/wham/usage endpoint.
-    account_base = base[:-len("/codex")] if base.endswith("/codex") else base
-    url = f"{account_base}/wham/usage"
-    headers = {
-        "Authorization": f"Bearer {conf['api_key']}",
-        "Accept": "application/json",
-        "User-Agent": "codex-cli",
-    }
-    if conf.get("account_id"):
-        headers["ChatGPT-Account-Id"] = conf["account_id"]
-    req = URLRequest(url, headers=headers, method="GET")
+        return {"available": False, "auth": True,
+                "reason": "Sign in with ChatGPT again to query usage."}
     try:
-        data = _model_catalog_json(req)
+        data = _model_catalog_json(_chatgpt_usage_request(conf))
     except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            # Expired/revoked sign-in: an expected state, not a server error —
+            # report it in-body so the UI can say "reconnect".
+            return {"available": False, "auth": True,
+                    "reason": "ChatGPT sign-in expired — sign in again in this entry's edit form."}
         # Only an HTTPError carries .code/.reason; _upstream_detail would raise
         # AttributeError on anything else and turn a degraded provider into a
         # 500 traceback.
@@ -575,6 +620,24 @@ def _model_catalog_json(req: URLRequest) -> dict:
     """Fetch one model catalog with a short, UI-friendly timeout."""
     with urlopen(req, timeout=_MODEL_CATALOG_TIMEOUT) as resp:
         return json.loads(resp.read())
+
+
+def _models_list_request(protocol: str, key: str, base: str) -> URLRequest:
+    """GET /v1/models for an API-key protocol — the free way to check a
+    credential (it 401s on a dead key without spending tokens)."""
+    if protocol == "anthropic":
+        return URLRequest(f"{base}/v1/models?limit=100",
+                          headers={
+                              "x-api-key": key,
+                              "anthropic-version": "2023-06-01",
+                              "Accept": "application/json",
+                              "User-Agent": "Gamma/model-catalog",
+                          })
+    return URLRequest(f"{base}/v1/models", headers={
+        "Authorization": f"Bearer {key}",
+        "Accept": "application/json",
+        "User-Agent": "Gamma/model-catalog",
+    })
 
 
 def _chatgpt_model_catalog(user: str, provider_id: str = "", with_fallback: bool = True) -> list:
@@ -659,23 +722,20 @@ def _fetch_key_protocol_models(protocol: str, base: str, api_key: str) -> list:
     answers. Anthropic-wire gateways that don't list under the anthropic path
     (DeepSeek's /anthropic base is one) usually answer their OpenAI-compatible
     listing with the same key, so the parent base is tried as a fallback."""
+    # Each candidate is the standard listing request (_models_list_request) plus
+    # whether that listing needs the OpenAI chat-prefix filter.
     candidates = []
     if protocol == "openai":
-        candidates.append((f"{base}/v1/models", {"Authorization": f"Bearer {api_key}"}, True))
+        candidates.append((_models_list_request("openai", api_key, base), True))
     else:  # anthropic
-        candidates.append(
-            (f"{base}/v1/models?limit=100", {"x-api-key": api_key, "anthropic-version": "2023-06-01"}, False)
-        )
+        candidates.append((_models_list_request("anthropic", api_key, base), False))
         parent = base[: -len("/anthropic")] if base.endswith("/anthropic") else base
         if parent != base:
-            candidates.append((f"{parent}/v1/models", {"Authorization": f"Bearer {api_key}"}, False))
-        candidates.append((f"{base}/v1/models", {"Authorization": f"Bearer {api_key}"}, False))
+            candidates.append((_models_list_request("openai", api_key, parent), False))
+        candidates.append((_models_list_request("openai", api_key, base), False))
     last = None
-    for url, headers, chat_prefix in candidates:
+    for req, chat_prefix in candidates:
         try:
-            req = URLRequest(
-                url, headers={**headers, "Accept": "application/json", "User-Agent": "Gamma/model-catalog"}
-            )
             data = _model_catalog_json(req)
             ids = [str(m.get("id") or "") for m in (data.get("data") or []) if m.get("id")]
             ids = _filter_chat_models(ids, chat_prefix)
@@ -719,6 +779,58 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     except ModelListError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"models": models}
+
+
+class AIHealthRequest(BaseModel):
+    provider_id: str = ""  # "" = the first configured entry
+    mode: str = "ping"     # "ping" = free credential check; "test" = tiny live completion
+    model: str = ""        # "test" mode: preferred probe model (the client's metadata model)
+
+
+# Sync def: the upstream check runs in the threadpool.
+@router.post("/ai/health")
+def ai_health(payload: AIHealthRequest, request: Request):
+    """Startup connection check for one provider entry, so a broken credential
+    surfaces at login instead of as a failed chat later. "ping" spends no
+    tokens: OAuth entries ask the subscription usage endpoint, API keys list
+    /v1/models — both 401 on a dead credential. "test" runs the same tiny
+    completion as the Test button (through the entry's test model). Always
+    answers in-body: {configured, ok, auth?, error?, ...}."""
+    user = require_user(request)
+    entries = load_provider_entries(user)
+    entry = (next((e for e in entries if e.get("id") == payload.provider_id), None)
+             or (entries[0] if entries else None))
+    if not entry:
+        return {"configured": False, "ok": True}
+    result = {"configured": True, "provider_id": entry.get("id"), "mode": payload.mode,
+              "provider_name": (entry.get("name") or "").strip()
+              or AI_PROTOCOLS.get(entry.get("protocol"), {}).get("label") or entry.get("protocol")}
+    if payload.mode == "test":
+        return {**result, **_probe_entry(user, entry, payload.model)}
+    clear_refresh_backoff(user, entry.get("id"))
+    rt = ai_runtime(user)
+    conf = rt["providers"].get(entry.get("id"))
+    if not conf:
+        return {**result, "ok": False, "auth": True,
+                "error": "ChatGPT sign-in expired or disconnected — sign in again"
+                if _is_oauth_entry(entry)
+                else "entry has no usable credential — set an API key"}
+    try:
+        if conf["protocol"] == "chatgpt":
+            _model_catalog_json(_chatgpt_usage_request(conf))
+        else:
+            _model_catalog_json(_models_list_request(conf["protocol"], conf["api_key"], conf["base_url"]))
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return {**result, "ok": False, "auth": True, "error": _upstream_detail(e, 200)}
+        if e.code in (404, 405):
+            # An OpenAI-compatible gateway without /v1/models — can't verify
+            # for free; don't cry wolf.
+            return {**result, "ok": True, "unverified": True}
+        return {**result, "ok": False, "auth": False, "error": _upstream_detail(e, 200)}
+    except Exception as e:
+        return {**result, "ok": False, "auth": False, "error": str(e)[:200]}
+    return {**result, "ok": True}
 
 
 # --- PDF translation ----------------------------------------------------------
