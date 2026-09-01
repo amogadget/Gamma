@@ -214,7 +214,7 @@ function MenuSelect({ value, onChange, options, label, block, icon: TriggerIcon,
         {!iconOnly ? <ChevronDownIcon size={13} className="uiSelectChev" /> : null}
       </button>
       {menu ? (
-        <ContextMenu x={menu.x} y={menu.y} anchorRight onClose={close} ignoreRef={triggerRef}>
+        <ContextMenu x={menu.x} y={menu.y} anchorRight className="ctxMenuScroll" onClose={close} ignoreRef={triggerRef}>
           {options.map(([val, lab, OptIcon]) => (
             <button key={val} className="ctxMenuItem ctxMenuItemIconed"
               onClick={() => { close(); onChange(val); }}>
@@ -240,7 +240,7 @@ function ActionMenu({ label, icon: Icon, items, disabled }) {
         <ChevronDownIcon size={13} className="uiSelectChev" />
       </button>
       {menu ? (
-        <ContextMenu x={menu.x} y={menu.y} anchorRight onClose={close} ignoreRef={triggerRef}>
+        <ContextMenu x={menu.x} y={menu.y} anchorRight className="ctxMenuScroll" onClose={close} ignoreRef={triggerRef}>
           {items.map(({ icon: ItemIcon, label: lab, title, onClick }) => (
             <button key={lab} className="ctxMenuItem ctxMenuItemIconed" title={title}
               onClick={() => { close(); onClick(); }}>

@@ -70,8 +70,9 @@ def test_refresh_merges_catalog_after_curated_models(user, monkeypatch):
     body = r.json()
     assert body["refreshed"] == 1
     # Curated first, then catalog additions, deduped — the pinned list is
-    # never reordered or clobbered.
-    assert [m["model"] for m in body["models"]] == ["gpt-5.6", "gpt-5.7-new", "gpt-5.8-new"]
+    # never clobbered. Within each group the newest generation leads, so the
+    # catalog's 5.8 precedes 5.7 (see tests/test_model_order.py).
+    assert [m["model"] for m in body["models"]] == ["gpt-5.6", "gpt-5.8-new", "gpt-5.7-new"]
     assert body["refreshed_at"]
     assert [m["model"] for m in c.get("/api/ai/models").json()["models"]] == body_models(body)
 
