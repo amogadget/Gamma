@@ -23,7 +23,10 @@ Nine panes in four rail groups (`NAV_GROUPS` in
 - **Workspace** — General (theme incl. the Sepia/Gray eye-comfort modes and
   flip page colors — both synced per account; paper-fetching prefs),
   Library (home-card thumbnails and folder/label chips, storage
-  usage/limits, search index, per-paper metadata health table)
+  usage/limits, search index, per-paper metadata health table — status
+  filter incl. "Unverified AI" / "Needs attention", verified/text/index
+  coverage tiles, click a title to open the paper, select-all works on the
+  filtered view, and the batch fetch targets missing + unverified records)
 - **Reading** — PDF viewer (snap scrolling, embedded annotations, translation:
   button on/off, target language, model, effort, parallel requests 1–8), Search
   (auto-expand defaults), Notes (Enter behavior, note badges)

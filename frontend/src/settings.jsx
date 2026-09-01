@@ -548,6 +548,7 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
   const [selected, setSelected] = React.useState(() => new Set());
   const [busy, setBusy] = React.useState(null); // {done, total, title} during a batch run
   const [sortMode, setSortMode] = React.useState("meta"); // meta | text | updated
+  const [filterMode, setFilterMode] = React.useState("all"); // all | attention | unverified | missing | notext
   const stopRef = React.useRef(false);
 
   async function refresh() {
@@ -593,22 +594,37 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
 
   const list = papers || [];
   const textOk = (p) => (p.text_chars ?? 0) >= 50; // same threshold as /api/pdf-text-status
+  // "Unverified": AI-extracted metadata claiming to be a paper — the same
+  // records the red "!" flags on the metadata button. Missing metadata and
+  // unverified records are what a batch (re)fetch can actually fix.
+  const unverifiedPaper = (p) => p.has_meta && p.meta_source === "ai" && (p.meta_kind || "paper") === "paper";
+  const fetchable = (p) => !p.has_meta || unverifiedPaper(p);
+  const noText = (p) => p.text_chars !== null && !textOk(p);
   const missing = list.filter((p) => !p.has_meta);
+  const unverified = list.filter(unverifiedPaper);
+  const needsWork = list.filter(fetchable);
   const counts = {
-    meta: list.filter((p) => p.has_meta).length,
+    verified: list.filter((p) => p.has_meta && !unverifiedPaper(p)).length,
     text: list.filter(textOk).length,
     indexed: list.filter((p) => p.indexed).length,
   };
+  const FILTERS = {
+    all: () => true,
+    attention: (p) => fetchable(p) || noText(p),
+    unverified: unverifiedPaper,
+    missing: (p) => !p.has_meta,
+    notext: noText,
+  };
   // ISO timestamps compare lexicographically; unfinished-first sorts fall back
   // to recency inside each group.
-  const sorted = React.useMemo(() => {
+  const shown = React.useMemo(() => {
     const byTime = (a, b) => (b.updated_at || "").localeCompare(a.updated_at || "");
-    const arr = [...list];
-    if (sortMode === "meta") arr.sort((a, b) => (a.has_meta ? 1 : 0) - (b.has_meta ? 1 : 0) || byTime(a, b));
+    const arr = list.filter(FILTERS[filterMode] || FILTERS.all);
+    if (sortMode === "meta") arr.sort((a, b) => (fetchable(b) ? 1 : 0) - (fetchable(a) ? 1 : 0) || byTime(a, b));
     else if (sortMode === "text") arr.sort((a, b) => (textOk(a) ? 1 : 0) - (textOk(b) ? 1 : 0) || byTime(a, b));
     else arr.sort(byTime);
     return arr;
-  }, [list, sortMode]);
+  }, [list, sortMode, filterMode]);
 
   async function retry(targets) {
     if (!targets.length || busy) return;
@@ -647,10 +663,13 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
       return next;
     });
   }
-  const allSelected = list.length > 0 && selected.size === list.length;
+  // Select-all works on the filtered view, so "filter to unverified → select
+  // all → fetch" is three clicks.
+  const allSelected = shown.length > 0 && shown.every((p) => selected.has(p.id));
   // One adaptive primary action instead of three near-identical buttons: a
-  // selection wins, otherwise it offers exactly the papers that need work.
-  const targets = selected.size ? list.filter((p) => selected.has(p.id)) : missing;
+  // selection wins, otherwise it offers exactly the papers a fetch can fix
+  // (missing metadata + unverified AI records).
+  const targets = selected.size ? list.filter((p) => selected.has(p.id)) : needsWork;
 
   const cell = (tone, text, title) => (
     <span className={`metaCell ${tone}`} title={title}><i className="setDot" />{text}</span>
@@ -690,9 +709,19 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
       action={
         <span className="metaStatActions">
           <MenuSelect
+            label="Show papers" value={filterMode} onChange={setFilterMode}
+            options={[
+              ["all", `All (${list.length})`],
+              ["attention", "Needs attention"],
+              ["unverified", `Unverified AI (${unverified.length})`],
+              ["missing", `Missing metadata (${missing.length})`],
+              ["notext", "No text layer"],
+            ]}
+          />
+          <MenuSelect
             label="Sort papers" value={sortMode} onChange={setSortMode}
             options={[
-              ["meta", "Missing metadata first"],
+              ["meta", "Needs work first"],
               ["text", "Missing text first"],
               ["updated", "Recently modified"],
             ]}
@@ -714,8 +743,8 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
       {list.length ? (
         <>
           <div className="setStats">
-            <Stat icon={PaperIcon} label="metadata" value={counts.meta} total={list.length}
-              title="Papers with a resolved title, authors and BibTeX" />
+            <Stat icon={PaperIcon} label="verified" value={counts.verified} total={list.length}
+              title="Metadata from a registry (arXiv/DOI/Crossref), edited by hand, or a non-paper document — nothing left to verify. Missing and unverified AI records count against this." />
             <Stat icon={FileTextIcon} label="text layer" value={counts.text} total={list.length}
               title="Papers whose PDF yielded extractable text" />
             <Stat icon={SearchIcon} label="indexed" value={counts.indexed} total={list.length}
@@ -726,8 +755,12 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
               <input
                 type="checkbox"
                 checked={allSelected}
-                onChange={() => setSelected(allSelected ? new Set() : new Set(list.map((p) => p.id)))}
-                title={allSelected ? "Clear selection" : "Select all"}
+                onChange={() => setSelected((prev) => {
+                  const next = new Set(prev);
+                  shown.forEach((p) => (allSelected ? next.delete(p.id) : next.add(p.id)));
+                  return next;
+                })}
+                title={allSelected ? "Clear the shown papers from the selection" : "Select all shown papers"}
               />
               <span>Paper</span>
               <span>Metadata</span>
@@ -735,10 +768,22 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
               <span>Index</span>
               <span />
             </div>
-            {sorted.map((p) => (
+            {!shown.length ? (
+              <div className="metaStatRow" style={{ cursor: "default" }}>
+                <span /><span className="metaStatTitle" style={{ color: "var(--text-dim)" }}>Nothing matches this filter.</span>
+              </div>
+            ) : null}
+            {shown.map((p) => (
               <label key={p.id} className="metaStatRow">
                 <input type="checkbox" checked={selected.has(p.id)} onChange={() => toggle(p.id)} />
-                <span className="metaStatTitle" title={p.title}>{p.title}</span>
+                <span
+                  className="metaStatTitle" title={`${p.title} — click to open`}
+                  onClick={(e) => {
+                    if (!value.openPaper) return;
+                    e.preventDefault(); e.stopPropagation();
+                    value.openPaper(p.id);
+                  }}
+                >{p.title}</span>
                 {metaCell(p)}
                 {textCell(p)}
                 {indexCell(p)}
@@ -764,14 +809,22 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
               <span className="metaStatProgress">
                 {selected.size
                   ? `${selected.size} selected`
-                  : missing.length ? `${missing.length} without metadata` : "Every paper has metadata"}
+                  : needsWork.length
+                    ? [missing.length && `${missing.length} missing metadata`,
+                       unverified.length && `${unverified.length} unverified (AI)`]
+                        .filter(Boolean).join(" · ")
+                    : "Everything is verified"}
               </span>
-              <button className="uiBtn sm primary" disabled={!targets.length} onClick={() => retry(targets)}>
-                <SparklesIcon size={13} />{selected.size ? "Fetch selected" : "Fetch missing"}
+              <button className="uiBtn sm primary" disabled={!targets.length} onClick={() => retry(targets)}
+                title={selected.size ? "Fetch metadata for the selected papers"
+                  : "Fetch metadata for papers that are missing it or have an unverified AI record"}>
+                <SparklesIcon size={13} />{selected.size ? "Fetch selected" : "Fetch needed"}
               </button>
-              <button className="uiBtn sm" disabled={!list.length} onClick={() => retry(list)}
-                title="Re-fetch metadata for every paper, including ones that already have it">
-                Refetch all
+              <button className="uiBtn sm" disabled={!shown.length} onClick={() => retry(shown)}
+                title={filterMode === "all"
+                  ? "Re-fetch metadata for every paper, including ones that already have it"
+                  : "Re-fetch metadata for every paper the current filter shows"}>
+                {filterMode === "all" ? "Refetch all" : "Refetch shown"}
               </button>
             </div>
           )}

@@ -613,11 +613,13 @@ body {
   margin-bottom: 1px;
 }
 
+/* Tight left gutter: the card's inner columns (collapse arrow + bullet dot)
+   are what put whitespace before the text — keep them minimal. */
 .blockRow {
   display: flex;
   align-items: flex-start;
-  gap: 3px;
-  padding: 2px 4px;
+  gap: 2px;
+  padding: 2px 6px 2px 2px;
   border-radius: 8px;
 }
 
@@ -1046,6 +1048,16 @@ body {
   text-decoration: none;
 }
 
+.blockEmbedSrc { cursor: pointer; }
+.blockEmbedCard .blockEmbedSrc:hover { color: var(--accent-bright); text-decoration: underline; }
+.blockEmbedBody { display: block; }
+.blockEmbedBody > p:last-child { margin-bottom: 0; }
+.blockEmbedSrc {
+  display: block;
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
 .blockQuote {
   margin-top: 8px;
   padding: 8px 10px;
@@ -1245,14 +1257,14 @@ body {
 }
 /* Notion-like handle: invisible at rest, appears on row hover, and gets a
    rounded pill background when hovered itself (it's also a click target for
-   the block menu). Negative margin tucks the row against it. */
+   the block menu). Sits fully outside the row card — no overlap. */
 .sortableBlockWrap > .dragHandle {
   flex: 0 0 auto;
-  width: 18px;
+  width: 16px;
   height: 22px;
   padding: 0;
   margin-top: 1px;
-  margin-right: -6px;
+  margin-right: 0;
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -1290,7 +1302,7 @@ body {
 }
 
 /* equal-width dot slot for alignment between highlight and non-highlight blocks */
-.dotSlot { width: 16px; min-width: 16px; display: inline-flex; align-items: center; justify-content: center; }
+.dotSlot { width: 14px; min-width: 14px; display: inline-flex; align-items: center; justify-content: center; }
 .dotSlotEmpty { height: 16px; margin-top: 2px; }
 .noteBulletDot {
   display: inline-block;
@@ -4332,6 +4344,15 @@ button.pdfOutlineChevron:hover {
   cursor: pointer;
 }
 .blockEmbedCard:hover { background: var(--bg-hover); }
+/* In-place editing of the synced source: card turns into a live editor. */
+.blockEmbedCard.editing {
+  cursor: text;
+  background: var(--bg-elevated);
+  box-shadow: 0 0 0 1px var(--border-subtle);
+}
+.blockEmbedCard .blockEditorCm { width: 100%; }
+.blockEmbedCard .blockEmbedSrc { cursor: pointer; }
+.blockEmbedCard .blockEmbedSrc:hover { color: var(--accent-bright); text-decoration: underline; }
 .blockEmbedBody { display: block; }
 .blockEmbedBody > p:last-child { margin-bottom: 0; }
 .blockEmbedSrc {

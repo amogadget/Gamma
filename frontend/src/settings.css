@@ -391,6 +391,7 @@
   white-space: nowrap;
   color: var(--text-primary);
 }
+.metaStatRow:not(.metaStatHeader) .metaStatTitle:hover { text-decoration: underline; }
 /* Status cell: a colour-coded dot carries the verdict, the word qualifies it. */
 .metaCell {
   display: inline-flex;

@@ -3883,7 +3883,10 @@ export default function App() {
   }
 
   function onCacheRef(id, blockData) {
-    setRefCache((prev) => (prev[id] ? prev : { ...prev, [id]: blockData }));
+    // Merge-write: embed in-place edits push updated content for an already
+    // cached ref, so this must overwrite (while keeping fields the caller
+    // didn't send, e.g. page_title).
+    setRefCache((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), ...blockData } }));
   }
 
   function triggerFlash(highlightId) {
@@ -8603,6 +8606,8 @@ export default function App() {
           // follow the standing strip-vs-hide viewer preference
           stripAnnots: embAnnots === "strip",
           onLibraryChange: fetchHomeBlocks,
+          // status-table row click: jump to the paper (closing the dialog)
+          openPaper: (id) => { setSettingsOpen(null); openPage(id); },
         }}
         ai={{
           aiKeysInfo,
