@@ -7,6 +7,7 @@ import {
   makeId,
   fmtBytes,
   getDocIdForUrl,
+  ALT_LABEL,
   isPdfFile,
   isMarkdownFile,
   resolvePdfUrl,
@@ -7747,7 +7748,7 @@ export default function App() {
                               ? `Translating… ${Math.round(pdfTransState.progress * 100)}% — click to stop (right-click for options)`
                               : pdfTransState.pages > 0
                                 ? (pdfTransState.shown
-                                    ? "Hide the translation (all pages; Alt peeks) — right-click for options"
+                                    ? `Hide the translation (all pages; hold ${ALT_LABEL} to peek at the original) — right-click for options`
                                     : "Show the translation — right-click for options")
                                 : `Translate this page into ${translateLangLabel} — right-click: whole document & options`}
                             aria-label={pdfTransState.running ? "Stop translating"

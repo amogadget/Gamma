@@ -1,5 +1,5 @@
 import React from "react";
-import { API, apiJson, fmtBytes, copyText } from "./utils";
+import { ALT_LABEL, API, apiJson, fmtBytes, copyText } from "./utils";
 import { MenuSelect } from "./menus";
 import {
   PaneHead, Section, Row, Toggle, Segmented, UnitInput, CharSlider, approxPages,
@@ -224,7 +224,7 @@ function ViewerSettings({ value }) {
           icon={GlobeIcon}
           label="Translate into"
           hint="Language for the viewer's translated view"
-          title="The translated view (the languages button in the PDF viewer's zoom column) redraws each paragraph in this language in place — figures and layout stay put, and holding Alt peeks at the original. Paragraph translations are cached per language and model, so re-reading a page is free."
+          title={`The translated view (the languages button in the PDF viewer's zoom column) redraws each paragraph in this language in place — figures and layout stay put, and holding ${ALT_LABEL} peeks at the original. Paragraph translations are cached per language and model, so re-reading a page is free.`}
         >
           <MenuSelect
             label="Translation language"

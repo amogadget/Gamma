@@ -208,6 +208,15 @@ async function copyRich(html, plain) {
   return legacyCopy(plain, html);
 }
 
+// Apple keyboards label the Alt key "option" (⌥), so a tooltip that says
+// "Alt" reads as a key a Mac user does not have. Same DOM event either way
+// (e.key === "Alt"); only the wording differs.
+// Test BOTH signals rather than `platform || userAgent`: platform is truthy on
+// every OS, so the `||` made the userAgent branch dead code (and untestable).
+const IS_MAC = typeof navigator !== "undefined"
+  && /Mac|iPhone|iPad|iPod/i.test(`${navigator.platform || ""} ${navigator.userAgent || ""}`);
+const ALT_LABEL = IS_MAC ? "\u2325 Option" : "Alt";
+
 const isPdfFile = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
 const isMarkdownFile = (f) => /\.(?:md|markdown)$/i.test(f.name || "")
   || /^(?:text\/markdown|text\/x-markdown)$/i.test(f.type || "");
@@ -263,6 +272,8 @@ export {
   fmtBytes,
   sha256,
   getDocIdForUrl,
+  IS_MAC,
+  ALT_LABEL,
   isPdfFile,
   isMarkdownFile,
   apiJson,
