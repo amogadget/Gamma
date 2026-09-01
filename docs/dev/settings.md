@@ -20,7 +20,7 @@ scatter `usePersistedState` calls through App.jsx.
 Nine panes in four rail groups (`NAV_GROUPS` in
 [frontend/src/settings.jsx](../../frontend/src/settings.jsx)):
 
-- **Workspace** — General (theme incl. the Sepia eye-comfort mode, flip page colors, home-card thumbnails and
+- **Workspace** — General (theme incl. the Sepia/Gray eye-comfort modes, flip page colors, home-card thumbnails and
   folder/label chips, paper-fetching prefs),
   Library (storage usage/limits, search index, per-paper metadata health table)
 - **Reading** — PDF viewer (snap scrolling, embedded annotations, translation:

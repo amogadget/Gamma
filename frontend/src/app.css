@@ -167,6 +167,55 @@
   color-scheme: light;
 }
 
+/* Eye-comfort ("Gray") theme — the neutral counterpart to Sepia for anyone
+   who wants the glare cut without a color cast: the eye-strain guidance's
+   warm light gray (#f4f4f4 ground, the same articles that recommend sepia)
+   with charcoal #2d2d2d text instead of pure black. Only the ground and the
+   text ladder change; role colors are the Light theme's — on a ground just
+   4% dimmer than white they keep their contrast. --pdf-paper again tints
+   the PDF page via the shared multiply rules further down. */
+[data-theme="gray"] {
+  --bg-page: #e9e9e9;
+  --bg-surface: #f4f4f4;
+  --bg-elevated: #f4f4f4;
+  --bg-block: #efefef;
+  --bg-card: #f4f4f4;
+  --bg-deeper: #e3e3e3;
+  --bg-input: #f4f4f4;
+  --bg-raised: #e8e8e8;
+  --bg-hover: #e0e0e0;
+  --bg-subtle: #d7d7d7;
+  --bg-active: #d0d0d0;
+  --text-primary: #2d2d2d;
+  --text-secondary: #424242;
+  --text-tertiary: #5a5a5a;
+  --text-muted: #7d7d7d;
+  --text-dim: #949494;
+  --text-bright: #1a1a1a;
+  --border: #dcdcdc;
+  --border-light: #cecece;
+  --border-hover: #ababab;
+  --border-subtle: #e2e2e2;
+  --ok: #2f8f57;
+  --danger: #c23b3b;
+  --danger-bg: rgba(194, 59, 59, 0.1);
+  --danger-border: rgba(194, 59, 59, 0.38);
+  --accent: #3a7bd5;
+  --accent-dark: #3a7bd5;
+  --accent-bright: #2b6bcb;
+  --accent-bg: rgba(74,144,226,0.12);
+  --accent-bg-light: rgba(74,144,226,0.06);
+  --drag-accent: #1565c0;
+  --scrollbar-thumb: #c6c6c6;
+  --scrollbar-thumb-hover: #a3a3a3;
+  /* PDF page ground; the canvas multiplies onto it (shared sepia/gray rules).
+     The ink alpha must be set per tinted theme — the shared canvas rule reads
+     the token and falls back to 1 (no softening) when a theme omits it. */
+  --pdf-paper: #f4f4f4;
+  --pdf-ink-alpha: 0.82;
+  color-scheme: light;
+}
+
 * { box-sizing: border-box; }
 
 /* Scrollbars are part of the theme, not OS chrome: a thin bar on a transparent
@@ -1210,7 +1259,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
 }
-:is([data-theme="light"], [data-theme="sepia"]) :is(.pdfZoomOverlay, .pdfOutlineBtn, .pdfFullscreenBtn) {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.pdfZoomOverlay, .pdfOutlineBtn, .pdfFullscreenBtn) {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
@@ -1257,7 +1306,7 @@ body {
   margin-left: 3px;
   white-space: nowrap;
 }
-:is([data-theme="light"], [data-theme="sepia"]) .pdfPageWidget {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfPageWidget {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
@@ -1345,7 +1394,7 @@ body {
   border-radius: 8px;
   padding: 6px 4px;
 }
-:is([data-theme="light"], [data-theme="sepia"]) .pdfOutlinePanel {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfOutlinePanel {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
@@ -3754,8 +3803,8 @@ button.pdfOutlineChevron:hover {
    find-mark overlays sit above and keep their own multiply.
    :not(.pdfDark) — "Flip page colors" is the stronger, explicit choice and
    wins when both are on. !important beats pdfViewer.jsx's inline background. */
-[data-theme="sepia"] .pdfViewer:not(.pdfDark) { background: var(--bg-deeper); }
-[data-theme="sepia"] .pdfViewer:not(.pdfDark) .pdfPageWrap {
+:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) { background: var(--bg-deeper); }
+:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap {
   background: var(--pdf-paper) !important;
   isolation: isolate;
 }
@@ -3764,7 +3813,7 @@ button.pdfOutlineChevron:hover {
    while black ink lifts to (1-a)*paper: a warm charcoal derived from the
    ground itself, without a contrast() filter, which would darken the paper
    too. Figures fade toward paper by the same amount, a mild wash. */
-[data-theme="sepia"] .pdfViewer:not(.pdfDark) .pdfPageWrap > canvas {
+:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap > canvas {
   mix-blend-mode: multiply;
   opacity: var(--pdf-ink-alpha, 1);
 }
@@ -3831,10 +3880,11 @@ button.pdfOutlineChevron:hover {
 .pdfViewer.pdfDark .pdfTransText { color: #c9c9c9; }
 /* Same for the eye-comfort ground: the masks are opaque divs above the
    canvas, so the page tint's blend never reaches them. */
-[data-theme="sepia"] .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
+:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
 /* Translated text is a real DOM layer, so it never passes through the
    canvas blend — match the softened ink colour explicitly. */
 [data-theme="sepia"] .pdfViewer:not(.pdfDark) .pdfTransText { color: #2e2c29; }
+[data-theme="gray"] .pdfViewer:not(.pdfDark) .pdfTransText { color: #2c2c2c; }
 /* Alt held = peek at the original (class set by the viewer). */
 .pdfViewer.transPeek .pdfTransLayer { visibility: hidden; }
 /* Tiny percentage under the zoom column's translate button while a job runs. */
@@ -4055,12 +4105,12 @@ button.pdfOutlineChevron:hover {
   border-color: #4a8abf;
   color: #fff;
 }
-:is([data-theme="light"], [data-theme="sepia"]) .blockLinkChip {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .blockLinkChip {
   background: #e3effa;
   color: #2b6bcb;
   border-color: #b5d2ee;
 }
-:is([data-theme="light"], [data-theme="sepia"]) .blockLinkChip:hover {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .blockLinkChip:hover {
   background: #cfe3f7;
   color: #1d5ab3;
 }

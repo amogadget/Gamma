@@ -42,13 +42,13 @@ export const TRANSLATE_LANGS = [
   ["es", "Español"], ["pt", "Português"], ["it", "Italiano"], ["ru", "Русский"],
 ];
 
-export const THEMES = ["system", "light", "dark", "sepia"];
+export const THEMES = ["system", "light", "dark", "sepia", "gray"];
 
 export function useAppPrefs() {
   // --- Appearance (Settings → General) ---
-  // Theme: "system" follows the OS; "light"/"dark"/"sepia" pin it. "sepia" is
-  // the eye-comfort mode — a Solarized-Light interface that also tints the
-  // PDF page (app.css [data-theme="sepia"]), no separate toggle.
+  // Theme: "system" follows the OS; the rest pin it. "sepia" is the warm
+  // eye-comfort mode (Solarized Light) and "gray" its neutral counterpart;
+  // both also tint the PDF page (app.css), no separate toggle.
   const [theme, setTheme] = usePersistedState("gamma-theme", "system", {
     parse: (raw) => (THEMES.includes(raw) ? raw : undefined),
   });

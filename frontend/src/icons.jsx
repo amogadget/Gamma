@@ -380,6 +380,9 @@ export const SunIcon = (p) => (
 export const MoonIcon = (p) => (
   <Icon {...p}><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" /></Icon>
 );
+export const ContrastIcon = (p) => (
+  <Icon {...p}><circle cx="12" cy="12" r="10" /><path d="M12 18a6 6 0 0 0 0-12v12z" fill="currentColor" stroke="none" /></Icon>
+);
 export const HardDriveIcon = (p) => (
   <Icon {...p}><path d="M3 12h18" /><path d="M5.5 5h13a2 2 0 0 1 1.8 1.1l1.5 3A2 2 0 0 1 22 10v7a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 .2-.9l1.5-3A2 2 0 0 1 5.5 5z" /><path d="M6.5 15.5h.01" /><path d="M10.5 15.5h.01" /></Icon>
 );

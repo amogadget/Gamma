@@ -14,7 +14,7 @@
     <script>
       try {
         var t = localStorage.getItem("gamma-theme");
-        if (t === "light" || t === "dark" || t === "sepia") document.documentElement.setAttribute("data-theme", t);
+        if (t === "light" || t === "dark" || t === "sepia" || t === "gray") document.documentElement.setAttribute("data-theme", t);
       } catch (e) {}
     </script>
     <style>
@@ -30,6 +30,8 @@
       html[data-theme="dark"] { color-scheme: dark; }
       html[data-theme="sepia"], html[data-theme="sepia"] body, html[data-theme="sepia"] #root { background: #f0e9d6; }
       html[data-theme="sepia"] { color-scheme: light; }
+      html[data-theme="gray"], html[data-theme="gray"] body, html[data-theme="gray"] #root { background: #e9e9e9; }
+      html[data-theme="gray"] { color-scheme: light; }
       /* First-load splash: index.html is tiny and paints immediately, while
          the app bundle (~450 kB gzipped) downloads and parses — without this
          that window is a pure blank page. Lives inside #root, so React's

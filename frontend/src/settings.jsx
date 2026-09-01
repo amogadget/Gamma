@@ -13,6 +13,7 @@ import {
   BookIcon,
   BugIcon,
   CloudDownloadIcon,
+  ContrastIcon,
   CornerDownLeftIcon,
   EyeIcon,
   EyeOffIcon,
@@ -84,7 +85,7 @@ const PANE_ALIASES = {
 
 // --- General: reading, notes, interface -------------------------------------
 
-const THEME_ICON = { dark: MoonIcon, light: SunIcon, sepia: EyeIcon, system: MonitorIcon };
+const THEME_ICON = { dark: MoonIcon, light: SunIcon, sepia: EyeIcon, gray: ContrastIcon, system: MonitorIcon };
 
 function GeneralSettings({ value }) {
   return (
@@ -96,8 +97,8 @@ function GeneralSettings({ value }) {
         <Row
           icon={THEME_ICON[value.theme] || MonitorIcon}
           label="Theme"
-          hint="Sepia is the eye-comfort mode; System follows the OS"
-          title="Light or dark interface. System tracks the operating system's appearance and switches live when it changes. Sepia is the eye-comfort mode: a warm Solarized-Light paper tone for both the interface and the PDF page, which cuts the glare and blue light of a white background without dimming the text."
+          hint="Sepia and Gray are eye-comfort modes; System follows the OS"
+          title="Light or dark interface. System tracks the operating system's appearance and switches live when it changes. Sepia and Gray are eye-comfort modes that soften both the interface and the PDF page: Sepia a warm Solarized-Light paper tone that also cuts blue light, Gray a neutral light-gray with no color cast. Both replace the glare of a white background and soften pure-black ink to charcoal."
         >
           <Segmented
             value={value.theme}
@@ -108,6 +109,7 @@ function GeneralSettings({ value }) {
               ["light", "Light", SunIcon, "Always light"],
               ["dark", "Dark", MoonIcon, "Always dark"],
               ["sepia", "Sepia", EyeIcon, "Eye comfort: warm paper tones for the interface and PDF pages"],
+              ["gray", "Gray", ContrastIcon, "Eye comfort: neutral light gray, no color cast"],
             ]}
           />
         </Row>

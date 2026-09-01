@@ -70,8 +70,8 @@ Settings panes are built only from
 
 ## Theme
 
-Four states: System (default, tracks `prefers-color-scheme` live) or pinned
-Light/Dark/Sepia — `gamma-theme` in localStorage (valid values are `THEMES`
+Five states: System (default, tracks `prefers-color-scheme` live) or pinned
+Light/Dark/Sepia/Gray — `gamma-theme` in localStorage (valid values are `THEMES`
 in `prefs.js`), applied as `data-theme` on the root element. An inline script
 in `index.html` applies a pinned theme before
 first paint; `color-scheme` follows so native controls match. Scrollbars are
@@ -82,8 +82,8 @@ themed rather than left to the OS: a global `scrollbar-width: thin` +
 inverts the PDF canvas (`.pdfDark`), swaps highlight blending from multiply
 to screen, and darkens the scroller surround.
 
-**Sepia** is the eye-comfort mode and the one theme that reaches the PDF
-page as well as the chrome: its tokens are Solarized Light (warm cream ground
+**Sepia** and **Gray** are the eye-comfort modes and the themes that reach
+the PDF page as well as the chrome. Sepia's tokens are Solarized Light (warm cream ground
 `#fdf6e3`, charcoal-teal text, Solarized accents darkened where a token is
 used as text — the stock accents sit near 3:1 on cream), and
 `[data-theme="sepia"] .pdfViewer:not(.pdfDark)` tints the page by giving the
@@ -95,10 +95,21 @@ invariant and lifts only the ink, black → `(1−α)·paper` ≈ `#2e2c29` (mea
 12.9:1 against the ground, against a 7:1 AAA bar), the softened charcoal the
 eye-strain guidance recommends over pure black; colour washes ~18%. The
 translated view's text is a DOM layer that never passes through the blend, so
-it sets that ink colour directly. The tint needs no prop — `data-theme` is global, so it is pure CSS
-— and "Flip page colors" wins when both are on. Light-ground rules that were
-`[data-theme="light"] …` are now `:is([data-theme="light"], [data-theme="sepia"])`;
-extend that list, don't add a third copy.
+it sets that ink colour directly.
+
+**Gray** is the neutral counterpart — the same machinery driven by different
+tokens (`--pdf-paper: #f4f4f4`, a `#2d2d2d` text ladder, Light's role colours)
+for users who want the glare cut without a colour cast. The PDF rules select
+`:is([data-theme="sepia"], [data-theme="gray"])`, so a new tinted theme needs
+only a token block — including its own `--pdf-ink-alpha`, since the shared
+canvas rule falls back to `1` (no softening) when a theme omits it — plus
+membership in those lists.
+
+The tint needs no prop — `data-theme` is global, so it is pure CSS — and
+"Flip page colors" wins when both are on. Light-ground rules that were
+`[data-theme="light"] …` are now
+`:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"])`;
+extend that list, don't add another copy.
 
 ## Layout
 
