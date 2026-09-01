@@ -36,6 +36,7 @@ from .pdf_export import parse_css_color
 from .pdf_image import XObjectStore
 from .pdf_typeset import (
     BOLD,
+    CODE_BG,
     HELV,
     ITALIC,
     LINK,
@@ -54,6 +55,7 @@ from .pdf_typeset import (
     plain,
     resolve,
     span_width,
+    styled,
     wrap,
 )
 
@@ -84,7 +86,6 @@ SECTION_GAP = 7.0                        # above a heading
 MUTED = (0.45, 0.46, 0.51)
 QUOTE_COLOR = (0.28, 0.29, 0.33)
 RULE_COLOR = (0.80, 0.81, 0.84)
-CODE_BG = (0.955, 0.957, 0.965)
 _CODE_STYLE = Style(MONO, None)
 
 _FENCE_RE = re.compile(r"^\s*```")
@@ -124,20 +125,17 @@ def inline(text: str, style: Style = PLAIN):
         if m.start() > pos:
             out.append((TEXT, text[pos:m.start()], 0, style))
         pos = m.end()
-        which = next(k for k in ("code", "dmath", "math", "bold", "italic", "strike",
-                                 "mark", "embed", "ref", "link", "url")
-                     if m.group(k) is not None)
+        which = m.lastgroup
         body = m.group(which)
         if which == "code":
-            out.append((TEXT, body.strip("`"), 0, Style(style.bits | MONO, style.href)))
+            out.append((TEXT, body.strip("`"), 0, styled(style, MONO)))
         elif which in ("math", "dmath"):
             tex = body.strip("$").strip() if body[0] == "$" else body[2:-2].strip()
             if tex:
                 out.append((MATH, tex, 0, style))
         elif which in _WRAPPERS:
             marks = _WRAPPERS[which]
-            out.extend(inline(body[marks:-marks],
-                              Style(style.bits | _BITS[which], style.href)))
+            out.extend(inline(body[marks:-marks], styled(style, _BITS[which])))
         elif which in ("embed", "ref"):
             # A page reference can't be followed outside Gamma; it still reads
             # as a reference, in link colour without a target.
@@ -145,9 +143,9 @@ def inline(text: str, style: Style = PLAIN):
             out.append((TEXT, name, 0, Style(style.bits | LINK, None)))
         elif which == "link":
             label, href = _LINK_PARTS.match(body).groups()
-            out.extend(inline(label or href, Style(style.bits | LINK, href)))
+            out.extend(inline(label or href, styled(style, LINK, href=href)))
         else:                                    # bare URL
-            out.append((TEXT, body, 0, Style(style.bits | LINK, body)))
+            out.append((TEXT, body, 0, styled(style, LINK, href=body)))
     if pos < len(text):
         out.append((TEXT, text[pos:], 0, style))
     return merge(out)
@@ -323,7 +321,7 @@ class _Canvas:
         """A dot for an unnumbered bullet, the number itself when there is one."""
         ops = self.page["ops"]
         if marker:
-            spans = [(TEXT, marker, 0, Style(0, None))]
+            spans = [(TEXT, marker, 0, PLAIN)]
             draw_spans(ops, x - BULLET_GAP - span_width(marker, size * 0.92), base,
                        spans, size * 0.92, color=MUTED, fonts=self.page["fonts"])
             return
@@ -437,7 +435,7 @@ class _Canvas:
             return
         label = f"{number} / {total}"
         size = SMALL_SIZE - 0.6
-        spans = [(TEXT, label, 0, Style(0, None))]
+        spans = [(TEXT, label, 0, PLAIN)]
         draw_spans(page["ops"], (PAGE_W - span_width(label, size)) / 2,
                    PAGE_H - MARGIN_BOTTOM + 26, spans, size, color=MUTED,
                    fonts=page["fonts"])
@@ -477,8 +475,12 @@ class _Canvas:
 
 # --- block tree → canvas -----------------------------------------------------
 
-def _meta_line(props: dict) -> str:
-    meta = props.get("meta") if isinstance(props.get("meta"), dict) else {}
+def _meta(props: dict) -> dict:
+    meta = props.get("meta")
+    return meta if isinstance(meta, dict) else {}
+
+
+def _meta_line(meta: dict) -> str:
     parts = []
     authors = meta.get("authors")
     if isinstance(authors, list) and authors:
@@ -521,8 +523,7 @@ def _emit_chunks(cv: _Canvas, md: str, x: float, width: float, color=TEXT_COLOR,
         size = HEADING_SIZES[level] if level else BODY_SIZE
         spans = chunk["spans"]
         if base_style.bits and not level:
-            spans = [(k, p, lv, Style(st.bits | base_style.bits, st.href))
-                     for k, p, lv, st in spans]
+            spans = [(k, p, lv, styled(st, base_style.bits)) for k, p, lv, st in spans]
         # A ">" quote inside a plain block gets its own grey rule; inside a
         # highlight the highlight's own bar already runs down the column.
         quoted = bool(chunk.get("quote")) and quote_bar is None
@@ -611,12 +612,13 @@ def _emit_page(cv: _Canvas, page: dict, highlights: bool, notes: bool):
     cv.bookmark(title)
     cv.paragraph(inline(title, Style(BOLD, None)), MARGIN_X, width, TITLE_SIZE,
                  leading=1.2)
-    meta = _meta_line(props)
-    if meta:
+    meta = _meta(props)
+    meta_line = _meta_line(meta)
+    if meta_line:
         cv.gap(2.0)
-        cv.paragraph(inline(meta), MARGIN_X, width, SMALL_SIZE + 0.6, color=MUTED)
+        cv.paragraph(inline(meta_line), MARGIN_X, width, SMALL_SIZE + 0.6, color=MUTED)
     source = props.get("source_url") or ""
-    doi = (props.get("meta") or {}).get("doi") if isinstance(props.get("meta"), dict) else None
+    doi = meta.get("doi")
     link = f"https://doi.org/{doi}" if doi else (source if source.startswith("http") else "")
     if link:
         cv.gap(1.0)

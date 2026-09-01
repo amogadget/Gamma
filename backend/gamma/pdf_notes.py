@@ -56,7 +56,6 @@ from .pdf_typeset import (
     LEADING,
     SYM,
     draw_spans,
-    font_of,
     font_resources,
     line_metrics,
     num as _num,
@@ -86,9 +85,6 @@ Y_RANGE = 320.0         # how far above/below the highlight to look
 # The three fonts the boxes draw with (pdf_typeset picks between them per
 # character) — kept as a tuple so the page resources carry only these.
 _FONTS = (HELV, SYM, CID)
-
-# Tests and note_markup check drawability through this name.
-_font_of = font_of
 
 
 def _measure(items, width: float, size: float, max_h: float, images):
@@ -394,15 +390,6 @@ def _page_occupancy(pdfium_page, to_display, disp_w, disp_h) -> _Space:
     return space
 
 
-# --- images ------------------------------------------------------------------
-
-class _Images(XObjectStore):
-    """The shared upload→XObject store, plus the lookup the box rows need."""
-
-    def used(self, rows):
-        return {row[1]: self.refs[row[1]] for row in rows if row[0] == "image"}
-
-
 # --- entry point -------------------------------------------------------------
 
 def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]:
@@ -438,7 +425,7 @@ def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]
         log.warning(f"[pdf-notes] pdfium open failed ({e}); placing notes in the margins")
         doc = None
 
-    images = _Images(writer, uploads_dir)
+    images = XObjectStore(writer, uploads_dir)
     drawn = 0
     try:
         for page_num, entries in sorted(by_page.items()):
@@ -504,7 +491,7 @@ def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]
                 space.placed.append((x - CLEARANCE, y - CLEARANCE,
                                      x + box_w + CLEARANCE, y + box_h + CLEARANCE))
                 _draw_note(ops, (x, y, x + box_w, y + box_h), anchor, rows, FONT_SIZE, color)
-                used.update(images.used(rows))
+                used.update({row[1]: images.refs[row[1]] for row in rows if row[0] == "image"})
                 drawn += 1
 
             if ops:

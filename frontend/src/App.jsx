@@ -121,18 +121,16 @@ function useIsPhone() {
 // Drag payload prefix marking a folder drag (page cards drag their bare id).
 const FOLDER_DRAG = "gamma-folder:";
 
-// Home sort is a per-folder choice: {"": "updated", "readout": "title", …} —
-// a folder without an entry inherits from its nearest ancestor (root = "").
-// Seeded from the old global gamma-home-sort key so an existing choice sticks.
-const HOME_SORT_CODEC = {
+// Home sort and kind filter are per-view choices: {"": "updated", "readout":
+// "title", "#label": …} — a view without an entry inherits from its nearest
+// ancestor folder (root = ""). Each map is seeded from its old global key
+// (gamma-home-sort / gamma-home-kinds) so an existing choice sticks.
+const HOME_MAP_CODEC = {
   parse: (raw) => { try { const v = JSON.parse(raw); return v && typeof v === "object" ? v : undefined; } catch { return undefined; } },
   serialize: JSON.stringify,
 };
 let HOME_SORT_DEFAULT = {};
 try { const old = localStorage.getItem("gamma-home-sort"); if (old) HOME_SORT_DEFAULT = { "": old }; } catch {}
-
-// Same shape for the kind filter (folders & files / folders / files), seeded
-// from the old global gamma-home-kinds key.
 let HOME_KINDS_DEFAULT = {};
 try { const old = localStorage.getItem("gamma-home-kinds"); if (old && old !== "all") HOME_KINDS_DEFAULT = { "": old }; } catch {}
 
@@ -646,7 +644,7 @@ export default function App() {
       p = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
     }
   }, [homeScope]);
-  const [homeSortMap, setHomeSortMap] = usePersistedState("gamma-home-sort-map", HOME_SORT_DEFAULT, HOME_SORT_CODEC);
+  const [homeSortMap, setHomeSortMap] = usePersistedState("gamma-home-sort-map", HOME_SORT_DEFAULT, HOME_MAP_CODEC);
   const homeSort = useMemo(() => scopedPref(homeSortMap, "updated"), [homeSortMap, scopedPref]);
   function changeHomeSort(v) { setHomeSortMap((m) => ({ ...m, [homeScope]: v })); }
   // Home layout: "list" (block-style rows) or "grid" (icon tiles).
@@ -654,7 +652,7 @@ export default function App() {
   // Kind filter: "all" (folders + files), "folders", "files", or "labels" (the
   // labels used in this view, browsable like folders) — same per-view keying
   // and inheritance as the sort above.
-  const [homeKindsMap, setHomeKindsMap] = usePersistedState("gamma-home-kinds-map", HOME_KINDS_DEFAULT, HOME_SORT_CODEC);
+  const [homeKindsMap, setHomeKindsMap] = usePersistedState("gamma-home-kinds-map", HOME_KINDS_DEFAULT, HOME_MAP_CODEC);
   const homeKinds = useMemo(() => scopedPref(homeKindsMap, "all"), [homeKindsMap, scopedPref]);
   function changeHomeKinds(v) { setHomeKindsMap((m) => ({ ...m, [homeScope]: v })); }
   // Listing search box (left of the sort pill): live, per-view, not persisted —
@@ -867,8 +865,9 @@ export default function App() {
   function handlePageClick(pageBlock, e) {
     const id = pageBlock._pageId;
     if (!id) return;
+    setSelectedFolders(new Set());
+    setSelectedLabels(new Set());
     if (e && (e.ctrlKey || e.metaKey)) {
-      setSelectedFolders(new Set());
       setSelectedPages((prev) => {
         const next = new Set(prev);
         if (next.has(id)) next.delete(id);
@@ -884,7 +883,6 @@ export default function App() {
       const b = order.indexOf(id);
       if (a !== -1 && b !== -1) {
         const [lo, hi] = a < b ? [a, b] : [b, a];
-        setSelectedFolders(new Set());
         setSelectedPages((prev) => {
           const next = new Set(prev);
           for (let i = lo; i <= hi; i++) next.add(order[i]);
@@ -895,7 +893,6 @@ export default function App() {
     }
     // Plain click: select just this page (replacing any prior selection).
     lastPageClickRef.current = id;
-    setSelectedFolders(new Set());
     setSelectedPages(new Set([id]));
   }
 
@@ -920,47 +917,36 @@ export default function App() {
     openBlock(id, { restoreScroll: true, origin: currentHomeOrigin() });
   }
 
-  // Folder single-click selects (Ctrl toggles); double-click navigates in.
-  function handleFolderClick(path, e) {
-    if (folderRenaming?.name === path) return;
+  // Container (folder or label) single-click selects, Ctrl/Cmd toggles within
+  // its own kind; either way the other kinds' selections clear. Double-click
+  // navigates in. Labels are the flat mirror of folders — same semantics,
+  // same cards and rows, no nesting.
+  function handleContainerClick(kind, name, e) {
+    if (kind === "folder" && folderRenaming?.name === name) return;
+    const setOwn = kind === "folder" ? setSelectedFolders : setSelectedLabels;
+    setSelectedPages(new Set());
+    (kind === "folder" ? setSelectedLabels : setSelectedFolders)(new Set());
     if (e && (e.ctrlKey || e.metaKey)) {
-      setSelectedPages(new Set());
-      setSelectedFolders((prev) => {
+      setOwn((prev) => {
         const next = new Set(prev);
-        if (next.has(path)) next.delete(path);
-        else next.add(path);
+        if (next.has(name)) next.delete(name);
+        else next.add(name);
         return next;
       });
-      return;
+    } else {
+      setOwn(new Set([name]));
     }
-    setSelectedPages(new Set());
-    setSelectedFolders(new Set([path]));
   }
+  const handleFolderClick = (path, e) => handleContainerClick("folder", path, e);
+  const handleLabelClick = (name, e) => handleContainerClick("label", name, e);
   function openFolder(path) {
     clearSelection();
     setFolderFilter(path);
     setCategoryFilter("");
     window.history.replaceState(null, "", homeUrlFor(path, ""));
   }
-  // Labels are the flat mirror of folders — same click-selects /
-  // double-click-opens semantics, same cards and rows, no nesting. Opening one
-  // KEEPS the folder scope, so a label opened inside a folder reads as "this
-  // folder, narrowed to that label".
-  function handleLabelClick(name, e) {
-    if (e && (e.ctrlKey || e.metaKey)) {
-      setSelectedPages(new Set());
-      setSelectedFolders(new Set());
-      setSelectedLabels((prev) => {
-        const next = new Set(prev);
-        if (next.has(name)) next.delete(name); else next.add(name);
-        return next;
-      });
-      return;
-    }
-    setSelectedPages(new Set());
-    setSelectedFolders(new Set());
-    setSelectedLabels(new Set([name]));
-  }
+  // Opening a label KEEPS the folder scope, so a label opened inside a folder
+  // reads as "this folder, narrowed to that label".
   function openLabel(name, folder = folderFilter) {
     clearSelection();
     setCategoryFilter(name);
@@ -1078,78 +1064,57 @@ export default function App() {
     }
   }
 
+  // Rewrite one tag list ("folder" or "category") on each page: `rewrite`
+  // maps the current tags to the new list, or null to leave the page alone.
+  // Returns how many pages changed; the selection and listing are refreshed.
+  async function retagPages(ids, property, rewrite) {
+    let changed = 0;
+    for (const id of ids) {
+      const b = homeBlocks.find((x) => x.id === id);
+      if (!b) continue;
+      const next = rewrite(parseFolderTags(b.properties?.[property]));
+      if (!next) continue;
+      try { await writePageTags(id, property, next); changed++; } catch {}
+    }
+    clearSelection();
+    await fetchHomeBlocks();
+    return changed;
+  }
+  const plural = (n) => `${n} page${n === 1 ? "" : "s"}`;
+
   // Add pages to a folder (soft link — other folder tags are kept). The only
   // tag removed is an ancestor of the target: dragging a "readout" paper into
   // readout/nondestructive refines it, it shouldn't stay in both levels.
   async function addPagesToFolder(ids, path) {
-    let changed = 0;
-    for (const id of ids) {
-      const b = homeBlocks.find((x) => x.id === id);
-      if (!b) continue;
-      const tags = parseFolderTags(b.properties?.folder);
-      if (tags.includes(path)) continue;
-      try { await writePageFolders(id, addFolderTag(tags, path)); changed++; } catch {}
-    }
     updateExtraFolders((prev) => prev.filter((f) => f !== path));
-    clearSelection();
-    await fetchHomeBlocks();
-    setStatus(
-      changed
-        ? `Added ${changed} page${changed === 1 ? "" : "s"} to “${path}”.`
-        : `Already in “${path}”.`,
+    const changed = await retagPages(ids, "folder", (tags) =>
+      tags.includes(path) ? null : addFolderTag(tags, path),
     );
+    setStatus(changed ? `Added ${plural(changed)} to “${path}”.` : `Already in “${path}”.`);
   }
 
-  // Label mirror of addPagesToFolder — labels are flat, so a soft add with no
-  // ancestor refinement. Dropping a paper on a label tile lands here.
+  // Label mirror — labels are flat, so a soft add with no ancestor
+  // refinement. Dropping a paper on a label tile lands here.
   async function addPagesToLabel(ids, name) {
-    let changed = 0;
-    for (const id of ids) {
-      const b = homeBlocks.find((x) => x.id === id);
-      if (!b) continue;
-      const tags = parseFolderTags(b.properties?.category);
-      if (tags.includes(name)) continue;
-      try { await writePageTags(id, "category", [...tags, name]); changed++; } catch {}
-    }
-    clearSelection();
-    await fetchHomeBlocks();
-    setStatus(changed ? `Labelled ${changed} page${changed === 1 ? "" : "s"} “${name}”.` : `Already labelled “${name}”.`);
+    const changed = await retagPages(ids, "category",
+      (tags) => (tags.includes(name) ? null : [...tags, name]));
+    setStatus(changed ? `Labelled ${plural(changed)} “${name}”.` : `Already labelled “${name}”.`);
   }
 
   // Remove one label from pages (the label view's back-row drop target).
   async function removePagesFromLabel(ids, name) {
-    for (const id of ids) {
-      const b = homeBlocks.find((x) => x.id === id);
-      if (!b) continue;
-      const tags = parseFolderTags(b.properties?.category);
-      const next = tags.filter((t) => t !== name);
-      if (next.length === tags.length) continue;
-      try { await writePageTags(id, "category", next); } catch {}
-    }
-    clearSelection();
-    await fetchHomeBlocks();
-    setStatus(`Removed ${ids.length} page${ids.length === 1 ? "" : "s"} from “${name}”.`);
+    await retagPages(ids, "category",
+      (tags) => (tags.includes(name) ? tags.filter((t) => t !== name) : null));
+    setStatus(`Removed ${plural(ids.length)} from “${name}”.`);
   }
 
   // Remove one folder tag (exact path). With path = "" strips ALL folder tags.
   async function removePagesFromFolder(ids, path) {
-    for (const id of ids) {
-      const b = homeBlocks.find((x) => x.id === id);
-      if (!b) continue;
-      const tags = parseFolderTags(b.properties?.folder);
+    await retagPages(ids, "folder", (tags) => {
       const next = path ? tags.filter((t) => t !== path) : [];
-      if (next.length === tags.length) continue;
-      try {
-        await writePageFolders(id, next);
-      } catch {}
-    }
-    clearSelection();
-    await fetchHomeBlocks();
-    setStatus(
-      path
-        ? `Removed ${ids.length} page${ids.length === 1 ? "" : "s"} from “${path}”.`
-        : "Cleared folder tags.",
-    );
+      return next.length === tags.length ? null : next;
+    });
+    setStatus(path ? `Removed ${plural(ids.length)} from “${path}”.` : "Cleared folder tags.");
   }
 
   // Apply a path-rewriting map to every folder tag in the library: pages, the
@@ -1169,7 +1134,7 @@ export default function App() {
     const nextFilter = mapTag(folderFilter);
     if (nextFilter !== folderFilter) {
       setFolderFilter(nextFilter);
-      window.history.replaceState(null, "", nextFilter ? `/?folder=${encodeURIComponent(nextFilter)}` : "/");
+      window.history.replaceState(null, "", homeUrlFor(nextFilter, categoryFilter));
     }
     await fetchHomeBlocks();
   }
@@ -1232,10 +1197,8 @@ export default function App() {
       moveFolders(folders, target);
       return;
     }
-    const id = e.dataTransfer.getData("text/plain");
-    if (!id) return;
-    const ids = selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
-    onPages(ids);
+    const ids = droppedPageIds(e);
+    if (ids) onPages(ids);
   }
 
   // Drop dispatch for label rows/tiles: pages get the label, folder drags are
@@ -1244,10 +1207,15 @@ export default function App() {
     e.preventDefault();
     setFolderDragOver(null);
     if (droppedFolderPaths(e)) { setStatus("Folders can’t carry labels — drop papers instead."); return; }
+    const ids = droppedPageIds(e);
+    if (ids) onPages(ids);
+  }
+  // The pages a card drag carries: the whole selection when the dragged card
+  // is part of a multi-select, else just that card.
+  function droppedPageIds(e) {
     const id = e.dataTransfer.getData("text/plain");
-    if (!id) return;
-    const ids = selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
-    onPages(ids);
+    if (!id) return null;
+    return selectedPages.has(id) && selectedPages.size > 1 ? [...selectedPages] : [id];
   }
 
   function deleteFolderByName(path) {
@@ -1259,7 +1227,7 @@ export default function App() {
       if (folderFilter === path || folderFilter.startsWith(path + "/")) {
         const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
         setFolderFilter(parent);
-        window.history.replaceState(null, "", parent ? `/?folder=${encodeURIComponent(parent)}` : "/");
+        window.history.replaceState(null, "", homeUrlFor(parent, categoryFilter));
       }
       clearSelection();
       await fetchHomeBlocks();
@@ -4817,10 +4785,7 @@ export default function App() {
       restorePdfScroll(entry, entry.blockId, openedUrl);
     } else {
       goHome();
-      if (entry.folder) {
-        setFolderFilter(entry.folder);
-        window.history.replaceState(null, "", `/?folder=${encodeURIComponent(entry.folder)}`);
-      }
+      if (entry.folder) openFolder(entry.folder);
     }
   }
   const goBackNavRef = useRef(null);
@@ -5696,6 +5661,9 @@ export default function App() {
     return [...items.filter((it) => it._match), ...items.filter((it) => !it._match)];
   }, [scopePages, categoryFilter, childFolders, folderMeta, scopeLabels, labelMeta, viewedAtById, homeSort, homeKinds, homeQuery]);
   const homeVisibleItems = useMemo(() => homeItems.slice(0, homeShowCount), [homeItems, homeShowCount]);
+  // "New folder" leads the listing wherever folders are listed — not inside a
+  // label view or with the listing filtered to files or labels.
+  const newFolderAllowed = !categoryFilter && homeKinds !== "files" && homeKinds !== "labels";
   // What an empty listing says — the view it is empty for, not the library.
   const homeEmptyText = categoryFilter
     ? `Nothing is labelled “${categoryFilter}” here — drop a paper on a label to add it.`
@@ -6763,7 +6731,7 @@ export default function App() {
                     <div className="empty">{homeEmptyText}</div>
                   ) : null}
                   <div className="fileGrid" onClick={(e) => { if (e.target.classList.contains("fileGrid")) clearSelection(); }}>
-                    {categoryFilter || homeKinds === "files" || homeKinds === "labels" ? null : newFolderOpen ? (
+                    {!newFolderAllowed ? null : newFolderOpen ? (
                       <PageCard
                         className="pageCardAdd"
                         glyph={<FolderGlyph />}
@@ -6910,7 +6878,7 @@ export default function App() {
                     <div className="empty">{homeEmptyText}</div>
                   ) : null}
                   <div className="fileList" onClick={(e) => { if (e.target.classList.contains("fileList")) clearSelection(); }}>
-                    {categoryFilter || homeKinds === "files" || homeKinds === "labels" ? null : newFolderOpen ? (
+                    {!newFolderAllowed ? null : newFolderOpen ? (
                       <div className="folderRow folderNewRow">
                         <FolderPlusIcon size={15} />
                         <input
@@ -8800,7 +8768,7 @@ export default function App() {
               </>
             ) : (
               <>
-                <MenuItem icon={FolderOpenIcon} onClick={() => { const name = homeMenu.name; setHomeMenu(null); if (!homeMode) goHome(); setFolderFilter(name); window.history.replaceState(null, "", `/?folder=${encodeURIComponent(name)}`); }}>Open</MenuItem>
+                <MenuItem icon={FolderOpenIcon} onClick={() => { const name = homeMenu.name; setHomeMenu(null); if (!homeMode) goHome(); openFolder(name); }}>Open</MenuItem>
                 <MenuItem icon={PenIcon} onClick={() => { setHomeMenu(null); setFolderRenaming({ name: homeMenu.name, draft: homeMenu.name }); }}>Rename</MenuItem>
                 <MenuItem icon={ExportIcon} onClick={() => quickExportFolder(homeMenu.name)}>Export</MenuItem>
                 <MenuItem

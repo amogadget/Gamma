@@ -29,10 +29,7 @@ _TITLE_RES = [
 ]
 # GitHub page titles carry boilerplate ("GitHub - owner/repo: desc", "· Issue
 # #N · owner/repo · GitHub"); trim it so chips stay short.
-_GITHUB_TRIMS = [
-    (re.compile(r"^GitHub - "), ""),
-    (re.compile(r" · GitHub$"), ""),
-]
+_GITHUB_TRIM = re.compile(r"^GitHub - | · GitHub$")
 
 
 def _extract_title(text: str) -> str | None:
@@ -71,8 +68,7 @@ def link_preview(request: Request, url: str):
                 raw = resp.read(_MAX_READ)
                 title = _extract_title(raw.decode("utf-8", "ignore"))
                 if title and parsed.hostname.endswith("github.com"):
-                    for pattern, repl in _GITHUB_TRIMS:
-                        title = pattern.sub(repl, title)
+                    title = _GITHUB_TRIM.sub("", title)
                 data["title"] = title
     except (BlockedUrlError, OSError, ValueError):
         pass  # unreachable/blocked pages still get a host-only chip

@@ -238,7 +238,7 @@ def merge(spans):
             out[-1] = (TEXT, out[-1][1] + payload, level, style)
         elif kind == MATH or payload:
             out.append((kind, payload, level, style))
-    return [s for s in out if s[0] == MATH or s[1]]
+    return out
 
 
 def resolve(spans, size: float, width: float):

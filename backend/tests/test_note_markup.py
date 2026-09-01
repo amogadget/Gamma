@@ -6,7 +6,7 @@ import pytest
 
 from gamma.note_markup import MATH, SUB, SUP, SYMBOLS, TEXT, latex_spans, parse_note
 from gamma.pdf_image import image_xobject
-from gamma.pdf_typeset import CID, font_of as _font_of
+from gamma.pdf_typeset import CID, font_of
 
 
 def flat(spans):
@@ -23,7 +23,7 @@ def test_every_symbol_is_drawable():
     would print as a blank box — the mapping must stay in sync with
     pdf_typeset.SYMBOL."""
     undrawable = {name: ch for name, ch in SYMBOLS.items()
-                  if any(_font_of(c) == CID for c in ch)}
+                  if any(font_of(c) == CID for c in ch)}
     assert undrawable == {}
 
 
