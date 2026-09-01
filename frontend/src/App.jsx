@@ -7807,6 +7807,7 @@ export default function App() {
                         noteBadges={hlNoteBadges}
                         hideEmbeddedAnnots={embAnnots === "hide"}
                         snapVertical={snapVertical}
+                        darkPage={pdfDarkPage}
                         translateKey={`${translateLang}|${translateSendModel}`}
                         translateParallel={translateParallel}
                         onTranslate={readOnly ? undefined : translateChunk}
