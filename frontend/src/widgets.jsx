@@ -309,12 +309,57 @@ function OpenTabs({ tabs, activeId, tabElements, onReorder, onOpen, onClose, onC
 // the format can't honour is shown disabled rather than hidden, so the choice
 // on offer never changes shape between formats.
 const EXPORT_FORMATS = [
-  ["pdf", "PDF"],
+  ["pdf", "PDF (the paper, annotated)"],
+  ["notespdf", "Notes as PDF"],
   ["markdown", "Markdown (.md)"],
   ["logseq", "Logseq graph (.zip)"],
   ["zotero", "Zotero RDF (.zip)"],
   ["gamma", "Gamma (.zip)"],
 ];
+
+// What the Highlights / Notes / Bundle switches mean per format: a short hint
+// under the label, the long explanation on hover. Formats missing a key fall
+// back to nothing (the switch is hidden or pinned there).
+const EXPORT_SWITCH_TEXT = {
+  highlights: {
+    pdf: ["Standard PDF annotations",
+      "Burned in as standard PDF annotations — they survive in Acrobat, SumatraPDF, browsers."],
+    notespdf: ["Quoted passages with page numbers",
+      "Each highlighted passage as a quote with its page number, in the colour you highlighted it."],
+    markdown: ["Blockquotes with page numbers",
+      "Each highlighted passage as a blockquote with its page number."],
+    logseq: ["Always in a graph (hls page + .edn)",
+      "Always included: a graph's highlights are its hls page and .edn."],
+    zotero: ["Embedded into the exported PDF copies",
+      "Written into the exported PDF copies as standard annotations — Zotero's own “Include Annotations” convention, its reader picks them up on import."],
+    gamma: ["Always — a Gamma export is a 1:1 copy",
+      "A Gamma export carries the pages exactly as they are, highlights included."],
+  },
+  notes: {
+    pdf: ["Printed onto the page in free space",
+      "Printed onto the page in nearby free space, with a line back to the highlight. Off: they stay in the annotation popups."],
+    notespdf: ["Typeset under their highlights",
+      "Your own writing, typeset under the highlight it belongs to — headings, lists, code, math and pasted images included."],
+    markdown: ["Nested under their highlights",
+      "Your own writing, nested under the highlight it belongs to."],
+    logseq: ["Always in a graph",
+      "Always included: the graph's notes page."],
+    zotero: ["Zotero notes on each item",
+      "Top-level notes become Zotero notes attached to the item; writing under a highlight travels in its annotation popup."],
+    gamma: ["Always — a Gamma export is a 1:1 copy",
+      "A Gamma export carries the pages exactly as they are, notes included."],
+  },
+  bundle: {
+    markdown: ["Pack the PDF and images into the .zip",
+      "Pack the PDF and any pasted images into the .zip. Off: they stay as links back to this server."],
+    logseq: ["Pack the PDF and images into the .zip",
+      "Pack the PDF and any pasted images into the .zip. Off: they stay as links back to this server."],
+    zotero: ["Include the PDF files (Zotero's “Export Files”)",
+      "Pack each paper's PDF into the .zip so Zotero imports the files too. Off: metadata, collections and notes only."],
+    gamma: ["Every referenced file is included",
+      "A Gamma export always bundles the PDFs and images the pages reference — the other Gamma needs them."],
+  },
+};
 
 // Same row dialect as the settings panes (settings.jsx Row/Toggle): icon tile ·
 // label · one short hint · control, with the long explanation on hover only.
@@ -346,14 +391,17 @@ function SwitchRow({ checked, onChange, disabled, label, ...row }) {
 }
 
 function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, allowGamma, onCancel, onExport }) {
-  // Folder exports cannot be one PDF; unavailable remembered choices fall back
-  // to Markdown without overwriting the user's standing preference.
+  // A note page has no PDF to annotate; a PDF opened from a URL and not saved
+  // here has no server copy either; a folder (`folder` = its path) is many
+  // papers, so the annotated-paper format doesn't apply — those fall back to
+  // "Notes as PDF", which needs no paper (it typesets the notes themselves).
+  // An unavailable remembered choice never overwrites the standing preference.
   const allowPdf = hasPdf && !folder;
-  const format = (
-    (opts.format !== "pdf" || allowPdf)
-    && (opts.format !== "gamma" || allowGamma)
-  ) ? opts.format : "markdown";
+  const format = (opts.format !== "pdf" || allowPdf) ? (
+    (opts.format !== "gamma" || allowGamma) ? opts.format : "markdown"
+  ) : "notespdf";
   const isPdf = format === "pdf";
+  const isDoc = format === "notespdf";
   const isGraph = format === "logseq";
   const isZotero = format === "zotero";
   const isGamma = format === "gamma";
@@ -365,6 +413,8 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, allowGamma, on
   const notes = pinned ? true : opts.notes;
   const rawPdf = isPdf && !highlights && !notes;
   const noPdfCopy = isPdf && !pdfStored;
+  // [hint, hover title] for one switch in the current format.
+  const switchText = (name) => EXPORT_SWITCH_TEXT[name][format] || [];
 
   const summary = isGraph
     ? "A Logseq graph: the notes page plus native PDF highlights (hls page + .edn)."
@@ -378,7 +428,11 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, allowGamma, on
           : rawPdf
             ? "The PDF file exactly as stored, with nothing added."
             : `The PDF with ${highlights ? "highlight annotations" : "no annotations"}${notes ? " and every note printed onto the page" : ""}.`
-        : highlights || notes
+        : isDoc
+          ? highlights || notes
+            ? `A new PDF of ${folder ? "every page in the folder" : "this page"} — title, ${highlights ? "quoted highlights" : "no quotes"}${notes ? " and your notes, typeset" : ""}.`
+            : "A new PDF with the title and metadata only — both switches are off."
+          : highlights || notes
           ? `Markdown with ${highlights ? "quoted highlights" : "no quotes"}${notes ? " and your notes" : ""}.`
           : "Markdown with the title and metadata only — both switches are off.";
 
@@ -398,24 +452,8 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, allowGamma, on
         <SwitchRow
           icon={HighlightIcon}
           label="Highlights"
-          hint={isPdf
-            ? "Standard PDF annotations"
-            : isGamma
-              ? "Always included in the scoped copy"
-            : isGraph
-              ? "Always in a graph (hls page + .edn)"
-              : isZotero
-                ? "Embedded into exported PDF copies"
-                : "Blockquotes with page numbers"}
-          title={isPdf
-            ? "Burned in as standard PDF annotations — they survive in Acrobat, SumatraPDF, browsers."
-            : isGamma
-              ? "Gamma exports preserve every selected block exactly, including highlights."
-            : isGraph
-              ? "Always included: a graph's highlights are its hls page and .edn."
-              : isZotero
-                ? "Written into PDF copies as standard annotations that Zotero imports."
-                : "Each highlighted passage as a blockquote with its page number."}
+          hint={switchText("highlights")[0]}
+          title={switchText("highlights")[1]}
           checked={highlights}
           disabled={pinned || noPdfCopy}
           onChange={(v) => set({ highlights: v })}
@@ -423,40 +461,18 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, allowGamma, on
         <SwitchRow
           icon={PenIcon}
           label="Notes"
-          hint={isPdf
-            ? "Printed onto the page in free space"
-            : isGamma
-              ? "Always included in the scoped copy"
-            : isGraph
-              ? "Always in a graph"
-              : isZotero
-                ? "Zotero notes attached to each item"
-                : "Nested under their highlights"}
-          title={isPdf
-            ? "Printed onto the page in nearby free space, with a line back to the highlight. Off: they stay in the annotation popups."
-            : isGamma
-              ? "Gamma exports preserve every selected block exactly, including notes."
-            : isGraph
-              ? "Always included: the graph's notes page."
-              : isZotero
-                ? "Top-level notes become Zotero notes; highlight writing travels in annotation popups."
-                : "Your own writing, nested under the highlight it belongs to."}
+          hint={switchText("notes")[0]}
+          title={switchText("notes")[1]}
           checked={notes}
           disabled={pinned || noPdfCopy}
           onChange={(v) => set({ notes: v })}
         />
-        {isPdf ? null : (
+        {isPdf || isDoc ? null : (
           <SwitchRow
             icon={PaperclipIcon}
             label="Bundle the files"
-            hint={isGamma
-              ? "All referenced local files are included"
-              : isZotero ? "Include PDF and note image files" : "Pack the PDF and images into the .zip"}
-            title={isGamma
-              ? "Gamma exports always include the locally stored files referenced by the selected pages."
-              : isZotero
-                ? "Include locally stored PDFs and images referenced by notes so Zotero imports those files too."
-                : "Pack the PDF and any pasted images into the .zip. Off: they stay as links back to this server."}
+            hint={switchText("bundle")[0]}
+            title={switchText("bundle")[1]}
             checked={isGamma ? true : opts.bundle}
             disabled={isGamma}
             onChange={(v) => set({ bundle: v })}

@@ -28,6 +28,7 @@ from PyPDF2.generic import (
 )
 
 from .logbuf import log
+from .markdown_export import UPLOAD_RE
 
 MAX_PIXELS = 2_500_000     # above this the pure-Python unfilter gets too slow
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -205,5 +206,41 @@ def image_xobject(path):
         if data[:2] == b"\xff\xd8":
             return _jpeg(data)
     except Exception as e:
-        log.warning(f"[pdf-notes] could not embed {getattr(path, 'name', path)}: {e}")
+        log.warning(f"[pdf-image] could not embed {getattr(path, 'name', path)}: {e}")
     return None
+
+
+class XObjectStore:
+    """Uploaded images referenced by notes → PDF XObjects, one per file.
+
+    Both PDF writers embed the same pasted pictures, so both register them
+    here: ``resolve`` maps an ``/api/uploads/…`` reference to the
+    ``(resource name, pixel width, pixel height)`` the caller draws with, and
+    ``refs`` holds the indirect objects for the page's /XObject dictionary.
+    Unresolvable refs are remembered as ``None`` so a broken image is looked
+    up (and logged) once.
+    """
+
+    def __init__(self, writer, uploads_dir):
+        self.writer, self.dir = writer, uploads_dir
+        self.by_src = {}        # src → (name, px_w, px_h) or None
+        self.refs = {}          # name → indirect object
+
+    def resolve(self, src: str):
+        if src in self.by_src:
+            return self.by_src[src]
+        info = None
+        match = UPLOAD_RE.search(src or "")
+        if match and self.dir is not None:
+            path = self.dir / match.group(1)
+            if path.is_file():
+                built = image_xobject(path)
+                if built:
+                    stream, px_w, px_h = built
+                    name = f"GmIm{len(self.refs)}"
+                    self.refs[name] = self.writer._add_object(stream)
+                    info = (name, px_w, px_h)
+                else:
+                    log.info(f"[pdf-image] unsupported image format: {match.group(1)}")
+        self.by_src[src] = info
+        return info

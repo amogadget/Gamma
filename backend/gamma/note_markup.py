@@ -29,7 +29,7 @@ SUP, SUB = 1, -1
 TEXT, MATH = "t", "m"
 
 # LaTeX command → unicode. Every value here is either WinAnsi- or Symbol-font
-# encodable (see pdf_notes._font_of), so it can actually be drawn.
+# encodable (see pdf_typeset.font_of), so it can actually be drawn.
 SYMBOLS = {
     "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε",
     "varepsilon": "ε", "zeta": "ζ", "eta": "η", "theta": "θ", "vartheta": "ϑ",

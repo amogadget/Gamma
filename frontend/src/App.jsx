@@ -5091,6 +5091,12 @@ export default function App() {
           exportFolder,
         );
         if (saved) setStatus("Zotero library saved — unzip it, then import the .rdf file in Zotero.");
+      } else if (o.format === "notespdf") {
+        await downloadFolderExport(
+          `${base}&mode=notes-pdf&${flags}`,
+          "notes.pdf",
+          exportFolder,
+        );
       } else {
         await downloadFolderExport(
           `${base}&mode=readable&${flags}&${bundle}`,
@@ -5105,6 +5111,12 @@ export default function App() {
     if (o.format === "pdf") {
       if (!o.highlights && !o.notes) { await exportRawPdf(); return; }
       await downloadExport(`/pages/${id}/export-pdf?${flags}`, "export.pdf");
+      return;
+    }
+    if (o.format === "notespdf") {
+      // The notes as their own PDF — no paper needed, so this works on note
+      // pages too (where the annotated-PDF format isn't offered).
+      await downloadExport(`/pages/${id}/export?mode=notes-pdf&${flags}`, "notes.pdf");
       return;
     }
     if (o.format === "logseq") {

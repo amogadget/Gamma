@@ -39,28 +39,35 @@ import math
 from PyPDF2 import PdfReader, PdfWriter
 from PyPDF2._page import PageObject
 from PyPDF2.generic import (
-    ArrayObject,
     DecodedStreamObject,
     DictionaryObject,
     NameObject,
-    NumberObject,
     RectangleObject,
-    create_string_object,
 )
 
 from . import vector_text
 from .logbuf import log
-from .markdown_export import UPLOAD_RE
-from .note_markup import MATH, SUB, SUP, TEXT, latex_spans, merge_spans, parse_note
+from .note_markup import TEXT, latex_spans, parse_note
 from .pdf_export import parse_css_color
-from .pdf_image import image_xobject
+from .pdf_image import XObjectStore
+from .pdf_typeset import (
+    CID,
+    HELV,
+    LEADING,
+    SYM,
+    draw_spans,
+    font_of,
+    font_resources,
+    line_metrics,
+    num as _num,
+    plain,
+    resolve,
+    spans_width,
+    wrap,
+)
 
 CELL = 3.0              # occupancy grid resolution, pt
 FONT_SIZE = 7.4
-LEADING = 1.22          # × font size
-SUP_SCALE = 0.72        # super/subscript size and baseline shift, × font size
-SUP_RISE = 0.30
-SUB_DROP = 0.16
 PAD = 4.0               # box inner padding
 BORDER = 0.7
 BOX_WIDTHS = (168.0, 132.0, 102.0)
@@ -76,194 +83,12 @@ X_STEP = 9.0            # candidate grid for the placement search
 Y_STEP = 8.0
 Y_RANGE = 320.0         # how far above/below the highlight to look
 
-# Helvetica AFM advance widths (1/1000 em) for ASCII 32..126; anything else
-# WinAnsi can encode gets the average. Only used for line breaking.
-_HELV = [
-    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278,   # ' '..'/'
-    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556,   # '0'..'?'
-    1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,  # '@'..'O'
-    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,   # 'P'..'_'
-    333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,   # '`'..'o'
-    556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,        # 'p'..'~'
-]
-_HELV_DEFAULT = 556
+# The three fonts the boxes draw with (pdf_typeset picks between them per
+# character) — kept as a tuple so the page resources carry only these.
+_FONTS = (HELV, SYM, CID)
 
-# Greek and math, as carried by the base-14 Symbol font: char → (code, width).
-# Both columns were measured from the font itself, not copied from a table.
-SYMBOL = {
-    "∀": (0x22, 713), "∃": (0x24, 549), "∋": (0x27, 439), "∗": (0x2a, 500), "−": (0x2d, 549),
-    "≅": (0x40, 549), "Α": (0x41, 722), "Β": (0x42, 667), "Χ": (0x43, 722), "∆": (0x44, 612),
-    "Ε": (0x45, 611), "Φ": (0x46, 763), "Γ": (0x47, 603), "Η": (0x48, 722), "Ι": (0x49, 333),
-    "ϑ": (0x4a, 631), "Κ": (0x4b, 722), "Λ": (0x4c, 686), "Μ": (0x4d, 889), "Ν": (0x4e, 722),
-    "Ο": (0x4f, 722), "Π": (0x50, 768), "Θ": (0x51, 741), "Ρ": (0x52, 556), "Σ": (0x53, 592),
-    "Τ": (0x54, 611), "Υ": (0x55, 690), "ς": (0x56, 439), "Ω": (0x57, 768), "Ξ": (0x58, 645),
-    "Ψ": (0x59, 795), "Ζ": (0x5a, 611), "∴": (0x5c, 863), "⊥": (0x5e, 658),
-    "α": (0x61, 631), "β": (0x62, 549), "χ": (0x63, 549), "δ": (0x64, 494), "ε": (0x65, 439),
-    "φ": (0x66, 521), "γ": (0x67, 411), "η": (0x68, 603), "ι": (0x69, 329), "ϕ": (0x6a, 603),
-    "κ": (0x6b, 549), "λ": (0x6c, 549), "μ": (0x6d, 576), "ν": (0x6e, 521), "ο": (0x6f, 549),
-    "π": (0x70, 549), "θ": (0x71, 521), "ρ": (0x72, 549), "σ": (0x73, 603), "τ": (0x74, 439),
-    "υ": (0x75, 576), "ϖ": (0x76, 713), "ω": (0x77, 686), "ξ": (0x78, 493), "ψ": (0x79, 686),
-    "ζ": (0x7a, 494), "∼": (0x7e, 549), "ϒ": (0xa1, 620), "′": (0xa2, 247), "≤": (0xa3, 549),
-    "⁄": (0xa4, 167), "∞": (0xa5, 713), "↔": (0xab, 1042), "←": (0xac, 987), "↑": (0xad, 603),
-    "→": (0xae, 987), "↓": (0xaf, 603), "″": (0xb2, 411), "≥": (0xb3, 549), "∝": (0xb5, 713),
-    "∂": (0xb6, 494), "•": (0xb7, 460), "≠": (0xb9, 549), "≡": (0xba, 549), "≈": (0xbb, 549),
-    "…": (0xbc, 1000), "↵": (0xbf, 658), "ℵ": (0xc0, 823), "ℑ": (0xc1, 686), "ℜ": (0xc2, 795),
-    "℘": (0xc3, 987), "⊗": (0xc4, 768), "⊕": (0xc5, 768), "∅": (0xc6, 823), "∩": (0xc7, 768),
-    "∪": (0xc8, 768), "⊃": (0xc9, 713), "⊇": (0xca, 713), "⊄": (0xcb, 713), "⊂": (0xcc, 713),
-    "⊆": (0xcd, 713), "∈": (0xce, 713), "∉": (0xcf, 713), "∠": (0xd0, 768), "∇": (0xd1, 713),
-    "∏": (0xd5, 823), "√": (0xd6, 549), "⋅": (0xd7, 250), "¬": (0xd8, 713), "∧": (0xd9, 603),
-    "∨": (0xda, 603), "⇔": (0xdb, 1042), "⇐": (0xdc, 987), "⇑": (0xdd, 603), "⇒": (0xde, 987),
-    "⇓": (0xdf, 603), "◊": (0xe0, 494), "〈": (0xe1, 329), "∑": (0xe5, 713), "〉": (0xf1, 329),
-    "∫": (0xf2, 274),
-}
-# Unicode keeps near-duplicates of a few of these (Δ U+0394 vs ∆ U+2206, the
-# angle brackets), and a note may be typed with either — draw them the same.
-for _twin, _canon in (("Δ", "∆"), ("Ω", "Ω"),
-                      ("⟨", "〈"), ("⟩", "〉"),
-                      ("〈", "〈"), ("〉", "〉")):
-    SYMBOL.setdefault(_twin, SYMBOL[_canon])
-
-HELV, SYM, CID = "F1", "F3", "F2"
-
-
-def _font_of(ch: str) -> str:
-    """Which of the three fonts can draw this character."""
-    try:
-        ch.encode("cp1252")
-        return HELV
-    except UnicodeEncodeError:
-        return SYM if ch in SYMBOL else CID
-
-
-def _char_em(ch: str) -> float:
-    font = _font_of(ch)
-    if font == HELV:
-        o = ord(ch)
-        return (_HELV[o - 32] if 32 <= o <= 126 else _HELV_DEFAULT) / 1000.0
-    if font == SYM:
-        return SYMBOL[ch][1] / 1000.0
-    return 1.0          # CID fonts here run at the default 1000/1000 width
-
-
-def _size_of(size: float, level: int) -> float:
-    return size * (SUP_SCALE if level else 1.0)
-
-
-def _span_width(text: str, size: float, level: int = 0) -> float:
-    return _size_of(size, level) * sum(_char_em(c) for c in text)
-
-
-def _spans_width(spans, size: float) -> float:
-    return sum(_token_width(k, p, lv, size) for k, p, lv in spans)
-
-
-# --- text layout -------------------------------------------------------------
-
-def _resolve(spans, size: float, width: float):
-    """Turn every span the base-14 fonts can't draw into vector paths:
-    (ops, w, h, ascent). Inline math that won't fit the box falls back to the
-    unicode approximation; CJK without an outline font falls back to the CID
-    font, which is only legible in viewers that can substitute one."""
-    out = []
-    for kind, payload, level in spans:
-        if kind == MATH:
-            drawn = vector_text.math(payload, size)
-            if drawn and drawn[1] <= width:
-                out.append((MATH, drawn, level))
-            else:
-                if drawn:
-                    log.info("[pdf-notes] inline math too wide for the box, "
-                             "falling back to text")
-                out.extend(latex_spans(payload))
-            continue
-        # One vector span per CJK character, so lines still break between them.
-        run = ""
-        for ch in payload:
-            drawn = vector_text.glyphs(ch, _size_of(size, level)) if _font_of(ch) == CID else None
-            if drawn is None:
-                run += ch
-                continue
-            if run:
-                out.append((TEXT, run, level))
-                run = ""
-            out.append((MATH, drawn, level))
-        if run:
-            out.append((TEXT, run, level))
-    return merge_spans(out)
-
-
-def _token_width(kind, payload, level, size: float) -> float:
-    return payload[1] if kind == MATH else _span_width(payload, size, level)
-
-
-def _tokens(spans):
-    """Unbreakable chunks across spans: words, single spaces, one token per CJK
-    character (no spaces there, so every character breaks), and math as a
-    whole."""
-    out = []
-    for kind, payload, level in spans:
-        if kind == MATH:
-            out.append((kind, payload, level))
-            continue
-        cur = ""
-        for ch in payload:
-            if ch == " " or _font_of(ch) == CID:
-                if cur:
-                    out.append((TEXT, cur, level))
-                    cur = ""
-                out.append((TEXT, ch, level))
-            else:
-                cur += ch
-        if cur:
-            out.append((TEXT, cur, level))
-    return out
-
-
-def _hang(spans, size: float, width: float) -> float:
-    """Continuation indent: nested note bullets keep their step."""
-    head = spans[0][1] if spans and spans[0][0] == TEXT else ""
-    body = head.lstrip(" ")
-    lead = head[: len(head) - len(body)]
-    return min(_span_width(lead + ("  " if body[:2] in ("- ", "* ") else ""), size),
-               width * 0.4)
-
-
-def _line_metrics(spans, size: float):
-    """(ascent, height) of one line: tall inline math pushes the line open."""
-    asc, desc = size * 0.82, size * (LEADING - 0.82)
-    for kind, payload, _level in spans:
-        if kind == MATH:
-            _ops, _w, h, a = payload
-            asc = max(asc, a + 0.5)
-            desc = max(desc, h - a + 0.5)
-    return asc, asc + desc
-
-
-def _wrap(spans, width: float, size: float):
-    """Spans → [(indent, spans)], one entry per rendered line."""
-    hang = _hang(spans, size, width)
-    lines, cur, cur_w, indent = [], [], 0.0, 0.0
-    for kind, payload, level in _tokens(spans):
-        w = _token_width(kind, payload, level, size)
-        if cur and cur_w + w > width - indent:
-            if kind == TEXT and payload == " ":
-                continue                          # swallow the break's space
-            lines.append((indent, merge_spans(cur)))
-            cur, cur_w, indent = [], 0.0, hang
-        if not cur and kind == TEXT and payload == " ":
-            continue
-        while kind == TEXT and w > width - indent and len(payload) > 1:
-            cut = len(payload)                    # one token too long: hard-split
-            while cut > 1 and _span_width(payload[:cut], size, level) > width - indent:
-                cut -= 1
-            lines.append((indent, [(TEXT, payload[:cut], level)]))
-            payload, indent = payload[cut:], hang
-            w = _span_width(payload, size, level)
-        cur.append((kind, payload, level))
-        cur_w += w
-    if cur:
-        lines.append((indent, merge_spans(cur)))
-    return lines or [(0.0, [])]
+# Tests and note_markup check drawability through this name.
+_font_of = font_of
 
 
 def _measure(items, width: float, size: float, max_h: float, images):
@@ -310,18 +135,19 @@ def _measure(items, width: float, size: float, max_h: float, images):
                 natural = max(natural, w)
                 continue
             item = {"spans": [(TEXT, (item.get("alt") or "image").strip(), 0)]}
-        for indent, spans in _wrap(_resolve(item["spans"], size, width), width, size):
-            ascent, line_h = _line_metrics(spans, size)
+        spans = resolve(plain(item["spans"]), size, width)
+        for indent, line in wrap(spans, width, size):
+            ascent, line_h = line_metrics(line, size)
             if height + line_h > max_h:
                 cut = True
                 break
-            rows.append(("text", indent, spans, ascent, line_h))
+            rows.append(("text", indent, line, ascent, line_h))
             height += line_h
-            natural = max(natural, indent + _spans_width(spans, size))
+            natural = max(natural, indent + spans_width(line, size))
         if cut:
             break
     if cut:
-        rows.append(("text", 0.0, [(TEXT, "…", 0)], size * 0.82, size * LEADING))
+        rows.append(("text", 0.0, plain([(TEXT, "\u2026", 0)]), size * 0.82, size * LEADING))
         height += size * LEADING
     return rows, natural, height, shrink
 
@@ -422,51 +248,6 @@ def _place(space: _Space, anchor, box_w: float, box_h: float, width_penalty: flo
 
 # --- content stream ----------------------------------------------------------
 
-def _esc(text: str) -> bytes:
-    out = bytearray(b"(")
-    for ch in text:
-        b = ch.encode("cp1252", "replace")
-        if b in (b"(", b")", b"\\"):
-            out += b"\\"
-        out += b
-    return bytes(out + b")")
-
-
-def _sym(text: str) -> bytes:
-    out = bytearray(b"(")
-    for ch in text:
-        b = bytes([SYMBOL[ch][0]])
-        if b in (b"(", b")", b"\\"):
-            out += b"\\"
-        out += b
-    return bytes(out + b")")
-
-
-def _hex(text: str) -> bytes:
-    """UTF-16BE hex string for the CID font (BMP only)."""
-    out = bytearray(b"<")
-    for ch in text:
-        o = ord(ch)
-        out += b"%04X" % (o if o < 0x10000 else 0x3F)
-    return bytes(out + b">")
-
-
-def _runs(text: str, level: int):
-    """[(font, chunk, level)] — one Tj per font stretch."""
-    out = []
-    for ch in text:
-        font = _font_of(ch)
-        if out and out[-1][0] == font:
-            out[-1][1] += ch
-        else:
-            out.append([font, ch])
-    return [(font, chunk, level) for font, chunk in out]
-
-
-def _num(v: float) -> bytes:
-    return b"%.2f" % round(v, 2)
-
-
 def _draw_note(ops: list, box, anchor, rows, size: float, color):
     """Box + leader line + rows, all in display coordinates."""
     r, g, b, _a = color
@@ -514,66 +295,8 @@ def _draw_note(ops: list, box, anchor, rows, size: float, color):
             y += h + IMAGE_GAP
             continue
         _kind, indent, spans, ascent, line_h = row
-        x = bx0 + PAD + indent
-        base = y + ascent
-        for kind, payload, level in spans:
-            if kind == MATH:
-                math_ops, w, h, asc = payload
-                ops.append(b"q 1 0 0 1 %s %s cm" % (_num(x), _num(base - asc)))
-                ops.append(math_ops)
-                ops.append(b"Q")
-                x += w
-                continue
-            ops.append(b"BT 0.13 0.13 0.15 rg")
-            for font, chunk, lv in _runs(payload, level):
-                if chunk.strip():
-                    fs = _size_of(size, lv)
-                    shift = -SUP_RISE * size if lv == SUP else SUB_DROP * size if lv == SUB else 0
-                    body = (_sym(chunk) if font == SYM else
-                            _hex(chunk) if font == CID else _esc(chunk))
-                    ops.append(b"/%s %s Tf 1 0 0 -1 %s %s Tm %s Tj" % (
-                        font.encode(), _num(fs), _num(x), _num(base + shift), body))
-                x += _span_width(chunk, size, lv)
-            ops.append(b"ET")
+        draw_spans(ops, bx0 + PAD + indent, y + ascent, spans, size)
         y += line_h
-
-
-def _fonts():
-    def base14(name):
-        font = DictionaryObject({
-            NameObject("/Type"): NameObject("/Font"),
-            NameObject("/Subtype"): NameObject("/Type1"),
-            NameObject("/BaseFont"): NameObject(name),
-        })
-        if name == "/Helvetica":       # Symbol carries its own built-in encoding
-            font[NameObject("/Encoding")] = NameObject("/WinAnsiEncoding")
-        return font
-
-    # Non-embedded CID font for anything the other two can't hold (CJK).
-    # Adobe-GB1 with the standard UniGB-UCS2-H CMap: no font file to ship.
-    cid = DictionaryObject({
-        NameObject("/Type"): NameObject("/Font"),
-        NameObject("/Subtype"): NameObject("/CIDFontType0"),
-        NameObject("/BaseFont"): NameObject("/STSong-Light"),
-        NameObject("/CIDSystemInfo"): DictionaryObject({
-            NameObject("/Registry"): create_string_object("Adobe"),
-            NameObject("/Ordering"): create_string_object("GB1"),
-            NameObject("/Supplement"): NumberObject(2),
-        }),
-        NameObject("/DW"): NumberObject(1000),
-    })
-    wide = DictionaryObject({
-        NameObject("/Type"): NameObject("/Font"),
-        NameObject("/Subtype"): NameObject("/Type0"),
-        NameObject("/BaseFont"): NameObject("/STSong-Light"),
-        NameObject("/Encoding"): NameObject("/UniGB-UCS2-H"),
-        NameObject("/DescendantFonts"): ArrayObject([cid]),
-    })
-    return DictionaryObject({
-        NameObject("/" + HELV): base14("/Helvetica"),
-        NameObject("/" + SYM): base14("/Symbol"),
-        NameObject("/" + CID): wide,
-    })
 
 
 def _stamp(writer, page_index: int, matrix, ops: list, xobjects):
@@ -594,7 +317,7 @@ def _stamp(writer, page_index: int, matrix, ops: list, xobjects):
     stream = DecodedStreamObject()
     stream.set_data(body)
     overlay[NameObject("/Contents")] = stream
-    resources = DictionaryObject({NameObject("/Font"): _fonts()})
+    resources = DictionaryObject({NameObject("/Font"): font_resources(_FONTS)})
     if xobjects:
         resources[NameObject("/XObject")] = DictionaryObject(
             {NameObject("/" + name): ref for name, ref in xobjects.items()})
@@ -673,32 +396,8 @@ def _page_occupancy(pdfium_page, to_display, disp_w, disp_h) -> _Space:
 
 # --- images ------------------------------------------------------------------
 
-class _Images:
-    """Uploaded images referenced by notes → PDF XObjects, one per file."""
-
-    def __init__(self, writer, uploads_dir):
-        self.writer, self.dir = writer, uploads_dir
-        self.by_src = {}        # src → (name, px_w, px_h) or None
-        self.refs = {}          # name → indirect object
-
-    def resolve(self, src: str):
-        if src in self.by_src:
-            return self.by_src[src]
-        info = None
-        match = UPLOAD_RE.search(src or "")
-        if match and self.dir is not None:
-            path = self.dir / match.group(1)
-            if path.is_file():
-                built = image_xobject(path)
-                if built:
-                    stream, px_w, px_h = built
-                    name = f"GmIm{len(self.refs)}"
-                    self.refs[name] = self.writer._add_object(stream)
-                    info = (name, px_w, px_h)
-                else:
-                    log.info(f"[pdf-notes] unsupported image format: {match.group(1)}")
-        self.by_src[src] = info
-        return info
+class _Images(XObjectStore):
+    """The shared upload→XObject store, plus the lookup the box rows need."""
 
     def used(self, rows):
         return {row[1]: self.refs[row[1]] for row in rows if row[0] == "image"}

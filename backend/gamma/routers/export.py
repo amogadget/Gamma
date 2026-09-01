@@ -44,6 +44,7 @@ from ..markdown_export import (
     render_readable,
     slugify,
 )
+from ..pdf_document import render_document
 from ..pdf_export import annotate_pdf, highlight_note_text, zotero_annot_key
 from ..pdf_notes import render_notes
 from ..zotero_export import (
@@ -68,7 +69,14 @@ _GAMMA_MAX_UPLOADS = 10_000
 _GAMMA_MAX_UPLOAD_BYTES = 512 * 1024 * 1024
 _GAMMA_MAX_ARCHIVE_BYTES = 640 * 1024 * 1024
 _GAMMA_MAX_SECONDS = 60
-_EXPORT_MODES = {"readable", "logseq-graph", "zotero-rdf", "gamma"}
+# Ceiling on one notes-PDF document. Typeset math is emitted as vector paths
+# at every occurrence (~7-12 KB per display formula, not deduplicated), so a
+# folder of math-heavy papers grows far faster than its prose would suggest:
+# 200 prose papers measured 7 MB, but 1000 display formulas already reach
+# 35 MB. Well above any realistic export, and it turns an unbounded response
+# into a clear error.
+_NOTES_PDF_MAX_BYTES = 192 * 1024 * 1024
+_EXPORT_MODES = {"readable", "logseq-graph", "zotero-rdf", "gamma", "notes-pdf"}
 _SCOPED_UPLOAD_NAME_RE = re.compile(
     r"^[0-9a-fA-F]{8,64}(?:-flat)?\.(?:pdf|png|jpe?g|gif|webp|svg|bmp)$"
 )
@@ -84,6 +92,30 @@ def _content_disposition(filename: str) -> str:
     """attachment header carrying both an ASCII fallback and a UTF-8 name."""
     ascii_name = filename.encode("ascii", "ignore").decode() or "export"
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
+def _notes_pdf_response(pages, uploads_dir, slug: str, highlights: bool, notes: bool) -> Response:
+    """The notes themselves typeset as one PDF (``pdf_document``) — the only
+    export whose download is a single file rather than a zip, and the only PDF
+    format a page without a paper can produce. Every selected page goes into
+    one document, each starting on a fresh sheet."""
+    try:
+        pdf_bytes = render_document(
+            pages, uploads_dir=uploads_dir, highlights=highlights, notes=notes)
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.warning("[notes-pdf] export failed for %s: %s", slug, e)
+        raise HTTPException(status_code=400, detail=f"could not build the PDF: {e}")
+    if len(pdf_bytes) > _NOTES_PDF_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="the notes PDF is too large — export a subfolder, or turn off Highlights or Notes")
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": _content_disposition(f"{slug}-notes.pdf")},
+    )
 
 
 def _md_response(md: str, slug: str) -> Response:
@@ -671,7 +703,9 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
     hls__ page + EDN) — openable by file-based Logseq directly and convertible
     by the DB version's "File to DB graph" importer; a graph is defined by both
     layers, so the two switches don't apply to it. ``mode=zotero-rdf`` returns
-    a one-page Zotero RDF library archive."""
+    a one-page Zotero RDF library archive. ``mode=notes-pdf`` returns the notes
+    typeset as their own PDF document — the one PDF format a page without a
+    paper can still export as."""
     _check_export_mode(mode)
     scope = share_scope_doc(request)
     if mode == "gamma":
@@ -707,6 +741,10 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
 
     page = build_tree(rows, block_id)
     slug = slugify(page.get("content"), block_id)
+
+    if mode == "notes-pdf":
+        return _notes_pdf_response(
+            [page], user_uploads_dir(user), slug, bool(highlights), bool(notes))
 
     if mode == "zotero-rdf":
         with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
@@ -821,7 +859,9 @@ def folder_export_progress(request: Request, op: str):
 @router.get("/folders/export")
 def export_folder(request: Request, name: str, mode: str = "readable", pdf: int = 1,
                   highlights: int = 1, notes: int = 1, op: str = ""):
-    """Export one authenticated owner's folder and descendants as an archive."""
+    """Export one authenticated owner's folder and descendants as an archive —
+    except ``mode=notes-pdf``, which is a single PDF document holding every
+    page's notes, each starting on a fresh sheet."""
     _check_export_mode(mode)
     name = (name or "").strip().strip("/")
     if not name:
@@ -891,11 +931,14 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
 
             entries, assets, used = [], set(), set()
             files, blobs = [], []
+            doc_pages = []  # notes-pdf: every page in one document
             for number, root in enumerate(matches, 1):
                 rows = fetch_subtree(conn, root["id"])
                 page = build_tree(rows, root["id"])
                 report(title=(page.get("content") or "Untitled"))
-                if mode == "logseq-graph":
+                if mode == "notes-pdf":
+                    doc_pages.append(page)
+                elif mode == "logseq-graph":
                     page_entries, page_files, page_blobs, page_assets = _graph_page_parts(
                         page,
                         user_uploads_dir(user),
@@ -922,6 +965,11 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
                     used.add(arcname)
                     entries.append((arcname, markdown))
                 report(done=number)
+
+        if mode == "notes-pdf":
+            return _notes_pdf_response(
+                doc_pages, user_uploads_dir(user), folder_slug,
+                bool(highlights), bool(notes))
 
         if mode == "logseq-graph":
             entries.append(("logseq/config.edn", CONFIG_EDN))
