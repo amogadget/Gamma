@@ -1123,7 +1123,9 @@ export default function SettingsDialog({
         <div className="settingsPane">
           <button className="uiClose uiCloseLg settingsClose" onClick={onClose} title="Close settings" aria-label="Close settings">×</button>
           {pane === "general" ? <GeneralSettings value={papers} /> : null}
-          {pane === "viewer" ? <ViewerSettings value={papers} /> : null}
+          {/* The Translation model picker needs the scoped model list, which
+              lives in the `ai` group; the rest of this pane is `papers`. */}
+          {pane === "viewer" ? <ViewerSettings value={{ ...papers, aiModels: ai?.aiModels }} /> : null}
           {pane === "search" ? <SearchSettings value={search} /> : null}
           {pane === "notes" ? <NotesSettings value={notes} /> : null}
           {pane === "library" ? (
