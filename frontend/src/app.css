@@ -4104,6 +4104,60 @@ button.pdfOutlineChevron:hover {
   color: #1d5ab3;
 }
 
+.cmEmbedChip {
+  border-left: 2px solid var(--accent);
+  border-radius: 2px 4px 4px 2px;
+}
+/* ==highlight== — same tint rendered and live in the editor. */
+.blockRendered mark,
+.blockEditorCm .cmHighlight {
+  background: rgba(255, 200, 0, 0.32);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+/* External-link chip (LinkChip): icon + label, quieter than a ref chip.
+   No remote favicon here — see the LinkChip comment in blockTree.jsx. */
+.linkChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 360px;
+  padding: 0 3px;
+  border-radius: 4px;
+  color: var(--text-primary);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border);
+  vertical-align: -2px;
+}
+.linkChip:hover { background: var(--bg-hover); }
+.linkChip svg { flex: none; color: var(--text-muted); }
+.linkChipText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ![[id]] transclusion card in the rendered view. */
+.blockEmbedCard {
+  display: block;
+  margin: 4px 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-block);
+  cursor: pointer;
+}
+.blockEmbedCard:hover { background: var(--bg-hover); }
+.blockEmbedBody { display: block; }
+.blockEmbedBody > p:last-child { margin-bottom: 0; }
+.blockEmbedSrc {
+  display: block;
+  margin-top: 2px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
 /* --- cursor-positioned context menu (shared surface recipe) --- */
 .ctxMenu {
   position: fixed;

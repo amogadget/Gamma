@@ -106,8 +106,15 @@ window.fetch = function (input, options) {
 };
 // -----------------------------------------------------------------------------
 
+// 9 random bytes, base64url — matches the backend's secrets.token_urlsafe(9)
+// (12 chars, 72 bits; the old Math.random base36 slice was 8 chars from a
+// non-crypto RNG).
 function makeId() {
-  return Math.random().toString(36).slice(2, 10);
+  const bytes = new Uint8Array(9);
+  if (globalThis.crypto?.getRandomValues) crypto.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-").replace(/\//g, "_");
 }
 
 function fmtBytes(n) {

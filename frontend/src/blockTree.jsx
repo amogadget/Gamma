@@ -19,7 +19,7 @@ import {
   LatexAcPopup,
   MathLivePreview,
 } from "./latexEditor";
-import { BlockCmEditor } from "./blockCmEditor";
+import { BlockCmEditor, scanMathSpans } from "./blockCmEditor";
 import { remarkCallouts } from "./callouts";
 import { filterSlashCommands } from "./slashCommands";
 import { SlashMenuPopup } from "./slashMenu";
@@ -40,6 +40,137 @@ function rehypeTaskIndexes() {
   };
 }
 
+
+// Source → markdown the renderer understands: {:width} images, ![[embeds]],
+// [[refs]] and ==highlights== rewritten OUTSIDE math and inline-code spans
+// (a "==" inside $...$ must stay LaTeX). `nested` is the inside-an-embed
+// render: embeds degrade to ref chips so transclusion can't recurse.
+function applyOutsideSpans(text, spans, fn) {
+  if (!spans.length) return fn(text);
+  spans.sort((a, b) => a.from - b.from);
+  let out = "", pos = 0;
+  for (const s of spans) {
+    if (s.from < pos) continue;
+    out += fn(text.slice(pos, s.from)) + text.slice(s.from, s.to);
+    pos = s.to;
+  }
+  return out + fn(text.slice(pos));
+}
+
+function mdPreprocess(content, nested) {
+  const spans = scanMathSpans(content).map((s) => ({ from: s.from, to: s.to }));
+  for (const m of content.matchAll(/`[^`\n]+`/g)) {
+    spans.push({ from: m.index, to: m.index + m[0].length });
+  }
+  return applyOutsideSpans(content, spans, (seg) => seg
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g, '<img src="$2" alt="$1" width="$3" />')
+    .replace(/!\[\[([a-zA-Z0-9_-]+)\]\]/g, nested ? "[$1](blockref:$1)" : "[$1](blockembed:$1)")
+    .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")
+    .replace(/==([^=\n]+?)==/g, "<mark>$1</mark>"));
+}
+
+// Plain text of a rendered element tree (link labels arrive as React children).
+function textOf(children) {
+  if (children == null) return "";
+  if (typeof children === "string" || typeof children === "number") return String(children);
+  if (Array.isArray(children)) return children.map(textOf).join("");
+  if (children.props?.children != null) return textOf(children.props.children);
+  return "";
+}
+
+// GitHub URLs get a readable label without any fetch: owner/repo, #issue/PR,
+// or the file a blob/tree link points at.
+function githubLabel(href) {
+  try {
+    const u = new URL(href);
+    if (!/(^|\.)github\.com$/i.test(u.hostname)) return null;
+    const p = u.pathname.split("/").filter(Boolean);
+    if (p.length === 0) return "GitHub";
+    if (p.length === 1) return p[0];
+    const repo = `${p[0]}/${p[1]}`;
+    if (["issues", "pull", "discussions"].includes(p[2]) && p[3]) return `${repo} #${p[3]}`;
+    if (["blob", "tree"].includes(p[2]) && p.length > 3) return `${repo} · ${p[p.length - 1]}`;
+    if (p[2] === "releases") return `${repo} · releases`;
+    if (p[2] === "commit" && p[3]) return `${repo} @ ${p[3].slice(0, 7)}`;
+    return repo;
+  } catch { return null; }
+}
+
+// Notion-style link chip: icon + label. Bare URLs (autolinked, or link text
+// that is itself a URL) get a fetched page title via /api/link-preview (host
+// shown until it arrives, or forever when the fetch fails/401s in the shared
+// view); user-written link text is kept as the label.
+//
+// Deliberately no remote favicon: upstream loads one per host from
+// icons.duckduckgo.com, which would tell a third party every site the user
+// links to from their private notes. The local LinkIcon is used instead —
+// /api/link-preview stays the only outbound fetch, and it goes through the
+// SSRF guard server-side.
+const _linkPreviewCache = new Map();
+function LinkChip({ href, text }) {
+  const bare = /^(https?:\/\/|www\.)/i.test((text || "").trim());
+  const gh = githubLabel(href);
+  let host = "";
+  try { host = new URL(href).hostname.replace(/^www\./, ""); } catch (_) {}
+  const wantFetch = bare && !gh;
+  const [fetched, setFetched] = useState(() => _linkPreviewCache.get(href) || null);
+  useEffect(() => {
+    if (!wantFetch || _linkPreviewCache.has(href)) return;
+    let dead = false;
+    fetch(`/api/link-preview?url=${encodeURIComponent(href)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        _linkPreviewCache.set(href, d?.title || "");
+        if (!dead && d?.title) setFetched(d.title);
+      })
+      .catch(() => {});
+    return () => { dead = true; };
+  }, [href, wantFetch]);
+  const label = bare ? (gh || fetched || host || text) : (text || host);
+  return (
+    <a
+      className="linkChip"
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={href}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <LinkIcon size={12} strokeWidth={2.2} />
+      <span className="linkChipText">{label}</span>
+    </a>
+  );
+}
+
+// ![[id]] transclusion: the referenced block's content rendered in a card;
+// clicking it jumps to the source block. Content/page title come from the
+// same refLabels resolution as [[ref]] chips.
+function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick }) {
+  return (
+    <span
+      className="blockEmbedCard"
+      role="link"
+      title={refBlock?.page_title ? `From: ${refBlock.page_title}` : "Embedded note"}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onBlockRefClick?.(refId);
+      }}
+    >
+      <span className="blockEmbedBody">
+        {refBlock?.content ? (
+          <BlockMarkdown content={refBlock.content} refLabels={refLabels} onBlockRefClick={onBlockRefClick} nested />
+        ) : (
+          <span className="blockPlaceholder">embedded note…</span>
+        )}
+      </span>
+      {refBlock?.page_title ? <span className="blockEmbedSrc">{refBlock.page_title}</span> : null}
+    </span>
+  );
+}
+
 // A block's rendered markdown, memoized: any edit re-renders the whole tree
 // (setBlocks replaces it), and without the memo one keystroke re-ran
 // ReactMarkdown + KaTeX for every rendered block on the page. Re-parses only
@@ -48,14 +179,18 @@ function rehypeTaskIndexes() {
 // check. onBlockRefClick is deliberately excluded from the comparison — the
 // caller passes an identity-stable wrapper.
 const BlockMarkdown = React.memo(
-  function BlockMarkdown({ content, refLabels, onBlockRefClick, onTaskToggle }) {
+  function BlockMarkdown({ content, refLabels, onBlockRefClick, onTaskToggle, nested }) {
     return (
       <ReactMarkdown
         // remark-breaks: a single Enter inside a note renders as a real line
         // break (the editor lets you type them), not markdown's soft-break space.
         remarkPlugins={[remarkGfm, remarkMath, remarkCallouts, remarkBreaks]}
         rehypePlugins={[rehypeTaskIndexes, rehypeRaw, rehypeKatex]}
-        urlTransform={(url) => (url.startsWith("blockref:") ? url : defaultUrlTransform(url))}
+        urlTransform={(url) =>
+          url.startsWith("blockref:") || url.startsWith("blockembed:")
+            ? url
+            : defaultUrlTransform(url)
+        }
         components={{
           a: ({ href, children }) => {
             if (href?.startsWith("blockref:")) {
@@ -76,6 +211,20 @@ const BlockMarkdown = React.memo(
                   {ref?.content || String(children)}
                 </a>
               );
+            }
+            if (href?.startsWith("blockembed:")) {
+              const refId = href.slice(11);
+              return (
+                <BlockEmbedCard
+                  refId={refId}
+                  refBlock={refLabels?.[refId]}
+                  refLabels={refLabels}
+                  onBlockRefClick={onBlockRefClick}
+                />
+              );
+            }
+            if (/^https?:\/\//i.test(href || "")) {
+              return <LinkChip href={href} text={textOf(children)} />;
             }
             return (
               <a href={href} target="_blank" rel="noreferrer">
@@ -104,17 +253,13 @@ const BlockMarkdown = React.memo(
           },
         }}
       >
-        {content
-          .replace(
-            /!\[([^\]]*)\]\(([^)]+)\)\{:width\s+(\d+)\}/g,
-            '<img src="$2" alt="$1" width="$3" />',
-          )
-          .replace(/\[\[([a-zA-Z0-9_-]+)\]\]/g, "[$1](blockref:$1)")}
+        {mdPreprocess(content, nested)}
       </ReactMarkdown>
     );
   },
   (prev, next) =>
     prev.content === next.content &&
+    prev.nested === next.nested &&
     !!prev.onTaskToggle === !!next.onTaskToggle &&
     Object.keys(prev.refLabels).length === Object.keys(next.refLabels).length &&
     Object.entries(next.refLabels).every(

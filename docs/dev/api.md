@@ -54,6 +54,11 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 | POST | `/search-reindex` | full rebuild, or just `doc_ids` from the body |
 | GET | `/tasks` | background task progress (indexing, downloads) |
 
+### Link previews (`links.py`)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/link-preview?url=` | webpage title for the frontend's link chips (`{url, host, title}`); authenticated, fetch goes through the SSRF guard, only the first 128 KB is read, results cached in-process (TTL 24 h, bounded). A blocked or unreachable URL degrades to a host-only chip rather than erroring |
+
 ### Metadata (`metadata.py`)
 | Method | Path | Purpose |
 |---|---|---|

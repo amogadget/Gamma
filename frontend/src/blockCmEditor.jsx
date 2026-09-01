@@ -71,18 +71,19 @@ class MathWidget extends WidgetType {
 }
 
 class RefChipWidget extends WidgetType {
-  constructor(label) {
+  constructor(label, embed) {
     super();
     this.label = label;
+    this.embed = embed; // ![[id]] transclusion — chip in the editor, card when rendered
   }
-  eq(other) { return other.label === this.label; }
+  eq(other) { return other.label === this.label && other.embed === this.embed; }
   toDOM(view) {
     const span = document.createElement("span");
-    span.className = "blockRefChip cmRefChip";
-    span.textContent = this.label;
+    span.className = "blockRefChip cmRefChip" + (this.embed ? " cmEmbedChip" : "");
+    span.textContent = (this.embed ? "⧉ " : "") + this.label;
     span.addEventListener("mousedown", (e) => {
       e.preventDefault();
-      placeCaretInside(view, span, 2);
+      placeCaretInside(view, span, this.embed ? 3 : 2);
     });
     return span;
   }
@@ -170,13 +171,15 @@ function buildInlineDecos(state, labelsRef) {
     ranges.push(Decoration.replace({ widget: new MathWidget(tex, s.display) }).range(s.from, s.to));
   }
 
-  for (const m of text.matchAll(/\[\[([a-zA-Z0-9_-]+)\]\]/g)) {
+  for (const m of text.matchAll(/!?\[\[([a-zA-Z0-9_-]+)\]\]/g)) {
     const from = m.index, to = m.index + m[0].length;
     if (overlapsClaimed(from, to)) continue;
     claimed.push([from, to]);
     if (touched(from, to)) continue;
     const label = labelsRef.current?.[m[1]]?.content || m[1];
-    ranges.push(Decoration.replace({ widget: new RefChipWidget(label) }).range(from, to));
+    ranges.push(Decoration.replace({
+      widget: new RefChipWidget(label, m[0].startsWith("!")),
+    }).range(from, to));
   }
 
   // Inline marks: [regex, delimiter length, class]. Matched in this order —
@@ -184,6 +187,7 @@ function buildInlineDecos(state, labelsRef) {
   // prone). Delimiters are hidden and the inner text gets the mark class.
   const INLINE = [
     [/`([^`\n]+)`/g, 1, "cmInlineCode"],
+    [/==(?!\s)([^=\n]+?)(?<!\s)==/g, 2, "cmHighlight"],
     [/\*\*(?!\s)([^*\n]+?)(?<!\s)\*\*/g, 2, "cmStrong"],
     [/~~(?!\s)([^~\n]+?)(?<!\s)~~/g, 2, "cmStrike"],
     [/(?<!\*)\*(?![\s*])([^*\n]+?)(?<![\s*])\*(?!\*)/g, 1, "cmEm"],
@@ -211,6 +215,15 @@ function buildInlineDecos(state, labelsRef) {
     ranges.push(Decoration.replace({}).range(from, from + 1));
     ranges.push(Decoration.mark({ class: "cmLinkText" }).range(from + 1, from + 1 + m[1].length));
     ranges.push(Decoration.replace({}).range(from + 1 + m[1].length, to));
+  }
+
+  // Bare URLs: just link-styled (never hidden — the rendered view shows the
+  // title chip). Claimed so emphasis regexes can't chew on URL punctuation.
+  for (const m of text.matchAll(/https?:\/\/[^\s<>()"\]]+/g)) {
+    const from = m.index, to = m.index + m[0].length;
+    if (overlapsClaimed(from, to)) continue;
+    claimed.push([from, to]);
+    ranges.push(Decoration.mark({ class: "cmLinkText" }).range(from, to));
   }
 
   // Line constructs: headings, quotes/callouts, task and bullet markers,

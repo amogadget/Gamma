@@ -38,6 +38,8 @@ const TABLE_MD = "| Column 1 | Column 2 |\n| --- | --- |\n|   |   |";
 
 export const SLASH_COMMANDS = [
   { name: "link", label: "Link to note", glyph: "[[", hint: "reference another block", keywords: ["ref", "page", "block", "mention"], run: (ctx) => { replaceRange(ctx, "[["); ctx.openRefPopup(); } },
+  { name: "embed", label: "Embed note", glyph: "\u29c9", hint: "show a block inline", keywords: ["transclude", "include", "block"], run: (ctx) => { replaceRange(ctx, "![["); ctx.openRefPopup(); } },
+  { name: "highlight", label: "Highlight text", glyph: "==", hint: "==marked==", keywords: ["mark", "yellow", "emphasize"], run: (ctx) => replaceRange(ctx, "==x==", 2, 1) },
   { name: "math", label: "Inline equation", glyph: "$x$", hint: "LaTeX, rendered in place", keywords: ["equation", "latex", "tex"], run: (ctx) => replaceRange(ctx, "$x$", 1, 1) },
   { name: "equation", label: "Equation block", glyph: "$$", hint: "display math", keywords: ["display", "math", "latex"], run: (ctx) => replaceRange(ctx, "$$x$$", 2, 1) },
   { name: "h1", label: "Heading 1", glyph: "H1", keywords: ["heading", "title"], run: (ctx) => applyLinePrefix(ctx, "# ") },

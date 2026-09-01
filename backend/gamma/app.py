@@ -20,6 +20,7 @@ from .routers import (
     chats,
     export,
     imports,
+    links,
     metadata,
     pageimage,
     pdf,
@@ -115,6 +116,7 @@ def create_app() -> FastAPI:
     app.include_router(blocks.router)
     app.include_router(imports.router)
     app.include_router(export.router)
+    app.include_router(links.router)
 
     # Serve the built frontend (SPA) when GAMMA_STATIC_DIR is set.
     # Registered last so all /api routes take precedence.
