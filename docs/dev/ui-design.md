@@ -10,7 +10,7 @@ already exists. Bespoke CSS classes are for **layout only**.
 
 | Class / component | Use for |
 |---|---|
-| `uiBtn` (+ `sm`, `on`, `primary`, `danger`, `iconSq`) | every button; `on` = toggled state, `iconSq` = square icon-only |
+| `uiBtn` (+ `sm`, `on`, `primary`, `danger`, `iconSq`) | every button; `sm` is the shared 28 px compact size, `on` = toggled state, `iconSq` = square icon-only (combine with `sm` for compact toolbars) |
 | `uiClose` (+ `uiCloseSm`/`uiCloseLg`) | every × close button |
 | `aiKeyInput` | every text/number/password input in dialogs and settings |
 | `switch` / `switchTrack` | every on/off toggle |

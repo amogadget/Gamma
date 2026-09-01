@@ -293,6 +293,34 @@
 .aiModelChips { display: flex; flex-wrap: wrap; gap: 5px; }
 /* …and the same chips on the saved-provider rows. */
 .aiProvModels { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.aiUsage {
+  display: grid;
+  gap: 6px;
+  width: min(100%, 360px);
+  margin-top: 4px;
+}
+.aiUsageWindow { display: block; min-width: 0; }
+.aiUsageHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.aiUsageHead > :first-child { flex-shrink: 0; text-transform: capitalize; }
+.aiUsageHead > :last-child {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-align: right;
+  text-overflow: ellipsis;
+}
+.aiUsageWindow .quotaMeter { max-width: none; }
+.aiUsageWindow .quotaBar { margin: 3px 0 2px; }
+.aiProvModelsLabel { color: var(--text-dim); font-size: 10px; align-self: center; margin-right: 2px; }
 /* Provider rows double as the active-key picker in the Providers pane. */
 .aiProvSelectable { cursor: pointer; }
 /* The row is avatar · meta · actions — meta takes the slack so the text starts

@@ -1,7 +1,7 @@
 // The building blocks every settings pane is composed from — and nothing
 // else: PaneHead › Section › Row/Toggle for the panes themselves, SubDialog ›
 // Step/Field for the editor dialogs they open, plus the small shared controls
-// (Segmented, UnitInput, CharSlider, Stat, Empty, QuotaMeter). New settings
+// (Segmented, UnitInput, CharSlider, Stat, Empty, QuotaMeter/PercentMeter). New settings
 // UI should reuse these; bespoke classes are for layout only.
 import React from "react";
 import { fmtBytes } from "./utils";
@@ -217,6 +217,24 @@ export function QuotaMeter({ usedBytes, quotaMb, barOnly }) {
             : `${fmtBytes(usedBytes)} used — no quota`}
         </span>
       )}
+    </span>
+  );
+}
+
+// Percentage-only variant of QuotaMeter. It deliberately shares the exact
+// quotaMeter/quotaBar markup and warning thresholds so provider allowance and
+// storage quota read as the same kind of capacity indicator.
+export function PercentMeter({ percent, barOnly, caption = "" }) {
+  const value = Number(percent);
+  if (!Number.isFinite(value)) return null;
+  const pct = Math.max(0, Math.min(100, value));
+  const state = pct >= 95 ? " full" : pct >= 80 ? " warn" : "";
+  return (
+    <span className="quotaMeter">
+      <span className="quotaBar">
+        <span className={`quotaBarFill${state}`} style={{ width: `${pct ? Math.max(pct, 2) : 0}%` }} />
+      </span>
+      {barOnly ? null : <span className="settingDesc">{caption || `${Math.round(pct)}% used`}</span>}
     </span>
   );
 }

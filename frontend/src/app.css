@@ -2221,8 +2221,7 @@ button.pdfOutlineChevron:hover {
 .slotStackGroup > [data-panel-group] {
   flex: 1;
 }
-/* unified compact header controls */
-.dockWindowHeader .uiBtn.sm { padding: 2px 10px; font-size: 11px; }
+/* Header controls use the shared uiBtn sizes; keep only layout here. */
 .dockWindowHeader .chatHeaderSelects { margin: 0; }
 .dockWindowHeader .chatPanelHeaderBtns { flex-shrink: 0; }
 .dockWindowBody {
@@ -2530,6 +2529,7 @@ button.pdfOutlineChevron:hover {
   display: flex;
   gap: 4px;
 }
+.chatToolsBtn { display: inline-flex; align-items: center; gap: 4px; }
 .chatMessages {
   flex: 1;
   overflow-y: auto;
@@ -2683,7 +2683,7 @@ button.pdfOutlineChevron:hover {
   margin-right: auto;
   min-width: 0;
 }
-.chatHeaderSelects .uiBtn.sm { padding: 2px 8px; font-size: 11px; min-width: 0; }
+.chatHeaderSelects .uiBtn { min-width: 0; }
 .chatHeaderSelects .uiSelectBtn .uiSelectLabel { max-width: 150px; }
 /* prompt editor */
 .promptTextarea {
@@ -2750,12 +2750,15 @@ button.pdfOutlineChevron:hover {
   box-shadow: none;
 }
 .uiBtn.sm {
+  min-height: 28px;
   font-size: 11.5px;
   padding: 4px 12px;
   border-radius: 8px;
 }
 /* Icon-only square variant (delete/edit row actions). */
 .uiBtn.iconSq { width: 27px; height: 25px; padding: 0; flex-shrink: 0; }
+.uiBtn.sm.iconSq { width: 28px; height: 28px; }
+.uiBtn.sm.iconSq svg { width: 15px; height: 15px; }
 /* Dropdown trigger (Codex-style select): a uiBtn whose content is the
    current choice plus a chevron. `.block` stretches it into a form field. */
 .uiSelectBtn { gap: 7px; }

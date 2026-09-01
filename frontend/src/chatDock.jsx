@@ -10,6 +10,7 @@ import { MenuSelect } from "./menus";
 import {
   ArrowUpIcon,
   BookIcon,
+  BrainIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
@@ -21,6 +22,7 @@ import {
   PaperclipIcon,
   PencilIcon,
   SearchIcon,
+  SlidersIcon,
   StopIcon,
   XIcon,
 } from "./icons";
@@ -77,6 +79,9 @@ export default function ChatDock({
   agentReadChars,
   agentPerms,
   agentSystem,
+  agentEnabled,
+  folderToolsDefault,
+  pdfToolsDefault,
   onLibraryChange,
   onGrip,
   onGripDoubleClick,
@@ -93,10 +98,31 @@ export default function ChatDock({
   // Chat history is per page; the home view buckets per folder so switching
   // folders cannot leak one organizer conversation into another.
   const chatKey = focusedBlockId || (organizeFolder ? `home:${organizeFolder}` : "home");
-  const perm = (key) => agentPerms?.[key] !== false;
+  const folderChat = organizeFolder != null;
+  const settingsDefault = folderChat ? folderToolsDefault !== false : !!pdfToolsDefault;
+  // Conversation-local overrides. Switching pages/folders retains each
+  // conversation's choice for this session; New chat drops it back to the
+  // configured scope default.
+  const [chatToolConfigs, setChatToolConfigs] = useState({});
+  const chatToolConfig = chatToolConfigs[chatKey];
+  const chatToolPerms = agentPerms || {};
+  const toolsRequested = chatToolConfig?.enabled ?? settingsDefault;
+  const toolsEnabled = !!agentEnabled && !!toolsRequested;
+  const perm = (key) => chatToolPerms?.[key] !== false;
+  const toggleToolsForChat = () => setChatToolConfigs((prev) => ({
+    ...prev,
+    [chatKey]: { enabled: !(prev[chatKey]?.enabled ?? settingsDefault) },
+  }));
+  const resetToolConfig = () => setChatToolConfigs((prev) => {
+    const next = { ...prev };
+    delete next[chatKey];
+    return next;
+  });
+  // What the agent may do here after applying the chat-local switches.
   const agentReads = perm("list") || perm("read") || perm("search");
   const agentWrites = perm("rename") || perm("move");
   const agentPayload = () => {
+    if (!toolsEnabled) return {};
     const scope =
       organizeFolder != null && (agentReads || agentWrites)
         ? { agent_scope: "folder", folder: organizeFolder }
@@ -115,7 +141,7 @@ export default function ChatDock({
   };
   const agentScopeName = organizeFolder ? "this folder" : "your library";
   const agentIntro =
-    organizeFolder == null
+    organizeFolder == null || !toolsEnabled
       ? null
       : agentWrites
         ? `Ask AI anything — it can ${agentReads ? "read, search and " : ""}organize ${agentScopeName} (rename papers, file them into folders)…`
@@ -222,6 +248,7 @@ export default function ChatDock({
   function clearChat() {
     setChatMessages([]);
     setAttachPdf(true); // new chat: first question carries the full PDF again
+    resetToolConfig();
     fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
       method: "DELETE",
       credentials: "include",
@@ -729,6 +756,8 @@ export default function ChatDock({
                 </button>
                 <MenuSelect
                   label="Reasoning effort — leave on 'effort: default' unless the model supports it"
+                  icon={BrainIcon}
+                  iconOnly
                   value={chatEffort}
                   onChange={setChatEffort}
                   options={[
@@ -742,14 +771,28 @@ export default function ChatDock({
         : null}
       <div className="chatPanelHeaderBtns">
         <button
-          className={`uiBtn sm ${chatFindOpen ? "on" : ""}`}
+          type="button"
+          className={`uiBtn sm iconSq chatHeaderIconBtn chatToolsBtn ${toolsEnabled ? "on" : ""}`}
+          disabled={!agentEnabled}
+          aria-pressed={toolsEnabled}
+          aria-label={`Tools ${toolsEnabled ? "on" : "off"}`}
+          onClick={() => { setOpenPopover(null); toggleToolsForChat(); }}
+          title={agentEnabled
+            ? `Turn tools ${toolsEnabled ? "off" : "on"} for this chat only`
+            : "Agent tools are disabled in Settings → Assistant"}
+        >
+          <SlidersIcon size={17} />
+        </button>
+        <button
+          className={`uiBtn sm iconSq chatHeaderIconBtn ${chatFindOpen ? "on" : ""}`}
           onClick={() => {
             setChatFindOpen((v) => !v);
             setChatFind("");
           }}
           title="Find in this conversation"
+          aria-label="Find in this conversation"
         >
-          Find
+          <SearchIcon size={17} />
         </button>
         <button
           className="uiBtn sm"

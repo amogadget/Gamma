@@ -30,7 +30,6 @@ import {
   LayoutIcon,
   ListIcon,
   MessageSquareIcon,
-  MicIcon,
   MonitorIcon,
   MoonIcon,
   MoveVerticalIcon,
@@ -67,7 +66,7 @@ const NAV_GROUPS = [
     ["notes", "Notes", FileTextIcon],
   ]],
   ["AI", [
-    ["ai", "Providers", KeyIcon],
+    ["ai", "Provider and models", KeyIcon],
     ["assistant", "Assistant", SparklesIcon],
     ["prompts", "Prompts", MessageSquareIcon],
   ]],
@@ -266,8 +265,8 @@ function ViewerSettings({ value }) {
   );
 }
 
-// Same shape as MetaModelSelect below: "" = follow the chat model, stale
-// picks fall back.
+// "" = follow the chat model; a stale pick (provider/model removed) also
+// falls back. Same shape as the model pickers in the Providers pane.
 function TranslateModelSelect({ value }) {
   const models = value.aiModels || [];
   const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
@@ -770,31 +769,7 @@ function MetaStatusSection({ value, refreshNonce = 0 }) {
   );
 }
 
-// --- Assistant: models, chat, context budgets, prompts ----------------------
-
-// Which model runs the AI step of metadata lookups (identifier detection +
-// extraction from the first pages). Default follows whatever the chat panel
-// has selected; a cheap model is usually plenty here.
-function MetaModelSelect({ value }) {
-  const models = value.aiModels || [];
-  const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
-  const current = value.metaModel && models.some((m) => m.id === value.metaModel) ? value.metaModel : "";
-  return (
-    <MenuSelect
-      label="Metadata model" value={current} onChange={value.setMetaModel}
-      options={[
-        ["", "Same as chat"],
-        ...models.map((m) => [m.id, multiProvider ? `${m.model} · ${m.provider_name || m.provider}` : m.model]),
-      ]}
-    />
-  );
-}
-
-const DICTATION_LANGS = [
-  ["", "Auto-detect"], ["en", "English"], ["zh", "中文"], ["ja", "日本語"], ["ko", "한국어"],
-  ["de", "Deutsch"], ["fr", "Français"], ["es", "Español"], ["pt", "Português"],
-  ["it", "Italiano"], ["ru", "Русский"], ["hi", "हिन्दी"], ["ar", "العربية"],
-];
+// --- Assistant: agent, chat, context budgets, prompts -----------------------
 
 // One accordion instead of three stacked textareas: only the prompt being
 // edited takes up space, and Restore default lights up only when it would
@@ -900,40 +875,37 @@ function AssistantSettings({ value }) {
   return (
     <>
       <PaneHead icon={SparklesIcon} title="Assistant">
-        Which model runs each AI job, how much of a paper it sees, and what the folder agent may do.
+        Configure chat behavior, context limits, and what the folder agent may do.
       </PaneHead>
-      <Section title="Models">
-        <Row icon={PaperIcon} label="Metadata model"
-          hint="Used when metadata has to be read from the PDF"
-          title="Model used when metadata has to be AI-extracted from the PDF text (no arXiv id or DOI found). A fast, cheap model works well for this.">
-          <MetaModelSelect value={value} />
-        </Row>
-        <Row icon={MicIcon} label="Dictation model"
-          hint="Speech-to-text for the chat mic button"
-          title="gpt-4o-transcribe is what ChatGPT dictation uses; it needs an OpenAI-protocol provider key.">
-          <MenuSelect
-            label="Dictation model" value={value.dictationModel} onChange={value.setDictationModel}
-            options={[
-              ["gpt-4o-transcribe", "gpt-4o-transcribe"],
-              ["gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"],
-              ["whisper-1", "whisper-1"],
-            ]}
-          />
-        </Row>
-        <Row icon={GlobeIcon} label="Dictation language"
-          hint="Naming the language improves accuracy"
-          title="Telling the model the spoken language improves accuracy; auto-detect handles mixed or unlisted languages.">
-          <MenuSelect
-            label="Dictation language" value={value.dictationLang} onChange={value.setDictationLang}
-            options={DICTATION_LANGS}
-          />
-        </Row>
-      </Section>
       <Section title="Folder agent">
+        <Toggle
+          icon={SparklesIcon}
+          label="Enable agent"
+          hint="Allow chat to use reading, search and organization tools"
+          title="Master switch for AI tool use. Off makes both PDF and folder chats plain chat regardless of their per-chat selection; your tool configuration is preserved."
+          checked={value.agentEnabled}
+          onChange={value.setAgentEnabled}
+        />
+        <Toggle
+          icon={FolderIcon}
+          label="Folder chat default"
+          hint="New folder/library chats start with tools on"
+          title="Starting state of the Tools button in library and folder chats. You can override it for the current conversation from the chat header."
+          checked={value.folderToolsDefault}
+          onChange={value.setFolderToolsDefault}
+        />
+        <Toggle
+          icon={PaperIcon}
+          label="PDF chat default"
+          hint="New paper chats start with tools off"
+          title="Starting state of the Tools button in a paper chat. Off keeps PDF chat as a plain context chat until you enable tools from its header."
+          checked={value.pdfToolsDefault}
+          onChange={value.setPdfToolsDefault}
+        />
         {AGENT_PERM_ROWS.map(([key, icon, label, hint]) => (
           <Toggle
             key={key} icon={icon} label={label} hint={hint}
-            title={`What the home/folder chat is allowed to do with the folder you are viewing. ${hint}. Whatever tools return is sent to your configured AI provider; every tool call is shown in the reply. Turn everything off for a plain chat.`}
+            title={`Allowed whenever a chat's Tools switch is on. ${hint}. Whatever tools return is sent to your configured AI provider; every tool call is shown in the reply.`}
             checked={value.agentPerms?.[key] !== false}
             onChange={(v) => value.setAgentPerms((p) => ({ ...p, [key]: v }))}
           />
@@ -1156,9 +1128,6 @@ export default function SettingsDialog({
             <AssistantSettings value={{
               ...prompts,
               ...context,
-              metaModel: papers.metaModel,
-              setMetaModel: papers.setMetaModel,
-              aiModels: papers.aiModels,
             }} />
           ) : null}
           {pane === "prompts" ? <PromptsSettings value={prompts} /> : null}

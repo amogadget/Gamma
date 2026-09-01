@@ -23,7 +23,7 @@ from ..blocks_store import (
 from ..db import connect_data_db, page_now, user_db_path, user_uploads_dir
 from ..logbuf import log
 from ..markdown_export import build_tree
-from ..storage import cleanup_orphan_uploads
+from ..storage import cleanup_orphan_uploads, display_filename
 from ..textnorm import fuzzy_pattern
 
 router = APIRouter(prefix="/api", tags=["blocks"])
@@ -51,6 +51,7 @@ class UBReorderRequest(BaseModel):
 class UBByDocCreate(BaseModel):
     default_title: str
     source_url: str | None = None
+    original_filename: str | None = None
 
 
 class UBPutChildrenRequest(BaseModel):
@@ -160,28 +161,50 @@ async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate, request: 
             (doc_id,),
         ).fetchone()
         if row:
-            # Opportunistic backfill of source_url
-            if payload.source_url:
-                props = json.loads(row[4] or "{}")
-                if not props.get("source_url"):
-                    props["source_url"] = payload.source_url
-                    now = page_now()
-                    conn.execute(
-                        "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-                        (json.dumps(props), now, row[0]),
-                    )
-                    conn.commit()
+            # Opportunistic backfill of source/filename markers. auto_title is
+            # only set when the page still has the exact title this request
+            # considers automatic, so a re-upload can never mark a user's
+            # custom title as replaceable by the metadata worker.
+            props = json.loads(row[4] or "{}")
+            changed = False
+            if payload.source_url and not props.get("source_url"):
+                props["source_url"] = payload.source_url
+                changed = True
+            original = display_filename(payload.original_filename)
+            if original and not props.get("original_filename"):
+                props["original_filename"] = original
+                changed = True
+            if not props.get("auto_title") and row[3] == (payload.default_title or "").strip():
+                props["auto_title"] = row[3]
+                changed = True
+            if changed:
+                now = page_now()
+                conn.execute(
+                    "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(props), now, row[0]),
+                )
+                conn.commit()
+                row = (*row[:4], json.dumps(props), *row[5:])
             return block_to_dict(row)
 
         # Create new block under root
         block_id = secrets.token_urlsafe(9)
-        title = (payload.default_title or "").strip() or "Untitled"
+        original = display_filename(payload.original_filename)
+        # Upload callers provide original_filename; use its leaf as the
+        # authoritative automatic title even if a browser leaked a relative
+        # path into default_title.
+        title = original or (payload.default_title or "").strip() or "Untitled"
         now = page_now()
         last_pos = last_child_position(conn, "root")
         new_pos = generate_key_between(last_pos, None)
-        props = {"doc_id": doc_id}
+        # auto_title is a compare-and-swap marker consumed by metadata_fetch:
+        # metadata may replace this value, but an explicit rename clears the
+        # marker first (see ub_update_block below).
+        props = {"doc_id": doc_id, "auto_title": title}
         if payload.source_url:
             props["source_url"] = payload.source_url
+        if original:
+            props["original_filename"] = original
         conn.execute(
             "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
             "VALUES (?, 'root', ?, ?, ?, ?, ?)",
@@ -308,17 +331,24 @@ async def ub_create_block(payload: UBCreateRequest, request: Request):
 async def ub_update_block(block_id: str, payload: UBUpdateRequest, request: Request):
     now = page_now()
     with sqlite3.connect(user_db_path(require_user(request), "pages.db")) as conn:
-        row = conn.execute("SELECT properties FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
+        row = conn.execute(
+            "SELECT content, properties FROM unified_blocks WHERE id = ?", (block_id,)
+        ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="block not found")
         sets = ["updated_at = ?"]
         values: list = [now]
+        existing = json.loads(row[1] or "{}")
         if payload.content is not None:
             sets.append("content = ?")
             values.append(payload.content)
+            # Any explicit title write is user intent. Clearing this marker in
+            # the same transaction prevents a slow metadata lookup from
+            # overwriting a rename that happened while it was in flight.
+            existing.pop("auto_title", None)
         if payload.properties is not None:
-            existing = json.loads(row[0] or "{}")
             existing.update(payload.properties)
+        if payload.properties is not None or payload.content is not None:
             sets.append("properties = ?")
             values.append(json.dumps(existing))
         values.append(block_id)

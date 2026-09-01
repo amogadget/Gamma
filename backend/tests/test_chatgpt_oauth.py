@@ -229,6 +229,7 @@ def test_api_key_entry_can_still_edit_key_and_base_url(erin):
     assert after["base_url"] == "https://my-gateway.example"
     erin.delete(f"/api/ai/providers/{entry['id']}")
 
+
 def test_provider_test_retries_a_backed_off_refresh(erin, monkeypatch):
     """The settings Test button clears the refresh backoff: a click after a
     failed refresh re-attempts the token refresh right away instead of probing
@@ -407,3 +408,174 @@ def test_chatgpt_sse_deltas_join_and_fail():
     empty = [b'data: {"type":"response.completed","response":{"status":"completed"}}\n']
     with pytest.raises(RuntimeError, match="empty response"):
         list(_sse_deltas(empty, "chatgpt"))
+
+
+def test_chatgpt_provider_usage_reports_remaining_windows(erin, monkeypatch):
+    import gamma.routers.ai as ai_mod
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+    ai_mod._USAGE_CACHE.clear()
+    seen = {}
+
+    def fake_open(req, timeout=0):
+        seen["url"] = req.full_url
+        seen["account"] = req.get_header("Chatgpt-account-id")
+        seen["auth"] = req.get_header("Authorization")
+        return _FakeResp({
+            "plan_type": "plus",
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 23,
+                    "limit_window_seconds": 18000,
+                    "reset_at": 1_900_000_000,
+                },
+                "secondary_window": {
+                    "used_percent": 61.5,
+                    "limit_window_seconds": 604800,
+                    "reset_at": 1_900_100_000,
+                },
+            },
+            "credits": {"has_credits": False, "balance": "0"},
+        })
+
+    monkeypatch.setattr(ai_mod, "urlopen", fake_open)
+    r = erin.post(f"/api/ai/providers/{entry['id']}/usage")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["available"] is True and body["plan_type"] == "plus"
+    assert [(w["name"], w["remaining_percent"]) for w in body["windows"]] == [
+        ("5-hour", 77.0), ("Weekly", 38.5),
+    ]
+    # The protocol-owned endpoint is used, never a saved base_url.
+    assert seen["url"] == "https://chatgpt.com/backend-api/wham/usage"
+    assert seen["account"] == "acct-123"
+    # No token is ever echoed back to the browser.
+    assert "Bearer" in seen["auth"]
+    assert "Bearer" not in json.dumps(body)
+    assert entry["oauth"]["access_token"] not in json.dumps(body)
+
+
+def test_chatgpt_provider_usage_is_briefly_cached(erin, monkeypatch):
+    """Reopening the pane must not re-hit the account endpoint every render."""
+    import gamma.routers.ai as ai_mod
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+    ai_mod._USAGE_CACHE.clear()
+    calls = {"n": 0}
+
+    def fake_open(req, timeout=0):
+        calls["n"] += 1
+        return _FakeResp({
+            "plan_type": "pro",
+            "rate_limit": {"primary_window": {"used_percent": 10, "limit_window_seconds": 18000}},
+        })
+
+    monkeypatch.setattr(ai_mod, "urlopen", fake_open)
+    first = erin.post(f"/api/ai/providers/{entry['id']}/usage").json()
+    second = erin.post(f"/api/ai/providers/{entry['id']}/usage").json()
+    assert first["cached"] is False and second["cached"] is True
+    assert calls["n"] == 1
+    assert second["windows"] == first["windows"]
+    ai_mod._USAGE_CACHE.clear()
+
+
+def test_usage_degrades_without_breaking_settings(erin, monkeypatch):
+    """An unstable provider API must not take the Providers pane down with it."""
+    import gamma.routers.ai as ai_mod
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+    ai_mod._USAGE_CACHE.clear()
+
+    def boom(req, timeout=0):
+        raise RuntimeError("account endpoint moved")
+
+    monkeypatch.setattr(ai_mod, "urlopen", boom)
+    r = erin.post(f"/api/ai/providers/{entry['id']}/usage")
+    assert r.status_code == 502
+    assert "usage inquiry failed" in r.json()["detail"]
+    # A non-HTTPError must not become a 500 traceback.
+    assert "AttributeError" not in r.text
+    # Settings itself still works, and no token leaked into the error.
+    settings = erin.get("/api/ai/settings")
+    assert settings.status_code == 200
+    assert entry["oauth"]["access_token"] not in r.text
+    ai_mod._USAGE_CACHE.clear()
+
+
+def test_usage_unavailable_for_api_key_providers(erin):
+    from gamma.ai_settings import load_provider_entries
+
+    created = erin.post("/api/ai/providers",
+                        json={"protocol": "anthropic", "api_key": "sk-ant-usage-000"})
+    assert created.status_code == 200
+    entry = next(e for e in load_provider_entries("erin")
+                 if e.get("api_key") == "sk-ant-usage-000")
+    r = erin.post(f"/api/ai/providers/{entry['id']}/usage")
+    assert r.status_code == 200
+    assert r.json()["available"] is False
+    assert "does not expose" in r.json()["reason"]
+    erin.delete(f"/api/ai/providers/{entry['id']}")
+
+
+def test_usage_404s_for_unknown_provider(erin):
+    assert erin.post("/api/ai/providers/no-such-entry/usage").status_code == 404
+
+
+def test_usage_http_error_reports_upstream_detail(erin, monkeypatch):
+    """An actual HTTP error from the provider still yields its status/body."""
+    import gamma.routers.ai as ai_mod
+
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+    ai_mod._USAGE_CACHE.clear()
+
+    def http_error(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {},
+                                     io.BytesIO(b'{"detail":"slow down"}'))
+
+    monkeypatch.setattr(ai_mod, "urlopen", http_error)
+    r = erin.post(f"/api/ai/providers/{entry['id']}/usage")
+    assert r.status_code == 502
+    assert "429" in r.json()["detail"]
+    ai_mod._USAGE_CACHE.clear()
+
+
+def test_usage_invalid_json_shape_degrades(erin, monkeypatch):
+    """A non-dict reply is 'unavailable', not a crash."""
+    import gamma.routers.ai as ai_mod
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+    ai_mod._USAGE_CACHE.clear()
+    monkeypatch.setattr(ai_mod, "urlopen", lambda req, timeout=0: _FakeResp(["not", "a", "dict"]))
+    r = erin.post(f"/api/ai/providers/{entry['id']}/usage")
+    assert r.status_code == 502
+    assert "invalid data" in r.json()["detail"]
+    ai_mod._USAGE_CACHE.clear()
+
+
+def test_usage_tolerates_garbage_window_values(erin, monkeypatch):
+    """Unparseable window fields are dropped, not fatal."""
+    import gamma.routers.ai as ai_mod
+    from gamma.ai_settings import load_provider_entries
+
+    entry = next(e for e in load_provider_entries("erin") if e.get("protocol") == "chatgpt")
+    ai_mod._USAGE_CACHE.clear()
+    monkeypatch.setattr(ai_mod, "urlopen", lambda req, timeout=0: _FakeResp({
+        "plan_type": "plus",
+        "rate_limit": {
+            "primary_window": {"used_percent": "not a number"},
+            "secondary_window": {"used_percent": 150, "limit_window_seconds": "soon"},
+        },
+    }))
+    r = erin.post(f"/api/ai/providers/{entry['id']}/usage")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # The bad one is dropped; the clamped one survives at 100%.
+    assert [w["used_percent"] for w in body["windows"]] == [100.0]
+    assert body["windows"][0]["remaining_percent"] == 0.0
+    ai_mod._USAGE_CACHE.clear()

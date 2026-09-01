@@ -404,6 +404,157 @@ def ai_provider_test(provider_id: str, request: Request):
     return {"ok": True, "model": model, "latency_ms": int((time.time() - started) * 1000)}
 
 
+# --- Subscription usage (ChatGPT OAuth only) ----------------------------------
+# The provider's usage API is undocumented and unstable, so this is treated as
+# best-effort decoration for the Providers pane: any failure degrades to
+# "unavailable" and must never break settings. Results are cached briefly so
+# reopening the pane doesn't re-hit the account endpoint on every render.
+_USAGE_TTL = 60          # seconds
+_USAGE_CACHE_CAP = 64    # (user, provider) entries
+_USAGE_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()  # key -> (fetched_at, payload)
+_USAGE_LOCK = threading.Lock()
+
+
+def _usage_cached(key: tuple) -> dict | None:
+    with _USAGE_LOCK:
+        hit = _USAGE_CACHE.get(key)
+        if not hit:
+            return None
+        fetched_at, payload = hit
+        if time.time() - fetched_at > _USAGE_TTL:
+            _USAGE_CACHE.pop(key, None)
+            return None
+        _USAGE_CACHE.move_to_end(key)
+        return payload
+
+
+def _usage_store(key: tuple, payload: dict) -> None:
+    with _USAGE_LOCK:
+        _USAGE_CACHE[key] = (time.time(), payload)
+        _USAGE_CACHE.move_to_end(key)
+        while len(_USAGE_CACHE) > _USAGE_CACHE_CAP:
+            _USAGE_CACHE.popitem(last=False)
+
+
+def _usage_window(raw: dict | None, name: str = "") -> dict | None:
+    """One rate-limit window from the provider's reply, or None if unusable."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        used = max(0.0, min(100.0, float(raw.get("used_percent", 0))))
+    except (TypeError, ValueError):
+        return None
+    try:
+        seconds = max(0, int(raw.get("limit_window_seconds") or 0))
+    except (TypeError, ValueError):
+        seconds = 0
+    try:
+        reset_at = int(raw.get("reset_at") or 0)
+    except (TypeError, ValueError):
+        reset_at = 0
+    if not name:
+        if 4 * 3600 <= seconds <= 6 * 3600:
+            name = "5-hour"
+        elif 6 * 86400 <= seconds <= 8 * 86400:
+            name = "Weekly"
+        elif seconds:
+            name = f"{max(1, round(seconds / 3600))}-hour"
+        else:
+            name = "Usage"
+    return {
+        "name": name,
+        "used_percent": used,
+        "remaining_percent": max(0.0, 100.0 - used),
+        "window_seconds": seconds,
+        "reset_at": reset_at,
+    }
+
+
+# Sync def: this read-only account call runs in FastAPI's threadpool.
+@router.post("/ai/providers/{provider_id}/usage")
+def ai_provider_usage(provider_id: str, request: Request):
+    """Return subscription allowance for a ChatGPT OAuth provider.
+
+    API-key protocols have no portable quota endpoint: OpenAI-compatible
+    gateways and Anthropic-style services all expose different billing/admin
+    APIs. Report that honestly instead of presenting token counts as quota.
+    """
+    user = _require_editor(request)
+    entry = next((e for e in load_provider_entries(user) if e.get("id") == provider_id), None)
+    if not entry:
+        raise HTTPException(status_code=404, detail="provider not found")
+    if entry.get("protocol") != "chatgpt":
+        return {"available": False,
+                "reason": "This API-key provider does not expose a standard remaining-usage percentage."}
+
+    cache_key = (user, provider_id)
+    cached = _usage_cached(cache_key)
+    if cached is not None:
+        return {**cached, "cached": True}
+
+    clear_refresh_backoff(user, provider_id)
+    rt = ai_runtime(user)
+    conf = rt["providers"].get(provider_id)
+    if not conf:
+        return {"available": False, "reason": "Sign in with ChatGPT again to query usage."}
+    # Use the administrator-controlled protocol endpoint, never the saved entry
+    # value: OAuth entries cannot redirect their bearer token.
+    base = str(AI_PROTOCOLS["chatgpt"]["base_url"]).rstrip("/")
+    # The model endpoint is .../backend-api/codex; Codex's account client uses
+    # the sibling .../backend-api/wham/usage endpoint.
+    account_base = base[:-len("/codex")] if base.endswith("/codex") else base
+    url = f"{account_base}/wham/usage"
+    headers = {
+        "Authorization": f"Bearer {conf['api_key']}",
+        "Accept": "application/json",
+        "User-Agent": "codex-cli",
+    }
+    if conf.get("account_id"):
+        headers["ChatGPT-Account-Id"] = conf["account_id"]
+    req = URLRequest(url, headers=headers, method="GET")
+    try:
+        data = _model_catalog_json(req)
+    except urllib.error.HTTPError as e:
+        # Only an HTTPError carries .code/.reason; _upstream_detail would raise
+        # AttributeError on anything else and turn a degraded provider into a
+        # 500 traceback.
+        raise HTTPException(status_code=502,
+                            detail=f"usage inquiry failed: {_upstream_detail(e, 200)}")
+    except Exception as e:
+        # URLError, socket timeout, malformed JSON — the provider API is
+        # undocumented and unstable, so anything here is "unavailable", never a
+        # server error. The exception text is not echoed: it can carry the
+        # request URL and we keep the surface minimal.
+        log.warning(f"[ai_usage] {type(e).__name__}: {e}")
+        raise HTTPException(status_code=502, detail="usage inquiry failed: provider unreachable")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=502, detail="usage inquiry returned invalid data")
+
+    rate = data.get("rate_limit")
+    rate = rate if isinstance(rate, dict) else {}
+    windows = [w for w in (
+        _usage_window(rate.get("primary_window")),
+        _usage_window(rate.get("secondary_window")),
+    ) if w]
+    for extra in data.get("additional_rate_limits") or []:
+        if not isinstance(extra, dict):
+            continue
+        extra_rate = extra.get("rate_limit") if isinstance(extra.get("rate_limit"), dict) else {}
+        window = _usage_window(extra_rate.get("primary_window"),
+                               str(extra.get("limit_name") or "Additional limit"))
+        if window:
+            windows.append(window)
+    payload = {
+        "available": bool(windows),
+        "plan_type": str(data.get("plan_type") or ""),
+        "windows": windows,
+        "credits": data.get("credits") if isinstance(data.get("credits"), dict) else None,
+        "reason": "" if windows else "The provider returned no usage windows.",
+    }
+    _usage_store(cache_key, payload)
+    return {**payload, "cached": False}
+
+
 # Fallback when the live listing fails on a connected entry (offline, backend
 # hiccup): models the ChatGPT backend has been known to serve.
 _CHATGPT_MODEL_FALLBACK = [

@@ -200,28 +200,54 @@ def _load_page(user: str, block_id: str):
     return row[0] or "", json.loads(row[1] or "{}")
 
 
-def _save_props(user: str, block_id: str, updates: dict | None = None, remove: tuple = ()):
+def _save_props(user: str, block_id: str, updates: dict | None = None, remove: tuple = (),
+                auto_title: str = "") -> bool:
     """Apply a delta to the page's properties, re-reading them inside the write.
 
     Lookups take seconds to minutes, and the user can label the page (which
     merges into properties via PUT /api/blocks/{id}) at any point during one.
     Writing back the dict we read before the lookup would silently drop that
-    label, so only the keys metadata owns are touched here."""
+    label, so only the keys metadata owns are touched here.
+
+    `auto_title`, when given, renames the page — but only as a compare-and-swap
+    against the automatic-title marker, so a rename the user made while the
+    lookup was in flight always wins. Returns whether the rename happened."""
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        # Serialize the read/merge/write. Whichever wins the lock first is
+        # safe: a later explicit rename wins after this commit, while a rename
+        # that committed first is observed with auto_title already cleared.
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT properties FROM unified_blocks WHERE id = ?", (block_id,)
+            "SELECT content, properties FROM unified_blocks WHERE id = ?", (block_id,)
         ).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="page not found")
-        props = json.loads(row[0] or "{}")
+        content = row[0] or ""
+        props = json.loads(row[1] or "{}")
         props.update(updates or {})
         for key in remove:
             props.pop(key, None)
-        conn.execute(
-            "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(props), page_now(), block_id),
-        )
+        # Rename only while the current title still matches the server-side
+        # automatic-title marker. The legacy prefix keeps pages created before
+        # this marker existed eligible; an explicit PUT title edit clears
+        # auto_title in blocks.py.
+        rename = bool(auto_title and (
+            (props.get("auto_title") and props.get("auto_title") == content)
+            or (not props.get("auto_title") and content.startswith("PDF Notes - "))
+        ))
+        if rename:
+            props.pop("auto_title", None)
+            conn.execute(
+                "UPDATE unified_blocks SET content = ?, properties = ?, updated_at = ? WHERE id = ?",
+                (auto_title, json.dumps(props), page_now(), block_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(props), page_now(), block_id),
+            )
         conn.commit()
+        return rename
 
 
 @router.get("/metadata/status")
@@ -332,9 +358,14 @@ def metadata_fetch(payload: MetaFetchRequest, request: Request):
     if not bibtex:
         bibtex = _build_bibtex(meta)
     # ppt_cite is dropped because the metadata it was generated from changed
-    _save_props(user, payload.block_id, {"meta": meta, "bibtex": bibtex},
-                remove=("meta_error", "ppt_cite"))
-    return {"meta": meta, "bibtex": bibtex, "source": meta.get("source", ""), "cached": False}
+    title = str(meta.get("title") or "").strip()
+    title_updated = _save_props(
+        user, payload.block_id, {"meta": meta, "bibtex": bibtex},
+        remove=("meta_error", "ppt_cite"), auto_title=title,
+    )
+    return {"meta": meta, "bibtex": bibtex, "source": meta.get("source", ""),
+            "cached": False, "title_updated": title_updated,
+            "page_title": title if title_updated else ""}
 
 
 class MetaUpdateRequest(BaseModel):

@@ -209,6 +209,8 @@ async function copyRich(html, plain) {
 }
 
 const isPdfFile = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
+const isMarkdownFile = (f) => /\.(?:md|markdown)$/i.test(f.name || "")
+  || /^(?:text\/markdown|text\/x-markdown)$/i.test(f.type || "");
 
 async function apiJson(url, options = {}) {
   const r = await fetch(url, { ...options, credentials: "include" });
@@ -262,6 +264,7 @@ export {
   sha256,
   getDocIdForUrl,
   isPdfFile,
+  isMarkdownFile,
   apiJson,
   resolvePdfUrl,
   setExpectedUser,

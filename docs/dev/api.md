@@ -26,7 +26,7 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 ### Blocks (`blocks.py`) — the core data model
 | Method | Path | Purpose |
 |---|---|---|
-| GET/POST | `/blocks/by-doc/{doc_id}` | blocks of a PDF page |
+| GET/POST | `/blocks/by-doc/{doc_id}` | blocks of a PDF page. POST accepts `original_filename`, reduced to a leaf and used as the automatic title; the page stores it as an `auto_title` compare-and-swap marker |
 | GET | `/blocks/{id}/children`, `/{id}/subtree`, `/{id}/backlinks` | tree reads |
 | POST/PUT/DELETE | `/blocks`, `/blocks/{id}` | CRUD |
 | PUT | `/blocks/{id}/children` | replace the whole subtree (delete + reinsert; triggers orphan-upload cleanup) |
@@ -57,7 +57,7 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 ### Metadata (`metadata.py`)
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/metadata/fetch` | resolve a paper (arXiv → DOI → AI extraction), cache meta + BibTeX on the page |
+| POST | `/metadata/fetch` | resolve a paper (arXiv → DOI → AI extraction), cache meta + BibTeX on the page. Renames the page to the resolved title **only** while the stored title still equals the `auto_title` marker (or the legacy `PDF Notes - ` prefix), under `BEGIN IMMEDIATE`; reports the outcome as `title_updated`/`page_title`. Any explicit `PUT /blocks/{id}` content write clears the marker, so a rename made during a slow lookup always wins |
 | POST | `/metadata/update` | save hand-edited fields (rebuilds BibTeX) |
 | POST | `/metadata/cite` | BibTeX → PPT-style citation via AI |
 | GET | `/metadata/status` | library-wide health table (feeds Settings → Library) |
@@ -70,6 +70,7 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 | GET | `/ai/settings` | masked provider list (key hints only) |
 | POST/PUT/DELETE | `/ai/providers[/{id}]` | manage provider entries |
 | POST | `/ai/providers/{id}/test` | live probe of one credential |
+| POST | `/ai/providers/{id}/usage` | ChatGPT subscription allowance windows; explicitly unavailable for generic API-key providers. Best-effort: any provider failure degrades to 502 "unavailable" and never returns a token. Uses the protocol-owned base URL, never the saved entry value, and caches per (user, provider) for 60s |
 | POST | `/ai/model-catalog` | list models available to a credential |
 | POST | `/ai/oauth/chatgpt/start`, `/complete` | ChatGPT OAuth (PKCE, pasted callback URL) |
 | POST | `/ai/transcribe` | voice dictation |
@@ -86,6 +87,7 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/import/logseq` | Logseq .pdf + .edn import |
+| POST | `/import/markdown` | UTF-8 `.md`/`.markdown` file → note page and nested blocks (optional `folder`). Max 5 MB / 5000 blocks; filename reduced to a leaf; parsed into pages.db with no file stored on disk. Idempotent by content digest — re-importing the same bytes returns the existing page (`duplicate: true`) instead of a second copy |
 | POST | `/import/pdf-annotations` | import annotations embedded in the PDF (idempotent; optional `strip`) |
 | POST | `/import/zotero` | Zotero library import: zip of a "Zotero RDF" export (multipart `file`; `strip`, optional `folder` prefix). Items→pages+metadata, collections→folders, tags→labels, notes→blocks; embedded annotations via the same importer. Idempotent by file hash / `zotero_key` |
 | POST | `/import-data?mode=merge` | additive import for full backups and scoped Gamma exports; scoped archives reject replace mode, validate DB/chat/upload scope, and never overwrite existing pages, chats, or files |

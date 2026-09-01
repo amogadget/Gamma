@@ -16,11 +16,14 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from fractional_indexing import generate_key_between, generate_n_keys_between
 
+from ..ai_tools import clean_path
 from ..auth import require_user
 from ..db import page_now, pdf_upload_path, user_db_path, user_uploads_dir
 from ..server_settings import check_upload_allowed
 from ..blocks_store import last_child_position
 from ..logbuf import log
+from ..markdown_import import md_to_blocks, split_frontmatter
+from ..storage import display_filename
 from ..logseq_import import (
     edn_highlight_position,
     edn_highlight_to_block,
@@ -198,6 +201,91 @@ async def import_logseq(
         conn.commit()
 
     return {"ok": True, "block_id": block_id, "doc_id": digest, "source_url": source_url, "imported": inserted}
+
+
+# --- Plain Markdown note import -----------------------------------------------
+
+MAX_MARKDOWN_BYTES = 5 * 1024 * 1024
+
+
+@router.post("/import/markdown")
+async def import_markdown(request: Request, file: UploadFile = File(...),
+                          folder: str = Form("")):
+    """Turn one Markdown file into a note page and nested note blocks.
+
+    Markdown is data, not an uploaded web asset: the parsed blocks are stored in
+    pages.db and no original file is served back. This also makes folder and
+    single-file uploads share exactly the same import path.
+
+    Re-importing the same bytes returns the page created the first time rather
+    than duplicating it — the content digest is the identity, so a folder
+    upload replayed after a partial failure converges instead of piling up.
+    """
+    user = require_user(request)
+    raw = await file.read(MAX_MARKDOWN_BYTES + 1)
+    if len(raw) > MAX_MARKDOWN_BYTES:
+        raise HTTPException(status_code=413, detail="Markdown file exceeds 5 MB")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Markdown file must be UTF-8")
+
+    original = display_filename(file.filename, "note.md")
+    frontmatter_title, body = split_frontmatter(text)
+    fallback = re.sub(r"\.(?:md|markdown)$", "", original, flags=re.I).strip() or "Untitled note"
+    title = (frontmatter_title or fallback).strip()[:500]
+    tree = md_to_blocks(body)
+    clean_folder = clean_path(folder)
+    digest = hashlib.sha256(raw).hexdigest()[:24]
+    props = {"original_filename": original, "markdown_import": digest}
+    if clean_folder:
+        props["folder"] = clean_folder
+
+    now = page_now()
+    page_id = secrets.token_urlsafe(9)
+    imported = 0
+    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        # Idempotency: the same file imported twice is the same page. Serialize
+        # the check with the insert so two concurrent uploads of one file can't
+        # both decide they are the first.
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT id, content FROM unified_blocks WHERE parent_id = 'root' "
+            "AND json_extract(properties, '$.markdown_import') = ?",
+            (digest,),
+        ).fetchone()
+        if existing:
+            conn.commit()
+            return {"ok": True, "block_id": existing[0], "title": existing[1],
+                    "original_filename": original, "imported": 0,
+                    "folder": clean_folder, "duplicate": True}
+        pos = generate_key_between(last_child_position(conn, "root"), None)
+        conn.execute(
+            "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
+            "VALUES (?,'root',?,?,?,?,?)",
+            (page_id, pos, title, json.dumps(props), now, now),
+        )
+        pending = [(page_id, tree)]
+        while pending:
+            parent_id, nodes = pending.pop()
+            if not nodes:
+                continue
+            positions = generate_n_keys_between(None, None, n=len(nodes))
+            for node, child_pos in zip(nodes, positions):
+                child_id = secrets.token_urlsafe(9)
+                conn.execute(
+                    "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?)",
+                    (child_id, parent_id, child_pos, node.get("content", ""), "{}", now, now),
+                )
+                imported += 1
+                if node.get("children"):
+                    pending.append((child_id, node["children"]))
+        conn.commit()
+
+    return {"ok": True, "block_id": page_id, "title": title,
+            "original_filename": original, "imported": imported,
+            "folder": clean_folder, "duplicate": False}
 
 
 # --- Annotations embedded in the PDF file itself ------------------------------

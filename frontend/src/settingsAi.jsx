@@ -4,8 +4,55 @@
 import React from "react";
 import { parseFolderTags } from "./libraryUtils";
 import { MenuSelect } from "./menus";
-import { PaneHead, Section, SubDialog, Step, Field, Empty } from "./settingsKit";
-import { KeyIcon, PenIcon, RefreshIcon, SparklesIcon, Trash2Icon } from "./icons";
+import { PaneHead, Section, SubDialog, Step, Field, Empty, PercentMeter, Row } from "./settingsKit";
+import { GlobeIcon, KeyIcon, MicIcon, PaperIcon, PenIcon, RefreshIcon, SparklesIcon, Trash2Icon } from "./icons";
+
+const DICTATION_LANGS = [
+  ["", "Auto-detect"], ["en", "English"], ["zh", "中文"], ["ja", "日本語"], ["ko", "한국어"],
+  ["de", "Deutsch"], ["fr", "Français"], ["es", "Español"], ["pt", "Português"],
+  ["it", "Italiano"], ["ru", "Русский"], ["hi", "हिन्दी"], ["ar", "العربية"],
+];
+
+function formatPercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "0";
+  return Number.isInteger(n) ? String(n) : n.toFixed(1);
+}
+
+// Subscription allowance for a ChatGPT sign-in provider. The endpoint is
+// best-effort (the provider API is undocumented), so every failure renders as
+// an explanation rather than breaking the pane.
+function ProviderUsage({ usage }) {
+  if (usage.busy) return <span className="aiProvDesc">Checking usage…</span>;
+  if (!usage.available) {
+    return <span className="aiProvDesc aiKeysError">{usage.reason || "Usage percentage unavailable"}</span>;
+  }
+  return (
+    <span className="aiUsage">
+      {(usage.windows || []).map((window, index) => {
+        const used = Number(window.used_percent) || 0;
+        const left = Number(window.remaining_percent) || 0;
+        const reset = window.reset_at
+          ? `resets ${new Date(window.reset_at * 1000).toLocaleString([], {
+              month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+            })}`
+          : "";
+        const label = [usage.plan_type ? `${usage.plan_type}` : "", window.name]
+          .filter(Boolean).join(" · ");
+        const detail = `${formatPercent(used)}% used · ${formatPercent(left)}% left${reset ? ` · ${reset}` : ""}`;
+        return (
+          <span className="aiUsageWindow" key={`${window.name}-${index}`}>
+            <span className="aiUsageHead">
+              <span>{label}</span>
+              <span title={detail}>{detail}</span>
+            </span>
+            <PercentMeter percent={used} barOnly />
+          </span>
+        );
+      })}
+    </span>
+  );
+}
 
 function ProviderForm({ value, onCancel }) {
   const {
@@ -197,9 +244,46 @@ export function AiSettings({ value }) {
   const providers = value.aiKeysInfo?.providers || [];
   return (
     <>
-      <PaneHead icon={KeyIcon} title="Providers">
-        Your own API keys, stored on the server and never sent back to the browser.
+      <PaneHead icon={KeyIcon} title="Provider and models">
+        Connect AI providers and configure every model available to chat and AI jobs.
+        Keys are stored on the server and never sent back to the browser.
       </PaneHead>
+      <Section title="AI jobs">
+        <Row icon={PaperIcon} label="Metadata model"
+          hint="Used only when identifiers cannot resolve the paper"
+          title="Metadata first tries arXiv and DOI records. This model is used only when metadata has to be AI-extracted from PDF text; a fast, cheap model is usually enough.">
+          <MenuSelect
+            label="Metadata model"
+            value={value.metaModel && (value.aiModels || []).some((model) => model.id === value.metaModel)
+              ? value.metaModel : ""}
+            onChange={value.setMetaModel}
+            options={[
+              ["", "Same as chat"],
+              ...(value.aiModels || []).map((model) => [model.id, model.model]),
+            ]}
+          />
+        </Row>
+        <Row icon={MicIcon} label="Dictation model"
+          hint="Speech-to-text for the chat mic button"
+          title="gpt-4o-transcribe is what ChatGPT dictation uses; it needs an OpenAI-protocol provider key.">
+          <MenuSelect
+            label="Dictation model" value={value.dictationModel} onChange={value.setDictationModel}
+            options={[
+              ["gpt-4o-transcribe", "gpt-4o-transcribe"],
+              ["gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"],
+              ["whisper-1", "whisper-1"],
+            ]}
+          />
+        </Row>
+        <Row icon={GlobeIcon} label="Dictation language"
+          hint="Naming the language improves accuracy"
+          title="Telling the model the spoken language improves accuracy; auto-detect handles mixed or unlisted languages.">
+          <MenuSelect
+            label="Dictation language" value={value.dictationLang} onChange={value.setDictationLang}
+            options={DICTATION_LANGS}
+          />
+        </Row>
+      </Section>
       {!value.aiKeysInfo && !value.aiKeysError ? <Empty icon={KeyIcon}>Loading…</Empty> : null}
       {value.aiKeysInfo ? (
         <>
@@ -210,10 +294,11 @@ export function AiSettings({ value }) {
                 : "Guest accounts cannot store API keys. Ask the admin for an account."}
             </Empty>
           ) : null}
-          {providers.length ? <Section title={providers.length > 1 ? "Keys · pick the one AI requests use" : "Keys"} /> : null}
+          {providers.length ? <Section title={providers.length > 1 ? "Providers · pick the one AI requests use" : "Provider"} /> : null}
           {providers.map((provider) => {
             const protocol = value.aiProtocolOf(provider.protocol);
             const test = value.aiKeyTests?.[provider.id];
+            const usage = value.aiKeyUsage?.[provider.id];
             const oauth = value.isOauthProto(provider.protocol);
             const active = activeKeyId === provider.id;
             return (
@@ -243,6 +328,7 @@ export function AiSettings({ value }) {
                     {provider.base_url ? ` · ${provider.base_url}` : ""}
                   </span>
                   <span className="aiProvDesc aiProvModels">
+                    <span className="aiProvModelsLabel">Models</span>
                     {(parseFolderTags(provider.models).length
                       ? parseFolderTags(provider.models)
                       : [protocol?.default_model || "provider default"]).map((model) => (
@@ -258,6 +344,9 @@ export function AiSettings({ value }) {
                           : `✗ ${test.error}`}
                     </span>
                   ) : null}
+                  {usage ? (
+                    <ProviderUsage usage={usage} />
+                  ) : null}
                 </span>
                 {canEdit ? (
                   <span className="aiProvActions">
@@ -265,6 +354,16 @@ export function AiSettings({ value }) {
                       title="Send a tiny AI request through this credential to check it still works"
                       onClick={() => value.testAiProvider(provider)}>
                       Test
+                    </button>
+                    <button className="uiBtn sm" disabled={value.aiKeysBusy || usage?.busy}
+                      title="Query remaining allowance; subscription percentages are available for ChatGPT sign-in providers"
+                      onClick={() => value.queryAiProviderUsage(provider)}>
+                      Usage
+                    </button>
+                    <button className="uiBtn sm" disabled={value.aiKeysBusy}
+                      title="Configure all models offered by this provider"
+                      onClick={() => value.startEditAiProvider(provider)}>
+                      Models
                     </button>
                     <button className="uiBtn sm iconSq" disabled={value.aiKeysBusy} title="Edit this key"
                       aria-label="Edit key" onClick={() => value.startEditAiProvider(provider)}>
@@ -281,7 +380,7 @@ export function AiSettings({ value }) {
           })}
           {canEdit ? (
             <div className="reportModalBtns settingsAlignStart">
-              <button className="uiBtn primary" onClick={value.startAddAiProvider}>+ Add key</button>
+              <button className="uiBtn primary" onClick={value.startAddAiProvider}>+ Add provider</button>
             </div>
           ) : null}
           {value.aiKeysForm ? (
