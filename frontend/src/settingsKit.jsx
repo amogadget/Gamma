@@ -126,14 +126,24 @@ export function Field({ label, hint, children }) {
 
 // Number input with a fixed unit suffix, so "MB" never has to live in the
 // label text. Empty string means "inherit" wherever the caller says so.
-export function UnitInput({ value, onChange, unit, placeholder, min, onEnter }) {
+// Two modes: live (onChange fires per keystroke — for draft state the caller
+// buffers itself) or deferred (onCommit fires the raw text on blur/Enter —
+// for handlers that clamp into range, so the clamp doesn't fight half-typed
+// values: typing "25" into a 1–32 field must not snap at "2").
+export function UnitInput({ value, onChange, onCommit, unit, placeholder, min, onEnter }) {
+  const [draft, setDraft] = React.useState(null); // non-null only while editing deferred
   return (
     <span className="unitInput">
       <input
         className="aiKeyInput" type="number" min={min}
-        placeholder={placeholder} value={value}
-        onChange={(event) => onChange(event.target.value)}
-        onKeyDown={onEnter ? (event) => { if (event.key === "Enter") onEnter(); } : undefined}
+        placeholder={placeholder} value={onCommit ? (draft ?? String(value ?? "")) : value}
+        onChange={(event) => (onCommit ? setDraft(event.target.value) : onChange(event.target.value))}
+        onBlur={onCommit ? () => { if (draft != null) { onCommit(draft); setDraft(null); } } : undefined}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter") return;
+          if (onCommit) event.currentTarget.blur(); // commit via onBlur
+          onEnter?.();
+        }}
       />
       <span className="unitSuffix">{unit}</span>
     </span>

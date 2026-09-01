@@ -1213,13 +1213,14 @@ body {
   z-index: var(--z-dock);
 }
 
-/* Zoom column — mid-left, always visible, same look as the TOC and
-   fullscreen buttons (28px-wide elevated rounded box, tertiary icons). */
-.pdfZoomOverlay {
+/* Viewer control boxes — ONE surface, three placements: the zoom column
+   (mid-left), the TOC toggle (top-left) and the fullscreen toggle
+   (bottom-left) are all a .pdfCtlBox: the same elevated 28px-wide rounded
+   box with the same 22px transparent inner buttons. Only the position
+   differs, via the modifier class — so any change to how these render
+   (sizing, touch targets, theming) lands on all three at once. */
+.pdfCtlBox {
   position: absolute;
-  left: 14px;
-  top: 50%;
-  transform: translateY(-50%);
   z-index: 20;
   display: flex;
   flex-direction: column;
@@ -1231,45 +1232,38 @@ body {
   border-radius: 8px;
   padding: 3px 0;
 }
-.pdfZoomOverlay button {
+.pdfCtlBox button {
   background: transparent;
   border: none;
   width: 22px;
   height: 22px;
   padding: 0;
   border-radius: 6px;
-}
-:is(.pdfZoomOverlay button, .pdfOutlineBtn, .pdfFullscreenBtn) {
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-tertiary);
   cursor: pointer;
 }
-:is(.pdfZoomOverlay button, .pdfOutlineBtn, .pdfFullscreenBtn):hover {
+.pdfCtlBox button:hover {
   color: var(--text-primary);
   background: var(--bg-active);
 }
-:is(.pdfOutlineBtn, .pdfFullscreenBtn) {
-  position: absolute;
-  z-index: 20;
-  width: 28px;
-  height: 28px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.pdfZoomOverlay, .pdfOutlineBtn, .pdfFullscreenBtn) {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfCtlBox {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
-
-/* --- PDF table of contents (document outline) --- */
-.pdfOutlineBtn {
+.pdfZoomOverlay {
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.pdfOutlineBox {
   top: 8px;
   left: 14px;
 }
-.pdfOutlineBtn.open {
-  color: var(--accent);
+.pdfFullscreenBox {
+  bottom: 14px;
+  left: 14px;
 }
 
 /* Current-page widget — top-right, same elevated look as the TOC button.
@@ -1373,12 +1367,7 @@ body {
   background: var(--bg-hover);
 }
 
-/* Fullscreen toggle — bottom-left, same look as the TOC button. */
-.pdfFullscreenBtn {
-  bottom: 14px;
-  left: 14px;
-}
-
+/* --- PDF table of contents (document outline) --- */
 .pdfOutlinePanel {
   position: absolute;
   top: 42px;
@@ -3911,7 +3900,7 @@ button.pdfOutlineChevron:hover {
   user-select: none !important;
   -webkit-user-select: none !important;
 }
-.pdfZoomOverlay button.modeActive {
+.pdfCtlBox button.modeActive {
   color: var(--accent);
   background: var(--bg-active);
 }

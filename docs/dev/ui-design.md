@@ -72,7 +72,10 @@ Settings panes are built only from
 
 Five states: System (default, tracks `prefers-color-scheme` live) or pinned
 Light/Dark/Sepia/Gray — `gamma-theme` in localStorage (valid values are `THEMES`
-in `prefs.js`), applied as `data-theme` on the root element. An inline script
+in `prefs.js`), applied as `data-theme` on the root element. The choice (plus
+"Flip page colors") also follows the account through `/api/prefs/appearance` —
+server wins on login and on window focus, changes push back; localStorage
+stays the instant-paint cache the `index.html` script reads. An inline script
 in `index.html` applies a pinned theme before
 first paint; `color-scheme` follows so native controls match. Scrollbars are
 themed rather than left to the OS: a global `scrollbar-width: thin` +

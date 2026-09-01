@@ -67,7 +67,7 @@ import {
 } from "./logseqPdfModel";
 import { loadSession, saveSession, clearSession } from "./sessionState";
 import { AuthLoading, LoginPage, SessionConflictPage } from "./LoginPage";
-import { TRANSLATE_LANGS, useAppPrefs } from "./prefs";
+import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useTransfers } from "./useTransfers";
 import { usePdfScrollRestore } from "./usePdfScrollRestore";
 import SettingsDialog from "./settings";
@@ -662,12 +662,16 @@ export default function App() {
       recentsSyncRef.current = "";
       readPosRef.current = {};
       readPosLoadedRef.current = false;
+      appearanceSyncRef.current = "";
+      appearanceLoadedRef.current = false;
       return;
     }
     prefsUserRef.current = u;
     tabsSyncRef.current = "";
     recentsSyncRef.current = "";
     snapsSyncedRef.current = false;
+    appearanceSyncRef.current = "";
+    appearanceLoadedRef.current = false;
     // Local cache first for instant paint…
     let localTabs = [];
     try {
@@ -728,6 +732,25 @@ export default function App() {
       .catch(() => {
         if (prefsUserRef.current === u) readPosLoadedRef.current = true;
       });
+    // Appearance: apply the account's copy; a validation miss (stale value
+    // shape) leaves the local state, and the push effect then normalizes the
+    // server copy. A GET failure keeps the gate closed so this session can't
+    // clobber a copy it never saw.
+    apiJson(`${API}/prefs/appearance`)
+      .then((d) => {
+        if (prefsUserRef.current !== u) return;
+        if (d.updated_at && d.value && typeof d.value === "object") {
+          const t = THEMES.includes(d.value.theme) ? d.value.theme : undefined;
+          const pd = typeof d.value.pdfDark === "boolean" ? d.value.pdfDark : undefined;
+          if (t !== undefined && pd !== undefined) {
+            appearanceSyncRef.current = JSON.stringify({ theme: t, pdfDark: pd });
+          }
+          if (t !== undefined) setTheme(t);
+          if (pd !== undefined) setPdfDarkPage(pd);
+        }
+        appearanceLoadedRef.current = true;
+      })
+      .catch(() => {});
     apiJson(`${API}/prefs/notes-pos`)
       .then((d) => {
         if (prefsUserRef.current !== u) return;
@@ -1438,6 +1461,12 @@ export default function App() {
   const prefsUserRef = useRef(""); // whose tabs/folders are currently loaded
   const tabsSyncRef = useRef(""); // updated_at of the last server state we applied/wrote
   const tabsPushTimerRef = useRef(null);
+  // Appearance (theme + flipped PDF colors) follows the account through
+  // /api/prefs/appearance: the server copy wins on login, a browser that
+  // syncs first seeds it, later changes push back. localStorage stays the
+  // instant-paint cache — the index.html pre-paint script keeps reading it.
+  const appearanceSyncRef = useRef("");      // JSON of the last state applied/pushed
+  const appearanceLoadedRef = useRef(false); // gate: no pushes before a successful pull
   function pushTabsToServer(tabs) {
     if (tabsPushTimerRef.current) clearTimeout(tabsPushTimerRef.current);
     tabsPushTimerRef.current = setTimeout(async () => {
@@ -1751,6 +1780,23 @@ export default function App() {
         if (mergeNotesPos(u, d.value)) pushNotesPosSoon(u);
       } catch {}
     }
+    async function pullAppearance() {
+      const u = prefsUserRef.current;
+      if (!u) return;
+      try {
+        const d = await apiJson(`${API}/prefs/appearance`);
+        if (prefsUserRef.current !== u || !d.updated_at || !d.value || typeof d.value !== "object") return;
+        const t = THEMES.includes(d.value.theme) ? d.value.theme : undefined;
+        const pd = typeof d.value.pdfDark === "boolean" ? d.value.pdfDark : undefined;
+        if (t === undefined || pd === undefined) return;
+        appearanceLoadedRef.current = true;
+        const snap = JSON.stringify({ theme: t, pdfDark: pd });
+        if (appearanceSyncRef.current === snap) return;
+        appearanceSyncRef.current = snap;
+        setTheme(t);
+        setPdfDarkPage(pd);
+      } catch {}
+    }
     async function pullRecents() {
       const u = prefsUserRef.current;
       if (!u || document.hidden || recentsPushTimerRef.current) return;
@@ -1825,6 +1871,7 @@ export default function App() {
       pullNotesPos();
       pullRecents();
       pullSnaps();
+      pullAppearance();
     };
     const onVisibility = () => {
       if (document.hidden) {
@@ -2280,6 +2327,22 @@ export default function App() {
     pdfToolsDefault, setPdfToolsDefault,
     chatImgAutoClear, setChatImgAutoClear,
   } = useAppPrefs();
+
+  // Appearance changes push to the account (the value is tiny — no debounce).
+  // The loaded gate keeps a session that hasn't pulled yet from overwriting
+  // the server copy with its stale local cache.
+  useEffect(() => {
+    if (!prefsUserRef.current || readOnly || !appearanceLoadedRef.current) return;
+    const payload = { theme, pdfDark: pdfDarkPage };
+    const snap = JSON.stringify(payload);
+    if (appearanceSyncRef.current === snap) return;
+    appearanceSyncRef.current = snap;
+    apiJson(`${API}/prefs/appearance`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value: payload }),
+    }).catch(() => {});
+  }, [theme, pdfDarkPage, authUser?.user, readOnly]);
   const pageTitleSaveTimerRef = useRef(null);
   const viewerWrapRef = useRef(null);
   const pdfRetryRef = useRef(null); // set by PdfViewer: re-runs a failed load (pill's Retry button)
@@ -7711,7 +7774,7 @@ export default function App() {
                       </button>
                     ) : null}
                     {pdfUrl && !pdfHidden ? (
-                      <div className="pdfZoomOverlay">
+                      <div className="pdfCtlBox pdfZoomOverlay">
                         <button onClick={() => zoomStep(-1)} title="Zoom out" aria-label="Zoom out">
                           <ZoomOutIcon size={15} />
                         </button>
@@ -7786,22 +7849,23 @@ export default function App() {
                       </div>
                     ) : null}
                     {pdfUrl && !pdfHidden ? (
-                      <button
-                        className="pdfFullscreenBtn"
-                        onClick={toggleFullscreen}
-                        title={
-                          isFullscreen || pseudoFullscreen ? "Exit full screen" : "Full screen"
-                        }
-                        aria-label={
-                          isFullscreen || pseudoFullscreen ? "Exit full screen" : "Full screen"
-                        }
-                      >
-                        {isFullscreen || pseudoFullscreen ? (
-                          <MinimizeIcon size={15} />
-                        ) : (
-                          <MaximizeIcon size={15} />
-                        )}
-                      </button>
+                      <div className="pdfCtlBox pdfFullscreenBox">
+                        <button
+                          onClick={toggleFullscreen}
+                          title={
+                            isFullscreen || pseudoFullscreen ? "Exit full screen" : "Full screen"
+                          }
+                          aria-label={
+                            isFullscreen || pseudoFullscreen ? "Exit full screen" : "Full screen"
+                          }
+                        >
+                          {isFullscreen || pseudoFullscreen ? (
+                            <MinimizeIcon size={15} />
+                          ) : (
+                            <MaximizeIcon size={15} />
+                          )}
+                        </button>
+                      </div>
                     ) : null}
                     {pdfUrl ? (
                       <PdfViewer
@@ -8222,6 +8286,7 @@ export default function App() {
           setTranslateEffort,
           translateParallel,
           setTranslateParallel,
+          aiModels: scopedAiModels, // the Translation-model picker's registry
           pdfDarkPage,
           setPdfDarkPage,
           recentThumbs,

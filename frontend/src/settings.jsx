@@ -91,7 +91,7 @@ function GeneralSettings({ value }) {
   return (
     <>
       <PaneHead icon={SettingsIcon} title="General">
-        Appearance and paper preferences — saved in this browser.
+        Appearance follows your account across devices; paper preferences are saved in this browser.
       </PaneHead>
       <Section title="Appearance">
         <Row
@@ -121,32 +121,6 @@ function GeneralSettings({ value }) {
           checked={value.pdfDarkPage}
           onChange={value.setPdfDarkPage}
         />
-        <Toggle
-          icon={EyeIcon}
-          label="Recents thumbnails"
-          hint="Page snapshots on the Recently-viewed cards"
-          title="Show each recently-viewed paper as a small snapshot of the page where you left off, captured on this device while you read. Off shows the file icon instead and stops capturing new snapshots. Library cards always use the plain file icon."
-          checked={value.recentThumbs}
-          onChange={value.setRecentThumbs}
-        />
-        <Row
-          icon={LabelIcon}
-          label="File labels"
-          hint="Folder and label chips on library cards and rows"
-          title="Show each page's folders and labels as small chips on the home library — the file list, the grid cards and the Recently-viewed strip. Chips are informational; labels are still edited from the paper view or the right-click menus."
-        >
-          <MenuSelect
-            label="File labels"
-            value={value.fileLabels}
-            onChange={value.setFileLabels}
-            options={[
-              ["both", "Folders & labels"],
-              ["folders", "Folders only"],
-              ["labels", "Labels only"],
-              ["off", "Hidden"],
-            ]}
-          />
-        </Row>
       </Section>
       <Section title="Papers">
         <Toggle
@@ -261,7 +235,7 @@ function ViewerSettings({ value }) {
           title="A page is translated in small chunks, this many at a time; a whole-document job streams chunks across pages and never exceeds it. Higher is faster until your provider's rate limit pushes back — every slot is a concurrent paid request."
         >
           <UnitInput value={value.translateParallel} unit="calls" min={1}
-            onChange={(raw) => {
+            onCommit={(raw) => {
               const n = Number.parseInt(raw, 10);
               if (Number.isFinite(n)) value.setTranslateParallel(Math.max(1, Math.min(8, n)));
             }} />
@@ -503,8 +477,36 @@ function LibrarySettings({ value }) {
   return (
     <>
       <PaneHead icon={ListIcon} title="Library">
-        Storage, importing, and per-paper health of metadata, extracted text and the search index.
+        How the home library presents itself, storage, and per-paper health of metadata, extracted text and the search index.
       </PaneHead>
+      <Section title="Display">
+        <Toggle
+          icon={EyeIcon}
+          label="Recents thumbnails"
+          hint="Page snapshots on the Recently-viewed cards"
+          title="Show each recently-viewed paper as a small snapshot of the page where you left off, captured on this device while you read. Off shows the file icon instead and stops capturing new snapshots. Library cards always use the plain file icon."
+          checked={value.recentThumbs}
+          onChange={value.setRecentThumbs}
+        />
+        <Row
+          icon={LabelIcon}
+          label="File labels"
+          hint="Folder and label chips on library cards and rows"
+          title="Show each page's folders and labels as small chips on the home library — the file list, the grid cards and the Recently-viewed strip. Chips are informational; labels are still edited from the paper view or the right-click menus."
+        >
+          <MenuSelect
+            label="File labels"
+            value={value.fileLabels}
+            onChange={value.setFileLabels}
+            options={[
+              ["both", "Folders & labels"],
+              ["folders", "Folders only"],
+              ["labels", "Labels only"],
+              ["off", "Hidden"],
+            ]}
+          />
+        </Row>
+      </Section>
       <Section title="Storage">
         <StorageCard />
         {value.isAdmin ? <ServerLimitRows setStatus={value.setStatus} refreshQuota={value.refreshQuota} /> : null}
@@ -920,7 +922,7 @@ function AssistantSettings({ value }) {
           hint="AI ↔ tool round-trips per message"
           title="Each round-trip lets the model issue more tool calls. This is a runaway guard — actual work is separately capped at 200 changes per message.">
           <UnitInput value={value.toolRounds} unit="rounds" min={1}
-            onChange={(raw) => {
+            onCommit={(raw) => {
               const n = Number.parseInt(raw, 10);
               if (Number.isFinite(n)) value.setToolRounds(Math.max(1, Math.min(100, n)));
             }} />
@@ -1123,13 +1125,21 @@ export default function SettingsDialog({
         <div className="settingsPane">
           <button className="uiClose uiCloseLg settingsClose" onClick={onClose} title="Close settings" aria-label="Close settings">×</button>
           {pane === "general" ? <GeneralSettings value={papers} /> : null}
-          {/* The Translation model picker needs the scoped model list, which
-              lives in the `ai` group; the rest of this pane is `papers`. */}
-          {pane === "viewer" ? <ViewerSettings value={{ ...papers, aiModels: ai?.aiModels }} /> : null}
+          {pane === "viewer" ? <ViewerSettings value={papers} /> : null}
           {pane === "search" ? <SearchSettings value={search} /> : null}
           {pane === "notes" ? <NotesSettings value={notes} /> : null}
+          {/* The Display rows moved here from General, but their state lives in
+              the `papers` group — pass it through or they render undefined. */}
           {pane === "library" ? (
-            <LibrarySettings value={{ ...library, isAdmin: papers.isAdmin, refreshQuota: papers.refreshQuota }} />
+            <LibrarySettings value={{
+              ...library,
+              isAdmin: papers.isAdmin,
+              refreshQuota: papers.refreshQuota,
+              recentThumbs: papers.recentThumbs,
+              setRecentThumbs: papers.setRecentThumbs,
+              fileLabels: papers.fileLabels,
+              setFileLabels: papers.setFileLabels,
+            }} />
           ) : null}
           {pane === "ai" ? <AiSettings value={ai} /> : null}
           {pane === "assistant" ? (

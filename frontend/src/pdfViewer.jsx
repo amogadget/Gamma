@@ -1599,7 +1599,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   useEffect(() => {
     if (!outlineOpen) return;
     function onDown(e) {
-      if (e.target.closest?.(".pdfOutlinePanel") || e.target.closest?.(".pdfOutlineBtn")) return;
+      if (e.target.closest?.(".pdfOutlinePanel") || e.target.closest?.(".pdfOutlineBox")) return;
       setOutlineOpen(false);
     }
     document.addEventListener("mousedown", onDown);
@@ -1818,15 +1818,17 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   return (
     <div style={{ position: "relative", height: "100%" }}>
       {outline ? (
-        <button
-          className={"pdfOutlineBtn" + (outlineOpen ? " open" : "")}
-          onClick={() => setOutlineOpen((o) => !o)}
-          title={outlineOpen ? "Hide table of contents" : "Table of contents"}
-          aria-label="Toggle table of contents"
-          type="button"
-        >
-          <OutlineIcon size={16} />
-        </button>
+        <div className="pdfCtlBox pdfOutlineBox">
+          <button
+            className={outlineOpen ? "modeActive" : ""}
+            onClick={() => setOutlineOpen((o) => !o)}
+            title={outlineOpen ? "Hide table of contents" : "Table of contents"}
+            aria-label="Toggle table of contents"
+            type="button"
+          >
+            <OutlineIcon size={15} />
+          </button>
+        </div>
       ) : null}
       {numPages > 0 ? (
         <div className="pdfPageWidget" title="Type a page number and press Enter to jump">

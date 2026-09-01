@@ -49,6 +49,9 @@ export function useAppPrefs() {
   // Theme: "system" follows the OS; the rest pin it. "sepia" is the warm
   // eye-comfort mode (Solarized Light) and "gray" its neutral counterpart;
   // both also tint the PDF page (app.css), no separate toggle.
+  // Theme and pdfDarkPage additionally follow the account through
+  // /api/prefs/appearance (App.jsx): server wins on login, changes push back,
+  // this localStorage copy stays the instant-paint cache.
   const [theme, setTheme] = usePersistedState("gamma-theme", "system", {
     parse: (raw) => (THEMES.includes(raw) ? raw : undefined),
   });
