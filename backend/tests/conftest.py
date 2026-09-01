@@ -87,3 +87,15 @@ def make_page(guest, title="Test page", properties=None):
         r = guest.put(f"/api/blocks/{block['id']}", json={"properties": properties})
         assert r.status_code == 200, r.text
     return block
+
+
+def require_math_renderer():
+    """Guard for assertions that count typeset-math vector paths: they need
+    ziamath, a hard requirement (requirements.txt) that is easy to miss when
+    the tests run under some other interpreter than backend/venv's. Fail with
+    the cause instead of a puzzling path count."""
+    try:
+        import ziamath  # noqa: F401
+    except ImportError:
+        pytest.fail("ziamath is not importable — run the tests with backend/venv's python "
+                    "(pip install -r requirements.txt)")

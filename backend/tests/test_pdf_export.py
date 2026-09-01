@@ -3,7 +3,7 @@ annotation importer, note flattening, and the HTTP endpoint end to end."""
 
 import io
 
-from conftest import make_page
+from conftest import make_page, require_math_renderer
 
 from gamma.pdf_export import annotate_pdf, parse_css_color
 
@@ -429,6 +429,7 @@ def test_render_notes_draws_math_and_images(guest):
     assert 3 in kinds, "the note's image should be drawn as a page image"
     # Glyph outlines, not text objects: the box chrome is 4 paths, the rest are
     # the typeset α/∑/fraction bar.
+    require_math_renderer()
     assert kinds.count(2) >= 10, "math should be typeset as vector paths"
 
 

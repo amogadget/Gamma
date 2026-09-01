@@ -42,9 +42,28 @@ python -m pytest tests -q
 ```
 
 In-process API tests (FastAPI TestClient) against a throwaway data
-directory — no server, no network. The frontend has **no test suite or
-linter**: verify UI changes by running the app (at minimum, `npm run build`
-must pass).
+directory — no server, no network. Run them with the project venv's
+interpreter (`backend/venv/bin/python`, or `venv/Scripts/python.exe` on
+Windows): the two vector-math tests need `ziamath` from `requirements.txt`,
+and a system/conda `python` without it fails them with "ziamath is not
+importable" rather than a puzzling path count.
+
+The frontend has unit tests and a linter:
+
+```
+cd frontend
+npm test        # node --test src/*.test.js — pure helpers only, no DOM
+npm run lint    # eslint (warnings only; keep the count from growing)
+npm run build   # must pass
+```
+
+`npm test` runs the files directly through Node's ESM loader, not Vite, so
+imports inside anything it reaches need explicit `.js` extensions.
+
+None of that exercises the UI. For anything visible, drive the **built**
+`dist/` in a real browser — a bundle can build, hash and serve 200s while
+rendering a blank page (see the missing-import incident: every symbol resolved
+at build time, nothing rendered at runtime).
 
 ## Debugging surfaces
 

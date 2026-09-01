@@ -3,7 +3,7 @@ and the ``notes-pdf`` export mode end to end."""
 
 import io
 
-from conftest import make_page
+from conftest import make_page, require_math_renderer
 
 from gamma.note_markup import MATH, TEXT
 from gamma.pdf_document import PAGE_H, chunks, inline, render_document
@@ -212,6 +212,7 @@ def test_math_and_cjk_are_drawn_as_vector_paths(guest):
     assert "Bayes" in text and "inline" in text
     if vector_text.cjk_font() is not None:
         assert not any("一" <= c <= "鿿" for c in text)
+    require_math_renderer()
     assert _object_kinds(pdf).count(2) >= 10, "math should be typeset as vector paths"
 
 
