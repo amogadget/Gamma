@@ -885,10 +885,10 @@ function AssistantSettings({ value }) {
       <PaneHead icon={SparklesIcon} title="Assistant">
         Configure chat behavior, context limits, and what the folder agent may do.
       </PaneHead>
-      <Section title="Folder agent">
+      <Section title="Tools">
         <Toggle
           icon={SparklesIcon}
-          label="Enable agent"
+          label="Enable tools"
           hint="Allow chat to use reading, search and organization tools"
           title="Master switch for AI tool use. Off makes both PDF and folder chats plain chat regardless of their per-chat selection; your tool configuration is preserved."
           checked={value.agentEnabled}
@@ -896,7 +896,7 @@ function AssistantSettings({ value }) {
         />
         <Toggle
           icon={FolderIcon}
-          label="Folder chat default"
+          label="Folder chats"
           hint="New folder/library chats start with tools on"
           title="Starting state of the Tools button in library and folder chats. You can override it for the current conversation from the chat header."
           checked={value.folderToolsDefault}
@@ -904,12 +904,14 @@ function AssistantSettings({ value }) {
         />
         <Toggle
           icon={PaperIcon}
-          label="PDF chat default"
+          label="PDF chats"
           hint="New paper chats start with tools off"
           title="Starting state of the Tools button in a paper chat. Off keeps PDF chat as a plain context chat until you enable tools from its header."
           checked={value.pdfToolsDefault}
           onChange={value.setPdfToolsDefault}
         />
+      </Section>
+      <Section title="Tool configuration">
         {AGENT_PERM_ROWS.map(([key, icon, label, hint]) => (
           <Toggle
             key={key} icon={icon} label={label} hint={hint}

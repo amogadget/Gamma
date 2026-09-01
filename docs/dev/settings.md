@@ -32,8 +32,10 @@ Nine panes in four rail groups (`NAV_GROUPS` in
   connection check — `gamma-ai-login-check`, default the free credential
   ping — in
   [settingsAi.jsx](../../frontend/src/settingsAi.jsx)),
-  Assistant (the folder-agent master switch, folder/PDF per-chat tool
-  defaults, per-tool permissions, tool rounds, agent read window, context budgets),
+  Assistant (Tools: the master switch + folder/PDF per-chat defaults; Tool
+  configuration: per-tool permissions, tool rounds, agent read window; context
+  budgets — the chat header's ⚙ popover edits the model, reasoning effort and
+  the single-paper context budget in place; same prefs),
   Prompts (the four editable prompts, as an accordion)
 - **Account** — Users (admin account management / "You" for non-admins, in
   [settingsUsers.jsx](../../frontend/src/settingsUsers.jsx)), Advanced (status

@@ -2308,7 +2308,9 @@ export default function App() {
   useEffect(() => {
     if (!openPopover) return;
     function onDown(e) {
-      if (!(e.target.closest && e.target.closest("[data-popover]"))) setOpenPopover(null);
+      // Dropdown menus (menus.jsx) portal to <body>: a pick inside a
+      // popover's own dropdown is not a click outside the popover.
+      if (!(e.target.closest && e.target.closest("[data-popover], .ctxMenu"))) setOpenPopover(null);
     }
     document.addEventListener("pointerdown", onDown);
     return () => document.removeEventListener("pointerdown", onDown);
@@ -7355,6 +7357,7 @@ export default function App() {
           setAiProvider={setAiProvider}
           refreshAiModels={refreshAiModels}
           chatContextChars={chatContextChars}
+          setChatContextChars={setChatContextChars}
           multiContextChars={multiContextChars}
           openAiKeysEditor={openAiKeysEditor}
           aiHealth={aiHealth}

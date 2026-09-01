@@ -1232,7 +1232,10 @@ body {
   border-radius: 8px;
   padding: 3px 0;
 }
-.pdfCtlBox button {
+/* .ctlBtn is the same button outside a box — .ctlBtnRow lays them flat
+   (the chat header's ⚙ / tools / find / new-chat strip). State classes are
+   shared: .modeActive = on. */
+:is(.pdfCtlBox button, .ctlBtn) {
   background: transparent;
   border: none;
   width: 22px;
@@ -1245,10 +1248,12 @@ body {
   color: var(--text-tertiary);
   cursor: pointer;
 }
-.pdfCtlBox button:hover {
+:is(.pdfCtlBox button, .ctlBtn):hover:not(:disabled) {
   color: var(--text-primary);
   background: var(--bg-active);
 }
+:is(.pdfCtlBox button, .ctlBtn):disabled { opacity: 0.4; cursor: default; }
+.ctlBtnRow { display: flex; align-items: center; gap: 2px; }
 :is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfCtlBox {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
@@ -2324,7 +2329,6 @@ button.pdfOutlineChevron:hover {
   flex: 1;
 }
 /* Header controls use the shared uiBtn sizes; keep only layout here. */
-.dockWindowHeader .chatHeaderSelects { margin: 0; }
 .dockWindowHeader .chatPanelHeaderBtns { flex-shrink: 0; }
 .dockWindowBody {
   flex: 1;
@@ -2627,11 +2631,23 @@ button.pdfOutlineChevron:hover {
   border-top: 1px solid var(--border);
   overflow: hidden;
 }
-.chatPanelHeaderBtns {
+/* Chat settings popover (header ⚙): model, effort, context slider */
+.chatSettingsPop {
+  min-width: 250px;
+}
+.chatSettingsPop .setSlider {
+  padding: 0 4px;
+}
+/* The model picker keeps its manual catalog-refresh button beside it. */
+.chatSettingsModelRow {
   display: flex;
+  align-items: center;
   gap: 4px;
 }
-.chatToolsBtn { display: inline-flex; align-items: center; gap: 4px; }
+.chatSettingsModelRow .uiSelectBtn {
+  flex: 1;
+  min-width: 0;
+}
 .chatMessages {
   flex: 1;
   overflow-y: auto;
@@ -2776,17 +2792,6 @@ button.pdfOutlineChevron:hover {
     transform: translateY(-2px);
   }
 }
-/* model + effort switchers — shared MenuSelect pills, sized down for the
-   window header (the dropdown look itself comes from .uiBtn/.uiSelectBtn). */
-.chatHeaderSelects {
-  display: flex;
-  gap: 4px;
-  margin-left: 8px;
-  margin-right: auto;
-  min-width: 0;
-}
-.chatHeaderSelects .uiBtn { min-width: 0; }
-.chatHeaderSelects .uiSelectBtn .uiSelectLabel { max-width: 150px; }
 /* prompt editor */
 .promptTextarea {
   width: 100%;
@@ -3930,7 +3935,7 @@ button.pdfOutlineChevron:hover {
   user-select: none !important;
   -webkit-user-select: none !important;
 }
-.pdfCtlBox button.modeActive {
+:is(.pdfCtlBox button, .ctlBtn).modeActive {
   color: var(--accent);
   background: var(--bg-active);
 }

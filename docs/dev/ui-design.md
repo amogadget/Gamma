@@ -11,6 +11,7 @@ already exists. Bespoke CSS classes are for **layout only**.
 | Class / component | Use for |
 |---|---|
 | `uiBtn` (+ `sm`, `on`, `primary`, `danger`, `iconSq`) | every button; `sm` is the shared 28 px compact size, `on` = toggled state, `iconSq` = square icon-only (combine with `sm` for compact toolbars) |
+| `ctlBtn` / `ctlBtnRow` / `pdfCtlBox` | the flat 22 px icon buttons of the PDF zoom column: `pdfCtlBox` = the elevated vertical box, `ctlBtnRow` = the same buttons laid flat with no box (chat header), `modeActive` = on |
 | `uiClose` (+ `uiCloseSm`/`uiCloseLg`) | every × close button |
 | `aiKeyInput` | every text/number/password input in dialogs and settings |
 | `switch` / `switchTrack` | every on/off toggle |
@@ -175,7 +176,7 @@ the recents strip shows snapshot covers; library cards always use the glyph.
 | `App.jsx` | routing, block-tree editor state, docks, autosave, AI chat glue (decomposition in progress) |
 | `prefs.js` | every localStorage preference (`useAppPrefs`) |
 | `settings.jsx` + `settingsKit/Ai/Users.jsx` | the Settings dialog |
-| `chatDock.jsx` | the AI chat panel (incl. agent wiring) |
+| `chatDock.jsx` | the AI chat panel (incl. agent wiring); header = a `.ctlBtnRow` of `.ctlBtn` icon buttons (the PDF zoom column's buttons laid flat) with the ⚙ settings popover |
 | `pdfViewer.jsx` | the custom pdf.js viewer |
 | `search.jsx` | workspace search (Ctrl+F) |
 | `blockTree.jsx`, `logseqPdfModel.js` | outliner rendering / pure tree ops |
