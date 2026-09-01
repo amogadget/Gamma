@@ -40,7 +40,7 @@ Route order matters: the static-prefix routes (`by-doc`, `children`,
 ### PDFs & uploads (`pdf.py`, `uploads.py`, `shares.py`)
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/resolve-pdf` | URL/arXiv/DOI → fetchable PDF (citation_pdf_url sniffing, Unpaywall OA fallback) |
+| POST | `/resolve-pdf` | URL/arXiv/DOI → fetchable PDF (citation_pdf_url sniffing, Unpaywall OA fallback). Only picks a *candidate*: the download behind it can still fail (paywall, blocked fetch, HTML behind the link), so `openPdf` preflights the result with `probePdfUrl` (`utils.js` — opens `/api/pdf` without `save=1`, keeps the headers, cancels the body) and creates the page only if the bytes really arrive. `/api/pdf` stays the single arbiter of "is this a PDF": its 400 `detail` becomes the failure message, and no empty page is left behind. A URL whose paper is already in the library skips the preflight, so an existing page stays openable after its source goes away |
 | GET | `/pdf` | proxy/download a PDF (`save=1` caches it server-side) |
 | POST | `/uploads`, `/upload-image` | store files (content-hash names, dedup'd; quota-gated) |
 | GET | `/uploads/{filename}` | serve stored files |
