@@ -84,6 +84,8 @@ const PANE_ALIASES = {
 
 // --- General: reading, notes, interface -------------------------------------
 
+const THEME_ICON = { dark: MoonIcon, light: SunIcon, sepia: EyeIcon, system: MonitorIcon };
+
 function GeneralSettings({ value }) {
   return (
     <>
@@ -92,18 +94,20 @@ function GeneralSettings({ value }) {
       </PaneHead>
       <Section title="Appearance">
         <Row
-          icon={value.theme === "dark" ? MoonIcon : value.theme === "light" ? SunIcon : MonitorIcon}
+          icon={THEME_ICON[value.theme] || MonitorIcon}
           label="Theme"
-          hint="System follows the OS setting"
-          title="Light or dark interface. System tracks the operating system's appearance and switches live when it changes."
+          hint="Sepia is the eye-comfort mode; System follows the OS"
+          title="Light or dark interface. System tracks the operating system's appearance and switches live when it changes. Sepia is the eye-comfort mode: a warm Solarized-Light paper tone for both the interface and the PDF page, which cuts the glare and blue light of a white background without dimming the text."
         >
           <Segmented
             value={value.theme}
             onChange={value.setTheme}
             options={[
+              // values = THEMES in prefs.js (its codec validates them)
               ["system", "System", MonitorIcon, "Follow the OS light/dark setting"],
               ["light", "Light", SunIcon, "Always light"],
               ["dark", "Dark", MoonIcon, "Always dark"],
+              ["sepia", "Sepia", EyeIcon, "Eye comfort: warm paper tones for the interface and PDF pages"],
             ]}
           />
         </Row>
@@ -111,7 +115,7 @@ function GeneralSettings({ value }) {
           icon={MoonIcon}
           label="Flip page colors"
           hint="Dark PDF pages — light text on a dark background"
-          title="Render PDF pages inverted for reading in the dark. Display-only: highlights, exports and the stored file keep their real colors. Figures and photos come out as negatives, so scanned papers may look better with this off."
+          title="Render PDF pages inverted for reading in the dark. Display-only: highlights, exports and the stored file keep their real colors. Figures and photos come out as negatives, so scanned papers may look better with this off. Takes precedence over the Sepia theme's warm page tint."
           checked={value.pdfDarkPage}
           onChange={value.setPdfDarkPage}
         />

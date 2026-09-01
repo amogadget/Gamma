@@ -70,9 +70,10 @@ Settings panes are built only from
 
 ## Theme
 
-Three states: System (default, tracks `prefers-color-scheme` live) or pinned
-Light/Dark — `gamma-theme` in localStorage, applied as `data-theme` on the
-root element. An inline script in `index.html` applies a pinned theme before
+Four states: System (default, tracks `prefers-color-scheme` live) or pinned
+Light/Dark/Sepia — `gamma-theme` in localStorage (valid values are `THEMES`
+in `prefs.js`), applied as `data-theme` on the root element. An inline script
+in `index.html` applies a pinned theme before
 first paint; `color-scheme` follows so native controls match. Scrollbars are
 themed rather than left to the OS: a global `scrollbar-width: thin` +
 `scrollbar-color: var(--scrollbar-thumb) transparent` (with a
@@ -80,6 +81,19 @@ themed rather than left to the OS: a global `scrollbar-width: thin` +
 "Flip page colors" (`gamma-pdf-dark`) is separate and display-only: it
 inverts the PDF canvas (`.pdfDark`), swaps highlight blending from multiply
 to screen, and darkens the scroller surround.
+
+**Sepia** is the eye-comfort mode and the one theme that reaches the PDF
+page as well as the chrome: its tokens are Solarized Light (warm cream ground
+`#fdf6e3`, charcoal-teal text, Solarized accents darkened where a token is
+used as text — the stock accents sit near 3:1 on cream), and
+`[data-theme="sepia"] .pdfViewer:not(.pdfDark)` tints the page by giving the
+page wrapper the `--pdf-paper` ground and letting the canvas `multiply` onto
+it. Multiply, not a `sepia()`/`hue-rotate` filter: white paper lands exactly
+on the ground color while black text stays black and figures only warm
+slightly. The tint needs no prop — `data-theme` is global, so it is pure CSS
+— and "Flip page colors" wins when both are on. Light-ground rules that were
+`[data-theme="light"] …` are now `:is([data-theme="light"], [data-theme="sepia"])`;
+extend that list, don't add a third copy.
 
 ## Layout
 

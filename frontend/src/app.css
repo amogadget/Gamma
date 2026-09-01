@@ -103,6 +103,64 @@
   color-scheme: light;
 }
 
+/* Eye-comfort ("Sepia") theme — Solarized Light (Ethan Schoonover). The
+   palette exists for exactly this job: a warm cream ground (base3 #fdf6e3,
+   the color of shaded paper) instead of glaring white, and charcoal-teal text
+   instead of pure black, so the page carries less blue light and far less
+   luminance contrast than Light without going dim. Role colors are the
+   Solarized accents, darkened where a token is used as text (the stock
+   accents sit near 3:1 on cream, below the 4.5:1 body-text bar).
+   --pdf-paper is the same ground applied to the PDF canvas — see .pdfSepia
+   rules further down. */
+[data-theme="sepia"] {
+  --bg-page: #f0e9d6;
+  --bg-surface: #fdf6e3;
+  --bg-elevated: #fdf6e3;
+  --bg-block: #f8f1de;
+  --bg-card: #fdf6e3;
+  --bg-deeper: #e9e1cb;
+  --bg-input: #fdf6e3;
+  --bg-raised: #eee8d5;
+  --bg-hover: #e7dfc9;
+  --bg-subtle: #ded5bd;
+  --bg-active: #d9cfb5;
+  /* base02 → base1: the same ladder as the light theme, one step darker than
+     Solarized's own editor defaults because UI chrome needs more contrast
+     than syntax highlighting does. */
+  --text-primary: #073642;
+  --text-secondary: #365b64;
+  --text-tertiary: #586e75;
+  --text-muted: #657b83;
+  --text-dim: #839496;
+  --text-bright: #002b36;
+  --border: #e0d8c0;
+  --border-light: #d3c9ad;
+  --border-hover: #bdb195;
+  --border-subtle: #e8e1cd;
+  --ok: #5f7519;
+  --danger: #c1382b;
+  --danger-bg: rgba(193, 56, 43, 0.1);
+  --danger-border: rgba(193, 56, 43, 0.38);
+  --accent: #1b6fa3;
+  --accent-dark: #14608f;
+  --accent-bright: #0f5c86;
+  --accent-bg: rgba(38, 139, 210, 0.14);
+  --accent-bg-light: rgba(38, 139, 210, 0.07);
+  --callout-note: #268bd2;
+  --callout-tip: #6f8000;
+  --callout-warning: #b58900;
+  --callout-danger: #dc322f;
+  --callout-important: #6c71c4;
+  --callout-quote: #93a1a1;
+  --drag-accent: #1b6fa3;
+  --scrollbar-thumb: #d3c9ad;
+  --scrollbar-thumb-hover: #b9ad91;
+  /* The PDF page ground (Solarized base3). Not a --bg-* token: it is the
+     paper, not a surface, and the .pdfViewer rules multiply the canvas onto it. */
+  --pdf-paper: #fdf6e3;
+  color-scheme: light;
+}
+
 * { box-sizing: border-box; }
 
 /* Scrollbars are part of the theme, not OS chrome: a thin bar on a transparent
@@ -1146,7 +1204,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
 }
-[data-theme="light"] :is(.pdfZoomOverlay, .pdfOutlineBtn, .pdfFullscreenBtn) {
+:is([data-theme="light"], [data-theme="sepia"]) :is(.pdfZoomOverlay, .pdfOutlineBtn, .pdfFullscreenBtn) {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
@@ -1193,7 +1251,7 @@ body {
   margin-left: 3px;
   white-space: nowrap;
 }
-[data-theme="light"] .pdfPageWidget {
+:is([data-theme="light"], [data-theme="sepia"]) .pdfPageWidget {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
@@ -1281,7 +1339,7 @@ body {
   border-radius: 8px;
   padding: 6px 4px;
 }
-[data-theme="light"] .pdfOutlinePanel {
+:is([data-theme="light"], [data-theme="sepia"]) .pdfOutlinePanel {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
@@ -3681,6 +3739,22 @@ button.pdfOutlineChevron:hover {
 .pdfViewer.pdfDark .pdfPageWrap > canvas { filter: invert(0.94) hue-rotate(180deg); }
 .pdfViewer.pdfDark .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }
 
+/* Eye-comfort theme: tint the PDF page to the same warm paper as the
+   interface. The canvas MULTIPLIES onto the wrapper's cream background
+   rather than being filtered — white paper becomes exactly --pdf-paper while
+   black text stays black and figures only warm slightly, where a sepia()/
+   hue-rotate filter would drag every color toward brown. isolation confines
+   the blend to the page (the wrapper is the backdrop); the highlight and
+   find-mark overlays sit above and keep their own multiply.
+   :not(.pdfDark) — "Flip page colors" is the stronger, explicit choice and
+   wins when both are on. !important beats pdfViewer.jsx's inline background. */
+[data-theme="sepia"] .pdfViewer:not(.pdfDark) { background: var(--bg-deeper); }
+[data-theme="sepia"] .pdfViewer:not(.pdfDark) .pdfPageWrap {
+  background: var(--pdf-paper) !important;
+  isolation: isolate;
+}
+[data-theme="sepia"] .pdfViewer:not(.pdfDark) .pdfPageWrap > canvas { mix-blend-mode: multiply; }
+
 /* --- AI translated view (overlay over the original text runs) ---
    The layer sits between the canvas and the text layer: each block is an
    opaque box in the page's background color, refilled with the translation.
@@ -3741,6 +3815,9 @@ button.pdfOutlineChevron:hover {
    page instead. */
 .pdfViewer.pdfDark :is(.pdfTransMask, .pdfTransText > span) { background: #0f0f0f; }
 .pdfViewer.pdfDark .pdfTransText { color: #c9c9c9; }
+/* Same for the eye-comfort ground: the masks are opaque divs above the
+   canvas, so the page tint's blend never reaches them. */
+[data-theme="sepia"] .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
 /* Alt held = peek at the original (class set by the viewer). */
 .pdfViewer.transPeek .pdfTransLayer { visibility: hidden; }
 /* Tiny percentage under the zoom column's translate button while a job runs. */
@@ -3961,12 +4038,12 @@ button.pdfOutlineChevron:hover {
   border-color: #4a8abf;
   color: #fff;
 }
-[data-theme="light"] .blockLinkChip {
+:is([data-theme="light"], [data-theme="sepia"]) .blockLinkChip {
   background: #e3effa;
   color: #2b6bcb;
   border-color: #b5d2ee;
 }
-[data-theme="light"] .blockLinkChip:hover {
+:is([data-theme="light"], [data-theme="sepia"]) .blockLinkChip:hover {
   background: #cfe3f7;
   color: #1d5ab3;
 }
