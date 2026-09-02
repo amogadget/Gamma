@@ -37,8 +37,10 @@
     -webkit-user-select: none; user-select: none;
   }
   main { width: 100%; max-width: 520px; }
-  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .sub { color: var(--text-muted); margin: 0 0 24px; }
+  .head { display: flex; align-items: center; gap: 14px; margin-bottom: 24px; }
+  .mark { flex: none; width: 44px; height: 44px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .sub { color: var(--text-muted); margin: 0; }
 
   .options { display: flex; flex-direction: column; gap: 10px; }
   .option {
@@ -103,8 +105,35 @@
 </head>
 <body>
 <main>
-  <h1>Gamma</h1>
-  <p class="sub">Where should your library live?</p>
+  <div class="head">
+    <!-- The mark, inlined: the page's CSP allows no external anything, and an
+         inline <svg> is markup rather than a fetch. Same artwork as
+         assets/icon.svg. -->
+    <svg class="mark" viewBox="12 12 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <defs>
+        <radialGradient id="g" cx="50" cy="40" r="22" gradientUnits="userSpaceOnUse">
+          <stop offset="0%" stop-color="#e8a020" stop-opacity="0.3"/>
+          <stop offset="60%" stop-color="#e8a020" stop-opacity="0.08"/>
+          <stop offset="100%" stop-color="#e8a020" stop-opacity="0"/>
+        </radialGradient>
+        <clipPath id="c"><rect x="12" y="12" width="48" height="48" rx="11"/></clipPath>
+      </defs>
+      <rect x="12" y="12" width="48" height="48" rx="11" fill="#1e1e1c"/>
+      <rect x="12" y="12" width="48" height="48" rx="11" fill="url(#g)"/>
+      <g clip-path="url(#c)">
+        <path d="M 16 36 C 22 27 30 27 36 36 C 42 45 50 45 56 36" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 16 36 C 22 45 30 45 36 36 C 42 27 50 27 56 36" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 16 13 Q 9 36 16 59" stroke="#e8a020" stroke-width="4.5" fill="none" stroke-linecap="round" opacity="0.88"/>
+        <path d="M 56 13 Q 63 36 56 59" stroke="#e8a020" stroke-width="4.5" fill="none" stroke-linecap="round" opacity="0.88"/>
+        <rect x="21" y="20" width="26" height="5" rx="1.2" fill="#eeebe4"/>
+        <rect x="21" y="20" width="5" height="28" rx="1.2" fill="#eeebe4"/>
+      </g>
+    </svg>
+    <div>
+      <h1>Gamma</h1>
+      <p class="sub">Where should your library live?</p>
+    </div>
+  </div>
 
   <div class="options" role="listbox" aria-label="How to run Gamma">
     <div class="option" id="opt-local" role="option" tabindex="0" aria-selected="true">
@@ -136,7 +165,7 @@
     <button class="ghost" id="cancel" hidden>Cancel</button>
     <button id="go">Continue</button>
   </div>
-  <p class="foot">You can change this later from the Gamma menu.</p>
+  <p class="foot">You can change this later from the File menu.</p>
 </main>
 <script src="chooser.js"></script>
 </body>

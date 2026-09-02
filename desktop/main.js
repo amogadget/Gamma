@@ -17,6 +17,10 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const path = require("node:path");
 
+// macOS reads the icon from the bundle; Linux and Windows want it on the window
+// itself, or the taskbar shows Electron's default.
+const ICON = path.join(__dirname, "assets", "icon.png");
+
 const config = require("./config");
 const { Supervisor } = require("./supervisor");
 const { buildMenu } = require("./menu");
@@ -118,6 +122,7 @@ function createWindow(url) {
     minHeight: 600,
     show: false,
     title: "Gamma",
+    icon: ICON,
     backgroundColor: "#111", // the app's own page colour; avoids a white flash
     webPreferences: {
       // No preload here on purpose: this window loads Gamma's UI, remote pages
@@ -171,6 +176,7 @@ function openChooser({ canCancel }) {
     resizable: false,
     show: false,
     title: "Gamma",
+    icon: ICON,
     backgroundColor: "#111",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {

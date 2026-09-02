@@ -12,7 +12,8 @@
     "lint": "eslint .",
     "stage": "node scripts/stage-runtime.mjs",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --publish never"
+    "dist": "electron-builder --publish never",
+    "icon": "electron scripts/render-icon.cjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.40.0",
@@ -35,7 +36,8 @@
       "config.js",
       "menu.js",
       "chooser/**/*",
-      "package.json"
+      "package.json",
+      "assets/icon.png"
     ],
     "extraResources": [
       {
@@ -69,7 +71,8 @@
         "NSHumanReadableCopyright": "",
         "LSApplicationCategoryType": "public.app-category.productivity"
       },
-      "identity": null
+      "identity": null,
+      "icon": "assets/icon.png"
     },
     "dmg": {
       "title": "Gamma ${version}"
@@ -85,7 +88,8 @@
         }
       ],
       "category": "Office",
-      "synopsis": "PDF annotator with an outliner and an AI chat"
+      "synopsis": "PDF annotator with an outliner and an AI chat",
+      "icon": "assets/icon.png"
     },
     "win": {
       "target": [
@@ -95,7 +99,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "icon": "assets/icon.png"
     },
     "nsis": {
       "oneClick": false,

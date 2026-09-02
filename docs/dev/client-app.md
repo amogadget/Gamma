@@ -336,7 +336,12 @@ app runs `Resources/python/bin/python3`, not any system or venv Python.
 - **2.3** Windows. The `electron-builder` config has an NSIS target and
   `desktop.py`/`supervisor.js` have Windows branches, but nothing Windows has
   been run. Linux is done (AppImage, tested).
-- **2.4** An app icon. There is none, so the app currently shows Electron's.
+- **2.4** ✅ App icon — `desktop/assets/icon.svg`, the icon half of
+  `logos/gamma-logo-dark.svg` with Apple's 10% margin, rasterized to 1024px by
+  `npm run icon`. Chromium does the rasterizing (`scripts/render-icon.cjs`):
+  ImageMagick's built-in SVG renderer silently drops the clipped group, losing
+  the Γ and the standing wave and letting the mirrors escape the rounded
+  square. The engine that draws the app draws its icon.
 
 ### Phase 3 — optional sharing
 
