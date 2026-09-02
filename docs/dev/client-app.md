@@ -395,6 +395,25 @@ are not cosmetic:
   "locate the built app" checks a name rather than an architecture (there is
   only one).
 
+### What the Windows runner found that nothing else could
+
+Two of the four platform bugs were only reachable on Windows, and one of them
+was a real defect rather than a build problem:
+
+- **`.mjs` was served as `text/plain`.** Python's `mimetypes` resolves
+  extensions through the *registry* on Windows, where `.mjs` is usually
+  absent. Chromium then refuses the file as a module script, and pdf.js
+  degrades to its main-thread fake worker without erroring: pages still
+  render, and no text is extracted. Selection, highlighting and in-PDF search
+  would all have been broken on Windows, and the failure is silent — a canvas
+  appears, so it looks like it works. `static_paths.register_web_mime_types()`
+  now pins the types the frontend serves, on every platform.
+- **GNU tar and drive letters.** See the staging notes above.
+
+The first one is the argument for testing the packaged app rather than the
+source tree: nothing in a unit test, and nothing on Linux or macOS, could have
+surfaced it.
+
 ### Phase 3 — optional sharing
 
 Opt-in, off by default, behind a dialog that states plainly that it makes the

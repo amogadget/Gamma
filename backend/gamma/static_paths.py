@@ -6,9 +6,39 @@ differs between running from a source checkout and running from inside
 Gamma.app/Contents/Resources.
 """
 
+import mimetypes
 import os
 import sys
 from pathlib import Path
+
+# Content types for everything the built frontend serves.
+#
+# Windows resolves extension → type through the registry, where `.mjs` is
+# usually absent, so Python's mimetypes answers text/plain and Chromium
+# refuses to execute the file as a module script ("Strict MIME type checking
+# is enforced for module scripts"). In the desktop app that silently
+# downgraded pdf.js to its main-thread fake worker: pages still rendered, but
+# no text was extracted, so selection, highlighting and in-PDF search stopped
+# working. Registering these makes every platform answer the same way.
+WEB_MIME_TYPES = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".css": "text/css",
+    ".html": "text/html",
+    ".json": "application/json",
+    ".map": "application/json",
+    ".wasm": "application/wasm",
+    ".svg": "image/svg+xml",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
+}
+
+
+def register_web_mime_types() -> None:
+    """Pin the content types the frontend depends on, whatever the OS thinks."""
+    for ext, ctype in WEB_MIME_TYPES.items():
+        mimetypes.add_type(ctype, ext)
 
 
 def candidate_static_dirs() -> list[Path]:

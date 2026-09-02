@@ -231,3 +231,31 @@ def test_desktop_user_is_idempotent_and_has_no_usable_password(guest):
     # then be a password-less way in.
     assert pwhash.startswith("$2") and len(pwhash) > 50
     assert is_admin == 1 and is_guest == 0
+
+
+# --- content types -----------------------------------------------------------
+
+def test_module_scripts_are_served_as_javascript(tmp_path, monkeypatch):
+    """A module script served as text/plain is refused by Chromium.
+
+    Python's mimetypes answers text/plain for `.mjs` on Windows, where the
+    mapping comes from the registry rather than a table. In the desktop app
+    that silently downgraded pdf.js to its main-thread fake worker: pages
+    rendered, no text was extracted, and selection, highlighting and in-PDF
+    search all stopped working. Caught on a Windows CI runner, not here.
+    """
+    import mimetypes
+
+    from gamma import app as app_module, config
+
+    (tmp_path / "index.html").write_text("<html></html>")
+    (tmp_path / "pdf.worker.min.mjs").write_text("export default 1;\n")
+
+    mimetypes.init()  # so the patch below lands on the live table
+    monkeypatch.setitem(mimetypes.types_map, ".mjs", "text/plain")  # what Windows says
+    monkeypatch.setattr(config, "STATIC_DIR", str(tmp_path))
+
+    client = TestClient(app_module.create_app())
+    r = client.get("/pdf.worker.min.mjs")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/javascript"), r.headers["content-type"]

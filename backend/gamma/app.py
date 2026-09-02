@@ -12,6 +12,7 @@ from . import config
 from .auth import session_middleware
 from .db import DATA_SCHEMA, connect_users_db
 from .logbuf import log, setup_logging
+from .static_paths import register_web_mime_types
 from .routers import (
     admin,
     ai,
@@ -122,6 +123,7 @@ def create_app() -> FastAPI:
 
     # Serve the built frontend (SPA) when GAMMA_STATIC_DIR is set.
     # Registered last so all /api routes take precedence.
+    register_web_mime_types()
     static_dir = Path(config.STATIC_DIR) if config.STATIC_DIR else None
     if static_dir and static_dir.is_dir():
         index_html = static_dir / "index.html"
