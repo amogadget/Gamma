@@ -29,6 +29,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
     defaults:
       run:
         # Git Bash on the Windows runner: `windows-latest` would otherwise use
@@ -204,20 +206,45 @@ jobs:
           path: desktop/${{ matrix.artifacts }}
           if-no-files-found: error
 
-      - name: Attach to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
-        uses: softprops/action-gh-release@v2
+  # One release, assembled after every platform has succeeded. Attaching from
+  # inside the matrix would publish whatever happened to build: a Windows
+  # failure would leave a release carrying three platforms and no installer.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
         with:
-          name: Gamma Desktop ${{ steps.meta.outputs.version }}
-          files: desktop/${{ matrix.artifacts }}
-          draft: true
+          path: artifacts
+          merge-multiple: true
+
+      - name: Show what will be attached
+        run: ls -lR artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Gamma Desktop ${{ needs.build.outputs.version }}
+          files: artifacts/**/*
           generate_release_notes: true
           body: |
-            Gamma Desktop ${{ steps.meta.outputs.version }} — double-click to run
-            Gamma on your own machine, or point it at a server you already run.
+            Double-click to run Gamma on your own machine, or point it at a
+            server you already run.
 
-            These builds are **not signed with an Apple Developer ID**, so the
+            | Platform | Download |
+            |---|---|
+            | macOS, Apple Silicon | `.dmg` |
+            | Windows, x86-64 | `Gamma Setup … .exe` |
+            | Linux, x86-64 and arm64 | `.AppImage` |
+
+            The macOS build is **not signed with an Apple Developer ID**, so the
             first launch needs one extra step: right-click Gamma.app → Open, and
             confirm. (Or `xattr -dr com.apple.quarantine /Applications/Gamma.app`.)
+
+            Every artifact here was launched and driven by the test suite on its
+            own platform before this release was created — on macOS, including
+            the copy inside the dmg.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
