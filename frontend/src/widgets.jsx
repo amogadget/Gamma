@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
+import { normalizeDisplayMath } from "./mathMarkdown";
 import {
   FileTextIcon,
   HighlightIcon,
@@ -154,24 +155,26 @@ function handleMarkdownCopy(e) {
 }
 
 const ChatMarkdown = React.memo(function ChatMarkdown({ text }) {
-  const normalized = useMemo(
-    () =>
-      (text || "")
-        .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `\n$$\n${m}\n$$\n`)
-        .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`)
-        // GFM splits table cells on every unescaped "|", including ones
-        // inside $…$ math — so a table with $|\Omega|T$ in a header cell
-        // never parses as a table (header/delimiter cell counts disagree)
-        // and collapses into a paragraph. Spell pipes inside inline math
-        // as \vert/\Vert, which KaTeX renders identically but the table
-        // tokenizer doesn't see.
-        .replace(/\$\$[\s\S]*?\$\$|\$([^$\n]+)\$/g, (m, inner) =>
-          inner == null || !inner.includes("|")
-            ? m
-            : `$${inner.replace(/\\\|/g, "\\Vert ").replace(/\|/g, "\\vert ")}$`,
-        ),
-    [text],
-  );
+  const normalized = useMemo(() => {
+    const dollars = (text || "")
+      .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `\n$$\n${m}\n$$\n`)
+      .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`)
+      // GFM splits table cells on every unescaped "|", including ones
+      // inside $…$ math — so a table with $|\Omega|T$ in a header cell
+      // never parses as a table (header/delimiter cell counts disagree)
+      // and collapses into a paragraph. Spell pipes inside inline math
+      // as \vert/\Vert, which KaTeX renders identically but the table
+      // tokenizer doesn't see.
+      .replace(/\$\$[\s\S]*?\$\$|\$([^$\n]+)\$/g, (m, inner) =>
+        inner == null || !inner.includes("|")
+          ? m
+          : `$${inner.replace(/\\\|/g, "\\Vert ").replace(/\|/g, "\\vert ")}$`,
+      );
+    // A reply that writes $$…$$ on one line means a centred equation, and
+    // remark-math reads that as inline. The \[…\] rule above already expands
+    // to the block form; this does the same for two dollars.
+    return normalizeDisplayMath(dollars);
+  }, [text]);
   return (
     <div onCopy={handleMarkdownCopy}>
       <ReactMarkdown
