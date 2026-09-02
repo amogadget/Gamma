@@ -4,9 +4,10 @@ A double-clickable Mac app that starts and maintains a local Gamma. Its own
 window, its own Dock icon; it never opens a browser. Everything the hosted
 version does except being reachable from outside the machine.
 
-Status: **Phases 0, 1 and 1b implemented.** Verified on Linux aarch64 against
-both the source tree and a packaged build; the macOS artifact itself is built
-by CI and has not yet been run on a Mac.
+Status: **Phases 0, 1 and 1b done, and the Mac app works.** 0.1.1's `.dmg`,
+built by CI on `macos-14`, runs on real hardware (confirmed 2026-09-02): the
+chooser appears, local mode starts its bundled backend, and the library opens.
+The Linux AppImage still fails its packaged tests on the x86-64 runner.
 
 ## Goal
 
@@ -141,6 +142,13 @@ publishing it necessarily violates 2 or 3.
 Free, and Gatekeeper's one-time right-click → Open is an acceptable cost for a
 personal tool. Signing and notarization (Apple Developer Program, $99/yr) can
 be added later without redoing anything; it is a build step, not a design.
+
+"Unsigned" has a hard floor, though, learned the expensive way: on Apple
+Silicon a bundle with *no* signature does not run at all — Finder reports
+"Gamma is damaged and can't be opened", which reads like a corrupt download and
+is actually macOS refusing code whose signature does not validate. Ad-hoc
+signing (`codesign --sign -`) is the minimum, and it must happen before the
+dmg is built. See Phase 1b.
 
 ### Standalone CPython, not PyInstaller
 
@@ -392,7 +400,7 @@ engine) or the macOS runner (the real `.app`, every tag).
 | Auto-session leaks into a hosted deployment | ✅ Three conditions in code, each with a negative test |
 | Backend dies silently and the window shows nothing | ✅ No window until `/api/health` answers; a dialog with the log tail on failure |
 | An orphaned backend locks the library after a quit | ✅ `before-quit` waits for the child; asserted by killing the app and polling the pid |
-| The macOS `.app` is still unexercised on real macOS | CI runs the packaged app on `macos-14`; the first tagged build is the first time that has ever happened |
+| The macOS `.app` is still unexercised on real macOS | ✅ Closed: 0.1.1 runs on a real Mac. CI also runs the packaged app on `macos-14` every tag, including the copy inside the dmg |
 | CI green but the release job broken | `desktop/scripts/ci-local.sh --clone` runs the whole job locally from a clean clone — added after a hand-written dependency range failed `npm ci` on every runner |
 
 ## Open questions
