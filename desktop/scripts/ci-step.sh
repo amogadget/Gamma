@@ -27,7 +27,10 @@ if [ -n "${GITHUB_ACTIONS:-}" ]; then
     [ -n "${CI_STEP_DIAG:-}" ] && printf '%s\n' "$CI_STEP_DIAG"
     echo "exit status: $status"
     echo "--- last 60 lines ---"
-    tail -60 "$out"
+    # \r → \n first: a progress meter is a single line thousands of
+    # characters long, and tail(1) would count it as one while it consumed the
+    # whole annotation. Blank lines go too, for the same reason.
+    tr '\r' '\n' < "$out" | awk 'NF' | tail -60
   } > "$out.diag"
   # An annotation message is a single line: %-escape first, then newlines.
   # sed and awk rather than python3, which Git Bash on the Windows runners

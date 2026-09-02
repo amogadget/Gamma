@@ -73,7 +73,9 @@ function stagePython() {
   const tarball = path.join(cache, name);
 
   if (!fs.existsSync(tarball)) {
-    run("curl", ["-fL", "--retry", "3", "-o", tarball, `${PY_BASE}/${name}`]);
+    // -sS: no progress meter. It is one line containing thousands of \r,
+    // which eats the whole budget of a failure annotation.
+    run("curl", ["-fsSL", "--retry", "3", "-o", tarball, `${PY_BASE}/${name}`]);
   } else {
     console.log(`using cached ${name}`);
   }
