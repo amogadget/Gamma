@@ -93,20 +93,38 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
       # electron-builder's output directory depends on platform and arch
-      # (dist/mac, dist/mac-arm64, dist/linux-unpacked, …), so locate the
-      # binary rather than hardcoding a path that fails at the last step.
+      # (dist/mac-arm64, dist/linux-unpacked, dist/linux-arm64-unpacked, …).
+      # Locate the binary rather than hardcoding a path — but check the
+      # architecture, because `find | head -1` once handed the x86-64 job an
+      # arm64 binary and every test failed in five milliseconds with "process
+      # failed to launch".
       - name: Locate the built app
         working-directory: desktop
         run: |
+          case "${{ matrix.arch }}" in
+            x64)   want="x86.64|x86_64" ;;
+            arm64) want="aarch64|arm64" ;;
+            *)     echo "unhandled arch ${{ matrix.arch }}"; exit 1 ;;
+          esac
           if [ "${{ runner.os }}" = "macOS" ]; then
-            bundle=$(find dist -maxdepth 2 -name "Gamma.app" -type d | head -1)
-            [ -n "$bundle" ] || { echo "no Gamma.app under dist/"; ls -R dist | head -50; exit 1; }
-            echo "GAMMA_BUNDLE=desktop/$bundle" >> "$GITHUB_ENV"
-            echo "GAMMA_PACKAGED_APP=$bundle/Contents/MacOS/Gamma" >> "$GITHUB_ENV"
+            found=""
+            for bundle in $(find dist -maxdepth 2 -name "Gamma.app" -type d); do
+              if file "$bundle/Contents/MacOS/Gamma" | grep -qE "$want"; then
+                found="$bundle"; break
+              fi
+            done
+            [ -n "$found" ] || { echo "no ${{ matrix.arch }} Gamma.app under dist/"; ls -R dist | head -50; exit 1; }
+            echo "GAMMA_BUNDLE=desktop/$found" >> "$GITHUB_ENV"
+            echo "GAMMA_PACKAGED_APP=$found/Contents/MacOS/Gamma" >> "$GITHUB_ENV"
+            file "$found/Contents/MacOS/Gamma"
           else
-            exe=$(find dist -maxdepth 2 -name "gamma-desktop" -type f | head -1)
-            [ -n "$exe" ] || { echo "no gamma-desktop under dist/"; ls -R dist | head -50; exit 1; }
-            echo "GAMMA_PACKAGED_APP=$exe" >> "$GITHUB_ENV"
+            found=""
+            for exe in $(find dist -maxdepth 2 -name "gamma-desktop" -type f); do
+              if file "$exe" | grep -qE "$want"; then found="$exe"; break; fi
+            done
+            [ -n "$found" ] || { echo "no ${{ matrix.arch }} gamma-desktop under dist/"; ls -R dist | head -50; exit 1; }
+            echo "GAMMA_PACKAGED_APP=$found" >> "$GITHUB_ENV"
+            file "$found"
           fi
 
 

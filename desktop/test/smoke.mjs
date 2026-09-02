@@ -45,16 +45,25 @@ function tmpRoot(label) {
 
 after(() => {
   for (const dir of tmpRoots) fs.rmSync(dir, { recursive: true, force: true });
+
+  // Printed at the end so it lands in the tail of the output, which is what a
+  // CI annotation carries. Silent when every launch was uneventful.
+  for (const lines of recorded) {
+    const text = lines.join("");
+    if (ALARMING.test(text)) {
+      console.error(`--- app output ---\n${text.slice(-2500)}`);
+    }
+  }
 });
 
-function launch({ userData, library, env = {} }) {
+async function launch({ userData, library, env = {} }) {
   const args = packagedApp
     ? // A packaged build carries its own app; --no-sandbox because the setuid
       // sandbox helper needs a root-owned binary, which a CI runner's checkout
       // is not.
       [`--user-data-dir=${userData}`, "--no-sandbox"]
     : [appDir, `--user-data-dir=${userData}`];
-  return electron.launch({
+  const app = await electron.launch({
     ...(packagedApp ? { executablePath: path.resolve(packagedApp) } : {}),
     args,
     timeout: LAUNCH_TIMEOUT,
@@ -64,10 +73,35 @@ function launch({ userData, library, env = {} }) {
       // Deterministic: never inherit a developer's own mode choice.
       GAMMA_DESKTOP_MODE: "",
       GAMMA_DESKTOP_SERVER: "",
+      // Make the shell echo the backend's output, so a failure here can say
+      // what the backend said (see recordOutput).
+      GAMMA_DESKTOP_VERBOSE: "1",
       ...env,
     },
   });
+  recordOutput(app);
+  return app;
 }
+
+// Playwright reports a dead app as "Target closed", which explains nothing. The
+// app's own stdout/stderr — Electron's, plus the backend's, via
+// GAMMA_DESKTOP_VERBOSE — is where the reason actually is. Keep it, and print
+// anything alarming once the run is over.
+//
+// On CI that tail is the whole diagnosis: workflow logs need admin rights on
+// the repository, so what reaches us is the annotation from
+// scripts/ci-step.sh, which carries the last lines of this output.
+const recorded = [];
+
+function recordOutput(app) {
+  const lines = [];
+  recorded.push(lines);
+  const proc = app.process();
+  proc.stdout?.on("data", (d) => lines.push(d.toString()));
+  proc.stderr?.on("data", (d) => lines.push(d.toString()));
+}
+
+const ALARMING = /Traceback|FATAL|Fatal error|error while loading|Segmentation|ImportError|ModuleNotFound|EADDR|Permission denied/;
 
 /**
  * Collect anything that looks like a failure into `sink`: page errors, console

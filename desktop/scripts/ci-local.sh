@@ -79,18 +79,33 @@ step "Package"
 npx electron-builder --dir "--$ARCH"
 
 step "Locate the built app"
+# Check the architecture of what we found. `find | head -1` once handed CI's
+# x86-64 job an arm64 binary — dist/linux-arm64-unpacked sorts first — and
+# every test failed instantly with "process failed to launch".
+case "$ARCH" in
+  x64)   WANT="x86.64|x86_64" ;;
+  arm64) WANT="aarch64|arm64" ;;
+  *)     echo "unhandled arch $ARCH" >&2; exit 1 ;;
+esac
+APP=""
 if [ "$(uname)" = "Darwin" ]; then
-  BUNDLE="$(find dist -maxdepth 2 -name "Gamma.app" -type d | head -1)"
-  [ -n "$BUNDLE" ] || { echo "no Gamma.app under dist/"; ls -R dist | head -50; exit 1; }
-  APP="$BUNDLE/Contents/MacOS/Gamma"
-  step "Ad-hoc sign"
-  codesign --force --deep --sign - "$BUNDLE"
-  codesign --verify --deep --verbose=2 "$BUNDLE"
+  for bundle in $(find dist -maxdepth 2 -name "Gamma.app" -type d); do
+    if file "$bundle/Contents/MacOS/Gamma" | grep -qE "$WANT"; then
+      APP="$bundle/Contents/MacOS/Gamma"
+      break
+    fi
+  done
+  [ -n "$APP" ] || { echo "no $ARCH Gamma.app under dist/"; ls -R dist | head -50; exit 1; }
+  # electron-builder signs the bundle during packaging (scripts/afterPack.cjs);
+  # verify rather than re-sign, so this matches what CI ships.
+  codesign --verify --deep --strict --verbose=2 "$(dirname "$(dirname "$APP")")"
 else
-  APP="$(find dist -maxdepth 2 -name "gamma-desktop" -type f | head -1)"
-  [ -n "$APP" ] || { echo "no gamma-desktop under dist/"; ls -R dist | head -50; exit 1; }
+  for exe in $(find dist -maxdepth 2 -name "gamma-desktop" -type f); do
+    if file "$exe" | grep -qE "$WANT"; then APP="$exe"; break; fi
+  done
+  [ -n "$APP" ] || { echo "no $ARCH gamma-desktop under dist/"; ls -R dist | head -50; exit 1; }
 fi
-echo "$APP"
+file "$APP"
 
 step "Run the packaged app's tests"
 export GAMMA_PACKAGED_APP="$APP"
