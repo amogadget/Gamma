@@ -410,6 +410,58 @@ test("a workspace whose server dies gets it back", async (t) => {
   await page.waitForSelector(".homeFindInput", { timeout: READY_TIMEOUT });
 });
 
+test("a server that never comes up is killed, not left behind", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("needs a POSIX shell for the stand-in interpreter");
+    return;
+  }
+  // A packaged build carries its own interpreter and ignores GAMMA_PYTHON.
+  if (packagedApp) {
+    t.skip("GAMMA_PYTHON only applies to a source checkout");
+    return;
+  }
+
+  const shellProfile = profile("wedged");
+  // An interpreter that starts, announces nothing, and sits there — the shape
+  // of a backend wedged on import or on a locked database.
+  const fake = path.join(shellProfile, "wedged-python");
+  const pidFile = path.join(shellProfile, "wedged.pid");
+  fs.writeFileSync(fake, `#!/bin/sh\necho $$ > ${pidFile}\nexec sleep 600\n`);
+  fs.chmodSync(fake, 0o755);
+
+  const app = await launch(shellProfile, {
+    GAMMA_PYTHON: fake,
+    GAMMA_READY_TIMEOUT_MS: "3000",
+  });
+  t.after(() => app.close().catch(() => {}));
+
+  const launcher = await launcherPage(app);
+  await launcher.click("#addLocal");
+  await launcher.fill("#localName", "Wedged");
+  await launcher.click("#createLocal");
+
+  // The launcher comes back with the reason rather than hanging.
+  await waitFor(async () => {
+    const page = await launcherPage(app);
+    const text = await page.textContent(".status").catch(() => "");
+    return /did not come up|never answered|stopped/i.test(text) ? text : null;
+  }, "the launcher to report the failure", 60_000);
+
+  const stray = Number(fs.readFileSync(pidFile, "utf8").trim());
+  assert.ok(stray > 0, "the stand-in interpreter recorded its pid");
+  assert.ok(
+    await waitFor(() => !pidAlive(stray), "the wedged process to be killed", 20_000),
+    "a server that never announced itself must not be left holding the library",
+  );
+  assert.equal(
+    // `running` is a Map: Object.keys() on it is always empty, which would
+    // make this assertion decorative.
+    await inspect(app, (shell) => shell.sidecars().running.size),
+    0,
+    "and it must not be left in the running map either",
+  );
+});
+
 // --- remote workspaces -------------------------------------------------------
 
 test("a remote workspace loads the server and starts nothing locally", async (t) => {

@@ -27,8 +27,9 @@ const MAX_RESTARTS = 3;
 const RESTART_WINDOW_MS = 60_000;
 
 // Cold starts are slow on a fresh library (schema, seeding) and slower still
-// on a loaded CI runner.
-const READY_TIMEOUT_MS = 90_000;
+// on a loaded CI runner. Overridable so the failure path can be tested without
+// waiting a minute and a half for it.
+const READY_TIMEOUT_MS = Number(process.env.GAMMA_READY_TIMEOUT_MS) || 90_000;
 const HEALTH_POLL_MS = 150;
 
 const LOG_TAIL_LINES = 80;
@@ -240,11 +241,42 @@ class Sidecars {
         READY_TIMEOUT_MS,
       ),
     );
-    const info = await Promise.race([readyPromise, timeout]);
-    // READY means it is about to serve; /api/health means it is serving.
-    await this._waitHealthy(info.url, ws);
+    try {
+      const info = await Promise.race([readyPromise, timeout]);
+      // READY means it is about to serve; /api/health means it is serving.
+      await this._waitHealthy(info.url, ws);
+      this.onState();
+      return info;
+    } catch (err) {
+      // A server that never announced itself is still a running process. Left
+      // alone it holds the library's advisory lock for the rest of the
+      // session, so the next attempt spawns a second one, is told the library
+      // is already served, adopts the wedged port and fails the same way —
+      // two processes, one of them untracked.
+      this._abandon(ws.id);
+      throw err;
+    }
+  }
+
+  /** Kill a server that never came up, and forget it. */
+  _abandon(id) {
+    const entry = this.running.get(id);
+    if (!entry) return;
+    this.running.delete(id);
+    const child = entry.child;
+    if (child && child.exitCode === null) {
+      if (process.platform === "win32") taskkill(child.pid);
+      else {
+        try {
+          // No graceful stop: it never served, so there is nothing to drain.
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+    clearInstanceRecord(entry.dataDir);
     this.onState();
-    return info;
   }
 
   async _waitHealthy(url, ws) {
