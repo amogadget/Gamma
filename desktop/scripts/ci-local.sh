@@ -2,8 +2,9 @@
 # Run .github/workflows/desktop-release.yml's job locally, in the same order,
 # with the same commands.
 #
-#   desktop/scripts/ci-local.sh            # this working tree
-#   desktop/scripts/ci-local.sh --clone    # a clean clone of HEAD (what CI sees)
+#   desktop/scripts/ci-local.sh              # this working tree
+#   desktop/scripts/ci-local.sh --clone      # a clean clone of HEAD (what CI sees)
+#   desktop/scripts/ci-local.sh --container  # …and the tests on a bare ubuntu:24.04
 #
 # `--clone` is the one that matters before tagging a release: it uses committed
 # state only and a fresh `npm ci`, which is how a lockfile out of sync with
@@ -22,11 +23,13 @@ DESKTOP_DIR="$PWD"
 REPO_DIR="$(cd .. && pwd)"
 ARCH="$(node -p 'process.arch')"
 CLEAN_CLONE=false
+IN_CONTAINER=false
 WORK=""
 
 for arg in "$@"; do
   case "$arg" in
     --clone) CLEAN_CLONE=true ;;
+    --container) IN_CONTAINER=true ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -95,6 +98,32 @@ if [ "$(uname)" = "Linux" ] && [ -z "${DISPLAY:-}" ]; then
   xvfb-run -a node --test --test-concurrency=1 test/smoke.mjs
 else
   node --test --test-concurrency=1 test/smoke.mjs
+fi
+
+# A dev box has years of accumulated libraries; a fresh runner has none. This
+# is how the 0.1.0 Linux job's failure was found — Electron could not even load
+# (19 unresolved sonames) on a clean Ubuntu.
+if $IN_CONTAINER; then
+  step "Run the packaged app's tests on a bare ubuntu:24.04"
+  if [ "$(uname)" != "Linux" ]; then
+    echo "skipped: --container needs a Linux host (the image must match the build)"
+  else
+    docker run --rm \
+      -v "$REPO_DIR:/repo" \
+      -v "$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")/bin:/hostnode/bin:ro" \
+      -w /repo/desktop ubuntu:24.04 bash -euc '
+        export DEBIAN_FRONTEND=noninteractive PATH=/hostnode/bin:$PATH
+        apt-get update -qq >/dev/null
+        apt-get install -y -qq ca-certificates xvfb >/dev/null 2>&1
+        node node_modules/playwright/cli.js install-deps chromium >/dev/null 2>&1
+        apt-get install -y -qq libgtk-3-0t64 >/dev/null 2>&1 \
+          || apt-get install -y -qq libgtk-3-0 >/dev/null 2>&1
+        app=$(find dist -maxdepth 2 -name gamma-desktop -type f | head -1)
+        ldd "$app" | grep "not found" && exit 1 || echo "all libraries resolve"
+        GAMMA_PACKAGED_APP="$app" xvfb-run -a \
+          node --test --test-concurrency=1 test/smoke.mjs
+      '
+  fi
 fi
 
 printf '\n\033[1mall steps passed\033[0m (%s, %s)\n' "$(uname)" "$ARCH"

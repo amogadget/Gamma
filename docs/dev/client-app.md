@@ -302,10 +302,25 @@ cannot start its own backend fails in CI rather than on someone's laptop.
   arch list cannot make a runner emit a bundle it did not stage a Python for,
   and the output paths stay predictable.
 - The interpreter download is cached per OS and architecture.
-- macOS builds are **ad-hoc signed** (`codesign --sign -`) after packaging: an
-  entirely unsigned bundle will not launch on Apple Silicon at all. That is not
-  the same as satisfying Gatekeeper for a download, which still needs the
-  one-time right-click → Open.
+- macOS builds are **ad-hoc signed** (`codesign --sign -`) from
+  `desktop/scripts/afterPack.cjs`, i.e. *inside* packaging. An entirely
+  unsigned bundle does not merely warn on Apple Silicon — it fails to launch
+  with "Gamma is damaged and can't be opened", which is macOS refusing code
+  whose signature does not validate. Ad-hoc signing is still not a Developer
+  ID: a download also needs the one-time right-click → Open.
+
+  0.1.0 got this wrong in an instructive way. Signing ran as a *workflow step
+  after* `electron-builder`, which had already assembled the dmg — so the seven
+  tests passed against a signed bundle in `dist/` while the artifact shipped
+  the unsigned one. "Tests passed" and "the download works" came apart. The
+  hook now runs before the dmg exists, and a further step opens the dmg,
+  verifies its payload's signature and **runs the suite on the app it
+  contains** — the artifact, not an intermediate.
+- Linux needs Electron's shared libraries installed on the runner:
+  `playwright install-deps chromium` covers all but GTK (its Chromium is
+  headless-shell, which does not need it). Verified in a bare `ubuntu:24.04`
+  container, where the binary otherwise cannot load at all — 19 unresolved
+  sonames.
 - Releases are created as **drafts**, so the artifacts can be tried before
   anything is published.
 - **1b.5** When signing is adopted it is configuration rather than new

@@ -111,19 +111,21 @@ jobs:
             echo "GAMMA_PACKAGED_APP=$exe" >> "$GITHUB_ENV"
           fi
 
-      # An unsigned bundle will not launch on Apple Silicon at all. Ad-hoc
-      # signing makes it runnable; it does not satisfy Gatekeeper for a
-      # download, which still needs the user to allow it once (or a real
-      # Developer ID + notarization — see docs/dev/client-app.md).
-      - name: Ad-hoc sign (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          codesign --force --deep --sign - "$GAMMA_BUNDLE"
-          codesign --verify --deep --verbose=2 "$GAMMA_BUNDLE"
 
-      - name: Install Xvfb (Linux)
+      # Electron needs a display and a pile of shared libraries. Verified on a
+      # bare ubuntu:24.04 container: without this the binary cannot even load
+      # (19 unresolved sonames), and `playwright install-deps` covers all of
+      # them except GTK — its Chromium is headless-shell, which does not need
+      # it, and Electron does.
+      - name: Install Electron's runtime dependencies (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        working-directory: desktop
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          node node_modules/playwright/cli.js install-deps chromium
+          sudo apt-get install -y libgtk-3-0t64 || sudo apt-get install -y libgtk-3-0
+          ldd "$GAMMA_PACKAGED_APP" | grep "not found" && exit 1 || echo "all libraries resolve"
 
       # The real test: launch the artifact, choose "Run locally", let it start
       # its own bundled interpreter, render a PDF, and quit without orphaning
@@ -136,6 +138,27 @@ jobs:
           else
             node --test --test-concurrency=1 test/smoke.mjs
           fi
+
+      # 0.1.0 shipped a dmg containing an unsigned bundle while the tests ran
+      # against a signed copy in dist/, so "tests passed" and "the download
+      # works" came apart. Open the artifact and run the suite on its payload.
+      - name: Test the app inside the artifact (macOS)
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        run: |
+          dmg=$(ls dist/*.dmg | head -1)
+          echo "verifying $dmg"
+          mount=$(mktemp -d)
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount"
+          staged=$(mktemp -d)
+          cp -R "$mount/Gamma.app" "$staged/"
+          hdiutil detach "$mount"
+          codesign --verify --deep --strict --verbose=2 "$staged/Gamma.app"
+          # Informational: an ad-hoc signature is not a Developer ID, so
+          # Gatekeeper still asks the user once. It must not be "damaged".
+          spctl --assess --type execute --verbose=4 "$staged/Gamma.app" || true
+          GAMMA_PACKAGED_APP="$staged/Gamma.app/Contents/MacOS/Gamma" \
+            node --test --test-concurrency=1 test/smoke.mjs
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
