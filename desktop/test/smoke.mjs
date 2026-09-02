@@ -120,11 +120,15 @@ const ALARMING = /Traceback|FATAL|Fatal error|error while loading|Segmentation|I
  * allowed failure can be named precisely rather than by muting a whole class
  * of message.
  */
-function watchForErrors(page, sink, { allowHttp = [] } = {}) {
+function watchForErrors(page, sink, { allowHttp = [], warnings } = {}) {
   page.on("console", (msg) => {
     const text = msg.text();
     if (msg.type() === "error" && !/^Failed to load resource/.test(text)) {
       sink.push(`console: ${text}`);
+    } else if (warnings && (msg.type() === "warning" || /^Warning:/.test(text))) {
+      // Not a failure on its own: pdf.js reports font and decoding trouble
+      // here, which is exactly what explains an empty text layer.
+      warnings.push(text);
     }
   });
   page.on("pageerror", (err) => sink.push(`pageerror: ${err.message}`));
@@ -303,11 +307,13 @@ test("a remembered choice skips the chooser", async (t) => {
 test("a PDF uploads and renders in the window", async (t) => {
   const { page } = await launchLocal(t, "pdf");
   const errors = [];
+  const warnings = [];
   watchForErrors(page, errors, {
     // Opening a page looks up its paper metadata, and a 404 there means "this
     // isn't a paper I can identify" — which is the truth about a PDF that says
     // "Gamma" in 24pt Helvetica.
     allowHttp: [/\/api\/metadata\/fetch$/],
+    warnings,
   });
 
   // Upload through the app's own API, from inside the app's own page — the
@@ -353,13 +359,24 @@ test("a PDF uploads and renders in the window", async (t) => {
     .then(() => true)
     .catch(() => false);
   if (!gotText) {
-    const state = await page.evaluate(() => ({
-      canvases: document.querySelectorAll("canvas").length,
-      textLayers: document.querySelectorAll(".textLayer").length,
-      textSample: (document.querySelector(".textLayer")?.textContent || "").slice(0, 120),
-      pageCount: document.querySelectorAll("[data-page-number], .pdfPage").length,
-    }));
-    assert.fail(`the text layer never carried the PDF's text: ${JSON.stringify(state)}`);
+    const state = await page.evaluate(() => {
+      const layer = document.querySelector(".textLayer");
+      return {
+        canvases: document.querySelectorAll("canvas").length,
+        textLayers: document.querySelectorAll(".textLayer").length,
+        // Spans-with-no-text and no-spans-at-all are different bugs: the first
+        // means text extraction produced nothing, the second means the layer
+        // was never rendered.
+        spans: layer ? layer.children.length : -1,
+        markup: layer ? layer.innerHTML.slice(0, 200) : null,
+        textSample: (layer?.textContent || "").slice(0, 120),
+      };
+    });
+    assert.fail(
+      `the text layer never carried the PDF's text: ${JSON.stringify(state)}` +
+        `\n  console errors: ${JSON.stringify(errors.slice(0, 8))}` +
+        `\n  console warnings: ${JSON.stringify(warnings.slice(0, 12))}`,
+    );
   }
 
   assert.deepEqual(errors, [], "opening a PDF should not log console errors");
