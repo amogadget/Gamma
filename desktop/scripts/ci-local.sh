@@ -94,11 +94,7 @@ echo "$APP"
 
 step "Run the packaged app's tests"
 export GAMMA_PACKAGED_APP="$APP"
-if [ "$(uname)" = "Linux" ] && [ -z "${DISPLAY:-}" ]; then
-  xvfb-run -a node --test --test-concurrency=1 test/smoke.mjs
-else
-  node --test --test-concurrency=1 test/smoke.mjs
-fi
+scripts/run-packaged-tests.sh
 
 # A dev box has years of accumulated libraries; a fresh runner has none. This
 # is how the 0.1.0 Linux job's failure was found — Electron could not even load
@@ -120,8 +116,7 @@ if $IN_CONTAINER; then
           || apt-get install -y -qq libgtk-3-0 >/dev/null 2>&1
         app=$(find dist -maxdepth 2 -name gamma-desktop -type f | head -1)
         ldd "$app" | grep "not found" && exit 1 || echo "all libraries resolve"
-        GAMMA_PACKAGED_APP="$app" xvfb-run -a \
-          node --test --test-concurrency=1 test/smoke.mjs
+        GAMMA_PACKAGED_APP="$app" scripts/run-packaged-tests.sh
       '
   fi
 fi
