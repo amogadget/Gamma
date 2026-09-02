@@ -1,7 +1,7 @@
 name: Build the desktop app
 
 # Tag `desktop-v<version>` (matching desktop/package.json) → a GitHub release
-# with a .dmg per Mac architecture and a Linux AppImage attached. Deliberately
+# with an Apple Silicon .dmg and a Linux AppImage attached. Deliberately
 # not `v*`: those tags build the Docker image (docker.yml), and not
 # `extension-v*` either (extension-release.yml).
 #
@@ -29,13 +29,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Apple Silicon only. A universal build doubles the interpreter, the
+          # native wheels and the Electron framework — ~600 MB — and cannot be
+          # staged on one runner, because `pip` installs for the host. Intel
+          # Macs are not a target.
           - os: macos-14
             label: macOS (Apple Silicon)
             arch: arm64
-            artifacts: dist/*.dmg
-          - os: macos-13
-            label: macOS (Intel)
-            arch: x64
             artifacts: dist/*.dmg
           - os: ubuntu-latest
             label: Linux (x86-64)

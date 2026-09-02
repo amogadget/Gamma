@@ -174,9 +174,12 @@ Two things the measurement caught:
   but a wrong guess is an `ImportError` in front of a user with no terminal,
   and 13 MB of a 300 MB app is not worth that.
 
-**Ship per-architecture, not universal.** A universal binary doubles the
-interpreter, the native wheels and the Electron framework — roughly 600 MB —
-to serve Intel Macs. Two separate downloads is the better trade.
+**Apple Silicon only; not universal, and no Intel build.** A universal binary
+doubles the interpreter, the native wheels and the Electron framework — roughly
+600 MB — to serve Intel Macs, and it cannot be staged on a single runner
+because `pip` installs for the host: it would take two runners and a merge
+step. Intel Macs are not a target (decided 2026-09-02), so neither cost is
+worth paying.
 
 ### Data location
 
@@ -283,7 +286,7 @@ does not need it; on a build where it does, the app keeps working.
 
 ### Phase 1b — build it in CI, not by hand — **DONE**
 
-`.github/workflows/desktop-release.yml`. A `desktop-v*` tag builds three
+`.github/workflows/desktop-release.yml`. A `desktop-v*` tag builds two
 artifacts and, on each one, **runs the app it just built**: the same Playwright
 suite with `GAMMA_PACKAGED_APP` pointed at the packaged binary. A release that
 cannot start its own backend fails in CI rather than on someone's laptop.
@@ -291,14 +294,13 @@ cannot start its own backend fails in CI rather than on someone's laptop.
 | Runner | Artifact |
 |---|---|
 | `macos-14` | `.dmg`, Apple Silicon |
-| `macos-13` | `.dmg`, Intel |
 | `ubuntu-latest` | `.AppImage`, x86-64 |
 
 - The tag must match `desktop/package.json`'s version — the same guard
   `extension-release.yml` uses.
-- `--${{ matrix.arch }}` pins each build to one architecture, so an Intel
-  runner does not also try to emit an Apple Silicon dmg and the output paths
-  stay predictable.
+- `--${{ matrix.arch }}` pins each build to one architecture, so the config's
+  arch list cannot make a runner emit a bundle it did not stage a Python for,
+  and the output paths stay predictable.
 - The interpreter download is cached per OS and architecture.
 - macOS builds are **ad-hoc signed** (`codesign --sign -`) after packaging: an
   entirely unsigned bundle will not launch on Apple Silicon at all. That is not
@@ -375,7 +377,8 @@ engine) or the macOS runner (the real `.app`, every tag).
 | Auto-session leaks into a hosted deployment | ✅ Three conditions in code, each with a negative test |
 | Backend dies silently and the window shows nothing | ✅ No window until `/api/health` answers; a dialog with the log tail on failure |
 | An orphaned backend locks the library after a quit | ✅ `before-quit` waits for the child; asserted by killing the app and polling the pid |
-| The macOS `.app` is still unexercised on real macOS | CI runs the packaged app on `macos-14`/`macos-13`, but no tag has been pushed yet |
+| The macOS `.app` is still unexercised on real macOS | CI runs the packaged app on `macos-14`; the first tagged build is the first time that has ever happened |
+| CI green but the release job broken | `desktop/scripts/ci-local.sh --clone` runs the whole job locally from a clean clone — added after a hand-written dependency range failed `npm ci` on every runner |
 
 ## Open questions
 
