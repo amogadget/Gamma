@@ -13,36 +13,13 @@ import {
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { findMathAtCursor, renderKatexInto } from "./latexEditor";
+// The editor and the renderers must agree on where math is and whether it is
+// centred, so the tokenizer lives in one place — see mathMarkdown.js.
+import { scanMathSpans } from "./mathMarkdown";
 import { calloutType } from "./callouts";
 import { highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
 
 // All CLOSED math spans in the text: [{from, to, display}] with from/to
-// including the delimiters. Same tokenizer as latexEditor's findMathAtCursor
-// (escaped \$ skipped), but only complete pairs — an unclosed opener stays
-// raw text while it's being typed. Inline spans must sit on one line and be
-// non-empty; "$5 and $3" across prose otherwise pairs into a bogus formula.
-function scanMathSpans(text) {
-  const re = /\$\$?/g;
-  const spans = [];
-  let m, open = null;
-  while ((m = re.exec(text))) {
-    if (text[m.index - 1] === "\\") continue;
-    const tok = { i: m.index, len: m[0].length };
-    if (!open) {
-      open = tok;
-    } else if (tok.len === open.len) {
-      const inner = text.slice(open.i + open.len, tok.i);
-      const ok = inner.trim() && (open.len === 2 || !inner.includes("\n"));
-      if (ok) spans.push({ from: open.i, to: tok.i + tok.len, display: open.len === 2 });
-      open = null;
-    } else {
-      // Mismatched pair ($ ... $$): treat the later token as a fresh opener.
-      open = tok;
-    }
-  }
-  return spans;
-}
-
 // Clicking a rendered widget drops the caret just inside it, which un-renders
 // the span (the caret now touches it) so the source is editable in place.
 function placeCaretInside(view, node, offsetFromStart) {

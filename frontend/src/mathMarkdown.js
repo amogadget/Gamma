@@ -1,69 +1,127 @@
-// `$$…$$` means display math.
+// One answer to "where is the math, and is it centred?", used by the editor,
+// the note renderer and the chat.
 //
-// That is what the editor does — blockCmEditor's scanMathSpans keys `display`
-// off the delimiter length, so a `$$` span renders centred while you are
-// typing it — and it is what people mean by writing two dollars.
+// There used to be two. The editor scans for `$$…$$` pairs and centres
+// anything it finds, wherever the delimiters sit. remark-math instead requires
+// `mathFlow`: both `$$` alone on their own lines. Everything else it mangles —
 //
-// remark-math disagrees when the span is on one line. micromark's `mathFlow`
-// treats the rest of the opening line as "meta", and meta may not contain a
-// `$`, so `$$ E = mc^2 $$` fails the block rule and falls back to *inline*
-// math. The visible result: a centred equation that snapped inline the moment
-// the block stopped being edited, and only that block, which looks like a
-// rendering bug rather than a parsing rule.
+//   $$ E = mc^2 $$              → *inline* math (one line: mathFlow refuses,
+//                                 because the rest of the opening line is an
+//                                 info string and may not contain a `$`)
+//   $$\begin{aligned}           → `\begin{aligned}` swallowed as the info
+//   a &= b                        string, the closing `$$` left inside the
+//   \end{aligned}$$               formula: KaTeX sees \end with no \begin
 //
-// The fix is to hand the parser the multi-line form it does recognise, in the
-// case where the intent is unambiguous.
-
-// A whole line that is nothing but one `$$…$$` span. An escaped `\$` may
-// appear inside — the editor's tokenizer (scanMathSpans) skips those too — but
-// a bare one may not, so `$$a$$ $$b$$` (two spans) is left alone.
-const WHOLE_LINE_DISPLAY = /^(\s*)\$\$((?:\\\$|[^$\n])+)\$\$\s*$/;
-
-// Fences whose contents are not markdown and must not be touched.
-const CODE_FENCE = /^\s*(?:```|~~~)/;
-const MATH_FENCE = /^\s*\$\$\s*$/;
+// — so a block rendered centred while you edited it went inline, or broke
+// outright, the moment it lost focus. That is not a rendering bug, it is two
+// tokenizers disagreeing, and no amount of patching one of them fixes the
+// class of problem.
+//
+// So: the editor's tokenizer decides, and expandDisplayMath rewrites what it
+// finds into the one layout remark-math handles correctly. The renderer then
+// agrees with the editor by construction.
+//
+// (latexEditor.js has a third scanner, findMathAtCursor, for the LaTeX helper
+// popup. It only decides where the caret is, never how anything renders, so it
+// is left alone.)
 
 /**
- * Expand one-line `$$…$$` into the block form remark-math renders as display
- * math. Text inside code fences is untouched, and so is a span that shares a
- * line with other text: turning that into a block would split the paragraph,
- * and inside a table cell it would destroy the table.
+ * Every complete `$$…$$` or `$…$` pair, in source order.
+ *
+ * An unclosed opener stays raw text — it is being typed. Inline spans must sit
+ * on one line and be non-empty, or "$5 and $3" in prose pairs into a formula.
+ * An escaped `\$` is not a delimiter.
+ *
+ * @param {string} text
+ * @returns {{from: number, to: number, display: boolean}[]} `to` is exclusive
+ */
+export function scanMathSpans(text) {
+  const re = /\$\$?/g;
+  const spans = [];
+  let match;
+  let open = null;
+  while ((match = re.exec(text))) {
+    if (text[match.index - 1] === "\\") continue;
+    const token = { i: match.index, len: match[0].length };
+    if (!open) {
+      open = token;
+    } else if (token.len === open.len) {
+      const inner = text.slice(open.i + open.len, token.i);
+      const ok = inner.trim() && (open.len === 2 || !inner.includes("\n"));
+      if (ok) spans.push({ from: open.i, to: token.i + token.len, display: open.len === 2 });
+      open = null;
+    } else {
+      // Mismatched pair ($ … $$): treat the later token as a fresh opener.
+      open = token;
+    }
+  }
+  return spans;
+}
+
+/**
+ * Ranges whose contents are not markdown: fenced blocks and inline code. Math
+ * inside them is text and must be left exactly as written.
+ *
+ * @param {string} text
+ * @returns {{from: number, to: number}[]}
+ */
+export function scanCodeRanges(text) {
+  const ranges = [];
+  const fence = /^[ \t]*(```+|~~~+)[^\n]*$/gm;
+  let open = null;
+  let match;
+  while ((match = fence.exec(text))) {
+    if (!open) {
+      open = { from: match.index, marker: match[1] };
+    } else if (match[1].startsWith(open.marker[0])) {
+      ranges.push({ from: open.from, to: match.index + match[0].length });
+      open = null;
+    }
+  }
+  // An unclosed fence runs to the end of the block, as markdown does.
+  if (open) ranges.push({ from: open.from, to: text.length });
+
+  for (const code of text.matchAll(/`[^`\n]+`/g)) {
+    const from = code.index;
+    const to = from + code[0].length;
+    if (!ranges.some((r) => from >= r.from && to <= r.to)) ranges.push({ from, to });
+  }
+  return ranges.sort((a, b) => a.from - b.from);
+}
+
+/**
+ * Rewrite every `$$…$$` span into the layout remark-math renders as display
+ * math: both fences alone on their own lines.
+ *
+ * Inline `$…$` spans, and anything inside code, are untouched.
  *
  * @param {string} text markdown as the user typed it
- * @returns {string} markdown with whole-line display math in block form
+ * @returns {string} markdown remark-math will render the way the editor does
  */
-export function normalizeDisplayMath(text) {
+export function expandDisplayMath(text) {
   if (!text || !text.includes("$$")) return text || "";
 
-  const lines = text.split("\n");
-  let inCode = false;
-  let inMath = false;
-  let changed = false;
+  const code = scanCodeRanges(text);
+  const inCode = (span) => code.some((r) => span.from >= r.from && span.to <= r.to);
+  const spans = scanMathSpans(text).filter((s) => s.display && !inCode(s));
+  if (!spans.length) return text;
 
-  const out = lines.map((line) => {
-    if (CODE_FENCE.test(line)) {
-      inCode = !inCode;
-      return line;
-    }
-    if (inCode) return line;
-
-    // A bare `$$` opens or closes math that is already in block form; leave
-    // everything between them exactly as written.
-    if (MATH_FENCE.test(line)) {
-      inMath = !inMath;
-      return line;
-    }
-    if (inMath) return line;
-
-    const match = WHOLE_LINE_DISPLAY.exec(line);
-    if (!match) return line;
-    const inner = match[2].trim();
-    if (!inner) return line;
-    changed = true;
-    // The indent is dropped deliberately: four spaces before `$$` would make
-    // the block an indented code block instead.
-    return `$$\n${inner}\n$$`;
-  });
-
-  return changed ? out.join("\n") : text;
+  let out = "";
+  let at = 0;
+  for (const span of spans) {
+    const before = text.slice(at, span.from);
+    const inner = text.slice(span.from + 2, span.to - 2).trim();
+    if (!inner) continue;
+    out += before;
+    // A fence must start its own line, and four spaces before it would make
+    // the block an indented code block — so drop the indent first, then break
+    // the line only if there is still something on it.
+    out = out.replace(/[ \t]+$/, "");
+    if (out && !out.endsWith("\n")) out += "\n";
+    out += `$$\n${inner}\n$$`;
+    at = span.to;
+    // …and the closing fence needs the line to itself too.
+    if (text[at] && text[at] !== "\n") out += "\n";
+  }
+  return out + text.slice(at);
 }

@@ -11,7 +11,7 @@ import { withLegacyAccessors } from "./logseqPdfModel";
 import { COLORS } from "./pdfViewer";
 import { handleMarkdownCopy } from "./widgets";
 import { isEnterCommit } from "./utils";
-import { normalizeDisplayMath } from "./mathMarkdown";
+import { expandDisplayMath, scanMathSpans } from "./mathMarkdown";
 import { FolderIcon, LinkIcon } from "./icons";
 import {
   findMathAtCursor,
@@ -20,7 +20,7 @@ import {
   LatexAcPopup,
   MathLivePreview,
 } from "./latexEditor";
-import { BlockCmEditor, scanMathSpans } from "./blockCmEditor";
+import { BlockCmEditor } from "./blockCmEditor";
 import { fenceInnerAt, highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
 import { remarkCallouts } from "./callouts";
 import { filterSlashCommands } from "./slashCommands";
@@ -63,11 +63,12 @@ function applyOutsideSpans(text, spans, fn) {
 }
 
 function mdPreprocess(raw, nested) {
-  // $$…$$ on one line is *inline* math to remark-math, but display math to the
-  // editor (scanMathSpans keys off the delimiter length) and to whoever typed
-  // it — so a centred equation snapped inline the moment its block lost focus.
-  // Done first, so the spans below are scanned against what will be parsed.
-  const content = normalizeDisplayMath(raw);
+  // remark-math only recognises display math when both `$$` sit alone on their
+  // own lines; the editor centres any `$$…$$` pair wherever the delimiters
+  // are. Rewrite to the layout remark-math wants, so the rendered block looks
+  // like the one that was just being edited. Done first, so the spans below
+  // are scanned against what will actually be parsed.
+  const content = expandDisplayMath(raw);
   const spans = scanMathSpans(content).map((s) => ({ from: s.from, to: s.to }));
   // ``` fences claim first (sorted by from, earlier span wins in
   // applyOutsideSpans) — a [[ref]] or == inside code must stay literal.

@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { normalizeDisplayMath } from "./mathMarkdown";
+import { expandDisplayMath } from "./mathMarkdown";
 import {
   FileTextIcon,
   HighlightIcon,
@@ -170,10 +170,12 @@ const ChatMarkdown = React.memo(function ChatMarkdown({ text }) {
           ? m
           : `$${inner.replace(/\\\|/g, "\\Vert ").replace(/\|/g, "\\vert ")}$`,
       );
-    // A reply that writes $$…$$ on one line means a centred equation, and
-    // remark-math reads that as inline. The \[…\] rule above already expands
-    // to the block form; this does the same for two dollars.
-    return normalizeDisplayMath(dollars);
+    // A reply that writes $$…$$ with the delimiters anywhere but alone on
+    // their own lines means a centred equation, and remark-math would read it
+    // as inline or swallow the first line into the fence's info string. The
+    // \[…\] rule above already produces the layout it wants; this does the
+    // same for two dollars.
+    return expandDisplayMath(dollars);
   }, [text]);
   return (
     <div onCopy={handleMarkdownCopy}>
