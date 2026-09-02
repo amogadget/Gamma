@@ -83,8 +83,20 @@ function stagePython() {
   const dest = path.join(out, "python");
   rmrf(dest);
   fs.mkdirSync(dest, { recursive: true });
+
+  // Extract from stdin, with cwd as the destination, so no path appears on
+  // tar's command line. Windows paths contain a colon, and GNU tar — which is
+  // what Git Bash provides — reads "C:\Users\..." as host:path and tries to
+  // resolve a host named C. `--force-local` would fix that for GNU tar and be
+  // rejected by bsdtar, the other tar on Windows; piping needs neither.
   // The archive contains a single `python/` directory; strip it.
-  run("tar", ["-xzf", tarball, "-C", dest, "--strip-components=1"]);
+  console.log(`$ tar -xzf - --strip-components=1   (< ${path.basename(tarball)}, in ${dest})`);
+  execFileSync("tar", ["-xzf", "-", "--strip-components=1"], {
+    cwd: dest,
+    input: fs.readFileSync(tarball),
+    stdio: ["pipe", "inherit", "inherit"],
+    maxBuffer: 1024 * 1024 * 1024,
+  });
   return dest;
 }
 
@@ -278,8 +290,13 @@ function stageFrontend() {
 }
 
 function sizeOf(p) {
-  const line = execFileSync("du", ["-sh", p], { encoding: "utf8" });
-  return line.split("\t")[0];
+  try {
+    const line = execFileSync("du", ["-sh", p], { encoding: "utf8" });
+    return line.split("\t")[0];
+  } catch {
+    // No du (or it dislikes a Windows path). This only feeds progress output.
+    return "?";
+  }
 }
 
 // --- go ----------------------------------------------------------------------

@@ -232,6 +232,7 @@ class Supervisor {
       // still interrupt a write, which is why SQLite's WAL matters here.
       await this._taskkill(child.pid);
       await Promise.race([gone, new Promise((r) => setTimeout(r, 4000))]);
+      this._clearInstanceRecord();
       return;
     }
 
@@ -252,6 +253,25 @@ class Supervisor {
         /* nothing more to do */
       }
       await Promise.race([gone, new Promise((r) => setTimeout(r, 2000))]);
+    }
+  }
+
+  /**
+   * Delete the running-instance record after a hard kill.
+   *
+   * On Unix the backend clears this itself on SIGTERM. On Windows nothing gets
+   * a chance to, so the shell does it — otherwise the next launch reads a
+   * record for a dead pid. `running_instance()` in gamma/desktop.py would
+   * detect and clear that anyway, but leaving correct state behind is better
+   * than leaving a mess for a backstop to tidy.
+   */
+  _clearInstanceRecord() {
+    const dir = this.info && this.info.data_dir;
+    if (!dir) return;
+    try {
+      fs.unlinkSync(path.join(dir, "desktop.json"));
+    } catch {
+      /* already gone, or never written */
     }
   }
 

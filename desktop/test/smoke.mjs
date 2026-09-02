@@ -44,7 +44,15 @@ function tmpRoot(label) {
 }
 
 after(() => {
-  for (const dir of tmpRoots) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of tmpRoots) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Windows refuses to delete a file another process still has open, and a
+      // just-quit Electron can hold one for a moment. Leaving a temp directory
+      // behind is not worth failing a green run over.
+    }
+  }
 
   // Printed at the end so it lands in the tail of the output, which is what a
   // CI annotation carries. Silent when every launch was uneventful.
