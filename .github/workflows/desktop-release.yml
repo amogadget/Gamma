@@ -51,14 +51,18 @@ jobs:
           - os: ubuntu-latest
             label: Linux (x86-64)
             arch: x64
-            artifacts: dist/*.AppImage
+            artifacts: |
+              dist/*.AppImage
+              dist/*.deb
           # GitHub's arm64 Linux runners are free for public repositories, and
           # this is the architecture the dev box builds and tests natively, so
           # it is the cheapest platform to add.
           - os: ubuntu-24.04-arm
             label: Linux (arm64)
             arch: arm64
-            artifacts: dist/*.AppImage
+            artifacts: |
+              dist/*.AppImage
+              dist/*.deb
           - os: windows-latest
             label: Windows (x86-64)
             arch: x64
@@ -237,7 +241,13 @@ jobs:
             |---|---|
             | macOS, Apple Silicon | `.dmg` |
             | Windows, x86-64 | `Gamma Setup … .exe` |
-            | Linux, x86-64 and arm64 | `.AppImage` |
+            | Debian / Ubuntu, x86-64 and arm64 | `.deb` |
+            | Other Linux | `.AppImage` |
+
+            On Ubuntu, prefer the `.deb`: AppImages need FUSE 2
+            (`libfuse.so.2`), which Ubuntu has not shipped since 22.04. If you
+            want the AppImage anyway, run it with
+            `--appimage-extract-and-run`, or install `libfuse2t64`.
 
             The macOS build is **not signed with an Apple Developer ID**, so the
             first launch needs one extra step: right-click Gamma.app → Open, and

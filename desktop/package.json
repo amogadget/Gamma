@@ -1,7 +1,7 @@
 {
   "name": "gamma-desktop",
   "productName": "Gamma",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Gamma \u2014 a local PDF annotator with an outliner and an AI chat.",
   "private": true,
   "main": "main.js",
@@ -72,12 +72,16 @@
     "linux": {
       "target": [
         {
+          "target": "deb"
+        },
+        {
           "target": "AppImage"
         }
       ],
       "category": "Office",
       "synopsis": "PDF annotator with an outliner and an AI chat",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.png",
+      "syncDesktopName": true
     },
     "win": {
       "target": [
@@ -98,5 +102,11 @@
     "npmRebuild": false,
     "publish": null,
     "afterPack": "scripts/afterPack.cjs"
-  }
+  },
+  "homepage": "https://github.com/amogadget/Gamma",
+  "author": {
+    "name": "amogadget",
+    "email": "amogadget@users.noreply.github.com"
+  },
+  "desktopName": "gamma-desktop.desktop"
 }
