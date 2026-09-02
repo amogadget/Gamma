@@ -124,17 +124,21 @@ function verifyBundle(pythonDir) {
  */
 function trimPython(pythonDir) {
   const before = sizeOf(pythonDir);
+  const minor = PY_VERSION.split(".").slice(0, 2).join(".");
   const lib = path.join(pythonDir, "lib");
-  const stdlib = path.join(lib, `python${PY_VERSION.split(".").slice(0, 2).join(".")}`);
+
+  // The two layouts are genuinely different: Unix keeps the standard library
+  // under lib/pythonX.Y, Windows under Lib/ beside DLLs/ and libs/. A list
+  // written for one silently trims nothing on the other — which is how a
+  // Windows bundle would have shipped with IDLE, Tk and the test suite in it.
+  const stdlib =
+    platform === "win32"
+      ? path.join(pythonDir, "Lib")
+      : path.join(lib, `python${minor}`);
 
   const doomed = [
     path.join(pythonDir, "include"),
-    path.join(pythonDir, "share", "terminfo"),
-    path.join(pythonDir, "share", "man"),
     // Tk: the GUI toolkit, in an app whose entire UI is Electron.
-    ...["tcl8.6", "tk8.6", "Tix8.4.3", "itcl4.2.4", "sqlite3.51.0", "thread2.8.9"].map((d) =>
-      path.join(lib, d),
-    ),
     ...["tkinter", "idlelib", "turtledemo", "lib2to3", "test", "ensurepip", "pydoc_data"].map(
       (d) => path.join(stdlib, d),
     ),
@@ -143,6 +147,29 @@ function trimPython(pythonDir) {
       path.join(stdlib, "site-packages", d),
     ),
   ];
+
+  if (platform === "win32") {
+    doomed.push(
+      path.join(pythonDir, "tcl"),
+      path.join(pythonDir, "libs"), // import libraries, for building extensions
+      path.join(pythonDir, "DLLs", "_tkinter.pyd"),
+      path.join(pythonDir, "Scripts"),
+    );
+    for (const f of fs.existsSync(path.join(pythonDir, "DLLs"))
+      ? fs.readdirSync(path.join(pythonDir, "DLLs"))
+      : []) {
+      if (/^(tcl|tk)\d|^tix/.test(f)) doomed.push(path.join(pythonDir, "DLLs", f));
+    }
+  } else {
+    doomed.push(
+      path.join(pythonDir, "share", "terminfo"),
+      path.join(pythonDir, "share", "man"),
+      ...["tcl8.6", "tk8.6", "Tix8.4.3", "itcl4.2.4", "sqlite3.51.0", "thread2.8.9"].map((d) =>
+        path.join(lib, d),
+      ),
+    );
+  }
+
   for (const p of doomed) rmrf(p);
   for (const f of fs.existsSync(lib) ? fs.readdirSync(lib) : []) {
     if (f.endsWith(".a")) rmrf(path.join(lib, f)); // static libs, for building C extensions
@@ -151,9 +178,14 @@ function trimPython(pythonDir) {
   // The shared libpython is ~28 MB and, on some builds, entirely redundant
   // because the launcher is statically linked. Whether that holds is a
   // property of the build, not something to assume — so try it and see.
-  const candidates = (fs.existsSync(lib) ? fs.readdirSync(lib) : []).filter((f) =>
-    /^libpython.*\.(so|dylib)/.test(f),
-  );
+  // Windows is excluded: python3.dll and pythonXY.dll sit beside python.exe
+  // and it links them by name, so there is nothing to test here.
+  const candidates =
+    platform === "win32"
+      ? []
+      : (fs.existsSync(lib) ? fs.readdirSync(lib) : []).filter((f) =>
+          /^libpython.*\.(so|dylib)/.test(f),
+        );
   for (const name of candidates) {
     const live = path.join(lib, name);
     const parked = `${live}.parked`;

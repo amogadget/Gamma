@@ -88,7 +88,15 @@ case "$ARCH" in
   *)     echo "unhandled arch $ARCH" >&2; exit 1 ;;
 esac
 APP=""
-if [ "$(uname)" = "Darwin" ]; then
+case "$(uname)" in
+  MINGW*|MSYS*|CYGWIN*)
+    APP="$(find dist -maxdepth 2 -name "Gamma.exe" -type f | head -1)"
+    [ -n "$APP" ] || { echo "no Gamma.exe under dist/"; ls -R dist | head -50; exit 1; }
+    ;;
+esac
+if [ -n "$APP" ]; then
+  :
+elif [ "$(uname)" = "Darwin" ]; then
   for bundle in $(find dist -maxdepth 2 -name "Gamma.app" -type d); do
     if file "$bundle/Contents/MacOS/Gamma" | grep -qE "$WANT"; then
       APP="$bundle/Contents/MacOS/Gamma"

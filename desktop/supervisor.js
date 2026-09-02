@@ -219,6 +219,22 @@ class Supervisor {
     if (!child || child.exitCode !== null) return;
 
     const gone = new Promise((resolve) => child.once("exit", resolve));
+
+    if (process.platform === "win32") {
+      // Windows has no SIGTERM: `child.kill()` calls TerminateProcess, which
+      // the backend cannot handle, so uvicorn never drains and the `finally`
+      // that clears the instance record never runs. `taskkill /T` at least
+      // takes the whole tree down rather than orphaning descendants.
+      //
+      // Leaving the record behind is survivable by design: running_instance()
+      // checks whether the recorded pid is alive and clears a stale one, and
+      // the OS releases the lock file when the process dies. A hard kill can
+      // still interrupt a write, which is why SQLite's WAL matters here.
+      await this._taskkill(child.pid);
+      await Promise.race([gone, new Promise((r) => setTimeout(r, 4000))]);
+      return;
+    }
+
     try {
       child.kill("SIGTERM");
     } catch {
@@ -237,6 +253,26 @@ class Supervisor {
       }
       await Promise.race([gone, new Promise((r) => setTimeout(r, 2000))]);
     }
+  }
+
+  /** Kill a process tree on Windows. */
+  _taskkill(pid) {
+    return new Promise((resolve) => {
+      const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      killer.on("exit", () => resolve());
+      killer.on("error", (err) => {
+        this._log(`taskkill failed: ${err.message}`);
+        try {
+          this.child?.kill();
+        } catch {
+          /* nothing more to do */
+        }
+        resolve();
+      });
+    });
   }
 }
 

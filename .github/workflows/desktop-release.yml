@@ -1,7 +1,8 @@
 name: Build the desktop app
 
 # Tag `desktop-v<version>` (matching desktop/package.json) → a GitHub release
-# with an Apple Silicon .dmg and a Linux AppImage attached. Deliberately
+# with an Apple Silicon .dmg, Linux AppImages (x86-64 and arm64) and a Windows
+# installer attached. Deliberately
 # not `v*`: those tags build the Docker image (docker.yml), and not
 # `extension-v*` either (extension-release.yml).
 #
@@ -28,6 +29,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
+    defaults:
+      run:
+        # Git Bash on the Windows runner: `windows-latest` would otherwise use
+        # PowerShell, and every script under desktop/scripts is bash.
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -44,6 +50,17 @@ jobs:
             label: Linux (x86-64)
             arch: x64
             artifacts: dist/*.AppImage
+          # GitHub's arm64 Linux runners are free for public repositories, and
+          # this is the architecture the dev box builds and tests natively, so
+          # it is the cheapest platform to add.
+          - os: ubuntu-24.04-arm
+            label: Linux (arm64)
+            arch: arm64
+            artifacts: dist/*.AppImage
+          - os: windows-latest
+            label: Windows (x86-64)
+            arch: x64
+            artifacts: dist/*.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -106,7 +123,14 @@ jobs:
             arm64) want="aarch64|arm64" ;;
             *)     echo "unhandled arch ${{ matrix.arch }}"; exit 1 ;;
           esac
-          if [ "${{ runner.os }}" = "macOS" ]; then
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            # Only ever x86-64, one output directory, and Git Bash has no
+            # dependable file(1) — so name and existence are the whole check.
+            found=$(find dist -maxdepth 2 -name "Gamma.exe" -type f | head -1)
+            [ -n "$found" ] || { echo "no Gamma.exe under dist/"; ls -R dist | head -50; exit 1; }
+            echo "GAMMA_PACKAGED_APP=$found" >> "$GITHUB_ENV"
+            ls -l "$found"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
             found=""
             for bundle in $(find dist -maxdepth 2 -name "Gamma.app" -type d); do
               if file "$bundle/Contents/MacOS/Gamma" | grep -qE "$want"; then

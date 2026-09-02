@@ -30,12 +30,10 @@ if [ -n "${GITHUB_ACTIONS:-}" ]; then
     tail -60 "$out"
   } > "$out.diag"
   # An annotation message is a single line: %-escape first, then newlines.
-  TITLE="$title" python3 - "$out.diag" <<'PY'
-import os, sys
-text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
-esc = text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-print(f"::error title={os.environ['TITLE']}::{esc[:8000]}")
-PY
+  # sed and awk rather than python3, which Git Bash on the Windows runners
+  # does not reliably provide.
+  message=$(sed -e 's/%/%25/g' -e 's/\r$//' "$out.diag" | awk '{printf "%s%%0A", $0}')
+  echo "::error title=$title::${message:0:8000}"
   rm -f "$out.diag"
 fi
 

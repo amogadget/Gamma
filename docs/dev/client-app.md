@@ -303,6 +303,8 @@ cannot start its own backend fails in CI rather than on someone's laptop.
 |---|---|
 | `macos-14` | `.dmg`, Apple Silicon |
 | `ubuntu-latest` | `.AppImage`, x86-64 |
+| `ubuntu-24.04-arm` | `.AppImage`, arm64 |
+| `windows-latest` | NSIS `.exe`, x86-64 |
 
 - The tag must match `desktop/package.json`'s version — the same guard
   `extension-release.yml` uses.
@@ -358,15 +360,40 @@ app runs `Resources/python/bin/python3`, not any system or venv Python.
 - **2.2** Crash/log surface. Partly done: **Help → Backend Log** shows the last
   60 lines in a dialog. A real log *file* on disk, and a way to reveal it, is
   still missing — the tail is lost when the app quits.
-- **2.3** Windows. The `electron-builder` config has an NSIS target and
-  `desktop.py`/`supervisor.js` have Windows branches, but nothing Windows has
-  been run. Linux is done (AppImage, tested).
+- **2.3** Windows and Linux arm64 — both in the matrix now. Linux arm64 is the
+  architecture the dev box builds natively, so it was nearly free. Windows
+  needed real changes, described below, and none of them can be tested here.
 - **2.4** ✅ App icon — `desktop/assets/icon.svg`, the icon half of
   `logos/gamma-logo-dark.svg` with Apple's 10% margin, rasterized to 1024px by
   `npm run icon`. Chromium does the rasterizing (`scripts/render-icon.cjs`):
   ImageMagick's built-in SVG renderer silently drops the clipped group, losing
   the Γ and the standing wave and letting the mirrors escape the rounded
   square. The engine that draws the app draws its icon.
+
+### What Windows actually needed
+
+Adding `windows-latest` to a matrix is the easy part; the platform differences
+are not cosmetic:
+
+- **No `SIGTERM`.** `child.kill()` on Windows is `TerminateProcess`, which the
+  backend cannot catch, so uvicorn never drains and the `finally` that clears
+  the instance record never runs. `stop()` uses `taskkill /T /F` there, which
+  at least takes the whole tree down instead of orphaning descendants. Leaving
+  a stale record behind is survivable by design: `running_instance()` checks
+  whether the recorded pid is alive and clears it if not, and the OS releases
+  the lock file when the process dies.
+- **A different interpreter layout.** Windows keeps the standard library in
+  `Lib/` beside `DLLs/`, `libs/` and `tcl/`; Unix uses `lib/pythonX.Y`. The
+  trim list was written for Unix, so on Windows it matched nothing — a bundle
+  would have shipped with IDLE, Tk and the test suite inside. `python3.dll`
+  and `python312.dll` sit beside `python.exe` and are linked by name, so the
+  conditional `libpython` trim is skipped there entirely.
+- **PowerShell.** `windows-latest` runs `run:` steps in PowerShell, and every
+  script in `desktop/scripts` is bash, so the job sets `shell: bash`.
+- **No dependable `python3` or `file(1)`** in Git Bash. The annotation
+  escaping in `ci-step.sh` is `sed` and `awk` now, and the Windows branch of
+  "locate the built app" checks a name rather than an architecture (there is
+  only one).
 
 ### Phase 3 — optional sharing
 
