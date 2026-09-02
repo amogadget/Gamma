@@ -373,6 +373,43 @@ test("two local workspaces are two libraries, both served at once", async (t) =>
   assert.equal(new URL(back.url()).port, new URL(firstUrl).port, "the same server as before");
 });
 
+test("a workspace whose server dies gets it back", async (t) => {
+  const shellProfile = profile("restart");
+  const app = await launch(shellProfile);
+  t.after(() => app.close().catch(() => {}));
+
+  const page = await createLocal(app, "Papers");
+  const ws = await inspect(app, (shell) => shell.registry.load().workspaces[0]);
+  const recordPath = path.join(ws.dataDir, "desktop.json");
+  const first = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+
+  // Simulate a crash: no cleanup, no chance to release anything.
+  process.kill(first.pid, "SIGKILL");
+  assert.ok(await waitFor(() => !pidAlive(first.pid), "the server to die"), "server dead");
+
+  // The supervisor starts a new one, on whatever port it gets…
+  const next = await waitFor(() => {
+    const record = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+    return record.pid !== first.pid && pidAlive(record.pid) ? record : null;
+  }, "a replacement server", 60_000);
+  assert.notEqual(next.port, undefined);
+
+  // …and the window comes back on its own. Polled, because the shell reloads
+  // it a moment after the new server records itself.
+  assert.ok(
+    await waitFor(async () => {
+      try {
+        const session = await page.evaluate(() => fetch("/api/session").then((r) => r.json()));
+        return session.user === "local";
+      } catch {
+        return false; // mid-navigation
+      }
+    }, "the window to be usable again", 60_000),
+    "recovered",
+  );
+  await page.waitForSelector(".homeFindInput", { timeout: READY_TIMEOUT });
+});
+
 // --- remote workspaces -------------------------------------------------------
 
 test("a remote workspace loads the server and starts nothing locally", async (t) => {

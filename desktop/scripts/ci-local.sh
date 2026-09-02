@@ -127,16 +127,22 @@ if $IN_CONTAINER; then
   if [ "$(uname)" != "Linux" ]; then
     echo "skipped: --container needs a Linux host (the image must match the build)"
   else
-    docker run --rm \
+    # Built once and reused; apt-getting Electron's dependency list on every
+    # run cost minutes and made iterating on a container-only failure
+    # impractical.
+    if ! docker image inspect gamma-bare >/dev/null 2>&1; then
+      step "Build the bare test image (first run only)"
+      docker build -t gamma-bare -f "$DESKTOP_DIR/test/Dockerfile.bare" "$DESKTOP_DIR"
+    fi
+    # --shm-size: Docker gives /dev/shm 64 MB, and Chromium renderers need
+    # more than that for a page the size of Gamma's — the renderer simply
+    # crashes, which looks exactly like an app bug and is not one. A real
+    # machine, including every CI runner, has a normal /dev/shm; the app is
+    # not going to be told to work around a container default.
+    docker run --rm --shm-size=1g \
       -v "$REPO_DIR:/repo" \
       -v "$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")/bin:/hostnode/bin:ro" \
-      -w /repo/desktop ubuntu:24.04 bash -euc '
-        export DEBIAN_FRONTEND=noninteractive PATH=/hostnode/bin:$PATH
-        apt-get update -qq >/dev/null
-        apt-get install -y -qq ca-certificates xvfb >/dev/null 2>&1
-        node node_modules/playwright/cli.js install-deps chromium >/dev/null 2>&1
-        apt-get install -y -qq libgtk-3-0t64 >/dev/null 2>&1 \
-          || apt-get install -y -qq libgtk-3-0 >/dev/null 2>&1
+      -w /repo/desktop gamma-bare bash -euc '
         app=$(find dist -maxdepth 2 -name gamma-desktop -type f | head -1)
         ldd "$app" | grep "not found" && exit 1 || echo "all libraries resolve"
         GAMMA_PACKAGED_APP="$app" scripts/run-packaged-tests.sh

@@ -1,0 +1,37 @@
+# A deliberately minimal Linux with exactly what Electron needs and nothing
+# else — the same set the release workflow installs on its runner.
+#
+# `scripts/ci-local.sh --container` runs the packaged suite in here. A dev box
+# has years of accumulated libraries; a fresh machine has none, and that
+# difference is what hid the 19 unresolved sonames that made the first Linux
+# release unrunnable.
+#
+# Built once and reused, because apt-getting the list on every run costs
+# minutes and made iterating on a container-only failure impractical.
+#
+#   docker build -t gamma-bare -f test/Dockerfile.bare .
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# xvfb for a display; the rest is Electron's runtime, via Playwright's own
+# dependency list plus GTK (its Chromium is headless-shell, which needs none).
+# Under node_modules/, so playwright's CLI can resolve playwright-core.
+COPY node_modules/playwright /tmp/pw/node_modules/playwright
+COPY node_modules/playwright-core /tmp/pw/node_modules/playwright-core
+
+# Ubuntu 24.04 ships Node 18 and Playwright's CLI requires 20+, so a current
+# Node goes in first — only to run install-deps, which keeps the package list
+# authoritative instead of hand-copied into this file.
+RUN apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends ca-certificates curl xvfb \
+ && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - >/dev/null \
+ && apt-get install -y -qq --no-install-recommends nodejs \
+ && node /tmp/pw/node_modules/playwright/cli.js install-deps chromium \
+ && apt-get install -y -qq --no-install-recommends libgtk-3-0t64 \
+ && rm -rf /tmp/pw /var/lib/apt/lists/*
+
+# The repo is mounted at run time; the host's node is mounted over /hostnode
+# so the version matches the one the tests are written against.
+ENV PATH="/hostnode/bin:${PATH}"
+WORKDIR /repo/desktop
