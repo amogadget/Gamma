@@ -62,21 +62,16 @@ jobs:
           node-version: "22"
 
       - name: Build the frontend
-        run: |
-          cd frontend
-          npm ci
-          npm run build
+        run: desktop/scripts/ci-step.sh "frontend build" "cd frontend && npm ci && npm run build"
 
       - name: Install the shell's dependencies
-        run: |
-          cd desktop
-          npm ci
+        run: desktop/scripts/ci-step.sh "npm ci" "cd desktop && npm ci"
 
       - name: Lint the shell
-        run: cd desktop && npm run lint
+        run: desktop/scripts/ci-step.sh "lint" "cd desktop && npm run lint"
 
       - name: Shell unit tests
-        run: cd desktop && npm run test:unit
+        run: desktop/scripts/ci-step.sh "unit tests" "cd desktop && npm run test:unit"
 
       - name: Cache the interpreter download
         uses: actions/cache@v4
@@ -88,10 +83,10 @@ jobs:
       # into it with that interpreter, so the wheels match the runner's OS and
       # architecture. This is why the Mac builds cannot be made on Linux.
       - name: Stage the Python runtime
-        run: cd desktop && npm run stage -- --arch ${{ matrix.arch }}
+        run: desktop/scripts/ci-step.sh "stage" "cd desktop && npm run stage -- --arch ${{ matrix.arch }}"
 
       - name: Package
-        run: cd desktop && npx electron-builder --publish never --${{ matrix.arch }}
+        run: desktop/scripts/ci-step.sh "package" "cd desktop && npx electron-builder --publish never --${{ matrix.arch }}"
         env:
           # No Developer ID yet, so electron-builder must not go looking for
           # one and fail the build.
@@ -124,11 +119,13 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: desktop
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb
-          node node_modules/playwright/cli.js install-deps chromium
-          sudo apt-get install -y libgtk-3-0t64 || sudo apt-get install -y libgtk-3-0
-          ldd "$GAMMA_PACKAGED_APP" | grep "not found" && exit 1 || echo "all libraries resolve"
+          scripts/ci-step.sh "electron deps" '
+            sudo apt-get update
+            sudo apt-get install -y xvfb
+            node node_modules/playwright/cli.js install-deps chromium
+            sudo apt-get install -y libgtk-3-0t64 || sudo apt-get install -y libgtk-3-0
+            ldd "$GAMMA_PACKAGED_APP" | grep "not found" && exit 1 || echo "all libraries resolve"
+          '
 
       # The real test: launch the artifact, choose "Run locally", let it start
       # its own bundled interpreter, render a PDF, and quit without orphaning
