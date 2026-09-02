@@ -155,11 +155,48 @@ Buildable and testable here; only the final `.app` packaging needs a Mac.
   likely thing to behave differently inside Electron.
 - **1.6** `electron-builder` config for a universal (arm64 + x86_64) `.dmg`.
 
+### Phase 1b — build it in CI, not by hand
+
+GitHub-hosted macOS runners remove the Mac dependency from *building*; only
+acceptance testing still wants hardware in your hands. This repo is public, so
+macOS runner minutes are free (private repos bill them at a 10× multiplier —
+worth remembering if that ever changes).
+
+The pattern already exists: `extension-release.yml` turns an `extension-v*`
+tag into a zip attached to a release. This is the same shape.
+
+- **1b.1** `desktop-release.yml`, `runs-on: macos-latest` (arm64), triggered by
+  a `desktop-v*` tag — deliberately not `v*`, which builds the Docker image.
+  Verify the tag matches the version in the app's `package.json`, the same
+  guard the extension workflow uses.
+- **1b.2** Build the universal `.dmg` (arm64 + x86_64) with
+  `electron-builder`, and attach it to the release.
+- **1b.3** **Run the Playwright-over-Electron test (task 1.4) on the macOS
+  runner.** This is the real prize: the app gets exercised on actual macOS on
+  every tag, not only on the Linux dev box. GitHub's macOS runners can run GUI
+  applications, so the window genuinely opens and renders.
+- **1b.4** Also run the same test on `ubuntu-latest` under `xvfb`, so a PR
+  gets fast feedback without waiting on a macOS runner.
+- **1b.5** When signing is adopted, it is configuration rather than new
+  machinery: a base64 `.p12` plus its password, `APPLE_ID`,
+  `APPLE_APP_SPECIFIC_PASSWORD` and `APPLE_TEAM_ID` as repository secrets;
+  `electron-builder` performs notarization itself.
+
+This gives three tiers of verification, which is what makes the untestable
+surface small:
+
+| Where | Engine | Catches |
+|---|---|---|
+| Linux dev box, `xvfb` | Chromium (same as the Mac build) | logic, lifecycle, rendering regressions — fast |
+| macOS CI, every tag | the real `.app` | packaging, bundled-Python paths, macOS-only breakage |
+| Your Mac | the shipped `.dmg` | Gatekeeper, retina, trackpad, feel |
+
 ### Phase 2 — make it usable day to day
 
 - **2.1** Import an existing library (the Docker volume, or a Gamma export).
 - **2.2** Crash/log surface: a menu item that reveals the backend log.
-- **2.3** Windows and Linux builds, if wanted.
+- **2.3** Windows and Linux builds. Nearly free once 1b exists — the same
+  workflow with `windows-latest` and `ubuntu-latest` added to the matrix.
 
 ### Phase 3 — optional sharing
 
@@ -170,15 +207,18 @@ library reachable from outside the machine.
   forwarding, no certificate work).
 - Turning it on **requires** authentication — the Phase 0.4 guard enforces it.
 
-## What needs your Mac
+## What needs a Mac in your hands
 
-Everything else can be built and verified on the Linux dev box.
+Once Phase 1b exists, *building* needs no Mac — CI does it. What is left is
+judgement, not mechanism:
 
-- The final `.dmg` / `.app` packaging and its universal binary.
-- Gatekeeper behaviour on first launch.
-- Native menu-bar and Dock integration details.
-- Signing and notarization, if adopted.
+- Gatekeeper's first-launch dialog, and whether the right-click → Open dance
+  is acceptable or signing is worth paying for.
 - Retina rendering and trackpad gestures in the PDF viewer.
+- Whether the window, menus and Dock behaviour feel right.
+
+Everything else is covered by the Linux dev box (fast iteration, same Chromium
+engine) or the macOS runner (the real `.app`, every tag).
 
 ## Risks
 
