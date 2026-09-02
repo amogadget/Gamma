@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- No remote anything: this page is part of the app shell. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src data:;">
+<title>Gamma</title>
+<style>
+  /* The web UI's palette, so the first screen doesn't look like a different
+     program than the one behind it. */
+  :root {
+    --bg-page: #111;
+    --bg-surface: #1a1a1a;
+    --bg-card: #1d1d1d;
+    --bg-input: #222;
+    --bg-hover: #333;
+    --text-primary: #eee;
+    --text-muted: #888;
+    --text-dim: #666;
+    --border: #333;
+    --border-hover: #555;
+    --accent: #5b9bd5;
+    --accent-bg: rgba(42, 79, 122, 0.3);
+    --danger: #e05c5c;
+    --ok: #4caf7d;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg-page);
+    color: var(--text-primary);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    /* The window is frameless-ish on macOS; leave room for the traffic lights. */
+    padding: 40px 32px 32px;
+    -webkit-user-select: none; user-select: none;
+  }
+  main { width: 100%; max-width: 520px; }
+  h1 { font-size: 22px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--text-muted); margin: 0 0 24px; }
+
+  .options { display: flex; flex-direction: column; gap: 10px; }
+  .option {
+    display: flex; gap: 12px; align-items: flex-start;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: border-color .12s, background .12s;
+  }
+  .option:hover { border-color: var(--border-hover); }
+  .option[aria-selected="true"] {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+  }
+  .option .dot {
+    flex: none; width: 16px; height: 16px; margin-top: 2px;
+    border: 1px solid var(--border-hover); border-radius: 50%;
+    position: relative;
+  }
+  .option[aria-selected="true"] .dot { border-color: var(--accent); }
+  .option[aria-selected="true"] .dot::after {
+    content: ""; position: absolute; inset: 3px;
+    background: var(--accent); border-radius: 50%;
+  }
+  .option h2 { font-size: 14px; font-weight: 600; margin: 0 0 2px; }
+  .option p { margin: 0; color: var(--text-muted); font-size: 13px; }
+
+  .server { margin: 12px 0 0; display: none; }
+  .server.shown { display: block; }
+  label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 6px; }
+  input[type="text"] {
+    width: 100%; padding: 9px 11px;
+    background: var(--bg-input); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 7px;
+    font: inherit;
+    -webkit-user-select: text; user-select: text;
+  }
+  input[type="text"]:focus { outline: none; border-color: var(--accent); }
+  datalist { color: inherit; }
+
+  .actions {
+    margin-top: 22px; display: flex; align-items: center; gap: 12px;
+    justify-content: flex-end;
+  }
+  .status { flex: 1; font-size: 13px; color: var(--text-muted); min-height: 20px; }
+  .status.error { color: var(--danger); }
+  .status.ok { color: var(--ok); }
+  button {
+    padding: 9px 18px; border-radius: 7px; font: inherit; font-weight: 500;
+    border: 1px solid var(--accent); background: var(--accent); color: #10202f;
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { filter: brightness(1.08); }
+  button:disabled { opacity: .55; cursor: default; }
+  button.ghost {
+    background: transparent; color: var(--text-muted); border-color: var(--border);
+  }
+  .foot { margin-top: 18px; color: var(--text-dim); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gamma</h1>
+  <p class="sub">Where should your library live?</p>
+
+  <div class="options" role="listbox" aria-label="How to run Gamma">
+    <div class="option" id="opt-local" role="option" tabindex="0" aria-selected="true">
+      <span class="dot" aria-hidden="true"></span>
+      <div>
+        <h2>Run locally</h2>
+        <p>Everything on this computer. Your PDFs and notes never leave it.
+           No account, no network needed.</p>
+      </div>
+    </div>
+
+    <div class="option" id="opt-remote" role="option" tabindex="0" aria-selected="false">
+      <span class="dot" aria-hidden="true"></span>
+      <div style="flex: 1">
+        <h2>Connect to a server</h2>
+        <p>Use a Gamma you already run somewhere else, and sign in as usual.</p>
+        <div class="server" id="server-row">
+          <label for="server">Server address</label>
+          <input type="text" id="server" list="recent" spellcheck="false"
+                 autocomplete="off" placeholder="https://gamma.example.com">
+          <datalist id="recent"></datalist>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <span class="status" id="status" role="status"></span>
+    <button class="ghost" id="cancel" hidden>Cancel</button>
+    <button id="go">Continue</button>
+  </div>
+  <p class="foot">You can change this later from the Gamma menu.</p>
+</main>
+<script src="chooser.js"></script>
+</body>
+</html>

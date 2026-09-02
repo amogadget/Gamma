@@ -1,0 +1,112 @@
+{
+  "name": "gamma-desktop",
+  "productName": "Gamma",
+  "version": "0.1.0",
+  "description": "Gamma \u2014 a local PDF annotator with an outliner and an AI chat.",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test --test-concurrency=1 test/*.test.mjs test/smoke.mjs",
+    "test:unit": "node --test test/*.test.mjs",
+    "lint": "eslint .",
+    "stage": "node scripts/stage-runtime.mjs",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --publish never"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.40.0",
+    "electron": "^44.1.1",
+    "electron-builder": "^26.0.24",
+    "eslint": "^9.40.0",
+    "globals": "^16.5.0",
+    "playwright": "^1.57.0"
+  },
+  "build": {
+    "appId": "com.amogadgetlab.gamma",
+    "productName": "Gamma",
+    "directories": {
+      "output": "dist",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "supervisor.js",
+      "config.js",
+      "menu.js",
+      "chooser/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/resources",
+        "to": ".",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "darkModeSupport": true,
+      "extendInfo": {
+        "NSHumanReadableCopyright": "",
+        "LSApplicationCategoryType": "public.app-category.productivity"
+      },
+      "identity": null
+    },
+    "dmg": {
+      "title": "Gamma ${version}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "Office",
+      "synopsis": "PDF annotator with an outliner and an AI chat"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "asar": true,
+    "compression": "normal",
+    "removePackageScripts": true,
+    "npmRebuild": false,
+    "afterSign": null,
+    "publish": null
+  }
+}

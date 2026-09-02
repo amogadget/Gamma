@@ -1,0 +1,153 @@
+name: Build the desktop app
+
+# Tag `desktop-v<version>` (matching desktop/package.json) → a GitHub release
+# with a .dmg per Mac architecture and a Linux AppImage attached. Deliberately
+# not `v*`: those tags build the Docker image (docker.yml), and not
+# `extension-v*` either (extension-release.yml).
+#
+# Every job builds the artifact and then *runs* it: the same Playwright suite
+# that runs locally against the source tree is pointed at the packaged binary
+# (GAMMA_PACKAGED_APP), so a release that cannot start its own backend fails
+# here rather than on someone's laptop.
+on:
+  push:
+    tags: ["desktop-v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach the artifacts to a draft release"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macOS (Apple Silicon)
+            arch: arm64
+            app: dist/mac-arm64/Gamma.app/Contents/MacOS/Gamma
+            artifacts: dist/*.dmg
+          - os: macos-13
+            label: macOS (Intel)
+            arch: x64
+            app: dist/mac/Gamma.app/Contents/MacOS/Gamma
+            artifacts: dist/*.dmg
+          - os: ubuntu-latest
+            label: Linux (x86-64)
+            arch: x64
+            app: dist/linux-unpacked/gamma-desktop
+            artifacts: dist/*.AppImage
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches package.json
+        id: meta
+        run: |
+          version=$(node -p "require('./desktop/package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "desktop-v$version" ]]; then
+            echo "tag $GITHUB_REF_NAME does not match desktop/package.json version $version" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build the frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+      - name: Install the shell's dependencies
+        run: |
+          cd desktop
+          npm ci
+
+      - name: Lint the shell
+        run: cd desktop && npm run lint
+
+      - name: Shell unit tests
+        run: cd desktop && npm run test:unit
+
+      - name: Cache the interpreter download
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/gamma-desktop
+          key: cpython-${{ runner.os }}-${{ matrix.arch }}
+
+      # Downloads a standalone CPython and installs the backend's dependencies
+      # into it with that interpreter, so the wheels match the runner's OS and
+      # architecture. This is why the Mac builds cannot be made on Linux.
+      - name: Stage the Python runtime
+        run: cd desktop && npm run stage -- --arch ${{ matrix.arch }}
+
+      - name: Package
+        run: cd desktop && npx electron-builder --publish never --${{ matrix.arch }}
+        env:
+          # No Developer ID yet, so electron-builder must not go looking for
+          # one and fail the build.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      # An unsigned bundle will not launch on Apple Silicon at all. Ad-hoc
+      # signing makes it runnable; it does not satisfy Gatekeeper for a
+      # download, which still needs the user to allow it once (or a real
+      # Developer ID + notarization — see docs/dev/client-app.md).
+      - name: Ad-hoc sign (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd desktop
+          app=$(dirname "$(dirname "$(dirname '${{ matrix.app }}')")")
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --verbose=2 "$app"
+
+      - name: Install Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      # The real test: launch the artifact, choose "Run locally", let it start
+      # its own bundled interpreter, render a PDF, and quit without orphaning
+      # the backend.
+      - name: Run the packaged app's tests
+        working-directory: desktop
+        env:
+          GAMMA_PACKAGED_APP: ${{ matrix.app }}
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            xvfb-run -a node --test --test-concurrency=1 test/smoke.mjs
+          else
+            node --test --test-concurrency=1 test/smoke.mjs
+          fi
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gamma-desktop-${{ steps.meta.outputs.version }}-${{ runner.os }}-${{ matrix.arch }}
+          path: desktop/${{ matrix.artifacts }}
+          if-no-files-found: error
+
+      - name: Attach to the GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Gamma Desktop ${{ steps.meta.outputs.version }}
+          files: desktop/${{ matrix.artifacts }}
+          draft: true
+          generate_release_notes: true
+          body: |
+            Gamma Desktop ${{ steps.meta.outputs.version }} — double-click to run
+            Gamma on your own machine, or point it at a server you already run.
+
+            These builds are **not signed with an Apple Developer ID**, so the
+            first launch needs one extra step: right-click Gamma.app → Open, and
+            confirm. (Or `xattr -dr com.apple.quarantine /Applications/Gamma.app`.)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

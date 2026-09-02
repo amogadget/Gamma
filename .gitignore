@@ -5,6 +5,8 @@ STATUS.md
 CLAUDE.md
 .claude/skills/
 node_modules/
+# the staged Python runtime for the desktop app (113 MB, rebuilt by `npm run stage`)
+desktop/build/
 venv/
 .venv/
 uploads-flat/
