@@ -1,0 +1,126 @@
+/* Shared styling for the shell's own pages (the bar and the launcher).
+ * Tokens come from theme.tokens.css, which is generated from the app's CSS. */
+
+@import "theme.tokens.css";
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  color: var(--text-primary);
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* Chrome, not a document: nothing here should look selectable except the
+     paths and URLs that people need to copy. */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* --- controls ------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-raised);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-hover); }
+.btn:disabled { opacity: 0.55; cursor: default; }
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #10202f;
+  font-weight: 500;
+}
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
+.btn.quiet { background: transparent; border-color: transparent; color: var(--text-muted); }
+.btn.quiet:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.btn.danger { color: var(--danger); border-color: var(--danger-border); background: var(--danger-bg); }
+.btn svg { width: 15px; height: 15px; }
+
+/* A square icon-only button, for the row of actions on a card. */
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.iconBtn:hover { background: var(--bg-hover); color: var(--text-primary); border-color: var(--border); }
+.iconBtn svg { width: 15px; height: 15px; }
+
+.input {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font: inherit;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.input:focus { outline: none; border-color: var(--accent); }
+
+.badge {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  padding: 1px 7px;
+}
+.badge.accent {
+  color: var(--accent);
+  border-color: var(--accent-bg);
+  background: var(--accent-bg-light);
+}
+
+/* A running local server. Not animated: a pulsing dot in the corner of the
+   eye is a distraction, and this one is true for the whole session. */
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+/* The one animation worth having: something is starting and the user is
+   waiting for it. */
+.spinner {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-light);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2s; }
+}

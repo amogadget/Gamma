@@ -6,7 +6,7 @@ export default [
   js.configs.recommended,
   {
     // The shell: CommonJS, main process, Node globals.
-    files: ["*.js", "chooser/preload.js"],
+    files: ["main.js", "lib/**/*.js"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "commonjs",
@@ -23,12 +23,28 @@ export default [
     },
   },
   {
-    // The chooser renderer runs in a browser context with the preload bridge.
-    files: ["chooser/chooser.js"],
+    // The shell's own pages run in a browser context with the preload bridge.
+    // icons.js defines ICONS for the other two, which load it first.
+    files: ["ui/*.js"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "script",
-      globals: { ...globals.browser },
+      globals: { ...globals.browser, ICONS: "readonly" },
+    },
+    rules: {
+      // Each page is loaded as its own classic script; the top-level `const`s
+      // they share names for are in separate global scopes at runtime.
+      "no-redeclare": "off",
+      "no-unused-vars": ["warn", { varsIgnorePattern: "^(ICONS)$" }],
+    },
+  },
+  {
+    // The preload runs in a renderer, with require() and the DOM both.
+    files: ["preload.js"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "commonjs",
+      globals: { ...globals.node, ...globals.browser },
     },
   },
   {

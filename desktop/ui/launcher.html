@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src data:;">
+<title>Gamma — Workspaces</title>
+<link rel="stylesheet" href="shell.css">
+<style>
+  html, body { background: var(--bg-page); }
+  body { overflow-y: auto; }
+  .wrap { max-width: 700px; margin: 0 auto; padding: 34px 28px 60px; }
+
+  .head { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+  .head .mark { flex: none; }
+  .head .mark svg { width: 42px; height: 42px; }
+  h1 { margin: 0; font-size: 21px; letter-spacing: -0.01em; }
+  .sub { margin: 0 0 24px; color: var(--text-muted); }
+
+  .groupLabel {
+    margin: 24px 0 8px;
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .cards { display: flex; flex-direction: column; gap: 8px; }
+  .card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 11px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .card:hover { border-color: var(--border-light); }
+  .card .kind {
+    display: flex; align-items: center; justify-content: center;
+    flex: none; width: 34px; height: 34px;
+    border: 1px solid var(--border); border-radius: 9px;
+    background: var(--bg-elevated); color: var(--text-muted);
+  }
+  .card .kind svg { width: 17px; height: 17px; }
+  .card .info { flex: 1; min-width: 0; }
+  .card .name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; }
+  .card .name .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .detail {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 11.5px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .card .detail .sep { margin: 0 6px; color: var(--text-dim); }
+  .card .actions { display: flex; align-items: center; gap: 2px; flex: none; }
+  .card .actions .btn { margin-right: 4px; }
+
+  .adders { display: flex; gap: 8px; margin-top: 14px; }
+
+  .status { margin-top: 14px; min-height: 20px; color: var(--text-muted); font-size: 12px; }
+  .status.error { color: var(--danger); white-space: pre-wrap; }
+
+  .empty {
+    padding: 28px 16px;
+    border: 1px dashed var(--border-light);
+    border-radius: 10px;
+    color: var(--text-muted);
+    text-align: center;
+  }
+  .empty b { color: var(--text-secondary); }
+
+  .panel {
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 0; }
+  .row .label { font-size: 13px; }
+  .row .hint { margin-top: 1px; color: var(--text-muted); font-size: 11.5px; }
+
+  .switch {
+    position: relative; flex: none;
+    width: 34px; height: 20px;
+    border: 1px solid var(--border-light); border-radius: 99px;
+    background: var(--bg-active);
+    cursor: pointer;
+  }
+  .switch::after {
+    content: ""; position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    transition: left 0.15s;
+  }
+  .switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
+  .switch[aria-checked="true"]::after { left: 16px; }
+
+  dialog {
+    width: 420px; max-width: 90vw; padding: 18px;
+    background: var(--bg-elevated); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 12px;
+  }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+  dialog h2 { margin: 0 0 10px; font-size: 15px; }
+  dialog p { margin: 0 0 10px; color: var(--text-muted); font-size: 12px; }
+  dialog label { display: block; margin: 12px 0 4px; color: var(--text-muted); font-size: 11.5px; }
+  dialog .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  dialog .err { color: var(--danger); font-size: 12px; min-height: 18px; }
+  pre.logView {
+    max-height: 46vh; margin: 0; padding: 10px;
+    overflow: auto;
+    background: var(--bg-deeper); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text-secondary);
+    font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    -webkit-user-select: text; user-select: text;
+  }
+
+  .foot {
+    display: flex; justify-content: space-between; gap: 12px;
+    margin-top: 28px;
+    color: var(--text-dim); font-size: 11px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <span class="mark" id="mark"></span>
+    <div>
+      <h1>Workspaces</h1>
+    </div>
+  </div>
+  <p class="sub">
+    A workspace is a Gamma server — a library kept on this computer, or one you
+    run somewhere else. They are separate libraries with no syncing between
+    them; switch any time from the toolbar.
+  </p>
+
+  <div id="groups"></div>
+
+  <div class="adders">
+    <button class="btn primary" id="addLocal"></button>
+    <button class="btn" id="addRemote"></button>
+  </div>
+  <div class="status" id="status" role="status"></div>
+
+  <div class="groupLabel">Settings</div>
+  <div class="panel">
+    <div class="row">
+      <div>
+        <div class="label">Reopen the last workspace at launch</div>
+        <div class="hint">Off: start on this page every time.</div>
+      </div>
+      <div class="switch" id="openLast" role="switch" tabindex="0"></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span id="version"></span>
+    <span class="selectable mono" id="userDataDir"></span>
+  </div>
+</div>
+
+<dialog id="dlgLocal">
+  <h2>New library on this computer</h2>
+  <p>A fresh, empty library. Nothing leaves this machine, and there is no
+     account to create — Gamma signs you in because the request comes from
+     here.</p>
+  <label for="localName">Name</label>
+  <input class="input" id="localName" placeholder="My library">
+  <div class="err" id="localErr"></div>
+  <div class="buttons">
+    <button class="btn" data-close="dlgLocal">Cancel</button>
+    <button class="btn primary" id="createLocal">Create</button>
+  </div>
+</dialog>
+
+<dialog id="dlgRemote">
+  <h2>Connect to a server</h2>
+  <p>A Gamma you already run — a VPS, a NAS, another machine on your network.
+     You sign in with that server's own accounts.</p>
+  <label for="remoteUrl">Address</label>
+  <input class="input mono" id="remoteUrl" spellcheck="false"
+         placeholder="https://gamma.example.com   or   http://192.168.1.10:9001">
+  <label for="remoteName">Name (optional)</label>
+  <input class="input" id="remoteName" placeholder="Home server">
+  <div class="err" id="remoteErr"></div>
+  <div class="buttons">
+    <button class="btn" data-close="dlgRemote">Cancel</button>
+    <button class="btn primary" id="createRemote">Add</button>
+  </div>
+</dialog>
+
+<dialog id="dlgRename">
+  <h2>Rename workspace</h2>
+  <label for="renameName">Name</label>
+  <input class="input" id="renameName">
+  <div class="err" id="renameErr"></div>
+  <div class="buttons">
+    <button class="btn" data-close="dlgRename">Cancel</button>
+    <button class="btn primary" id="doRename">Rename</button>
+  </div>
+</dialog>
+
+<dialog id="dlgRemove">
+  <h2 id="removeTitle">Remove workspace</h2>
+  <p id="removeBody"></p>
+  <div class="err" id="removeErr"></div>
+  <div class="buttons">
+    <button class="btn" data-close="dlgRemove">Cancel</button>
+    <button class="btn" id="removeKeep">Remove, keep files</button>
+    <button class="btn danger" id="removeAll">Delete everything</button>
+  </div>
+</dialog>
+
+<dialog id="dlgLog">
+  <h2>Server log</h2>
+  <p id="logPathLine" class="selectable mono"></p>
+  <pre class="logView" id="logText"></pre>
+  <div class="buttons">
+    <button class="btn" id="revealLog">Show the file</button>
+    <button class="btn primary" data-close="dlgLog">Close</button>
+  </div>
+</dialog>
+
+<script src="icons.js"></script>
+<script src="launcher.js"></script>
+</body>
+</html>

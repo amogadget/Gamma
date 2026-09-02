@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src data:;">
+<title>Gamma</title>
+<link rel="stylesheet" href="shell.css">
+<style>
+  /* The page is transparent: only the strip and an open menu paint. While the
+     menu is open the view is enlarged over the content, and a click on the
+     see-through part closes it. */
+  html, body { background: transparent; overflow: hidden; }
+
+  .strip {
+    position: relative;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    -webkit-app-region: drag;
+    /* Windows and Linux: stop where the overlaid window controls begin. */
+    width: env(titlebar-area-width, 100%);
+  }
+  body[data-platform="darwin"] .strip { padding-left: 84px; width: 100%; }
+  .strip > * { -webkit-app-region: no-drag; }
+  .strip .grab { -webkit-app-region: drag; flex: 1; height: 100%; }
+
+  .mark { display: flex; align-items: center; }
+  .mark svg { width: 20px; height: 20px; }
+
+  .switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    max-width: 340px;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .switcher:hover, .switcher[aria-expanded="true"] {
+    background: var(--bg-hover);
+    border-color: var(--border);
+  }
+  .switcher .kind { display: inline-flex; color: var(--text-muted); }
+  .switcher .kind svg { width: 15px; height: 15px; }
+  .switcher .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .switcher .chev { display: inline-flex; color: var(--text-dim); }
+  .switcher .chev svg { width: 13px; height: 13px; }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+  .status:empty { display: none; }
+
+  .menu {
+    position: absolute;
+    top: 36px;
+    left: 32px;
+    min-width: 270px;
+    max-width: 380px;
+    max-height: 420px;
+    overflow-y: auto;
+    padding: 5px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+    z-index: 2;
+  }
+  body[data-platform="darwin"] .menu { left: 108px; }
+  .menu[hidden] { display: none; }
+
+  .item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    width: 100%;
+    padding: 6px 9px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .item:hover { background: var(--bg-hover); }
+  .item .ico { display: inline-flex; flex: none; color: var(--text-muted); }
+  .item .ico svg { width: 15px; height: 15px; }
+  .item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .check { display: inline-flex; width: 14px; flex: none; color: var(--accent); }
+  .item .check svg { width: 14px; height: 14px; }
+  .item[aria-current="true"] { font-weight: 600; }
+  .sep { height: 1px; margin: 5px 4px; background: var(--border); }
+  .groupLabel {
+    padding: 5px 9px 2px;
+    color: var(--text-dim);
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+</style>
+</head>
+<body>
+<div class="strip">
+  <span class="mark" title="Gamma" id="mark"></span>
+  <button class="switcher" id="switcher" aria-expanded="false" aria-haspopup="menu"
+          title="Switch workspace (Ctrl/Cmd+Shift+L for all)">
+    <span class="kind" id="kind"></span>
+    <span class="label" id="label">Workspaces</span>
+    <span class="chev" id="chev"></span>
+  </button>
+  <span class="status" id="status" role="status"></span>
+  <div class="grab"></div>
+  <button class="iconBtn" id="reload" title="Reload (Ctrl/Cmd+R)" hidden></button>
+</div>
+<div class="menu" id="menu" role="menu" hidden></div>
+<script src="icons.js"></script>
+<script src="bar.js"></script>
+</body>
+</html>

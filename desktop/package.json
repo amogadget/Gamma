@@ -13,7 +13,8 @@
     "stage": "node scripts/stage-runtime.mjs",
     "pack": "electron-builder --dir",
     "dist": "electron-builder --publish never",
-    "icon": "electron scripts/render-icon.cjs"
+    "icon": "electron scripts/render-icon.cjs",
+    "sync-theme": "node scripts/sync-theme.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -32,12 +33,11 @@
     },
     "files": [
       "main.js",
-      "supervisor.js",
-      "config.js",
-      "menu.js",
-      "chooser/**/*",
-      "package.json",
-      "assets/icon.png"
+      "preload.js",
+      "lib/**/*",
+      "ui/**/*",
+      "assets/icon.png",
+      "package.json"
     ],
     "extraResources": [
       {

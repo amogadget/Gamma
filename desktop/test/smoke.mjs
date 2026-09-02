@@ -1,11 +1,16 @@
-// End-to-end smoke test: launch the real app, drive the real chooser, and make
-// sure the real Python backend starts — and, just as importantly, dies.
+// End-to-end: launch the real shell, drive the real launcher, and make sure
+// the real servers start — and, just as importantly, die.
 //
 //   npm test            (needs a display; use `xvfb-run -a npm test` on a
 //                        headless Linux box)
 //
-// Every launch gets its own userData directory and its own library directory,
-// so a test run can neither read nor damage a real installation.
+// Point GAMMA_PACKAGED_APP at a built binary to run the whole suite against
+// the real artifact — bundled interpreter, staged dependencies, asar and all:
+//
+//   GAMMA_PACKAGED_APP=dist/linux-unpacked/gamma-desktop xvfb-run -a npm test
+//
+// Every launch gets its own shell profile and its own libraries, so a run can
+// neither read nor damage a real installation.
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -21,303 +26,252 @@ import { tinyPdf } from "./tinypdf.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const appDir = path.resolve(here, "..");
-
-const LAUNCH_TIMEOUT = 90_000;
-const tmpRoots = [];
-
-// Point this at a built binary to run the whole suite against the real
-// artifact — bundled interpreter, staged dependencies, asar and all:
-//
-//   GAMMA_PACKAGED_APP=dist/linux-arm64-unpacked/gamma-desktop xvfb-run -a npm test
-//
-// Unset, the suite runs from this source tree against backend/venv.
 const packagedApp = process.env.GAMMA_PACKAGED_APP || "";
 
-function tmpRoot(label) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `gamma-${label}-`));
-  tmpRoots.push(dir);
-  const userData = path.join(dir, "userData");
-  const library = path.join(dir, "library");
-  fs.mkdirSync(userData, { recursive: true });
-  fs.mkdirSync(library, { recursive: true });
-  return { dir, userData, library };
-}
+const LAUNCH_TIMEOUT = 120_000;
+const READY_TIMEOUT = 120_000;
+const tmpRoots = [];
+
+// Electron and the backend both report real trouble on stderr. Playwright
+// reports a dead app as "Target closed", which explains nothing, so keep the
+// output and print anything alarming at the end — on CI that tail is the whole
+// diagnosis, since it reaches us through scripts/ci-step.sh's annotation.
+const recorded = [];
+const ALARMING =
+  /Traceback|FATAL|Fatal error|error while loading|Segmentation|ImportError|ModuleNotFound|EADDR|Permission denied/;
 
 after(() => {
   for (const dir of tmpRoots) {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
     } catch {
-      // Windows refuses to delete a file another process still has open, and a
-      // just-quit Electron can hold one for a moment. Leaving a temp directory
-      // behind is not worth failing a green run over.
+      // Windows will not delete a file another process still holds, and a
+      // just-quit Electron can hold one for a moment.
     }
   }
-
-  // Printed at the end so it lands in the tail of the output, which is what a
-  // CI annotation carries. Silent when every launch was uneventful.
   for (const lines of recorded) {
     const text = lines.join("");
-    if (ALARMING.test(text)) {
-      console.error(`--- app output ---\n${text.slice(-2500)}`);
-    }
+    if (ALARMING.test(text)) console.error(`--- app output ---\n${text.slice(-2500)}`);
   }
 });
 
-async function launch({ userData, library, env = {} }) {
+function profile(label) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `gamma-${label}-`));
+  tmpRoots.push(dir);
+  return dir;
+}
+
+async function launch(shellProfile, env = {}) {
+  const chromiumProfile = path.join(shellProfile, "chromium");
   const args = packagedApp
-    ? // A packaged build carries its own app; --no-sandbox because the setuid
-      // sandbox helper needs a root-owned binary, which a CI runner's checkout
-      // is not.
-      [`--user-data-dir=${userData}`, "--no-sandbox"]
-    : [appDir, `--user-data-dir=${userData}`];
+    ? // The setuid sandbox helper needs a root-owned binary, which a CI
+      // runner's checkout is not.
+      [`--user-data-dir=${chromiumProfile}`, "--no-sandbox"]
+    : [appDir, `--user-data-dir=${chromiumProfile}`];
   const app = await electron.launch({
     ...(packagedApp ? { executablePath: path.resolve(packagedApp) } : {}),
     args,
     timeout: LAUNCH_TIMEOUT,
     env: {
       ...process.env,
-      GAMMA_DATA_DIR: library,
-      // Deterministic: never inherit a developer's own mode choice.
-      GAMMA_DESKTOP_MODE: "",
-      GAMMA_DESKTOP_SERVER: "",
-      // Make the shell echo the backend's output, so a failure here can say
-      // what the backend said (see recordOutput).
-      GAMMA_DESKTOP_VERBOSE: "1",
+      GAMMA_SHELL_USER_DATA: shellProfile,
+      // Records what would have opened in a browser instead of doing it.
+      GAMMA_SHELL_TEST: "1",
       ...env,
     },
   });
-  recordOutput(app);
+  const lines = [];
+  recorded.push(lines);
+  app.process().stdout?.on("data", (d) => lines.push(d.toString()));
+  app.process().stderr?.on("data", (d) => lines.push(d.toString()));
   return app;
 }
 
-// Playwright reports a dead app as "Target closed", which explains nothing. The
-// app's own stdout/stderr — Electron's, plus the backend's, via
-// GAMMA_DESKTOP_VERBOSE — is where the reason actually is. Keep it, and print
-// anything alarming once the run is over.
-//
-// On CI that tail is the whole diagnosis: workflow logs need admin rights on
-// the repository, so what reaches us is the annotation from
-// scripts/ci-step.sh, which carries the last lines of this output.
-const recorded = [];
-
-function recordOutput(app) {
-  const lines = [];
-  recorded.push(lines);
-  const proc = app.process();
-  proc.stdout?.on("data", (d) => lines.push(d.toString()));
-  proc.stderr?.on("data", (d) => lines.push(d.toString()));
-}
-
-const ALARMING = /Traceback|FATAL|Fatal error|error while loading|Segmentation|ImportError|ModuleNotFound|EADDR|Permission denied/;
-
-/**
- * Collect anything that looks like a failure into `sink`: page errors, console
- * errors, and HTTP responses of 400 and up.
- *
- * Chromium's own "Failed to load resource" console line carries no URL, so
- * failed requests are tracked from the response side instead — that way an
- * allowed failure can be named precisely rather than by muting a whole class
- * of message.
- */
-function watchForErrors(page, sink, { allowHttp = [], warnings } = {}) {
-  page.on("console", (msg) => {
-    const text = msg.text();
-    if (msg.type() === "error" && !/^Failed to load resource/.test(text)) {
-      sink.push(`console: ${text}`);
-    } else if (warnings && (msg.type() === "warning" || /^Warning:/.test(text))) {
-      // Not a failure on its own: pdf.js reports font and decoding trouble
-      // here, which is exactly what explains an empty text layer.
-      warnings.push(text);
+/** The shell's views are separate webContents, so separate Playwright pages. */
+async function findPage(app, predicate, what, timeout = READY_TIMEOUT) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const hit = app.windows().find((p) => {
+      try {
+        return predicate(p.url());
+      } catch {
+        return false;
+      }
+    });
+    if (hit) return hit;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `no ${what}; open pages: ${app.windows().map((p) => p.url()).join(", ")}`,
+      );
     }
-  });
-  page.on("pageerror", (err) => sink.push(`pageerror: ${err.message}`));
-  page.on("response", (res) => {
-    if (res.status() < 400) return;
-    if (allowHttp.some((re) => re.test(res.url()))) return;
-    sink.push(`http ${res.status()} ${new URL(res.url()).pathname}`);
-  });
+    await sleep(150);
+  }
 }
 
-function readState(library) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(library, "desktop.json"), "utf8"));
-  } catch {
-    return null;
+const isBar = (u) => u.endsWith("/ui/bar.html");
+const isLauncher = (u) => u.includes("/ui/launcher.html");
+const isWorkspace = (u) => /^https?:\/\//.test(u);
+
+const barPage = (app) => findPage(app, isBar, "shell bar");
+const launcherPage = (app) => findPage(app, isLauncher, "launcher");
+const workspacePage = (app) => findPage(app, isWorkspace, "workspace page");
+
+/** Read shell internals from the main process (the GAMMA_SHELL_TEST hook). */
+function inspect(app, fn, arg) {
+  return app.evaluate(
+    (_electronApi, [source, value]) =>
+      new Function("shell", "arg", `return (${source})(shell, arg)`)(global.__gammaShell, value),
+    [fn.toString(), arg],
+  );
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function waitFor(fn, what, timeout = 60_000) {
+  const deadline = Date.now() + timeout;
+  let last;
+  for (;;) {
+    try {
+      last = await fn();
+      if (last) return last;
+    } catch (err) {
+      last = err;
+    }
+    if (Date.now() > deadline) {
+      const detail = last && last.message ? last.message : JSON.stringify(last);
+      throw new Error(`timed out waiting for ${what} (last: ${detail})`);
+    }
+    await sleep(250);
   }
+}
+
+/** Create a local workspace through the UI and wait for its library to load. */
+async function createLocal(app, name) {
+  const launcher = await launcherPage(app);
+  await launcher.click("#addLocal");
+  await launcher.fill("#localName", name);
+  await launcher.click("#createLocal");
+  const page = await workspacePage(app);
+  await page.waitForSelector(".homeFindInput", { timeout: READY_TIMEOUT });
+  return page;
 }
 
 function pidAlive(pid) {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (e) {
-    return e.code === "EPERM";
+  } catch (err) {
+    return err.code === "EPERM";
   }
 }
 
-async function waitUntil(fn, { timeoutMs = 15_000, everyMs = 100 } = {}) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    if (await fn()) return true;
-    if (Date.now() > deadline) return false;
-    await new Promise((r) => setTimeout(r, everyMs));
-  }
-}
+// --- the launcher ------------------------------------------------------------
 
-/**
- * A running app in local mode with the chooser already answered — the state
- * the tests below start from.
- */
-async function launchLocal(t, label) {
-  const { userData, library } = tmpRoot(label);
-  fs.writeFileSync(
-    path.join(userData, "settings.json"),
-    JSON.stringify({ mode: "local", serverUrl: "" }),
+test("first launch shows the launcher and starts nothing", async (t) => {
+  const shellProfile = profile("launcher");
+  const app = await launch(shellProfile);
+  t.after(() => app.close().catch(() => {}));
+
+  const launcher = await launcherPage(app);
+  await launcher.waitForSelector("#addLocal");
+  assert.match(await launcher.textContent(".empty"), /No workspaces yet/);
+  assert.match(await launcher.textContent("#addLocal"), /library on this computer/);
+  assert.match(await launcher.textContent("#addRemote"), /Connect to a server/);
+
+  const bar = await barPage(app);
+  assert.equal(await bar.textContent("#label"), "Workspaces", "nothing is open yet");
+
+  // Asking is not choosing: no server and no library until something is made.
+  assert.equal(await inspect(app, (shell) => shell.registry.load().workspaces.length), 0);
+});
+
+test("an unreachable server is refused, and not added", async (t) => {
+  const shellProfile = profile("badserver");
+  const app = await launch(shellProfile);
+  t.after(() => app.close().catch(() => {}));
+
+  const launcher = await launcherPage(app);
+  await launcher.click("#addRemote");
+  // Port 1 on loopback refuses at once, so this does not wait on a timeout.
+  await launcher.fill("#remoteUrl", "http://127.0.0.1:1");
+  await launcher.click("#createRemote");
+
+  await launcher.waitForFunction(
+    () => document.getElementById("remoteErr").textContent.length > 0,
   );
-  const app = await launch({ userData, library });
-  t.after(() => app.close().catch(() => {}));
-  const page = await app.firstWindow();
-  await page.waitForSelector(".homeFindInput", { timeout: 60_000 });
-  return { app, page, library, userData };
-}
-
-/** Wait for a window that is not the chooser. */
-async function appWindow(app) {
-  for (;;) {
-    const win = await app.waitForEvent("window", { timeout: LAUNCH_TIMEOUT });
-    if (!(await win.url()).startsWith("file:")) return win;
-  }
-}
-
-// --- the chooser -------------------------------------------------------------
-
-test("first launch asks where the library should live", async (t) => {
-  const { userData, library } = tmpRoot("chooser");
-  const app = await launch({ userData, library });
-  t.after(() => app.close().catch(() => {}));
-
-  const chooser = await app.firstWindow();
-  const errors = [];
-  watchForErrors(chooser, errors);
-  await chooser.waitForSelector("#opt-local");
-
-  assert.ok((await chooser.url()).startsWith("file:"), "the chooser is part of the app");
-  assert.match(await chooser.textContent("#opt-local"), /Run locally/);
-  assert.match(await chooser.textContent("#opt-remote"), /Connect to a server/);
-  // Local is the default, and the server field stays out of the way until the
-  // other option is picked.
-  assert.equal(await chooser.getAttribute("#opt-local", "aria-selected"), "true");
-  assert.equal(await chooser.isVisible("#server"), false);
-  await chooser.click("#opt-remote");
-  assert.equal(await chooser.isVisible("#server"), true);
-  // First run: there is nothing to go back to, so no Cancel.
-  assert.equal(await chooser.isVisible("#cancel"), false);
-
-  // Nothing has been started yet — asking is not choosing.
-  assert.equal(readState(library), null, "no backend should run before a choice");
-  assert.deepEqual(errors, []);
+  assert.match(await launcher.textContent("#remoteErr"), /Couldn't reach|No answer/);
+  assert.equal(await inspect(app, (shell) => shell.registry.load().workspaces.length), 0);
 });
 
-test("an unreachable server is reported instead of a blank window", async (t) => {
-  const { userData, library } = tmpRoot("badserver");
-  const app = await launch({ userData, library });
-  t.after(() => app.close().catch(() => {}));
+// --- local workspaces --------------------------------------------------------
 
-  const chooser = await app.firstWindow();
-  await chooser.waitForSelector("#opt-remote");
-  await chooser.click("#opt-remote");
-  // Port 1 on loopback: refuses immediately, so this does not wait on a timeout.
-  await chooser.fill("#server", "http://127.0.0.1:1");
-  await chooser.click("#go");
-
-  await chooser.waitForSelector(".status.error");
-  assert.match(await chooser.textContent(".status"), /Couldn't reach|No answer/);
-  assert.equal(await chooser.isVisible("#opt-remote"), true, "still on the chooser");
-  assert.equal(readState(library), null, "and no local backend was started");
-});
-
-// --- local mode --------------------------------------------------------------
-
-test("choosing local starts the backend, shows the library, and cleans up on quit", async (t) => {
-  const { userData, library } = tmpRoot("local");
-  const app = await launch({ userData, library });
+test("a local workspace starts its own server and signs you in", async (t) => {
+  const shellProfile = profile("local");
+  const app = await launch(shellProfile);
   let closed = false;
   t.after(() => (closed ? null : app.close().catch(() => {})));
 
-  const chooser = await app.firstWindow();
-  await chooser.waitForSelector("#opt-local");
-  await chooser.click("#opt-local");
-  await chooser.click("#go");
+  const page = await createLocal(app, "Papers");
 
-  const page = await appWindow(app);
-  const errors = [];
-  watchForErrors(page, errors);
+  // The auto-session means no login screen: the library itself renders.
+  const session = await page.evaluate(() => fetch("/api/session").then((r) => r.json()));
+  assert.equal(session.user, "local", "the loopback auto-session should sign us in");
+  assert.match(page.url(), /^http:\/\/127\.0\.0\.1:\d+\//);
 
-  assert.match(await page.url(), /^http:\/\/127\.0\.0\.1:\d+\//);
+  const bar = await barPage(app);
+  await bar.waitForFunction(() => document.getElementById("label").textContent === "Papers");
 
-  // The auto-session means no login screen: the library itself must render.
-  await page.waitForSelector(".homeFindInput", { timeout: 60_000 });
-  const session = await page.evaluate(() =>
-    fetch("/api/session").then((r) => r.json()),
+  const ws = await inspect(app, (shell) => shell.registry.load().workspaces[0]);
+  assert.equal(ws.type, "local");
+  assert.ok(
+    ws.dataDir.startsWith(path.join(shellProfile, "workspaces")),
+    "its library is in the shell's own folder",
   );
-  assert.equal(session.user, "local", "the desktop auto-session should sign us in");
+  assert.ok(fs.existsSync(path.join(ws.dataDir, "users.db")), "with a real library in it");
+  assert.ok(
+    fs.existsSync(path.join(shellProfile, "logs", `${ws.id}.log`)),
+    "and a server log on disk",
+  );
 
-  // The library lives where we pointed it, and the running-instance record
-  // names a live process.
-  const state = readState(library);
-  assert.ok(state && state.pid, "the backend should have recorded itself");
-  assert.ok(pidAlive(state.pid), "…and be running");
-  assert.ok(fs.existsSync(path.join(library, "users.db")), "the library was created here");
+  const record = JSON.parse(fs.readFileSync(path.join(ws.dataDir, "desktop.json"), "utf8"));
+  assert.ok(pidAlive(record.pid), "the server it recorded is running");
 
-  // The choice is remembered.
-  const saved = JSON.parse(fs.readFileSync(path.join(userData, "settings.json"), "utf8"));
-  assert.equal(saved.mode, "local");
-
-  assert.deepEqual(errors, [], "the library page should load without console errors");
-
-  // Quitting must not leave the backend behind: it holds the single-instance
-  // lock, and the next launch would refuse to start.
-  const pid = state.pid;
+  // Quitting must not leave it behind: it holds the library's lock, and the
+  // next launch would refuse to start.
   await app.close();
   closed = true;
-  assert.ok(
-    await waitUntil(() => !pidAlive(pid)),
-    "the Python backend should be gone after the app quits",
+  assert.ok(await waitFor(() => !pidAlive(record.pid), "the server to exit"), "server gone");
+  assert.equal(
+    fs.existsSync(path.join(ws.dataDir, "desktop.json")),
+    false,
+    "and its running-instance record cleared",
   );
-  assert.equal(readState(library), null, "and its running-instance record cleared");
 });
-
-test("a remembered choice skips the chooser", async (t) => {
-  const { userData, library } = tmpRoot("remembered");
-  fs.writeFileSync(
-    path.join(userData, "settings.json"),
-    JSON.stringify({ mode: "local", serverUrl: "" }),
-  );
-  const app = await launch({ userData, library });
-  t.after(() => app.close().catch(() => {}));
-
-  const page = await app.firstWindow();
-  assert.match(await page.url(), /^http:\/\/127\.0\.0\.1:\d+\//, "straight to the app");
-  await page.waitForSelector(".homeFindInput", { timeout: 60_000 });
-});
-
-// --- the actual product ------------------------------------------------------
 
 test("a PDF uploads and renders in the window", async (t) => {
-  const { page } = await launchLocal(t, "pdf");
+  const shellProfile = profile("pdf");
+  const app = await launch(shellProfile);
+  t.after(() => app.close().catch(() => {}));
+
+  const page = await createLocal(app, "Papers");
   const errors = [];
   const warnings = [];
-  watchForErrors(page, errors, {
-    // Opening a page looks up its paper metadata, and a 404 there means "this
-    // isn't a paper I can identify" — which is the truth about a PDF that says
-    // "Gamma" in 24pt Helvetica.
-    allowHttp: [/\/api\/metadata\/fetch$/],
-    warnings,
+  page.on("pageerror", (err) => errors.push(`pageerror: ${err.message}`));
+  page.on("console", (msg) => {
+    const text = msg.text();
+    if (msg.type() === "error" && !/^Failed to load resource/.test(text)) errors.push(text);
+    else if (msg.type() === "warning" || /^Warning:/.test(text)) warnings.push(text);
+  });
+  page.on("response", (res) => {
+    // A metadata 404 means "this isn't a paper I can identify", which is the
+    // truth about a PDF that says "Gamma" in 24pt Helvetica.
+    if (res.status() >= 400 && !/\/api\/metadata\/fetch$/.test(res.url())) {
+      errors.push(`http ${res.status()} ${new URL(res.url()).pathname}`);
+    }
   });
 
-  // Upload through the app's own API, from inside the app's own page — the
-  // same path the UI takes, minus the file picker.
   const b64 = tinyPdf("Gamma").toString("base64");
   const ids = await page.evaluate(async (data) => {
     const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
@@ -334,22 +288,17 @@ test("a PDF uploads and renders in the window", async (t) => {
     if (!made.ok) throw new Error(`page create failed: ${made.status}`);
     return { docId: doc_id, blockId: (await made.json()).id };
   }, b64);
-
   assert.ok(ids.blockId, "a page should have been created for the document");
 
-  const origin = new URL(page.url()).origin;
-  await page.goto(`${origin}/?block=${ids.blockId}`);
+  await page.goto(`${new URL(page.url()).origin}/?block=${ids.blockId}`);
 
-  // pdf.js is bundled in the app and the PDF is served by the local backend:
-  // a canvas with real pixels means both halves work inside the window.
-  const canvas = await page.waitForSelector("canvas", { timeout: 60_000 });
+  const canvas = await page.waitForSelector("canvas", { timeout: READY_TIMEOUT });
   const box = await canvas.boundingBox();
   assert.ok(box && box.width > 50 && box.height > 50, `canvas too small: ${JSON.stringify(box)}`);
 
-  // …and the text layer, which is what selection and highlighting depend on.
-  // Generous, because a Windows CI runner takes ten times as long to get here
-  // as this dev box does; and if it never arrives, say what *was* on the page
-  // rather than only that a timeout elapsed.
+  // The text layer is what selection, highlighting and in-PDF search need. It
+  // was empty on Windows until .mjs stopped being served as text/plain — pages
+  // rendered, so nothing else noticed.
   const gotText = await page
     .waitForFunction(
       () => /Gamma/.test(document.querySelector(".textLayer")?.textContent || ""),
@@ -359,71 +308,74 @@ test("a PDF uploads and renders in the window", async (t) => {
     .then(() => true)
     .catch(() => false);
   if (!gotText) {
-    const state = await page.evaluate(() => {
+    const dom = await page.evaluate(() => {
       const layer = document.querySelector(".textLayer");
       return {
         canvases: document.querySelectorAll("canvas").length,
         textLayers: document.querySelectorAll(".textLayer").length,
-        // Spans-with-no-text and no-spans-at-all are different bugs: the first
-        // means text extraction produced nothing, the second means the layer
-        // was never rendered.
         spans: layer ? layer.children.length : -1,
         markup: layer ? layer.innerHTML.slice(0, 200) : null,
-        textSample: (layer?.textContent || "").slice(0, 120),
       };
     });
     assert.fail(
-      `the text layer never carried the PDF's text: ${JSON.stringify(state)}` +
-        `\n  console errors: ${JSON.stringify(errors.slice(0, 8))}` +
-        `\n  console warnings: ${JSON.stringify(warnings.slice(0, 12))}`,
+      `the text layer never carried the PDF's text: ${JSON.stringify(dom)}` +
+        `\n  errors: ${JSON.stringify(errors.slice(0, 8))}` +
+        `\n  warnings: ${JSON.stringify(warnings.slice(0, 12))}`,
     );
   }
-
-  assert.deepEqual(errors, [], "opening a PDF should not log console errors");
+  assert.deepEqual(errors, [], "opening a PDF should not log errors");
 });
 
-test("the backend is restarted if it dies", async (t) => {
-  const { page, library } = await launchLocal(t, "restart");
-  const first = readState(library);
-  assert.ok(first && pidAlive(first.pid));
+test("two local workspaces are two libraries, both served at once", async (t) => {
+  const shellProfile = profile("two");
+  const app = await launch(shellProfile);
+  t.after(() => app.close().catch(() => {}));
 
-  // Simulate a crash — no cleanup, no chance to release anything.
-  process.kill(first.pid, "SIGKILL");
-  assert.ok(await waitUntil(() => !pidAlive(first.pid)), "the backend should be gone");
+  const firstPage = await createLocal(app, "First");
+  const firstUrl = firstPage.url();
 
-  assert.ok(
-    await waitUntil(() => {
-      const st = readState(library);
-      return st && st.pid !== first.pid && pidAlive(st.pid);
-    }, { timeoutMs: 30_000 }),
-    "the supervisor should start a new backend",
+  // Back to the launcher through the switcher, then make a second library.
+  const bar = await barPage(app);
+  await bar.click("#switcher");
+  await bar.waitForSelector(".menu:not([hidden])");
+  assert.deepEqual(
+    await bar.$$eval(".menu .item .name", (els) => els.map((e) => e.textContent)),
+    ["First", "All workspaces…"],
   );
+  await bar.click(".menu .item >> nth=-1");
 
-  // And the window comes back on its own, on whatever port the new backend
-  // got. Polled, because the shell reloads it a moment after the new backend
-  // records itself — the stale DOM is still on screen until then.
-  assert.ok(
-    await waitUntil(
-      async () => {
-        try {
-          const session = await page.evaluate(() =>
-            fetch("/api/session").then((r) => r.json()),
-          );
-          return session.user === "local";
-        } catch {
-          return false; // mid-navigation
-        }
-      },
-      { timeoutMs: 60_000, everyMs: 500 },
+  const second = await createLocal(app, "Second");
+  assert.notEqual(new URL(second.url()).port, new URL(firstUrl).port, "on its own port");
+
+  const workspaces = await inspect(app, (shell) => shell.registry.load().workspaces);
+  assert.equal(workspaces.length, 2);
+  assert.notEqual(workspaces[0].dataDir, workspaces[1].dataDir, "and its own library");
+  for (const ws of workspaces) {
+    assert.ok(fs.existsSync(path.join(ws.dataDir, "users.db")), `${ws.name} has a library`);
+  }
+
+  // Both servers stay up, which is what makes switching back instant.
+  assert.deepEqual(
+    await inspect(app, (shell) =>
+      shell.registry.load().workspaces.map((w) => Boolean(shell.sidecars().status(w.id))),
     ),
-    "the window should be usable again after the backend restarts",
+    [true, true],
   );
-  await page.waitForSelector(".homeFindInput", { timeout: 60_000 });
+
+  await bar.click("#switcher");
+  await bar.waitForSelector(".menu:not([hidden])");
+  await bar.click(".menu .item >> nth=0");
+  await waitFor(
+    async () => (await inspect(app, (shell) => shell.current().name)) === "First",
+    "the first workspace to be current again",
+  );
+  const back = await workspacePage(app);
+  assert.equal(new URL(back.url()).port, new URL(firstUrl).port, "the same server as before");
 });
 
-// --- remote mode -------------------------------------------------------------
+// --- remote workspaces -------------------------------------------------------
 
-test("remote mode loads the server and starts no local backend", async (t) => {
+test("a remote workspace loads the server and starts nothing locally", async (t) => {
   // A stand-in for a hosted Gamma: answers /api/health and serves a page.
   const server = http.createServer((req, res) => {
     if (req.url === "/api/health") {
@@ -438,23 +390,120 @@ test("remote mode loads the server and starts no local backend", async (t) => {
   const origin = `http://127.0.0.1:${server.address().port}`;
   t.after(() => new Promise((r) => server.close(r)));
 
-  const { userData, library } = tmpRoot("remote");
-  const app = await launch({ userData, library });
+  const shellProfile = profile("remote");
+  const app = await launch(shellProfile);
   t.after(() => app.close().catch(() => {}));
 
-  const chooser = await app.firstWindow();
-  await chooser.waitForSelector("#opt-remote");
-  await chooser.click("#opt-remote");
-  await chooser.fill("#server", origin);
-  await chooser.click("#go");
+  const launcher = await launcherPage(app);
+  await launcher.click("#addRemote");
+  await launcher.fill("#remoteUrl", origin);
+  await launcher.fill("#remoteName", "Home server");
+  await launcher.click("#createRemote");
 
-  const page = await appWindow(app);
+  const page = await workspacePage(app);
   await page.waitForSelector("#remote");
-  assert.ok((await page.url()).startsWith(origin));
-  assert.equal(readState(library), null, "remote mode must not start Python");
+  assert.ok(page.url().startsWith(origin));
 
-  const saved = JSON.parse(fs.readFileSync(path.join(userData, "settings.json"), "utf8"));
-  assert.equal(saved.mode, "remote");
-  assert.equal(saved.serverUrl, origin);
-  assert.deepEqual(saved.recentServers, [origin]);
+  const ws = await inspect(app, (shell) => shell.registry.load().workspaces[0]);
+  assert.equal(ws.type, "remote");
+  assert.equal(ws.name, "Home server");
+  assert.equal(
+    await inspect(app, (shell) => Boolean(shell.sidecars().status(shell.current().id))),
+    false,
+    "a remote workspace must not start a local server",
+  );
+  assert.equal(
+    fs.existsSync(path.join(shellProfile, "workspaces")),
+    false,
+    "and must not create a local library",
+  );
+});
+
+test("links out of the app go to the browser, not the content view", async (t) => {
+  const shellProfile = profile("links");
+  const app = await launch(shellProfile);
+  t.after(() => app.close().catch(() => {}));
+
+  const page = await createLocal(app, "Papers");
+  const before = page.url();
+
+  await page.evaluate(() => {
+    const a = document.createElement("a");
+    a.href = "https://example.com/paper";
+    a.textContent = "outbound";
+    document.body.append(a);
+    a.click();
+  });
+
+  const opened = await waitFor(
+    async () => {
+      const list = await inspect(app, (shell) => shell.externalOpens);
+      return list.length ? list : null;
+    },
+    "the link to be handed to the browser",
+  );
+  assert.ok(opened.includes("https://example.com/paper"), JSON.stringify(opened));
+  assert.equal(page.url(), before, "and the app stays where it was");
+});
+
+test("the chrome follows the app's theme", async (t) => {
+  const shellProfile = profile("theme");
+  const app = await launch(shellProfile);
+  t.after(() => app.close().catch(() => {}));
+
+  const page = await createLocal(app, "Papers");
+
+  // Whatever the app resolved on load — Gamma's default preference is
+  // "system", so this is the OS's answer — the shell should already agree.
+  const initial = await page.evaluate(
+    () => document.documentElement.getAttribute("data-theme") || "",
+  );
+  await waitFor(
+    async () => (await inspect(app, (shell) => shell.theme())) === initial,
+    `the shell to agree with the page's initial theme (${initial || "dark"})`,
+  );
+
+  // Then change it and watch the chrome follow.
+  const next = initial === "sepia" ? "gray" : "sepia";
+  await page.evaluate((t) => document.documentElement.setAttribute("data-theme", t), next);
+  await waitFor(
+    async () => (await inspect(app, (shell) => shell.theme())) === next,
+    `the shell to follow the page to ${next}`,
+  );
+
+  const bar = await barPage(app);
+  await bar.waitForFunction(
+    (t) => document.documentElement.getAttribute("data-theme") === t,
+    next,
+  );
+  // Remembered, so the chrome is already right next launch, before any page
+  // has loaded.
+  assert.equal(await inspect(app, (shell) => shell.registry.settings().lastTheme), next);
+});
+
+// --- across restarts ---------------------------------------------------------
+
+test("the last workspace reopens, and quitting reaped the old server", async (t) => {
+  const shellProfile = profile("relaunch");
+  const first = await launch(shellProfile);
+  await createLocal(first, "Papers");
+  const workspaces = await inspect(first, (shell) => shell.registry.load().workspaces);
+  const dataDir = workspaces[0].dataDir;
+  const { pid } = JSON.parse(fs.readFileSync(path.join(dataDir, "desktop.json"), "utf8"));
+  await first.close();
+  assert.ok(await waitFor(() => !pidAlive(pid), "the first server to exit"), "server reaped");
+
+  const again = await launch(shellProfile);
+  t.after(() => again.close().catch(() => {}));
+  const page = await workspacePage(again);
+  await page.waitForSelector(".homeFindInput", { timeout: READY_TIMEOUT });
+  assert.equal(
+    await inspect(again, (shell) => shell.current().name),
+    "Papers",
+    "reopened where we left off, without showing the launcher",
+  );
+  // The same library, not a fresh one beside it.
+  const after = await inspect(again, (shell) => shell.registry.load().workspaces);
+  assert.equal(after.length, 1);
+  assert.equal(after[0].dataDir, dataDir);
 });

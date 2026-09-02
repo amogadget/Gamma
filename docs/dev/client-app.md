@@ -44,26 +44,26 @@ Three properties of the existing code, verified rather than assumed:
 
 ```
 Gamma.app
-├── main.js ...................... lifecycle, the two modes, window creation
-│   ├── supervisor.js ............ spawns + restarts + reaps the backend
-│   ├── config.js ................ the remembered mode, in userData/settings.json
-│   ├── menu.js .................. edit/zoom/reload, switch mode, reveal library
-│   └── chooser/ ................. the first-run screen (its own window)
-├── the app window ............... local:  http://127.0.0.1:<port>/
-│                                  remote: https://<your server>/
-└── Resources/                     (local mode only)
+├── main.js ...................... window, views, layout, theme, menu, IPC
+│   ├── lib/registry.js .......... workspaces.json + the migration
+│   ├── lib/sidecar.js ........... one local server per workspace
+│   └── ui/ ...................... bar.html + launcher.html (the shell's chrome)
+├── bar view ..................... the title bar: switcher, status, reload
+├── content view ................. the launcher, or a workspace's own Gamma
+└── Resources/                     (used by local workspaces)
     ├── python/ .................. standalone CPython, trimmed (43 MB)
     ├── site-packages/ ........... the 11 declared runtime deps (65 MB)
     ├── backend/gamma/ ........... the backend package (764 KB)
     └── static/ .................. frontend/dist (4.7 MB)
 
-data → ~/Library/Application Support/Gamma/
-       (users.db, users/<name>/{pages.db,data.db,uploads/})
+shell state → <userData>/{workspaces.json, workspaces/<id>/, logs/<id>.log}
 ```
 
-The app window carries **no preload script and no IPC**: it loads Gamma's UI,
-remote pages in remote mode, and AI output. Only the chooser window gets a
-bridge, and it exposes four methods.
+The content view's **preload exposes nothing on a Gamma page** — it loads the
+app's UI, remote servers, and AI output, none of which has business reaching
+the main process. All it does there is report `data-theme`. The bridge exists
+only on `file:` pages, and every IPC handler re-checks the sender frame rather
+than trusting the preload alone.
 
 The renderer points at an HTTP server rather than loading files directly: the
 app is a FastAPI application, and `file://` would break every `/api` call, the
@@ -71,32 +71,60 @@ PDF proxy and the asset paths alike.
 
 ## Decisions
 
-### Two modes, chosen on first launch
+### Workspaces, not modes
 
-The first window is a chooser: **Run locally** or **Connect to a server**. It
-is a plain page inside the app — no browser, and nothing is started until the
-question is answered.
+The first version asked one question at first launch — run locally, or connect
+to a server — and remembered the answer as a mode. That was too small an idea,
+and the design it was replaced with is **tim4431's**, from the parallel shell
+he built on the same suggestion: a *workspace* is a Gamma server, and there can
+be as many as you like.
 
-- *Local* spawns the bundled backend, as above.
-- *Remote* spawns nothing and points the window at an existing Gamma, where the
-  normal login applies. This is what makes the app useful to someone who
-  already runs the hosted version: it is a real client for it, not a second
-  disconnected library.
+- **local** — a library directory on this machine, served by a backend the
+  shell starts. Several local workspaces means several libraries, one server
+  each.
+- **remote** — a Gamma you already run, reached by URL, with its own login.
 
-The choice is remembered in `userData/settings.json` and can be changed from
-**File → Switch Server or Library…**. A missing, corrupt, or half-written file
-means "no choice made", which shows the chooser again rather than guessing a
-mode — settings are written with write-then-rename so a power cut cannot
-produce a truncated file in the first place.
+They are independent servers with no synchronisation; moving notes between them
+is Gamma's own export/import. Local servers stay up once started, so switching
+back is instant, and each library keeps its own advisory lock, so two servers
+can never share one set of SQLite files — which matters much more once several
+libraries exist.
 
-A typed address is checked against `GET <url>/api/health` **before** the window
-is pointed at it, and the four failure modes are reported distinctly
+The window follows from that: a 38px **bar view** that is also the title bar,
+holding the workspace switcher and a reload button, above a **content view**
+showing either the launcher or the workspace's own Gamma. The launcher lists
+workspaces as cards with size, path or URL, last-used, and per-workspace
+actions — including the **server log**, which had been an open task here.
+
+The chrome paints in Gamma's own theme: the preload mirrors the page's
+`data-theme` to the main process, which restyles the bar, the launcher, the
+window background and the Windows title-bar overlay, and remembers it so the
+chrome is right before any page has loaded. `ui/theme.tokens.css` is generated
+from `frontend/src/app.css`, because copied colour values drift and chrome that
+is nearly the right grey looks worse than chrome that is plainly separate.
+
+A typed address is still checked against `GET <url>/api/health` **before** a
+window is pointed at it, with the four failure modes reported distinctly
 (unreachable / timed out / answered with a status / answered but isn't Gamma).
-Pointing a window at a bad address and letting Chromium's error page explain it
-tells the user nothing they can act on.
 
-Deferred deliberately: sync between the two. Remote mode reads the server
-live — it is not a local mirror. See open question 2.
+**What was kept rather than adopted**, where the two shells disagree:
+
+| | his | here | why |
+|---|---|---|---|
+| local sign-in | admin credentials generated per workspace, stored in `workspaces.json`, POSTed to `/api/login` from the page | the loopback auto-session | no password at rest, and nothing to leak; the guard is three conditions in code with a test for each failing closed |
+| the interpreter | PyInstaller freeze | standalone CPython + plain `site-packages` | his macOS build does not run; ours is verified on four platforms |
+| quitting | `stopAll()` fire-and-forget on `before-quit` | awaited teardown | an orphan holds its library's lock and the next launch refuses to start — the failure this project has already hit |
+
+Adopted from him nearly as-is: the workspace registry, the bar-plus-content
+window, the launcher's card list, theme mirroring, per-workspace logs, window
+bounds, serialised opens, and the `shellOnly` IPC guard that re-checks the
+sender frame is a `file:` page rather than trusting the preload alone.
+
+**Migration matters more than any of it.** The pre-workspaces app kept one
+library in the platform's application-support directory. The migration adopts
+*that directory* as a workspace rather than starting an empty one, and marks it
+as not-ours so *Delete everything* can never touch it. Losing someone's notes
+to a refactor is not a recoverable mistake, so it has its own tests.
 
 ### Electron, not Tauri
 

@@ -1,96 +1,374 @@
-// Gamma Desktop — Electron main process.
+// Gamma Desktop — the shell.
 //
-// Two modes, chosen on first launch and changeable from the menu:
+// A *workspace* is a Gamma server: a library on this machine that the shell
+// serves, or a Gamma you already run, reached by URL. Opening one points the
+// content view at it, so the frontend always comes from the server it talks
+// to — no API-base plumbing and no version skew.
 //
-//   local   — start the bundled Python backend and show that. No account, no
-//             network; the library sits in the platform's app-support dir.
-//   remote  — point the window at a Gamma the user already runs somewhere,
-//             and let them sign in as usual. Nothing is spawned locally.
+//   ┌──────────────────────────────────────────────┐
+//   │ ⌈γ⌉ My library ▾   Starting Notes…      ⟳    │  bar view (file://),
+//   ├──────────────────────────────────────────────┤  doubles as the title bar
+//   │  the launcher (file://), or the workspace's   │
+//   │  own Gamma frontend (http://…)               │  content view
+//   └──────────────────────────────────────────────┘
 //
-// In both cases the window is the app's own window: no browser is ever opened,
-// except for genuinely outbound links the user clicks inside a note.
+// The shell owns its chrome, the workspace registry and the servers it starts.
+// The only thing it reads out of a Gamma page is `data-theme`, so the chrome
+// can paint in the same theme.
 //
-// Startup order matters. A window is only shown once there is something real to
-// load — showing one first and letting it fail is how you get a white rectangle
-// with no explanation.
+// Two lifecycle rules, both learned the hard way:
+//   * A window appears only once there is something real in it. A window that
+//     loads nothing is a white rectangle with no explanation.
+//   * Quitting *waits* for every server to be gone. An orphan keeps its
+//     library's advisory lock and the next launch refuses to start.
 
-const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const {
+  app, BaseWindow, WebContentsView, Menu, ipcMain, shell,
+} = require("electron");
+const fs = require("node:fs");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 
-// macOS reads the icon from the bundle; Linux and Windows want it on the window
-// itself, or the taskbar shows Electron's default.
+const registry = require("./lib/registry");
+const { Sidecars } = require("./lib/sidecar");
+
+const BAR_H = 38;
 const ICON = path.join(__dirname, "assets", "icon.png");
 
-const config = require("./config");
-const { Supervisor } = require("./supervisor");
-const { buildMenu } = require("./menu");
+// Tests point the shell at a throwaway profile, so a run can neither read nor
+// damage a real installation.
+if (process.env.GAMMA_SHELL_USER_DATA) {
+  app.setPath("userData", process.env.GAMMA_SHELL_USER_DATA);
+}
 
-// One instance per machine. The backend has its own lock on the library, but
-// catching it here is nicer: focus the window that already exists instead of
-// starting a doomed second copy.
-const gotLock = app.requestSingleInstanceLock();
+// Window-chrome colours per Gamma theme, mirroring app.css's --bg-surface and
+// --text-secondary. "" = the page never reported one → Gamma's default, dark.
+const CHROME = {
+  "": { bg: "#1a1a1a", symbol: "#dddddd" },
+  dark: { bg: "#1a1a1a", symbol: "#dddddd" },
+  light: { bg: "#ffffff", symbol: "#333333" },
+  sepia: { bg: "#f4ecd8", symbol: "#433422" },
+  gray: { bg: "#e8e8e8", symbol: "#2d2d2d" },
+};
 
 let win = null;
-let chooser = null;
-let supervisor = null;
-let settings = null;
-/** The URL the content window should be showing — the reload target. */
-let baseUrl = "";
-let fatalShown = false;
-/** Set when settings came from the environment, so we don't persist over them. */
-let settingsFromEnv = false;
-/**
- * True while the app deliberately has no window on screen — during startup and
- * while switching modes. Without it, `window-all-closed` fires the moment the
- * chooser closes and quits the app before its window exists.
- */
-let starting = true;
+let bar = null;
+let content = null;
+/** The open workspace, or null while the launcher is showing. */
+let current = null;
+/** Status text while something is starting. */
+let busy = null;
+let theme = "";
+let barExpanded = false;
+/** Origins the content view may navigate to. Everything else is outbound. */
+const allowedOrigins = new Set();
+let sidecars = null;
+let quitting = false;
 
-const HEALTH_TIMEOUT_MS = 60_000;
-const HEALTH_POLL_MS = 150;
-const PROBE_TIMEOUT_MS = 8000;
+// --- helpers -----------------------------------------------------------------
 
-// --- readiness ---------------------------------------------------------------
+function chrome() {
+  return CHROME[theme || registry.settings().lastTheme || ""] || CHROME[""];
+}
 
-/** Resolve once the backend answers /api/health, or reject after a timeout. */
-async function waitForHealth(origin, timeoutMs = HEALTH_TIMEOUT_MS) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
+function isShellSender(event) {
+  const url = event.senderFrame ? event.senderFrame.url : "";
+  return url.startsWith("file:");
+}
+
+/** Wrap an IPC handler so only the shell's own pages can call it. */
+function shellOnly(handler) {
+  return (event, ...args) => {
+    if (!isShellSender(event)) throw new Error("not available to this page");
+    return handler(...args);
+  };
+}
+
+// --- window ------------------------------------------------------------------
+
+function layout() {
+  if (!win) return;
+  const [w, h] = win.getContentSize();
+  // The switcher menu needs room below the strip, and a 38px view cannot show
+  // it: while the menu is open the bar view grows over the content. Its page
+  // is transparent outside the strip and the menu, and a click there closes.
+  const barH = barExpanded ? Math.min(h, BAR_H + 460) : BAR_H;
+  bar.setBounds({ x: 0, y: 0, width: w, height: barH });
+  content.setBounds({ x: 0, y: BAR_H, width: w, height: Math.max(0, h - BAR_H) });
+}
+
+function applyChrome() {
+  if (!win) return;
+  const c = chrome();
+  win.setBackgroundColor(c.bg);
+  if (process.platform !== "darwin") {
     try {
-      const res = await fetch(`${origin}/api/health`);
-      if (res.ok) return true;
+      win.setTitleBarOverlay({ color: c.bg, symbolColor: c.symbol, height: BAR_H });
     } catch {
-      /* not up yet */
+      /* only where an overlay exists */
     }
-    if (Date.now() > deadline) throw new Error("the backend did not become ready");
-    await new Promise((r) => setTimeout(r, HEALTH_POLL_MS));
   }
 }
 
-/**
- * Is there a Gamma at this address? Runs in the main process, so it is not
- * subject to page CORS, and it tells the user *which* way it failed.
- */
+function createWindow() {
+  const saved = registry.windowBounds();
+  const c = chrome();
+  win = new BaseWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 860,
+    minHeight: 560,
+    ...(saved && saved.width > 500 && saved.height > 360
+      ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height }
+      : {}),
+    title: "Gamma",
+    icon: ICON,
+    backgroundColor: c.bg,
+    show: false,
+    // The bar is the title bar: frameless, with the OS controls overlaid on
+    // Windows and Linux and the traffic lights inset on macOS.
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
+    ...(process.platform === "darwin"
+      ? { trafficLightPosition: { x: 12, y: 11 } }
+      : { titleBarOverlay: { color: c.bg, symbolColor: c.symbol, height: BAR_H } }),
+    autoHideMenuBar: true,
+  });
+  if (saved && saved.maximized) win.maximize();
+
+  const webPreferences = {
+    preload: path.join(__dirname, "preload.js"),
+    contextIsolation: true,
+    nodeIntegration: false,
+    spellcheck: true,
+  };
+
+  bar = new WebContentsView({ webPreferences });
+  bar.setBackgroundColor("#00000000");
+  content = new WebContentsView({ webPreferences });
+  content.setBackgroundColor(c.bg);
+  win.contentView.addChildView(content);
+  win.contentView.addChildView(bar); // above, so the open menu overlays
+  layout();
+
+  for (const event of ["resize", "maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) {
+    win.on(event, layout);
+  }
+
+  bar.webContents.loadFile(path.join(__dirname, "ui", "bar.html"));
+  bar.webContents.on("did-finish-load", pushState);
+
+  const wc = content.webContents;
+
+  // Notes carry outbound links (DOIs, arXiv, link chips, a paper's source
+  // URL). In a browser those open a tab; here they go to the real browser,
+  // never navigating the app away from itself.
+  const guard = (event, url) => {
+    if (url.startsWith("file:")) return;
+    let origin = null;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      /* not a URL we can reason about */
+    }
+    if (origin && allowedOrigins.has(origin)) return;
+    event.preventDefault();
+    if (origin && /^https?:$/.test(new URL(url).protocol)) openExternal(url);
+  };
+  wc.on("will-navigate", guard);
+  wc.on("will-redirect", guard);
+  wc.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) openExternal(url);
+    return { action: "deny" };
+  });
+
+  wc.on("page-title-updated", (_event, title) => {
+    if (!win) return;
+    const suffix = current && current.type === registry.REMOTE ? ` — ${current.name}` : "";
+    win.setTitle(`${title || "Gamma"}${suffix}`);
+  });
+  wc.on("did-navigate", pushState);
+  wc.on("did-navigate-in-page", pushState);
+  wc.on("focus", () => setBarExpanded(false));
+
+  // Exports and backups download through the normal save dialog; tests take
+  // them without one.
+  wc.session.on("will-download", (_event, item) => {
+    const dir = process.env.GAMMA_SHELL_DOWNLOAD_DIR;
+    if (dir) item.setSavePath(path.join(dir, item.getFilename()));
+  });
+
+  win.on("close", () => {
+    try {
+      registry.setWindowBounds({ ...win.getNormalBounds(), maximized: win.isMaximized() });
+    } catch {
+      /* a close mid-move; the old bounds are fine */
+    }
+  });
+  win.on("closed", () => {
+    win = null;
+    bar = null;
+    content = null;
+  });
+  return win;
+}
+
+function openExternal(url) {
+  externalOpens.push(url);
+  if (!process.env.GAMMA_SHELL_TEST) shell.openExternal(url);
+}
+const externalOpens = []; // test hook; see the bottom of this file
+
+function setBarExpanded(on) {
+  const next = Boolean(on);
+  if (next === barExpanded) return;
+  barExpanded = next;
+  layout();
+}
+
+function showWindow() {
+  if (win && !win.isVisible()) win.show();
+}
+
+/** Show the launcher, optionally with an error to explain why. */
+function loadLauncher(error) {
+  if (!win) createWindow();
+  current = null;
+  busy = null;
+  const query = error ? `?error=${encodeURIComponent(String(error))}` : "";
+  content.webContents.loadURL(
+    pathToFileURL(path.join(__dirname, "ui", "launcher.html")).href + query,
+  );
+  win.setTitle("Gamma");
+  showWindow();
+  pushState();
+  buildMenu();
+}
+
+// --- state pushed to the shell's pages ---------------------------------------
+
+function barState() {
+  const state = registry.load();
+  return {
+    platform: process.platform,
+    version: app.getVersion(),
+    theme: theme || state.settings.lastTheme || "",
+    current,
+    busy,
+    workspaces: state.workspaces.map((ws) => ({
+      id: ws.id,
+      name: ws.name,
+      type: ws.type,
+      running: ws.type === registry.LOCAL ? Boolean(sidecars.status(ws.id)) : undefined,
+    })),
+  };
+}
+
+/** The launcher's fuller view: paths, sizes, settings. */
+function detailState() {
+  const state = registry.load();
+  return {
+    ...barState(),
+    userDataDir: app.getPath("userData"),
+    settings: state.settings,
+    lastOpened: state.lastOpened,
+    workspaces: state.workspaces.map((ws) => ({
+      ...ws,
+      running: ws.type === registry.LOCAL ? Boolean(sidecars.status(ws.id)) : undefined,
+      url: ws.type === registry.REMOTE ? ws.url : (sidecars.status(ws.id) || {}).url,
+      sizeBytes: ws.type === registry.LOCAL ? registry.dirSize(ws.dataDir) : undefined,
+      logPath: ws.type === registry.LOCAL ? registry.logPath(ws.id) : undefined,
+      // A library the shell did not create is never a candidate for deletion.
+      owned:
+        ws.type === registry.LOCAL &&
+        path.resolve(ws.dataDir).startsWith(path.resolve(registry.workspacesDir()) + path.sep),
+    })),
+  };
+}
+
+function pushState() {
+  const state = barState();
+  for (const view of [bar, content]) {
+    const wc = view && view.webContents;
+    if (!wc || wc.isDestroyed()) continue;
+    // Only the shell's own pages get shell state.
+    if (view === content && !wc.getURL().startsWith("file:")) continue;
+    wc.send("shell:state", state);
+  }
+}
+
+// --- opening a workspace -----------------------------------------------------
+
+let opening = null;
+
+/** Serialised: a second click while one open is in flight waits for it. */
+async function openWorkspace(id) {
+  if (opening) await opening.catch(() => {});
+  opening = openWorkspaceNow(id);
+  try {
+    return await opening;
+  } finally {
+    opening = null;
+  }
+}
+
+async function openWorkspaceNow(id) {
+  const ws = registry.get(id);
+  if (!ws) throw new Error("That workspace is gone.");
+  if (!win) createWindow();
+  if (current && current.id === id) {
+    showWindow();
+    return { url: current.url };
+  }
+
+  busy = ws.type === registry.LOCAL ? `Starting ${ws.name}…` : `Connecting to ${ws.name}…`;
+  setBarExpanded(false);
+  pushState();
+  try {
+    let url;
+    if (ws.type === registry.REMOTE) {
+      // Check before pointing a window at it: a browser error page tells the
+      // user nothing they can act on.
+      const probe = await probeServer(ws.url);
+      if (!probe.ok) throw new Error(probe.error);
+      url = probe.url;
+    } else {
+      url = (await sidecars.start(ws)).url;
+    }
+    allowedOrigins.add(new URL(url).origin);
+    await content.webContents.loadURL(url);
+    current = { id: ws.id, name: ws.name, type: ws.type, url };
+    registry.markOpened(ws.id);
+    content.webContents.focus();
+    showWindow();
+    return { url };
+  } catch (err) {
+    current = null;
+    throw err;
+  } finally {
+    busy = null;
+    pushState();
+    buildMenu();
+  }
+}
+
+/** Is there a Gamma at this address, and if not, which way did it fail? */
 async function probeServer(raw) {
-  const url = config.normalizeServerUrl(raw);
+  const url = registry.normalizeUrl(raw);
   if (!url) return { ok: false, error: "That doesn't look like a web address." };
   let res;
   try {
-    res = await fetch(`${url}/api/health`, {
-      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
-      redirect: "follow",
-    });
-  } catch (e) {
-    const msg = e && e.name === "TimeoutError"
-      ? "No answer from that address."
-      : `Couldn't reach that address (${(e && e.message) || "network error"}).`;
-    return { ok: false, error: msg };
-  }
-  if (!res.ok) {
+    res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(8000) });
+  } catch (err) {
     return {
       ok: false,
-      error: `That address answered with ${res.status}. Is it a Gamma server?`,
+      error:
+        err && err.name === "TimeoutError"
+          ? "No answer from that address."
+          : `Couldn't reach that address (${(err && err.message) || "network error"}).`,
     };
+  }
+  if (!res.ok) {
+    return { ok: false, error: `That address answered with ${res.status}. Is it a Gamma server?` };
   }
   try {
     const body = await res.json();
@@ -101,310 +379,252 @@ async function probeServer(raw) {
   return { ok: true, url };
 }
 
-// --- windows -----------------------------------------------------------------
+// --- menu --------------------------------------------------------------------
 
-function isAppUrl(target) {
-  if (!baseUrl) return false;
-  try {
-    return new URL(target).origin === new URL(baseUrl).origin;
-  } catch {
-    return false;
-  }
-}
+function buildMenu() {
+  const { workspaces } = registry.load();
+  const wc = () => (content ? content.webContents : null);
+  const isMac = process.platform === "darwin";
 
-function createWindow(url) {
-  baseUrl = url;
-  starting = false;
-  win = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 900,
-    minHeight: 600,
-    show: false,
-    title: "Gamma",
-    icon: ICON,
-    backgroundColor: "#111", // the app's own page colour; avoids a white flash
-    webPreferences: {
-      // No preload here on purpose: this window loads Gamma's UI, remote pages
-      // in remote mode, and AI output. Nothing in it needs Node or IPC.
-      nodeIntegration: false,
-      contextIsolation: true,
-      spellcheck: true,
+  // Deliberately thin: every accelerator here takes a keystroke away from the
+  // page, and Gamma binds a lot of them.
+  const template = [
+    ...(isMac ? [{ role: "appMenu" }] : []),
+    {
+      label: "Workspace",
+      submenu: [
+        {
+          label: "All Workspaces…",
+          accelerator: "CmdOrCtrl+Shift+L",
+          click: () => loadLauncher(),
+        },
+        { type: "separator" },
+        ...workspaces.map((ws) => ({
+          label: ws.name + (ws.type === registry.REMOTE ? "  (remote)" : ""),
+          type: "checkbox",
+          checked: Boolean(current && current.id === ws.id),
+          click: () => openWorkspace(ws.id).catch((e) => loadLauncher(e.message || e)),
+        })),
+        { type: "separator" },
+        isMac ? { role: "close" } : { role: "quit" },
+      ],
     },
-  });
-
-  win.once("ready-to-show", () => win.show());
-  win.on("closed", () => {
-    win = null;
-  });
-
-  // In remote mode, say where you are — otherwise two Gammas look identical.
-  win.on("page-title-updated", (event, title) => {
-    event.preventDefault();
-    const suffix = settings && settings.mode === config.REMOTE
-      ? ` — ${new URL(settings.serverUrl).host}`
-      : "";
-    win.setTitle(`${title || "Gamma"}${suffix}`);
-  });
-
-  // Notes carry outbound links (DOIs, arXiv, link chips, a paper's source URL).
-  // In a browser those open a tab; here they must go to the real browser rather
-  // than navigating the app away from itself.
-  win.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (isAppUrl(target)) return { action: "allow" };
-    if (/^https?:/i.test(target)) shell.openExternal(target);
-    return { action: "deny" };
-  });
-  win.webContents.on("will-navigate", (event, target) => {
-    if (isAppUrl(target)) return;
-    event.preventDefault();
-    if (/^https?:/i.test(target)) shell.openExternal(target);
-  });
-
-  win.loadURL(url);
-  return win;
-}
-
-function openChooser({ canCancel }) {
-  if (chooser) {
-    chooser.focus();
-    return chooser;
-  }
-  chooser = new BrowserWindow({
-    width: 620,
-    height: 520,
-    resizable: false,
-    show: false,
-    title: "Gamma",
-    icon: ICON,
-    backgroundColor: "#111",
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
-    webPreferences: {
-      preload: path.join(__dirname, "chooser", "preload.js"),
-      nodeIntegration: false,
-      contextIsolation: true,
+    { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        {
+          // Not role:"reload" — after a server restart the workspace may be on
+          // a different port, so reloading has to go through the shell.
+          label: "Reload",
+          accelerator: "CmdOrCtrl+R",
+          click: () => reloadContent(),
+        },
+        { label: "Toggle Developer Tools", accelerator: isMac ? "Alt+Cmd+I" : "Ctrl+Shift+I",
+          click: () => wc() && wc().toggleDevTools() },
+        { type: "separator" },
+        { label: "Actual Size", accelerator: "CmdOrCtrl+0", click: () => wc() && wc().setZoomLevel(0) },
+        { label: "Zoom In", accelerator: "CmdOrCtrl+=",
+          click: () => wc() && wc().setZoomLevel(wc().getZoomLevel() + 0.5) },
+        { label: "Zoom Out", accelerator: "CmdOrCtrl+-",
+          click: () => wc() && wc().setZoomLevel(wc().getZoomLevel() - 0.5) },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
     },
-  });
-  chooser.chooserCanCancel = !!canCancel;
-  chooser.once("ready-to-show", () => chooser.show());
-  chooser.on("closed", () => {
-    chooser = null;
-    // Closing the chooser on a first run means the user never chose; there is
-    // nothing to show, so quit rather than sit as an invisible process.
-    if (!win && !settings) app.quit();
-  });
-  chooser.loadFile(path.join(__dirname, "chooser", "index.html"));
-  return chooser;
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function showFatal(message, detail) {
-  if (fatalShown) return;
-  fatalShown = true;
-  dialog.showMessageBoxSync({
-    type: "error",
-    title: "Gamma",
-    message,
-    detail: (detail || "").slice(-4000),
-    buttons: ["Quit"],
-  });
-  app.exit(1);
-}
-
-// --- modes -------------------------------------------------------------------
-
-function startLocal() {
-  supervisor = new Supervisor({
-    onReady: async (info) => {
-      try {
-        await waitForHealth(`http://127.0.0.1:${info.port}`);
-      } catch {
-        showFatal("Gamma's backend started but never answered.", supervisor.tail());
-        return;
-      }
-      closeChooser();
-      if (win) {
-        // A restart after a crash: the window exists, just reload it.
-        baseUrl = info.url;
-        win.loadURL(info.url);
-      } else {
-        createWindow(info.url);
-      }
-    },
-    onBusy: (info) => {
-      // The library is owned by another process — most likely a copy of this
-      // app started from a different location. Show that one rather than
-      // refusing to do anything.
-      if (!info.port) {
-        showFatal(
-          "Another copy of Gamma is already using your library.",
-          "Quit it and try again.",
-        );
-        return;
-      }
-      waitForHealth(`http://127.0.0.1:${info.port}`, 10_000)
-        .then(() => {
-          closeChooser();
-          createWindow(`http://127.0.0.1:${info.port}/`);
-        })
-        .catch(() =>
-          showFatal(
-            "Another copy of Gamma is already using your library.",
-            `It reported port ${info.port} but is not answering. Quit it and try again.`,
-          ),
-        );
-    },
-    onFatal: showFatal,
-    onLog: (line) => {
-      if (process.env.GAMMA_DESKTOP_VERBOSE) console.log(`[backend] ${line}`);
-    },
-  });
-  supervisor.start();
-}
-
-function startRemote(url) {
-  closeChooser();
-  createWindow(`${url}/`);
-}
-
-function start(next) {
-  settings = next;
-  if (next.mode === config.REMOTE) startRemote(next.serverUrl);
-  else startLocal();
-}
-
-function closeChooser() {
-  if (!chooser) return;
-  const c = chooser;
-  chooser = null;
-  c.destroy();
-}
-
-/** Tear down whatever mode is running, so the other one can start clean. */
-async function teardown() {
-  if (supervisor) {
-    const s = supervisor;
-    supervisor = null;
-    await s.stop();
-  }
-  baseUrl = "";
-  if (win) {
-    const w = win;
-    win = null;
-    w.destroy();
-  }
-}
-
-async function switchTo(choice) {
-  starting = true; // the old window goes before the new one arrives
-  await teardown();
-  const next = {
-    mode: choice.mode === config.REMOTE ? config.REMOTE : config.LOCAL,
-    serverUrl: choice.serverUrl || "",
-    recentServers: (settings && settings.recentServers) || [],
-  };
-  if (!settingsFromEnv) {
-    const saved = config.write(app.getPath("userData"), next);
-    next.recentServers = saved.recentServers;
-  }
-  fatalShown = false;
-  start(next);
+function reloadContent() {
+  if (!content) return;
+  if (current && current.url) content.webContents.loadURL(current.url);
+  else content.webContents.reload();
 }
 
 // --- ipc ---------------------------------------------------------------------
 
 function registerIpc() {
-  ipcMain.handle("chooser:state", (event) => {
-    const w = BrowserWindow.fromWebContents(event.sender);
-    const saved = settings || config.read(app.getPath("userData")) || {};
-    return {
-      mode: saved.mode || config.LOCAL,
-      serverUrl: saved.serverUrl || "",
-      recentServers: saved.recentServers || [],
-      canCancel: !!(w && w.chooserCanCancel),
-    };
-  });
+  ipcMain.handle("shell:state", shellOnly(() => barState()));
+  ipcMain.handle("shell:details", shellOnly(() => detailState()));
 
-  ipcMain.handle("chooser:probe", (_event, url) => probeServer(url));
-
-  ipcMain.handle("chooser:choose", async (_event, choice) => {
+  ipcMain.handle("shell:open", shellOnly(async (id) => {
     try {
-      await switchTo(choice || {});
-      return { ok: true };
-    } catch (e) {
-      return { error: (e && e.message) || "Couldn't start." };
+      return await openWorkspace(id);
+    } catch (err) {
+      // The launcher shows the reason; the caller gets it too.
+      loadLauncher(err.message || err);
+      throw err;
     }
-  });
+  }));
 
-  ipcMain.handle("chooser:cancel", () => {
-    // Only meaningful when there is something to go back to; the chooser only
-    // offers Cancel in that case.
-    closeChooser();
-    if (!win && baseUrl) createWindow(baseUrl);
-    return { ok: true };
+  ipcMain.handle("shell:add-local", shellOnly((name) => {
+    const ws = registry.addLocal(name);
+    pushState();
+    buildMenu();
+    return ws;
+  }));
+
+  ipcMain.handle("shell:add-remote", shellOnly(async (name, url) => {
+    const probe = await probeServer(url);
+    if (!probe.ok) throw new Error(probe.error);
+    const ws = registry.addRemote(name, probe.url);
+    pushState();
+    buildMenu();
+    return ws;
+  }));
+
+  ipcMain.handle("shell:probe", shellOnly((url) => probeServer(url)));
+
+  ipcMain.handle("shell:rename", shellOnly((id, name) => {
+    const ws = registry.rename(id, name);
+    if (current && current.id === id) current = { ...current, name: ws.name };
+    pushState();
+    buildMenu();
+    return ws;
+  }));
+
+  ipcMain.handle("shell:remove", shellOnly(async (id, opts) => {
+    const wasCurrent = Boolean(current && current.id === id);
+    await sidecars.stop(id);
+    const result = registry.remove(id, opts || {});
+    if (wasCurrent) loadLauncher();
+    else {
+      pushState();
+      buildMenu();
+    }
+    return result;
+  }));
+
+  ipcMain.handle("shell:launcher", shellOnly(() => loadLauncher()));
+  ipcMain.handle("shell:reload", shellOnly(() => reloadContent()));
+  ipcMain.handle("shell:bar-expand", shellOnly((on) => setBarExpanded(on)));
+
+  ipcMain.handle("shell:reveal-data", shellOnly((id) => {
+    const ws = registry.get(id);
+    if (ws && ws.type === registry.LOCAL) shell.openPath(ws.dataDir);
+  }));
+
+  ipcMain.handle("shell:reveal-log", shellOnly((id) => {
+    const p = registry.logPath(id);
+    if (fs.existsSync(p)) shell.showItemInFolder(p);
+  }));
+
+  ipcMain.handle("shell:read-log", shellOnly((id) => {
+    try {
+      const text = fs.readFileSync(registry.logPath(id), "utf8");
+      return text.split(/\r?\n/).slice(-400).join("\n");
+    } catch {
+      return "(nothing logged yet)";
+    }
+  }));
+
+  ipcMain.handle("shell:set-settings", shellOnly((patch) => registry.setSettings(patch)));
+
+  // The theme mirror is the one channel a Gamma page may use, and all it can
+  // do is name a theme.
+  ipcMain.on("shell:theme", (event, value) => {
+    if (!content || event.sender !== content.webContents) return;
+    const clean = typeof value === "string" && CHROME[value] ? value : "";
+    if (clean === theme) return;
+    theme = clean;
+    registry.setSettings({ lastTheme: clean });
+    applyChrome();
+    pushState();
   });
 }
 
 // --- lifecycle ---------------------------------------------------------------
 
-if (!gotLock) {
+if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    const target = win || chooser;
-    if (target) {
-      if (target.isMinimized()) target.restore();
-      target.focus();
-    }
+    if (!win) return;
+    if (win.isMinimized()) win.restore();
+    win.focus();
   });
 
-  app.whenReady().then(() => {
-    registerIpc();
-    buildMenu({
-      getWindow: () => win,
-      getSupervisor: () => supervisor,
-      getSettings: () => settings,
-      reload: () => win && baseUrl && win.loadURL(baseUrl),
-      openChooser: () => openChooser({ canCancel: true }),
+  app.whenReady().then(async () => {
+    registry.init(app.getPath("userData"));
+    sidecars = new Sidecars({
+      logDir: path.join(app.getPath("userData"), "logs"),
+      onState: pushState,
+      onRespawn: (id, info) => {
+        // Back on a (possibly different) port: point the window at it.
+        if (!current || current.id !== id) return;
+        allowedOrigins.add(new URL(info.url).origin);
+        current = { ...current, url: info.url };
+        content.webContents.loadURL(info.url);
+      },
+      onGaveUp: (id, message, tail) => {
+        if (current && current.id === id) loadLauncher(`${message}\n\n${tail}`);
+        else pushState();
+      },
     });
 
-    const fromEnv = config.fromEnv();
-    if (fromEnv) {
-      settingsFromEnv = true;
-      start(fromEnv);
-      return;
-    }
-    const saved = config.read(app.getPath("userData"));
-    if (saved) start(saved);
-    else openChooser({ canCancel: false }); // first run: ask before doing anything
-  });
+    registerIpc();
+    buildMenu();
+    createWindow();
 
-  // macOS convention: closing the window does not quit. The Dock icon reopens
-  // it, and in local mode the backend keeps running in the meantime.
-  app.on("activate", () => {
-    if (win || chooser) return;
-    if (baseUrl) createWindow(baseUrl);
-    else openChooser({ canCancel: false });
+    // Carry over the pre-workspaces configuration, pointing at the library it
+    // used rather than a fresh one.
+    let openId = null;
+    try {
+      const { defaultDataDir } = require("./lib/legacy");
+      openId = registry.migrateFromSingleMode({ defaultDataDir: defaultDataDir() });
+    } catch (err) {
+      console.error("migration skipped:", err && err.message);
+    }
+
+    const settings = registry.settings();
+    const last = openId ? registry.get(openId) : settings.openLastOnLaunch ? registry.lastOpened() : null;
+    if (last) {
+      openWorkspace(last.id).catch((err) => loadLauncher(err.message || err));
+    } else {
+      loadLauncher();
+    }
+
+    app.on("activate", () => {
+      if (win) {
+        showWindow();
+        return;
+      }
+      createWindow();
+      if (current && current.url) content.webContents.loadURL(current.url);
+      else loadLauncher();
+    });
   });
 
   app.on("window-all-closed", () => {
-    if (process.platform === "darwin") return;
-    // Fires when the chooser closes too, so check both that no window is left
-    // and that none is on its way.
-    if (starting || BrowserWindow.getAllWindows().length > 0) return;
-    app.quit();
+    if (process.platform !== "darwin") app.quit();
   });
 
-  // Quit means quit: the backend must be dead before the process exits, or it
-  // keeps the library's single-instance lock and the next launch refuses.
-  let cleanupDone = false;
+  // Quit means quit: every server must be gone before the process exits.
   app.on("before-quit", (event) => {
-    if (cleanupDone || !supervisor) return;
+    if (quitting || !sidecars) return;
     event.preventDefault();
-    supervisor.stop().then(() => {
-      cleanupDone = true;
-      app.quit();
-    });
+    quitting = true;
+    sidecars.stopAll().finally(() => app.quit());
   });
 }
 
-module.exports = { isAppUrl, waitForHealth, probeServer };
+// Test hook. Only with GAMMA_SHELL_TEST, and only reachable from the main
+// process, so the suite can assert on shell internals instead of scraping the
+// UI for them.
+if (process.env.GAMMA_SHELL_TEST) {
+  global.__gammaShell = {
+    registry,
+    sidecars: () => sidecars,
+    current: () => current,
+    theme: () => theme,
+    externalOpens,
+    barExpanded: () => barExpanded,
+    bounds: () => ({ bar: bar && bar.getBounds(), content: content && content.getBounds() }),
+    openWorkspace,
+    loadLauncher,
+  };
+}
+
+module.exports = { probeServer };
