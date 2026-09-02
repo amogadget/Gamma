@@ -1,7 +1,7 @@
 {
   "name": "gamma-desktop",
   "productName": "Gamma",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Gamma \u2014 a local PDF annotator with an outliner and an AI chat.",
   "private": true,
   "main": "main.js",
