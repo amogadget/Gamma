@@ -32,17 +32,14 @@ jobs:
           - os: macos-14
             label: macOS (Apple Silicon)
             arch: arm64
-            app: dist/mac-arm64/Gamma.app/Contents/MacOS/Gamma
             artifacts: dist/*.dmg
           - os: macos-13
             label: macOS (Intel)
             arch: x64
-            app: dist/mac/Gamma.app/Contents/MacOS/Gamma
             artifacts: dist/*.dmg
           - os: ubuntu-latest
             label: Linux (x86-64)
             arch: x64
-            app: dist/linux-unpacked/gamma-desktop
             artifacts: dist/*.AppImage
     steps:
       - uses: actions/checkout@v4
@@ -97,6 +94,23 @@ jobs:
           # one and fail the build.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      # electron-builder's output directory depends on platform and arch
+      # (dist/mac, dist/mac-arm64, dist/linux-unpacked, …), so locate the
+      # binary rather than hardcoding a path that fails at the last step.
+      - name: Locate the built app
+        working-directory: desktop
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            bundle=$(find dist -maxdepth 2 -name "Gamma.app" -type d | head -1)
+            [ -n "$bundle" ] || { echo "no Gamma.app under dist/"; ls -R dist | head -50; exit 1; }
+            echo "GAMMA_BUNDLE=desktop/$bundle" >> "$GITHUB_ENV"
+            echo "GAMMA_PACKAGED_APP=$bundle/Contents/MacOS/Gamma" >> "$GITHUB_ENV"
+          else
+            exe=$(find dist -maxdepth 2 -name "gamma-desktop" -type f | head -1)
+            [ -n "$exe" ] || { echo "no gamma-desktop under dist/"; ls -R dist | head -50; exit 1; }
+            echo "GAMMA_PACKAGED_APP=$exe" >> "$GITHUB_ENV"
+          fi
+
       # An unsigned bundle will not launch on Apple Silicon at all. Ad-hoc
       # signing makes it runnable; it does not satisfy Gatekeeper for a
       # download, which still needs the user to allow it once (or a real
@@ -104,10 +118,8 @@ jobs:
       - name: Ad-hoc sign (macOS)
         if: runner.os == 'macOS'
         run: |
-          cd desktop
-          app=$(dirname "$(dirname "$(dirname '${{ matrix.app }}')")")
-          codesign --force --deep --sign - "$app"
-          codesign --verify --deep --verbose=2 "$app"
+          codesign --force --deep --sign - "$GAMMA_BUNDLE"
+          codesign --verify --deep --verbose=2 "$GAMMA_BUNDLE"
 
       - name: Install Xvfb (Linux)
         if: runner.os == 'Linux'
@@ -118,8 +130,6 @@ jobs:
       # the backend.
       - name: Run the packaged app's tests
         working-directory: desktop
-        env:
-          GAMMA_PACKAGED_APP: ${{ matrix.app }}
         run: |
           if [ "${{ runner.os }}" = "Linux" ]; then
             xvfb-run -a node --test --test-concurrency=1 test/smoke.mjs
