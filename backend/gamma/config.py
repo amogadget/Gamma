@@ -17,6 +17,17 @@ STATIC_DIR = os.environ.get("GAMMA_STATIC_DIR", "")
 
 MAX_UPLOAD_BYTES = 55 * 1024 * 1024  # 55 MB
 
+# --- desktop app --------------------------------------------------------------
+# Set by the double-clickable app's launcher (gamma/desktop_main.py), never by
+# the hosted deployment. Its only effect is to permit the loopback auto-session
+# in auth.py: one local account, no login screen, because there is nobody else
+# on the machine to authenticate against. The guard is deliberately three-part
+# (this flag AND a loopback peer AND no proxy headers) so that turning on
+# remote sharing later cannot silently publish an unauthenticated library —
+# see docs/dev/client-app.md.
+DESKTOP_MODE = os.environ.get("GAMMA_DESKTOP", "") == "1"
+DESKTOP_USER = os.environ.get("GAMMA_DESKTOP_USER", "") or "local"
+
 # --- AI chat -----------------------------------------------------------------
 # AI configuration is per-user, not env: each user adds provider entries in the
 # GUI (Settings → AI providers) — a wire protocol + API key + optional label,

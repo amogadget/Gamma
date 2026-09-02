@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from . import config
 from .config import USERS_DB
+from .desktop import PROXY_HEADERS, is_loopback
 from .db import page_now
 from .logbuf import log
 from .seed import reset_guest_data
@@ -140,6 +142,14 @@ async def session_middleware(request: Request, call_next):
                 request.state.user = username
                 request.state.is_guest = bool(is_guest)
                 request.state.is_admin = bool(is_admin) and not is_guest
+    if not request.state.user:
+        # Desktop app: no login screen. A real session cookie above always
+        # wins, so signing in as someone else still works.
+        auto = desktop_auto_user(request)
+        if auto:
+            request.state.user = auto
+            request.state.is_guest = False
+            request.state.is_admin = True
     # The session cookie is browser-wide, so logging in from a second tab
     # silently switches every other tab's identity. Tabs declare who they
     # think is signed in (X-Gamma-User); on mismatch refuse the request
@@ -161,6 +171,34 @@ async def session_middleware(request: Request, call_next):
     if new_session_token:
         set_session_cookie(response, new_session_token, request)
     return _finish_request_log(request, response, started, expected)
+
+
+def desktop_auto_user(request: Request) -> str | None:
+    """The desktop app's single local account, or None.
+
+    Three conditions, all required, because each covers a way the other two
+    can be wrong:
+
+    1. ``config.DESKTOP_MODE`` — set only by the desktop launcher. A hosted
+       deployment never sets it, so this code is inert there.
+    2. The peer address is loopback. Even in desktop mode, a request arriving
+       from the LAN (someone bound a real interface) gets no free session.
+    3. No proxy headers. Behind a reverse proxy every peer address *looks*
+       like loopback, which would turn condition 2 into a rubber stamp and
+       hand a session to anyone on the internet.
+
+    Together these are what make the planned remote-sharing feature safe to
+    add: it cannot quietly publish an unauthenticated library, because
+    publishing it necessarily violates 2 or 3.
+    """
+    if not config.DESKTOP_MODE:
+        return None
+    peer = (request.client.host if request.client else "") or ""
+    if not is_loopback(peer):
+        return None
+    if any(h in request.headers for h in PROXY_HEADERS):
+        return None
+    return config.DESKTOP_USER
 
 
 def require_user(request: Request) -> str:

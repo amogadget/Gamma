@@ -4,7 +4,7 @@ A double-clickable Mac app that starts and maintains a local Gamma. Its own
 window, its own Dock icon; it never opens a browser. Everything the hosted
 version does except being reachable from outside the machine.
 
-Status: **plan only** — nothing implemented yet.
+Status: **Phase 0 implemented and tested**; the app shell (Phase 1) is next.
 
 ## Goal
 
@@ -74,8 +74,8 @@ loses anyway, for two reasons:
   Playwright harness used for everything else. Tauri's Linux build uses
   WebKitGTK, so testing it here would not even exercise the Mac code path.
 
-Expected download: **250–280 MB**. That is Obsidian/VS Code territory for a
-tool in this category.
+Expected download: see the measured sizes below. Obsidian/VS Code territory
+for a tool in this category.
 
 ### No login screen, hard-gated to loopback
 
@@ -83,11 +83,20 @@ The app creates one local account and establishes its session automatically.
 The bcrypt/session machinery stays exactly as it is underneath; only the
 *presentation* of login goes away.
 
-The gate is the point: auto-session is permitted **only** when the server is
-bound to `127.0.0.1`. If a bind address is ever anything else, authentication
-is required and there is no override. Phase 3 therefore cannot silently
-publish an unauthenticated library — the failure mode this guard exists to
-prevent.
+The gate is the point, and implementing it showed one condition was not
+enough. `auth.desktop_auto_user` requires all three:
+
+1. `config.DESKTOP_MODE` — set only by the desktop launcher, so the code is
+   inert in the hosted deployment.
+2. The request's peer address is loopback. Even in desktop mode, a request
+   from the LAN gets no free session.
+3. No proxy headers (`X-Forwarded-For` and friends). **This is the one a bind
+   check alone would have missed:** behind a reverse proxy every peer address
+   looks like loopback, which would have turned condition 2 into a rubber
+   stamp for anyone on the internet.
+
+Phase 3 therefore cannot silently publish an unauthenticated library —
+publishing it necessarily violates 2 or 3.
 
 ### Unsigned to start
 
@@ -102,11 +111,34 @@ it has to discover and relocate. A standalone CPython
 (`python-build-standalone`) plus a plain `site-packages` directory has no magic
 to go wrong, and the size difference is small once the tree is trimmed.
 
-Current venv is 149 MB, but `pip`, `setuptools`, `pytest`, `reportlab`,
-`pygments` and `lxml` are not declared runtime dependencies. The real closure
-of `requirements.txt` needs measuring (task 0.1); estimate 90–120 MB including
-the interpreter, driven by Pillow (~24 MB), `pypdfium2` (7.8 MB) and
-`pikepdf` (4.7 MB).
+**Measured** (task 0.1, done), rather than estimated:
+
+| | |
+|---|---|
+| `requirements.txt` closure, clean venv | 96 MB |
+| …minus `pip`/`setuptools` and `__pycache__` | **65 MB** |
+| CPython 3.12 standalone, macOS arm64, trimmed | **66 MB** |
+| `gamma` package | 1.7 MB |
+| `frontend/dist` | 4.7 MB |
+| Electron framework, one arch | ~150–190 MB |
+
+So roughly **290–330 MB** per-architecture app, compressing to perhaps
+120–160 MB in a `.dmg`. The full 463-test suite passes against the 65 MB
+trimmed tree, so the trim is verified rather than hoped for.
+
+Two things the measurement caught:
+
+- **`.dist-info` cannot be stripped.** `ziamath` resolves `latex2mathml`'s
+  version through `importlib.metadata` at import time, so removing the
+  metadata directories raises `PackageNotFoundError`. Keeping them costs 2 MB.
+- **`lxml` (13 MB) stays.** It arrives via `pikepdf`, which uses it for XMP
+  metadata. Nothing here imports it directly, so it is *probably* droppable —
+  but a wrong guess is an `ImportError` in front of a user with no terminal,
+  and 13 MB of a 300 MB app is not worth that.
+
+**Ship per-architecture, not universal.** A universal binary doubles the
+interpreter, the native wheels and the Electron framework — roughly 600 MB —
+to serve Intel Macs. Two separate downloads is the better trade.
 
 ### Data location
 
@@ -116,26 +148,45 @@ replacement, and Time Machine covers it. The existing Docker volume is
 
 ## Phases
 
-### Phase 0 — make the server desktop-ready
+### Phase 0 — make the server desktop-ready — **DONE**
 
-All of this is plain Python, fully testable on Linux.
+All plain Python, all tested on Linux. 17 new tests; suite at 463.
 
-- **0.1** Measure the true runtime closure of `requirements.txt` in a clean
-  venv. Decides the real bundle size; everything downstream depends on it.
-- **0.2** `gamma/desktop.py`: resolve the per-OS data dir; pick a free port
-  (try 9001, then ephemeral); write a `port` + `pid` file so the shell can
-  find a running instance.
-- **0.3** Single-instance lock. Second launch focuses the existing window
-  rather than starting a second server on a second port against the same
-  SQLite files.
-- **0.4** Loopback auto-session, with the bind guard above. Tests must cover
-  the *negative* case: a non-loopback bind refusing to auto-session.
-- **0.5** First-run: create the data dir and the single account with no
-  password printed anywhere.
-- **0.6** `GET /healthz` — cheap, unauthenticated, no DB touch, so the shell
-  can poll for readiness rather than sleeping.
-- **0.7** Clean shutdown: SIGTERM drains in-flight requests, closes SQLite,
-  releases the lock.
+- **0.1** ✅ Measured — see the sizes above.
+- **0.2** ✅ `gamma/desktop.py`: per-OS data dir, port picking (9001 then
+  ephemeral), and a `desktop.json` record of port + pid.
+- **0.3** ✅ `SingleInstance`, an advisory `flock`/`LK_NBLCK` on the library
+  directory. A second launch prints `GAMMA_ALREADY_RUNNING {port, pid}` and
+  exits 3 so the shell can focus the live window. A stale record left by a
+  SIGKILL is detected via the pid and cleared, so a crash cannot lock the user
+  out of their own library.
+- **0.4** ✅ `auth.desktop_auto_user`. Three conditions, each tested for
+  failing closed alone: the `GAMMA_DESKTOP` flag, a loopback peer, and no
+  proxy headers. A real session cookie always wins, so signing in as another
+  account still works.
+- **0.5** ✅ `seed.ensure_desktop_user` — idempotent, no password printed. The
+  row still carries a bcrypt hash of a random secret rather than an empty
+  one: if sharing is ever enabled the guard correctly refuses the
+  auto-session, and this account must not then be a password-less way in.
+- **0.6** ✅ Already existed — `GET /api/health` is unauthenticated and touches
+  no database. Adding `/healthz` would have been a duplicate.
+- **0.7** ✅ SIGTERM/SIGINT set `should_exit`; uvicorn drains with a 10s
+  grace; a `finally` clears the record and releases the lock. Verified by
+  signalling a live instance: process gone, record cleared, port released,
+  and a fresh launch succeeds immediately.
+
+`gamma/static_paths.py` was needed too and is not in the original list: a
+packaged app has to *find* the built frontend, whereas the container is told
+where it is. It requires an `index.html` to accept a candidate — an empty
+directory winning would serve a blank page and drop every `/api` call into the
+SPA fallback.
+
+Entry point: `python -m gamma.desktop_main`, which prints one line the shell
+parses:
+
+```
+GAMMA_READY {"port": 9001, "pid": 4242, "data_dir": "…", "user": "local", "url": "…"}
+```
 
 ### Phase 1 — the app shell
 

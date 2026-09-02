@@ -234,3 +234,30 @@ def ensure_guest_user():
                 (page_now(),),
             )
             conn.commit()
+
+
+def ensure_desktop_user(username: str | None = None) -> str:
+    """The desktop app's single local account. Idempotent; returns its name.
+
+    Unlike ensure_admin_seed there is no password to print, because the
+    desktop app never shows a login screen — auth.desktop_auto_user grants the
+    session, gated on the request genuinely coming from this machine. The row
+    still carries a bcrypt hash of a random secret rather than an empty one:
+    if that account is ever reached through the normal login form (someone
+    enables remote sharing, so the auto-session guard correctly refuses), it
+    must not be a password-less way in. Recovery in that case is
+    `manage.py set-password`, the same as any other account.
+    """
+    username = (username or os.environ.get("GAMMA_DESKTOP_USER", "") or "local").strip()
+    with connect_users_db() as conn:
+        exists = conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone()
+        if not exists:
+            unusable = bcrypt.hashpw(secrets.token_urlsafe(32).encode(), bcrypt.gensalt()).decode()
+            conn.execute(
+                "INSERT INTO users (username, password_hash, is_guest, is_admin, created_at) "
+                "VALUES (?, ?, 0, 1, ?)",
+                (username, unusable, page_now()),
+            )
+            conn.commit()
+    create_user_dbs(username)
+    return username
