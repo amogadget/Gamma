@@ -47,13 +47,13 @@ jobs:
           - os: macos-14
             label: macOS (Apple Silicon)
             arch: arm64
-            artifacts: dist/*.dmg
+            artifacts: desktop/dist/*.dmg
           - os: ubuntu-latest
             label: Linux (x86-64)
             arch: x64
             artifacts: |
-              dist/*.AppImage
-              dist/*.deb
+              desktop/dist/*.AppImage
+              desktop/dist/*.deb
           # GitHub's arm64 Linux runners are free for public repositories, and
           # this is the architecture the dev box builds and tests natively, so
           # it is the cheapest platform to add.
@@ -61,12 +61,12 @@ jobs:
             label: Linux (arm64)
             arch: arm64
             artifacts: |
-              dist/*.AppImage
-              dist/*.deb
+              desktop/dist/*.AppImage
+              desktop/dist/*.deb
           - os: windows-latest
             label: Windows (x86-64)
             arch: x64
-            artifacts: dist/*.exe
+            artifacts: desktop/dist/*.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -207,7 +207,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gamma-desktop-${{ steps.meta.outputs.version }}-${{ runner.os }}-${{ matrix.arch }}
-          path: desktop/${{ matrix.artifacts }}
+          path: ${{ matrix.artifacts }}
           if-no-files-found: error
 
   # One release, assembled after every platform has succeeded. Attaching from
@@ -225,8 +225,20 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Show what will be attached
-        run: ls -lR artifacts
+      - name: Check every platform's artifact is here
+        run: |
+          ls -lR artifacts
+          fail=""
+          expect() {
+            n=$(find artifacts -name "$1" -type f | wc -l)
+            echo "$1: $n (want $2)"
+            [ "$n" -eq "$2" ] || fail="$fail $1"
+          }
+          expect "*.dmg" 1          # macOS, Apple Silicon
+          expect "*.exe" 1          # Windows, x86-64
+          expect "*.deb" 2          # Linux, x86-64 + arm64
+          expect "*.AppImage" 2     # Linux, x86-64 + arm64
+          [ -z "$fail" ] || { echo "wrong number of artifacts for:$fail"; exit 1; }
 
       - uses: softprops/action-gh-release@v2
         with:
