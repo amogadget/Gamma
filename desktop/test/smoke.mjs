@@ -341,11 +341,26 @@ test("a PDF uploads and renders in the window", async (t) => {
   assert.ok(box && box.width > 50 && box.height > 50, `canvas too small: ${JSON.stringify(box)}`);
 
   // …and the text layer, which is what selection and highlighting depend on.
-  await page.waitForFunction(
-    () => /Gamma/.test(document.querySelector(".textLayer")?.textContent || ""),
-    null,
-    { timeout: 30_000 },
-  );
+  // Generous, because a Windows CI runner takes ten times as long to get here
+  // as this dev box does; and if it never arrives, say what *was* on the page
+  // rather than only that a timeout elapsed.
+  const gotText = await page
+    .waitForFunction(
+      () => /Gamma/.test(document.querySelector(".textLayer")?.textContent || ""),
+      null,
+      { timeout: 90_000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+  if (!gotText) {
+    const state = await page.evaluate(() => ({
+      canvases: document.querySelectorAll("canvas").length,
+      textLayers: document.querySelectorAll(".textLayer").length,
+      textSample: (document.querySelector(".textLayer")?.textContent || "").slice(0, 120),
+      pageCount: document.querySelectorAll("[data-page-number], .pdfPage").length,
+    }));
+    assert.fail(`the text layer never carried the PDF's text: ${JSON.stringify(state)}`);
+  }
 
   assert.deepEqual(errors, [], "opening a PDF should not log console errors");
 });
