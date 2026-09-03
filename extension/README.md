@@ -12,7 +12,7 @@ Chrome only installs extensions from the Web Store or as an unpacked folder
 
 1. Get the folder: clone the repo, or download
    `gamma-connector-<version>.zip` from the
-   [releases page](https://github.com/tim4431/gamma/releases) and unzip it
+   [releases page](https://github.com/amogadget/Gamma/releases) and unzip it
    somewhere permanent (Chrome loads it from that path).
 2. `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
    pick the folder.
@@ -21,6 +21,13 @@ Chrome only installs extensions from the Web Store or as an unpacked folder
    sign in. Signing in from Gamma's own tab also works: the session cookie is
    shared. The server must run a Gamma version that has `/api/clip`
    (see `docs/dev/extension.md`).
+
+To save into a **local workspace of the desktop app** instead, use
+`http://127.0.0.1:9001`: that is the port the app's backend prefers, and it
+only falls back to a random one when 9001 is taken. So it works while the app
+is running and that workspace was the first one started — with several local
+workspaces, the others land on ports the extension cannot guess. Pointing the
+extension at a server you host is the arrangement that always works.
 
 Releases: tag `extension-v<version>` (matching `manifest.json`) and the
 `Release the browser extension` workflow attaches the zip to a GitHub

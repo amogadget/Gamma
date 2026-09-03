@@ -53,7 +53,7 @@ metadata (title, authors, venue, DOI) is resolved automatically.
   (a quoted block with its source link).
 - Ctrl+Shift+S saves the current page.
 
-You need your own Gamma server (github.com/tim4431/gamma). The extension
+You need your own Gamma server (github.com/amogadget/Gamma). The extension
 talks only to the server address you enter; nothing is sent anywhere else.
 
 ## Privacy tab
