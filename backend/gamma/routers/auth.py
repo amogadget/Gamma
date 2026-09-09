@@ -46,9 +46,9 @@ _IMPORT_CHUNK_BYTES = 1024 * 1024
 _GAMMA_IMPORT_MAX_PAGES = 500
 _GAMMA_IMPORT_MAX_BLOCKS = 100_000
 _IMPORT_UPLOAD_RE = re.compile(
-    r"^[0-9a-fA-F]{8,64}(?:-flat)?\.(?:pdf|png|jpe?g|gif|webp|svg|bmp)$"
+    r"^(?:[0-9a-f]{64}\.pkdrawing|[0-9a-fA-F]{8,64}(?:-flat)?\.(?:pdf|png|jpe?g|gif|webp|svg|bmp))$"
 )
-_IMPORT_UPLOAD_REF_RE = re.compile(r"/api/uploads/([^\s\"')\]}>,]+)")
+_IMPORT_UPLOAD_REF_RE = re.compile(r"/api/(?:uploads|assets)/([^\s\"')\]}>,]+)")
 
 
 def _copy_limited(source, output, limit: int, deadline: float) -> int:
@@ -155,7 +155,9 @@ def export_data(request: Request, uploads: int = 1, user: str | None = None):
     upload_files = []
     uploads_dir = user_dir / "uploads"
     if uploads and uploads_dir.exists():
-        upload_files = sorted(f for f in uploads_dir.iterdir() if f.is_file())
+        upload_files = sorted(f for f in uploads_dir.iterdir()
+                              if f.is_file() and not f.is_symlink()
+                              and _IMPORT_UPLOAD_RE.fullmatch(f.name))
     db_files = [user_dir / n for n in ("pages.db", "data.db") if (user_dir / n).exists()]
     prog = {"active": True, "total": sum(f.stat().st_size for f in db_files + upload_files), "done": 0}
     _export_progress[user] = prog
@@ -305,7 +307,7 @@ def _validate_scoped_backup(
             raise HTTPException(status_code=400, detail="invalid block properties in scoped backup")
         for text in (content or "", properties_text or ""):
             matches = _IMPORT_UPLOAD_REF_RE.findall(text)
-            if "/api/uploads/" in text and not matches:
+            if any(prefix in text for prefix in ("/api/uploads/", "/api/assets/")) and not matches:
                 raise HTTPException(
                     status_code=400,
                     detail="invalid upload reference in scoped backup",

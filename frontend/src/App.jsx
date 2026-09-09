@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS, clampZoom } from "./pdfViewer";
+import { blocksToPdfInk } from "./inkBlock.js";
 import {
   API,
   apiJson,
@@ -5764,6 +5765,7 @@ export default function App() {
   // derived highlights rarely change — returning the previous array when the
   // content is identical keeps the viewer's per-page memo effective (otherwise
   // each keystroke re-rendered every PdfPage's overlays).
+  const inkBlocks = useMemo(() => blocksToPdfInk(blocks), [blocks]);
   const prevHighlightsRef = useRef({ json: "", value: [] });
   const highlights = useMemo(() => {
     const byHlId = new Map();
@@ -8161,6 +8163,7 @@ export default function App() {
                       <PdfViewer
                         url={pdfUrl}
                         highlights={highlights}
+                        inkBlocks={inkBlocks}
                         noteBadges={hlNoteBadges}
                         hideEmbeddedAnnots={embAnnots === "hide"}
                         snapVertical={snapVertical}

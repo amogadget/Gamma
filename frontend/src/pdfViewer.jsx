@@ -12,6 +12,7 @@ import "pdfjs-dist/web/pdf_viewer.css";
 import { createPortal } from "react-dom";
 import { ChevronRightIcon, LinkIcon, MessageSquareIcon, OutlineIcon } from "./icons";
 import { segmentPage } from "./pdfTranslate";
+import { pdfInkPlacement } from "./inkBlock.js";
 import { ChatMarkdown } from "./widgets";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 // Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
@@ -320,7 +321,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState }) {
+function PdfViewer({ url, highlights, inkBlocks = EMPTY_MARKS, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -645,6 +646,15 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // screen: during a tab switch the incoming page's highlights arrive before
   // its document does, and must not paint onto the outgoing one. Per-page
   // slices also mean editing a note re-renders just that highlight's page.
+  const inkByPage = useMemo(() => {
+    const pages = new Map();
+    for (const block of inkBlocks) {
+      const page = block.properties?.pdf_page;
+      if (!pages.has(page)) pages.set(page, []);
+      pages.get(page).push(block);
+    }
+    return pages;
+  }, [inkBlocks]);
   const hlsByPage = useMemo(() => {
     const map = new Map();
     if (displayedUrl !== url) return map;
@@ -1891,6 +1901,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
               pdfDoc={pdfDoc}
               scale={scale}
               highlights={hlsByPage.get(i + 1) || EMPTY_MARKS}
+              inkBlocks={inkByPage.get(i + 1) || EMPTY_MARKS}
               onJump={stableCbs.onJump}
               onHighlightJump={stableCbs.onHighlightJump}
               onLinkHighlight={stableCbs.onLinkHighlight}
@@ -2094,6 +2105,7 @@ const PdfPage = React.memo(function PdfPage({
   pdfDoc,
   scale,
   highlights,
+  inkBlocks,
   _onJump,
   onHighlightJump,
   onLinkHighlight,
@@ -2533,6 +2545,16 @@ const PdfPage = React.memo(function PdfPage({
           }}
         />
       ))}
+      {pageSize && inkBlocks.map((block) => {
+        const viewport = pageRef.current?.getViewport({ scale });
+        const ink = pdfInkPlacement(block, viewport);
+        if (!ink) return null;
+        return <img key={block.id} src={ink.url} alt="" aria-hidden="true"
+          data-ink-block-id={block.id} draggable={false}
+          style={{ position: "absolute", left: 0, top: 0, width: ink.width, height: ink.height,
+            maxWidth: "none", transformOrigin: "0 0", transform: `matrix(${ink.matrix.join(",")})`,
+            pointerEvents: "none", userSelect: "none", zIndex: 3 }} />;
+      })}
       {highlights.map((h) => {
         const rects =
           h.position?.rects || (h.position?.boundingRect ? [h.position.boundingRect] : []);

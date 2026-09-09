@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Gamma Connector",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Save papers and PDFs into your Gamma library with one click, like the Zotero Connector.",
   "minimum_chrome_version": "116",
   "permissions": [

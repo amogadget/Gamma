@@ -8,6 +8,7 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
+import { inkBlockPreview } from "./inkBlock.js";
 import { COLORS } from "./pdfViewer";
 import { handleMarkdownCopy } from "./widgets";
 import { isEnterCommit } from "./utils";
@@ -31,6 +32,31 @@ import { Trash2Icon } from "./icons";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
+
+function InkBlockPreview({ block }) {
+  const preview = inkBlockPreview(block);
+  const [unavailable, setUnavailable] = useState(false);
+  useEffect(() => setUnavailable(false), [preview?.url]);
+  if (!preview) return null;
+  return (
+    <figure style={{ margin: "8px 0", padding: 8, background: "white", borderRadius: 6 }}>
+      {unavailable ? (
+        <span style={{ color: "#555" }}>Handwriting preview unavailable. Sign in to the owning Gamma account.</span>
+      ) : (
+        <img
+          src={preview.url}
+          alt={`Handwriting${preview.page ? ` on PDF page ${preview.page}` : ""}`}
+          loading="lazy"
+          onError={() => setUnavailable(true)}
+          style={{ display: "block", maxWidth: "100%", maxHeight: 360, objectFit: "contain" }}
+        />
+      )}
+      <figcaption style={{ fontSize: 12, color: "#555", marginTop: 4 }}>
+        Handwriting{preview.page ? ` · Page ${preview.page}` : ""} · Edit ink on iPad
+      </figcaption>
+    </figure>
+  );
+}
 
 function rehypeTaskIndexes() {
   return function indexTasks(tree) {
@@ -1199,7 +1225,8 @@ function BlockRow({
                 } else if (
                   e.key === "Backspace" &&
                   (block._isEmpty || !(block.content || "").trim()) &&
-                  !(block.quote || "").trim()
+                  !(block.quote || "").trim() &&
+                  block.properties?.type !== "pdf_ink"
                 ) {
                   e.preventDefault();
                   onDelete(block.id);
@@ -1223,6 +1250,7 @@ function BlockRow({
             </div>
           )}
 
+          <InkBlockPreview block={block} />
           {block.quote?.trim() ? <div className="blockQuote">{block.quote}</div> : null}
           {block.position?.area && captureArea ? (
             <AreaSnapshot block={block} captureArea={captureArea} docNonce={docNonce} />

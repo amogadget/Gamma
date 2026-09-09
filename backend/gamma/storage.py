@@ -1,8 +1,15 @@
 """Uploaded-file helpers: media types, lookup, orphan cleanup."""
 
 from pathlib import Path
+import re
+import time
 
 from .db import user_uploads_dir
+
+# Pending native ink uploads survive restarts/deletions for seven days, so a
+# lost connection between upload and block save does not destroy queued work.
+INK_STAGING_SECONDS = 7 * 24 * 60 * 60
+INK_ASSET_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:pkdrawing|png)$")
 
 # Content-addressed ids are a truncated sha256 hex digest. One constant: the
 # extension's /api/clip recomputes the proxy's id for an external PDF URL to
@@ -64,14 +71,20 @@ def cleanup_orphan_uploads(conn, uploads_dir: Path):
         if not f.is_file():
             continue
         filename = f.name
+        if filename.startswith(".ink-"):
+            continue  # atomic upload in progress; never sweep its temporary file
+        if INK_ASSET_NAME_RE.fullmatch(filename) and time.time() - f.stat().st_mtime < INK_STAGING_SECONDS:
+            continue
         stem = f.stem
         ref = conn.execute(
             "SELECT 1 FROM unified_blocks "
             "WHERE json_extract(properties, '$.doc_id') = ? "
             "   OR content LIKE ? "
             "   OR properties LIKE ? "
+            "   OR content LIKE ? OR properties LIKE ? "
             "LIMIT 1",
-            (stem, f"%/api/uploads/{filename}%", f"%/api/uploads/{filename}%"),
+            (stem, f"%/api/uploads/{filename}%", f"%/api/uploads/{filename}%",
+             f"%/api/assets/{filename}%", f"%/api/assets/{filename}%"),
         ).fetchone()
         if not ref:
             try:

@@ -22,6 +22,7 @@ from .routers import (
     clip,
     export,
     imports,
+    ink,
     links,
     metadata,
     pageimage,
@@ -116,6 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(uploads.router)
     app.include_router(pageimage.router)
     app.include_router(blocks.router)
+    app.include_router(ink.router)
     app.include_router(imports.router)
     app.include_router(export.router)
     app.include_router(links.router)

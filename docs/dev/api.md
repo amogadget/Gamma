@@ -63,6 +63,90 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 Route order matters: the static-prefix routes (`by-doc`, `children`,
 `subtree`) must stay registered before `/blocks/{block_id}`.
 
+### Native iPad ink (`ink.py`)
+
+All three routes require the owner's session cookie, never a share token or
+`?user=`. One explicit multi-stroke annotation is one ordinary unified block
+under an existing Gamma PDF page; no stroke-per-block model and no audio.
+
+- `POST /api/assets`: multipart `file`. `.pkdrawing` accepts
+  `application/octet-stream` or `application/x-pkdrawing`; `.png` requires
+  `image/png` and a validated PNG. PKDrawing is opaque binary, not decoded or
+  validated by Linux. Empty files/other types return 400. Hard asset cap: 32 MiB.
+  Returns 200 `{filename, url, size, already_existed}`, where filename is the
+  full lowercase SHA-256 plus extension and URL is `/api/assets/{filename}`.
+  Dedup is per-user. New bytes use existing per-file (413) and storage quota
+  (507) rules; existing bytes do not consume quota again.
+- `GET /api/assets/{filename}`: authenticated own-user file only; 404 if absent.
+  `Cache-Control: private, no-cache`, `Vary: Cookie, Authorization`, and
+  `nosniff`. The legacy uploads alias uses this same private policy.
+- `PUT /api/blocks/{block_id}/ink`: `block_id` must be a canonical lowercase
+  client-generated UUID. Body (unknown fields rejected):
+
+  ```json
+  {
+    "parent_id": "existing-gamma-pdf-page-block-id",
+    "pdf_page": 1,
+    "ink_asset": "/api/assets/<64hex>.pkdrawing",
+    "preview_asset": "/api/assets/<64hex>.png",
+    "bounds": {"x": 20, "y": 30, "width": 100, "height": 40},
+    "crop_box": {"width": 612, "height": 792},
+    "coordinate_space": "pdf-crop-top-left-v1",
+    "expected_revision": 0
+  }
+  ```
+
+  `pdf_page` is one-based within the parent's PDF (not another Gamma page).
+  Coordinates are **unrotated PDF crop-box points, origin upper-left**, x right,
+  y down; viewport scale, scroll, device pixels and PDF rotation are excluded.
+  PKDrawing uses those same page coordinates. PNG depicts `bounds`, not the
+  whole page. `crop_box` describes unrotated width/height, not its PDF media-box
+  offset. Bounds must be finite, positive-sized and crop-contained; empty ink
+  may use a transparent PNG with a small positive rectangle. Clients validate
+  actual PDF page count/dimensions; backend validates geometry but does not
+  open the PDF. `coordinate_space` defaults to the shown version.
+
+  Returns 200 the ordinary full block `{id,parent_id,position,content,properties,
+  created_at,updated_at}`. Properties contain `type: "pdf_ink"`, the ink fields
+  above (excluding parent/expected revision), and `ink_revision` starting at 1.
+  New blocks append with empty content. Updates preserve content, children,
+  order, creation timestamp and unrelated properties. Generic block PUT rejects
+  changes to reserved ink fields or native-note revision markers (409); use
+  these dedicated endpoints instead. Existing IDs must already
+  be ink blocks under the same parent and same PDF page; otherwise 409.
+  Missing parent/assets return 404; parent without PDF identity returns 409;
+  invalid UUID/body/geometry returns 422.
+
+  `expected_revision` is optional: 0 means create-only; a positive value must
+  match current `ink_revision`. Mismatch returns 409 with
+  `detail: {message, current_revision}`. An exact payload replay returns the
+  existing block without incrementing revision, even with an old expectation.
+  Without an expectation, differing saves are last-write-wins. Serialize saves
+  per annotation, persist UUID/body/assets before upload, upload both assets,
+  then PUT; on 409 reconcile instead of blind retry. Delayed retries following
+  a newer save conflict when using expected revisions. Delete via normal block
+  DELETE; deletion has no tombstone, so cancel queued saves before deleting.
+- `PUT /api/blocks/{block_id}/note`: idempotent native child-note upsert with
+  canonical UUID and `{parent_id, content, expected_revision?}`. Parent must be
+  an existing `pdf_ink` block or a `native_note: true` descendant of one.
+  Ancestor validation is bounded to 64 blocks (ink included), rejects cycles
+  and plain-text intermediary blocks, and requires ink directly beneath an
+  existing Gamma PDF page root. Returns the ordinary full block with
+  `properties: {native_note: true, note_revision: 1}` on create. Same revision
+  and exact replay semantics as ink. Updates preserve children and other
+  properties. Only marked native notes under that same parent may be edited;
+  unrelated blocks return 409. Normal note editing via `/blocks/{id}` also
+  increments `note_revision` when its content changes. Notes are otherwise
+  normal Gamma blocks, including their own ordinary note children.
+
+Assets live in the per-user uploads directory, count toward quota, and are
+included in full backups, scoped Gamma exports/imports and readable Markdown
+bundles (preview plus editable drawing). Unreferenced native assets have a
+seven-day staging grace period; reupload renews it. Existing orphan cleanup
+then removes expired unreferenced assets but retains referenced assets. Clients
+must retain local bytes until successful save and reupload after long outages.
+No schema migration. PDF/Zotero exports do not flatten PencilKit strokes.
+
 ### PDFs & uploads (`pdf.py`, `uploads.py`, `shares.py`)
 | Method | Path | Purpose |
 |---|---|---|

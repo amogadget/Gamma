@@ -97,6 +97,11 @@ def _share_can_read_upload(user: str, scope_doc_id: str, filename: str) -> bool:
 
 @router.get("/uploads/{filename}")
 async def serve_upload(filename: str, request: Request):
+    # Native preview bytes share the uploads directory for backups/quota, but
+    # must not acquire the legacy public/share cache policy through this alias.
+    from .ink import ASSET_NAME_RE, get_asset
+    if ASSET_NAME_RE.fullmatch(filename):
+        return get_asset(filename, request)
     # Sanitize: only allow [hex].ext pattern, no path traversal
     dot = filename.rfind(".")
     if dot < 0:

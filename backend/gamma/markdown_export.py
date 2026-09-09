@@ -23,7 +23,7 @@ _RGBA_TO_NAME = {
 }
 
 # /api/uploads/<hexsha>.<ext> — content-addressed, so the filename is a stable key.
-UPLOAD_RE = re.compile(r"/api/uploads/([0-9a-fA-F]+\.[A-Za-z0-9]+)")
+UPLOAD_RE = re.compile(r"/api/(?:uploads|assets)/([0-9a-fA-F]+\.[A-Za-z0-9]+)")
 
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -106,7 +106,17 @@ def _render_readable_block(node, depth, lines, highlights=True, notes=True):
     indent = "  " * depth
     emitted = False
 
-    if props.get("link_url"):
+    if props.get("type") == "pdf_ink" and highlights:
+        preview = props.get("preview_asset", "")
+        drawing = props.get("ink_asset", "")
+        if re.fullmatch(r"/api/assets/[0-9a-f]{64}\.png", preview):
+            lines.append(f"{indent}- ![Ink annotation]({preview})")
+            emitted = True
+        if re.fullmatch(r"/api/assets/[0-9a-f]{64}\.pkdrawing", drawing):
+            lines.append(f"{indent}  [Editable PencilKit drawing]({drawing})")
+        if content:
+            lines.extend(f"{indent}  {line}" for line in content.split("\n"))
+    elif props.get("link_url"):
         label = content or (props.get("quote") or "").strip() or props["link_url"]
         lines.append(f"{indent}- [{label}]({props['link_url']})")
         emitted = True

@@ -269,6 +269,7 @@ async def ub_create_block(payload: UBCreateRequest, request: Request):
 async def ub_update_block(block_id: str, payload: UBUpdateRequest, request: Request):
     now = page_now()
     with sqlite3.connect(user_db_path(require_user(request), "pages.db")) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT content, properties FROM unified_blocks WHERE id = ?", (block_id,)
         ).fetchone()
@@ -277,6 +278,14 @@ async def ub_update_block(block_id: str, payload: UBUpdateRequest, request: Requ
         sets = ["updated_at = ?"]
         values: list = [now]
         existing = json.loads(row[1] or "{}")
+        protected = set()
+        if existing.get("type") == "pdf_ink":
+            protected.update({"type", "ink_revision", "ink_asset", "preview_asset", "bounds",
+                              "crop_box", "coordinate_space", "pdf_page"})
+        if existing.get("native_note") is True:
+            protected.update({"native_note", "note_revision"})
+        if protected.intersection(payload.properties or {}):
+            raise HTTPException(status_code=409, detail="use the native ink/note endpoint for reserved properties")
         if payload.content is not None:
             sets.append("content = ?")
             values.append(payload.content)
@@ -284,6 +293,8 @@ async def ub_update_block(block_id: str, payload: UBUpdateRequest, request: Requ
             # the same transaction prevents a slow metadata lookup from
             # overwriting a rename that happened while it was in flight.
             existing.pop("auto_title", None)
+            if existing.get("native_note") is True and row[0] != payload.content:
+                existing["note_revision"] = existing.get("note_revision", 0) + 1
         if payload.properties is not None:
             existing.update(payload.properties)
         if payload.properties is not None or payload.content is not None:
