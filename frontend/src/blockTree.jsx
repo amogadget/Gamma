@@ -10,6 +10,7 @@ import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
 import { inkBlockPreview } from "./inkBlock.js";
 import { audioSegments, formatAudioDuration } from "./audioBlock.js";
+import { StaticInkPreview } from "./ReplayInkLayer.jsx";
 import { COLORS } from "./pdfViewer";
 import { handleMarkdownCopy } from "./widgets";
 import { isEnterCommit } from "./utils";
@@ -34,7 +35,7 @@ import { Trash2Icon } from "./icons";
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
 
-function AudioBlockPreview({ block }) {
+function AudioBlockPreview({ block, readOnly }) {
   const segments = audioSegments(block);
   if (!segments.length) return null;
   return <figure style={{ margin: "8px 0" }} aria-label="Audio recording">
@@ -42,18 +43,20 @@ function AudioBlockPreview({ block }) {
       <audio controls preload="metadata" src={s.url} />
       <span>{formatAudioDuration(s.duration)}</span>
     </div>)}
-    <figcaption style={{ fontSize: 12, color: "#555" }}>Audio · {formatAudioDuration(block.properties.duration)}</figcaption>
+    <figcaption style={{ fontSize: 12, color: "#555" }}>Audio · {formatAudioDuration(block.properties.duration)}
+      {!readOnly && <button className="uiBtn sm" style={{marginLeft:8}} onClick={() => window.dispatchEvent(new CustomEvent("gamma-start-replay", {detail:{blockID:block.id}}))}>Open Note Replay</button>}
+    </figcaption>
   </figure>;
 }
 
-function InkBlockPreview({ block }) {
+function InkBlockPreview({ block, data }) {
   const preview = inkBlockPreview(block);
   const [unavailable, setUnavailable] = useState(false);
   useEffect(() => setUnavailable(false), [preview?.url]);
   if (!preview) return null;
   return (
     <figure style={{ margin: "8px 0", padding: 8, background: "white", borderRadius: 6 }}>
-      {unavailable ? (
+      {data ? <StaticInkPreview data={data} /> : unavailable ? (
         <span style={{ color: "#555" }}>Handwriting preview unavailable. Sign in to the owning Gamma account.</span>
       ) : (
         <img
@@ -438,6 +441,8 @@ function AreaSnapshot({ block, captureArea, docNonce }) {
 
 function BlockRow({
   block,
+  inkPreviews,
+  onInkJump,
   _depth,
   focusedId,
   setFocusedId,
@@ -729,6 +734,7 @@ function BlockRow({
   }, [block.editMode]);
 
   const isHighlight = !!block.highlightId;
+  const isInk = block.properties?.type === "pdf_ink";
   const hasChildren = (block.children?.length || 0) > 0;
 
   function handleImageDragOver(e) {
@@ -923,6 +929,10 @@ function BlockRow({
           // not just the little colored dot. Ctrl+click appends the quote to
           // the chat selection, same as clicking the highlight on the PDF.
           if (block.highlightId) onJump?.(block.highlightId, e.ctrlKey || e.metaKey);
+          if (isInk) {
+            onInkJump?.(block.id);
+            if (e.target.closest("figure")) return;
+          }
           // Home page cards open on CLICK, not mousedown — mousedown may be
           // the start of a drag onto a folder, and navigating away mid-drag
           // would unmount the drop target.
@@ -958,7 +968,12 @@ function BlockRow({
         ) : (
           <span className="collapseSpacer" />
         )}
-        {isHighlight && !block.editMode ? (
+        {isInk ? (
+          <button className="collapseBtn dotSlot inkDotBtn" title="Jump to handwriting" aria-label="Jump to handwriting"
+            onClick={e => { e.stopPropagation(); onInkJump?.(block.id); }}>
+            <span className="inkDot" aria-hidden="true">✎</span>
+          </button>
+        ) : isHighlight && !block.editMode ? (
           <>
             <button
               className="collapseBtn highlightDotBtn dotSlot"
@@ -1263,8 +1278,8 @@ function BlockRow({
             </div>
           )}
 
-          <InkBlockPreview block={block} />
-           <AudioBlockPreview block={block} />
+          <InkBlockPreview block={block} data={inkPreviews?.[block.id]?.data} />
+           <AudioBlockPreview block={block} readOnly={readOnly} />
           {block.quote?.trim() ? <div className="blockQuote">{block.quote}</div> : null}
           {block.position?.area && captureArea ? (
             <AreaSnapshot block={block} captureArea={captureArea} docNonce={docNonce} />

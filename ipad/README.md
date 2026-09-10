@@ -2,11 +2,13 @@
 
 Native Gamma client for iPadOS 17+, Swift 5.9 / Xcode 15+, and XcodeGen 2.38+. **Sign in → the same Gamma library → the existing PDF page and Notes tree.** There is no Files-import library, local UUID document copy, or import sheet.
 
+**[统一设计总纲](../docs/design/handwriting-recording-ipad.md)**：手写、录音、双端 Replay、混合工作区、持久化与安全的完整设计；历史讨论中的未实现设想与现状分别标注。
+
 ## Use
 
 1. Enter your HTTPS Gamma server and account. The authenticated session stays alive while moving between library and reader. Only server URL and authenticated username are remembered; passwords/cookies are not persisted. Relaunch requires explicit login. A currently signed-in session can read cached documents and queue edits during a network outage.
-2. Open a PDF from Gamma’s library. Its original cached source is downloaded once without flattening or changing its document/page identity.
-3. Navigate to a PDF page and press **New Ink**. Multiple Pencil strokes belong to that one `pdf_ink` unified block, directly under the existing Gamma PDF page. New Ink is explicit; writing does not create one note per stroke.
+2. After sign-in, **Full Gamma** opens the actual Web workspace inside the app: the existing Markdown/math editor, block tree, search, AI, settings and import/export UI. Open a PDF there and choose **Pencil & Audio** to switch that same document to PDFKit/PencilKit; the original cached PDF is downloaded without changing its Gamma identity. **Full Gamma** returns after pending native changes sync and reloads the Web tree. See `WEB_PARITY.md` for the feature matrix and platform limits.
+3. In the native workspace, **Select text** enables PDFKit selection; long-press a passage, adjust the handles and choose a highlight color. It creates an ordinary Gamma highlight/note block. For handwriting, navigate to a PDF page and press **New Ink**. Multiple Pencil strokes belong to that one `pdf_ink` unified block, directly under the existing Gamma PDF page. New Ink is explicit; writing does not create one note per stroke.
 4. The **Notes** tree stays next to the PDF. Select an Ink block to edit its strokes; all other ink is read-only background. Edit the annotation’s own content in **Annotation note**, and add ordinary child notes with **Add Child Note**. Selecting an annotation navigates to its PDF page.
 5. **Saved on iPad / pending** is not a server success. The durable outbox retries every 15 seconds while signed in, on activation, and through **Retry Sync**. **Reload Notes** fetches the current remote subtree and editable sources. Revision conflicts stop that ink upload until explicitly choosing local or remote; choosing remote archives the old local source in the cache.
 
@@ -54,10 +56,10 @@ Configure DNS/TLS and confirm `https://gamma.example.com/api/health` works from 
 
 ### 2. Generate and build the iPad project
 
-Requirements: a Mac with full Xcode initialized, XcodeGen, an iPadOS 17+ device (or simulator), and a checkout containing `ipad/` (currently the `ipad-app` branch). Apple SDKs cannot be built on Linux.
+Requirements: a Mac with full Xcode initialized, XcodeGen, an iPadOS 17+ device (or simulator), and a current `main` checkout containing `ipad/`. Apple SDKs cannot be built on Linux.
 
 ```sh
-git clone --branch ipad-app https://github.com/amogadget/Gamma.git
+git clone https://github.com/amogadget/Gamma.git
 cd Gamma
 brew install xcodegen
 cd ipad

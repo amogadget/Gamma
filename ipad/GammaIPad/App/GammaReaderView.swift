@@ -16,6 +16,9 @@ struct GammaReaderView: View {
     @State private var showStatus = false
     @State private var collapsed = Set<String>()
     @State private var resumeAfterScrub = false
+    @State private var selectingText = false
+    @State private var textSelection: [GammaSelectedText] = []
+    @State private var selectionReset = 0
     @ObservedObject private var recorder: GammaRecordingController
     init(workspace: GammaWorkspace, paper: GammaPaper, document: PDFDocument) {
         self.workspace = workspace; self.paper = paper; self.document = document
@@ -29,6 +32,7 @@ struct GammaReaderView: View {
             VStack(spacing: 0) {
                 header(wide: wide)
                 if replaying { replayControls }
+                else if selectingText { selectionControls }
                 Rectangle().fill(GammaTheme.line).frame(height: 1)
                 HStack(spacing: 0) {
                     pdfSurface
@@ -83,6 +87,28 @@ struct GammaReaderView: View {
         return String(format: "%d:%02d", value / 60, value % 60)
     }
 
+    private var selectionControls: some View {
+        HStack(spacing: 12) {
+            Text(textSelection.isEmpty ? "Long-press text, then drag the selection handles" : "Highlight selected text")
+                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Spacer()
+            ForEach(["#ffe28f", "#aaebaa", "#9bcdff", "#e6b4ff"], id: \.self) { color in
+                Button {
+                    do {
+                        try workspace.createHighlights(textSelection, color: color)
+                        textSelection = []; selectionReset += 1
+                        Task { await workspace.sync() }
+                    } catch { localSaveError = error.localizedDescription }
+                } label: {
+                    Circle().fill(Color(uiColor: GammaPDFHighlight.uiColor(color).withAlphaComponent(1)))
+                        .frame(width: 25, height: 25).overlay(Circle().stroke(GammaTheme.line))
+                }.buttonStyle(.plain).disabled(textSelection.isEmpty || workspace.busy)
+                    .accessibilityLabel("Create \(color) highlight")
+            }
+            Button("Done") { selectingText = false; textSelection = []; selectionReset += 1 }.font(.caption)
+        }.padding(.horizontal, 14).frame(height: 40).background(GammaTheme.surface)
+    }
+
     private func header(wide: Bool) -> some View {
         HStack(spacing: 12) {
             iconButton("Library", symbol: "house") {
@@ -104,8 +130,14 @@ struct GammaReaderView: View {
                         Button("Retry sync") { Task { await workspace.retrySync() } }.disabled(workspace.syncing)
                     }.padding(20).frame(width: 320).presentationCompactAdaptation(.popover)
                 }
+            iconButton("Select text", symbol: "text.cursor", active: selectingText) {
+                selectingText.toggle(); textSelection = []; selectionReset += 1
+            }.disabled(replaying || workspace.busy)
             GammaRecordingButton(workspace: workspace, recorder: workspace.recorder)
-            Button { perform { try workspace.newInk(pdfPage: currentPage + 1) }; pencil = true } label: {
+            Button {
+                selectingText = false; textSelection = []; selectionReset += 1
+                perform { try workspace.newInk(pdfPage: currentPage + 1) }; pencil = true
+            } label: {
                 Label("New ink", systemImage: "pencil.tip.crop.circle.badge.plus").font(.system(size: 12, weight: .medium))
                     .padding(.horizontal, 10).frame(height: 32)
                     .background(GammaTheme.accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 6))
@@ -129,7 +161,7 @@ struct GammaReaderView: View {
                     localSaveError = nil
                 } catch { localSaveError = error.localizedDescription; throw error }
             }, onError: { localSaveError = $0 },
-            isDrawing: pencil && inkID != nil && !workspace.busy && !replaying,
+            isDrawing: pencil && inkID != nil && !workspace.busy && !replaying && !selectingText,
             backgroundDrawing: { try workspace.background(excluding: inkID, pdfPage: $0) },
             editablePage: workspace.selectedInkPage, contentRevision: workspace.contentRevision,
             onPageChanged: { currentPage = $0; workspace.pageNavigated($0 + 1) }, requestedPage: requestedPage,
@@ -157,7 +189,9 @@ struct GammaReaderView: View {
             replayActive: replaying,
             replayDrawing: { workspace.replayDrawing(pdfPage: $0) },
             replayHitTest: { workspace.replaySeek(at: $1, pdfPage: $0, tolerance: $2) },
-            onReplaySeek: { time in recorder.seek(to: time); recorder.resumePlayback(); followReplayPage() })
+            onReplaySeek: { time in recorder.seek(to: time); recorder.resumePlayback(); followReplayPage() },
+            textSelectionEnabled: selectingText && !replaying, selectionReset: selectionReset,
+            onTextSelection: { textSelection = $0 })
     }
 
     private var notes: some View {

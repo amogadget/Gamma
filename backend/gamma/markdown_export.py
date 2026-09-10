@@ -120,6 +120,9 @@ def _render_readable_block(node, depth, lines, highlights=True, notes=True):
             emitted = True
         if re.fullmatch(r"/api/assets/[0-9a-f]{64}\.pkdrawing", drawing):
             lines.append(f"{indent}  [Editable PencilKit drawing]({drawing})")
+        replay = props.get("replay_asset", "")
+        if re.fullmatch(r"/api/assets/[0-9a-f]{64}\.inkjson", replay):
+            lines.append(f"{indent}  [Ink replay]({replay})")
         if content:
             lines.extend(f"{indent}  {line}" for line in content.split("\n"))
     elif props.get("link_url"):

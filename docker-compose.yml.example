@@ -1,7 +1,7 @@
 services:
   gamma:
     container_name: gamma
-    image: ghcr.io/tim4431/gamma:latest
+    image: ghcr.io/amogadget/gamma:latest
     build: .
     ports:
       - "9001:9001"

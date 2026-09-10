@@ -1,5 +1,7 @@
 # Gamma iPad 客户端设计讨论记录
 
+> **历史讨论记录，非当前实现清单。** import-only、纯原生 UI、完整擦除/undo 历史等段落包含当时的设想或已被替代的方案。当前统一设计、已实现边界及后续路线请看 [手写、录音、Note Replay 与 iPad 统一设计](docs/design/handwriting-recording-ipad.md)。
+
 ## 1. 最初目标：一个极简的 iPad Notability alternative
 
 最开始的设想是做一个 iPad 上非常克制的 Notability 替代品，不追求复杂功能，只保留最核心的几件事：

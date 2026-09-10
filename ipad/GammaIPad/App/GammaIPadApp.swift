@@ -14,15 +14,55 @@ struct GammaRootView: View {
     @State private var server = UserDefaults.standard.string(forKey: "gamma.server") ?? ""
     @State private var username = UserDefaults.standard.string(forKey: "gamma.username") ?? ""
     @State private var password = ""
+    @State private var useWeb = true
+    @State private var webReloadToken: UUID?
 
     var body: some View {
         Group {
             if workspace.username == nil { signIn }
-            else if let paper = workspace.paper, let document = workspace.document {
-                GammaReaderView(workspace: workspace, paper: paper, document: document)
-            } else { library }
+            else {
+                ZStack {
+                    if let session = workspace.webSession {
+                        GammaWebWorkspace(serverURL: session.serverURL, cookies: session.cookies,
+                            sessionID: session.id, reloadToken: webReloadToken,
+                            onOpenPDF: { request, cookies in
+                                Task {
+                                    if await workspace.openFromWeb(request, cookies: cookies) { useWeb = false }
+                                    else { webReloadToken = UUID() }
+                                }
+                            }, onError: { workspace.errorMessage = $0 })
+                            .id(session.id).opacity(useWeb ? 1 : 0).allowsHitTesting(useWeb && !workspace.busy)
+                            .accessibilityHidden(!useWeb)
+                    }
+                    if !useWeb || workspace.webSession == nil {
+                        VStack(spacing: 0) {
+                            HStack {
+                                Button { Task {
+                                    if await workspace.prepareWebWorkspace() { webReloadToken = UUID(); useWeb = true }
+                                } } label: { Label("Full Gamma", systemImage: "chevron.left") }
+                                .font(.caption).disabled(workspace.busy || workspace.syncing)
+                                Spacer()
+                                Text("Pencil · Recording · Replay").font(.caption2).foregroundStyle(.secondary)
+                            }.padding(.horizontal, 14).frame(height: 34).background(GammaTheme.surface)
+                            if let paper = workspace.paper, let document = workspace.document {
+                                GammaReaderView(workspace: workspace, paper: paper, document: document)
+                            } else { library }
+                        }
+                    }
+                }
+                .overlay(alignment: .bottom) {
+                    if useWeb, workspace.webSession != nil, let error = workspace.errorMessage {
+                        HStack {
+                            Text(error).font(.caption).lineLimit(3)
+                            Spacer()
+                            Button("Dismiss") { workspace.errorMessage = nil }.font(.caption)
+                        }.padding(12).background(.regularMaterial)
+                    }
+                }
+            }
         }
         .tint(GammaTheme.accent)
+        .onChange(of: workspace.webSession?.id) { _, id in if id != nil { useWeb = true } }
         .task(id: workspace.username) {
             guard workspace.username != nil else { return }
             while !Task.isCancelled {

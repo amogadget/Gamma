@@ -281,7 +281,7 @@ async def ub_update_block(block_id: str, payload: UBUpdateRequest, request: Requ
         protected = set()
         if existing.get("type") == "pdf_ink":
             protected.update({"type", "ink_revision", "ink_asset", "preview_asset", "bounds",
-                              "crop_box", "coordinate_space", "pdf_page"})
+                              "crop_box", "coordinate_space", "pdf_page", "replay_asset"})
         if existing.get("native_note") is True:
             protected.update({"native_note", "note_revision"})
         if existing.get("type") == "audio":
@@ -357,8 +357,31 @@ async def ub_put_children(block_id: str, payload: UBPutChildrenRequest, request:
     flatten_tree(payload.blocks, block_id, rows, now)
     user = require_user(request)
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="block not found")
+        # Web edits text/tree structure, not native source manifests. Preserve
+        # the current native fields so a stale Web autosave cannot roll back a
+        # recording timeline or discard a newly backfilled replay preview.
+        for row in rows:
+            old = conn.execute("SELECT properties FROM unified_blocks WHERE id = ?", (row["id"],)).fetchone()
+            if not old:
+                continue
+            previous = json.loads(old[0] or "{}")
+            native_type = previous.get("type")
+            if native_type == "pdf_ink":
+                keys = {"type", "ink_asset", "preview_asset", "replay_asset", "ink_revision", "pdf_page", "bounds", "crop_box", "coordinate_space"}
+            elif native_type == "audio":
+                keys = {"type", "segments", "duration", "audio_state", "audio_revision", "replay_events"}
+            else:
+                continue
+            incoming = json.loads(row["properties"] or "{}")
+            for key in keys:
+                if key in previous:
+                    incoming[key] = previous[key]
+                else:
+                    incoming.pop(key, None)
+            row["properties"] = json.dumps(incoming)
         delete_children(conn, block_id)
         for r in rows:
             conn.execute(

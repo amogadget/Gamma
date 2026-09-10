@@ -18,6 +18,8 @@ targets:
     platform: iOS
     sources:
       - path: GammaIPad
+        excludes:
+          - "**/*.md"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.gamma.pdfnotes.ipad
@@ -25,6 +27,8 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Gamma
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Record audio notes linked to your Gamma document when you tap Record.
+        INFOPLIST_KEY_NSCameraUsageDescription: Take a photo to attach to a Gamma note when you choose Camera.
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: Select images to attach to Gamma notes when you choose them.
         INFOPLIST_KEY_LSRequiresIPhoneOS: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES

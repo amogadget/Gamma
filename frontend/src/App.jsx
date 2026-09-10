@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS, clampZoom } from "./pdfViewer";
 import { blocksToPdfInk } from "./inkBlock.js";
+import { nativePDFRequest } from "./nativeBridge.js";
+import NoteReplayPlayer, { useReplayAssets } from "./NoteReplayPlayer.jsx";
 import {
   API,
   apiJson,
@@ -3767,11 +3769,13 @@ export default function App() {
   // page id they belong to) and flushed on navigation; failures retry so a
   // briefly unreachable server doesn't eat them either.
   const pendingSaveRef = useRef(null); // {pageId, blocks, attempts}
+  const inFlightSavesRef = useRef(new Set());
   function savePending() {
+    if (window.__GAMMA_NATIVE_ACTIVE__) return Promise.resolve();
     const p = pendingSaveRef.current;
-    if (!p) return;
+    if (!p) return Promise.all([...inFlightSavesRef.current]);
     pendingSaveRef.current = null;
-    apiJson(`${API}/blocks/${p.pageId}/children`, {
+    const request = apiJson(`${API}/blocks/${p.pageId}/children`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ blocks: p.blocks }),
@@ -3784,8 +3788,12 @@ export default function App() {
         setTimeout(savePending, 3000);
       } else {
         setStatus(`Save failed: ${err.message}`);
+        pendingSaveRef.current = { ...p, attempts };
       }
     });
+    inFlightSavesRef.current.add(request);
+    void request.finally(() => inFlightSavesRef.current.delete(request));
+    return request;
   }
   // Persist queued edits NOW — called before anything replaces the block tree.
   function flushPendingSave() {
@@ -3793,7 +3801,38 @@ export default function App() {
       clearTimeout(autosaveTimerRef.current);
       autosaveTimerRef.current = null;
     }
-    savePending();
+    return savePending();
+  }
+  async function openInNativeReader() {
+    const bridge = window.webkit?.messageHandlers?.gammaNative;
+    if (!bridge || readOnly || !docId || !focusedBlockId) return;
+    try {
+      const pageID = focusedBlockId;
+      setStatus("Saving notes before opening Pencil…");
+      await flushPendingSave();
+      await Promise.all([...inFlightSavesRef.current]);
+      if (pendingSaveRef.current || inFlightSavesRef.current.size || focusedBlockIdRef.current !== pageID) {
+        throw new Error("Notes changed or are not saved yet. Wait for sync and try again.");
+      }
+      const session = await apiJson(`${API}/session`);
+      if (!session.user || session.user !== sessionUser) throw new Error("The Gamma account changed. Reload before opening Pencil.");
+      if (pendingSaveRef.current || inFlightSavesRef.current.size || focusedBlockIdRef.current !== pageID) throw new Error("Notes changed during handoff. Please try again after saving.");
+      const request = nativePDFRequest({pageID, docID: docId, title: pdfTitle, user: session.user});
+      if (!request) throw new Error("Invalid Gamma document identity.");
+      // Freeze editing after the final save check. The native workspace returns
+      // through a reload, so this old tree cannot enqueue edits while hidden.
+      const root = document.getElementById("root");
+      if (root) root.inert = true;
+      window.__GAMMA_NATIVE_ACTIVE__ = true;
+      setReplayBlockID(null);
+      bridge.postMessage(request);
+      setStatus("Opened in Pencil workspace");
+    } catch (error) {
+      const root = document.getElementById("root");
+      if (root) root.inert = false;
+      window.__GAMMA_NATIVE_ACTIVE__ = false;
+      setStatus(error.message);
+    }
   }
   useEffect(() => {
     if (readOnly || !focusedBlockId) return;
@@ -3812,6 +3851,7 @@ export default function App() {
   // Closing/reloading the tab: best-effort keepalive save of queued edits.
   useEffect(() => {
     const flush = () => {
+      if (window.__GAMMA_NATIVE_ACTIVE__) return;
       const p = pendingSaveRef.current;
       if (!p) return;
       pendingSaveRef.current = null;
@@ -5766,6 +5806,34 @@ export default function App() {
   // content is identical keeps the viewer's per-page memo effective (otherwise
   // each keystroke re-rendered every PdfPage's overlays).
   const inkBlocks = useMemo(() => blocksToPdfInk(blocks), [blocks]);
+  const [replayBlockID, setReplayBlockID] = useState(null);
+  const [replayFrame, setReplayFrame] = useState(null);
+  const [replaySeekRequest, setReplaySeekRequest] = useState(null);
+  const [inkJumpRequest, setInkJumpRequest] = useState(null);
+  const jumpToInk = useCallback(id => {
+    setFocusedId(id);
+    setPdfHidden(false);
+    if (!pdfUrl && docId) setPdfUrl(`${API}/uploads/${encodeURIComponent(docId)}.pdf`);
+    setInkJumpRequest({id,nonce:performance.now()});
+  }, [pdfUrl,docId]);
+  const replayBlock = useMemo(() => flattenBlocks(blocks).find(b => b.id === replayBlockID && b.properties?.type === "audio") ?? null, [blocks, replayBlockID]);
+  const replayAssets = useReplayAssets(inkBlocks, !readOnly && focusedBlockId && sessionUser ? `${sessionUser}:${focusedBlockId}` : null);
+  const replay = replayBlock && replayFrame?.recordingID === replayBlock.id ? {...replayFrame, assets: replayAssets} : null;
+  const updateReplayFrame = useCallback(frame => setReplayFrame(frame), []);
+  const seekReplay = useCallback(time => setReplaySeekRequest({recordingID: replayBlockID, time, nonce: performance.now()}), [replayBlockID]);
+  useEffect(() => {
+    const start = event => {
+      if (readOnly || !docId) return;
+      const block = flattenBlocks(blocksRef.current).find(b => b.id === event.detail?.blockID && b.properties?.type === "audio");
+      if (!block || block.id === replayBlockID) return;
+      document.querySelectorAll("audio").forEach(audio => audio.pause());
+      setReplayFrame(null); setReplaySeekRequest(null); setReplayBlockID(block.id); setPdfHidden(false);
+      if (!pdfUrl) setPdfUrl(`${API}/uploads/${encodeURIComponent(docId)}.pdf`);
+    };
+    window.addEventListener("gamma-start-replay", start);
+    return () => window.removeEventListener("gamma-start-replay", start);
+  }, [readOnly, docId, pdfUrl, replayBlockID]);
+  useEffect(() => { setReplayBlockID(null); setReplayFrame(null); setInkJumpRequest(null); }, [focusedBlockId, sessionUser]);
   const prevHighlightsRef = useRef({ json: "", value: [] });
   const highlights = useMemo(() => {
     const byHlId = new Map();
@@ -7063,6 +7131,8 @@ export default function App() {
         ) : (
           (() => {
             const rowProps = {
+              inkPreviews: replayAssets,
+              onInkJump: jumpToInk,
               homeMode,
               focusedId,
               setFocusedId,
@@ -8002,6 +8072,8 @@ export default function App() {
         </ContextMenu>
       )}
 
+      {replayBlock && <NoteReplayPlayer key={replayBlock.id} block={replayBlock} inkBlocks={inkBlocks} assets={replayAssets}
+        onFrame={updateReplayFrame} onClose={() => { setReplayBlockID(null); setReplayFrame(null); }} seekRequest={replaySeekRequest} />}
       <div className="workArea">
         <PanelGroup
           direction="horizontal"
@@ -8140,6 +8212,13 @@ export default function App() {
                         ) : null}
                       </div>
                     ) : null}
+                    {pdfUrl && !pdfHidden && !readOnly && window.__GAMMA_IPAD__ ? (
+                      <div className="pdfCtlBox" style={{ position: "absolute", top: 12, right: 12, zIndex: 20 }}>
+                        <button onClick={openInNativeReader} aria-label="Open Pencil, recording and Replay" title="Open this Gamma PDF in the native Pencil workspace" style={{ width: "auto", padding: "0 10px" }}>
+                          Pencil &amp; Audio
+                        </button>
+                      </div>
+                    ) : null}
                     {pdfUrl && !pdfHidden ? (
                       <div className="pdfCtlBox pdfFullscreenBox">
                         <button
@@ -8164,6 +8243,10 @@ export default function App() {
                         url={pdfUrl}
                         highlights={highlights}
                         inkBlocks={inkBlocks}
+                        replay={replay}
+                        inkPreviews={replayAssets}
+                        inkJumpRequest={inkJumpRequest}
+                        onReplaySeek={seekReplay}
                         noteBadges={hlNoteBadges}
                         hideEmbeddedAnnots={embAnnots === "hide"}
                         snapVertical={snapVertical}

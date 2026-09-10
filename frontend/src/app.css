@@ -4695,3 +4695,21 @@ button.pdfOutlineChevron:hover {
 /* secondary danger (e.g. the confirm dialog's alternative action): outlined red */
 .uiBtn.dangerBtn:not(.primary) { color: var(--danger); border-color: var(--danger-border); }
 .uiBtn.dangerBtn:not(.primary):hover:not(:disabled) { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
+
+.inkDot { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border: 1px solid currentColor; border-radius: 4px; color: #66869c; font-size: 13px; line-height: 1; }
+.inkDotBtn:hover .inkDot { color: var(--text); background: var(--bg-input); }
+.inkJumpFlash { outline: 2px solid #66869c; outline-offset: 4px; border-radius: 3px; background: rgba(102,134,156,.10); animation: inkJumpPulse 1.8s ease-out; }
+@keyframes inkJumpPulse { from { opacity: 1; } to { opacity: 0; } }
+
+.noteReplayBar { flex: 0 0 auto; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg-input); }
+.noteReplayControls { display: flex; align-items: center; gap: 8px; }
+.noteReplayControls strong { font-size: 10px; letter-spacing: .08em; white-space: nowrap; }
+.noteReplayControls input[type="range"] { min-width: 70px; flex: 1; }
+.noteReplayControls > span { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.noteReplayMessage { margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+.noteReplayMessage label { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; }
+.pdfDark .pdfReplayInk, .pdfDark .pdfStaticInk { filter: invert(0.94) hue-rotate(180deg); }
+@media (max-width: 600px) {
+  .noteReplayControls { flex-wrap: wrap; }
+  .noteReplayControls input[type="range"] { min-width: 120px; }
+}

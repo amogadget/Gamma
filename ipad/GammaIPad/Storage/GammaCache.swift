@@ -3,7 +3,7 @@ import CryptoKit
 import PencilKit
 
 struct GammaMutation: Codable, Identifiable, Equatable {
-    enum Kind: String, Codable { case ink, content, child, audio }
+    enum Kind: String, Codable { case ink, content, child, audio, highlight, inkPreview }
     var id: String = UUID().uuidString
     var kind: Kind
     var blockID: String
@@ -14,6 +14,9 @@ struct GammaMutation: Codable, Identifiable, Equatable {
     var revision: Int = 0
     var conflict: Bool = false
     var audioSession: GammaRecordingSession?
+    var highlight: GammaSelectedText?
+    var highlightColor: String?
+    var sourceAsset: String?
 }
 
 struct GammaPageCache: Codable {
@@ -23,6 +26,7 @@ struct GammaPageCache: Codable {
     var drawings: [String: Data] = [:]
     var outbox: [GammaMutation] = []
     var recordings: [String: GammaRecordingSession]?
+    var replayPreviewSkippedSources: [String: String]?
 }
 
 /// Atomic snapshots include both editable source and its pending operation. A

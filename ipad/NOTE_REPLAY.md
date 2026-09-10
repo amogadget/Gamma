@@ -35,4 +35,4 @@ Ink coordinates stay unchanged. Playback uses a separate read-only canvas, with 
 
 The final GUI-session build exited 0, strict signature verification passed, and the app was installed and launched on the connected iPad (installation sequence 1756).
 
-These tests use framework-generated strokes/audio and deterministic gesture callbacks, not physical Pencil touch synthesis. Long real recording-plus-handwriting sessions, touch arbitration and actual on-device performance still need user acceptance. No Phase 5B exact edit-history replay, Web replay player, automatic iPad source push or new GitHub release is included.
+These tests use framework-generated strokes/audio and deterministic gesture callbacks, not physical Pencil touch synthesis. Long real recording-plus-handwriting sessions, touch arbitration and actual on-device performance still need user acceptance. No Phase 5B exact edit-history replay is included. Browser Note Replay has subsequently been implemented using per-stroke display assets; see `../docs/dev/note-replay.md`. Updating iPad and opening a document backfills existing ink previews without changing ink revisions or fabricating old audio timing.

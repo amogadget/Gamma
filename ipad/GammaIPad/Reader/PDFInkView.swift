@@ -30,6 +30,9 @@ struct PDFInkView: UIViewRepresentable {
     var replayDrawing: (Int) -> PKDrawing? = { _ in nil }
     var replayHitTest: (Int, CGPoint, CGFloat) -> Double? = { _, _, _ in nil }
     var onReplaySeek: (Double) -> Void = { _ in }
+    var textSelectionEnabled = false
+    var selectionReset = 0
+    var onTextSelection: ([GammaSelectedText]) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -109,6 +112,7 @@ struct PDFInkView: UIViewRepresentable {
         func attach(_ view: InkPDFView) {
             self.view = view
             view.pageOverlayViewProvider = self
+            NotificationCenter.default.addObserver(self, selector: #selector(textSelectionChanged), name: .PDFViewSelectionChanged, object: view)
             view.addGestureRecognizer(pencilSelectionTap)
             view.onLayout = { [weak self] in self?.updateGeometry() }
             NotificationCenter.default.addObserver(self, selector: #selector(scaleChanged),
@@ -128,6 +132,7 @@ struct PDFInkView: UIViewRepresentable {
                 || configuration?.contentRevision != value.contentRevision
                 || configuration?.editablePage != value.editablePage
             let navigationChanged = documentChanged || configuration?.requestedPage != value.requestedPage
+            let resetSelection = configuration?.selectionReset != value.selectionReset || configuration?.textSelectionEnabled != value.textSelectionEnabled
             if snapshotsChanged || configuration?.isDrawing != value.isDrawing {
                 // Flush while the OLD selection/configuration is still installed.
                 // A failed write leaves all snapshots and callbacks intact for retry.
@@ -156,8 +161,11 @@ struct PDFInkView: UIViewRepresentable {
             } else {
                 configuration = value
             }
+            let markup = !value.textSelectionEnabled || value.replayActive
+            if view.isInMarkupMode != markup { view.isInMarkupMode = markup }
+            if resetSelection { view.clearSelection() }
             for state in states.values {
-                state.overlay.acceptsInk = state.loaded && state.writable && value.isDrawing && !value.replayActive
+                state.overlay.acceptsInk = state.loaded && state.writable && value.isDrawing && !value.replayActive && !value.textSelectionEnabled
             }
             if navigationChanged || value.replayActive, let index = value.requestedPage,
                index >= 0, index < value.document.pageCount,
@@ -234,7 +242,7 @@ struct PDFInkView: UIViewRepresentable {
             // in the previously selected annotation. Ordinary writing fails
             // this recognizer immediately in shouldReceive below.
             overlay.canvas.drawingGestureRecognizer.require(toFail: pencilSelectionTap)
-            overlay.acceptsInk = loaded && writable && configuration.isDrawing && !configuration.replayActive
+            overlay.acceptsInk = loaded && writable && configuration.isDrawing && !configuration.replayActive && !configuration.textSelectionEnabled
             overlay.onGeometryError = { [weak self, weak state] in
                 guard let self, let state, !state.geometryErrorReported else { return }
                 state.geometryErrorReported = true
@@ -369,7 +377,7 @@ struct PDFInkView: UIViewRepresentable {
 
         func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
             guard gestureRecognizer === pencilSelectionTap,
-                  let view, let configuration,
+                  let view, let configuration, !configuration.textSelectionEnabled,
                   touch.type == .pencil || (configuration.replayActive && touch.type == .direct) else { return false }
             selectionTarget = nil; replaySeekTarget = nil
             let location = touch.location(in: view)
@@ -402,6 +410,16 @@ struct PDFInkView: UIViewRepresentable {
                 return
             }
             configuration?.onSelectInk(id)
+        }
+
+        @objc private func textSelectionChanged() {
+            guard let view, let configuration, configuration.textSelectionEnabled else { return }
+            let selection = GammaTextSelection.highlights(from: view.currentSelection, in: view)
+            let callback = configuration.onTextSelection
+            DispatchQueue.main.async { [weak self] in
+                guard self?.alive == true, self?.configuration?.textSelectionEnabled == true else { return }
+                callback(selection)
+            }
         }
 
         @objc private func pageChanged() {

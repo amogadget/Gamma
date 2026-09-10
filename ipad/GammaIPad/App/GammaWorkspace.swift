@@ -17,6 +17,7 @@ final class GammaWorkspace: ObservableObject {
     @Published var busy = false
     @Published var syncing = false
     @Published var syncUnavailable = false
+    @Published var webSession: GammaWebSession?
     private var api: GammaAPI?
     private var cache: GammaCache?
     private var accountGeneration = UUID()
@@ -57,14 +58,56 @@ final class GammaWorkspace: ObservableObject {
             await refreshLibrary()
             busy = false
             await sync()
+            if (try? storage.pendingPages().flatMap(\.outbox).filter({ $0.kind != .inkPreview }).isEmpty) == true {
+                webSession = GammaWebSession(id: UUID(), serverURL: client.baseURL, cookies: client.sessionCookies())
+            }
         } catch { candidate?.close(); errorMessage = error.localizedDescription }
     }
     func signOut() async {
         guard !syncing, !busy, recorder.pauseBeforeLeaving() else { return }
         accountGeneration = UUID()
         await api?.logout(); api?.close(); api = nil; cache = nil
+        webSession = nil
         username = nil; papers = []; recentPageIDs = []; closeReader(); status = "Signed out. Cached data and pending changes are preserved for this account."
     }
+    func prepareWebWorkspace() async -> Bool {
+        guard !busy, !syncing, recorder.pauseBeforeLeaving(), let api, let cache else { return false }
+        await retrySync()
+        do {
+            guard try cache.pendingPages().flatMap(\.outbox).filter({ $0.kind != .inkPreview }).isEmpty else {
+                errorMessage = "Sync or resolve pending native changes before returning to the Web editor, to avoid a stale tree overwriting them."
+                return false
+            }
+            closeReader()
+            if webSession == nil { webSession = GammaWebSession(id: UUID(), serverURL: api.baseURL, cookies: api.sessionCookies()) }
+            return true
+        } catch { errorMessage = error.localizedDescription; return false }
+    }
+    func openFromWeb(_ request: GammaWebOpenRequest, cookies: [HTTPCookie]) async -> Bool {
+        guard !busy, !syncing, recorder.pauseBeforeLeaving(), let server = webSession?.serverURL else { return false }
+        busy = true
+        var candidate: GammaAPI?
+        do {
+            if let cache, !(try cache.pendingPages().flatMap(\.outbox).filter({ $0.kind != .inkPreview }).isEmpty) {
+                throw GammaAPI.APIError.message("Pending native changes must sync before changing Web/native session.")
+            }
+            let client = try GammaAPI(server: server.absoluteString); candidate = client
+            let user = try await client.adoptWebSession(cookies: cookies)
+            guard user == request.user else { throw GammaAPI.APIError.message("The Web account changed during handoff. Please try again.") }
+            let remote = try await client.subtree(request.pageID)
+            guard remote.id == request.pageID, remote.parentID == "root", remote.properties.docID == request.docID else {
+                throw GammaAPI.APIError.message("Gamma document identity changed. Reload it before opening Pencil mode.")
+            }
+            let storage = try GammaCache.application(server: client.baseURL, username: user)
+            let library = try storage.library(), recent = try storage.recentPageIDs()
+            api?.close(); api = client; cache = storage; username = user
+            accountGeneration = UUID(); papers = library; recentPageIDs = recent
+            busy = false
+            await open(remote)
+            return paper?.id == request.pageID && document != nil
+        } catch { candidate?.close(); busy = false; errorMessage = error.localizedDescription; return false }
+    }
+
     func startRecording(resuming id: String? = nil) async {
         guard !busy, let cache, let original = page, !recorder.recording else { return }
         busy = true; defer { busy = false }
@@ -327,6 +370,21 @@ final class GammaWorkspace: ObservableObject {
         try persist(snapshot)
         pendingInkTiming.removeValue(forKey: blockID)
     }
+    func createHighlights(_ selections: [GammaSelectedText], color: String) throws {
+        guard var snapshot = page, let document else { return }
+        var last: String?
+        for selection in selections where selection.page >= 1 && selection.page <= document.pageCount && !selection.quote.isEmpty {
+            let id = UUID().uuidString.lowercased()
+            snapshot.blocks.append(GammaBlock(id: id, parentID: snapshot.pageID, content: "", properties:
+                GammaProperties(pdfPage: selection.page, highlightID: id, quote: selection.quote, color: color, pdfPosition: selection.position)))
+            snapshot.outbox.append(GammaMutation(kind: .highlight, blockID: id, parentID: snapshot.pageID,
+                highlight: selection, highlightColor: color))
+            last = id
+        }
+        try persist(snapshot)
+        if let last { select(last) }
+    }
+
     func newInk(pdfPage: Int) throws {
         guard var snapshot = page, let document, (1...document.pageCount).contains(pdfPage) else { return }
         let id = UUID().uuidString.lowercased() // The server's permanent unified-block ID, NOT a new document/library.
@@ -416,6 +474,13 @@ final class GammaWorkspace: ObservableObject {
                 segments: block.properties.segments ?? [], revision: block.properties.audioRevision ?? 0,
                 replayEvents: block.properties.replayEvents)
         }
+        for block in result.blocks where block.isInk && block.properties.replayAsset == nil {
+            guard let source = block.properties.inkAsset, let data = result.drawings[block.id], let pdfPage = block.properties.pdfPage,
+                  result.replayPreviewSkippedSources?[block.id] != source,
+                  !result.outbox.contains(where: { $0.blockID == block.id && ($0.kind == .ink || $0.kind == .inkPreview) }) else { continue }
+            result.outbox.append(GammaMutation(kind: .inkPreview, blockID: block.id, parentID: original.pageID,
+                drawing: data, pdfPage: pdfPage, sourceAsset: source))
+        }
         return result
     }
 
@@ -432,7 +497,7 @@ final class GammaWorkspace: ObservableObject {
             return seen.count
         }
         func priority(_ kind: GammaMutation.Kind) -> Int {
-            switch kind { case .ink, .audio: return 0; case .child: return 1; case .content: return 2 }
+            switch kind { case .ink, .audio, .highlight: return 0; case .child: return 1; case .content: return 2; case .inkPreview: return 3 }
         }
         return snapshot.outbox.enumerated().sorted { a, b in
             let left = (priority(a.element.kind), depth(a.element.blockID), a.offset)
@@ -464,7 +529,22 @@ final class GammaWorkspace: ObservableObject {
                     guard let operation = snapshot.outbox.first(where: { $0.id == queued.id }), !operation.conflict else { continue }
                     do {
                         var returnedBlock: GammaBlock?
+                        var previewUnsupported = false
+                        var previewPending = false
                         switch operation.kind {
+                        case .inkPreview:
+                            guard let block = snapshot.blocks.first(where: { $0.id == operation.blockID }),
+                                  block.properties.inkAsset == operation.sourceAsset, block.properties.replayAsset == nil,
+                                  let source = operation.drawing, let sourceAsset = operation.sourceAsset, let pdfPage = operation.pdfPage else {
+                                snapshot.outbox.removeAll { $0.id == operation.id }; try persist(snapshot); continue
+                            }
+                            guard let pdf = PDFDocument(url: cache.sourceURL(docID: original.docID)), let page = pdf.page(at: pdfPage - 1) else { throw NoteStoreError.missingSource }
+                            let data = try GammaWebInkExport.encode(drawing: PKDrawing(data: source), sourceData: source, pageSize: page.bounds(for: .cropBox).size)
+                            let asset = try await api.upload(data: data, fileExtension: "inkjson", mime: "application/json")
+                            returnedBlock = try await api.setReplayPreview(id: operation.blockID, inkAsset: sourceAsset, replayAsset: asset)
+                        case .highlight:
+                            guard let selection = operation.highlight, let color = operation.highlightColor else { throw CocoaError(.fileReadCorruptFile) }
+                            returnedBlock = try await api.createHighlight(id: operation.blockID, parent: operation.parentID, selection: selection, color: color)
                         case .audio:
                             guard let recording = operation.audioSession else { throw CocoaError(.fileReadCorruptFile) }
                             var segments = recording.segments
@@ -492,13 +572,26 @@ final class GammaWorkspace: ObservableObject {
                             guard let preview = drawing.image(from: rect, scale: min(1, 2048 / max(rect.width, rect.height))).pngData() else { throw GammaAPI.APIError.message("Unable to encode ink preview.") }
                             let ink = try await api.upload(data: source, fileExtension: "pkdrawing", mime: "application/octet-stream")
                             let png = try await api.upload(data: preview, fileExtension: "png", mime: "image/png")
-                            returnedBlock = try await api.putInk(id: operation.blockID, body: [
+                            var replayAsset: String?
+                            do {
+                                let replayData = try GammaWebInkExport.encode(drawing: drawing, sourceData: source, pageSize: crop.size)
+                                replayAsset = try await api.upload(data: replayData, fileExtension: "inkjson", mime: "application/json")
+                            } catch let error as GammaWebInkExport.ExportError {
+                                previewUnsupported = true
+                                errorMessage = "Editable ink is preserved, but browser replay preview is unavailable: \(error.localizedDescription)"
+                            } catch {
+                                previewPending = true
+                                errorMessage = "Browser replay preview upload is pending; syncing editable ink first. \(error.localizedDescription)"
+                            }
+                            var body: [String: Any] = [
                                 "parent_id": operation.parentID, "pdf_page": pdfPage,
                                 "ink_asset": ink, "preview_asset": png, "expected_revision": operation.revision,
                                 "bounds": ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height],
                                 "crop_box": ["width": crop.width, "height": crop.height],
                                 "coordinate_space": "pdf-crop-top-left-v1"
-                            ])
+                            ]
+                            if let replayAsset { body["replay_asset"] = replayAsset }
+                            returnedBlock = try await api.putInk(id: operation.blockID, body: body)
                         case .content:
                             try await api.updateContent(id: operation.blockID, content: operation.content)
                         case .child:
@@ -507,7 +600,20 @@ final class GammaWorkspace: ObservableObject {
                         }
                         snapshot = try latest(original, cache: cache)
                         if let remote = returnedBlock {
-                            if operation.kind == .audio {
+                            if previewPending, let source = operation.drawing, let sourceAsset = remote.properties.inkAsset {
+                                enqueue(GammaMutation(kind: .inkPreview, blockID: remote.id, parentID: operation.parentID,
+                                    drawing: source, pdfPage: operation.pdfPage, sourceAsset: sourceAsset), in: &snapshot)
+                            }
+                            if previewUnsupported {
+                                if snapshot.replayPreviewSkippedSources == nil { snapshot.replayPreviewSkippedSources = [:] }
+                                snapshot.replayPreviewSkippedSources?[remote.id] = remote.properties.inkAsset
+                            }
+                            if operation.kind == .inkPreview {
+                                if let i = snapshot.blocks.firstIndex(where: { $0.id == remote.id }),
+                                   snapshot.blocks[i].properties.inkAsset == remote.properties.inkAsset {
+                                    snapshot.blocks[i].properties.replayAsset = remote.properties.replayAsset
+                                }
+                            } else if operation.kind == .audio {
                                 let revision = remote.properties.audioRevision ?? operation.revision + 1
                                 if let i = snapshot.blocks.firstIndex(where: { $0.id == remote.id }) {
                                     snapshot.blocks[i].properties.audioRevision = revision
@@ -545,6 +651,15 @@ final class GammaWorkspace: ObservableObject {
                         }
                         snapshot.outbox.removeAll { $0.id == operation.id }
                         try persist(snapshot)
+                    } catch let error as GammaWebInkExport.ExportError {
+                        snapshot = try latest(original, cache: cache)
+                        if operation.kind == .inkPreview {
+                            snapshot.outbox.removeAll { $0.id == operation.id }
+                            if snapshot.replayPreviewSkippedSources == nil { snapshot.replayPreviewSkippedSources = [:] }
+                            snapshot.replayPreviewSkippedSources?[operation.blockID] = operation.sourceAsset
+                            try persist(snapshot)
+                        }
+                        errorMessage = "Browser replay preview unavailable; editable ink is retained. \(error.localizedDescription)"
                     } catch GammaAPI.APIError.serverUpgradeRequired(let path) {
                         syncUnavailable = true
                         errorMessage = GammaAPI.APIError.serverUpgradeRequired(path).localizedDescription
@@ -552,6 +667,11 @@ final class GammaWorkspace: ObservableObject {
                         return
                     } catch GammaAPI.APIError.conflict {
                         snapshot = try latest(original, cache: cache)
+                        if operation.kind == .inkPreview {
+                            snapshot.outbox.removeAll { $0.id == operation.id }; try persist(snapshot)
+                            errorMessage = "Ink changed while preparing browser replay. Reload notes to prepare the current source."
+                            continue
+                        }
                         for i in snapshot.outbox.indices where snapshot.outbox[i].blockID == operation.blockID && snapshot.outbox[i].kind == operation.kind {
                             snapshot.outbox[i].conflict = true
                         }

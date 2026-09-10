@@ -1,10 +1,10 @@
 # Follow-up roadmap
 
-These are planned improvements, not features completed by the icon/deployment update.
+This began as a post-icon-update plan. Native text selection/highlight creation, full Web workspace reuse and browser Replay have since been delivered. The authoritative current design and remaining work are in [the unified design](../docs/design/handwriting-recording-ipad.md) and `WEB_PARITY.md`. The original ordering below is retained as decision history, not an assertion that every item is still unimplemented.
 
-## 1. iPad Web/Desktop feature parity
+## 1. Original Web/Desktop parity plan
 
-Priority order:
+Original priority order:
 
 1. **PDF text selection and native highlight creation.** Introduce an explicit Reading/Selecting versus Pencil-editing mode so text selection does not compete with handwriting. Use PDFKit selections and preserve Gamma's existing `highlight_id`, quote, page and position properties; highlights and note blocks must remain the same objects as on Web/Desktop.
 2. **Markdown rendering parity.** Headings, lists/tasks, quotes, links, images, code blocks, tables, inline/display math and Gamma block references/embeds should render consistently. Establish a shared corpus from existing Web tests before choosing an editor/renderer.
@@ -17,9 +17,9 @@ Gamma Desktop is an Electron application containing the React/pdf.js/CodeMirror 
 
 ## 2. Browser Note Replay
 
-Current Web support: static handwriting preview on PDF/Notes and per-segment audio playback. It does **not** synchronize ink to the recording timeline.
+Implemented Phase 5A: Web Note Replay now combines the audio timeline with native-exported per-stroke PNG/path data, progressive masks, cross-page seek and click-ink navigation. See `../docs/dev/note-replay.md` for usage, automatic old-ink backfill, tests and limits. Exact erase/undo history remains out of scope.
 
-Proposed next step:
+Original design considerations (retained for context):
 
 - Reuse the audio block's validated `replay_events` and segment-derived time offsets.
 - Drive a browser player from audio currentTime; support play/pause, seek, cross-page restoration and click-ink navigation.

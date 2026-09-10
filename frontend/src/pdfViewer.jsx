@@ -13,6 +13,8 @@ import { createPortal } from "react-dom";
 import { ChevronRightIcon, LinkIcon, MessageSquareIcon, OutlineIcon } from "./icons";
 import { segmentPage } from "./pdfTranslate";
 import { pdfInkPlacement } from "./inkBlock.js";
+import ReplayInkLayer from "./ReplayInkLayer.jsx";
+import { inkJumpPosition } from "./inkNavigation.js";
 import { ChatMarkdown } from "./widgets";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
 // Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
@@ -321,7 +323,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-function PdfViewer({ url, highlights, inkBlocks = EMPTY_MARKS, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState }) {
+function PdfViewer({ url, highlights, inkBlocks = EMPTY_MARKS, replay = null, inkPreviews = null, inkJumpRequest = null, onReplaySeek, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -1216,9 +1218,49 @@ function PdfViewer({ url, highlights, inkBlocks = EMPTY_MARKS, pdfScaleValue, sc
   // Populated by the load flow above, before the document is shown.
   const [pageHeights, setPageHeights] = useState([]);
 
+  const [flashingInk, setFlashingInk] = useState(null);
+  const inkBlocksRef=useRef(inkBlocks); inkBlocksRef.current=inkBlocks;
+  useEffect(() => {
+    setFlashingInk(null);
+    if (!inkJumpRequest || !pdfDoc) return;
+    const block=inkBlocksRef.current.find(b=>b.id===inkJumpRequest.id);
+    const pageNumber=block?.properties?.pdf_page;
+    if (!pageNumber || pageNumber>pdfDoc.numPages) return;
+    let cancelled=false, timer;
+    (async()=>{
+      try {
+        const page=await pdfDoc.getPage(pageNumber);
+        if(cancelled) return;
+        const position=inkJumpPosition(block,page.getViewport({scale:1}));
+        if(position) await scrollToPositionRef.current?.({position,behavior:"auto",offset:100});
+        if(cancelled) return;
+        const container=viewerRef.current, rectangle=position?.boundingRect;
+        const element=container?.querySelector(`[data-page="${pageNumber}"]`);
+        if(container && element && rectangle) {
+          const pageBox=element.getBoundingClientRect(), viewBox=container.getBoundingClientRect();
+          const left=pageBox.left+rectangle.x1/rectangle.width*pageBox.width;
+          const right=pageBox.left+rectangle.x2/rectangle.width*pageBox.width;
+          if(left<viewBox.left+16 || right>viewBox.right-16) {
+            const delta=right-left>viewBox.width-32 ? left-viewBox.left-16 : (left+right-viewBox.left-viewBox.right)/2;
+            container.scrollLeft+=delta;
+          }
+        }
+        setFlashingInk({id:block.id,nonce:inkJumpRequest.nonce});
+        timer=setTimeout(()=>setFlashingInk(null),1800);
+      } catch { /* PDF load/retry UI reports unavailable pages. */ }
+    })();
+    return ()=>{cancelled=true;clearTimeout(timer);};
+  }, [inkJumpRequest,pdfDoc]);
+
   // Scroll to exact highlight position. Long jumps snap instantly — smooth
   // scrolling across many pages is what made find-next feel sluggish.
   const scrollToPositionRef = useRef(null);
+  useEffect(() => {
+    if (replay?.page && replay.page <= numPages) {
+      const frame = requestAnimationFrame(() => scrollToPositionRef.current?.({position:{pageNumber:replay.page},offset:0}));
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [replay?.page, numPages, pdfDoc]);
   useEffect(() => {
     scrollToPositionRef.current = async ({ position, behavior, offset }) => {
       const pn = position?.pageNumber || position?.boundingRect?.pageNumber;
@@ -1632,7 +1674,7 @@ function PdfViewer({ url, highlights, inkBlocks = EMPTY_MARKS, pdfScaleValue, sc
 
   // Ctrl held (when annotating is allowed) → crosshair over the pages: the
   // cue that dragging now draws an area note instead of selecting text.
-  const canAnnotate = !!onSelectionFinished;
+  const canAnnotate = !!onSelectionFinished && !replay;
   const [areaCursor, setAreaCursor] = useState(false);
   useEffect(() => {
     if (!canAnnotate) return;
@@ -1902,11 +1944,15 @@ function PdfViewer({ url, highlights, inkBlocks = EMPTY_MARKS, pdfScaleValue, sc
               scale={scale}
               highlights={hlsByPage.get(i + 1) || EMPTY_MARKS}
               inkBlocks={inkByPage.get(i + 1) || EMPTY_MARKS}
+              replay={replay}
+              inkPreviews={inkPreviews}
+              flashingInk={flashingInk}
+              onReplaySeek={onReplaySeek}
               onJump={stableCbs.onJump}
               onHighlightJump={stableCbs.onHighlightJump}
               onLinkHighlight={stableCbs.onLinkHighlight}
               onHighlightContext={stableCbs.onHighlightContext}
-              readOnly={!onSelectionFinished}
+              readOnly={!onSelectionFinished || !!replay}
               forceRender={forcePages.has(i + 1)}
               noteBadges={!!noteBadges}
               hideEmbeddedAnnots={!!hideEmbeddedAnnots}
@@ -2106,6 +2152,10 @@ const PdfPage = React.memo(function PdfPage({
   scale,
   highlights,
   inkBlocks,
+  replay,
+  inkPreviews,
+  flashingInk,
+  onReplaySeek,
   _onJump,
   onHighlightJump,
   onLinkHighlight,
@@ -2547,6 +2597,8 @@ const PdfPage = React.memo(function PdfPage({
       ))}
       {pageSize && inkBlocks.map((block) => {
         const viewport = pageRef.current?.getViewport({ scale });
+        const manifest = (replay?.assets ?? inkPreviews)?.[block.id]?.data;
+        if (manifest) return <ReplayInkLayer key={block.id} block={block} data={manifest} viewport={viewport} replay={replay} onSeek={onReplaySeek} />;
         const ink = pdfInkPlacement(block, viewport);
         if (!ink) return null;
         return <img key={block.id} src={ink.url} alt="" aria-hidden="true"
@@ -2554,6 +2606,12 @@ const PdfPage = React.memo(function PdfPage({
           style={{ position: "absolute", left: 0, top: 0, width: ink.width, height: ink.height,
             maxWidth: "none", transformOrigin: "0 0", transform: `matrix(${ink.matrix.join(",")})`,
             pointerEvents: "none", userSelect: "none", zIndex: 3 }} />;
+      })}
+      {pageSize && inkBlocks.filter(block=>block.id===flashingInk?.id).map(block=>{
+        const ink=pdfInkPlacement(block,pageRef.current?.getViewport({scale}));
+        return ink ? <div key={`${block.id}-${flashingInk.nonce}`} className="inkJumpFlash" data-ink-jump-target={block.id}
+          style={{position:"absolute",left:0,top:0,width:ink.width,height:ink.height,transformOrigin:"0 0",
+            transform:`matrix(${ink.matrix.join(",")})`,pointerEvents:"none",zIndex:5}} /> : null;
       })}
       {highlights.map((h) => {
         const rects =

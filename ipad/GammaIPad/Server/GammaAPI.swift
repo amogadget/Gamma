@@ -6,6 +6,7 @@ struct GammaProperties: Codable, Equatable {
     var pdfPage: Int?
     var inkAsset: String?
     var previewAsset: String?
+    var replayAsset: String?
     var revision: Int?
     var clientMutationID: String?
     var nativeNote: Bool?
@@ -28,7 +29,7 @@ struct GammaProperties: Codable, Equatable {
         case nativeNote = "native_note", noteRevision = "note_revision"
         case revision = "ink_revision"
         case docID = "doc_id", pdfPage = "pdf_page", inkAsset = "ink_asset"
-        case previewAsset = "preview_asset", clientMutationID = "client_mutation_id"
+        case previewAsset = "preview_asset", replayAsset = "replay_asset", clientMutationID = "client_mutation_id"
     }
 }
 
@@ -87,6 +88,22 @@ final class GammaAPI: NSObject, URLSessionTaskDelegate {
         authenticatedUsername = actual
         return actual
     }
+    func sessionCookies() -> [HTTPCookie] {
+        session.configuration.httpCookieStorage?.cookies(for: baseURL) ?? []
+    }
+    func adoptWebSession(cookies: [HTTPCookie]) async throws -> String {
+        guard let host = baseURL.host?.lowercased() else { throw APIError.message("Invalid server origin.") }
+        for cookie in cookies {
+            let domain = cookie.domain.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+            guard host == domain || host.hasSuffix("." + domain) else { continue }
+            session.configuration.httpCookieStorage?.setCookie(cookie)
+        }
+        struct Session: Decodable { let user: String? }
+        let value = try JSONDecoder().decode(Session.self, from: await get("api/session"))
+        guard let user = value.user, !user.isEmpty else { throw APIError.message("Sign in to Gamma before opening the native reader.") }
+        authenticatedUsername = user
+        return user
+    }
     func logout() async { _ = try? await json("api/logout", method: "POST", body: [:]) }
     func papers() async throws -> [GammaPaper] {
         struct Children: Decodable { let children: [GammaBlock] }
@@ -104,6 +121,17 @@ final class GammaAPI: NSObject, URLSessionTaskDelegate {
     func putNote(id: String, parent: String, content: String, revision: Int) async throws -> GammaBlock {
         let data = try await json("api/blocks/\(component(id))/note", method: "PUT", body: [
             "parent_id": parent, "content": content, "expected_revision": revision])
+        return try JSONDecoder().decode(GammaBlock.self, from: data)
+    }
+    func createHighlight(id: String, parent: String, selection: GammaSelectedText, color: String) async throws -> GammaBlock {
+        let position = try JSONSerialization.jsonObject(with: JSONEncoder().encode(selection.position))
+        let data = try await json("api/blocks/\(component(id))/highlight", method: "PUT", body: [
+            "parent_id": parent, "quote": selection.quote, "color": color, "pdf_position": position])
+        return try JSONDecoder().decode(GammaBlock.self, from: data)
+    }
+    func setReplayPreview(id: String, inkAsset: String, replayAsset: String) async throws -> GammaBlock {
+        let data = try await json("api/blocks/\(component(id))/replay-preview", method: "PUT",
+                                  body: ["ink_asset": inkAsset, "replay_asset": replayAsset])
         return try JSONDecoder().decode(GammaBlock.self, from: data)
     }
     func putInk(id: String, body: [String: Any]) async throws -> GammaBlock {
