@@ -1,0 +1,8 @@
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+*.xcresult/
+.DS_Store
+coordinate-fixture.pdf
+__pycache__/
+project.local.yml

@@ -147,6 +147,37 @@ then removes expired unreferenced assets but retains referenced assets. Clients
 must retain local bytes until successful save and reupload after long outages.
 No schema migration. PDF/Zotero exports do not flatten PencilKit strokes.
 
+### Native audio recordings (`ink.py`)
+
+`POST /api/assets` also accepts `.m4a` with `audio/mp4` or `audio/x-m4a`. The
+32 MiB hard cap applies; bytes must contain a plausible ISO-BMFF `ftyp` box.
+Audio is intentionally opaque (no server decoding), with a maximum 24-hour
+recording and 1,000 segments per block. `GET /api/assets/<sha>.m4a` is private,
+same-user only, and returns `audio/mp4`.
+
+`PUT /api/blocks/{canonical-uuid}/audio` accepts `{parent_id, expected_revision,
+audio_state, segments, replay_events?}` where each segment has a canonical UUID,
+local `/api/assets/<64hex>.m4a` ref, and finite positive duration. It creates or
+updates a unified block, preserving content/children/other properties, and
+returns `type: audio`, `audio_revision`, cumulative `start_time`, total
+`duration`, and `replay_events` when present.
+
+`replay_events` is optional for compatibility: omitting it preserves an existing
+timeline, while explicit `[]` clears it. Each event is `{id, kind, segment_id,
+start, end, pdf_page, block_id?, stroke_id?}`. IDs are canonical lowercase UUIDs
+and unique; `kind` is `stroke`, `page`, or `note`; times are finite,
+nonnegative segment-relative seconds with `end >= start` and a 24-hour cap;
+`pdf_page` is a positive strict integer. Stroke events require nonempty `block_id`
+and `stroke_id`; note events require `block_id`; page events require neither.
+At most 20,000 events are accepted, and each `segment_id` must name a segment in
+the same payload. Block references are weak references only: the server neither
+fetches nor discloses cross-user data. Exact retries, including the timeline, are
+idempotent; divergent stale revisions return 409.
+
+Generic block PUT cannot alter reserved audio fields, including `replay_events`.
+Audio assets are included in backups and scoped exports/imports and follow native
+orphan cleanup.
+
 ### PDFs & uploads (`pdf.py`, `uploads.py`, `shares.py`)
 | Method | Path | Purpose |
 |---|---|---|

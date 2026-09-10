@@ -284,6 +284,8 @@ async def ub_update_block(block_id: str, payload: UBUpdateRequest, request: Requ
                               "crop_box", "coordinate_space", "pdf_page"})
         if existing.get("native_note") is True:
             protected.update({"native_note", "note_revision"})
+        if existing.get("type") == "audio":
+            protected.update({"type", "audio_revision", "audio_state", "segments", "duration", "replay_events"})
         if protected.intersection(payload.properties or {}):
             raise HTTPException(status_code=409, detail="use the native ink/note endpoint for reserved properties")
         if payload.content is not None:

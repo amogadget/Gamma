@@ -19,6 +19,14 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 - **Ask the AI** — chat about the open paper (or pick several at once) with Anthropic or OpenAI models, or just sign in with your ChatGPT subscription — no API key. Paste figures, dictate by voice, or attach the whole PDF so the model sees tables and plots.
 - **Dockable panels** — drag any window's grip to the left, right, or bottom; double-click to collapse.
 
+## Native iPad client
+
+The [iPad client](./ipad/) connects to the same Gamma account/library and adds PencilKit handwriting blocks, recording and Phase 5A audio-synchronized Note Replay. Existing highlights are displayed; Web/Desktop text-selection, highlight creation and full Markdown editing are follow-up work, not claimed feature parity.
+
+**Deploy:** use a checkout containing `ipad/` (currently `ipad-app`), build the matching backend from that checkout, expose it over HTTPS, then generate `ipad/GammaIPad.xcodeproj` with XcodeGen on a Mac. Select a Personal Team/development team in Xcode and install on a trusted Developer Mode iPad. Optional desktop-session build automation supports SSH without storing Apple passwords.
+
+See the **[complete iPad deployment guide](./ipad/README.md#deployment)** for Docker/HTTPS setup, free signing, local signing overrides, unattended builds, installation and tests. [Follow-up roadmap](./ipad/ROADMAP.md) covers Web/Desktop feature parity and browser Note Replay.
+
 ## An agent in your library
 
 <!-- Demo GIF slot ➜ record: home chat "Organize my library…", tool chips streaming (List/Read/Move), folders appearing in the list. Save as docs/demo-agent.gif (recorder: .claude/skills/readme-media/record-agent.mjs) -->

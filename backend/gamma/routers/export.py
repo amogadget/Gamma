@@ -78,7 +78,7 @@ _GAMMA_MAX_SECONDS = 60
 _NOTES_PDF_MAX_BYTES = 192 * 1024 * 1024
 _EXPORT_MODES = {"readable", "logseq-graph", "zotero-rdf", "gamma", "notes-pdf"}
 _SCOPED_UPLOAD_NAME_RE = re.compile(
-    r"^(?:[0-9a-f]{64}\.pkdrawing|[0-9a-fA-F]{8,64}(?:-flat)?\.(?:pdf|png|jpe?g|gif|webp|svg|bmp))$"
+    r"^(?:[0-9a-f]{64}\.(?:pkdrawing|m4a)|[0-9a-fA-F]{8,64}(?:-flat)?\.(?:pdf|png|jpe?g|gif|webp|svg|bmp))$"
 )
 _SCOPED_UPLOAD_REF_RE = re.compile(r"/api/(?:uploads|assets)/([^\s\"')\]}>,]+)")
 _EXPORT_OP_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")

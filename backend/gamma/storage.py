@@ -9,7 +9,7 @@ from .db import user_uploads_dir
 # Pending native ink uploads survive restarts/deletions for seven days, so a
 # lost connection between upload and block save does not destroy queued work.
 INK_STAGING_SECONDS = 7 * 24 * 60 * 60
-INK_ASSET_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:pkdrawing|png)$")
+INK_ASSET_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:pkdrawing|png|m4a)$")
 
 # Content-addressed ids are a truncated sha256 hex digest. One constant: the
 # extension's /api/clip recomputes the proxy's id for an external PDF URL to

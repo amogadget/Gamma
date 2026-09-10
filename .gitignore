@@ -35,3 +35,10 @@ SESSION-20260806.md
 docs/dev/backport-plan.md
 docs/dev/backport-handoff.md
 docs/sync.md
+# Local Xcode output and desktop-session build agent state.
+/GUIBuildDerivedData/
+/DeviceDerivedData/
+/LiveDerivedData/
+/DerivedData/
+/gui-build/
+*.xcresult/

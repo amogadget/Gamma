@@ -106,7 +106,13 @@ def _render_readable_block(node, depth, lines, highlights=True, notes=True):
     indent = "  " * depth
     emitted = False
 
-    if props.get("type") == "pdf_ink" and highlights:
+    if props.get("type") == "audio" and notes:
+        for seg in props.get("segments", []):
+            asset = seg.get("asset", "") if isinstance(seg, dict) else ""
+            if re.fullmatch(r"/api/assets/[0-9a-f]{64}\.m4a", asset):
+                lines.append(f"{indent}- [Audio recording]({asset}) ({seg.get('duration', 0)}s)")
+                emitted = True
+    elif props.get("type") == "pdf_ink" and highlights:
         preview = props.get("preview_asset", "")
         drawing = props.get("ink_asset", "")
         if re.fullmatch(r"/api/assets/[0-9a-f]{64}\.png", preview):

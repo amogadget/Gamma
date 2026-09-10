@@ -9,6 +9,7 @@ import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
 import { inkBlockPreview } from "./inkBlock.js";
+import { audioSegments, formatAudioDuration } from "./audioBlock.js";
 import { COLORS } from "./pdfViewer";
 import { handleMarkdownCopy } from "./widgets";
 import { isEnterCommit } from "./utils";
@@ -32,6 +33,18 @@ import { Trash2Icon } from "./icons";
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
+
+function AudioBlockPreview({ block }) {
+  const segments = audioSegments(block);
+  if (!segments.length) return null;
+  return <figure style={{ margin: "8px 0" }} aria-label="Audio recording">
+    {segments.map((s) => <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <audio controls preload="metadata" src={s.url} />
+      <span>{formatAudioDuration(s.duration)}</span>
+    </div>)}
+    <figcaption style={{ fontSize: 12, color: "#555" }}>Audio · {formatAudioDuration(block.properties.duration)}</figcaption>
+  </figure>;
+}
 
 function InkBlockPreview({ block }) {
   const preview = inkBlockPreview(block);
@@ -1251,6 +1264,7 @@ function BlockRow({
           )}
 
           <InkBlockPreview block={block} />
+           <AudioBlockPreview block={block} />
           {block.quote?.trim() ? <div className="blockQuote">{block.quote}</div> : null}
           {block.position?.area && captureArea ? (
             <AreaSnapshot block={block} captureArea={captureArea} docNonce={docNonce} />
