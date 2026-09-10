@@ -46,7 +46,7 @@ _IMPORT_CHUNK_BYTES = 1024 * 1024
 _GAMMA_IMPORT_MAX_PAGES = 500
 _GAMMA_IMPORT_MAX_BLOCKS = 100_000
 _IMPORT_UPLOAD_RE = re.compile(
-    r"^(?:[0-9a-f]{64}\.pkdrawing|[0-9a-fA-F]{8,64}(?:-flat)?\.(?:pdf|png|jpe?g|gif|webp|svg|bmp))$"
+    r"^(?:[0-9a-f]{64}\.(?:pkdrawing|m4a|inkjson)|[0-9a-fA-F]{8,64}(?:-flat)?\.(?:pdf|png|jpe?g|gif|webp|svg|bmp))$"
 )
 _IMPORT_UPLOAD_REF_RE = re.compile(r"/api/(?:uploads|assets)/([^\s\"')\]}>,]+)")
 

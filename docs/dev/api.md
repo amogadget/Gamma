@@ -63,16 +63,23 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 Route order matters: the static-prefix routes (`by-doc`, `children`,
 `subtree`) must stay registered before `/blocks/{block_id}`.
 
+### Native text highlights (`native_highlights.py`)
+
+`PUT /api/blocks/{canonical UUID}/highlight` creates an ordinary page-scoped highlight with the owner's authenticated session. Body: `{parent_id, quote, color, pdf_position: {pageNumber, boundingRect, rects, area:false}}`. Rectangles carry `x1/y1/x2/y2/width/height/pageNumber` in the Web viewport coordinate convention; a native selection spanning pages creates one block per page. Returns the complete block with `highlight_id` equal to its stable UUID, `quote`, `color`, `pdf_page` and `pdf_position` properties. A retry for the same existing highlight/parent returns its current state without overwriting subsequent Web edits; unrelated UUID/parent collisions are rejected. Later text/comment changes use normal block CRUD.
+
 ### Native iPad ink (`ink.py`)
 
-All three routes require the owner's session cookie, never a share token or
+Native asset and mutation routes require the owner's session cookie, never a share token or
 `?user=`. One explicit multi-stroke annotation is one ordinary unified block
-under an existing Gamma PDF page; no stroke-per-block model and no audio.
+under an existing Gamma PDF page; audio is a separate block, not one block per stroke.
 
 - `POST /api/assets`: multipart `file`. `.pkdrawing` accepts
   `application/octet-stream` or `application/x-pkdrawing`; `.png` requires
-  `image/png` and a validated PNG. PKDrawing is opaque binary, not decoded or
-  validated by Linux. Empty files/other types return 400. Hard asset cap: 32 MiB.
+  `image/png` and a validated PNG. `.inkjson` requires `application/json` and
+  the strict `gamma-ink-replay-v1` schema (bounded page/strokes/points, monotonic
+  timestamps, base64 PNGs decoded with Pillow, and no data URLs). PKDrawing is
+  opaque binary, not decoded or validated by Linux. M4A support is described in the
+  audio section below. Empty files or unsupported types return 400. Hard asset cap: 32 MiB.
   Returns 200 `{filename, url, size, already_existed}`, where filename is the
   full lowercase SHA-256 plus extension and URL is `/api/assets/{filename}`.
   Dedup is per-user. New bytes use existing per-file (413) and storage quota
@@ -89,6 +96,7 @@ under an existing Gamma PDF page; no stroke-per-block model and no audio.
     "pdf_page": 1,
     "ink_asset": "/api/assets/<64hex>.pkdrawing",
     "preview_asset": "/api/assets/<64hex>.png",
+    "replay_asset": "/api/assets/<64hex>.inkjson",
     "bounds": {"x": 20, "y": 30, "width": 100, "height": 40},
     "crop_box": {"width": 612, "height": 792},
     "coordinate_space": "pdf-crop-top-left-v1",
@@ -117,14 +125,23 @@ under an existing Gamma PDF page; no stroke-per-block model and no audio.
   Missing parent/assets return 404; parent without PDF identity returns 409;
   invalid UUID/body/geometry returns 422.
 
-  `expected_revision` is optional: 0 means create-only; a positive value must
-  match current `ink_revision`. Mismatch returns 409 with
+  `replay_asset` is optional. When present it must be an existing local
+  `.inkjson` whose `source_sha256` equals the 64-hex digest in `ink_asset`.
+  Omitted replay refs preserve the existing replay only when the ink source is
+  unchanged; changing the source removes the stale ref. Explicit `null` clears it.
+  Generic block PUT treats `replay_asset` as reserved. `expected_revision` is
+  optional: 0 means create-only; a positive value must match current `ink_revision`. Mismatch returns 409 with
   `detail: {message, current_revision}`. An exact payload replay returns the
   existing block without incrementing revision, even with an old expectation.
   Without an expectation, differing saves are last-write-wins. Serialize saves
   per annotation, persist UUID/body/assets before upload, upload both assets,
   then PUT; on 409 reconcile instead of blind retry. Delayed retries following
-  a newer save conflict when using expected revisions. Delete via normal block
+  a newer save conflict when using expected revisions. `PUT
+  /api/blocks/{canonical UUID}/replay-preview` accepts only
+  `{ink_asset, replay_asset}` for an existing own `pdf_ink` block. It verifies
+  the expected current ink source and replay `source_sha256`, then updates only
+  `replay_asset` without changing `ink_revision`, content, children, or other
+  properties; source mismatch returns 409. Delete via normal block
   DELETE; deletion has no tombstone, so cancel queued saves before deleting.
 - `PUT /api/blocks/{block_id}/note`: idempotent native child-note upsert with
   canonical UUID and `{parent_id, content, expected_revision?}`. Parent must be
@@ -146,6 +163,37 @@ seven-day staging grace period; reupload renews it. Existing orphan cleanup
 then removes expired unreferenced assets but retains referenced assets. Clients
 must retain local bytes until successful save and reupload after long outages.
 No schema migration. PDF/Zotero exports do not flatten PencilKit strokes.
+
+### Native audio recordings (`ink.py`)
+
+`POST /api/assets` also accepts `.m4a` with `audio/mp4` or `audio/x-m4a`. The
+32 MiB hard cap applies; bytes must contain a plausible ISO-BMFF `ftyp` box.
+Audio is intentionally opaque (no server decoding), with a maximum 24-hour
+recording and 1,000 segments per block. `GET /api/assets/<sha>.m4a` is private,
+same-user only, and returns `audio/mp4`.
+
+`PUT /api/blocks/{canonical-uuid}/audio` accepts `{parent_id, expected_revision,
+audio_state, segments, replay_events?}` where each segment has a canonical UUID,
+local `/api/assets/<64hex>.m4a` ref, and finite positive duration. It creates or
+updates a unified block, preserving content/children/other properties, and
+returns `type: audio`, `audio_revision`, cumulative `start_time`, total
+`duration`, and `replay_events` when present.
+
+`replay_events` is optional for compatibility: omitting it preserves an existing
+timeline, while explicit `[]` clears it. Each event is `{id, kind, segment_id,
+start, end, pdf_page, block_id?, stroke_id?}`. IDs are canonical lowercase UUIDs
+and unique; `kind` is `stroke`, `page`, or `note`; times are finite,
+nonnegative segment-relative seconds with `end >= start` and a 24-hour cap;
+`pdf_page` is a positive strict integer. Stroke events require nonempty `block_id`
+and `stroke_id`; note events require `block_id`; page events require neither.
+At most 20,000 events are accepted, and each `segment_id` must name a segment in
+the same payload. Block references are weak references only: the server neither
+fetches nor discloses cross-user data. Exact retries, including the timeline, are
+idempotent; divergent stale revisions return 409.
+
+Generic block PUT cannot alter reserved audio fields, including `replay_events`.
+Audio assets are included in backups and scoped exports/imports and follow native
+orphan cleanup.
 
 ### PDFs & uploads (`pdf.py`, `uploads.py`, `shares.py`)
 | Method | Path | Purpose |

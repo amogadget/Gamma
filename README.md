@@ -19,6 +19,16 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 - **Ask the AI** — chat about the open paper (or pick several at once) with Anthropic or OpenAI models, or just sign in with your ChatGPT subscription — no API key. Paste figures, dictate by voice, or attach the whole PDF so the model sees tables and plots.
 - **Dockable panels** — drag any window's grip to the left, right, or bottom; double-click to collapse.
 
+## Native iPad client
+
+The [iPad client](./ipad/) embeds the actual Gamma Web workspace for the existing Markdown/math editor, block tree, search, AI, settings and transfers, with a same-account **Pencil & Audio** handoff to PDFKit/PencilKit, recording and Phase 5A Note Replay. The native reader also supports PDF text selection and ordinary Gamma highlight creation. See the [feature matrix and platform limits](./ipad/WEB_PARITY.md): this reuses Web functionality, not Electron's desktop-only local server runtime, and does not claim every iPad touch/export/provider flow has been individually verified.
+
+**[统一设计文档：手写、录音、Note Replay 与 iPad 架构](./docs/design/handwriting-recording-ipad.md)** — 数据模型、坐标、同步/恢复、跨端回放、安全边界和未来设计。
+
+**Deploy:** use a current `main` checkout containing `ipad/`, build the matching backend from that checkout, expose it over HTTPS, then generate `ipad/GammaIPad.xcodeproj` with XcodeGen on a Mac. Select a Personal Team/development team in Xcode and install on a trusted Developer Mode iPad. Optional desktop-session build automation supports SSH without storing Apple passwords.
+
+See the **[complete iPad deployment guide](./ipad/README.md#deployment)** for Docker/HTTPS setup, free signing, local signing overrides, unattended builds, installation and tests. [Follow-up roadmap](./ipad/ROADMAP.md) covers Web/Desktop feature parity and browser Note Replay.
+
 ## An agent in your library
 
 <!-- Demo GIF slot ➜ record: home chat "Organize my library…", tool chips streaming (List/Read/Move), folders appearing in the list. Save as docs/demo-agent.gif (recorder: .claude/skills/readme-media/record-agent.mjs) -->
@@ -63,7 +73,7 @@ The **Gamma Connector** extension ([extension/](./extension/)) saves the paper y
 ### Quickstart
 
 ```bash
-docker run -d --name gamma -p 9001:9001 -v gamma-data:/data ghcr.io/tim4431/gamma:latest
+docker run -d --name gamma -p 9001:9001 -v gamma-data:/data ghcr.io/amogadget/gamma:latest
 ```
 
 Open <http://localhost:9001> and log in as `admin` — a fresh instance seeds the account itself and prints its password once to the log (`docker logs gamma`). No environment variables needed.

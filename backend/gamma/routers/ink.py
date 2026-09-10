@@ -1,5 +1,7 @@
 """Native grouped PencilKit annotations, stored as ordinary unified blocks."""
 
+import base64
+import binascii
 import hashlib
 import io
 import json
@@ -22,8 +24,14 @@ from ..db import page_now, user_db_path, user_uploads_dir
 from ..server_settings import check_upload_allowed
 
 router = APIRouter(prefix="/api", tags=["ink"])
-ASSET_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:pkdrawing|png)$")
-ASSET_REF_RE = re.compile(r"^/api/assets/([0-9a-f]{64}\.(?:pkdrawing|png))$")
+ASSET_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:pkdrawing|png|m4a|inkjson)$")
+ASSET_REF_RE = re.compile(r"^/api/assets/([0-9a-f]{64}\.(?:pkdrawing|png|m4a|inkjson))$")
+REPLAY_REF_RE = re.compile(r"^/api/assets/([0-9a-f]{64}\.inkjson)$")
+_REPLAY_MAX_STROKES = 2000
+_REPLAY_MAX_POINTS = 200000
+_REPLAY_MAX_PNG_DIMENSION = 4096
+_REPLAY_MAX_PIXELS = 24_000_000
+_REPLAY_EPSILON = 0.001
 
 
 def asset_path(user: str, filename: str):
@@ -35,14 +43,88 @@ def asset_path(user: str, filename: str):
     return path
 
 
+class ReplayPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    x: float
+    y: float
+    t: float = Field(ge=0)
+    radius: float = Field(gt=0)
+
+
+class ReplayBounds(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    x: float = Field(ge=0)
+    y: float = Field(ge=0)
+    width: float = Field(gt=0)
+    height: float = Field(gt=0)
+
+
+class ReplayStroke(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=256)
+    bounds: ReplayBounds
+    png: str
+    points: list[ReplayPoint] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_png_and_points(self):
+        times = [point.t for point in self.points]
+        if any(a > b for a, b in zip(times, times[1:])):
+            raise ValueError("stroke points must have monotonic t")
+        if self.png.startswith("data:"):
+            raise ValueError("PNG must not be a data URL")
+        try:
+            raw = base64.b64decode(self.png.encode("ascii"), validate=True)
+        except (UnicodeEncodeError, ValueError, binascii.Error):
+            raise ValueError("png must be valid base64")
+        try:
+            with Image.open(io.BytesIO(raw)) as image:
+                if image.format != "PNG":
+                    raise ValueError("not PNG")
+                image.verify()
+                width, height = image.size
+        except Exception:
+            raise ValueError("png must be a valid PNG")
+        if width > _REPLAY_MAX_PNG_DIMENSION or height > _REPLAY_MAX_PNG_DIMENSION:
+            raise ValueError("PNG dimensions exceed limit")
+        object.__setattr__(self, "_decoded_pixels", width * height)
+        return self
+
+
+class ReplayAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False, strict=True)
+    format: Literal["gamma-ink-replay-v1"]
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    width: float = Field(gt=0, le=100000)
+    height: float = Field(gt=0, le=100000)
+    strokes: list[ReplayStroke] = Field(max_length=_REPLAY_MAX_STROKES)
+
+    @model_validator(mode="after")
+    def validate_replay(self):
+        points = 0
+        pixels = 0
+        for stroke in self.strokes:
+            points += len(stroke.points)
+            if (stroke.bounds.x + stroke.bounds.width > self.width + _REPLAY_EPSILON
+                    or stroke.bounds.y + stroke.bounds.height > self.height + _REPLAY_EPSILON):
+                raise ValueError("stroke bounds must lie within page")
+            pixels += getattr(stroke, "_decoded_pixels", 0)
+        if points > _REPLAY_MAX_POINTS:
+            raise ValueError("too many replay points")
+        if pixels > _REPLAY_MAX_PIXELS:
+            raise ValueError("too many decoded PNG pixels")
+        return self
+
+
 @router.post("/assets")
 async def upload_asset(request: Request, file: UploadFile = File(...)):
     user = require_user(request)
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-    allowed = {"png": {"image/png"}, "pkdrawing": {
-        "application/octet-stream", "application/x-pkdrawing"}}
+    allowed = {"png": {"image/png"}, "inkjson": {"application/json"}, "pkdrawing": {
+        "application/octet-stream", "application/x-pkdrawing"}, "m4a": {
+        "audio/mp4", "audio/x-m4a"}}
     if ext not in allowed or file.content_type not in allowed[ext]:
-        raise HTTPException(400, "only PNG and PKDrawing assets are supported")
+        raise HTTPException(400, "only PNG, PKDrawing, M4A, or ink replay assets are supported")
     # Bounded reading, unlike legacy upload routes. A fixed safety ceiling also
     # applies to duplicates; quota/per-file policy otherwise gates only new bytes.
     cap = 32 * 1024 * 1024
@@ -51,6 +133,15 @@ async def upload_asset(request: Request, file: UploadFile = File(...)):
         raise HTTPException(413, "asset too large")
     if not contents:
         raise HTTPException(400, "empty asset")
+    if ext == "inkjson":
+        try:
+            ReplayAsset.model_validate(json.loads(contents.decode("utf-8")))
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError, TypeError):
+            raise HTTPException(400, "invalid ink replay JSON")
+    if ext == "m4a":
+        # Opaque audio: require a plausible ISO-BMFF ftyp box; decoders stay client-side.
+        if len(contents) < 16 or contents[4:8] != b"ftyp":
+            raise HTTPException(400, "invalid M4A (missing ftyp)")
     if ext == "png":
         try:
             with Image.open(io.BytesIO(contents)) as image:
@@ -94,7 +185,7 @@ def get_asset(filename: str, request: Request):
     if not path.is_file():
         raise HTTPException(404, "asset not found")
     return FileResponse(path, media_type=("image/png" if filename.endswith(".png")
-                                         else "application/octet-stream"), headers={
+                                         else ("audio/mp4" if filename.endswith(".m4a") else ("application/json" if filename.endswith(".inkjson") else "application/octet-stream"))), headers={
         "Cache-Control": "private, no-cache", "Vary": "Cookie, Authorization",
         "X-Content-Type-Options": "nosniff",
         "Content-Disposition": f'inline; filename="{filename}"',
@@ -118,6 +209,7 @@ class InkSave(BaseModel):
     pdf_page: int = Field(ge=1, strict=True)
     ink_asset: str
     preview_asset: str
+    replay_asset: str | None = None
     bounds: InkBounds
     crop_box: CropBox
     coordinate_space: Literal["pdf-crop-top-left-v1"] = "pdf-crop-top-left-v1"
@@ -131,6 +223,22 @@ class InkSave(BaseModel):
         for ref, ext in ((self.ink_asset, ".pkdrawing"), (self.preview_asset, ".png")):
             if not ASSET_REF_RE.fullmatch(ref) or not ref.endswith(ext):
                 raise ValueError(f"expected a local {ext} asset URL")
+        if self.replay_asset is not None and not REPLAY_REF_RE.fullmatch(self.replay_asset):
+            raise ValueError("expected a local .inkjson asset URL")
+        return self
+
+
+class ReplayPreviewSave(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ink_asset: str
+    replay_asset: str
+
+    @model_validator(mode="after")
+    def validate_refs(self):
+        if not re.fullmatch(r"/api/assets/[0-9a-f]{64}\.pkdrawing", self.ink_asset):
+            raise ValueError("expected a local PKDrawing asset URL")
+        if not REPLAY_REF_RE.fullmatch(self.replay_asset):
+            raise ValueError("expected a local .inkjson asset URL")
         return self
 
 
@@ -142,7 +250,9 @@ def save_ink(block_id: str, payload: InkSave, request: Request):
             raise ValueError()
     except ValueError:
         raise HTTPException(422, "block_id must be a canonical lowercase UUID")
-    ink = payload.model_dump(exclude={"parent_id", "expected_revision"})
+    ink = payload.model_dump(exclude={"parent_id", "expected_revision", "replay_asset"})
+    if "replay_asset" in payload.model_fields_set:
+        ink["replay_asset"] = payload.replay_asset
     ink["type"] = "pdf_ink"
     with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -164,6 +274,11 @@ def save_ink(block_id: str, payload: InkSave, request: Request):
                     or not isinstance(revision, int) or revision < 1
                     or any(props.get(key) for key in ("highlight_id", "link_url", "link_page_id", "doc_id"))):
                 raise HTTPException(409, "block ID belongs to another block or annotation scope")
+            if "replay_asset" not in payload.model_fields_set:
+                if props.get("ink_asset") == payload.ink_asset:
+                    ink["replay_asset"] = props.get("replay_asset")
+                else:
+                    ink["replay_asset"] = None
             if all(props.get(key) == value for key, value in ink.items()):
                 return existing  # Lost-response retry: no new revision or timestamp.
         if payload.expected_revision is not None and payload.expected_revision != revision:
@@ -171,7 +286,21 @@ def save_ink(block_id: str, payload: InkSave, request: Request):
         for ref in (payload.ink_asset, payload.preview_asset):
             if not asset_path(user, ref.rsplit("/", 1)[-1]).is_file():
                 raise HTTPException(404, "asset not found; upload assets before saving ink")
+        replay_ref = ink.get("replay_asset")
+        if replay_ref:
+            replay_path = asset_path(user, replay_ref.rsplit("/", 1)[-1])
+            if not replay_path.is_file():
+                raise HTTPException(404, "replay asset not found; upload assets before saving ink")
+            try:
+                replay = ReplayAsset.model_validate(json.loads(replay_path.read_text(encoding="utf-8")))
+            except Exception:
+                raise HTTPException(400, "invalid ink replay asset")
+            source_hash = payload.ink_asset.rsplit("/", 1)[-1].split(".", 1)[0]
+            if replay.source_sha256 != source_hash:
+                raise HTTPException(422, "replay asset source digest does not match ink asset")
         props.update(ink)
+        if props.get("replay_asset") is None:
+            props.pop("replay_asset", None)
         props["ink_revision"] = revision + 1
         now = page_now()
         if existing:
@@ -183,6 +312,179 @@ def save_ink(block_id: str, payload: InkSave, request: Request):
             position = generate_key_between(last[0] if last else None, None)
             conn.execute(f"INSERT INTO unified_blocks ({BLOCK_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
                          (block_id, payload.parent_id, position, "", json.dumps(props), now, now))
+        result = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
+        conn.commit()
+    return block_to_dict(result)
+
+
+@router.put("/blocks/{block_id}/replay-preview")
+def save_replay_preview(block_id: str, payload: ReplayPreviewSave, request: Request):
+    """Attach a replay generated later, without changing the ink revision."""
+    user = require_user(request)
+    try:
+        if str(UUID(block_id)) != block_id:
+            raise ValueError()
+    except ValueError:
+        raise HTTPException(422, "block_id must be a canonical lowercase UUID")
+    expected_source = payload.ink_asset.rsplit("/", 1)[-1].split(".", 1)[0]
+    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "ink block not found")
+        existing = block_to_dict(row)
+        props = existing["properties"]
+        if props.get("type") != "pdf_ink":
+            raise HTTPException(409, "block is not a PDF ink annotation")
+        if props.get("ink_asset") != payload.ink_asset:
+            raise HTTPException(409, "ink source does not match current annotation")
+        replay_path = asset_path(user, payload.replay_asset.rsplit("/", 1)[-1])
+        if not replay_path.is_file():
+            raise HTTPException(404, "replay asset not found; upload assets before saving replay")
+        try:
+            replay = ReplayAsset.model_validate(json.loads(replay_path.read_text(encoding="utf-8")))
+        except Exception:
+            raise HTTPException(400, "invalid ink replay asset")
+        if replay.source_sha256 != expected_source:
+            raise HTTPException(409, "replay asset source digest does not match ink asset")
+        if props.get("replay_asset") == payload.replay_asset:
+            conn.commit()
+            return existing
+        props["replay_asset"] = payload.replay_asset
+        now = page_now()
+        conn.execute("UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
+                     (json.dumps(props), now, block_id))
+        result = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
+        conn.commit()
+    return block_to_dict(result)
+
+
+class AudioSegment(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    id: str
+    asset: str
+    duration: float = Field(gt=0, le=24 * 60 * 60)
+
+
+class ReplayEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    id: str
+    kind: Literal["stroke", "page", "note"]
+    segment_id: str
+    start: float = Field(ge=0, le=24 * 60 * 60)
+    end: float = Field(ge=0, le=24 * 60 * 60)
+    pdf_page: int = Field(gt=0, strict=True)
+    block_id: str | None = None
+    stroke_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_event(self):
+        for name, value in (("id", self.id), ("segment_id", self.segment_id)):
+            try:
+                if str(UUID(value)) != value:
+                    raise ValueError()
+            except (ValueError, AttributeError):
+                raise ValueError(f"{name} must be a canonical lowercase UUID")
+        if self.end < self.start:
+            raise ValueError("replay event end must be at least start")
+        if self.kind == "stroke" and (not self.block_id or not self.stroke_id):
+            raise ValueError("stroke replay events require block_id and stroke_id")
+        if self.kind == "note" and not self.block_id:
+            raise ValueError("note replay events require block_id")
+        if self.kind == "page" and (self.block_id is not None or self.stroke_id is not None):
+            raise ValueError("page replay events cannot have block_id or stroke_id")
+        return self
+
+
+class AudioSave(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    parent_id: str = Field(min_length=1, max_length=200)
+    expected_revision: int | None = Field(default=None, ge=0, strict=True)
+    audio_state: Literal["recording", "paused", "interrupted", "stopped"]
+    segments: list[AudioSegment] = Field(default_factory=list, max_length=1000)
+    replay_events: list[ReplayEvent] | None = Field(default=None, max_length=20000)
+
+    @model_validator(mode="after")
+    def validate_replay_events(self):
+        if self.replay_events is None:
+            return self
+        ids = [event.id for event in self.replay_events]
+        if len(ids) != len(set(ids)):
+            raise ValueError("replay event IDs must be unique")
+        segment_ids = {segment.id for segment in self.segments}
+        if any(event.segment_id not in segment_ids for event in self.replay_events):
+            raise ValueError("replay event segment_id must reference a submitted segment")
+        return self
+
+
+@router.put("/blocks/{block_id}/audio")
+def save_audio(block_id: str, payload: AudioSave, request: Request):
+    user = require_user(request)
+    try:
+        if str(UUID(block_id)) != block_id:
+            raise ValueError()
+    except ValueError:
+        raise HTTPException(422, "block_id must be a canonical lowercase UUID")
+    ids = [s.id for s in payload.segments]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(422, "audio segment IDs must be unique")
+    for sid in ids:
+        try:
+            if str(UUID(sid)) != sid:
+                raise ValueError()
+        except ValueError:
+            raise HTTPException(422, "segment IDs must be canonical lowercase UUIDs")
+    total = sum(s.duration for s in payload.segments)
+    if total > 24 * 60 * 60:
+        raise HTTPException(422, "audio duration exceeds 24 hour limit")
+    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        parent = conn.execute("SELECT parent_id, properties FROM unified_blocks WHERE id = ?", (payload.parent_id,)).fetchone()
+        if not parent:
+            raise HTTPException(404, "parent block not found")
+        pprops = json.loads(parent[1] or "{}")
+        if parent[0] != "root" or not pprops.get("doc_id"):
+            raise HTTPException(409, "parent must be an existing Gamma PDF page")
+        row = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
+        existing = block_to_dict(row) if row else None
+        props = existing["properties"] if existing else {}
+        revision = props.get("audio_revision", 0)
+        if existing and (existing["parent_id"] != payload.parent_id or props.get("type") != "audio" or not isinstance(revision, int) or revision < 1):
+            raise HTTPException(409, "block ID belongs to another block or audio scope")
+        incoming = [{"id": s.id, "asset": s.asset, "duration": s.duration} for s in payload.segments]
+        incoming_replay = ([event.model_dump(exclude_none=True) for event in payload.replay_events]
+                           if payload.replay_events is not None else None)
+        old_segments = props.get("segments", [])
+        # Stored segments carry derived start_time; compare only client-owned fields
+        # so exact retries remain idempotent after the first save. An omitted
+        # replay_events field is an old-client save and preserves the stored timeline.
+        comparable_old = [{k: s.get(k) for k in ("id", "asset", "duration")}
+                          for s in old_segments if isinstance(s, dict)]
+        timeline_same = (incoming_replay is None or props.get("replay_events", []) == incoming_replay)
+        if existing and props.get("audio_state") == payload.audio_state and comparable_old == incoming and timeline_same:
+            return existing
+        if payload.expected_revision is not None and payload.expected_revision != revision:
+            raise HTTPException(409, {"message": "audio revision conflict", "current_revision": revision})
+        for seg in payload.segments:
+            if not ASSET_REF_RE.fullmatch(seg.asset) or not seg.asset.endswith(".m4a"):
+                raise HTTPException(422, "expected a local M4A asset URL")
+            if not asset_path(user, seg.asset.rsplit("/", 1)[-1]).is_file():
+                raise HTTPException(404, "audio asset not found; upload assets before saving audio")
+        start = 0.0
+        segments = []
+        for seg in payload.segments:
+            segments.append({"id": seg.id, "asset": seg.asset, "duration": seg.duration, "start_time": start})
+            start += seg.duration
+        props.update(type="audio", audio_revision=revision + 1, audio_state=payload.audio_state, segments=segments, duration=total)
+        if payload.replay_events is not None:
+            props["replay_events"] = incoming_replay
+        now = page_now()
+        if existing:
+            conn.execute("UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?", (json.dumps(props), now, block_id))
+        else:
+            last = conn.execute("SELECT position FROM unified_blocks WHERE parent_id = ? ORDER BY position DESC LIMIT 1", (payload.parent_id,)).fetchone()
+            pos = generate_key_between(last[0] if last else None, None)
+            conn.execute(f"INSERT INTO unified_blocks ({BLOCK_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)", (block_id, payload.parent_id, pos, "", json.dumps(props), now, now))
         result = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
         conn.commit()
     return block_to_dict(result)

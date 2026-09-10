@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.gamma.ipad.agent-build</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__CHECKOUT__/ipad/scripts/mac-agent-build.sh</string>
+  </array>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>RunAtLoad</key><false/>
+  <key>KeepAlive</key><false/>
+  <key>StandardOutPath</key><string>__CHECKOUT__/gui-build/stdout.log</string>
+  <key>StandardErrorPath</key><string>__CHECKOUT__/gui-build/stderr.log</string>
+</dict>
+</plist>

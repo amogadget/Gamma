@@ -41,11 +41,12 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Lint frontend (ESLint)
+      - name: Lint and test frontend
         run: |
           cd frontend
           npm ci
           npm run lint
+          npm test
 
   build-and-push:
     needs: test
