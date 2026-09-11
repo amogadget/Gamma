@@ -27,7 +27,7 @@ Verification results and remaining hardware boundaries will be recorded below af
 - Queue tests cover duplicate requests, active cancellation, retry, persisted in-flight recovery, corrupt PDF, missing/local-only audio and account-generation invalidation.
 - Local cold-entry test opens a cached PDF and plays locally created unuploaded audio without an API session; corruption tests preserve source bytes and invalidate visible readiness.
 - Download-manager portrait/landscape screenshots were exported and visually reviewed.
-- Manual GUI LaunchAgent device-signing build completed with `exit_code=0`. No installation was performed.
+- Manual GUI LaunchAgent device-signing build completed with `exit_code=0`. Subsequently installed the signed update on the connected iPad Pro 11-inch (2nd generation) and successfully launched `com.gamma.pdfnotes.ipad` using devicectl; the app was not uninstalled and its data was not cleared. Installation/launch is not a flight-mode acceptance test.
 
 ### Remaining acceptance boundaries
 
