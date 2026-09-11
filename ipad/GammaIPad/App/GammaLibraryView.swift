@@ -9,6 +9,9 @@ struct GammaLibraryView: View {
     @State private var grid = false
     @State private var alphabetical = false
     @State private var showStatus = false
+    @State private var selecting = false
+    @State private var selection = Set<String>()
+    @State private var showDownloads = false
 
     var body: some View {
         GeometryReader { geometry in
@@ -29,6 +32,7 @@ struct GammaLibraryView: View {
                 }
             }.background(Color(uiColor: .secondarySystemBackground))
         }.tint(GammaTheme.accent)
+        .sheet(isPresented: $showDownloads) { GammaDownloadsView(workspace: workspace) }
     }
     private func toolbar(compact: Bool) -> some View {
         HStack(spacing: 12) {
@@ -36,6 +40,8 @@ struct GammaLibraryView: View {
                 Image(systemName: "house").font(.system(size: 16)).frame(width: 32, height: 32)
                     .background(folder.isEmpty ? GammaTheme.line : .clear, in: RoundedRectangle(cornerRadius: 5))
             }.buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Library home")
+            Button { showDownloads = true } label: { Image(systemName: "arrow.down.circle") }
+                .accessibilityLabel("Downloads on this iPad")
             Text("Gamma").font(.system(size: 15, weight: .semibold))
             if !folder.isEmpty {
                 Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.tertiary)
@@ -99,6 +105,7 @@ struct GammaLibraryView: View {
                                 .background(GammaTheme.surface, in: RoundedRectangle(cornerRadius: 7))
                                 .overlay(RoundedRectangle(cornerRadius: 7).stroke(GammaTheme.line, lineWidth: 1))
                         }.buttonStyle(.plain).disabled(workspace.busy)
+                        .contextMenu { Button("Download PDF, notes and recordings") { workspace.enqueueDownloads([paper]) }.disabled(workspace.isOffline) }
                     }
                 }
             }
@@ -128,6 +135,14 @@ struct GammaLibraryView: View {
                 caption(search.isEmpty ? (folder.isEmpty ? "ALL FILES" : "FILES") : "SEARCH RESULTS")
                 Text("\(filtered.count)").font(.system(size: 10)).foregroundStyle(.tertiary)
                 Spacer()
+                Button(selecting ? "Done" : "Select") { selecting.toggle(); selection.removeAll() }.font(.caption)
+                if selecting {
+                    Button("Select all") { selection = Set(filtered.map(\.id)) }.font(.caption)
+                    Button("Download (\(selection.count))") {
+                        workspace.enqueueDownloads(workspace.papers.filter { selection.contains($0.id) })
+                        selection.removeAll(); selecting = false; showDownloads = true
+                    }.font(.caption).disabled(selection.isEmpty || workspace.isOffline)
+                }
                 Menu {
                     Button("Recently modified") { alphabetical = false }
                     Button("Title A–Z") { alphabetical = true }
@@ -155,6 +170,7 @@ struct GammaLibraryView: View {
                                 .background(GammaTheme.surface, in: RoundedRectangle(cornerRadius: 8))
                                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(GammaTheme.line))
                         }.buttonStyle(.plain).disabled(workspace.busy)
+                        .contextMenu { Button("Download PDF, notes and recordings") { workspace.enqueueDownloads([paper]) }.disabled(workspace.isOffline) }
                     }
                 }
             } else {
@@ -167,7 +183,8 @@ struct GammaLibraryView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                 folderChips(paper)
                             }.padding(.horizontal, 8).frame(minHeight: 44).contentShape(Rectangle())
-                        }.buttonStyle(.plain).disabled(workspace.busy).accessibilityIdentifier("gamma-page-\(paper.id)")
+                        }.buttonStyle(.plain).disabled(workspace.busy)
+                        .contextMenu { Button("Download PDF, notes and recordings") { workspace.enqueueDownloads([paper]) }.disabled(workspace.isOffline) }.accessibilityIdentifier("gamma-page-\(paper.id)")
                     }
                 }
             }
@@ -191,6 +208,11 @@ struct GammaLibraryView: View {
     }
     private func folderChips(_ paper: GammaPaper) -> some View {
         HStack(spacing: 8) {
+            if selecting { Image(systemName: selection.contains(paper.id) ? "checkmark.circle.fill" : "circle") }
+            if let entry = workspace.offlineEntries[paper.id] {
+                Image(systemName: entry.state == .ready ? "checkmark.circle.fill" : "arrow.down.circle")
+                    .accessibilityLabel(entry.state.rawValue)
+            }
             if let path = paper.folders.first {
                 Label(path.split(separator: "/").last.map(String.init) ?? path, systemImage: "folder")
                     .font(.system(size: 10)).foregroundStyle(GammaTheme.accent).lineLimit(1)
@@ -198,7 +220,10 @@ struct GammaLibraryView: View {
             Text("PDF").font(.system(size: 10)).foregroundStyle(.tertiary)
         }
     }
-    private func open(_ paper: GammaPaper) { Task { await workspace.open(paper) } }
+    private func open(_ paper: GammaPaper) {
+        if selecting { if !selection.insert(paper.id).inserted { selection.remove(paper.id) } }
+        else { Task { await workspace.open(paper) } }
+    }
     static func belongs(_ paper: GammaPaper, to folder: String) -> Bool {
         folder.isEmpty || paper.folders.contains { $0 == folder || $0.hasPrefix(folder + "/") }
     }

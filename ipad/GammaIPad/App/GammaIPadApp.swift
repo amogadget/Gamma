@@ -40,14 +40,23 @@ struct GammaRootView: View {
                                 Button { Task {
                                     if await workspace.prepareWebWorkspace() { webReloadToken = UUID(); useWeb = true }
                                 } } label: { Label("Full Gamma", systemImage: "chevron.left") }
-                                .font(.caption).disabled(workspace.busy || workspace.syncing)
+                                .font(.caption).disabled(workspace.busy || workspace.syncing || workspace.isOffline)
                                 Spacer()
-                                Text("Pencil · Recording · Replay").font(.caption2).foregroundStyle(.secondary)
+                                Text(workspace.isOffline ? "On this iPad · sign in to sync" : "Pencil · Recording · Replay").font(.caption2).foregroundStyle(.secondary)
                             }.padding(.horizontal, 14).frame(height: 34).background(GammaTheme.surface)
                             if let paper = workspace.paper, let document = workspace.document {
                                 GammaReaderView(workspace: workspace, paper: paper, document: document)
                             } else { library }
                         }
+                    }
+                }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    if useWeb, workspace.webSession != nil {
+                        HStack { Spacer(); Button { workspace.closeReader(); useWeb = false } label: {
+                            Label("On this iPad", systemImage: "arrow.down.circle")
+                        }.buttonStyle(.bordered).controlSize(.small)
+                            .disabled(workspace.busy || workspace.syncing)
+                        }.padding(.horizontal, 12).padding(.vertical, 4).background(GammaTheme.surface)
                     }
                 }
                 .overlay(alignment: .bottom) {
@@ -62,6 +71,7 @@ struct GammaRootView: View {
             }
         }
         .tint(GammaTheme.accent)
+        .task { workspace.reloadOfflineAccounts() }
         .onChange(of: workspace.webSession?.id) { _, id in if id != nil { useWeb = true } }
         .task(id: workspace.username) {
             guard workspace.username != nil else { return }
@@ -75,7 +85,7 @@ struct GammaRootView: View {
         }
     }
     private var signIn: some View {
-        VStack(spacing: 24) {
+        ScrollView { VStack(spacing: 24) {
             Spacer()
             VStack(spacing: 8) {
                 Image("GammaMark").resizable().scaledToFit().frame(width: 84, height: 84)
@@ -97,11 +107,29 @@ struct GammaRootView: View {
                         .padding(.vertical, 6)
                 }.buttonStyle(.borderedProminent).disabled(workspace.busy || username.isEmpty || password.isEmpty)
             }.textFieldStyle(.roundedBorder).padding(24).background(GammaTheme.surface, in: RoundedRectangle(cornerRadius: 12))
+            if !workspace.offlineAccounts.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Open files on this iPad").font(.headline)
+                    Text("No connection needed. Sign in to the same account later to sync edits.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(workspace.offlineAccounts) { account in
+                        Button {
+                            workspace.enterOffline(account); useWeb = false
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Label(account.username, systemImage: "ipad")
+                                Text(account.server).font(.caption2).lineLimit(2)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }.buttonStyle(.bordered).disabled(workspace.busy)
+                    }
+                }
+            }
             if let error = workspace.errorMessage { Text(error).font(.caption).foregroundStyle(.red) }
             Text("Connect to your Gamma server. Credentials stay on this device only for the current session.")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Spacer(); Spacer()
-        }.frame(maxWidth: 380).padding(28).frame(maxWidth: .infinity, maxHeight: .infinity).background(GammaTheme.canvas)
+        }.frame(maxWidth: 380).padding(28).frame(maxWidth: .infinity)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity).background(GammaTheme.canvas)
     }
     private var library: some View { GammaLibraryView(workspace: workspace) }
 }

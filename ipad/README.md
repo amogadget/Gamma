@@ -6,11 +6,17 @@ Native Gamma client for iPadOS 17+, Swift 5.9 / Xcode 15+, and XcodeGen 2.38+. *
 
 ## Use
 
-1. Enter your HTTPS Gamma server and account. The authenticated session stays alive while moving between library and reader. Only server URL and authenticated username are remembered; passwords/cookies are not persisted. Relaunch requires explicit login. A currently signed-in session can read cached documents and queue edits during a network outage.
+1. Enter your HTTPS Gamma server and account. The authenticated session stays alive while moving between library and reader. Only server URL and authenticated username are remembered; passwords/cookies are not persisted. Relaunch offers **Open files on this iPad** for existing local accounts without a network connection or additional local authentication. This is not a server session; sign in to the same server/account to sync pending edits.
 2. After sign-in, **Full Gamma** opens the actual Web workspace inside the app: the existing Markdown/math editor, block tree, search, AI, settings and import/export UI. Open a PDF there and choose **Pencil & Audio** to switch that same document to PDFKit/PencilKit; the original cached PDF is downloaded without changing its Gamma identity. **Full Gamma** returns after pending native changes sync and reloads the Web tree. See `WEB_PARITY.md` for the feature matrix and platform limits.
 3. In the native workspace, **Select text** enables PDFKit selection; long-press a passage, adjust the handles and choose a highlight color. It creates an ordinary Gamma highlight/note block. For handwriting, navigate to a PDF page and press **New Ink**. Multiple Pencil strokes belong to that one `pdf_ink` unified block, directly under the existing Gamma PDF page. New Ink is explicit; writing does not create one note per stroke.
 4. The **Notes** tree stays next to the PDF. Select an Ink block to edit its strokes; all other ink is read-only background. Edit the annotation’s own content in **Annotation note**, and add ordinary child notes with **Add Child Note**. Selecting an annotation navigates to its PDF page.
 5. **Saved on iPad / pending** is not a server success. The durable outbox retries every 15 seconds while signed in, on activation, and through **Retry Sync**. **Reload Notes** fetches the current remote subtree and editable sources. Revision conflicts stop that ink upload until explicitly choosing local or remote; choosing remote archives the old local source in the cache.
+
+## Offline downloads
+
+Choose **On this iPad** from Full Gamma, then **Select → Download** in the native library (or a document’s context menu). Downloads include PDF, notes/handwriting and recordings. Valid local recordings are reused; only missing remote audio is fetched. The download manager shows component readiness, per-document/total local size, cancellation/retry and explicit local-file removal.
+
+Intentional downloads remain until you remove them. **No cache budget or automatic eviction** is imposed. Removing local files never deletes server documents, pending edits or recording recovery sources. See [OFFLINE.md](OFFLINE.md) for behavior and verification boundaries.
 
 ## Identity, storage, and synchronization
 
@@ -18,6 +24,8 @@ Native Gamma client for iPadOS 17+, Swift 5.9 / Xcode 15+, and XcodeGen 2.38+. *
 
 `Library/Application Support/GammaCache/<SHA256(server + authenticated username)>/` contains:
 
+- `identity.json`: non-secret canonical server and authenticated username for local account discovery.
+- `offline.json`: persistent per-document preparation queue and component readiness.
 - `library.json`: cached Gamma page IDs and document metadata.
 - `source-<SHA256(doc_id)>.pdf`: immutable original PDF bytes.
 - `page-<SHA256(page_id)>.json`: Gamma block tree, per-block PencilKit source archives, and durable pending mutations in one atomic snapshot.
