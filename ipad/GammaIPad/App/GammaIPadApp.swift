@@ -16,6 +16,7 @@ struct GammaRootView: View {
     @State private var password = ""
     @State private var useWeb = true
     @State private var webReloadToken: UUID?
+    @State private var showDownloads = false
 
     var body: some View {
         Group {
@@ -44,8 +45,8 @@ struct GammaRootView: View {
                                 Spacer()
                                 if workspace.isOffline {
                                     GammaReconnectButton(workspace: workspace)
-                                } else {
-                                    Text("Pencil · Recording · Replay").font(.caption2).foregroundStyle(.secondary)
+                                } else if workspace.paper == nil {
+                                    Text("Library").font(.caption2).foregroundStyle(.secondary)
                                 }
                             }.padding(.horizontal, 14).frame(height: 34).background(GammaTheme.surface)
                             if let paper = workspace.paper, let document = workspace.document {
@@ -56,8 +57,8 @@ struct GammaRootView: View {
                 }
                 .safeAreaInset(edge: .top, spacing: 0) {
                     if useWeb, workspace.webSession != nil {
-                        HStack { Spacer(); Button { workspace.closeReader(); useWeb = false } label: {
-                            Label("On this iPad", systemImage: "arrow.down.circle")
+                        HStack { Spacer(); Button { showDownloads = true } label: {
+                            Label("Downloads", systemImage: "arrow.down.circle")
                         }.buttonStyle(.bordered).controlSize(.small)
                             .disabled(workspace.busy || workspace.syncing)
                         }.padding(.horizontal, 12).padding(.vertical, 4).background(GammaTheme.surface)
@@ -75,6 +76,7 @@ struct GammaRootView: View {
             }
         }
         .tint(GammaTheme.accent)
+        .sheet(isPresented: $showDownloads) { GammaDownloadsView(workspace: workspace) }
         .task { workspace.reloadOfflineAccounts() }
         .onChange(of: workspace.webSession?.id) { _, id in if id != nil { useWeb = true } }
         .task(id: workspace.username) {

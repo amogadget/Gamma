@@ -5,6 +5,8 @@ struct GammaDownloadsView: View {
     @ObservedObject var workspace: GammaWorkspace
     @Environment(\.dismiss) private var dismiss
     @State private var removal: GammaPaper?
+    @State private var selecting = false
+    @State private var selection = Set<String>()
 
     var body: some View {
         NavigationStack {
@@ -23,10 +25,28 @@ struct GammaDownloadsView: View {
                 if let error = workspace.errorMessage {
                     Section { Text(error).font(.caption).foregroundStyle(.red) }
                 }
+                if selecting {
+                    Section {
+                        Button("Select all") { selection = Set(workspace.papers.map(\.id)) }
+                        Button("Download selected (\(selection.count))") {
+                            workspace.enqueueDownloads(workspace.papers.filter { selection.contains($0.id) })
+                            selection.removeAll(); selecting = false
+                        }.disabled(selection.isEmpty || workspace.isOffline)
+                    }
+                }
                 Section("Documents") {
                     ForEach(workspace.papers) { paper in
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(paper.content.isEmpty ? "Untitled PDF" : paper.content).font(.headline)
+                            HStack {
+                                if selecting {
+                                    Button {
+                                        if !selection.insert(paper.id).inserted { selection.remove(paper.id) }
+                                    } label: {
+                                        Image(systemName: selection.contains(paper.id) ? "checkmark.circle.fill" : "circle")
+                                    }.accessibilityLabel("Select \(paper.content)")
+                                }
+                                Text(paper.content.isEmpty ? "Untitled PDF" : paper.content).font(.headline)
+                            }
                             Text(ByteCountFormatter.string(fromByteCount: workspace.localDocumentBytes[paper.id] ?? 0, countStyle: .file))
                                 .font(.caption).foregroundStyle(.secondary)
                             if let entry = workspace.offlineEntries[paper.id] {
@@ -60,8 +80,13 @@ struct GammaDownloadsView: View {
                 }
             }
             .buttonStyle(.borderless)
-            .navigationTitle("On this iPad")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .navigationTitle("Downloads")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(selecting ? "Cancel selection" : "Select") { selecting.toggle(); selection.removeAll() }
+                }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
             .onAppear { workspace.refreshOfflineStatus() }
             .confirmationDialog("Remove downloaded files from this iPad?", isPresented: Binding(
                 get: { removal != nil }, set: { if !$0 { removal = nil } }

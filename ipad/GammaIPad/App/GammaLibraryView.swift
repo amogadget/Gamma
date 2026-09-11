@@ -41,7 +41,7 @@ struct GammaLibraryView: View {
                     .background(folder.isEmpty ? GammaTheme.line : .clear, in: RoundedRectangle(cornerRadius: 5))
             }.buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("Library home")
             Button { showDownloads = true } label: { Image(systemName: "arrow.down.circle") }
-                .accessibilityLabel("Downloads on this iPad")
+                .accessibilityLabel("Downloads")
             Text("Gamma").font(.system(size: 15, weight: .semibold))
             if !folder.isEmpty {
                 Image(systemName: "chevron.right").font(.system(size: 9)).foregroundStyle(.tertiary)

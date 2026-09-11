@@ -10,7 +10,7 @@
 
 ## Workflow
 
-From Full Gamma, choose **On this iPad** to open the native library. Choose **Select**, select documents, then **Download**. A document's context menu also offers download. The download button in the native library opens component status, retry/cancel controls and explicit local-file removal.
+From Full Gamma, choose **Downloads** to open download management directly, without changing the Web workspace or entering the PDF editor. Choose **Select**, select documents, then **Download selected**. The native library also provides download selection and a download-management button. Handwriting and recording controls belong only to an opened PDF, not to the library or Downloads page.
 
 After restarting without a connection, choose a saved account under **Open files on this iPad**. Open prepared documents normally. To reconnect, tap **Sign in to sync** in the native workspace header or download manager. The sheet shows the current server/account and asks only for its password. Cancel or failed authentication keeps the local workspace intact; successful authentication syncs without closing the current reader. Pending changes are not sent using a different account.
 
@@ -36,3 +36,7 @@ Physical iPad flight-mode process relaunch, real Pencil/microphone interactions,
 ### Direct sign-in UI correction
 
 The offline header and download manager now provide an actual **Sign in to sync** button. Its same-account password sheet allows cancellation without sign-out and reconnects without closing the current reader. Simulator regression after this correction: **110 passed, 5 skipped, 0 failed**. The form screenshot was reviewed; the signed correction was installed and launched on the connected iPad without uninstalling or clearing its data.
+
+### Download navigation separation
+
+Full Gamma’s **Downloads** action now presents the manager as a sheet and never closes the reader or switches into the native editor. The manager supports multi-selection directly. The library no longer carries a Pencil/Recording/Replay banner. Full simulator regression: **110 passed, 5 skipped, 0 failed**; additional download-manager isolation checks pass. The signed update was installed and launched on the connected iPad without uninstalling or clearing data.

@@ -14,7 +14,7 @@ Native Gamma client for iPadOS 17+, Swift 5.9 / Xcode 15+, and XcodeGen 2.38+. *
 
 ## Offline downloads
 
-Choose **On this iPad** from Full Gamma, then **Select → Download** in the native library (or a document’s context menu). Downloads include PDF, notes/handwriting and recordings. Valid local recordings are reused; only missing remote audio is fetched. The download manager shows component readiness, per-document/total local size, cancellation/retry and explicit local-file removal.
+Choose **Downloads** from Full Gamma, then **Select → Download selected**. This opens download management directly, not the handwriting/recording workspace. The native library also offers downloads through selection or a document’s context menu. Downloads include PDF, notes/handwriting and recordings. Valid local recordings are reused; only missing remote audio is fetched. The download manager shows component readiness, per-document/total local size, cancellation/retry and explicit local-file removal.
 
 Intentional downloads remain until you remove them. **No cache budget or automatic eviction** is imposed. Removing local files never deletes server documents, pending edits or recording recovery sources. See [OFFLINE.md](OFFLINE.md) for behavior and verification boundaries.
 

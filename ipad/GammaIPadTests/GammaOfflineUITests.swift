@@ -20,6 +20,10 @@ final class GammaOfflineUITests: XCTestCase {
                     state: index == 0 ? .ready : .failed, pdfReady: true, snapshotReady: true, audioReady: index == 0,
                     error: index == 0 ? nil : "A recording segment is missing. Local recovery files were preserved.")
             }
+            // Download management must not enter or close a PDF editor.
+            let current = workspace.papers[0]
+            workspace.paper = current
+            workspace.selectedID = "keep-current-selection"
             let host = UIHostingController(rootView: GammaDownloadsView(workspace: workspace))
             let window = UIWindow(windowScene: scene); window.frame = CGRect(origin: .zero, size: size)
             window.rootViewController = host; window.makeKeyAndVisible()
@@ -34,6 +38,9 @@ final class GammaOfflineUITests: XCTestCase {
             attachment.lifetime = .keepAlways; add(attachment)
             XCTAssertNil(workspace.webSession)
             XCTAssertEqual(workspace.offlineEntries.count, 4)
+            XCTAssertEqual(workspace.paper?.id, current.id)
+            XCTAssertEqual(workspace.selectedID, "keep-current-selection")
+            XCTAssertNil(workspace.document)
         }
     }
     @MainActor
