@@ -36,4 +36,29 @@ final class GammaOfflineUITests: XCTestCase {
             XCTAssertEqual(workspace.offlineEntries.count, 4)
         }
     }
+    @MainActor
+    func testReconnectFormShowsAccountAndPasswordWithoutLeavingLocalWorkspace() async throws {
+        let workspace = GammaWorkspace()
+        workspace.username = "Offline test reader"
+        workspace.accountServer = "https://offline-test.invalid"
+        workspace.isOffline = true
+        let paper = GammaPaper(id: "current", parentID: "root", content: "Current PDF", properties: GammaProperties(docID: "doc"))
+        workspace.paper = paper
+        let host = UIHostingController(rootView: GammaReconnectView(workspace: workspace))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let oldKey = scene.windows.first { $0.isKeyWindow }
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = host; window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil; oldKey?.makeKeyAndVisible() }
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(400))
+        let image = UIGraphicsImageRenderer(bounds: host.view.bounds).image { _ in
+            XCTAssertTrue(host.view.drawHierarchy(in: host.view.bounds, afterScreenUpdates: true))
+        }
+        let attachment = XCTAttachment(image: image); attachment.name = "Gamma-reconnect-form"
+        attachment.lifetime = .keepAlways; add(attachment)
+        XCTAssertTrue(workspace.isOffline); XCTAssertEqual(workspace.paper?.id, paper.id)
+        XCTAssertNil(workspace.api)
+    }
+
 }

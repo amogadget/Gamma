@@ -16,7 +16,8 @@ struct GammaDownloadsView: View {
                     Text("Downloads stay on this iPad until you remove them. PDF, notes, handwriting and recordings are prepared together. Existing local recordings are reused.")
                         .font(.caption).foregroundStyle(.secondary)
                     if workspace.isOffline {
-                        Label("Local workspace · sign in to download or sync", systemImage: "wifi.slash")
+                        Label("Files saved on this iPad", systemImage: "wifi.slash")
+                        GammaReconnectButton(workspace: workspace)
                     }
                 }
                 if let error = workspace.errorMessage {

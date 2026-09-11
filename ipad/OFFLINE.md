@@ -12,7 +12,7 @@
 
 From Full Gamma, choose **On this iPad** to open the native library. Choose **Select**, select documents, then **Download**. A document's context menu also offers download. The download button in the native library opens component status, retry/cancel controls and explicit local-file removal.
 
-After restarting without a connection, choose a saved account under **Open files on this iPad**. Open prepared documents normally. To reconnect, leave the local workspace through the account menu and sign in to the same server/account; pending changes are not sent using a different account.
+After restarting without a connection, choose a saved account under **Open files on this iPad**. Open prepared documents normally. To reconnect, tap **Sign in to sync** in the native workspace header or download manager. The sheet shows the current server/account and asks only for its password. Cancel or failed authentication keeps the local workspace intact; successful authentication syncs without closing the current reader. Pending changes are not sent using a different account.
 
 ## Safety and verification
 
@@ -32,3 +32,7 @@ Verification results and remaining hardware boundaries will be recorded below af
 ### Remaining acceptance boundaries
 
 Physical iPad flight-mode process relaunch, real Pencil/microphone interactions, OS suspension under memory pressure, disk exhaustion and large-library performance have not been hardware-validated. The live test seeds the PDF through a data request because the test-only URLProtocol bridge does not exercise URLSession download tasks; real-network PDF interruption remains a device acceptance boundary. No production accounts or user recordings were used. No commits were pushed.
+
+### Direct sign-in UI correction
+
+The offline header and download manager now provide an actual **Sign in to sync** button. Its same-account password sheet allows cancellation without sign-out and reconnects without closing the current reader. Simulator regression after this correction: **110 passed, 5 skipped, 0 failed**. The form screenshot was reviewed; the signed correction was installed and launched on the connected iPad without uninstalling or clearing its data.

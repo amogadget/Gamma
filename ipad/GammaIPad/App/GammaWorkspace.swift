@@ -62,18 +62,24 @@ final class GammaWorkspace: ObservableObject {
     var selectedInkPage: Int? { selected?.isInk == true ? selected?.properties.pdfPage.map { $0 - 1 } : nil }
     var pendingCount: Int { page?.outbox.count ?? 0 }
 
-    func login(server: String, username: String, password: String) async {
-        guard !busy, !syncing else { return }
+    func login(server: String, username: String, password: String, reconnect: Bool = false) async {
+        guard !busy, !syncing, recorder.pauseBeforeLeaving() else { return }
         busy = true
         defer { busy = false }
         var candidate: GammaAPI?
         do {
             let client = try GammaAPI(server: server); candidate = client
             let authenticatedUser = try await client.login(username: username, password: password)
+            if reconnect {
+                guard authenticatedUser == self.username,
+                      GammaCache.canonicalServer(client.baseURL) == GammaCache.canonicalServer(accountServer) else {
+                    throw GammaAPI.APIError.message("Sign in to the same account. Your local workspace and edits were preserved.")
+                }
+            }
             let storage = try GammaCache.application(server: client.baseURL, username: authenticatedUser)
             let library = try storage.library()
             recentPageIDs = try storage.recentPageIDs()
-            stopOfflineWorker(); api?.close(); closeReader()
+            stopOfflineWorker(); api?.close(); if !reconnect { closeReader() }
             api = client; cache = storage; self.username = authenticatedUser
             isOffline = false; accountServer = client.baseURL.absoluteString
             accountGeneration = UUID(); papers = library; errorMessage = nil; syncUnavailable = false
@@ -83,7 +89,7 @@ final class GammaWorkspace: ObservableObject {
             await refreshLibrary()
             busy = false
             await sync()
-            if (try? storage.pendingPages().flatMap(\.outbox).filter({ $0.kind != .inkPreview }).isEmpty) == true {
+            if !reconnect, (try? storage.pendingPages().flatMap(\.outbox).filter({ $0.kind != .inkPreview }).isEmpty) == true {
                 webSession = GammaWebSession(id: UUID(), serverURL: client.baseURL, cookies: client.sessionCookies())
             }
         } catch { candidate?.close(); errorMessage = error.localizedDescription }

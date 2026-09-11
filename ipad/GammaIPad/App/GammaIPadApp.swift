@@ -42,7 +42,11 @@ struct GammaRootView: View {
                                 } } label: { Label("Full Gamma", systemImage: "chevron.left") }
                                 .font(.caption).disabled(workspace.busy || workspace.syncing || workspace.isOffline)
                                 Spacer()
-                                Text(workspace.isOffline ? "On this iPad · sign in to sync" : "Pencil · Recording · Replay").font(.caption2).foregroundStyle(.secondary)
+                                if workspace.isOffline {
+                                    GammaReconnectButton(workspace: workspace)
+                                } else {
+                                    Text("Pencil · Recording · Replay").font(.caption2).foregroundStyle(.secondary)
+                                }
                             }.padding(.horizontal, 14).frame(height: 34).background(GammaTheme.surface)
                             if let paper = workspace.paper, let document = workspace.document {
                                 GammaReaderView(workspace: workspace, paper: paper, document: document)
