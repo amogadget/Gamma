@@ -18,14 +18,25 @@ final class GammaWorkspace: ObservableObject {
     @Published var syncing = false
     @Published var syncUnavailable = false
     @Published var webSession: GammaWebSession?
-    private var api: GammaAPI?
-    private var cache: GammaCache?
-    private var accountGeneration = UUID()
+    var api: GammaAPI?
+    var cache: GammaCache?
+    var accountGeneration = UUID()
     let recorder = GammaRecordingController()
     private var currentPDFPage = 1
     private var strokeBegins: [String: GammaAudioStamp] = [:]
     private var replaySources: [String: (Data, PKDrawing)] = [:]
     private var pendingInkTiming: [String: (data: Data, recordingID: String, events: [GammaReplayEvent])] = [:]
+    // A selected local cache never grants server permissions.
+    @Published var isOffline = false
+    @Published var accountServer = ""
+    @Published var offlineEntries: [String: GammaOfflineEntry] = [:]
+    @Published var localUsageBytes: Int64 = 0
+    @Published var localDocumentBytes: [String: Int64] = [:]
+    @Published var offlineAccounts: [GammaOfflineIdentity] = []
+    var offlineWorker: Task<Void, Never>?
+    var offlineWorkerID = UUID()
+    var activeDownloadID: String?
+    var hydratingPages = Set<String>()
 
     private let recordingClock: (() -> GammaAudioStamp?)?
     private var audioStamp: GammaAudioStamp? { recordingClock?() ?? recorder.recordingStamp }
@@ -34,6 +45,16 @@ final class GammaWorkspace: ObservableObject {
         self.cache = cache
         self.api = api
         self.username = api?.authenticatedUsername
+        self.accountServer = api?.baseURL.absoluteString ?? ""
+        if let cache, let identity = try? cache.accountIdentity() {
+            self.username = identity.username; self.accountServer = identity.server; self.isOffline = api == nil
+        }
+        if let api, let cache, let identity = try? cache.accountIdentity(),
+           api.authenticatedUsername != identity.username || GammaCache.canonicalServer(api.baseURL) != identity.server {
+            self.api = nil; self.isOffline = true
+            self.errorMessage = "Authenticated session does not match this local account. Files remain isolated."
+        }
+        reloadOfflineAccounts(); refreshOfflineStatus()
         recorder.canRollSegment = { [weak self] in self?.strokeBegins.isEmpty ?? true }
     }
 
@@ -42,6 +63,7 @@ final class GammaWorkspace: ObservableObject {
     var pendingCount: Int { page?.outbox.count ?? 0 }
 
     func login(server: String, username: String, password: String) async {
+        guard !busy, !syncing else { return }
         busy = true
         defer { busy = false }
         var candidate: GammaAPI?
@@ -51,8 +73,11 @@ final class GammaWorkspace: ObservableObject {
             let storage = try GammaCache.application(server: client.baseURL, username: authenticatedUser)
             let library = try storage.library()
             recentPageIDs = try storage.recentPageIDs()
+            stopOfflineWorker(); api?.close(); closeReader()
             api = client; cache = storage; self.username = authenticatedUser
+            isOffline = false; accountServer = client.baseURL.absoluteString
             accountGeneration = UUID(); papers = library; errorMessage = nil; syncUnavailable = false
+            reloadOfflineAccounts(); restoreOfflineQueue()
             UserDefaults.standard.set(client.baseURL.absoluteString, forKey: "gamma.server")
             UserDefaults.standard.set(authenticatedUser, forKey: "gamma.username")
             await refreshLibrary()
@@ -65,10 +90,11 @@ final class GammaWorkspace: ObservableObject {
     }
     func signOut() async {
         guard !syncing, !busy, recorder.pauseBeforeLeaving() else { return }
-        accountGeneration = UUID()
+        busy = true; defer { busy = false }
+        stopOfflineWorker(); accountGeneration = UUID()
         await api?.logout(); api?.close(); api = nil; cache = nil
-        webSession = nil
-        username = nil; papers = []; recentPageIDs = []; closeReader(); status = "Signed out. Cached data and pending changes are preserved for this account."
+        webSession = nil; localUsageBytes = 0; reloadOfflineAccounts()
+        username = nil; papers = []; recentPageIDs = []; accountServer = ""; isOffline = false; offlineEntries = [:]; closeReader(); status = "Signed out. Cached data and pending changes are preserved for this account."
     }
     func prepareWebWorkspace() async -> Bool {
         guard !busy, !syncing, recorder.pauseBeforeLeaving(), let api, let cache else { return false }
@@ -100,8 +126,10 @@ final class GammaWorkspace: ObservableObject {
             }
             let storage = try GammaCache.application(server: client.baseURL, username: user)
             let library = try storage.library(), recent = try storage.recentPageIDs()
-            api?.close(); api = client; cache = storage; username = user
+            stopOfflineWorker(); api?.close(); api = client; cache = storage; username = user
+            accountServer = GammaCache.canonicalServer(client.baseURL); isOffline = false
             accountGeneration = UUID(); papers = library; recentPageIDs = recent
+            restoreOfflineQueue()
             busy = false
             await open(remote)
             return paper?.id == request.pageID && document != nil
@@ -174,18 +202,20 @@ final class GammaWorkspace: ObservableObject {
         catch { recorder.errorMessage = error.localizedDescription }
     }
     func playRecording(_ id: String) async {
-        guard !busy, !recorder.recording, let cache, let api,
+        guard !busy, !recorder.recording, let cache,
               let block = page?.blocks.first(where: { $0.id == id && $0.isAudio }) else { return }
+        let activeAPI = api
+        let generation = accountGeneration
         busy = true; defer { busy = false }
         do {
             var urls: [URL] = []
             for segment in block.properties.segments ?? [] {
                 let url = try GammaRecordingFiles.url(root: cache.rootURL, recordingID: id, segmentID: segment.id)
                 if !FileManager.default.fileExists(atPath: url.path) {
-                    guard let asset = segment.asset else { throw CocoaError(.fileNoSuchFile) }
-                    let data = try await api.asset(asset)
-                    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                    guard let asset = segment.asset, let activeAPI else { throw CocoaError(.fileNoSuchFile) }
+                    let data = try await activeAPI.asset(asset)
+                    guard generation == accountGeneration else { throw CancellationError() }
+                    try installAudio(data, at: url)
                 }
                 _ = try GammaRecordingController.validatedDuration(url)
                 urls.append(url)
@@ -267,31 +297,48 @@ final class GammaWorkspace: ObservableObject {
 
     func refreshLibrary() async {
         guard let api, let cache else { return }
-        do { let library = try await api.papers(); try cache.saveLibrary(library); papers = library }
-        catch { errorMessage = error.localizedDescription; status = "Offline / session unavailable — showing cached Gamma library" }
+        let generation = accountGeneration
+        do {
+            let remote = try await api.papers()
+            guard generation == accountGeneration else { return }
+            let retained = try cache.loadOfflineEntries().values.map(\.paper)
+            let library = remote + retained.filter { p in !remote.contains(where: { $0.id == p.id }) }
+            try cache.saveLibrary(library); papers = library; refreshOfflineStatus()
+        }
+        catch { guard generation == accountGeneration else { return }; errorMessage = error.localizedDescription; status = "Offline / session unavailable — showing cached Gamma library" }
     }
     func open(_ paper: GammaPaper) async {
-        guard let cache, let api, let docID = paper.properties.docID else { return }
+        guard !busy, recorder.pauseBeforeLeaving(), let cache, let docID = paper.properties.docID else { return }
+        let activeAPI = api
+        let generation = accountGeneration
         busy = true; defer { busy = false }
         do {
             var snapshot = try cache.loadPage(pageID: paper.id, docID: docID)
             let source = cache.sourceURL(docID: docID)
             if !FileManager.default.fileExists(atPath: source.path) {
-                let temporary = try await api.download(paper)
+                guard let activeAPI else { throw GammaAPI.APIError.message("This document is not prepared for offline use.") }
+                let temporary = try await activeAPI.download(paper)
                 defer { try? FileManager.default.removeItem(at: temporary) }
                 guard let original = PDFDocument(url: temporary), !original.isLocked, original.pageCount > 0 else {
                     throw NoteStoreError.invalidPDF
                 }
+                guard generation == accountGeneration else { throw CancellationError() }
                 try cache.preserveSource(from: temporary, docID: docID)
             }
             guard let pdf = PDFDocument(url: source), !pdf.isLocked, pdf.pageCount > 0 else { throw NoteStoreError.invalidPDF }
             recentPageIDs = try cache.recordRecent(paper.id)
             self.paper = paper; document = pdf; page = snapshot; selectedID = nil; contentRevision += 1
-            do {
-                snapshot = try await hydrated(snapshot, api: api)
-                try cache.savePage(snapshot); page = snapshot; contentRevision += 1
-                errorMessage = nil
-            } catch { errorMessage = error.localizedDescription; status = "Cached Gamma page — remote hydration incomplete; retry available" }
+            if let activeAPI {
+                do {
+                    snapshot = try await hydrated(snapshot, api: activeAPI)
+                    guard generation == accountGeneration else { throw CancellationError() }
+                    try cache.savePage(snapshot); page = snapshot; contentRevision += 1
+                    errorMessage = nil
+                } catch { errorMessage = error.localizedDescription; status = "Cached Gamma page — remote hydration incomplete; retry available" }
+            } else {
+                status = "Offline Gamma workspace"
+                errorMessage = snapshot.blocks.contains(where: { $0.id == paper.id }) ? nil : "PDF is available, but notes have not been prepared. Sign in to download the current notes and recordings."
+            }
             busy = false
             await sync()
         } catch { errorMessage = error.localizedDescription }
@@ -371,6 +418,7 @@ final class GammaWorkspace: ObservableObject {
         pendingInkTiming.removeValue(forKey: blockID)
     }
     func createHighlights(_ selections: [GammaSelectedText], color: String) throws {
+        if let current = page, let cache { page = try cache.loadPage(pageID: current.pageID, docID: current.docID) }
         guard var snapshot = page, let document else { return }
         var last: String?
         for selection in selections where selection.page >= 1 && selection.page <= document.pageCount && !selection.quote.isEmpty {
@@ -386,6 +434,7 @@ final class GammaWorkspace: ObservableObject {
     }
 
     func newInk(pdfPage: Int) throws {
+        if let current = page, let cache { page = try cache.loadPage(pageID: current.pageID, docID: current.docID) }
         guard var snapshot = page, let document, (1...document.pageCount).contains(pdfPage) else { return }
         let id = UUID().uuidString.lowercased() // The server's permanent unified-block ID, NOT a new document/library.
         let data = PKDrawing().dataRepresentation()
@@ -397,6 +446,7 @@ final class GammaWorkspace: ObservableObject {
         try persist(snapshot); select(id)
     }
     func editContent(blockID: String, text: String) throws {
+        if let current = page, let cache { page = try cache.loadPage(pageID: current.pageID, docID: current.docID) }
         guard var snapshot = page, let index = snapshot.blocks.firstIndex(where: { $0.id == blockID }) else { return }
         guard snapshot.blocks[index].content != text else { return }
         let wasEmpty = snapshot.blocks[index].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -417,6 +467,7 @@ final class GammaWorkspace: ObservableObject {
         try persist(snapshot)
     }
     func addChild(parentID: String) throws {
+        if let current = page, let cache { page = try cache.loadPage(pageID: current.pageID, docID: current.docID) }
         guard var snapshot = page else { return }
         guard let parent = snapshot.blocks.first(where: { $0.id == parentID }),
               parent.isInk || parent.properties.nativeNote == true else {
@@ -442,8 +493,21 @@ final class GammaWorkspace: ObservableObject {
     private func latest(_ original: GammaPageCache, cache: GammaCache) throws -> GammaPageCache {
         try cache.loadPage(pageID: original.pageID, docID: original.docID)
     }
-    private func hydrated(_ original: GammaPageCache, api: GammaAPI) async throws -> GammaPageCache {
+    func hydrated(_ original: GammaPageCache, api: GammaAPI) async throws -> GammaPageCache {
+        guard let cache else { throw GammaAPI.APIError.message("Cache unavailable.") }
+        let generation = accountGeneration
+        while syncing || hydratingPages.contains(original.pageID) {
+            try await Task.sleep(for: .milliseconds(50))
+            guard generation == accountGeneration else { throw CancellationError() }
+        }
+        hydratingPages.insert(original.pageID)
+        defer { hydratingPages.remove(original.pageID) }
         let remote = try await api.subtree(original.pageID)
+        guard generation == accountGeneration else { throw CancellationError() }
+        guard remote.id == original.pageID,
+              remote.properties.docID == original.docID else {
+            throw GammaAPI.APIError.message("Gamma document identity changed. Cached edits were preserved.")
+        }
         var downloaded: [String: Data] = [:]
         for block in remote.flattened where block.isInk && !original.outbox.contains(where: { $0.blockID == block.id && $0.kind == .ink }) {
             guard let asset = block.properties.inkAsset else { throw GammaAPI.APIError.message("Gamma ink block has no editable source.") }
@@ -452,7 +516,9 @@ final class GammaWorkspace: ObservableObject {
         }
         // Re-read after every await: disabling Pencil or leaving a page may have
         // synchronously flushed a canvas while remote hydration was in flight.
-        let local = try cache?.loadPage(pageID: original.pageID, docID: original.docID) ?? original
+        try Task.checkCancellation()
+        guard generation == accountGeneration else { throw CancellationError() }
+        let local = try cache.loadPage(pageID: original.pageID, docID: original.docID)
         var result = local
         let dirty = Set(local.outbox.map(\.blockID))
         result.blocks = remote.flattened.map { block in
@@ -462,17 +528,48 @@ final class GammaWorkspace: ObservableObject {
         for block in local.blocks where dirty.contains(block.id) && !result.blocks.contains(where: { $0.id == block.id }) {
             result.blocks.append(block)
         }
+        for block in local.blocks where block.isAudio && !result.blocks.contains(where: { $0.id == block.id }) {
+            // Retain local recording blocks, including empty active/recovery sessions.
+            if local.recordings?[block.id] != nil { result.blocks.append(block) }
+        }
         for (id, data) in downloaded where !local.outbox.contains(where: { $0.blockID == id && $0.kind == .ink }) {
             result.drawings[id] = data
         }
         for block in remote.flattened where block.isAudio && !dirty.contains(block.id) {
-            guard result.recordings?[block.id]?.activeSegmentID == nil else { continue }
             if result.recordings == nil { result.recordings = [:] }
-            let state = GammaRecordingSession.State(rawValue: block.properties.audioState ?? "stopped") ?? .stopped
-            result.recordings?[block.id] = GammaRecordingSession(id: block.id, pageID: original.pageID,
-                state: state == .recording ? .interrupted : state,
-                segments: block.properties.segments ?? [], revision: block.properties.audioRevision ?? 0,
-                replayEvents: block.properties.replayEvents)
+            if var session = result.recordings?[block.id] {
+                // Keep every local segment and all recovery state; append genuinely new remote segments.
+                for remoteSegment in block.properties.segments ?? [] {
+                    if let i = session.segments.firstIndex(where: { $0.id == remoteSegment.id }) {
+                        if session.segments[i].asset == nil { session.segments[i].asset = remoteSegment.asset }
+                    } else { session.segments.append(remoteSegment) }
+                }
+                session.revision = block.properties.audioRevision ?? session.revision
+                if session.state == .stopped && session.activeSegmentID == nil { session.replayEvents = block.properties.replayEvents ?? session.replayEvents }
+                result.recordings?[block.id] = session
+                if let i = result.blocks.firstIndex(where: { $0.id == block.id }) {
+                    result.blocks[i].properties.segments = session.segments
+                    result.blocks[i].properties.audioState = session.serverState
+                }
+            } else {
+                let state = GammaRecordingSession.State(rawValue: block.properties.audioState ?? "stopped") ?? .stopped
+                result.recordings?[block.id] = GammaRecordingSession(id: block.id, pageID: original.pageID,
+                    state: state == .recording ? .interrupted : state,
+                    segments: block.properties.segments ?? [], revision: block.properties.audioRevision ?? 0,
+                    replayEvents: block.properties.replayEvents)
+            }
+        }
+        for block in remote.flattened where block.isAudio && dirty.contains(block.id) {
+            for segment in block.properties.segments ?? [] {
+                guard let asset = segment.asset else { continue }
+                if let i = result.recordings?[block.id]?.segments.firstIndex(where: { $0.id == segment.id && $0.asset == nil }) {
+                    result.recordings?[block.id]?.segments[i].asset = asset
+                }
+                if let i = result.blocks.firstIndex(where: { $0.id == block.id }),
+                   let j = result.blocks[i].properties.segments?.firstIndex(where: { $0.id == segment.id && $0.asset == nil }) {
+                    result.blocks[i].properties.segments?[j].asset = asset
+                }
+            }
         }
         for block in result.blocks where block.isInk && block.properties.replayAsset == nil {
             guard let source = block.properties.inkAsset, let data = result.drawings[block.id], let pdfPage = block.properties.pdfPage,
@@ -514,7 +611,11 @@ final class GammaWorkspace: ObservableObject {
     }
 
     func sync() async {
-        guard !syncing, !busy, !syncUnavailable, let api, let cache else { return }
+        guard !syncing, !busy, !syncUnavailable, !isOffline, hydratingPages.isEmpty, let api, let cache else { return }
+        guard let identity = try? cache.accountIdentity(), identity.username == api.authenticatedUsername,
+              identity.server == GammaCache.canonicalServer(api.baseURL) else {
+            errorMessage = "Sign in to the same account before syncing its saved edits."; return
+        }
         syncing = true; defer { syncing = false }
         let generation = accountGeneration
         do {
