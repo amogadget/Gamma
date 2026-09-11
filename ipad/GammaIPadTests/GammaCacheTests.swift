@@ -65,4 +65,73 @@ final class GammaCacheTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(reopened.outbox.first).conflict)
         XCTAssertEqual(reopened.drawings["ink"], drawing)
     }
+
+    func testOfflineManifestRoundTripsAndIdentityDiscovery() throws {
+        let store = try cache()
+        let paper = GammaPaper(id: "paper", parentID: nil, content: "Paper", properties: GammaProperties(docID: "doc"), children: nil, updatedAt: nil)
+        let entry = GammaOfflineEntry(pageID: "paper", paper: paper, state: .ready, pdfReady: true, snapshotReady: true, audioReady: true, error: nil)
+        try store.saveOfflineEntry(entry)
+        XCTAssertEqual(try store.loadOfflineEntry(pageID: "paper"), entry)
+        XCTAssertEqual(try GammaCache.discoverOfflineIdentities(rootURL: root), [GammaOfflineIdentity(server: "https://gamma.example", username: "alice")])
+    }
+
+    @MainActor
+    func testRemovalProtectsPendingSnapshotAndRemovesOnlySafeFiles() throws {
+        let store = try cache()
+        let pdf = root.appendingPathComponent("download.pdf")
+        try Data("pdf".utf8).write(to: pdf)
+        try store.preserveSource(from: pdf, docID: "doc")
+        var page = GammaPageCache(pageID: "paper", docID: "doc")
+        let recordingID = UUID().uuidString.lowercased()
+        let segmentID = UUID().uuidString.lowercased()
+        page.recordings = [recordingID: GammaRecordingSession(id: recordingID, pageID: "paper", state: .stopped,
+                                                               segments: [GammaAudioSegment(id: segmentID, duration: 1, asset: "/api/assets/a")])]
+        page.blocks = [GammaBlock(id: recordingID, parentID: "paper", content: "Audio",
+            properties: GammaProperties(type: "audio", audioState: "stopped", segments: page.recordings?[recordingID]?.segments))]
+        try store.savePage(page)
+        let audio = try GammaRecordingFiles.url(root: store.rootURL, recordingID: recordingID, segmentID: segmentID)
+        try FileManager.default.createDirectory(at: audio.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("audio".utf8).write(to: audio)
+        let result = try store.removeRedownloadable(pageID: "paper", docID: "doc")
+        XCTAssertFalse(result.protected); XCTAssertTrue(result.pdfRemoved); XCTAssertEqual(result.audioFilesRemoved, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.rootURL.appendingPathComponent("page-\(GammaCache.key("paper")).json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.sourceURL(docID: "doc").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audio.path))
+    }
+
+    @MainActor
+    func testRemovalProtectsUnuploadedRecordingAndCorruptSnapshot() throws {
+        let store = try cache()
+        let pdf = root.appendingPathComponent("download.pdf"); try Data("pdf".utf8).write(to: pdf); try store.preserveSource(from: pdf, docID: "doc")
+        var page = GammaPageCache(pageID: "paper", docID: "doc")
+        page.recordings = ["bad": GammaRecordingSession(id: "bad", pageID: "paper", state: .stopped, segments: [GammaAudioSegment(id: UUID().uuidString.lowercased(), duration: 1, asset: nil)])]
+        try store.savePage(page)
+        XCTAssertTrue(try store.removeRedownloadable(pageID: "paper", docID: "doc").protected)
+        try Data("broken".utf8).write(to: store.rootURL.appendingPathComponent("page-\(GammaCache.key("paper")).json"))
+        XCTAssertThrowsError(try store.removeRedownloadable(pageID: "paper", docID: "doc"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.sourceURL(docID: "doc").path))
+    }
+
+    func testDiskUsageIncludesNestedFiles() throws {
+        let store = try cache(); try Data(repeating: 1, count: 7).write(to: store.rootURL.appendingPathComponent("one"))
+        XCTAssertGreaterThanOrEqual(try store.diskUsage().bytes, 7)
+    }
+
+    func testManifestRejectsKeyOrPaperIdentityMismatch() throws {
+        let store = try cache()
+        let paper = GammaPaper(id: "paper", parentID: nil, content: "Paper", properties: GammaProperties(docID: "doc"), children: nil, updatedAt: nil)
+        let entry = GammaOfflineEntry(pageID: "paper", paper: paper)
+        let data = try JSONEncoder().encode(["wrong": entry])
+        try data.write(to: store.rootURL.appendingPathComponent("offline.json"))
+        XCTAssertThrowsError(try store.loadOfflineEntries())
+    }
+
+    func testExistingIdentityMismatchIsNotOverwritten() throws {
+        let store = try cache()
+        let identityURL = store.rootURL.appendingPathComponent("identity.json")
+        let wrong = GammaOfflineIdentity(server: "https://other.example", username: "alice")
+        try JSONEncoder().encode(wrong).write(to: identityURL)
+        XCTAssertThrowsError(try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice"))
+        XCTAssertEqual(try JSONDecoder().decode(GammaOfflineIdentity.self, from: Data(contentsOf: identityURL)), wrong)
+    }
 }

@@ -35,14 +35,20 @@ struct GammaPageCache: Codable {
 /// page/document/block identities inside the cache remain Gamma identities.
 final class GammaCache {
     let rootURL: URL
-    private let writeOverride: ((Data, URL) throws -> Void)?
+    let writeOverride: ((Data, URL) throws -> Void)?
     init(rootURL: URL, server: URL, username: String, writeOverride: ((Data, URL) throws -> Void)? = nil) throws {
         self.writeOverride = writeOverride
-        let canonical = server.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let canonical = Self.canonicalServer(server.absoluteString)
         let key = Self.key(canonical + "\n" + username)
         self.rootURL = rootURL.appendingPathComponent(key, isDirectory: true)
         try FileManager.default.createDirectory(at: self.rootURL, withIntermediateDirectories: true)
+        // This metadata is intentionally non-secret and permits safe offline identity discovery.
+        try ensureAccountIdentity(GammaOfflineIdentity(server: canonical, username: username))
     }
+    static func canonicalServer(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    }
+    static func canonicalServer(_ value: URL) -> String { canonicalServer(value.absoluteString) }
     static func application(server: URL, username: String) throws -> GammaCache {
         let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                                appropriateFor: nil, create: true)
