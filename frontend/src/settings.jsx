@@ -7,6 +7,8 @@ import {
 } from "./settingsKit";
 import { AiSettings } from "./settingsAi";
 import { UsersSettings } from "./settingsUsers";
+import { WorkspaceSettings } from "./settingsWorkspace";
+import { ServerBackups } from "./settingsBackups";
 import { TRANSLATE_LANGS, UI_SCALE } from "./prefs";
 import {
   ActivityIcon,
@@ -63,6 +65,7 @@ const NAV_GROUPS = [
   ["Workspace", [
     ["general", "General", SettingsIcon],
     ["library", "Library", ListIcon],
+    ["workspace", "Members & sharing", UsersIcon], // hidden for guests (see SettingsDialog)
   ]],
   ["Editor", [
     ["notes", "Notes", FileTextIcon],
@@ -1098,6 +1101,7 @@ function AdvancedSettings({ value }) {
         />
         {value.isAdmin ? <ServerLogBox setStatus={value.setStatus} /> : null}
       </Section>
+      {value.isAdmin ? <ServerBackups setStatus={value.setStatus} confirm={value.confirm} /> : null}
     </>
   );
 }
@@ -1116,6 +1120,7 @@ export default function SettingsDialog({
   context,
   search,
   users,
+  workspace,
   diagnostics,
 }) {
   if (!activePane) return null;
@@ -1127,7 +1132,8 @@ export default function SettingsDialog({
       group,
       items
         .map(([id, label, Icon]) => (id === "users" && !users?.isAdmin ? [id, "You", UserIcon] : [id, label, Icon]))
-        .filter(([id]) => id !== "users" || users),
+        .filter(([id]) => id !== "users" || users)
+        .filter(([id]) => id !== "workspace" || workspace),
     ])
     .filter(([, items]) => items.length);
 
@@ -1166,6 +1172,7 @@ export default function SettingsDialog({
           ) : null}
           {pane === "prompts" ? <PromptsSettings value={prompts} /> : null}
           {pane === "users" && users ? <UsersSettings value={users} /> : null}
+          {pane === "workspace" && workspace ? <WorkspaceSettings value={workspace} /> : null}
           {pane === "advanced" ? <AdvancedSettings value={diagnostics} /> : null}
         </div>
       </div>

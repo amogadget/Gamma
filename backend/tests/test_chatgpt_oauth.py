@@ -38,7 +38,7 @@ def erin(client):
     """A non-guest user (guests may not store credentials)."""
     from gamma.app import app
     from gamma.db import connect_users_db, page_now
-    from gamma.seed import create_user_dbs
+    from gamma import workspaces
 
     with connect_users_db() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE username = 'erin'").fetchone():
@@ -47,7 +47,7 @@ def erin(client):
                 ("erin", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode(), page_now()),
             )
             conn.commit()
-    create_user_dbs("erin")
+    workspaces.ensure_personal("erin")
     c = TestClient(app)
     r = c.post("/api/login", json={"username": "erin", "password": "pw"})
     assert r.status_code == 200, r.text

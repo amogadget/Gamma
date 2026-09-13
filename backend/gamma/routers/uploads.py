@@ -5,10 +5,10 @@ import sqlite3
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
-from ..auth import require_user, require_writer, resolve_user, share_scope_page
+from ..auth import require_ws, require_ws_writer, resolve_ws, share_scope_page
 from ..blocks_store import fetch_subtree
-from ..db import connect_pages_db, user_uploads_dir
-from ..server_settings import check_upload_allowed, usage_bytes, user_limits
+from ..db import connect_pages_db, ws_uploads_dir
+from ..server_settings import check_upload_allowed, workspace_quota
 from ..storage import (
     ALLOWED_IMAGE_TYPES,
     FILE_MEDIA_TYPES,
@@ -29,22 +29,21 @@ router = APIRouter(prefix="/api", tags=["uploads"])
 
 @router.get("/quota")
 async def get_quota(request: Request):
-    """The session user's effective storage limits and current usage — feeds
-    the client-side pre-upload size check and the Settings usage display.
-    (Deliberately its own endpoint: limits/usage change on admin edits and
-    uploads, /api/session only at login.)"""
-    user = require_user(request)
-    limits = user_limits(user)
-    return {**limits, "used_bytes": usage_bytes(user)}
+    """The storage limits that apply to uploads into the request's workspace
+    (its billing account's) and that account's usage — feeds the client-side
+    pre-upload size check and the Settings usage display. (Deliberately its
+    own endpoint: limits/usage change on admin edits and uploads, /api/session
+    only at login.)"""
+    return workspace_quota(require_ws(request))
 
 
 @router.post("/uploads")
 async def upload_pdf(request: Request, file: UploadFile = File(...)):
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     contents = await file.read()
     if not is_pdf(contents):
         raise HTTPException(status_code=400, detail="not a valid PDF (missing %PDF header)")
-    doc_id, source_url, already_existed = store_pdf(user, contents)
+    doc_id, source_url, already_existed = store_pdf(ws, contents)
     return {
         "doc_id": doc_id,
         "source_url": source_url,
@@ -55,10 +54,10 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
 
 @router.post("/upload-image")
 async def upload_image(request: Request, file: UploadFile = File(...)):
-    # Share editors' images land in the owner's uploads (and count against the
-    # owner's quota) — they are referenced from the owner's page.
-    user = require_writer(request)
-    uploads = user_uploads_dir(user)
+    # Share editors' images land in the page's workspace (and count against
+    # its billing account) — they are referenced from that workspace's page.
+    ws = require_ws_writer(request)
+    uploads = ws_uploads_dir(ws)
     uploads.mkdir(parents=True, exist_ok=True)
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         raise HTTPException(status_code=400, detail=f"unsupported image type: {file.content_type}")
@@ -68,7 +67,7 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
     target = uploads / f"{digest}{ext}"
     already_existed = target.exists()
     if not already_existed:
-        check_upload_allowed(user, len(contents))
+        check_upload_allowed(ws, len(contents))
         target.write_bytes(contents)
     return {
         "url": f"/api/uploads/{digest}{ext}",
@@ -84,7 +83,7 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     to reference as ``[name](/api/uploads/<hash>.<ext>)``. The extension
     comes from the uploaded name (images: from the declared type, same path
     as /upload-image). → ``{url, name, size, already_existed}``."""
-    user = require_writer(request)
+    ws = require_ws_writer(request)
     name = display_filename(file.filename, "file")
     ext = ""
     if file.content_type in ALLOWED_IMAGE_TYPES:
@@ -99,16 +98,16 @@ async def upload_file(request: Request, file: UploadFile = File(...)):
     contents = await file.read()
     if ext == ".pdf" and not is_pdf(contents):
         raise HTTPException(status_code=400, detail="not a valid PDF (missing %PDF header)")
-    filename, already_existed = store_file(user, contents, ext)
+    filename, already_existed = store_file(ws, contents, ext)
     return {"url": f"/api/uploads/{filename}", "name": name, "size": len(contents),
             "already_existed": already_existed}
 
 
-def _share_can_read_upload(user: str, scope_page_id: str, filename: str) -> bool:
+def _share_can_read_upload(ws: str, scope_page_id: str, filename: str) -> bool:
     """A share link may read only its own page's PDF (``<doc_id>.pdf``) or a
     file the page's subtree references (embedded images, file chips — any
     extension, matched textually)."""
-    with connect_pages_db(user) as conn:
+    with connect_pages_db(ws) as conn:
         doc = conn.execute(
             "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks WHERE id = ?",
             (scope_page_id,),
@@ -136,15 +135,15 @@ async def serve_upload(filename: str, request: Request):
     if not stem or not all(c in "0123456789abcdef" for c in stem):
         raise HTTPException(status_code=400, detail="invalid filename")
 
-    # Who may read this: the session user (their own dir), or — with a
-    # ?share= token — its owner, confined to the shared page's own assets.
+    # Who may read this: a member of the workspace, or — with a ?share=
+    # token — anyone the share admits, confined to the shared page's own assets.
     # Same resolution and refusal statuses as every other read endpoint.
-    user = resolve_user(request)
+    ws = resolve_ws(request)
     scope_page_id = share_scope_page(request)
-    if scope_page_id is not None and not _share_can_read_upload(user, scope_page_id, filename):
+    if scope_page_id is not None and not _share_can_read_upload(ws, scope_page_id, filename):
         raise HTTPException(status_code=403, detail="not accessible via this share link")
 
-    path = find_upload_file(filename, user)
+    path = find_upload_file(filename, ws)
     if not path:
         raise HTTPException(status_code=404, detail="not found")
     # Filenames are content hashes (or URL hashes the server only writes once),

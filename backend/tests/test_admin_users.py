@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import login as _login, make_user as _make_user
+from conftest import workspace_of, login as _login, make_user as _make_user
 
 
 @pytest.fixture(scope="module")
@@ -120,15 +120,17 @@ def test_lockout_rails(boss):
 
 def test_rename_user_via_gui(boss):
     from gamma.app import app
-    from gamma.config import USERS_DIR
+    from gamma.db import ws_dir
 
     boss.post("/api/admin/users", json={"username": "rene", "password": "rpw"})
+    ws = workspace_of("rene")
+    assert (ws_dir(ws) / "pages.db").exists()
     r = boss.post("/api/admin/users/rene/rename", json={"new_username": "renata"})
     assert r.status_code == 200, r.text
     names = [u["username"] for u in r.json()["users"]]
     assert "renata" in names and "rene" not in names
-    assert (USERS_DIR / "renata" / "pages.db").exists()
-    assert not (USERS_DIR / "rene").exists()
+    # Workspace directories are named by id: nothing moves, the rows follow.
+    assert workspace_of("renata") == ws and (ws_dir(ws) / "pages.db").exists()
     c = TestClient(app)
     assert c.post("/api/login", json={"username": "rene", "password": "rpw"}).status_code == 401
     _login("renata", "rpw")
@@ -170,13 +172,14 @@ def test_seed_hints_but_never_backdoors_an_adminless_instance(boss):
 
 
 def test_delete_user_removes_account_and_data(boss):
-    from gamma.config import USERS_DIR
-    assert (USERS_DIR / "newbie" / "pages.db").exists()
+    from gamma.db import ws_dir
+    ws = workspace_of("newbie")
+    assert (ws_dir(ws) / "pages.db").exists()
     r = boss.delete("/api/admin/users/newbie")
     assert r.status_code == 200, r.text
     assert "newbie" not in [u["username"] for u in r.json()["users"]]
+    assert r.json()["deleted_workspaces"] == [ws]  # the personal workspace went with the account
     from gamma.app import app
     c = TestClient(app)
     assert c.post("/api/login", json={"username": "newbie", "password": "rotated"}).status_code == 401
-    if not r.json()["warning"]:  # Windows file locks may defer the dir removal
-        assert not (USERS_DIR / "newbie").exists()
+    assert not (ws_dir(ws) / "pages.db").exists()

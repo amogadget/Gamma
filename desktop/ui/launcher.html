@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8" />
-<title>Gamma — Workspaces</title>
+<title>Gamma — Servers</title>
 <link rel="stylesheet" href="theme.css" />
 <style>
   html, body { background: var(--bg-page); height: 100%; }
@@ -78,14 +78,14 @@
       <rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/>
     </svg>
     <div>
-      <h1>Workspaces</h1>
+      <h1>Servers</h1>
     </div>
   </div>
-  <p class="sub">A workspace is a Gamma server: a local library kept on this computer, or one you host elsewhere. Switch between them any time from the toolbar.</p>
+  <p class="sub">A server keeps your libraries: one run on this computer, or a Gamma you host elsewhere. Inside a server, workspaces (your own and shared ones) are switched from the toolbar, together with the servers.</p>
 
   <div class="cards" id="cards"></div>
   <div class="adders">
-    <button class="uiBtn primary" id="btnAddLocal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>New local workspace</button>
+    <button class="uiBtn primary" id="btnAddLocal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>New local server</button>
     <button class="uiBtn" id="btnAddRemote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/></svg>Add remote server…</button>
   </div>
   <div class="status" id="status"></div>
@@ -94,14 +94,14 @@
   <div class="settings">
     <div class="setRow">
       <div>
-        <div class="l">Reopen the last workspace at launch</div>
+        <div class="l">Reopen the last server at launch</div>
         <div class="d">Off: start on this page every time.</div>
       </div>
       <div class="switch" id="swOpenLast" role="switch"></div>
     </div>
     <div class="setRow">
       <div>
-        <div class="l">Local workspace storage</div>
+        <div class="l">Local server storage</div>
         <div class="d path" id="dataRootText"></div>
       </div>
       <div class="btns">
@@ -119,7 +119,7 @@
   </div>
 
   <details id="advanced">
-    <summary>Advanced: run local workspaces from a source checkout</summary>
+    <summary>Advanced: run local servers from a source checkout</summary>
     <div class="settings">
       <label>Python executable (blank = auto-detect)</label>
       <input class="uiInput mono" id="setPython" spellcheck="false" />
@@ -144,14 +144,14 @@
   <p id="dataRootMoveNote"></p>
   <div class="row">
     <button class="uiBtn" onclick="dlgDataRoot.close()">Cancel</button>
-    <button class="uiBtn" id="btnDataRootNewOnly">Only new workspaces</button>
+    <button class="uiBtn" id="btnDataRootNewOnly">Only new servers</button>
     <button class="uiBtn primary" id="btnDataRootMove">Move data</button>
   </div>
 </dialog>
 
 <dialog id="dlgLocal">
-  <h3>New local workspace</h3>
-  <p>A fresh library stored on this computer. The shell runs its server for you and signs you in.</p>
+  <h3>New local server</h3>
+  <p>A Gamma of its own, stored on this computer. The shell runs it for you and signs you in; create workspaces inside it from Gamma's account menu.</p>
   <label>Name</label>
   <input class="uiInput" id="localName" placeholder="My library" />
   <div class="row">
@@ -174,7 +174,7 @@
 </dialog>
 
 <dialog id="dlgRename">
-  <h3>Rename workspace</h3>
+  <h3>Rename server</h3>
   <input class="uiInput" id="renameName" />
   <div class="row">
     <button class="uiBtn" onclick="dlgRename.close()">Cancel</button>
@@ -183,14 +183,14 @@
 </dialog>
 
 <dialog id="dlgCreds">
-  <h3>Local workspace credentials</h3>
-  <p>The shell created this admin account and signs you in automatically. You only need it to open the workspace from a browser, or to add more users in Gamma's settings.</p>
+  <h3>Local server credentials</h3>
+  <p>The shell created this admin account and signs you in automatically. You only need it to open the server from a browser, or to add more users in Gamma's settings.</p>
   <div class="creds" id="credsText"></div>
   <div class="row"><button class="uiBtn primary" onclick="dlgCreds.close()">Close</button></div>
 </dialog>
 
 <dialog id="dlgRemove">
-  <h3 id="removeTitle">Remove workspace</h3>
+  <h3 id="removeTitle">Remove server</h3>
   <p id="removeText"></p>
   <div class="row">
     <button class="uiBtn" onclick="dlgRemove.close()">Cancel</button>
@@ -239,10 +239,10 @@
     document.documentElement.setAttribute('data-theme', state.theme || 'dark');
     const cards = $('cards');
     cards.innerHTML = '';
-    if (!state.workspaces.length) {
-      cards.innerHTML = '<div class="empty"><b>No workspaces yet.</b><br>Create a local one to keep a library on this computer, or add the address of a Gamma server you already run.</div>';
+    if (!state.servers.length) {
+      cards.innerHTML = '<div class="empty"><b>No servers yet.</b><br>Create a local one to keep your libraries on this computer, or add the address of a Gamma you already run.</div>';
     }
-    for (const ws of state.workspaces) {
+    for (const ws of state.servers) {
       const card = document.createElement('div');
       card.className = 'card';
       card.dataset.id = ws.id;
@@ -300,10 +300,10 @@
         actions.appendChild(iconBtn('folder', 'Open data folder', () => gammaShell.revealData(ws.id)));
         actions.appendChild(iconBtn('log', 'Show server log', () => gammaShell.revealLog(ws.id)));
       }
-      actions.appendChild(iconBtn('trash', 'Remove workspace', () => {
+      actions.appendChild(iconBtn('trash', 'Remove server', () => {
         $('removeTitle').textContent = `Remove "${ws.name}"?`;
         if (ws.type === 'local') {
-          $('removeText').textContent = `"Delete everything" also erases its data folder (${fmtBytes(ws.sizeBytes)}: the library, notes and PDFs). "Keep files" only forgets the workspace; the folder stays on disk.`;
+          $('removeText').textContent = `"Delete everything" also erases its data folder (${fmtBytes(ws.sizeBytes)}: every workspace, note and PDF in it). "Keep files" only forgets the server; the folder stays on disk.`;
           $('btnRemoveKeep').hidden = false;
           $('btnRemoveWipe').textContent = 'Delete everything';
         } else {
@@ -340,15 +340,15 @@
     const movable = state.movable || [];
     $('dataRootNew').textContent = target || state.defaultDataRoot;
     $('dataRootMoveNote').textContent = movable.length
-      ? `"Move data" copies ${movable.length === 1 ? 'the workspace' : `these ${movable.length} workspaces`} (${movable.join(', ')}) into the new folder — their servers stop and start again the next time each is opened; the old copies are deleted once the move succeeds. "Only new workspaces" leaves them where they are.`
-      : 'No local workspaces to move; new ones will be created here.';
+      ? `"Move data" copies ${movable.length === 1 ? 'the server' : `these ${movable.length} servers`} (${movable.join(', ')}) into the new folder — they stop and start again the next time each is opened; the old copies are deleted once the move succeeds. "Only new servers" leaves them where they are.`
+      : 'No local servers to move; new ones will be created here.';
     $('btnDataRootMove').hidden = !movable.length;
     const run = async (move) => {
       $('dlgDataRoot').close();
-      setStatus(move && movable.length ? 'Moving workspace data…' : '');
+      setStatus(move && movable.length ? 'Moving server data…' : '');
       try {
         const r = await gammaShell.setDataRoot(target, { move });
-        setStatus(r.moved.length ? `Moved ${r.moved.join(', ')} to ${r.root}.` : `New local workspaces go to ${r.root}.`);
+        setStatus(r.moved.length ? `Moved ${r.moved.join(', ')} to ${r.root}.` : `New local servers go to ${r.root}.`);
       } catch (e) {
         setStatus(cleanErr(e), true);
       }

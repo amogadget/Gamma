@@ -24,7 +24,8 @@ npm run build   # outputs dist/ (FastAPI serves it in the Docker image)
 First run: the app seeds an `admin` account with a random password printed
 once to the console (only while zero non-guest accounts exist). User CRUD
 also via `python manage.py` (create-user, set-password, set-admin,
-rename-user, delete-user, list-users, reset-guest).
+rename-user, delete-user, list-users, list-workspaces, set-member,
+reset-guest, migrate, backups).
 
 Docker:
 
@@ -79,8 +80,17 @@ checked end to end with two browser contexts on one page (see
   `def`** so FastAPI's threadpool runs them; don't convert them to
   `async def` while they hold blocking calls.
 - All state is SQLite + files under the data dir (`GAMMA_DATA_DIR`, default
-  `backend/`): global `users.db`, per-user `users/<name>/pages.db`,
+  the repo's `data/`): global `users.db` (accounts, workspaces, memberships,
+  shares, personal prefs), per-workspace `workspaces/<id>/pages.db`,
   `data.db`, `uploads/`. Safe to inspect with any SQLite client while the
-  server runs; on Windows, open handles lock the directory (matters for
-  renames/moves).
+  server runs; on Windows, open handles lock the directory (matters for the
+  migration's moves — stop the server before `manage.py migrate`).
+- The server upgrades the data directory at startup (`gamma/migrations.py`,
+  snapshot first, log line `[migrate]`) and refuses to start on a directory
+  written by a newer Gamma — [migrations.md](migrations.md). `python
+  manage.py migrate --status` says where a directory stands.
+- Every API call names its workspace (`X-Gamma-Workspace` header from the
+  fetch wrapper, `?ws=` on the websocket and in URLs); a 403 "not a member"
+  on an otherwise fine request means the tab's workspace is not the one you
+  expect — the id is in the URL.
 - Timestamps are UTC ISO strings with `Z` (`page_now()`); keep the format.

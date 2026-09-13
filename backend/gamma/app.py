@@ -1,17 +1,15 @@
 """FastAPI application assembly: middleware, routers, startup maintenance, SPA serving."""
 
-import sqlite3
 import sys
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
-from . import config
+from . import config, migrations
 from .auth import session_middleware
-from .db import DATA_SCHEMA, connect_pages_db, connect_users_db
+from .db import connect_data_db, connect_pages_db, connect_users_db
 from .logbuf import log, setup_logging
-from .migrate import run_all as run_migrations
 from .routers import (
     admin,
     ai,
@@ -30,6 +28,7 @@ from .routers import (
     search,
     shares,
     uploads,
+    workspaces,
 )
 from .seed import ensure_admin_seed
 from .storage import cleanup_orphan_uploads
@@ -58,39 +57,38 @@ def _silence_windows_connection_reset():
 
 
 def _startup_maintenance():
-    """Ensure users.db exists, seed a fresh instance's first admin, normalize
-    old data shapes (gamma/migrate.py — a no-op on a clean install), prune
-    orphaned uploads, and apply lightweight schema upgrades to every per-user
-    data.db (e.g. the chats table)."""
+    """In this order: bring the data directory to the current schema version
+    (gamma/migrations.py — refuses to serve a newer or unmigratable data
+    directory), create users.db on a fresh install, seed the first admin,
+    then per workspace: prune orphaned uploads and apply the per-file
+    schema statements (a restored backup gains page_ops, WAL, ...)."""
+    try:
+        done = migrations.ensure_current()
+    except migrations.MigrationError as e:
+        print(f"[startup] {e}")
+        raise SystemExit(1)
+    if done["applied"]:
+        log.info(f"[startup] data directory upgraded from schema version {done['from']} "
+                 f"to {done['to']} ({', '.join(done['applied'])}); snapshot: {done['backup']}")
     connect_users_db().close()
     ensure_admin_seed()
-    try:
-        migrated = run_migrations()
-        if migrated.get("changed"):
-            log.info(f"[startup] normalized old data shapes: users={migrated['users']} "
-                     f"shares={migrated['shares']}")
-    except Exception as e:  # never keep the server from starting
-        log.warning(f"[startup] data normalization failed: {e}")
-    if not config.USERS_DIR.exists():
+    if not config.WORKSPACES_DIR.exists():
         return
-    for user_dir in config.USERS_DIR.iterdir():
-        if not user_dir.is_dir():
+    for ws_root in config.WORKSPACES_DIR.iterdir():
+        if not ws_root.is_dir():
             continue
-        uploads_dir = user_dir / "uploads"
-        pages_db = user_dir / "pages.db"
+        ws_id = ws_root.name
+        uploads_dir = ws_root / "uploads"
+        pages_db = ws_root / "pages.db"
         if uploads_dir.exists() and pages_db.exists():
             # connect_pages_db also switches the file to WAL and adds the
-            # page_ops table on instances that predate them.
-            with connect_pages_db(user_dir.name) as conn:
+            # page_ops table on files that predate them.
+            with connect_pages_db(ws_id) as conn:
                 removed = cleanup_orphan_uploads(conn, uploads_dir)
                 if removed:
-                    log.info(f"[startup] removed orphan uploads for {user_dir.name}: {removed}")
-        data_db = user_dir / "data.db"
-        if data_db.exists():
-            with sqlite3.connect(str(data_db)) as conn:
-                for stmt in DATA_SCHEMA:
-                    conn.execute(stmt)
-                conn.commit()
+                    log.info(f"[startup] removed orphan uploads in workspace {ws_id}: {removed}")
+        if (ws_root / "data.db").exists():
+            connect_data_db(ws_id).close()
 
 
 def create_app() -> FastAPI:
@@ -106,6 +104,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth_router.router)
     app.include_router(admin.router)
+    app.include_router(workspaces.router)
     app.include_router(ai.router)
     app.include_router(chats.router)
     app.include_router(chats.history_router)

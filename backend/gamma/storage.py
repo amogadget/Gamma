@@ -6,7 +6,7 @@ import hashlib
 import urllib.parse
 from pathlib import Path
 
-from .db import user_uploads_dir
+from .db import ws_uploads_dir
 from .server_settings import check_upload_allowed
 
 ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"}
@@ -84,49 +84,49 @@ def content_digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:DIGEST_CHARS]
 
 
-def store_pdf(user: str, data: bytes) -> tuple[str, str, bool]:
-    """Store PDF bytes under their content hash (callers validate with
-    :func:`is_pdf` first). Returns ``(doc_id, source_url, already_existed)``.
-    Dedup first: a re-upload of a stored file adds no bytes, so the storage
-    limits only gate genuinely new ones (check_upload_allowed raises 413/507
-    past them)."""
-    uploads = user_uploads_dir(user)
+def store_pdf(ws: str, data: bytes) -> tuple[str, str, bool]:
+    """Store PDF bytes under their content hash in the workspace (callers
+    validate with :func:`is_pdf` first). Returns ``(doc_id, source_url,
+    already_existed)``. Dedup first: a re-upload of a stored file adds no
+    bytes, so the storage limits only gate genuinely new ones
+    (check_upload_allowed raises 413/507 past them)."""
+    uploads = ws_uploads_dir(ws)
     uploads.mkdir(parents=True, exist_ok=True)
     doc_id = content_digest(data)
     target = uploads / f"{doc_id}.pdf"
     already_existed = target.exists()
     if not already_existed:
-        check_upload_allowed(user, len(data))
+        check_upload_allowed(ws, len(data))
         target.write_bytes(data)
     return doc_id, f"/api/uploads/{doc_id}.pdf", already_existed
 
 
-def store_file(user: str, data: bytes, ext: str) -> tuple[str, bool]:
+def store_file(ws: str, data: bytes, ext: str) -> tuple[str, bool]:
     """Store any upload under its content hash as ``<sha24><ext>`` (``ext``
     lowercase with the dot, already validated by the caller). Returns
     ``(filename, already_existed)``; storage limits gate new bytes only."""
-    uploads = user_uploads_dir(user)
+    uploads = ws_uploads_dir(ws)
     uploads.mkdir(parents=True, exist_ok=True)
     filename = f"{content_digest(data)}{ext}"
     target = uploads / filename
     already_existed = target.exists()
     if not already_existed:
-        check_upload_allowed(user, len(data))
+        check_upload_allowed(ws, len(data))
         target.write_bytes(data)
     return filename, already_existed
 
 
-def find_upload_file(filename: str, user: str) -> Path | None:
-    """The uploaded file `filename` in `user`'s uploads dir, or None.
+def find_upload_file(filename: str, ws: str) -> Path | None:
+    """The uploaded file `filename` in the workspace's uploads dir, or None.
 
-    Deliberately scoped to the single named user — the caller resolves who that
-    is (session user or a validated share owner). No cross-user fallback: that
-    let anyone read any account's files by guessing a content hash.
+    Deliberately scoped to the single named workspace — the caller resolves
+    which (the session's workspace or a validated share's). No cross-workspace
+    fallback: that would let anyone read any file by guessing a content hash.
     """
-    if not user:
+    if not ws:
         return None
     try:
-        path = user_uploads_dir(user) / filename
+        path = ws_uploads_dir(ws) / filename
     except ValueError:
         return None
     return path if path.is_file() else None

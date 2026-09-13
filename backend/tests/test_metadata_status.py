@@ -2,8 +2,8 @@
 
 import sqlite3
 
-from conftest import make_page
-from gamma.db import user_db_path
+from conftest import make_page, workspace_of
+from gamma.db import ws_db_path
 from gamma.textnorm import INDEX_VERSION
 
 
@@ -50,7 +50,7 @@ def test_status_lists_papers_not_notes(guest):
 def test_status_reads_index_state(guest):
     doc = "b" * 24
     page = make_page(guest, "Indexed paper", properties={"doc_id": doc})
-    with sqlite3.connect(user_db_path("guest", "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of("guest"), "data.db")) as conn:
         conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS pdf_fts USING fts5(doc_id UNINDEXED, page UNINDEXED, content)")
         conn.execute("CREATE TABLE IF NOT EXISTS pdf_fts_docs (doc_id TEXT PRIMARY KEY, indexed_at TEXT NOT NULL, pages INTEGER, ver INTEGER NOT NULL DEFAULT 0)")
         conn.execute("INSERT INTO pdf_fts (doc_id, page, content) VALUES (?, 1, ?)", (doc, "hello " * 20))
@@ -64,7 +64,7 @@ def test_status_reads_index_state(guest):
     assert p["text_chars"] == len("hello " * 20)
 
     # Bumped extraction version → the doc reads as stale, not indexed.
-    with sqlite3.connect(user_db_path("guest", "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of("guest"), "data.db")) as conn:
         conn.execute("UPDATE pdf_fts_docs SET ver = ver - 1 WHERE doc_id = ?", (doc,))
         conn.commit()
     r = guest.get("/api/metadata/status")

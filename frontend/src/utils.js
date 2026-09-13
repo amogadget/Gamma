@@ -20,6 +20,29 @@ function setExpectedUser(user) {
   expectedUser = user || null;
 }
 
+// ---- Workspace -------------------------------------------------------------
+// Which library this tab works in (docs/dev/workspaces.md). App.jsx picks it
+// once the session resolves (the URL's ?ws=, the page a deep link names, the
+// last one used, else the account's personal workspace) and every API call
+// then carries it as X-Gamma-Workspace — again injected here so no call site
+// can forget it. The websocket and copied links carry it as ?ws= instead.
+let currentWorkspace = "";
+
+function setCurrentWorkspace(ws) {
+  currentWorkspace = ws || "";
+}
+
+function getCurrentWorkspace() {
+  return currentWorkspace;
+}
+
+// Append the workspace to an in-app URL (links, history entries) so a reload
+// or a copied link lands in the same library. Share URLs never carry it.
+function withWorkspace(url) {
+  if (!currentWorkspace || typeof url !== "string" || /[?&]ws=/.test(url)) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}ws=${encodeURIComponent(currentWorkspace)}`;
+}
+
 // For the rare non-fetch transport (the backup-import XHR) that must carry
 // the same identity guard the fetch wrapper injects.
 function getExpectedUser() {
@@ -37,13 +60,16 @@ window.fetch = function (input, options) {
   const method = String(options?.method || input?.method || "GET").toUpperCase();
   const expectedAtStart = expectedUser;
   const started = performance.now();
-  if (expectedUser && isApi && !AUTH_PATHS.has(path)) {
+  if ((expectedUser || currentWorkspace) && isApi && !AUTH_PATHS.has(path)) {
     options = { ...(options || {}) };
+    const extra = {};
+    if (expectedUser) extra["X-Gamma-User"] = expectedUser;
+    if (currentWorkspace) extra["X-Gamma-Workspace"] = currentWorkspace;
     if (options.headers instanceof Headers) {
       options.headers = new Headers(options.headers);
-      options.headers.set("X-Gamma-User", expectedUser);
+      for (const [k, v] of Object.entries(extra)) options.headers.set(k, v);
     } else {
-      options.headers = { ...(options.headers || {}), "X-Gamma-User": expectedUser };
+      options.headers = { ...(options.headers || {}), ...extra };
     }
   }
   const promise = rawFetch(input, options);
@@ -345,4 +371,4 @@ async function readNdjson(res, onBatch) {
   }
 }
 
-export { API, makeId, fmtBytes, sha256, getDocIdForUrl, isPdfFile, isMarkdownFile, isUnverifiedPaperMeta, metaSourceInfo, apiJson, withShare, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson };
+export { API, makeId, fmtBytes, sha256, getDocIdForUrl, isPdfFile, isMarkdownFile, isUnverifiedPaperMeta, metaSourceInfo, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson };

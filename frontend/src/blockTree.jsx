@@ -21,7 +21,7 @@ import { filterSlashCommands, SlashMenuPopup } from "./slashMenu";
 import { remarkCallouts } from "./callouts";
 import { PeerChips } from "./presence";
 import { ContextMenu, MenuItem } from "./menus";
-import { API, apiJson, copyText, withShare } from "./utils";
+import { API, apiJson, copyText, withShare, withWorkspace } from "./utils";
 import { CopyIcon, ExportIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "./icons";
 import {
   applyImageEdit, applyTableEdit, formatTables, htmlTableToMarkdown,
@@ -1596,7 +1596,7 @@ function SortableBlockRow({ block, ...rowProps }) {
             icon={LinkIcon}
             title="Paste it in a note to choose mention / synced block, or open it anywhere"
             onClick={() => copy(
-              `${window.location.origin}/?block=${encodeURIComponent(block.id)}`,
+              withWorkspace(`${window.location.origin}/?block=${encodeURIComponent(block.id)}`),
               "Block link copied — paste into a note for mention / synced block",
             )}
           >Copy link to block</MenuItem>

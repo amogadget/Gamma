@@ -5,7 +5,7 @@ publisher PDFs without a page-1 identifier, and AI-extracted output is
 verified — fabricated identifiers are dropped instead of stored.
 """
 
-from conftest import make_page
+from conftest import workspace_of, make_page
 
 from gamma.routers import metadata
 from gamma.routers.metadata import (
@@ -293,7 +293,7 @@ def test_detector_doi_hint_is_trusted(guest, monkeypatch):
     page = _paper_page(guest, "scanned garbage with no identifiers at all", monkeypatch)
     monkeypatch.setattr(metadata, "_fetch_doi",
                         lambda d: (ZENO_META, "@article{zeno}") if d == "10.1000/zeno754" else (None, ""))
-    out = metadata.fetch_page_metadata("guest", page["id"], doi="10.1000/zeno754")
+    out = metadata.fetch_page_metadata(workspace_of("guest"), page["id"], "guest", doi="10.1000/zeno754")
     assert out["meta"]["title"] == ZENO_TITLE
     assert out["source"] == "doi"
 

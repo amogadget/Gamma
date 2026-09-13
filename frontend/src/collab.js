@@ -20,7 +20,7 @@
 // of view: every commit diffs against it and advances it; remote ops advance
 // it too. Positions live in one Map shared with blockOps.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { API, apiJson, makeId, withShare } from "./utils";
+import { API, apiJson, makeId, withShare, withWorkspace } from "./utils";
 import { applyOps, diffTrees, pushOp, seedPositions } from "./blockOps";
 
 export const CLIENT_ID = makeId().slice(0, 10); // one per tab
@@ -32,7 +32,10 @@ const RETRY_MS = 3000;
 const MAX_RETRIES = 8;
 
 function socketUrl(pageId) {
-  const path = withShare(`${API}/ws/page/${encodeURIComponent(pageId)}?client=${CLIENT_ID}`);
+  // A share view carries its token (the share names the workspace); a
+  // member's socket carries ?ws= — the handshake has no headers to inject.
+  const base = `${API}/ws/page/${encodeURIComponent(pageId)}?client=${CLIENT_ID}`;
+  const path = withShare(base) === base ? withWorkspace(base) : withShare(base);
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${proto}//${window.location.host}${path}`;
 }

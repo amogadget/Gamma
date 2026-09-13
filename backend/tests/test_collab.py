@@ -6,7 +6,7 @@ import pytest
 from fractional_indexing import generate_key_between
 from starlette.websockets import WebSocketDisconnect
 
-from conftest import login, make_page, make_user
+from conftest import login, make_page, make_user, workspace_of
 
 PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
        b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82")
@@ -303,7 +303,7 @@ def test_socket_cross_page_move_and_ai_edit(guest):
         assert _recv(d, "reload")
         # an AI tool edit runs in a worker thread; its op still lands in the room
         from gamma.ai_tools import run_agent_tool
-        text, action = run_agent_tool("guest", {"type": "page", "page_id": dst["id"]}, "edit_block",
+        text, action = run_agent_tool(workspace_of("guest"), {"type": "page", "page_id": dst["id"]}, "edit_block",
                                       {"block_id": blk["id"], "content": "travelled, edited by ai"})
         assert action["kind"] == "edit", text
         m = _recv(d, "ops")

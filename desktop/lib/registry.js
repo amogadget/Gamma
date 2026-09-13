@@ -1,26 +1,31 @@
-// Workspace registry: the shell's only persistent state, a JSON file in the
-// Electron userData dir. A workspace is a name plus either a server URL
-// (remote) or a data directory the shell runs a local server over (local).
-// Local workspaces also remember the admin credentials the shell generated on
-// first run — the server's one-time password print would otherwise be lost in
-// the hidden sidecar console.
+// Server registry: the shell's only persistent state, a JSON file in the
+// Electron userData dir. A server is a name plus either a URL (remote) or a
+// data directory the shell runs a local Gamma over (local). Gamma's own
+// workspaces (the libraries inside a server, with members and roles) live in
+// that server's data — the shell only lists them in its switcher.
 //
-// Besides the list the file keeps a little shell UX state: the workspace
-// opened last (reopened at launch when `openLastOnLaunch`), the theme the
-// Gamma page last reported (so the launcher/shell bar paint in it before any
-// workspace is loaded), and the window bounds.
+// Local servers also remember the admin credentials the shell generated on
+// first run — the server's one-time password print would otherwise be lost
+// in the hidden sidecar console.
 //
-// Local workspace data dirs live under ONE root, `<root>/<workspace id>`:
-// `settings.dataRoot` when set, else `<userData>/workspaces`. `setDataRoot`
-// switches the root and, on request, moves the existing workspaces there
-// (copy, verify, re-point the registry, then delete the originals — safe
-// across drives; callers stop the sidecars first).
+// Besides the list the file keeps a little shell UX state: the server opened
+// last (reopened at launch when `openLastOnLaunch`), the theme the Gamma
+// page last reported (so the launcher/shell bar paint in it before any page
+// is loaded), and the window bounds.
+//
+// Local server data dirs live under ONE root, `<root>/<server id>`:
+// `settings.dataRoot` when set, else `<userData>/workspaces` (the folder
+// name predates the rename and stays so existing installs need no move).
+// `setDataRoot` switches the root and, on request, moves the existing dirs
+// there (copy, verify, re-point the registry, then delete the originals —
+// safe across drives; callers stop the sidecars first).
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const FILE = 'workspaces.json';
+const FILE = 'servers.json';
+const LEGACY_FILE = 'workspaces.json'; // the registry's name before servers had that name
 
 const DEFAULTS = {
   settings: {
@@ -28,14 +33,14 @@ const DEFAULTS = {
     pythonPath: '',
     backendDir: '',
     staticDir: '',
-    // Reopen the last workspace at launch instead of showing the launcher.
+    // Reopen the last server at launch instead of showing the launcher.
     openLastOnLaunch: true,
     // Last data-theme the Gamma page reported ('' = never seen → dark).
     lastTheme: '',
-    // Folder new local workspaces are created in ('' = <userData>/workspaces).
+    // Folder new local servers are created in ('' = <userData>/workspaces).
     dataRoot: '',
   },
-  workspaces: [],
+  servers: [],
   lastOpened: null,
   windowBounds: null,
 };
@@ -45,6 +50,14 @@ let userDataDir = null;
 function init(dir) {
   userDataDir = dir;
   fs.mkdirSync(dir, { recursive: true });
+  // One-time rename of the registry file; the old copy stays for a rollback.
+  const legacy = path.join(dir, LEGACY_FILE);
+  if (!fs.existsSync(filePath()) && fs.existsSync(legacy)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(legacy, 'utf8'));
+      save({ ...raw, servers: raw.servers || raw.workspaces || [] });
+    } catch {}
+  }
 }
 
 function filePath() {
@@ -54,9 +67,10 @@ function filePath() {
 function load() {
   try {
     const raw = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
+    const list = Array.isArray(raw.servers) ? raw.servers : Array.isArray(raw.workspaces) ? raw.workspaces : [];
     return {
       settings: { ...DEFAULTS.settings, ...(raw.settings || {}) },
-      workspaces: Array.isArray(raw.workspaces) ? raw.workspaces : [],
+      servers: list,
       lastOpened: raw.lastOpened || null,
       windowBounds: raw.windowBounds || null,
     };
@@ -67,14 +81,15 @@ function load() {
 
 function save(state) {
   fs.mkdirSync(userDataDir, { recursive: true });
-  fs.writeFileSync(filePath(), JSON.stringify(state, null, 2));
+  const { workspaces, ...rest } = state; // never write the old key back
+  fs.writeFileSync(filePath(), JSON.stringify(rest, null, 2));
 }
 
 function defaultDataRoot() {
   return path.join(userDataDir, 'workspaces');
 }
 
-// Where local workspaces are created now.
+// Where local servers are created now.
 function dataRoot(state = load()) {
   return path.resolve(state.settings.dataRoot || defaultDataRoot());
 }
@@ -84,18 +99,18 @@ function isUnder(dir, root) {
   return norm(dir).startsWith(norm(root) + path.sep);
 }
 
-// The local workspaces whose data dir sits under the current root — the ones
-// a root change moves.
+// The local servers whose data dir sits under the current root — the ones a
+// root change moves.
 function localsUnderRoot(state = load()) {
   const root = dataRoot(state);
-  return state.workspaces.filter((w) => w.type === 'local' && w.dataDir && isUnder(w.dataDir, root));
+  return state.servers.filter((s) => s.type === 'local' && s.dataDir && isUnder(s.dataDir, root));
 }
 
 // Change the storage root. `newRoot` '' resets to the default. With `move`
-// every local workspace under the old root is copied to `<newRoot>/<id>`;
-// only after ALL copies succeed does the registry switch over and the old
-// copies get deleted, so a failure (disk full, permissions) leaves everything
-// as it was. Returns { root, moved: [names] }.
+// every local server under the old root is copied to `<newRoot>/<id>`; only
+// after ALL copies succeed does the registry switch over and the old copies
+// get deleted, so a failure (disk full, permissions) leaves everything as it
+// was. Returns { root, moved: [names] }.
 function setDataRoot(newRoot, { move = true } = {}) {
   const state = load();
   const oldRoot = dataRoot(state);
@@ -108,20 +123,19 @@ function setDataRoot(newRoot, { move = true } = {}) {
   fs.mkdirSync(targetRoot, { recursive: true });
   const moved = [];
   if (move) {
-    const locals = localsUnderRoot(state);
-    for (const ws of locals) {
-      const dest = path.join(targetRoot, path.basename(ws.dataDir));
+    for (const srv of localsUnderRoot(state)) {
+      const dest = path.join(targetRoot, path.basename(srv.dataDir));
       try {
         if (fs.existsSync(dest)) throw new Error('already exists');
-        fs.cpSync(ws.dataDir, dest, { recursive: true }); // throws on any failed file
+        fs.cpSync(srv.dataDir, dest, { recursive: true }); // throws on any failed file
       } catch (e) {
         for (const m of moved) fs.rmSync(m.dest, { recursive: true, force: true });
         fs.rmSync(dest, { recursive: true, force: true });
-        throw new Error(`Could not move "${ws.name}" to ${dest}: ${e.message}`);
+        throw new Error(`Could not move "${srv.name}" to ${dest}: ${e.message}`);
       }
-      moved.push({ ws, from: ws.dataDir, dest });
+      moved.push({ srv, from: srv.dataDir, dest });
     }
-    for (const m of moved) m.ws.dataDir = m.dest;
+    for (const m of moved) m.srv.dataDir = m.dest;
   }
   state.settings.dataRoot = target;
   save(state);
@@ -130,7 +144,7 @@ function setDataRoot(newRoot, { move = true } = {}) {
       fs.rmSync(m.from, { recursive: true, force: true });
     } catch {}
   }
-  return { root: targetRoot, moved: moved.map((m) => m.ws.name) };
+  return { root: targetRoot, moved: moved.map((m) => m.srv.name) };
 }
 
 function newId() {
@@ -144,19 +158,19 @@ function newPassword() {
 function addLocal(name) {
   const state = load();
   const id = newId();
-  const ws = {
+  const srv = {
     id,
-    name: (name || '').trim() || 'Local workspace',
+    name: (name || '').trim() || 'Local',
     type: 'local',
     dataDir: path.join(dataRoot(state), id),
     adminUser: 'admin',
     adminPassword: newPassword(),
     createdAt: new Date().toISOString(),
   };
-  fs.mkdirSync(ws.dataDir, { recursive: true });
-  state.workspaces.push(ws);
+  fs.mkdirSync(srv.dataDir, { recursive: true });
+  state.servers.push(srv);
   save(state);
-  return ws;
+  return srv;
 }
 
 function addRemote(name, url) {
@@ -167,69 +181,69 @@ function addRemote(name, url) {
     throw new Error('Invalid URL');
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error('Workspace URL must be http:// or https://');
+    throw new Error('Server URL must be http:// or https://');
   }
   const state = load();
-  if (state.workspaces.some((w) => w.type === 'remote' && w.url === parsed.origin)) {
-    throw new Error(`${parsed.origin} is already a workspace`);
+  if (state.servers.some((s) => s.type === 'remote' && s.url === parsed.origin)) {
+    throw new Error(`${parsed.origin} is already listed`);
   }
-  const ws = {
+  const srv = {
     id: newId(),
     name: (name || '').trim() || parsed.host,
     type: 'remote',
     url: parsed.origin,
     createdAt: new Date().toISOString(),
   };
-  state.workspaces.push(ws);
+  state.servers.push(srv);
   save(state);
-  return ws;
+  return srv;
 }
 
 function get(id) {
-  return load().workspaces.find((w) => w.id === id) || null;
+  return load().servers.find((s) => s.id === id) || null;
 }
 
 function rename(id, name) {
   const state = load();
-  const ws = state.workspaces.find((w) => w.id === id);
-  if (!ws) throw new Error('Unknown workspace');
+  const srv = state.servers.find((s) => s.id === id);
+  if (!srv) throw new Error('Unknown server');
   const clean = (name || '').trim();
   if (!clean) throw new Error('Name cannot be empty');
-  ws.name = clean;
+  srv.name = clean;
   save(state);
-  return ws;
+  return srv;
 }
 
 function remove(id, { deleteData = false } = {}) {
   const state = load();
-  const ws = state.workspaces.find((w) => w.id === id);
-  if (!ws) return;
-  state.workspaces = state.workspaces.filter((w) => w.id !== id);
+  const srv = state.servers.find((s) => s.id === id);
+  if (!srv) return;
+  state.servers = state.servers.filter((s) => s.id !== id);
   if (state.lastOpened === id) state.lastOpened = null;
   save(state);
-  if (deleteData && ws.type === 'local' && ws.dataDir) {
+  if (deleteData && srv.type === 'local' && srv.dataDir) {
     // Guard: only ever delete directories we created — under the default
     // root or the configured one — never an arbitrary folder.
-    const resolved = path.resolve(ws.dataDir);
+    const resolved = path.resolve(srv.dataDir);
     if (isUnder(resolved, defaultDataRoot()) || isUnder(resolved, dataRoot(state))) {
       fs.rmSync(resolved, { recursive: true, force: true });
     }
   }
 }
 
-// Remember which workspace is open (reopened at next launch).
+// Remember which server is open (reopened at next launch).
 function markOpened(id) {
   const state = load();
-  const ws = state.workspaces.find((w) => w.id === id);
-  if (!ws) return;
-  ws.lastOpenedAt = new Date().toISOString();
+  const srv = state.servers.find((s) => s.id === id);
+  if (!srv) return;
+  srv.lastOpenedAt = new Date().toISOString();
   state.lastOpened = id;
   save(state);
 }
 
 function getLastOpened() {
   const state = load();
-  return state.workspaces.find((w) => w.id === state.lastOpened) || null;
+  return state.servers.find((s) => s.id === state.lastOpened) || null;
 }
 
 function getSettings() {
@@ -253,7 +267,7 @@ function setWindowBounds(bounds) {
   save(state);
 }
 
-// Bytes on disk under a local workspace's data dir (SQLite files + uploads).
+// Bytes on disk under a local server's data dir (SQLite files + uploads).
 // Synchronous walk; libraries are at most a few thousand files.
 function dirSize(dir) {
   let total = 0;

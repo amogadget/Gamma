@@ -7,22 +7,28 @@ GAMMA_ADMIN_USER bootstrap; after that admins manage everyone from Settings.
 Safety rails: the guest account can only be inspected (it is reset daily and
 has no password), you cannot delete your own account, and the last remaining
 admin cannot be demoted or deleted — so the instance can never lock itself out.
+
+Accounts and workspaces are separate (gamma/workspaces.py): creating an
+account creates its personal workspace, deleting one removes the workspaces
+it alone owned, renaming touches rows only (workspace directories are named
+by id, never by account).
 """
 
-import gc
+import os
 import re
-import shutil
 import sqlite3
 
 import bcrypt
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
+from .. import backups, workspaces
 from ..auth import require_admin
-from ..config import USERS_DIR
-from ..db import connect_users_db, page_now
+from ..db import connect_users_db
 from ..logbuf import tail as _log_tail
-from ..seed import create_user_dbs
+from ..seed import create_account
 from ..server_settings import (
     QUOTA_MB_MAX,
     QUOTA_MB_MIN,
@@ -38,22 +44,23 @@ from ..server_settings import (
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")  # names a data directory
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 MAX_PASSWORD_LEN = 128
 
 
 def _user_list(conn: sqlite3.Connection, with_usage: bool = False) -> list:
-    """with_usage stats every file of every account — only the GET listing pays
-    for it; mutation responses omit used_bytes and the client keeps its last
-    known values."""
+    """with_usage stats every upload of every account's workspaces — only
+    the GET listing pays for it; mutation responses omit used_bytes and the
+    client keeps its last known values."""
     rows = conn.execute(
-        "SELECT username, is_guest, is_admin, created_at, max_upload_mb, quota_mb "
+        "SELECT username, is_guest, is_admin, created_at, max_upload_mb, quota_mb, default_workspace "
         "FROM users ORDER BY created_at"
     ).fetchall()
     return [{"username": u, "is_guest": bool(g), "is_admin": bool(a), "created_at": c,
              "max_upload_mb": mu, "quota_mb": q,  # overrides; null = server default
+             "default_workspace": dw,
              **({"used_bytes": usage_bytes(u)} if with_usage else {})}
-            for u, g, a, c, mu, q in rows]
+            for u, g, a, c, mu, q, dw in rows]
 
 
 def _get_user(conn: sqlite3.Connection, username: str):
@@ -117,6 +124,64 @@ async def list_users(request: Request):
         return {"users": _user_list(conn, with_usage=True), "me": me}
 
 
+@router.get("/workspaces")
+async def list_workspaces(request: Request):
+    """Every workspace on the server with its members and upload size, plus
+    directories under workspaces/ that no row names (leftovers to inspect)."""
+    require_admin(request)
+    return {"workspaces": workspaces.all_workspaces(), "orphans": workspaces.orphan_dirs()}
+
+
+# --- server backups (gamma/backups.py) ---------------------------------------
+
+@router.get("/backups")
+async def list_backups(request: Request):
+    """Every snapshot under backups/ (name, time, label, schema version,
+    files, size, whether uploads were included)."""
+    require_admin(request)
+    return {"backups": backups.list_backups()}
+
+
+class BackupCreateRequest(BaseModel):
+    label: str = "manual"
+    uploads: bool = False
+
+
+# Sync def: copying a library's uploads can take a while.
+@router.post("/backups")
+def create_backup(payload: BackupCreateRequest, request: Request):
+    require_admin(request)
+    try:
+        return backups.create(payload.label.strip() or "manual", uploads=payload.uploads)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _named_backup(name: str) -> dict:
+    b = backups.info(name)
+    if not b:
+        raise HTTPException(status_code=404, detail="no such backup")
+    return b
+
+
+# Sync def: zipping runs in the threadpool.
+@router.get("/backups/{name}/download")
+def download_backup(name: str, request: Request):
+    require_admin(request)
+    _named_backup(name)
+    tmp = backups.zip_backup(name)
+    return FileResponse(str(tmp), media_type="application/zip", filename=f"gamma-backup-{name}.zip",
+                        background=BackgroundTask(os.unlink, str(tmp)))
+
+
+@router.delete("/backups/{name}")
+async def delete_backup(name: str, request: Request):
+    require_admin(request)
+    _named_backup(name)
+    backups.delete(name)
+    return {"ok": True}
+
+
 class UserCreateRequest(BaseModel):
     username: str
     password: str
@@ -134,15 +199,9 @@ async def create_user(payload: UserCreateRequest, request: Request):
     with connect_users_db() as conn:
         if _get_user(conn, username):
             raise HTTPException(status_code=409, detail="user already exists")
-        pwhash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-        conn.execute(
-            "INSERT INTO users (username, password_hash, is_guest, is_admin, created_at) VALUES (?, ?, 0, ?, ?)",
-            (username, pwhash, 1 if payload.is_admin else 0, page_now()),
-        )
-        conn.commit()
-        users = _user_list(conn)
-    create_user_dbs(username)
-    return {"users": users}
+    create_account(username, password, is_admin=payload.is_admin)
+    with connect_users_db() as conn:
+        return {"users": _user_list(conn)}
 
 
 class UserUpdateRequest(BaseModel):
@@ -194,14 +253,30 @@ class UserRenameRequest(BaseModel):
     new_username: str
 
 
+def rename_account_rows(conn: sqlite3.Connection, old: str, new: str) -> None:
+    """Every row that names an account (shared by the GUI and manage.py).
+    Sessions and share tokens keep working — nobody is logged out, including
+    the renamed user. Workspace directories are named by id, so no files move."""
+    conn.execute("UPDATE users SET username = ? WHERE username = ?", (new, old))
+    conn.execute("UPDATE sessions SET username = ? WHERE username = ?", (new, old))
+    conn.execute("UPDATE shares SET created_by = ? WHERE created_by = ?", (new, old))
+    conn.execute("UPDATE workspace_members SET username = ? WHERE username = ?", (new, old))
+    conn.execute("UPDATE workspace_members SET added_by = ? WHERE added_by = ?", (new, old))
+    conn.execute("UPDATE workspaces SET created_by = ? WHERE created_by = ?", (new, old))
+    conn.execute("UPDATE workspaces SET name = ? WHERE name = ? AND created_by = ?", (new, old, new))
+    conn.execute("UPDATE user_prefs SET username = ? WHERE username = ?", (new, old))
+    # Invited-people lists on shares ("carol:edit,dave:view") name accounts too.
+    for token, allowed in conn.execute("SELECT token, allowed_users FROM shares WHERE allowed_users != ''").fetchall():
+        parts = [p.strip() for p in allowed.split(",") if p.strip()]
+        changed = [(new + p[len(old):]) if p == old or p.startswith(old + ":") else p for p in parts]
+        if changed != parts:
+            conn.execute("UPDATE shares SET allowed_users = ? WHERE token = ?", (",".join(changed), token))
+
+
 @router.post("/users/{username}/rename")
 async def rename_user(username: str, payload: UserRenameRequest, request: Request):
     """Rename an account (sessions and share tokens keep working — nobody is
-    logged out, including the renamed user).
-
-    The data directory is moved FIRST: on Windows a lingering SQLite handle
-    can lock it, and failing before touching the database leaves everything
-    consistent. Only after the move succeed do the rows change."""
+    logged out, including the renamed user)."""
     require_admin(request)
     new = payload.new_username.strip()
     if not _USERNAME_RE.match(new):
@@ -217,31 +292,16 @@ async def rename_user(username: str, payload: UserRenameRequest, request: Reques
             return {"users": _user_list(conn)}
         if _get_user(conn, new):
             raise HTTPException(status_code=409, detail="user already exists")
-
-        old_dir, new_dir = USERS_DIR / username, USERS_DIR / new
-        if old_dir.exists():
-            gc.collect()  # frees GC-delayed SQLite handles that would lock the move on Windows
-            try:
-                old_dir.rename(new_dir)
-            except OSError:
-                raise HTTPException(
-                    status_code=409,
-                    detail="the account's files are in use (someone is working in it right now) — "
-                           "try again in a moment, or run manage.py rename-user with the server stopped")
-        try:
-            conn.execute("UPDATE users SET username = ? WHERE username = ?", (new, username))
-            conn.execute("UPDATE sessions SET username = ? WHERE username = ?", (new, username))
-            conn.execute("UPDATE shares SET username = ? WHERE username = ?", (new, username))
-            conn.commit()
-        except Exception:
-            if new_dir.exists() and not old_dir.exists():
-                new_dir.rename(old_dir)  # roll the move back so nothing is half-renamed
-            raise
+        rename_account_rows(conn, username, new)
+        conn.commit()
         return {"users": _user_list(conn), "renamed": {"from": username, "to": new}}
 
 
 @router.delete("/users/{username}")
 async def delete_user(username: str, request: Request):
+    """Delete an account. Its memberships go; the workspaces it alone owned
+    (its personal one included) are deleted with their files — the response
+    names them."""
     me = require_admin(request)
     if username == me:
         raise HTTPException(status_code=400, detail="cannot delete your own account")
@@ -254,17 +314,10 @@ async def delete_user(username: str, request: Request):
         if row[2] and _admin_count(conn) <= 1:
             raise HTTPException(status_code=400, detail="cannot delete the last admin")
         conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
-        conn.execute("DELETE FROM shares WHERE username = ?", (username,))
+        conn.commit()
+    deleted = workspaces.delete_account_workspaces(username)
+    with connect_users_db() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
         conn.commit()
         users = _user_list(conn)
-    warning = ""
-    user_dir = USERS_DIR / username
-    if user_dir.exists():
-        try:
-            shutil.rmtree(str(user_dir))
-        except OSError as e:
-            # Windows: a lingering SQLite handle can lock the directory. The
-            # account is gone either way; the files just need a manual sweep.
-            warning = f"account deleted, but its data directory could not be removed ({e}); delete users/{username}/ manually"
-    return {"users": users, "warning": warning}
+    return {"users": users, "deleted_workspaces": deleted, "warning": ""}

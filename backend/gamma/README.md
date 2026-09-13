@@ -4,9 +4,13 @@ The backend package. `app.py` assembles the middleware + routers and serves the 
 
 ```
 config.py          env config
-db.py              schemas + per-user DB paths
-auth.py            session middleware → request.state.user (+ daily guest reset)
-seed.py            per-user DB creation, guest welcome page
+db.py              schemas, SCHEMA_VERSION, per-workspace DB paths, user prefs
+migrations.py      versioned data-directory upgrades (snapshot, numbered steps)
+backups.py         server backups: snapshots under backups/ (create, zip, delete, restore)
+normalize.py       content normalization of a workspace's files (migration + restore)
+workspaces.py      workspaces + memberships (roles, billing, personal workspace)
+auth.py            session middleware → request.state.user; request → workspace / share
+seed.py            workspace file creation, guest welcome page, first admin
 blocks_store.py    recursive-CTE tree helpers
 storage.py         uploads (content-addressed) + orphan cleanup
 ai_client.py       provider HTTP protocols + streaming response parsing
@@ -18,7 +22,8 @@ routers/           one module per API area — see routers/README.md
 
 ## Data model — everything is a block
 
-`pages.db` has one table, `unified_blocks`. Rows form a tree via `parent_id`;
+Each workspace's `pages.db` has the `unified_blocks` table (plus the `page_ops`
+log). Rows form a tree via `parent_id`;
 sibling order is the lexicographic `position` (fractional-index strings like `a0`, `a0V`).
 
 ```

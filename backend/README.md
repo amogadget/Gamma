@@ -10,10 +10,10 @@ backend/
 └── tests/            in-process TestClient tests — see tests/README.md
 
 data/                repo-root runtime data, outside backend source
-├── users.db          global: accounts, sessions, share tokens
-└── users/<name>/     per-user data
+├── users.db          global: accounts, sessions, workspaces + members, shares, personal prefs (schema-versioned)
+└── workspaces/<id>/  one directory per workspace (pages.db, data.db, uploads/)
     ├── pages.db        the block tree (see gamma/README.md for schema)
-    ├── data.db         legacy annotations + AI chat history
+    ├── data.db         AI chats, cover snapshots, search indexes
     └── uploads/        PDFs & images, named <sha256[:24]>
 ```
 

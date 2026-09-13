@@ -1,4 +1,4 @@
-"""Full-text index over note blocks — ``block_fts`` in the per-user data.db,
+"""Full-text index over note blocks — ``block_fts`` in the workspace's data.db,
 next to the PDF index (``pdf_fts``, routers/search.py).
 
 Every non-root block's content is indexed under its page root (highlights
@@ -25,7 +25,7 @@ import sqlite3
 
 from . import pdf_index
 from .blocks_store import fetch_subtree
-from .db import connect_data_db, user_db_path
+from .db import connect_data_db, ws_db_path
 from .logbuf import log
 from .textnorm import INDEX_VERSION, normalize_text
 
@@ -57,14 +57,14 @@ def fts_query(q: str) -> str:
     return " ".join(quoted)
 
 
-def mark_page_dirty(user: str, page_id: str | None) -> None:
+def mark_page_dirty(ws: str, page_id: str | None) -> None:
     """Forget a page's index bookkeeping so the next search rebuilds it. Called
     by the block writers whose change doesn't move the page root's
     updated_at. Never raises — the index is derived data."""
     if not page_id:
         return
     try:
-        with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+        with sqlite3.connect(ws_db_path(ws, "data.db")) as conn:
             ensure_schema(conn)
             conn.execute("DELETE FROM block_fts_meta WHERE page_id = ?", (page_id,))
             conn.commit()
@@ -72,11 +72,11 @@ def mark_page_dirty(user: str, page_id: str | None) -> None:
         pass
 
 
-def mark_all_dirty(user: str) -> None:
+def mark_all_dirty(ws: str) -> None:
     """Stamp every page stale (the Settings "rebuild index" path): rows keep
     their text until rebuilt, so search stays usable meanwhile."""
     try:
-        with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+        with sqlite3.connect(ws_db_path(ws, "data.db")) as conn:
             ensure_schema(conn)
             conn.execute("UPDATE block_fts_meta SET ver = 0")
             conn.commit()
@@ -118,12 +118,12 @@ def index_page(pages_conn: sqlite3.Connection, data_conn: sqlite3.Connection,
     return len(rows)
 
 
-def refresh(user: str, pages_conn: sqlite3.Connection, page_ids=None) -> int:
+def refresh(ws: str, pages_conn: sqlite3.Connection, page_ids=None) -> int:
     """Bring the index up to date for the given pages (None = every page):
     rebuild the stale ones, at most ``REFRESH_BATCH`` per call. Returns how
     many are still stale afterwards (the "indexing" count a search reports)."""
     live = _root_pages(pages_conn, page_ids)
-    with sqlite3.connect(user_db_path(user, "data.db")) as data_conn:
+    with sqlite3.connect(ws_db_path(ws, "data.db")) as data_conn:
         ensure_schema(data_conn)
         current = {r[0]: r[1] for r in data_conn.execute(
             "SELECT page_id, updated_at FROM block_fts_meta WHERE ver = ?", (INDEX_VERSION,))}
@@ -174,7 +174,7 @@ def search_blocks(data_conn: sqlite3.Connection, match: str, limit: int,
     return found
 
 
-def purge_page_data(user: str, pages_conn: sqlite3.Connection, deleted_ids) -> None:
+def purge_page_data(ws: str, pages_conn: sqlite3.Connection, deleted_ids) -> None:
     """Sweep data.db after blocks were deleted or a PDF detached: chats of the
     deleted blocks, ``pdf_fts`` rows of papers no page carries any more, and
     the notes-index rows of pages that are gone — none of it cleans itself.
@@ -185,7 +185,7 @@ def purge_page_data(user: str, pages_conn: sqlite3.Connection, deleted_ids) -> N
             "WHERE json_extract(properties, '$.doc_id') IS NOT NULL").fetchall()}
         live_pages = [r[0] for r in pages_conn.execute(
             "SELECT id FROM unified_blocks WHERE parent_id = 'root'").fetchall()]
-        with connect_data_db(user) as ddb:
+        with connect_data_db(ws) as ddb:
             pdf_index.ensure_schema(ddb)
             ddb.executemany("DELETE FROM chats WHERE block_id = ?", [(i,) for i in deleted_ids])
             ddb.executemany("DELETE FROM chat_history WHERE bucket = ?", [(i,) for i in deleted_ids])

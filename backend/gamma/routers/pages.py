@@ -4,7 +4,7 @@ CARRY a PDF; the PDF is an action on an existing page, not the way pages come
 into being. (``POST /api/blocks/by-doc/{doc_id}`` remains the lookup-or-create
 BY ATTACHMENT path for PDF ingest and the extension's dedup.)
 
-All three are session-only (``require_user``): a share token never creates
+All three need an editor of the workspace (``require_ws(write=True)``): a share token never creates
 pages or changes a page's attachment (page properties stay the owner's, same
 rule as PUT /blocks/{id} under a share).
 """
@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .. import block_index
-from ..auth import require_user
+from ..auth import require_ws
 from ..blocks_store import (
     BLOCK_COLUMNS,
     attachment_props,
@@ -59,12 +59,12 @@ async def create_page_endpoint(payload: PageCreate, request: Request):
     """A new text-only page: ``{title?, folder?}`` → the page's block dict.
     Title defaults to "Untitled"; ``folder`` (a path like ``a/b``) becomes
     ``properties.folder``."""
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     props = {}
     folder = clean_path(payload.folder or "")
     if folder:
         props["folder"] = folder
-    with connect_pages_db(user) as conn:
+    with connect_pages_db(ws) as conn:
         return create_page(conn, payload.title, props)
 
 
@@ -79,7 +79,7 @@ async def attach_pdf(page_id: str, payload: AttachRequest, request: Request):
     title is still automatic ("Untitled"/empty) it becomes the file name (or
     URL tail) and is marked ``auto_title`` for the metadata worker.
     Returns the updated block."""
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     doc_id = (payload.doc_id or "").strip()
     source_url = (payload.source_url or "").strip()
     if doc_id:
@@ -89,7 +89,7 @@ async def attach_pdf(page_id: str, payload: AttachRequest, request: Request):
             raise HTTPException(status_code=400, detail="invalid doc_id")
     if not doc_id and not source_url:
         raise HTTPException(status_code=400, detail="doc_id or source_url required")
-    with connect_pages_db(user) as conn:
+    with connect_pages_db(ws) as conn:
         page = _load_page(conn, page_id)
         props = dict(page["properties"])
         if page_attachment(props):
@@ -111,7 +111,7 @@ async def attach_pdf(page_id: str, payload: AttachRequest, request: Request):
         op = {"op": "set", "id": page_id, "props": props_patch(page["properties"], props)}
         if content != page["content"]:
             op["content"] = content
-        result = after_commit(user, conn, apply_ops(conn, page_id, [op], actor=user))
+        result = after_commit(ws, conn, apply_ops(conn, page_id, [op], actor=request.state.user or ""))
     return {**page, "content": content, "properties": props, "updated_at": result["at"]}
 
 
@@ -121,17 +121,17 @@ async def detach_pdf(page_id: str, request: Request):
     ``original_filename``). Highlight blocks keep their ``pdf_position``;
     the file itself is deleted by the orphan sweep unless another page still
     references it. → ``{"ok", "block", "removed_uploads"}``."""
-    user = require_user(request)
-    with connect_pages_db(user) as conn:
+    ws = require_ws(request, write=True)
+    with connect_pages_db(ws) as conn:
         page = _load_page(conn, page_id)
         props = dict(page["properties"])
         if not page_attachment(props):
             raise HTTPException(status_code=404, detail="page has no attachment")
         for key in ATTACHMENT_KEYS:
             props.pop(key, None)
-        result = after_commit(user, conn, apply_ops(
+        result = after_commit(ws, conn, apply_ops(
             conn, page_id, [{"op": "set", "id": page_id,
-                             "props": props_patch(page["properties"], props)}], actor=user))
-        block_index.purge_page_data(user, conn, [])
+                             "props": props_patch(page["properties"], props)}], actor=request.state.user or ""))
+        block_index.purge_page_data(ws, conn, [])
     return {"ok": True, "block": {**page, "properties": props, "updated_at": result["at"]},
             "removed_uploads": result["removed_uploads"]}

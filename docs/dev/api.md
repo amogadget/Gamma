@@ -6,20 +6,24 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 ## Auth model
 
 - A `session` cookie identifies the user (middleware sets
-  `request.state.user`). Write endpoints require it (`require_user`).
+  `request.state.user`). Identity-only endpoints use `require_user`.
+- Every data endpoint works in a **workspace** ([workspaces.md](workspaces.md)):
+  `?ws=` or the `X-Gamma-Workspace` header names it, nothing means the
+  account's personal workspace. `require_ws(request)` admits any member,
+  `require_ws(request, write=True)` editors and owners (a viewer gets 403);
+  a non-member gets 403. The returned workspace id is what the data helpers
+  take; `request.state.user` stays the actor.
 - Share tokens (`?share=<token>`) are the ONLY unauthenticated **read** path.
-  `resolve_user` returns the session user, or the owner named by a valid
-  `?share=` token — there is no `?user=` fallback (it used to trust any
-  username and leaked whole accounts). A share is keyed by PAGE (the root
-  block — so note pages without a PDF share exactly like papers; the PDF is
-  just the page's `doc_id`/`source_url`) and scoped to it: read endpoints that
-  can serve a share view also call `share_scope_page()` and
-  `blocks_store.assert_block_in_page()`, so a token can only reach its own
-  page's subtree and assets (its PDF, uploads its blocks reference, its own
-  `source_url` through the proxy) — root listing, backlinks, other pages, and
-  folder export are refused (403). Rows minted by the old doc-keyed model
-  (`page_id` NULL) were backfilled once by `gamma/migrate.py` (see
-  [user_db.md](user_db.md)); auth treats a row without `page_id` as dead.
+  `resolve_ws` returns the session's workspace, or the workspace of the page
+  named by a valid `?share=` token — there is no `?user=` fallback (it used
+  to trust any username and leaked whole accounts). A share is keyed by
+  (workspace, PAGE) — the page's root block, so note pages without a PDF
+  share exactly like papers; the PDF is just the page's `doc_id`/`source_url`
+  — and scoped to it: read endpoints that can serve a share view also call
+  `share_scope_page()` and `blocks_store.assert_block_in_page()`, so a token
+  can only reach its own page's subtree and assets (its PDF, uploads its
+  blocks reference, its own `source_url` through the proxy) — root listing,
+  backlinks, other pages, and folder export are refused (403).
 - Share reads are readable **cross-origin**: a GET carrying `?share=` or
   resolving `/share/{token}` answers `Access-Control-Allow-Origin: *`
   (`auth._apply_share_cors`), so another Gamma's frontend can pull a shared
@@ -29,17 +33,19 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   so a cross-origin fetch is a stranger's: only `anyone` links open that way.
   Writes and every other endpoint keep the same-origin default.
 - **Share permissions** (`shares.audience` / `role` / `allowed_users`,
-  `auth.share_access`) are Notion-shaped and additive: the owner INVITES
-  people (`users: [{name, role}]`, stored as `carol:edit,dave:view`) who get
-  in with their own `view`/`edit` whatever general access says; everyone else
-  goes through general access — `audience` `anyone` (no session, always view),
-  `users` (any signed-in non-guest account, with the share's `role`), `list`
-  (nobody beyond the invited). When a request carries `?share=`, the token decides
-  WHOSE data is read (the owner's — a signed-in visitor sees the owner's page,
+  `auth.share_access`) are Notion-shaped and additive: members of the page's
+  workspace keep their workspace role (editors/owners edit, viewers view);
+  the sharer INVITES people (`users: [{name, role}]`, stored as
+  `carol:edit,dave:view`) who get in with their own `view`/`edit` whatever
+  general access says; everyone else goes through general access —
+  `audience` `anyone` (no session, always view), `users` (any signed-in
+  non-guest account, with the share's `role`), `list` (nobody beyond the
+  invited). When a request carries `?share=`, the token decides WHICH
+  WORKSPACE is read (the page's — a signed-in visitor sees the shared page,
   not their own library) while the session decides whether the audience gate
   admits them; a refused token is 401 when signing in could help, else 403.
-  `edit` shares (never valid with `anyone`) let `require_writer` resolve the
-  owner for the block writers — `POST /blocks`, `PUT /blocks/{id}`,
+  `edit` shares (never valid with `anyone`) let `require_ws_writer` resolve
+  the workspace for the block writers — `POST /blocks`, `PUT /blocks/{id}`,
   `DELETE /blocks/{id}`, `PUT /blocks/{id}/children`, `POST /blocks/{id}/reorder`,
   `POST /pages/{id}/ops` (and the page websocket, view or edit),
   `POST /upload-image`, `POST /upload-file` — each of which confines the touched blocks to the
@@ -51,8 +57,8 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   non-http(s) schemes (`file:`, `ftp:`, …) and hosts that resolve to
   loopback/private/link-local/metadata addresses (SSRF), re-checking on every
   redirect.
-- Usernames and doc ids are validated (`db.safe_username` / `db.safe_doc_id`,
-  used by `user_db_path` / `user_uploads_dir` / `pdf_upload_path`) before they
+- Workspace ids and doc ids are validated (`db.safe_ws_id` / `db.safe_doc_id`,
+  used by `ws_db_path` / `ws_uploads_dir` / `pdf_upload_path`) before they
   become filesystem paths — no traversal.
 - The session cookie is `HttpOnly; SameSite=Lax`, and `Secure` when the request
   is HTTPS (auto via scheme / `X-Forwarded-Proto` — off on plain-HTTP LAN so
@@ -75,9 +81,17 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/login`, `/login-guest`, `/logout` | session management |
-| GET | `/session` | who am I (identity only — quota lives in `/quota`) |
-| GET | `/export` (+ `/export-progress`) | backup zip (everything or DB-only); admins may target `?user=` |
-| POST | `/import-data` | restore/merge a backup zip |
+| GET | `/session` | who am I, plus `workspaces: [{id, name, role, personal, members}]` and `default_workspace` (quota lives in `/quota`) |
+| GET | `/export` (+ `/export-progress`) | backup zip of a workspace (everything or DB-only): the request's, `?ws=` (any member), or — admins — `?user=` for an account's personal workspace |
+| POST | `/import-data` | restore (`mode=replace`, owners) / merge (`mode=merge`, editors) a backup zip into a workspace (same targeting); never into the guest workspace |
+
+### Workspaces (`workspaces.py`) — see [workspaces.md](workspaces.md)
+| Method | Path | Purpose |
+|---|---|---|
+| GET/POST | `/workspaces` | mine / create one (`{name}`; guests 403) |
+| GET/PUT/DELETE | `/workspaces/{id}` | members + quota (any member) / rename (owner) / delete (owner; not a personal one) |
+| PUT/DELETE | `/workspaces/{id}/members/{user}` | invite or set a role `{role}` (owner) / remove (owner) or leave (yourself) |
+| GET | `/workspaces/find-page/{page_id}` | which of my workspaces holds the page (deep links without `ws`) |
 
 ### Blocks (`blocks.py`) — the core data model
 | Method | Path | Purpose |
@@ -98,9 +112,9 @@ the tree reflects (the live session catches up from it).
 ### Collaboration (`collab.py`) — see [collab.md](collab.md)
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/pages/{id}/ops` | apply a batch of block ops `{client, ops: [set / insert / move / delete]}` in one transaction → `{seq, at, ops (as applied — re-keyed positions carry their final value), removed_uploads}`; session user or an edit share (confined to the shared page; the page root's properties stay the owner's); a bad op fails the whole batch (400/403/404/413) |
+| POST | `/pages/{id}/ops` | apply a batch of block ops `{client, ops: [set / insert / move / delete]}` in one transaction → `{seq, at, ops (as applied — re-keyed positions carry their final value), removed_uploads}`; a workspace editor or an edit share (confined to the shared page; the page root's properties stay the workspace's); a bad op fails the whole batch (400/403/404/413) |
 | GET | `/pages/{id}/ops?since=` | the op log after a seq → `{seq, batches: [{seq, actor, client, at, ops}]}`; 410 when pruned past `since` (reload the tree) |
-| WS | `/ws/page/{id}[?share=&client=]` | the page's live channel: `hello` / `join` / `leave` / `cursor` presence, every applied `ops` batch, `reload`; the client only ever sends `cursor`. Auth like HTTP (session cookie or share token, resolved in the handler — the middleware doesn't run for websockets); viewers join too |
+| WS | `/ws/page/{id}[?ws=&share=&client=]` | the page's live channel: `hello` / `join` / `leave` / `cursor` presence, every applied `ops` batch, `reload`; the client only ever sends `cursor`. Auth like HTTP (session cookie + `?ws=` (else the default workspace) or share token, resolved in the handler — the middleware doesn't run for websockets); viewers join too |
 
 ### Pages (`pages.py`) — page first, PDF as an action on it
 | Method | Path | Purpose |
@@ -109,8 +123,9 @@ the tree reflects (the live session catches up from it).
 | POST | `/pages/{page_id}/attachment` | attach a PDF to a page that has none: body `{doc_id?, source_url?, original_filename?}` (at least one of `doc_id`/`source_url`; `doc_id` is shape-validated only — a URL-opened PDF's id is the URL hash and the proxy fetches it lazily, like `by-doc`; `source_url` defaults to `/api/uploads/<doc_id>.pdf`). While the title is still automatic (`Untitled`/empty) it becomes the file name / URL tail and is marked `auto_title`. → the updated block. 400 bad input / not a root page, 404 unknown page, 409 `{"detail": "page already has an attachment"}`, 409 `{"detail": "attachment belongs to another page", "page_id"}` |
 | DELETE | `/pages/{page_id}/attachment` | drop `doc_id`/`source_url`/`original_filename` (highlights keep their `pdf_position`; the orphan sweep deletes the file unless another page references it) → `{ok, block, removed_uploads}`; 404 when the page has no attachment |
 
-All session-only (`require_user`): a share token never creates pages or
-touches a page's attachment. `GET /pages/{id}/export*` live in `export.py`.
+All need a workspace editor (`require_ws(write=True)`): a share token never
+creates pages or touches a page's attachment. `GET /pages/{id}/export*` live
+in `export.py`.
 
 ### PDFs & uploads (`pdf.py`, `uploads.py`, `shares.py`)
 | Method | Path | Purpose |
@@ -120,10 +135,10 @@ touches a page's attachment. `GET /pages/{id}/export*` live in `export.py`.
 | POST | `/uploads`, `/upload-image` | store a PDF / an image (content-hash names, dedup'd; quota-gated) |
 | POST | `/upload-file` | store any allowed file for a block to reference as `[name](/api/uploads/<hash>.<ext>)`: md, txt, csv, json, tex, bib, py, ipynb, html, docx, xlsx, pptx, zip, plus images (routed like `/upload-image`) and PDFs; extension from the uploaded name; same hashing + limits → `{url, name, size, already_existed}`; 400 for anything else |
 | GET | `/uploads/{filename}` | serve stored files with their media type; pdf / images / txt / md render inline, everything else is `Content-Disposition: attachment` (html additionally sandboxed like svg) |
-| GET | `/quota` | effective limits + usage for the session user |
-| POST | `/share/{page_id}` | create the page's share link (defaults `anyone`/`view`; optional body `{audience, role, users}` applies to a NEW link) or return the existing one unchanged — root blocks only (400 otherwise) |
-| GET/PUT/DELETE | `/share-settings/{page_id}` | owner: read settings (`{token: null}` when unshared) / change `audience`, `role`, `users` (`["carol"]` or `[{name, role}]`; validated: `edit`+`anyone` → 400, unknown usernames or roles → 400; the token stays) / stop sharing (the token dies) |
-| GET | `/share/{token}` | resolve a link for this viewer → `{page_id, doc_id, username, audience, role, can_edit, viewer, viewer_is_guest}` (`doc_id` = the page's PDF attachment id via `page_attachment`, `""` without one — the vestigial `shares.doc_id` column is never read; `viewer`/`viewer_is_guest` let the share view offer "Open in my library" to the owner or "Add to my library" to an account that can import); 404 unknown, 401 sign in first, 403 signed in but not allowed |
+| GET | `/quota` | the limits that apply to uploads into the request's workspace (its billing account's) + that account's `used_bytes`, plus `workspace_bytes` and `billed_to` |
+| POST | `/share/{page_id}` | create the page's share link (defaults `anyone`/`view`; optional body `{audience, role, users}` applies to a NEW link) or return the existing one unchanged — root blocks only (400 otherwise); workspace editors and owners |
+| GET/PUT/DELETE | `/share-settings/{page_id}` | read settings (`{token: null}` when unshared; any member) / change `audience`, `role`, `users` (`["carol"]` or `[{name, role}]`; validated: `edit`+`anyone` → 400, unknown usernames or roles → 400; the token stays) / stop sharing (the token dies) — editors and owners |
+| GET | `/share/{token}` | resolve a link for this viewer → `{page_id, doc_id, username (who shared it), workspace_id, audience, role, can_edit, viewer, viewer_is_guest}` (`doc_id` = the page's PDF attachment id via `page_attachment`, `""` without one; `viewer`/`viewer_is_guest` let the share view offer "Open in my library" or "Add to my library"); 404 unknown, 401 sign in first, 403 signed in but not allowed |
 
 ### Search (`search.py`, `gamma/block_index.py`, `gamma/pdf_index.py`)
 | Method | Path | Purpose |
@@ -159,7 +174,8 @@ indexer in `search.py`.
 | GET | `/library/folders` | `{folders, labels}` in use (folder paths include their ancestors) — the popup's pickers |
 | POST | `/clip/note` | the explicit "clip into page" append: `> quote — [title](url)` as the last block of `page_id`, or of the "Web clips" page (created on first use) |
 
-All five are session-only (`require_user`), never share-token readable.
+All five are session-only, never share-token readable; the clip lands in
+the request's workspace — the extension names none, so its personal one.
 
 ### Metadata (`metadata.py`)
 | Method | Path | Purpose |
@@ -212,7 +228,7 @@ All five are session-only (`require_user`), never share-token readable.
 ### Prefs (`prefs.py`)
 | Method | Path | Purpose |
 |---|---|---|
-| GET/PUT | `/prefs/{key}` | small synced JSON KV (`open-tabs`, `recent-views`, `pinned-folders`, `ai-provider`, …); refuses the reserved `ai-settings` key |
+| GET/PUT | `/prefs/{key}` | small synced JSON KV per account: `open-tabs`, `recent-views`, `pinned-folders`, `read-pos` are stored per workspace (the request's), `appearance` / `ai-provider` account-wide (`db.USER_PREF_KEYS`); refuses the reserved `ai-settings` key |
 | GET | `/page-snaps` | all recents-card cover thumbnails `{snaps: {pageId: {img, at}}}`; `?after=<iso>` returns only newer ones (the focus-pull delta) |
 | PUT | `/page-snaps/{page_id}` | store a cover (JPEG data URL body `{img, at}`; per-page newest-`at` wins, count-capped server-side) |
 | DELETE | `/page-snaps/{page_id}` | drop a cover (the recents card's ×) |
@@ -220,9 +236,13 @@ All five are session-only (`require_user`), never share-token readable.
 ### Admin (`admin.py`, prefix `/api/admin`)
 | Method | Path | Purpose |
 |---|---|---|
-| GET/POST | `/admin/users` | list (with usage) / create accounts |
-| PUT/DELETE | `/admin/users/{name}` | password, admin flag, storage overrides / delete |
-| POST | `/admin/users/{name}/rename` | rename (moves the data dir first; sessions survive) |
+| GET/POST | `/admin/users` | list (with usage and `default_workspace`) / create accounts (+ personal workspace) |
+| PUT/DELETE | `/admin/users/{name}` | password, admin flag, storage overrides / delete (+ the workspaces only they owned, listed as `deleted_workspaces`) |
+| POST | `/admin/users/{name}/rename` | rename (rows only — no files move; sessions survive) |
+| GET | `/admin/workspaces` | every workspace with members and upload size, plus orphan directories |
+| GET/POST | `/admin/backups` | list the snapshots under `backups/` / take one now (`{label?, uploads?}` — databases, plus every upload with `uploads: true`) |
+| GET | `/admin/backups/{name}/download` | the snapshot as a zip |
+| DELETE | `/admin/backups/{name}` | delete a snapshot (restoring is `manage.py backups --restore`, server stopped — [migrations.md](migrations.md)) |
 | GET/PUT | `/admin/settings` | server-wide storage defaults |
 | GET | `/admin/logs?after=<seq>` | scrubbed in-memory server log |
 

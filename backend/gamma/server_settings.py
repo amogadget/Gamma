@@ -8,14 +8,17 @@ process start):
 
 `user_limits()` resolves the effective pair for an account; a missing or
 corrupt value can never break request handling — it falls back to the
-default. Quota 0 means unlimited. Usage is the byte size of the account's
-uploads/ directory (the databases are not metered).
+default. Quota 0 means unlimited. Usage is the byte size of the uploads/
+directories of every workspace billed to the account (its own, plus shared
+ones it created — gamma/workspaces.py billing_user); the databases are not
+metered. Uploads into a workspace are checked against ITS billing account,
+whoever is uploading.
 """
 
 from fastapi import HTTPException
 
 from .config import MAX_UPLOAD_BYTES
-from .db import connect_users_db, page_now, user_uploads_dir
+from .db import connect_users_db, page_now, ws_uploads_dir
 
 MB = 1024 * 1024
 DEFAULT_MAX_UPLOAD_MB = MAX_UPLOAD_BYTES // MB
@@ -98,25 +101,48 @@ def user_limits(username: str) -> dict:
     }
 
 
-def usage_bytes(username: str) -> int:
-    uploads = user_uploads_dir(username)
+def workspace_bytes(ws: str) -> int:
+    """Upload bytes stored in one workspace."""
+    try:
+        uploads = ws_uploads_dir(ws)
+    except ValueError:
+        return 0
     if not uploads.exists():
         return 0
     return sum(f.stat().st_size for f in uploads.iterdir() if f.is_file())
 
 
-def check_upload_allowed(username: str, nbytes: int) -> None:
-    """Hard gate for explicit uploads: 413 over the per-file cap, 507 over quota.
+def usage_bytes(username: str) -> int:
+    """Upload bytes billed to an account: every workspace it is billed for."""
+    from . import workspaces  # local: workspaces imports seed → db
+
+    return sum(workspace_bytes(ws) for ws in workspaces.billed_to(username))
+
+
+def workspace_quota(ws: str) -> dict:
+    """The limits and usage that apply to uploads into ``ws``:
+    ``{max_upload_mb, quota_mb, used_bytes (billed account total),
+    workspace_bytes, billed_to}``."""
+    from . import workspaces
+
+    who = workspaces.billing_user(ws)
+    return {**user_limits(who), "used_bytes": usage_bytes(who) if who else workspace_bytes(ws),
+            "workspace_bytes": workspace_bytes(ws), "billed_to": who}
+
+
+def check_upload_allowed(ws: str, nbytes: int) -> None:
+    """Hard gate for explicit uploads into a workspace: 413 over the billing
+    account's per-file cap, 507 over its quota.
 
     Callers should skip this when the content hash already exists on disk —
     re-uploading a stored file costs nothing, so it is always allowed.
     """
-    limits = user_limits(username)
+    limits = workspace_quota(ws)
     if nbytes > limits["max_upload_mb"] * MB:
         raise HTTPException(status_code=413, detail=f"file too large (max {limits['max_upload_mb']} MB)")
     quota = limits["quota_mb"]
     if quota:
-        used = usage_bytes(username)
+        used = limits["used_bytes"]
         if used + nbytes > quota * MB:
             raise HTTPException(
                 status_code=507,
@@ -124,11 +150,11 @@ def check_upload_allowed(username: str, nbytes: int) -> None:
                        f"this file needs {max(1, nbytes // MB)} MB more)")
 
 
-def can_store(username: str, nbytes: int) -> bool:
+def can_store(ws: str, nbytes: int) -> bool:
     """Soft gate for best-effort caches (external-PDF save, AI re-download):
     same rules as check_upload_allowed, but the caller just skips the save."""
     try:
-        check_upload_allowed(username, nbytes)
+        check_upload_allowed(ws, nbytes)
         return True
     except HTTPException:
         return False

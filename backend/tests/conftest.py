@@ -56,10 +56,11 @@ def guest(client):
 
 
 def make_user(username, password, is_admin=0):
-    """Create (idempotently) a password account plus its per-user DBs."""
+    """Create (idempotently) a password account plus its personal workspace.
+    Returns the workspace id."""
     import bcrypt
+    from gamma import workspaces
     from gamma.db import connect_users_db, page_now
-    from gamma.seed import create_user_dbs
 
     with connect_users_db() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
@@ -68,7 +69,13 @@ def make_user(username, password, is_admin=0):
                 (username, bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode(), is_admin, page_now()),
             )
             conn.commit()
-    create_user_dbs(username)
+    return workspaces.ensure_personal(username)
+
+
+def workspace_of(username):
+    """The account's personal workspace id."""
+    from gamma import workspaces
+    return workspaces.default_workspace(username)
 
 
 def login(username, password):

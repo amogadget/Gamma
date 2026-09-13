@@ -70,8 +70,8 @@ Backend
   `pdf_*` argument names stay (documented as attachment text).
 - ~~`shares.doc_id` is `NOT NULL` and still returned to the client (vestigial
   since shares were re-keyed by page).~~ Never read any more; the response's
-  `doc_id` is derived from the page. The column itself goes with the hand-run
-  `migrate --drop-share-doc-id` (stage 3, after the release ships).
+  `doc_id` is derived from the page. The column went with migration step 2
+  (the shares table is keyed by workspace and page now).
 - `export-pdf` 400s without `doc_id` (correct — that format IS the PDF); the
   dialog already falls back to notes-as-PDF.
 - ~~`metadata/status` skips pages with neither `doc_id` nor `source_url`
@@ -113,16 +113,18 @@ tabs, markdown-import and web-clip pages, notes-as-PDF export,
 
 ## One-time cleanup of old data shapes
 
-Gamma has no migration framework: schemas are `CREATE TABLE IF NOT EXISTS`
-on connect plus lazy `ALTER TABLE ... ADD COLUMN` (`db.py connect_users_db`).
 Old rows were historically tolerated forever by read-side shims, which means
-every renamed property or syntax lives twice in the code. The block-centric
-work replaces that with ONE idempotent normalization pass, `gamma/migrate.py`,
-run by `python manage.py migrate` and on every server start
-(`app._startup_maintenance`). Each step only touches rows that still carry
-the old shape (SQL-filtered), so a clean database costs one query per step.
+every renamed property or syntax lived twice in the code. The block-centric
+work replaced that with ONE idempotent normalization pass, now
+`gamma/normalize.py`, which the versioned migration runner
+([migrations.md](migrations.md)) applies in its baseline step and every
+backup restore applies to the imported files. Each step only touches rows
+that still carry the old shape (SQL-filtered), so a clean database costs one
+query per step. Schema changes themselves (columns, tables, the workspace
+layout) are numbered migration steps, no longer lazy `ALTER TABLE` on
+connect.
 
-Per-user `pages.db`
+Per-workspace `pages.db`
 - `properties.sourceUrl` (camelCase, earliest pages) → `source_url`; the old
   key is removed.
 - Legacy Logseq image size `![alt](url){:width N}` in block content →
@@ -134,25 +136,20 @@ Per-user `pages.db`
 - Stage 4 (when it lands): highlight blocks under a page with `doc_id` gain
   `attachment_id = doc_id`.
 
-Per-user `data.db`
-- Drop the legacy `annotations` and per-user `shares` tables (superseded by
-  `unified_blocks` and the global `shares` table long ago).
+Per-workspace `data.db`
+- Drop the legacy `annotations`, per-user `shares` and `prefs` tables
+  (superseded by `unified_blocks`, the global `shares` table and
+  `user_prefs`); add `chats.title` where missing.
 
 Global `users.db`
 - Backfill `shares.page_id` for rows minted when shares were keyed by PDF
   (resolve through the owner's pages.db; rows whose document is gone are
-  deleted — they could never resolve).
-- Stage 3: drop `shares.doc_id` — `migrate.drop_shares_doc_id()` (a table
-  rebuild, any SQLite version; idempotent), exposed as `python manage.py
-  migrate --drop-share-doc-id` and deliberately NOT called from `run_all()`.
-  Run it by hand only after the Docker image and desktop release both ship
-  code that no longer reads it and inserts without it (this change), since
-  an older binary would fail to INSERT (`NOT NULL`, no default). `db.py`
-  keeps creating the old shape for fresh installs until then.
+  deleted — they could never resolve). Migration step 1; step 2 re-keys the
+  table by workspace and drops the vestigial `doc_id` column.
 
-Status (2026-09-02): `gamma/migrate.py` is in place with every step above
-except the stage-3/4 schema ones (`run_all()` at startup + `manage.py
-migrate`, tests in `tests/test_migrate.py`), and the matching read-side shims
+Status (2026-09-13): the normalization pass lives in `gamma/normalize.py`
+(run by migration step 1 and on backup restore — `tests/test_migrations.py`),
+the stage-3 schema step shipped as migration step 2, and the matching read-side shims
 are deleted (`sourceUrl` fallbacks in `ai_context`/`metadata`/`pdf`, the
 `PDF Notes - ` recogniser in `metadata._save_props`, `auth._legacy_share_page`
 + the lazy backfill in `share_lookup`). New code writes only the new shape.
@@ -298,10 +295,8 @@ inventory; `/api/search` serves the AI tools and is verified with curl (notes
   as the append path. — **done (backend)**: `clip._clip_web_page` (+
   `selection` on the request, `find_web_page` dedup); `/clip/note` unchanged.
   The extension itself does not send `selection` on a page save yet.
-- Drop `shares.doc_id` (one-time backfill already keyed by page). — **done
-  (backend, gated)**: nothing reads the column; `migrate.drop_shares_doc_id`
-  / `manage.py migrate --drop-share-doc-id` drops it by hand after the
-  release ships (see "One-time cleanup" above).
+- Drop `shares.doc_id` (one-time backfill already keyed by page). — **done**:
+  migration step 2 rebuilt the table without it ([migrations.md](migrations.md)).
 - Read-position / scroll restore for text-only pages (top block id), so
   reopening any page lands where you were.
 

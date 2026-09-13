@@ -10,7 +10,7 @@ python desktop/build_backend.py && cd desktop && npm run pack && npm run e2e:pac
 `npm run e2e` runs the same suite on the dev tree (sidecars from
 `backend/venv`, frontend from `frontend/dist`) in ~3 min; `--continue` keeps
 going after a failure, `--keep` leaves the temp profile behind for a look.
-The suite uses a throwaway userData profile, so your real workspaces are
+The suite uses a throwaway userData profile, so your real servers are
 never touched. Each item below names the e2e step that covers it (**auto**)
 or says it is a manual look (**manual**).
 
@@ -18,39 +18,40 @@ or says it is a manual look (**manual**).
 
 | # | Check | How |
 |---|---|---|
-| 1.1 | First start shows the launcher; the shell bar reads *Workspaces*; layout is bar 38 px + content below | auto: *first start shows the launcher + shell bar* |
-| 1.2 | Create a local workspace → card appears, data dir created under `workspaces/<id>` | auto: *create a local workspace from the launcher* |
+| 1.1 | First start shows the launcher; the shell bar reads *Servers*; layout is bar 38 px + content below | auto: *first start shows the launcher + shell bar* |
+| 1.2 | Create a local server → card appears, data dir created under `workspaces/<id>` | auto: *create a local server from the launcher* |
 | 1.3 | Open it → sidecar starts on a free `127.0.0.1` port, Gamma loads, silent admin login lands, bar shows the name + reload button | auto: *open it: sidecar starts, Gamma loads, auto-login lands* |
 | 1.4 | Quit → every sidecar process is gone (no orphan `gamma-server.exe`/python), window bounds saved | auto: *quit: every sidecar stops, window bounds persist* |
-| 1.5 | Relaunch → the last workspace reopens by itself, data intact, chrome already in the persisted theme | auto: *relaunch reopens the last workspace with its data intact* |
-| 1.6 | *Reopen last workspace at launch* switched off → launcher at start | manual (toggle in the launcher, restart) |
+| 1.5 | Relaunch → the last server reopens by itself, data intact, chrome already in the persisted theme | auto: *relaunch reopens the last server with its data intact* |
+| 1.6 | *Reopen last server at launch* switched off → launcher at start | manual (toggle in the launcher, restart) |
 | 1.7 | Cold start of the frozen server stays well under the 60 s health budget on a slow disk | manual: watch the *Starting …* status; `logs/<id>.log` has the uvicorn banner |
 
-## 2. Switching workspaces (the reason the shell bar exists)
+## 2. Switching (the reason the shell bar exists)
 
 | # | Check | How |
 |---|---|---|
-| 2.1 | Bar dropdown lists every workspace with running dots, check on the current one, *All workspaces…* | auto: *second workspace; switch from the shell bar while Alpha keeps running* |
-| 2.2 | Switching to another local workspace starts its sidecar; the first one keeps running | auto (same step) |
+| 2.0 | Bar dropdown lists the open server's Gamma workspaces (check on the current one, role per row); choosing one navigates to `?ws=<id>` on the same server and the bar names it | auto: *Gamma workspaces: the bar lists them and switches with ?ws=* |
+| 2.1 | Bar dropdown lists every server with running dots, check on the current one, *All servers…* | auto: *second server; switch from the shell bar while Alpha keeps running* |
+| 2.2 | Switching to another local server starts its sidecar; the first one keeps running | auto (same step) |
 | 2.3 | Switching back is instant and hits the same server process (no restart, session still valid) | auto: *switch back to Alpha: instant, same server, no restart* |
 | 2.4 | The dropdown closes on choose / outside click / Esc, and the bar shrinks back to 38 px | auto (bar height asserted) + manual feel |
-| 2.5 | `Ctrl/Cmd+Shift+L` and the *All workspaces…* item go to the launcher | auto: *launcher lists sizes …* uses the menu item; accelerator manual |
-| 2.6 | A workspace added while another is open shows up in the dropdown | auto (Beta is added mid-session) |
+| 2.5 | `Ctrl/Cmd+Shift+L` and the *All servers…* item go to the launcher | auto: *launcher lists sizes …* uses the menu item; accelerator manual |
+| 2.6 | A server added while another is open shows up in the dropdown | auto (Beta is added mid-session) |
 
-## 3. Storage (per-workspace `GAMMA_DATA_DIR`)
+## 3. Storage (per-server `GAMMA_DATA_DIR`)
 
 | # | Check | How |
 |---|---|---|
-| 3.1 | Layout: `users.db`, `users/admin/pages.db`, `users/admin/data.db`, `users/admin/uploads/` | auto: *data dir has the standard GAMMA_DATA_DIR layout* |
+| 3.1 | Layout: `users.db`, `workspaces/<id>/pages.db`, `workspaces/<id>/data.db`, `workspaces/<id>/uploads/` (one dir per Gamma workspace; a pre-workspace `users/<name>/` layout is upgraded at first start, snapshot under `backups/`) | auto: *data dir has the standard GAMMA_DATA_DIR layout* |
 | 3.2 | An uploaded PDF lands in `uploads/` under its content-hash name, exactly once | auto: *upload a PDF + create a paper page with a math note* |
-| 3.3 | Launcher shows size on disk per local workspace + the *last opened* badge | auto: *launcher lists sizes, last-opened badge …* |
+| 3.3 | Launcher shows size on disk per local server + the *last opened* badge | auto: *launcher lists sizes, last-opened badge …* |
 | 3.4 | Remove → *keep files* leaves the folder; *delete everything* removes it (only under the default or the configured storage root) | auto (remove) + manual (check the folder) |
-| 3.5 | Two workspaces never share state (separate DBs, uploads, sessions) | auto: Beta starts empty; Alpha's page only appears after the import |
+| 3.5 | Two servers never share state (separate DBs, uploads, sessions) | auto: Beta starts empty; Alpha's page only appears after the import |
 | 3.6 | Storage limits still apply per server (Settings → Users in Gamma) | manual, Gamma's own feature |
-| 3.7 | *Local workspace storage → Change…* + *Move data*: every local workspace lands under `<new root>/<id>`, old folders gone, sidecars stopped (they start on the next open), library intact; *Use default* moves back | auto: *storage folder: change the root, existing workspaces move, data intact* (the picker itself is manual) |
-| 3.8 | *Only new workspaces* leaves existing ones in place; the next new workspace is created in the new root | manual |
+| 3.7 | *Local server storage → Change…* + *Move data*: every local server lands under `<new root>/<id>`, old folders gone, sidecars stopped (they start on the next open), library intact; *Use default* moves back | auto: *storage folder: change the root, existing servers move, data intact* (the picker itself is manual) |
+| 3.8 | *Only new servers* leaves existing ones in place; the next new server is created in the new root | manual |
 
-## 4. Export / import inside a workspace
+## 4. Export / import inside a server
 
 | # | Check | How |
 |---|---|---|
@@ -59,18 +60,18 @@ or says it is a manual look (**manual**).
 | 4.3 | Markdown import creates a page | auto: *markdown import creates a page* |
 | 4.4 | Backup zip (*Export my data*) downloads through the browser download path into a file | auto: *backup zip downloads through the browser download path* |
 | 4.5 | Save dialog appears for downloads in the real app (tests bypass it via `GAMMA_SHELL_DOWNLOAD_DIR`) | manual |
-| 4.6 | *Import data* restores the backup into another workspace, uploads included | auto: *import the Alpha backup into Beta* |
+| 4.6 | *Import data* restores the backup into another server's workspace, uploads included | auto: *import the Alpha backup into Beta* |
 | 4.7 | Drag-and-drop a PDF / `<input type=file>` uploads work in the Electron window | manual |
 | 4.8 | Zotero RDF and Logseq imports | manual (need real export files) |
 
-## 5. Remote workspaces + navigation guard
+## 5. Remote servers + navigation guard
 
 | # | Check | How |
 |---|---|---|
-| 5.1 | A remote URL loads without auto-login (normal Gamma login), bar shows its name | auto: *remote workspace: a URL, loads without auto-login* |
+| 5.1 | A remote URL loads without auto-login (normal Gamma login), bar shows its name | auto: *remote server: a URL, loads without auto-login* |
 | 5.2 | Unreachable server → back on the launcher with the error text | auto: *unreachable remote falls back to the launcher with the error* |
 | 5.3 | Remote cards and bar-menu rows carry a reachability dot: green for a live server, red for a dead URL, dim until probed | auto: *remote reachability dot: on for the live server, off for a dead URL* |
-| 5.4 | Foreign URLs (`window.open`, `location` changes, `target=_blank` chips) open in the system browser; the window stays on the workspace | auto: *navigation guard: foreign URLs open outside, the window stays* |
+| 5.4 | Foreign URLs (`window.open`, `location` changes, `target=_blank` chips) open in the system browser; the window stays on the server | auto: *navigation guard: foreign URLs open outside, the window stays* |
 | 5.5 | ChatGPT-OAuth sign-in: the auth page opens in the system browser and the pasted callback URL completes it in Gamma | manual |
 | 5.6 | HTTPS remote with a self-signed cert shows Chromium's interstitial (expected: use a real cert) | manual |
 
@@ -104,7 +105,7 @@ or says it is a manual look (**manual**).
 | 8.1 | `desktop/package.json` version bumped (the release tag is `v<version>`; with an existing tag the workflow only builds) | manual |
 | 8.2 | `desktop` workflow: frontend build → freeze → frozen health check → electron-builder → signature verify → packaged smoke, all three OSes; Linux also installs the `.deb` and smokes `/opt/Gamma/gamma` | CI |
 | 8.3 | Release page lists `Gamma-<v>-win-x64.exe` (+ `.blockmap`, `latest.yml`), `Gamma-<v>-mac-arm64.dmg`/`.zip` (+ `latest-mac.yml`), `Gamma-<v>-linux-amd64.deb` (+ `latest-linux.yml`); the release is NOT a draft / pre-release (installed apps skip those) and is marked *Latest* (an `extension-v*` release must never be) | manual on the release page |
-| 8.4 | Fresh machine: installer runs (unsigned: SmartScreen *Run anyway*; signed: no SmartScreen block, *Publisher* shows the cert subject in the UAC prompt; Debian/Ubuntu: `sudo apt install ./Gamma-<v>-linux-amd64.deb` pulls the deps), first launch creates a workspace, no Python/Node needed | manual |
+| 8.4 | Fresh machine: installer runs (unsigned: SmartScreen *Run anyway*; signed: no SmartScreen block, *Publisher* shows the cert subject in the UAC prompt; Debian/Ubuntu: `sudo apt install ./Gamma-<v>-linux-amd64.deb` pulls the deps), first launch creates a local server, no Python/Node needed | manual |
 | 8.5 | Signed macOS build: `codesign --verify --deep --strict Gamma.app` and `spctl --assess --type execute Gamma.app` pass; a fresh download opens without the *damaged* dialog (the release job's *Verify signature* step covers this on the runner) | manual |
 
 ## Last run

@@ -3,13 +3,21 @@
 import os
 from pathlib import Path
 
-# Where all persistent state lives: users.db, users/<name>/{pages.db,data.db,uploads/}.
-# Defaults to a data/ folder at the repo root — the local mirror of Docker's /data
+# Where all persistent state lives: users.db (accounts, sessions, workspaces,
+# memberships, shares, personal prefs) and workspaces/<id>/{pages.db,data.db,
+# uploads/} — one directory per workspace (docs/dev/workspaces.md). Defaults
+# to a data/ folder at the repo root — the local mirror of Docker's /data
 # volume. Override with GAMMA_DATA_DIR (the Docker image sets it to /data).
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = Path(os.environ.get("GAMMA_DATA_DIR", "") or _REPO_ROOT / "data")
 USERS_DB = DATA_DIR / "users.db"
-USERS_DIR = DATA_DIR / "users"
+WORKSPACES_DIR = DATA_DIR / "workspaces"
+# The pre-workspace layout (users/<username>/...). Read ONLY by the schema
+# migration that moves it into WORKSPACES_DIR (gamma/migrations.py).
+LEGACY_USERS_DIR = DATA_DIR / "users"
+# Database snapshots the migration runner takes before changing the data
+# directory (gamma/migrations.py backup()).
+BACKUPS_DIR = DATA_DIR / "backups"
 
 # Built frontend (vite dist/). When set and the directory exists, the backend
 # serves it as an SPA — no separate static file server or reverse proxy needed.

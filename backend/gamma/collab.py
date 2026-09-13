@@ -1,7 +1,7 @@
 """Live rooms: who is on a page right now, and the fan-out of applied
 operations to them.
 
-One room per ``(owner, page_id)``, in memory — Gamma runs as one uvicorn
+One room per ``(workspace, page_id)``, in memory — Gamma runs as one uvicorn
 process everywhere (Docker, the desktop sidecar), so nothing needs to be
 shared across workers. A room holds the websocket peers
 (``routers/collab.py`` accepts them) with their identity, colour and last
@@ -73,10 +73,10 @@ class Room:
                 self.peers.pop(peer.client, None)
 
 
-def join(owner: str, page_id: str, peer: Peer) -> Room:
+def join(ws: str, page_id: str, peer: Peer) -> Room:
     global _loop
     _loop = asyncio.get_running_loop()
-    room = _rooms.setdefault((owner, page_id), Room((owner, page_id)))
+    room = _rooms.setdefault((ws, page_id), Room((ws, page_id)))
     room.peers[peer.client] = peer
     return room
 
@@ -87,8 +87,8 @@ def leave(room: Room, client: str) -> None:
         _rooms.pop(room.key, None)
 
 
-def room_for(owner: str, page_id: str) -> Room | None:
-    return _rooms.get((owner, page_id))
+def room_for(ws: str, page_id: str) -> Room | None:
+    return _rooms.get((ws, page_id))
 
 
 def _schedule(coro) -> None:
@@ -106,9 +106,9 @@ def _schedule(coro) -> None:
         asyncio.run_coroutine_threadsafe(coro, _loop)
 
 
-def publish(owner: str, page_id: str, message: dict, exclude: str = "") -> None:
+def publish(ws: str, page_id: str, message: dict, exclude: str = "") -> None:
     """Send ``message`` to everyone in the page's room (no room → no-op)."""
-    room = _rooms.get((owner, page_id))
+    room = _rooms.get((ws, page_id))
     if not room or not room.peers:
         return
     try:
@@ -117,22 +117,22 @@ def publish(owner: str, page_id: str, message: dict, exclude: str = "") -> None:
         log.warning(f"[collab] publish failed: {e}")
 
 
-def publish_ops(owner: str, result: dict) -> None:
+def publish_ops(ws: str, result: dict) -> None:
     """Fan out an applied batch (the dict ``ops.apply_ops`` returns)."""
-    publish(owner, result["page_id"], {
+    publish(ws, result["page_id"], {
         "t": "ops", "seq": result["seq"], "at": result["at"],
         "actor": result["actor"], "client": result["client"], "ops": result["ops"],
     })
 
 
-def publish_reload(owner: str, page_id: str, seq: int | None = None) -> None:
+def publish_reload(ws: str, page_id: str, seq: int | None = None) -> None:
     """Tell the room the page changed in a way ops can't express (a whole
     subtree replace, an import): clients refetch the tree."""
-    publish(owner, page_id, {"t": "reload", "seq": seq})
+    publish(ws, page_id, {"t": "reload", "seq": seq})
 
 
-def publish_all(owner: str, message: dict) -> None:
-    """Every room of one account (library-wide rewrites)."""
+def publish_all(ws: str, message: dict) -> None:
+    """Every room of one workspace (library-wide rewrites)."""
     for key in list(_rooms):
-        if key[0] == owner:
-            publish(owner, key[1], message)
+        if key[0] == ws:
+            publish(ws, key[1], message)

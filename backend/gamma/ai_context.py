@@ -9,7 +9,7 @@ import sqlite3
 from urllib.request import Request as URLRequest
 
 from .blocks_store import fetch_subtree, page_attachment, page_for_doc, page_root_id
-from .db import connect_pages_db, pdf_upload_path, user_db_path
+from .db import connect_pages_db, pdf_upload_path, ws_db_path
 from .foldertags import parse_tags
 from .logbuf import log
 from .net_guard import guarded_urlopen
@@ -110,7 +110,7 @@ MAX_NOTE_PASSAGE_CHARS = 4000
 MAX_BLOCK_SECTION_CHARS = 12_000
 
 
-def notes_focus_section(user: str, payload) -> str:
+def notes_focus_section(ws: str, payload) -> str:
     """The user's pointer into their notes, as one context section: the
     block their cursor is on and the blocks they attached to this message,
     each as ``[id] text`` with its sub-blocks indented — the same id-labelled
@@ -129,7 +129,7 @@ def notes_focus_section(user: str, payload) -> str:
         return ""
     out = []
     try:
-        with connect_pages_db(user) as conn:
+        with connect_pages_db(ws) as conn:
             def outline(block_id: str, budget: int) -> str | None:
                 if page_root_id(conn, block_id) not in pages:
                     return None
@@ -290,11 +290,11 @@ def build_messages(payload, context: str, with_tools: bool = False) -> list[dict
     return messages
 
 
-def _download_pdf_from_source(user: str, doc_id: str, pdf_path) -> None:
+def _download_pdf_from_source(ws: str, doc_id: str, pdf_path) -> None:
     """Best-effort download of a missing PDF from its recorded source URL."""
     log.info(f"[ai_chat] PDF NOT FOUND at {pdf_path}, attempting download from source_url")
     try:
-        with connect_pages_db(user) as connection:
+        with connect_pages_db(ws) as connection:
             row = connection.execute(
                 "SELECT properties FROM unified_blocks "
                 "WHERE json_extract(properties, '$.doc_id') = ?",
@@ -312,7 +312,7 @@ def _download_pdf_from_source(user: str, doc_id: str, pdf_path) -> None:
         )
         with guarded_urlopen(request, timeout=30) as response:
             pdf_data = response.read()
-        if not can_store(user, len(pdf_data)):
+        if not can_store(ws, len(pdf_data)):
             log.info(f"[ai_chat] not caching {doc_id} ({len(pdf_data)} bytes): over storage limits")
             return
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
@@ -322,14 +322,14 @@ def _download_pdf_from_source(user: str, doc_id: str, pdf_path) -> None:
         log.warning(f"[ai_chat] download failed: {error}")
 
 
-def pdf_path(user: str, doc_id: str):
+def pdf_path(ws: str, doc_id: str):
     """Return a document's local PDF path, downloading it when possible."""
     try:
-        path = pdf_upload_path(user, doc_id)
+        path = pdf_upload_path(ws, doc_id)
     except ValueError:
         return None
     if not path.exists():
-        _download_pdf_from_source(user, doc_id, path)
+        _download_pdf_from_source(ws, doc_id, path)
     return path if path.exists() else None
 
 
@@ -337,26 +337,26 @@ def truncate(text: str, limit: int) -> str:
     return text[:limit] + "\n…[truncated]" if len(text) > limit else text
 
 
-def extract_pdf_context(user: str, doc_id: str, limit: int = 8000) -> str:
+def extract_pdf_context(ws: str, doc_id: str, limit: int = 8000) -> str:
     """The head of a document's text, labelled with how little of it that is.
 
     Without the label the model reads "Here is the PDF text:" as the whole
     paper and answers detail questions from memory rather than looking them
     up — measurably the biggest source of confident wrong answers.
     """
-    return head_context(user, doc_id, limit)[0]
+    return head_context(ws, doc_id, limit)[0]
 
 
-def head_context(user: str, doc_id: str, limit: int) -> tuple[str, dict]:
+def head_context(ws: str, doc_id: str, limit: int) -> tuple[str, dict]:
     """extract_pdf_context plus its coverage: ``{"partial", "chars",
     "pages", "pages_shown"}`` — what the chat reports back to the user so a
     truncated paper is visible in the UI, not only in the prompt label."""
-    text, next_offset, _, pages_shown = pdf_excerpt(user, doc_id, limit, with_pages=True)
+    text, next_offset, _, pages_shown = pdf_excerpt(ws, doc_id, limit, with_pages=True)
     cover = {"partial": next_offset is not None, "chars": len(text),
              "pages": pages_shown, "pages_shown": pages_shown}
     if next_offset is None:
         return text, cover  # the whole document fits (or nothing extracted) — no caveat needed
-    path = pdf_path(user, doc_id)
+    path = pdf_path(ws, doc_id)
     pages = cover["pages"] = page_count(str(path)) if path else 0
     where = f" of this {pages}-page PDF" if pages else ""
     return (f"[EXCERPT — the first {limit:,} characters{where}. The rest of the "
@@ -377,7 +377,7 @@ MAP_BUDGET = 2400
 _MAP_LINE_CHARS = 80
 
 
-def ensure_indexed(user: str, doc_id: str) -> bool:
+def ensure_indexed(ws: str, doc_id: str) -> bool:
     """Kick the background indexer for a paper the search index doesn't hold
     at the current version, so a page chat's document map and search_library
     exist by the next turn even when the model never calls search. Returns
@@ -386,25 +386,25 @@ def ensure_indexed(user: str, doc_id: str) -> bool:
     from .pdf_index import pdf_missing
     from .routers.search import _index_missing_async
     try:
-        with sqlite3.connect(user_db_path(user, "data.db")) as connection:
+        with sqlite3.connect(ws_db_path(ws, "data.db")) as connection:
             missing = pdf_missing(connection, [doc_id])
     except sqlite3.OperationalError as e:
         log.warning(f"[ai_context] index check for {doc_id} failed: {e}")
         return False
     if not missing:
         return True
-    _index_missing_async(user, missing)
+    _index_missing_async(ws, missing)
     return False
 
 
-def document_map(user: str, doc_id: str, budget: int = MAP_BUDGET) -> str:
+def document_map(ws: str, doc_id: str, budget: int = MAP_BUDGET) -> str:
     """How each PDF page starts, as a compact outline. "" when the document
     isn't indexed yet (search is unavailable then too; ensure_indexed kicks
     the indexer so the next turn has both). Reads whichever index version is
     stored — a page-start outline barely depends on normalization, and stale
     docs re-index lazily through the search paths anyway."""
     try:
-        with sqlite3.connect(user_db_path(user, "data.db")) as connection:
+        with sqlite3.connect(ws_db_path(ws, "data.db")) as connection:
             rows = connection.execute(
                 f"SELECT page, substr(content, 1, {_MAP_LINE_CHARS + 10}) FROM pdf_fts "
                 "WHERE doc_id = ? ORDER BY page", (doc_id,)).fetchall()
@@ -423,7 +423,7 @@ def document_map(user: str, doc_id: str, budget: int = MAP_BUDGET) -> str:
             f"read_page(pdf_page=N).]\n" + "\n".join(lines))
 
 
-def pdf_excerpt(user: str, doc_id: str, limit: int, offset: int = 0,
+def pdf_excerpt(ws: str, doc_id: str, limit: int, offset: int = 0,
                 start_page: int = 1, with_pages: bool = False):
     """Slice ``[offset, offset+limit)`` of a document's extracted text so long
     papers can be read in successive windows; start_page (1-based) starts the
@@ -434,7 +434,7 @@ def pdf_excerpt(user: str, doc_id: str, limit: int, offset: int = 0,
     offset points past the end, that's the full extracted length (from
     start_page on). with_pages=True appends how many PDF pages the
     extraction spanned (from start_page) as a fourth value."""
-    path = pdf_path(user, doc_id)
+    path = pdf_path(ws, doc_id)
     if not path:
         log.warning("[ai_chat] PDF still not found after download attempt")
         return ("", None, 0, 0) if with_pages else ("", None, 0)
@@ -453,9 +453,9 @@ def pdf_excerpt(user: str, doc_id: str, limit: int, offset: int = 0,
     return (text, next_offset, len(full), pages) if with_pages else (text, next_offset, len(full))
 
 
-def load_pdf_b64(user: str, doc_id: str) -> str | None:
+def load_pdf_b64(ws: str, doc_id: str) -> str | None:
     """Return a size-limited document PDF as base64."""
-    path = pdf_path(user, doc_id)
+    path = pdf_path(ws, doc_id)
     if not path:
         return None
     data = path.read_bytes()
@@ -535,14 +535,14 @@ def _join_upto(pages: list[str], start: int, limit: int) -> str:
     return "\n\n".join(parts)[:limit]
 
 
-def selection_context(user: str, doc_id: str, selection: str, budget: int) -> str | None:
+def selection_context(ws: str, doc_id: str, selection: str, budget: int) -> str | None:
     """Chat context for selected passages: a small head slice (title/abstract
     grounding) plus text around each passage's PDF page — instead of spending
     the whole budget on the start of the paper, which rarely covers what the
     selection is about. Labels carry the page numbers so the model knows where
     each passage sits. None = nothing located (caller falls back to the plain
     head-of-document context)."""
-    path = pdf_path(user, doc_id)
+    path = pdf_path(ws, doc_id)
     if not path:
         return None
     try:
@@ -608,7 +608,7 @@ def page_properties_line(properties: dict) -> str:
     return ("Properties: " + "; ".join(bits)) if bits else ""
 
 
-def page_report_section(connection, user: str, page_id: str, pdf_budget: int,
+def page_report_section(connection, ws: str, page_id: str, pdf_budget: int,
                         pdf_offset: int = 0, pdf_page: int = 1,
                         document_text: str | None = None,
                         include_notes: bool = True) -> str | None:
@@ -664,7 +664,7 @@ def page_report_section(connection, user: str, page_id: str, pdf_budget: int,
         if document_text:
             sections.append(f"Document text:\n{document_text}")
     elif doc_id and pdf_budget > 0:
-        excerpt, next_offset, seen = pdf_excerpt(user, doc_id, pdf_budget, pdf_offset, pdf_page)
+        excerpt, next_offset, seen = pdf_excerpt(ws, doc_id, pdf_budget, pdf_offset, pdf_page)
         at_page = f"pdf_page={pdf_page}, " if pdf_page > 1 else ""
         if excerpt:
             where = ([f"from PDF page {pdf_page}"] if pdf_page > 1 else []) + \
@@ -691,7 +691,7 @@ def page_report_section(connection, user: str, page_id: str, pdf_budget: int,
     return "\n\n".join(sections)
 
 
-def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], str, list[dict]]:
+def gather_inputs(ws: str, payload, allow_native: bool) -> tuple[list[str], str, list[dict]]:
     """Collect the chat's context: native PDF attachments and the text
     sections for the request's pages.
 
@@ -725,7 +725,7 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
 
     page_ids = [str(page) for page in (payload.pages or []) if page][:6]
     single = not page_ids
-    with connect_pages_db(user) as connection:
+    with connect_pages_db(ws) as connection:
         if single:
             page_id = str(getattr(payload, "page_id", "") or "")
             if not page_id or not connection.execute(
@@ -750,7 +750,7 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
             document_text = ""
             attached = False
             if doc_id and attach:
-                data = load_pdf_b64(user, doc_id)
+                data = load_pdf_b64(ws, doc_id)
                 if data and total_b64 + len(data) < 20_000_000:
                     pdf_b64s.append(data)
                     total_b64 += len(data)
@@ -760,7 +760,7 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
                 # exist for the next turn — the first chat on a fresh paper
                 # otherwise runs without them for as long as the model never
                 # calls search.
-                ensure_indexed(user, doc_id)
+                ensure_indexed(ws, doc_id)
             if doc_id and attached:
                 report(title, doc_id, True)
             elif doc_id:
@@ -770,7 +770,7 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
                 # passages (located by page) instead of the start of the
                 # paper; fall back to the plain head excerpt when nothing
                 # could be located.
-                document_text = (selection_context(user, doc_id, selection, text_budget)
+                document_text = (selection_context(ws, doc_id, selection, text_budget)
                                  if selection else None)
                 if document_text:
                     # Selection-centred context: the budget went to windows
@@ -778,9 +778,9 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
                     report(title, doc_id, False,
                            {**none, "partial": True, "chars": len(document_text), "selection": True})
                 else:
-                    document_text, cover = head_context(user, doc_id, limit=text_budget)
+                    document_text, cover = head_context(ws, doc_id, limit=text_budget)
                     report(title, doc_id, False, cover)
-            section = page_report_section(connection, user, page_id, 0,
+            section = page_report_section(connection, ws, page_id, 0,
                                           document_text=document_text or "",
                                           include_notes=bool(payload.include_notes))
             if section:
@@ -790,7 +790,7 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
             # Only for a page chat with tools: the map is worth its tokens
             # when the model can act on it (read_page), not in plain chat.
             if doc_id and single and getattr(payload, "agent_scope", "") == "page":
-                outline = document_map(user, doc_id)
+                outline = document_map(ws, doc_id)
                 if outline:
                     context_sections.append(outline)
 
@@ -811,7 +811,7 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
 
     # Where the user is pointing inside the notes (cursor block, attached
     # block chips) — last, right before the question it belongs to.
-    focus_section = notes_focus_section(user, payload)
+    focus_section = notes_focus_section(ws, payload)
     if focus_section:
         context_sections.append(focus_section)
 

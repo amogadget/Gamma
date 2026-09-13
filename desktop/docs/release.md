@@ -163,7 +163,7 @@ The package version must increase per submission
 (`package.json` `<version>` becomes `<version>.0`; the Store requires the
 fourth part to be 0, which electron-builder guarantees). Certification takes one
 to three days; the reviewer launches the app, so a fresh install must reach
-the launcher with no workspace configured.
+the launcher with no server configured.
 
 **Runtime differences of the Store install:**
 
@@ -171,15 +171,15 @@ the launcher with no workspace configured.
   (reason `store`) and the launcher / *Help → Check for Updates…* say the
   Store delivers updates. `electron-updater` is never initialized.
 - MSIX virtualizes AppData: Electron's userData (the registry and every
-  local workspace's data dir under it, see
+  local server's data dir under it, see
   [architecture.md](architecture.md#shell-state)) lands in
   `%LOCALAPPDATA%\Packages\xwtim.GammaPDF_<hash>\LocalCache\Roaming\gamma-desktop`.
-  A Store install and an NSIS install never see each other's workspaces, and
+  A Store install and an NSIS install never see each other's servers, and
   **uninstalling the Store app deletes that folder**, including local
-  workspaces' PDFs and databases.
-- The launcher's *Local workspace storage* setting is the way out of that
+  servers' PDFs and databases.
+- The launcher's *Local server storage* setting is the way out of that
   folder: pick one outside the package (e.g. under *Documents*) and *Move
-  data* relocates the existing workspaces there
+  data* relocates the existing servers there
   ([architecture.md](architecture.md#shell-state)).
 - The install directory (`C:\Program Files\WindowsApps\…`) is read-only.
   Fine for the onedir sidecar, which writes only to `GAMMA_DATA_DIR`.

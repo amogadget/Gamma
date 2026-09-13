@@ -39,8 +39,9 @@ delete blocks or drop an `/api/uploads/` reference; the data.db purge only
 when blocks were deleted.
 
 `apply_ops(conn, page_id, ops, actor=, client=, share_scoped=)` applies and
-commits; `after_commit(user, conn, result)` does the derived-data work and
-publishes; `commit_ops` is both on a fresh connection. Every server-side writer
+commits; `after_commit(ws, conn, result)` does the derived-data work and
+publishes; `commit_ops(ws, page_id, ops, actor=)` is both on a fresh
+connection — `ws` the workspace id, `actor` the account making the change. Every server-side writer
 goes through them — the single-block endpoints in `routers/blocks.py` are thin
 wrappers, page attach/detach, the metadata write, the clip endpoints and the AI
 tools (`edit_block`, `create_block`, `move_block`, `rename_page`, `move_page`)
@@ -52,7 +53,7 @@ publish a `reload` instead; a cross-page move's source page gets a `delete`
 
 ## The op log
 
-`page_ops(page_id, seq, actor, client, at, ops)` in each user's `pages.db`
+`page_ops(page_id, seq, actor, client, at, ops)` in each workspace's `pages.db`
 (`db.PAGES_SCHEMA`), one row per applied batch, `seq` counting up per page
 (the write lock is taken up front with `BEGIN IMMEDIATE`, so it never
 collides). `actor` is the account that made the change (a share editor's own
@@ -64,19 +65,21 @@ client reloads the tree); `GET /blocks/{id}/subtree` on a page carries the
 
 ## Rooms and the socket (`gamma/collab.py`, `routers/collab.py`)
 
-One in-memory room per `(owner, page_id)` — Gamma is one uvicorn process
+One in-memory room per `(workspace, page_id)` — Gamma is one uvicorn process
 everywhere (Docker, the desktop sidecar), so nothing is shared across
 workers. `publish` schedules sends on the loop the sockets live on and is safe
 from threadpool code (the sync AI chat endpoint runs the tools there); a
 handler being torn down announces its leave through `publish` too, never by
 awaiting inside a possibly cancelled scope.
 
-`WS /api/ws/page/{page_id}[?share=token&client=id]`. The HTTP middleware does
-not run for websockets, so the handler resolves the session cookie itself
-(`auth.session_lookup`) and the share grant with the same rules as HTTP
-(`share_lookup` + `share_access` on the socket's `state`): an owner or a
-signed-in account joins its own page, a share token admits its audience (view
-or edit); anything else is closed before accept. Messages:
+`WS /api/ws/page/{page_id}[?ws=id&share=token&client=id]`. The HTTP
+middleware does not run for websockets, so the handler resolves the session
+cookie itself (`auth.session_lookup`), the workspace (`?ws=`, else the
+account's default — `auth.workspace_access`) and the share grant with the
+same rules as HTTP (`share_lookup` + `share_access` on the socket's
+`state`): a member joins with their workspace role (viewers presence-only),
+a share token admits its audience (view or edit); anything else is closed
+before accept. Messages:
 
 - server → client: `hello {client, color, seq, peers}` on join; `join {peer}`
   / `leave {client}`; `cursor {client, block, anchor, head}`; `ops {seq, at,

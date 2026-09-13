@@ -23,8 +23,9 @@ the per-page op log (``page_ops``, ``seq`` counting up per page) — live
 clients follow the log over the page's websocket (gamma/collab.py), a
 reconnecting one reads it back with ``ops_since``.
 
-Server-side writers (the block endpoints, AI tools, page rename/attach,
-metadata) go through ``apply_ops`` too, so everything a page's viewers see
+``ws`` everywhere below is the workspace id (docs/dev/workspaces.md), ``actor``
+the account making the change. Server-side writers (the block endpoints, AI
+tools, page rename/attach, metadata) go through ``apply_ops`` too, so everything a page's viewers see
 comes from one code path and one log.
 """
 
@@ -37,7 +38,7 @@ from pydantic import BaseModel, Field
 
 from . import block_index, collab
 from .blocks_store import delete_subtree, fetch_subtree, last_child_position
-from .db import connect_pages_db, page_now, user_uploads_dir
+from .db import connect_pages_db, page_now, ws_uploads_dir
 from .storage import cleanup_orphan_uploads
 
 MAX_OPS = 500
@@ -324,45 +325,45 @@ def apply_ops(conn, page_id: str, ops: list[dict], *, actor: str, client: str = 
             "ops": batch.applied, "deleted_ids": batch.deleted, "sweep": batch.sweep}
 
 
-def after_commit(user: str, conn, result: dict) -> dict:
+def after_commit(ws: str, conn, result: dict) -> dict:
     """Derived data after a committed batch: the orphan-upload sweep when a
     reference may have gone, the data.db purge for deleted blocks, and the
     fan-out to the page's room. Adds ``removed_uploads`` to the result."""
     result["removed_uploads"] = (
-        cleanup_orphan_uploads(conn, user_uploads_dir(user)) if result["sweep"] else [])
+        cleanup_orphan_uploads(conn, ws_uploads_dir(ws)) if result["sweep"] else [])
     if result["deleted_ids"]:
-        block_index.purge_page_data(user, conn, result["deleted_ids"])
-    collab.publish_ops(user, result)
+        block_index.purge_page_data(ws, conn, result["deleted_ids"])
+    collab.publish_ops(ws, result)
     return result
 
 
-def commit_ops(user: str, page_id: str, ops: list[dict], *, actor: str = "", client: str = "",
+def commit_ops(ws: str, page_id: str, ops: list[dict], *, actor: str, client: str = "",
                share_scoped: bool = False) -> dict:
     """``apply_ops`` + ``after_commit`` on a fresh connection."""
-    with connect_pages_db(user) as conn:
-        result = apply_ops(conn, page_id, ops, actor=actor or user, client=client,
+    with connect_pages_db(ws) as conn:
+        result = apply_ops(conn, page_id, ops, actor=actor, client=client,
                            share_scoped=share_scoped)
-        return after_commit(user, conn, result)
+        return after_commit(ws, conn, result)
 
 
-def record_ops(user: str, conn, page_id: str, ops: list[dict], *, actor: str) -> int:
+def record_ops(ws: str, conn, page_id: str, ops: list[dict], *, actor: str) -> int:
     """Log + publish ops a writer performed with its own SQL (a cross-page
     move, whose two halves are a delete on one page and an arrival on the
     other). Commits."""
     now = page_now()
     seq = _log(conn, page_id, actor, "", now, ops)
     conn.commit()
-    collab.publish(user, page_id, {"t": "ops", "seq": seq, "at": now, "actor": actor,
+    collab.publish(ws, page_id, {"t": "ops", "seq": seq, "at": now, "actor": actor,
                                    "client": "", "ops": ops})
     return seq
 
 
-def note_reload(user: str, conn, page_id: str, actor: str) -> int:
+def note_reload(ws: str, conn, page_id: str, actor: str) -> int:
     """``log_reload`` + commit + fan-out, for writers that rewrote a page's
     tree wholesale (the subtree replace, imports into an existing page)."""
     seq = log_reload(conn, page_id, actor)
     conn.commit()
-    collab.publish_reload(user, page_id, seq)
+    collab.publish_reload(ws, page_id, seq)
     return seq
 
 

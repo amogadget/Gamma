@@ -10,6 +10,8 @@ App.jsx             application orchestration: routing, autosave, docking, home
 libraryUtils.js     pure library/paper rules shared across application views
 LoginPage.jsx       loading and login screens
 settings.jsx        settings dialog and its papers/AI/search/diagnostic panes
+settingsWorkspace.jsx  Settings → Members & sharing: this workspace, members/roles, all my workspaces
+settingsBackups.jsx    Settings → Advanced → Server backups (admins): snapshot, download, delete
 blockTree.jsx       the Logseq outliner — block rows, [[refs]], drag, markdown
 logseqPdfModel.js   pure tree ops (insert/indent/outdent/flatten/cycle-check)
 pdfViewer.jsx       custom pdf.js viewer — pages, highlights, links, text search; exports COLORS
@@ -17,8 +19,8 @@ search.jsx          workspace search (Ctrl+F): SearchPanel popover, fuzzy
                     buildSearchRegex (mirror of backend gamma/textnorm.py)
 chatDock.jsx        the AI chat window (self-contained per-page conversation)
 widgets.jsx         shared chrome: dock windows, tabs, popovers, markdown, inputs
-sessionState.js     localStorage: restore last workspace on bare `/`
-utils.js            API base, fetch wrapper, ids, hashing, formatting
+sessionState.js     localStorage: restore the last open page on bare `/` (per workspace)
+utils.js            API base, fetch wrapper (user + workspace headers), ids, hashing, formatting
 app.css             shared controls plus workspace, PDF, blocks, and chat
 library.css         home library, folders, file views, selection, and pins
 settings.css        settings dialog layout and settings-specific controls

@@ -14,8 +14,8 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from fractional_indexing import generate_key_between, generate_n_keys_between
 
-from ..auth import require_user
-from ..db import connect_pages_db, page_now, pdf_upload_path, user_uploads_dir
+from ..auth import require_user, require_ws
+from ..db import connect_pages_db, page_now, pdf_upload_path, ws_uploads_dir
 from ..blocks_store import last_child_position
 from ..foldertags import clean_path, parse_tags
 from ..logbuf import log
@@ -44,11 +44,11 @@ async def import_logseq(
     md: UploadFile = File(None),
 ):
     # 1. Validate and store PDF
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     pdf_bytes = await pdf.read()
     if not is_pdf(pdf_bytes):
         raise HTTPException(status_code=400, detail="not a valid PDF")
-    digest, source_url, _ = store_pdf(user, pdf_bytes)
+    digest, source_url, _ = store_pdf(ws, pdf_bytes)
 
     # 2. Parse EDN → build quote→highlight lookup
     edn_text = (await edn.read()).decode("utf-8")
@@ -92,7 +92,7 @@ async def import_logseq(
     # 4. Get or create unified_block for this doc
     title = (pdf.filename or digest).removesuffix(".pdf")
     now = page_now()
-    with connect_pages_db(user) as conn:
+    with connect_pages_db(ws) as conn:
         row = conn.execute(
             "SELECT id FROM unified_blocks WHERE json_extract(properties,'$.doc_id') = ?",
             (digest,),
@@ -140,7 +140,7 @@ async def import_logseq(
         conn.execute("UPDATE unified_blocks SET updated_at=? WHERE id=?", (now, block_id))
         conn.commit()
         if row and inserted:
-            note_reload(user, conn, block_id, user)
+            note_reload(ws, conn, block_id, actor)
 
     return {"ok": True, "block_id": block_id, "doc_id": digest, "source_url": source_url, "imported": inserted}
 
@@ -156,7 +156,7 @@ async def import_markdown(request: Request, file: UploadFile = File(...),
     pages.db and no original file is served back. This also makes folder and
     single-file uploads share exactly the same import path.
     """
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     raw = await file.read(MAX_MARKDOWN_BYTES + 1)
     if len(raw) > MAX_MARKDOWN_BYTES:
         raise HTTPException(status_code=413, detail="Markdown file exceeds 5 MB")
@@ -179,7 +179,7 @@ async def import_markdown(request: Request, file: UploadFile = File(...),
 
     now = page_now()
     page_id = secrets.token_urlsafe(9)
-    with connect_pages_db(user) as conn:
+    with connect_pages_db(ws) as conn:
         imported = insert_note_page(conn, page_id, title, props, tree, now)
         conn.commit()
 
@@ -194,13 +194,13 @@ def import_markdown_zip_endpoint(request: Request, file: UploadFile = File(...),
     """A zip of Markdown notes → one page per .md (see markdown_zip_import):
     Notion's Markdown & CSV export, a Gamma Markdown export, or any zipped
     folder of notes. ``folder`` prefixes every page's folder label."""
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     try:
         zf = zipfile.ZipFile(file.file)
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="not a zip file")
-    with zf, connect_pages_db(user) as conn:
-        report = import_markdown_zip(user, zf, conn, folder, page_now())
+    with zf, connect_pages_db(ws) as conn:
+        report = import_markdown_zip(ws, zf, conn, folder, page_now())
         conn.commit()
     return {"ok": True, **report}
 
@@ -387,7 +387,7 @@ class PdfAnnotsRequest(BaseModel):
     strip: bool = False
 
 
-def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool) -> dict:
+def import_embedded_annotations(ws: str, block_id: str, pdf_path, strip: bool, actor: str = "") -> dict:
     """Extract the annotations embedded in the stored PDF and add the missing
     ones as highlight blocks under ``block_id`` (idempotent via the stable
     ``imported_annot`` key), then optionally strip the originals from the file.
@@ -400,7 +400,7 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
 
     now = page_now()
     inserted = 0
-    with connect_pages_db(user) as conn:
+    with connect_pages_db(ws) as conn:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id=?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="page block not found")
         # Idempotent: each embedded annotation carries a stable key
@@ -425,7 +425,7 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
                 inserted += 1
             conn.execute("UPDATE unified_blocks SET updated_at=? WHERE id=?", (now, block_id))
             conn.commit()
-            note_reload(user, conn, block_id, user)
+            note_reload(ws, conn, block_id, actor)
 
     # Strip AFTER the blocks are committed: if the rewrite fails the file is
     # untouched and the import still stands; a re-run can strip again.
@@ -439,7 +439,7 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
             # The embedded originals are gone from the file, so PDF export must
             # start writing these blocks again (it skips imported ones only
             # while the original annotation still lives in the PDF).
-            with connect_pages_db(user) as conn:
+            with connect_pages_db(ws) as conn:
                 rows = conn.execute(
                     "SELECT id, properties FROM unified_blocks WHERE parent_id=? "
                     "AND json_extract(properties,'$.imported_annot') IS NOT NULL",
@@ -456,15 +456,16 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
 # Sync endpoint: PyPDF2 parsing is CPU-bound; the threadpool keeps the loop free.
 @router.post("/import/pdf-annotations")
 def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     try:
-        pdf_path = pdf_upload_path(user, payload.doc_id)
+        pdf_path = pdf_upload_path(ws, payload.doc_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="invalid document id")
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not stored on the server")
     try:
-        result = import_embedded_annotations(user, payload.block_id, pdf_path, payload.strip)
+        result = import_embedded_annotations(ws, payload.block_id, pdf_path, payload.strip,
+                                             request.state.user or "")
     except HTTPException:
         raise
     except Exception as e:
@@ -490,7 +491,7 @@ def _merge_tags(existing_raw: str, new_tags: list[str]) -> str:
     return ", ".join(merged)
 
 
-def _zotero_item_page(conn, user, uploads, zf, names, base, item, prefix, now, report):
+def _zotero_item_page(conn, ws, uploads, zf, names, base, item, prefix, now, report):
     """Store the item's PDF (if any), find-or-create its page, merge metadata,
     labels and notes. Returns (block_id, pdf_path) when embedded annotations
     should be imported afterwards, else None."""
@@ -532,7 +533,7 @@ def _zotero_item_page(conn, user, uploads, zf, names, base, item, prefix, now, r
     # Attach the file only when the page doesn't already have one — a page
     # found by zotero_key keeps its existing PDF (and the highlights tied to it).
     if digest and not props.get("doc_id"):
-        _, source_url, already_existed = store_pdf(user, pdf_bytes)
+        _, source_url, already_existed = store_pdf(ws, pdf_bytes)
         if not already_existed:
             report["pdfs_stored"] += 1
         props["doc_id"] = digest
@@ -593,7 +594,7 @@ def _zotero_item_page(conn, user, uploads, zf, names, base, item, prefix, now, r
 @router.post("/import/zotero")
 def import_zotero(request: Request, file: UploadFile = File(...),
                   strip: bool = Form(False), folder: str = Form("")):
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     try:
         zf = zipfile.ZipFile(file.file)
     except zipfile.BadZipFile:
@@ -617,17 +618,17 @@ def import_zotero(request: Request, file: UploadFile = File(...),
 
         names = zip_name_map(zf)
         prefix = clean_path(folder)
-        uploads = user_uploads_dir(user)
+        uploads = ws_uploads_dir(ws)
         uploads.mkdir(parents=True, exist_ok=True)
         now = page_now()
         report = {"items": len(items), "pages_created": 0, "pages_merged": 0,
                   "pdfs_stored": 0, "annotations_imported": 0, "notes_imported": 0,
                   "pages": [], "skipped": [], "warnings": []}
         annot_jobs = []
-        with connect_pages_db(user) as conn:
+        with connect_pages_db(ws) as conn:
             for item in items:
                 try:
-                    job = _zotero_item_page(conn, user, uploads, zf, names, base,
+                    job = _zotero_item_page(conn, ws, uploads, zf, names, base,
                                             item, prefix, now, report)
                     if job:
                         annot_jobs.append(job)
@@ -642,7 +643,7 @@ def import_zotero(request: Request, file: UploadFile = File(...),
     # import_embedded_annotations opens its own connections.
     for block_id, pdf_path in annot_jobs:
         try:
-            result = import_embedded_annotations(user, block_id, pdf_path, strip)
+            result = import_embedded_annotations(ws, block_id, pdf_path, strip, request.state.user or "")
             report["annotations_imported"] += result["imported"]
         except Exception as e:
             log.warning(f"[zotero] annotations for {pdf_path.name} failed: {e}")

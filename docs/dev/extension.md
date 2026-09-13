@@ -194,7 +194,9 @@ Companions:
 page_id?}` — the explicit "clip selection INTO a page" append path (with
 `generate_key_between`; without `page_id` it uses/creates the root page
 flagged `properties.web_clips = 1`), as opposed to `/api/clip`'s "make a page
-of this tab". All session-only (`require_user`).
+of this tab". All session-only, and — since the extension names no
+workspace — they land in the account's personal workspace
+([workspaces.md](workspaces.md)).
 
 ## Auth and permissions
 

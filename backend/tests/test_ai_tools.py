@@ -4,6 +4,7 @@ protocol, tool-call SSE parsing, and the /api/ai/chat agent loop end-to-end
 with a faked provider."""
 
 import json
+from conftest import workspace_of
 import re
 
 import bcrypt
@@ -33,7 +34,7 @@ def org(client):
     """A non-guest user with a small library: two papers in folders, one loose note."""
     from gamma.app import app
     from gamma.db import connect_users_db, page_now
-    from gamma.seed import create_user_dbs
+    from gamma import workspaces
 
     with connect_users_db() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE username = 'organizer'").fetchone():
@@ -42,7 +43,7 @@ def org(client):
                 ("organizer", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode(), page_now()),
             )
             conn.commit()
-    create_user_dbs("organizer")
+    workspaces.ensure_personal("organizer")
     c = TestClient(app)
     assert c.post("/api/login", json={"username": "organizer", "password": "pw"}).status_code == 200
 
@@ -112,25 +113,25 @@ def test_agent_system_mentions_scope_and_armed_tools():
 
 def test_list_pages_scoped_and_annotated(org):
     c, ids = org
-    text, action = run_agent_tool("organizer", _folder("readout"), "list_pages", {})
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("readout"), "list_pages", {})
     assert action["kind"] == "list" and "2 pages" in action["summary"]
     assert f"id={ids['a']}" in text and f"id={ids['b']}" in text
     assert ids["note"] not in text  # outside the folder
     assert "One et al., 2019, Nature" in text  # cached metadata surfaces
     # Root scope lists everything, including the loose note.
-    root_text, _ = run_agent_tool("organizer", _folder(""), "list_pages", {})
+    root_text, _ = run_agent_tool(workspace_of("organizer"), _folder(""), "list_pages", {})
     assert ids["note"] in root_text and "note" in root_text
 
 
 def test_rename_page(org):
     c, ids = org
-    text, action = run_agent_tool("organizer", _folder("readout"), "rename_page",
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("readout"), "rename_page",
                                   {"page_id": ids["a"], "title": "  Ada2019 —  Cavity readout \n"})
     assert text.startswith("ok"), text
     assert action["kind"] == "rename" and "Ada2019 — Cavity readout" in action["summary"]
     assert _props(c, ids["a"])["content"] == "Ada2019 — Cavity readout"
     # No-op rename mutates nothing, but still shows as a (non-error) chip.
-    text, action = run_agent_tool("organizer", _folder("readout"), "rename_page",
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("readout"), "rename_page",
                                   {"page_id": ids["a"], "title": "Ada2019 — Cavity readout"})
     assert action["kind"] == "rename" and not action.get("error")
     # Every chip carries the raw call so the chat can expand it.
@@ -140,11 +141,11 @@ def test_rename_page(org):
 
 def test_scope_blocks_outside_pages(org):
     c, ids = org
-    text, action = run_agent_tool("organizer", _folder("readout"), "rename_page",
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("readout"), "rename_page",
                                   {"page_id": ids["note"], "title": "hijack"})
     assert text.startswith("error") and action["error"] and action["kind"] == "error"
     assert _props(c, ids["note"])["content"] == "loose note"
-    text, _ = run_agent_tool("organizer", _folder("readout"), "rename_page",
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("readout"), "rename_page",
                              {"page_id": "nope", "title": "x"})
     assert text.startswith("error")
 
@@ -152,36 +153,36 @@ def test_scope_blocks_outside_pages(org):
 def test_move_page_keeps_out_of_scope_tags(org):
     c, ids = org
     # Relative target resolves inside the scope; the "cooling" membership survives.
-    text, action = run_agent_tool("organizer", _folder("readout"), "move_page",
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("readout"), "move_page",
                                   {"page_id": ids["b"], "folder": "fast"})
     assert text.startswith("ok"), text
     assert action["kind"] == "move" and "readout/fast" in action["summary"]
     tags = [t.strip() for t in _props(c, ids["b"])["properties"]["folder"].split(",")]
     assert sorted(tags) == ["cooling", "readout/fast"]
     # "" files the page at the scope itself.
-    run_agent_tool("organizer", _folder("readout"), "move_page", {"page_id": ids["b"], "folder": ""})
+    run_agent_tool(workspace_of("organizer"), _folder("readout"), "move_page", {"page_id": ids["b"], "folder": ""})
     tags = [t.strip() for t in _props(c, ids["b"])["properties"]["folder"].split(",")]
     assert sorted(tags) == ["cooling", "readout"]
 
 
 def test_move_at_root_replaces_all_folders(org):
     c, ids = org
-    run_agent_tool("organizer", _folder(""), "move_page", {"page_id": ids["b"], "folder": "archive/2019"})
+    run_agent_tool(workspace_of("organizer"), _folder(""), "move_page", {"page_id": ids["b"], "folder": "archive/2019"})
     assert _props(c, ids["b"])["properties"]["folder"] == "archive/2019"
     # Root + "" = out of every folder.
-    run_agent_tool("organizer", _folder(""), "move_page", {"page_id": ids["b"], "folder": ""})
+    run_agent_tool(workspace_of("organizer"), _folder(""), "move_page", {"page_id": ids["b"], "folder": ""})
     assert _props(c, ids["b"])["properties"]["folder"] == ""
     # Restore for later tests.
-    run_agent_tool("organizer", _folder(""), "move_page", {"page_id": ids["b"], "folder": "readout"})
+    run_agent_tool(workspace_of("organizer"), _folder(""), "move_page", {"page_id": ids["b"], "folder": "readout"})
 
 
 def test_unknown_or_out_of_scope_tools_error(org):
-    text, action = run_agent_tool("organizer", _folder(""), "delete_page", {"page_id": "x"})
+    text, action = run_agent_tool(workspace_of("organizer"), _folder(""), "delete_page", {"page_id": "x"})
     assert text.startswith("error") and action["error"] and action["result"] == text
-    text, action = run_agent_tool("organizer", _folder(""), "set_labels", {"page_id": "x"})
+    text, action = run_agent_tool(workspace_of("organizer"), _folder(""), "set_labels", {"page_id": "x"})
     assert text.startswith("error") and action["error"]
     # Write tools don't exist in page scope — same error as an unknown tool.
-    text, _ = run_agent_tool("organizer", {"type": "page", "page_id": "x"},
+    text, _ = run_agent_tool(workspace_of("organizer"), {"type": "page", "page_id": "x"},
                              "rename_page", {"page_id": "x", "title": "y"})
     assert text.startswith("error: unknown tool")
 
@@ -190,11 +191,11 @@ def test_read_page_returns_notes_and_respects_scope(org):
     c, ids = org
     r = c.post("/api/blocks", json={"parent_id": ids["a"], "content": "important note"})
     assert r.status_code == 200
-    text, action = run_agent_tool("organizer", _folder("readout"), "read_page", {"page_id": ids["a"]})
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("readout"), "read_page", {"page_id": ids["a"]})
     assert action["kind"] == "read" and action["summary"].startswith("Read “")
     assert "important note" in text  # the user's notes ride along
     # A page outside the scope is unreadable, same rule as the write tools.
-    text, _ = run_agent_tool("organizer", _folder("readout"), "read_page", {"page_id": ids["note"]})
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("readout"), "read_page", {"page_id": ids["note"]})
     assert text.startswith("error")
 
 
@@ -213,24 +214,24 @@ def test_read_page_pdf_offset_pages_through_long_documents(org, monkeypatch):
     monkeypatch.setattr("gamma.ai_context.pdf_path", lambda u, d: "fake.pdf")
     scope = _folder("readout")
 
-    text, _ = run_agent_tool("organizer", scope, "read_page",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_page",
                              {"page_id": ids["a"], "pdf_chars": 100})
     assert "[0000]" in text and "[0020]" not in text  # first window only
     assert "pdf_offset=100" in text  # continuation hint
 
-    text, _ = run_agent_tool("organizer", scope, "read_page",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_page",
                              {"page_id": ids["a"], "pdf_chars": 100, "pdf_offset": 100})
     assert "Document text (from char 100):" in text
     assert "[0017]" in text and "[0000]" not in text  # window slides
     assert "pdf_offset=200" in text
 
     # A window reaching the end has no continuation marker.
-    text, _ = run_agent_tool("organizer", scope, "read_page",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_page",
                              {"page_id": ids["a"], "pdf_chars": 20000})
     assert "[0199]" in text and "more text remains" not in text
 
     # An offset past the end reports the document's extracted length.
-    text, _ = run_agent_tool("organizer", scope, "read_page",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_page",
                              {"page_id": ids["a"], "pdf_offset": 5000})
     assert "past the end" in text and "1200" in text
 
@@ -249,21 +250,21 @@ def test_read_page_pdf_page_jumps_to_a_search_hit(org, monkeypatch):
     monkeypatch.setattr("gamma.ai_context.pdf_path", lambda u, d: "fake.pdf")
     scope = _folder("readout")
 
-    text, _ = run_agent_tool("organizer", scope, "read_page",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_page",
                              {"page_id": ids["a"], "pdf_page": 4, "pdf_chars": 60})
     assert "Document text (from PDF page 4):" in text
     assert "(page 4)" in text and "(page 3)" not in text
     assert "pdf_page=4, pdf_offset=60" in text  # continuation keeps the page anchor
 
     # Continuing from that page with an offset labels and slices from there.
-    text, _ = run_agent_tool("organizer", scope, "read_page",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_page",
                              {"page_id": ids["a"], "pdf_page": 4, "pdf_offset": 60,
                               "pdf_chars": 20000})
     assert "from PDF page 4, from char 60" in text and "(page 5)" in text
     assert "more text remains" not in text  # pages 4-5 end inside the window
 
     # A page past the end of the document says so instead of going silent.
-    text, _ = run_agent_tool("organizer", scope, "read_page",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_page",
                              {"page_id": ids["a"], "pdf_page": 40})
     assert "no text at or after PDF page 40" in text
 
@@ -278,13 +279,13 @@ def test_read_window_cap_is_user_tunable(org, monkeypatch):
     monkeypatch.setattr("gamma.ai_context.pdf_path", lambda u, d: "fake.pdf")
 
     scope = {**_folder("readout"), "read_chars": 150}
-    text, _ = run_agent_tool("organizer", scope, "read_page",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_page",
                              {"page_id": ids["a"], "pdf_chars": 99999})
     assert "[0020]" in text and "[0030]" not in text  # clamped to ~150 chars
     assert "pdf_offset=150" in text
     # Unset / absurd values fall back to the stock 20000 cap.
     for bad in ({}, {"read_chars": 0}, {"read_chars": "x"}, {"read_chars": 10**9}):
-        text, _ = run_agent_tool("organizer", {**_folder("readout"), **bad},
+        text, _ = run_agent_tool(workspace_of("organizer"), {**_folder("readout"), **bad},
                                  "read_page", {"page_id": ids["a"], "pdf_chars": 99999})
         assert "[0199]" in text  # the whole 1200-char doc fits under 20000
 
@@ -334,7 +335,7 @@ def _children(c, parent):
 def test_read_block_outline_with_ids(notes):
     c, ids = notes
     scope = _folder("sandbox")
-    text, action = run_agent_tool("organizer", scope, "read_block", {"block_id": ids["page"]})
+    text, action = run_agent_tool(workspace_of("organizer"), scope, "read_block", {"block_id": ids["page"]})
     assert action["kind"] == "read" and action["page_id"] == ids["page"]
     for key in ("top", "child", "other", "hl"):
         assert f"[{ids[key]}]" in text
@@ -342,31 +343,31 @@ def test_read_block_outline_with_ids(notes):
     assert text.index(ids["top"]) < text.index(ids["child"])  # nesting in order
     assert "edit_block" in text  # the footer teaches the editing tools
     # A nested block id reads that subtree only, the block's own text in full.
-    text, _ = run_agent_tool("organizer", scope, "read_block", {"block_id": ids["top"]})
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_block", {"block_id": ids["top"]})
     assert "top-level idea" in text and ids["child"] in text
     assert ids["other"] not in text
     # Scope rules match the page tools.
-    text, _ = run_agent_tool("organizer", _folder("readout"), "read_block",
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("readout"), "read_block",
                              {"block_id": ids["top"]})
     assert text.startswith("error")
-    text, _ = run_agent_tool("organizer", scope, "read_block", {"block_id": "nope"})
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_block", {"block_id": "nope"})
     assert text.startswith("error: no such block")
 
 
 def test_edit_block(notes):
     c, ids = notes
     scope = _folder("sandbox")
-    text, action = run_agent_tool("organizer", scope, "edit_block",
+    text, action = run_agent_tool(workspace_of("organizer"), scope, "edit_block",
                                   {"block_id": ids["child"], "content": "sharper detail"})
     assert text.startswith("ok"), text
     assert action["kind"] == "edit" and action["page_id"] == ids["page"]
     assert _props(c, ids["child"])["content"] == "sharper detail"
     # Page roots are refused — titles go through rename_page.
-    text, _ = run_agent_tool("organizer", scope, "edit_block",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "edit_block",
                              {"block_id": ids["page"], "content": "x"})
     assert "rename_page" in text
     # No-op edit mutates nothing but still shows as a non-error chip.
-    text, action = run_agent_tool("organizer", scope, "edit_block",
+    text, action = run_agent_tool(workspace_of("organizer"), scope, "edit_block",
                                   {"block_id": ids["child"], "content": "sharper detail"})
     assert text.startswith("ok") and not action.get("error")
 
@@ -374,20 +375,20 @@ def test_edit_block(notes):
 def test_create_block_placement(notes):
     c, ids = notes
     scope = _folder("sandbox")
-    text, action = run_agent_tool("organizer", scope, "create_block",
+    text, action = run_agent_tool(workspace_of("organizer"), scope, "create_block",
                                   {"parent_id": ids["page"], "content": "appended note"})
     assert action["kind"] == "create" and action["page_id"] == ids["page"]
     new_last = re.search(r"\[([^\]]+)\]", text).group(1)
     assert _children(c, ids["page"])[-1] == new_last
     # after_id inserts between siblings.
-    text, _ = run_agent_tool("organizer", scope, "create_block",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "create_block",
                              {"parent_id": ids["page"], "content": "wedged in",
                               "after_id": ids["top"]})
     wedged = re.search(r"\[([^\]]+)\]", text).group(1)
     order = _children(c, ids["page"])
     assert order.index(wedged) == order.index(ids["top"]) + 1
     # A bad anchor is refused, not guessed.
-    text, _ = run_agent_tool("organizer", scope, "create_block",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "create_block",
                              {"parent_id": ids["page"], "content": "x",
                               "after_id": ids["child"]})
     assert "after_id" in text and text.startswith("error")
@@ -397,33 +398,33 @@ def test_move_block_rules(notes):
     c, ids = notes
     scope = _folder("sandbox")
     # Reparent under a sibling.
-    text, action = run_agent_tool("organizer", scope, "move_block",
+    text, action = run_agent_tool(workspace_of("organizer"), scope, "move_block",
                                   {"block_id": ids["other"], "parent_id": ids["top"]})
     assert text.startswith("ok"), text
     assert action["kind"] == "move" and action["page_id"] == ids["page"]
     assert _children(c, ids["top"])[-1] == ids["other"]
     # Into its own subtree → refused.
-    text, _ = run_agent_tool("organizer", scope, "move_block",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "move_block",
                              {"block_id": ids["top"], "parent_id": ids["other"]})
     assert "into itself" in text
     # Page roots don't move this way.
-    text, _ = run_agent_tool("organizer", scope, "move_block",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "move_block",
                              {"block_id": ids["page"], "parent_id": ids["top"]})
     assert "move_page" in text
     # Highlights stay on their page; plain blocks may cross pages in scope.
     r = c.post("/api/blocks", json={"parent_id": "root", "content": "second page",
                                     "properties": {"folder": "sandbox"}})
     page2 = r.json()["id"]
-    text, _ = run_agent_tool("organizer", scope, "move_block",
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "move_block",
                              {"block_id": ids["hl"], "parent_id": page2})
     assert "anchored" in text
-    text, action = run_agent_tool("organizer", scope, "move_block",
+    text, action = run_agent_tool(workspace_of("organizer"), scope, "move_block",
                                   {"block_id": ids["child"], "parent_id": page2})
     assert text.startswith("ok")
     assert action["page_id"] == page2 and action["src_page_id"] == ids["page"]
     assert _children(c, page2) == [ids["child"]]
     # A page outside the scope can't receive blocks.
-    text, _ = run_agent_tool("organizer", _folder("sandbox"), "move_block",
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("sandbox"), "move_block",
                              {"block_id": ids["child"], "parent_id": ids["a"]})
     assert text.startswith("error")
 
@@ -435,20 +436,20 @@ def test_block_tools_gated_by_permissions():
 
 def test_search_library_scoped_snippets(org):
     import sqlite3 as sq
-    from gamma.db import page_now, user_db_path
+    from gamma.db import page_now, ws_db_path
     from gamma.pdf_index import ensure_schema
     from gamma.textnorm import INDEX_VERSION
 
     c, ids = org
     doc = "d" * 24  # page a's doc_id
-    with sq.connect(user_db_path("organizer", "data.db")) as db:
+    with sq.connect(ws_db_path(workspace_of("organizer"), "data.db")) as db:
         ensure_schema(db)
         db.execute("INSERT INTO pdf_fts (doc_id, page, content) VALUES (?, ?, ?)",
                    (doc, 3, "quantum error correction with cat qubits"))
         db.execute("INSERT OR REPLACE INTO pdf_fts_docs (doc_id, indexed_at, pages, ver) "
                    "VALUES (?, ?, 1, ?)", (doc, page_now(), INDEX_VERSION))
         db.commit()
-    text, action = run_agent_tool("organizer", _folder("readout"), "search_library",
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("readout"), "search_library",
                                   {"query": "error correction"})
     assert action["kind"] == "search" and "1 hit" in action["summary"]
     assert 'PDF "' in text and "p.3" in text and "cat qubits" in text
@@ -457,11 +458,11 @@ def test_search_library_scoped_snippets(org):
     r = c.post("/api/blocks", json={"parent_id": "root", "content": "text only",
                                     "properties": {"folder": "textonly"}})
     assert r.status_code == 200
-    text, _ = run_agent_tool("organizer", _folder("textonly"), "search_library", {"query": "cat"})
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("textonly"), "search_library", {"query": "cat"})
     assert text.startswith("No notes or PDF text match") and "not answer from your own knowledge" in text
     c.delete(f"/api/blocks/{r.json()['id']}")
     # A folder with no pages at all says so.
-    text, _ = run_agent_tool("organizer", _folder("nowhere"), "search_library", {"query": "cat"})
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("nowhere"), "search_library", {"query": "cat"})
     assert text == "No pages are reachable from this chat."
 
 
@@ -475,7 +476,7 @@ def test_search_library_finds_notes_and_pdf_text(org):
                                     "content": "cat qubits need bias-preserving gates"})
     assert r.status_code == 200
     note_block = r.json()["id"]
-    text, action = run_agent_tool("organizer", _folder("readout"), "search_library",
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("readout"), "search_library",
                                   {"query": "cat qubits"})
     assert action["kind"] == "search" and "2 hits" in action["summary"]
     lines = [l for l in text.splitlines() if l.startswith("- ")]
@@ -483,14 +484,14 @@ def test_search_library_finds_notes_and_pdf_text(org):
     assert f"(page_id {ids['b']})" in lines[0] and "bias-preserving" in lines[0]
     assert lines[1].startswith(f'- PDF "{title_a}" p.3')
     # The page chat of the note-only page reaches its own notes, nothing else.
-    text, _ = run_agent_tool("organizer", {"type": "page", "page_id": ids["b"]},
+    text, _ = run_agent_tool(workspace_of("organizer"), {"type": "page", "page_id": ids["b"]},
                              "search_library", {"query": "cat qubits"})
     assert f"[{note_block}]" in text and "p.3" not in text
     # Editing the note re-indexes it on the next search.
     assert c.put(f"/api/blocks/{note_block}", json={"content": "zebra crossings"}).status_code == 200
-    text, _ = run_agent_tool("organizer", _folder("readout"), "search_library", {"query": "zebra"})
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("readout"), "search_library", {"query": "zebra"})
     assert f"[{note_block}]" in text
-    text, _ = run_agent_tool("organizer", _folder("readout"), "search_library",
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("readout"), "search_library",
                              {"query": "bias-preserving"})
     assert f"[{note_block}]" not in text
     c.delete(f"/api/blocks/{note_block}")
@@ -500,7 +501,7 @@ def test_deprecated_search_pdfs_still_dispatches(org):
     """Old chats saved `search_pdfs` calls; a model copying that name out of
     the replayed history is served by search_library, under the new name."""
     c, ids = org
-    text, action = run_agent_tool("organizer", _folder("readout"), "search_pdfs",
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("readout"), "search_pdfs",
                                   {"query": "cat qubits"})
     assert action["tool"] == "search_library" and action["kind"] == "search"
     assert "p.3" in text
@@ -510,13 +511,13 @@ def test_deprecated_search_pdfs_still_dispatches(org):
 def test_page_scope_reaches_only_its_paper(org):
     c, ids = org
     scope = {"type": "page", "page_id": ids["a"]}
-    text, action = run_agent_tool("organizer", scope, "read_page", {"page_id": ids["a"]})
+    text, action = run_agent_tool(workspace_of("organizer"), scope, "read_page", {"page_id": ids["a"]})
     assert action["kind"] == "read" and "important note" in text
     # Any other page — even one in the same folder — is out of reach.
-    text, _ = run_agent_tool("organizer", scope, "read_page", {"page_id": ids["b"]})
+    text, _ = run_agent_tool(workspace_of("organizer"), scope, "read_page", {"page_id": ids["b"]})
     assert text.startswith("error")
     # Search covers only this paper's PDF (seeded in the FTS test above).
-    text, action = run_agent_tool("organizer", scope, "search_library", {"query": "cat qubits"})
+    text, action = run_agent_tool(workspace_of("organizer"), scope, "search_library", {"query": "cat qubits"})
     assert "p.3" in text and action["kind"] == "search"
 
 
@@ -829,7 +830,7 @@ def test_paper_chat_kicks_indexing_for_unindexed_doc(org, monkeypatch):
     import gamma.ai_context as ctx
     import gamma.routers.ai as ai_mod
     import gamma.routers.search as search_mod
-    from gamma.db import page_now, user_db_path
+    from gamma.db import page_now, ws_db_path
     from gamma.pdf_index import ensure_schema
     from gamma.textnorm import INDEX_VERSION
 
@@ -849,21 +850,21 @@ def test_paper_chat_kicks_indexing_for_unindexed_doc(org, monkeypatch):
     # tools-on turn needs, and it costs one query to check.
     r = c.post("/api/ai/chat", json={"prompt": "hi", "page_id": fresh, "stream": True})
     assert r.status_code == 200 and '"delta": "ok"' in r.text
-    assert kicked == [("organizer", [doc])]
+    assert kicked == [(workspace_of("organizer"), [doc])]
     # Already indexed at the current version: nothing to kick.
-    with __import__("sqlite3").connect(user_db_path("organizer", "data.db")) as db:
+    with __import__("sqlite3").connect(ws_db_path(workspace_of("organizer"), "data.db")) as db:
         ensure_schema(db)
         db.execute("INSERT OR REPLACE INTO pdf_fts_docs (doc_id, indexed_at, pages, ver) "
                    "VALUES (?, ?, 1, ?)", (doc, page_now(), INDEX_VERSION))
         db.commit()
-    assert ctx.ensure_indexed("organizer", doc) is True
+    assert ctx.ensure_indexed(workspace_of("organizer"), doc) is True
     assert len(kicked) == 1
     # A stale index version counts as missing.
-    with __import__("sqlite3").connect(user_db_path("organizer", "data.db")) as db:
+    with __import__("sqlite3").connect(ws_db_path(workspace_of("organizer"), "data.db")) as db:
         db.execute("UPDATE pdf_fts_docs SET ver = ? WHERE doc_id = ?", (INDEX_VERSION - 1, doc))
         db.commit()
-    assert ctx.ensure_indexed("organizer", doc) is False
-    assert kicked[-1] == ("organizer", [doc])
+    assert ctx.ensure_indexed(workspace_of("organizer"), doc) is False
+    assert kicked[-1] == (workspace_of("organizer"), [doc])
 
 
 def test_chat_reports_context_coverage(org, monkeypatch):
@@ -1078,21 +1079,21 @@ def test_list_pages_filters_and_labels_mode(org):
     jeff2 = page("tweezer gates", {"folder": "labtest/sub", "category": "jeff"})
     other = page("ldpc paper", {"folder": "labtest", "category": "qec"})
     # Exact label match, case-insensitive; only matching pages come back.
-    text, action = run_agent_tool("organizer", _folder("labtest"), "list_pages", {"label": "jeff"})
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("labtest"), "list_pages", {"label": "jeff"})
     assert "2 pages" in action["summary"] and "jeff" in action["summary"]
     assert jeff1 in text and jeff2 in text and other not in text
     # Title substring filter.
-    text, _ = run_agent_tool("organizer", _folder("labtest"), "list_pages",
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("labtest"), "list_pages",
                              {"title_contains": "LDPC"})
     assert other in text and jeff1 not in text
     # Relative subfolder filter resolves inside the scope.
-    text, _ = run_agent_tool("organizer", _folder("labtest"), "list_pages", {"folder": "sub"})
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("labtest"), "list_pages", {"folder": "sub"})
     assert jeff2 in text and jeff1 not in text
     # No matches is a clear answer, not an empty-library claim.
-    text, _ = run_agent_tool("organizer", _folder("labtest"), "list_pages", {"label": "nope"})
+    text, _ = run_agent_tool(workspace_of("organizer"), _folder("labtest"), "list_pages", {"label": "nope"})
     assert "No pages match" in text
     # Labels mode: the vocabulary with counts, not page lines.
-    text, action = run_agent_tool("organizer", _folder("labtest"), "list_pages",
+    text, action = run_agent_tool(workspace_of("organizer"), _folder("labtest"), "list_pages",
                                   {"list_labels": True})
     assert "labels" in action["summary"]
     assert '- label "Jeff": 1 page' in text and '- label "jeff": 1 page' in text
@@ -1304,7 +1305,7 @@ def test_notes_focus_section_and_agent_prompt(notes):
     other = c.post("/api/blocks", json={"parent_id": ids["page"], "content": "attached thread"}).json()["id"]
     payload = SimpleNamespace(focus_block_id=top, page_id=ids["page"], pages=[],
                               context_blocks=[other, ids["page"], "nope", ids["hl"]])
-    section = notes_focus_section("organizer", payload)
+    section = notes_focus_section(workspace_of("organizer"), payload)
     assert "cursor is on this note block" in section
     assert f"- [{top}] focus idea" in section
     assert f"  - [{child}] focus detail" in section   # sub-block, indented
@@ -1314,9 +1315,9 @@ def test_notes_focus_section_and_agent_prompt(notes):
     assert f'[{ids["page"]}]' not in section and "nope" not in section
     # Nothing to point at → no section; a chip from a page outside the
     # context is dropped (the section is scoped to the request's pages).
-    assert notes_focus_section("organizer", SimpleNamespace(
+    assert notes_focus_section(workspace_of("organizer"), SimpleNamespace(
         focus_block_id="", page_id=ids["page"], pages=[], context_blocks=[])) == ""
-    assert notes_focus_section("organizer", SimpleNamespace(
+    assert notes_focus_section(workspace_of("organizer"), SimpleNamespace(
         focus_block_id="", page_id=ids["a"], pages=[], context_blocks=[other])) == ""
     text = agent_system({"type": "page", "page_id": ids["page"], "focus_block_id": top,
                          "context_blocks": [other, ids["page"]]})

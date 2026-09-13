@@ -9,14 +9,14 @@ import json
 import sqlite3
 
 import pytest
-from conftest import make_page
+from conftest import make_page, workspace_of
 
 
 def _label(user, block_id, value):
     """What PUT /api/blocks/{id} does: merge one key into the properties."""
-    from gamma.db import user_db_path
+    from gamma.db import ws_db_path
 
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of(user), "pages.db")) as conn:
         row = conn.execute(
             "SELECT properties FROM unified_blocks WHERE id = ?", (block_id,)
         ).fetchone()
@@ -117,7 +117,7 @@ def test_save_props_missing_page_404s(guest):
     from fastapi import HTTPException
 
     with pytest.raises(HTTPException) as e:
-        _save_props("guest", "no-such-block", {"meta": {}})
+        _save_props(workspace_of("guest"), "no-such-block", {"meta": {}})
     assert e.value.status_code == 404
 
 
@@ -153,7 +153,7 @@ def test_uploaded_pdf_title_uses_filename_leaf_only(guest):
 
 
 def test_rename_during_metadata_fetch_wins(guest, monkeypatch):
-    from gamma.db import user_db_path
+    from gamma.db import ws_db_path
     from gamma.routers import metadata
 
     created = guest.post("/api/blocks/by-doc/filetitle2", json={
@@ -165,7 +165,7 @@ def test_rename_during_metadata_fetch_wins(guest, monkeypatch):
     def fetch_after_rename(_arxiv_id):
         # Same transaction effect as an explicit PUT /blocks/{id}: write the
         # user's title and clear the automatic-title compare-and-swap marker.
-        with sqlite3.connect(user_db_path("guest", "pages.db")) as conn:
+        with sqlite3.connect(ws_db_path(workspace_of("guest"), "pages.db")) as conn:
             row = conn.execute(
                 "SELECT properties FROM unified_blocks WHERE id=?", (created["id"],)
             ).fetchone()
@@ -191,7 +191,7 @@ def test_fetch_reports_title_renamed_by_concurrent_lookup(guest, monkeypatch):
     """Two lookups race (the extension's background one and the app's on
     open): the loser must still report the page's current title — the
     winner's rename — or the open page keeps showing the filename."""
-    from gamma.db import user_db_path
+    from gamma.db import ws_db_path
     from gamma.routers import metadata
 
     created = guest.post("/api/blocks/by-doc/filetitle3", json={
@@ -203,7 +203,7 @@ def test_fetch_reports_title_renamed_by_concurrent_lookup(guest, monkeypatch):
     def other_lookup_wins(_arxiv_id):
         # What the winning lookup's _save_props leaves behind: the paper's
         # title, marker cleared.
-        with sqlite3.connect(user_db_path("guest", "pages.db")) as conn:
+        with sqlite3.connect(ws_db_path(workspace_of("guest"), "pages.db")) as conn:
             row = conn.execute(
                 "SELECT properties FROM unified_blocks WHERE id=?", (created["id"],)
             ).fetchone()

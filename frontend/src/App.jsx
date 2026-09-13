@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS, clampZoom } from "./pdfViewer";
-import { API, apiJson, withShare, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "./utils";
+import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "./utils";
 import {
   BlockDropIndicator,
   ChatMarkdown,
@@ -55,7 +55,7 @@ import {
   cloneBlocks,
   findBlock,
 } from "./logseqPdfModel";
-import { loadSession, saveSession, clearSession } from "./sessionState";
+import { loadSession, saveSession, clearSession, setSessionScope } from "./sessionState";
 import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage } from "./LoginPage";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
@@ -135,8 +135,11 @@ function homeUrlFor(folder, label) {
   const q = [];
   if (folder) q.push(`folder=${encodeURIComponent(folder)}`);
   if (label) q.push(label === NO_LABEL ? "unlabelled=1" : `category=${encodeURIComponent(label)}`);
-  return q.length ? `/?${q.join("&")}` : "/";
+  return withWorkspace(q.length ? `/?${q.join("&")}` : "/");
 }
+
+// Workspace roles as the UI words them (docs/dev/workspaces.md).
+const ROLE_LABEL = { owner: "owner", editor: "can edit", viewer: "view only" };
 
 // The listing search box: every whitespace-separated term must appear in the
 // item's text (its title plus, for a page, its folder/label chips), case and
@@ -286,6 +289,7 @@ export default function App() {
   const initialBlockId = params.get("block") || params.get("page") || "";
   const initialCategory = params.get("unlabelled") ? NO_LABEL : (params.get("category") || "");
   const initialFolder = params.get("folder") || "";
+  const initialWs = params.get("ws") || "";
   // shareMode: this tab shows a page through a ?share= link — no account of
   // its own, no library, no chat, no prefs sync. readOnly: the block tree
   // can't be edited; every share view starts read-only and stays so unless
@@ -294,6 +298,16 @@ export default function App() {
   const [readOnly, setReadOnly] = useState(shareMode);
   const [shareInfo, setShareInfo] = useState(null); // resolved share: {owner, role, canEdit, audience, viewer}
   const [shareGate, setShareGate] = useState(null); // "login" | "forbidden" | "missing" while the share can't open
+
+  // The workspace this tab works in and the ones the account may switch to
+  // (from /api/session). Every API call carries the id (utils fetch
+  // wrapper); a viewer role makes the tree read-only. wsReady gates the
+  // data effects and the deep-link boot: nothing is fetched before the
+  // workspace is known, or the first requests would land in the wrong one.
+  const [workspace, setWorkspace] = useState(null);   // {id, name, role, personal, members}
+  const [workspaces, setWorkspaces] = useState([]);
+  const [wsReady, setWsReady] = useState(shareMode);
+  const wsId = workspace?.id || "";
 
   // Auth state: null=loading, false=logged out, {user, is_guest}=logged in
   const [authUser, setAuthUser] = useState(shareMode ? {user:"_public"} : null);
@@ -349,10 +363,50 @@ export default function App() {
     };
   }, [sessionUser, shareMode]);
 
+  // Which of the account's workspaces this tab opens: the URL's ?ws= when
+  // the account belongs to it; else, for a deep link without one, the
+  // workspace holding that page; else the last one used in this browser;
+  // else the personal workspace.
+  async function chooseWorkspace(user, list, dflt) {
+    const ids = new Set(list.map((w) => w.id));
+    const urlWs = new URLSearchParams(window.location.search).get("ws") || "";
+    if (urlWs && ids.has(urlWs)) return urlWs;
+    if (!urlWs && initialBlockId) {
+      try {
+        const d = await apiJson(`${API}/workspaces/find-page/${encodeURIComponent(initialBlockId)}`);
+        if (ids.has(d.workspace_id)) return d.workspace_id;
+      } catch {}
+    }
+    let last = "";
+    try { last = localStorage.getItem(`gamma-last-ws:${user}`) || ""; } catch {}
+    if (last && ids.has(last)) return last;
+    return ids.has(dflt) ? dflt : (list[0]?.id || dflt);
+  }
+
+  function applyWorkspace(user, id, list) {
+    const w = list.find((x) => x.id === id) || { id, name: "Workspace", role: "owner", personal: true, members: 1 };
+    setCurrentWorkspace(id);
+    setSessionScope(id);
+    setWorkspace(w);
+    setWorkspaces(list);
+    setReadOnly(w.role === "viewer");
+    try { localStorage.setItem(`gamma-last-ws:${user}`, id); } catch {}
+    // Keep the id in the URL so a reload or a copied link lands here again.
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("ws") !== id) {
+      url.searchParams.set("ws", id);
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    }
+    setWsReady(true);
+  }
+
   async function checkSession() {
     try {
       const data = await apiJson(`${API}/session`);
       if (data.user) {
+        const list = data.workspaces || [];
+        const chosen = await chooseWorkspace(data.user, list, data.default_workspace || "");
+        applyWorkspace(data.user, chosen, list);
         setAuthUser({ user: data.user, is_guest: data.is_guest, is_admin: data.is_admin });
       } else {
         setAuthUser(false);
@@ -360,6 +414,15 @@ export default function App() {
     } catch {
       setAuthUser(false);
     }
+  }
+
+  // Switching is a navigation: tabs, recents, the open page and the live
+  // session all belong to the library being left, so the tab reloads on the
+  // other workspace's URL.
+  function switchWorkspace(id) {
+    if (!id || id === wsId) return;
+    leaveCurrentPage();
+    window.location.href = `${window.location.pathname}?ws=${encodeURIComponent(id)}`;
   }
 
   // Effective storage limits + usage for the session user (GET /api/quota):
@@ -537,10 +600,12 @@ export default function App() {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API}/import-data?mode=${mode}${other ? `&user=${encodeURIComponent(other)}` : ""}`);
     xhr.withCredentials = true;
-    // XHR bypasses the window.fetch wrapper, so the tab-identity guard header
-    // must be set by hand — this is the most destructive endpoint in the app.
+    // XHR bypasses the window.fetch wrapper, so the tab-identity guard and
+    // the workspace header must be set by hand — this is the most
+    // destructive endpoint in the app.
     const expected = getExpectedUser();
     if (expected) xhr.setRequestHeader("X-Gamma-User", expected);
+    if (getCurrentWorkspace()) xhr.setRequestHeader("X-Gamma-Workspace", getCurrentWorkspace());
     let lastPct = -1;
     xhr.upload.onprogress = (e) => {
       const pct = e.total ? Math.min(99, Math.floor((e.loaded / e.total) * 100)) : null;
@@ -562,8 +627,8 @@ export default function App() {
         // Another account's data changed, not this workspace's — nothing here
         // is stale, so stay put instead of throwing the session away.
         if (other) setStatus(`${merging ? "Merged into" : "Restored"} ${other}.`);
-        else if (after.openPage) window.location.href = `${window.location.pathname}?page=${encodeURIComponent(after.openPage)}`;
-        else window.location.href = window.location.pathname; // fresh state, no stale ?block=
+        else if (after.openPage) window.location.href = withWorkspace(`${window.location.pathname}?page=${encodeURIComponent(after.openPage)}`);
+        else window.location.href = withWorkspace(window.location.pathname); // fresh state, no stale ?block=
       } else {
         const msg = d.detail || xhr.statusText || "failed";
         updateTransfer(tid, { status: "error", info: String(msg) });
@@ -664,9 +729,10 @@ export default function App() {
   }
 
   // Load per-user browser prefs (tabs, manually created folders) on login /
-  // account switch.
+  // account switch. Keyed by account AND workspace ("user@ws"): open tabs,
+  // recents and folders name pages of one library.
   useEffect(() => {
-    const u = authUser?.user;
+    const u = authUser?.user && wsId ? `${authUser.user}@${wsId}` : "";
     if (!u || shareMode) {
       // Losing the session (logout button, expiry in another tab) must fully
       // close the workspace: a stale focusedBlockId would get merged into the
@@ -769,7 +835,7 @@ export default function App() {
       }
       appearanceLoadedRef.current = true;
     }).catch(() => {});
-  }, [authUser?.user, shareMode]);
+  }, [authUser?.user, wsId, shareMode]);
 
   // Write a page's tag-list property ("folder" nests on "/", "category" is
   // flat) — both serialize as a comma-separated list, so neither character
@@ -2906,7 +2972,7 @@ export default function App() {
   // server may replace its original-filename title only while the automatic
   // title marker still matches, so an in-flight lookup cannot undo a rename.
   function queueMetadataForUploads(uploaded) {
-    if (shareMode || !metaAutoFetch) return;
+    if (shareMode || readOnly || !metaAutoFetch) return;
     const pending = uploaded.filter(({ block }) => block?.id
       && !block.properties?.meta && !block.properties?.meta_error
       && !attemptedMetaRef.current.has(block.id));
@@ -2915,7 +2981,7 @@ export default function App() {
   }
 
   async function fetchMetadataForUploads(uploaded) {
-    if (shareMode || !metaAutoFetch) return;
+    if (shareMode || readOnly || !metaAutoFetch) return;
     let completed = 0;
     for (const { block } of uploaded) {
       if (!block?.id || block.properties?.meta) continue;
@@ -3471,7 +3537,12 @@ export default function App() {
   }
 
 
+  // The deep link / saved-session boot, once the workspace is known (a share
+  // view needs none and boots at once).
+  const bootedRef = useRef(false);
   useEffect(() => {
+    if (!wsReady || bootedRef.current) return;
+    bootedRef.current = true;
     if (initialShare) resolveShare(initialShare);
     else if (initialBlockId) {
       (async () => {
@@ -3505,7 +3576,7 @@ export default function App() {
         });
       }
     }
-  }, []);
+  }, [wsReady]);
 
   // Restore viewer/layout prefs from session on mount
   useEffect(() => {
@@ -4226,7 +4297,7 @@ export default function App() {
         if (latest) pendingBlockScrollRef.current = latest.id;
       }
 
-      const newUrl = `${window.location.pathname}?block=${encodeURIComponent(blockId)}`;
+      const newUrl = withWorkspace(`${window.location.pathname}?block=${encodeURIComponent(blockId)}`);
       window.history.replaceState({}, "", newUrl);
       // Pages remember their own window arrangement; pages without one
       // inherit whatever layout is currently on screen.
@@ -4289,10 +4360,10 @@ export default function App() {
   const pageLayoutsRef = useRef({});
   const panelGroupRefs = useRef({}); // group key -> react-resizable-panels imperative handle
   useEffect(() => {
-    if (!authUser?.user || shareMode) return;
-    try { pageLayoutsRef.current = JSON.parse(localStorage.getItem(`gamma-page-layouts:${authUser.user}`) || "{}"); }
+    if (!authUser?.user || !wsId || shareMode) return;
+    try { pageLayoutsRef.current = JSON.parse(localStorage.getItem(`gamma-page-layouts:${authUser.user}@${wsId}`) || "{}"); }
     catch { pageLayoutsRef.current = {}; }
-  }, [authUser?.user, shareMode]);
+  }, [authUser?.user, wsId, shareMode]);
   const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
   const restoringForRef = useRef(null); // block whose restore hasn't landed yet
   const pdfRenderedUrlRef = useRef(""); // url of the document whose pages are in the DOM
@@ -6203,7 +6274,8 @@ export default function App() {
                 ) : null}
                 <button
                   className="pageActionBtn pageDeleteBtn"
-                  title="Delete this page"
+                  title={readOnly ? "You can only view this workspace" : "Delete this page"}
+                  disabled={readOnly}
                   onClick={() => setConfirmBox({
                     title: "Delete page",
                     message: `Delete "${pageTitle || "this page"}" and all its notes? This can't be undone.`,
@@ -7520,7 +7592,11 @@ export default function App() {
                 </span>
                 <span className="userCardMeta">
                   <span className="userCardName">{authUser.is_guest ? "Guest" : authUser.user}</span>
-                  <span className="userCardRole">{authUser.is_guest ? "Temporary workspace" : "Signed in"}</span>
+                  <span className="userCardRole">
+                    {authUser.is_guest ? "Temporary workspace"
+                      : workspace ? `${workspace.name} · ${workspace.personal ? "personal" : ROLE_LABEL[workspace.role] || workspace.role}`
+                      : "Signed in"}
+                  </span>
                 </span>
                 {quotaInfo ? (
                   <span className="userCardQuota" title="Storage used by your uploaded PDFs and images">
@@ -7536,6 +7612,33 @@ export default function App() {
                 <div className="popoverQuota">
                   <QuotaMeter usedBytes={quotaInfo.used_bytes} quotaMb={quotaInfo.quota_mb} barOnly />
                 </div>
+              ) : null}
+              <div className="popoverDivider" />
+              {/* The workspace switcher: every library this account belongs
+                  to; switching reloads the tab on that workspace's URL. */}
+              {workspaces.length ? <div className="popoverSection">Workspaces</div> : null}
+              {workspaces.map((w) => (
+                <button
+                  key={w.id}
+                  className={`popoverItem wsItem ${w.id === wsId ? "active" : ""}`}
+                  onClick={() => { setOpenPopover(null); switchWorkspace(w.id); }}
+                  title={w.personal ? "Your personal workspace" : `Shared workspace · ${w.members} member${w.members === 1 ? "" : "s"} · you ${ROLE_LABEL[w.role] || w.role}`}
+                >
+                  <span className="wsItemBadge" aria-hidden="true">{(w.name || "?").charAt(0).toUpperCase()}</span>
+                  <span className="wsItemName">{w.name}</span>
+                  <span className="wsItemMeta">{w.personal ? "personal" : ROLE_LABEL[w.role] || w.role}</span>
+                  {w.id === wsId ? <CheckIcon size={14} className="wsItemCheck" /> : null}
+                </button>
+              ))}
+              {!authUser.is_guest ? (
+                <button
+                  className="popoverItem"
+                  onClick={() => { setSettingsOpen("workspace"); setOpenPopover(null); }}
+                  title="Rename this workspace, invite people, create another, back it up"
+                >
+                  <UsersIcon className="popoverItemIcon" size={15} />
+                  Workspace settings…
+                </button>
               ) : null}
               <div className="popoverDivider" />
               <button className="popoverItem" onClick={() => { setSettingsOpen("general"); setOpenPopover(null); }}>
@@ -8344,6 +8447,20 @@ export default function App() {
           },
         }}
         search={{ searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper, indexTask, setStatus }}
+        workspace={authUser?.user && !authUser.is_guest ? {
+          workspace,
+          workspaces,
+          me: authUser.user,
+          isAdmin: !!authUser?.is_admin,
+          quotaInfo,
+          switchWorkspace,
+          refreshSession: checkSession,
+          exportUserData,
+          importUserData,
+          setStatus,
+          confirm: setConfirmBox,
+          closeSettings: () => setSettingsOpen(null),
+        } : null}
         users={authUser?.user ? {
           // Everyone gets this pane for their own backups; only admins see
           // the other accounts and the account editor.
@@ -8359,7 +8476,7 @@ export default function App() {
           onSelfRenamed: checkSession, // self-rename re-keys the whole app
           refreshQuota,
         } : null}
-        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, isAdmin: !!authUser?.is_admin, debugLog, setDebugLog }}
+        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, isAdmin: !!authUser?.is_admin, debugLog, setDebugLog, confirm: setConfirmBox }}
       />
       {tabMenu ? (() => {
         // Two pins: the tab pin (this device's tab strip, synced with the
@@ -8523,7 +8640,7 @@ export default function App() {
                 // Also a paste-able deep link: opening it jumps straight to
                 // this highlight (in the browser, chat notes, anywhere).
                 if (blk) {
-                  copyText(`${window.location.origin}/?block=${encodeURIComponent(blk.id)}`);
+                  copyText(withWorkspace(`${window.location.origin}/?block=${encodeURIComponent(blk.id)}`));
                 }
                 setHighlightMenu(null);
                 setStatus("Reference point copied — paste the link, or pick it in another paper's link dialog.");

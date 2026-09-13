@@ -1,40 +1,61 @@
 # Desktop shell architecture
 
 The shell is an Electron window plus a process manager. Gamma stays a black
-box: the window shows whatever Gamma server a workspace points at, the way a
-browser tab would.
+box: the window shows whatever Gamma server is open, the way a browser tab
+would.
 
-## Workspaces
+## Servers and workspaces
 
-A **workspace is a Gamma server**. Two kinds:
+Two levels, one switcher. A **server** is a Gamma the shell can open; a
+**workspace** is one of Gamma's own libraries inside it (personal or shared,
+with members and roles — [docs/dev/workspaces.md](../../docs/dev/workspaces.md)).
+Before Gamma had workspaces the shell called its servers "workspaces" and
+separate libraries meant separate local servers; now one local server holds
+as many workspaces as you like, and the shell-bar menu switches both.
+
+Servers come in two kinds:
 
 - **Local** — a data directory under the shell's userData dir, served by a
   Gamma backend the shell spawns on `127.0.0.1:<free port>` with
   `GAMMA_DATA_DIR` pointed at it. Fully self-initializing: the server seeds
-  schema + first admin on an empty data dir. The shell passes
-  `GAMMA_ADMIN_USER`/`GAMMA_ADMIN_PASSWORD` on the first spawn (the server's
-  one-time password print would be lost in the hidden console), remembers
-  the credentials in its registry, and auto-logs-in after navigation by
-  POSTing `/api/login` from the page. Several local workspaces = several
-  data dirs, one server process each; a sidecar keeps running until the app
-  quits, so switching back is instant.
+  schema + first admin on an empty data dir (and upgrades an older data
+  layout at startup — [docs/dev/migrations.md](../../docs/dev/migrations.md)).
+  The shell passes `GAMMA_ADMIN_USER`/`GAMMA_ADMIN_PASSWORD` on the first
+  spawn (the server's one-time password print would be lost in the hidden
+  console), remembers the credentials in its registry, and auto-logs-in
+  after navigation by POSTing `/api/login` from the page. Several local
+  servers are still possible (one data dir and process each; a sidecar keeps
+  running until the app quits, so switching back is instant), but the usual
+  shape is one local server with several workspaces.
 - **Remote** — just a URL (e.g. the NAS Docker deployment). Normal login;
   the session cookie persists in the Electron profile per origin.
 
-Workspaces are fully independent servers; there is **no synchronization**
-(move data between them with Gamma's own *Export my data* / *Import data*).
+Servers are fully independent; there is **no synchronization** (move data
+between them with Gamma's own per-workspace *Export* / *Import*).
+
+### Gamma's workspaces in the switcher
+
+While a server is open the main process reads `GET /api/session` through the
+content view's cookie session (`session.fetch` with credentials — a public
+API call, nothing injected into the page) whenever the content view
+navigates, and again when the bar menu opens. The reply's `workspaces` list
+and the `ws` query parameter of the current URL become `gamma` in the shell
+state (`null` while signed out). The bar menu lists them above the servers;
+choosing one navigates the content view to `<origin>/?ws=<id>`
+(`shell:open-workspace`) — the same thing Gamma's own account-menu switcher
+does. The bar button reads "server · workspace".
 
 ### Remote reachability
 
-Local workspaces show a running dot (is the sidecar up). Remote ones show
-the same dot from a **health probe**: the main process fetches
-`<url>/api/health` (public, no session needed; 5 s timeout) per remote
-workspace, caches the answer for 20 s, and exposes it as `reachable`
+Local servers show a running dot (is the sidecar up). Remote ones show the
+same dot from a **health probe**: the main process fetches `<url>/api/health`
+(public, no session needed; 5 s timeout) per remote server, caches the
+answer for 20 s, and exposes it as `reachable`
 (`true` / `false` / `null` while unknown) in the shell state. Probes run on
 demand — every launcher refresh and every bar-menu open ask for the list,
 which triggers stale probes — and their results arrive asynchronously
 through `pushState`, so the dot fills in a moment after the page renders.
-Opening a remote workspace also records the outcome (success → reachable,
+Opening a remote server also records the outcome (success → reachable,
 failure → unreachable). Green = reachable, red = unreachable, dim = not
 probed yet.
 
@@ -42,38 +63,40 @@ probed yet.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│ ⌈γ⌉ Alpha ▾   Starting Beta…        [↑ Restart to update] ⟳  – □ ✕ │  shell bar (38 px, is the title bar)
+│ ⌈γ⌉ Alpha · Rydberg lab ▾   Starting Beta…   [↑ Restart to update] ⟳  – □ ✕ │  shell bar (38 px, is the title bar)
 ├────────────────────────────────────────────────────────────┤
 │                                                            │
 │   launcher (file://ui/launcher.html)                       │  content view
-│   or the workspace's Gamma frontend (http://…)             │
+│   or the server's Gamma frontend (http://…)                │
 │                                                            │
 └────────────────────────────────────────────────────────────┘
 ```
 
 One `BaseWindow`, two `WebContentsView`s. The **shell bar** is the
 frameless window's title bar (OS controls overlaid on Windows/Linux, traffic
-lights inset on macOS) and holds the workspace switcher: click the name →
-dropdown of every workspace (running / reachable dot, check on the current
-one) plus *All workspaces…* (the launcher, also `Ctrl/Cmd+Shift+L`). While
+lights inset on macOS) and holds the switcher: click the name → dropdown of
+the open server's Gamma workspaces (check on the current one, role or
+*personal* per row), then every server (running / reachable dot, check on
+the current one), then *All servers…* (the launcher, also
+`Ctrl/Cmd+Shift+L`). While
 the dropdown is open the bar view is temporarily enlarged over the content
 (its page is transparent outside the strip and the menu), which is how a
 38 px view can show a menu. At the right: the update pill (only while an
 update is ready, see below) and a reload button.
 
-The **content view** shows the launcher or the workspace. The launcher lists
-workspaces as cards (kind, running / reachable dot, size on disk, data dir /
+The **content view** shows the launcher or the server. The launcher lists
+servers as cards (kind, running / reachable dot, size on disk, data dir /
 URL, *last opened* badge) with open / rename / credentials / data folder /
-server log / remove actions, then Settings: the *reopen last workspace at
-launch* switch, the *Local workspace storage* row, the *Updates* row (status
+server log / remove actions, then Settings: the *reopen last server at
+launch* switch, the *Local server storage* row, the *Updates* row (status
 line + check / download / restart button), and the dev-mode server
-overrides. The storage row shows the folder new local workspaces are created
+overrides. The storage row shows the folder new local servers are created
 in. *Change…* opens a folder picker and *Use default* appears once a custom
-folder is set. Either one leads to a dialog with *Only new workspaces* and,
-when local workspaces exist under the current root, *Move data*, which
-relocates them too.
+folder is set. Either one leads to a dialog with *Only new servers* and, when
+local servers exist under the current root, *Move data*, which relocates
+them too.
 
-**Theme.** The chrome paints in Gamma's own theme: the preload on workspace
+**Theme.** The chrome paints in Gamma's own theme: the preload on server
 pages mirrors the page's `data-theme` attribute (`dark`/`light`/`sepia`/
 `gray`; none = dark) to the main process, which restyles the bar, the
 launcher, the window background and the Windows title-bar overlay. The last
@@ -115,27 +138,30 @@ bottom of the launcher; a Microsoft Store install gets the MSIX-virtualized
 copy under `%LOCALAPPDATA%\Packages\xwtim.GammaPDF_<hash>\LocalCache\Roaming`,
 which the Store uninstall deletes — [release.md](release.md#microsoft-store)):
 
-- `workspaces.json` — the registry: workspace list, `lastOpened`,
-  `windowBounds`, and `settings` (`openLastOnLaunch`, `lastTheme`, `dataRoot`,
-  the dev-mode `pythonPath`/`backendDir`/`staticDir` overrides). Local admin
-  credentials are stored in plaintext here — same trust level as the SQLite
-  files next to it; acceptable for a per-OS-user desktop app.
-- `workspaces/<id>/` — local workspace data dirs (a standard `GAMMA_DATA_DIR`
-  layout: `users.db`, `users/<name>/{pages.db,data.db,uploads/}`). This is
-  the default **storage root**. `settings.dataRoot` replaces it with any
-  folder (a drive with room, a synced folder, outside an MSIX package's
-  virtualized AppData), and new local workspaces are created under the
-  current root as `<root>/<id>`.
+- `servers.json` — the registry: server list, `lastOpened`, `windowBounds`,
+  and `settings` (`openLastOnLaunch`, `lastTheme`, `dataRoot`, the dev-mode
+  `pythonPath`/`backendDir`/`staticDir` overrides). Local admin credentials
+  are stored in plaintext here — same trust level as the SQLite files next
+  to it; acceptable for a per-OS-user desktop app. An older profile's
+  `workspaces.json` (the file's previous name) is copied over on first start
+  and left in place.
+- `workspaces/<id>/` — local servers' data dirs (a standard `GAMMA_DATA_DIR`
+  layout: `users.db`, `workspaces/<id>/{pages.db,data.db,uploads/}` — Gamma's
+  own workspaces inside; the folder name predates the rename and stays so
+  existing installs need no move). This is the default **storage root**.
+  `settings.dataRoot` replaces it with any folder (a drive with room, a
+  synced folder, outside an MSIX package's virtualized AppData), and new
+  local servers are created under the current root as `<root>/<id>`.
 - `logs/<id>.log` — captured stdout/stderr of each sidecar run.
 
 Changing the root is `registry.setDataRoot(dir, { move })`. With `move` it
-relocates every local workspace under the old root. The shell stops their
+relocates every local server under the old root. The shell stops their
 sidecars first (an open one returns to the launcher). The registry copies
 each `<id>` dir with `fs.cpSync` (so it works across drives), and only after
 every copy succeeded re-points the entries and deletes the originals. A
 failure midway rolls back the copies and leaves the registry untouched. The
 new folder may not be inside the current one or contain it. Removing a
-workspace offers *keep files* / *delete everything*; deletion is guarded to
+server offers *keep files* / *delete everything*; deletion is guarded to
 directories under the default or the configured root only.
 
 `GAMMA_SHELL_USER_DATA=<dir>` relocates all of it (the tests use a temp
@@ -147,18 +173,19 @@ dialog (tests only); `GAMMA_SHELL_NO_UPDATE=1` disables the updater.
 - `main.js` — window + views + layout, theme mirror, native menu
   (accelerators only; hidden behind Alt on Windows; *Help* holds *Check for
   Updates…*), IPC for the shell pages, auto-login script, navigation guard
-  (only workspace origins may load in the content view; everything else —
-  `target=_blank`, cross-origin redirects — opens in the system browser),
-  the remote health probes, `--smoke` self-test, sidecar cleanup on quit,
-  the `GAMMA_SHELL_TEST` hook the e2e suite drives.
+  (only registered server origins may load in the content view; everything
+  else — `target=_blank`, cross-origin redirects — opens in the system
+  browser), the remote health probes, the `/api/session` read behind the
+  workspace switcher, `--smoke` self-test, sidecar cleanup on quit, the
+  `GAMMA_SHELL_TEST` hook the e2e suite drives.
 - `preload.js` — exposes the `gammaShell` IPC bridge **only on `file:`
-  URLs**; on workspace pages it exposes nothing and only reports
-  `data-theme` changes.
+  URLs**; on server pages it exposes nothing and only reports `data-theme`
+  changes.
 - `ui/theme.css` — Gamma's tokens + the unified control classes (`uiBtn`,
   `ctlBtn`, `uiInput`, the `dot` states) for the shell pages.
-- `ui/bar.html` — the shell bar. `ui/launcher.html` — the workspace picker.
+- `ui/bar.html` — the shell bar. `ui/launcher.html` — the server picker.
   Both plain HTML, no build step.
-- `lib/registry.js` — `workspaces.json` load/save, add/rename/remove,
+- `lib/registry.js` — `servers.json` load/save, add/rename/remove,
   last-opened, settings, window bounds, data-dir size.
 - `lib/sidecar.js` — local server lifecycle: free port, spawn, health poll
   (`/api/health`, 60 s budget for frozen cold starts), log capture,
@@ -189,14 +216,15 @@ dialog (tests only); `GAMMA_SHELL_NO_UPDATE=1` disables the updater.
 
 - The shell must keep treating Gamma as a black box: talk to it only via the
   public HTTP API + env config (`GAMMA_DATA_DIR`, `GAMMA_STATIC_DIR`,
-  `GAMMA_ADMIN_USER`, `GAMMA_ADMIN_PASSWORD`) and `/api/health`. No imports
-  from `backend/`, no frontend patches. The one thing it reads off the page
-  is the `data-theme` attribute (read-only, via the preload).
-- Workspace pages never get an IPC bridge; `gammaShell` exists only on the
+  `GAMMA_ADMIN_USER`, `GAMMA_ADMIN_PASSWORD`), `/api/health` and
+  `/api/session` (+ the `?ws=` URL parameter). No imports from `backend/`,
+  no frontend patches. The one thing it reads off the page is the
+  `data-theme` attribute (read-only, via the preload).
+- Server pages never get an IPC bridge; `gammaShell` exists only on the
   shell's own `file:` pages, and every handler re-checks the sender.
 - Local sidecars bind `127.0.0.1` only (the LAN-exposed use case is the
   existing server/Docker deployment, not the desktop app).
-- Navigation allowlist: only registered workspace origins render in the
+- Navigation allowlist: only registered server origins render in the
   content view; foreign URLs (including `window.open` and cross-origin
   redirects) go to the system browser.
 - The updater never installs without the user's click (the pill / button /
