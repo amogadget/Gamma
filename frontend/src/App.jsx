@@ -59,6 +59,9 @@ import { loadSession, saveSession, clearSession } from "./sessionState";
 import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage } from "./LoginPage";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
+import { usePageCollab } from "./collab";
+import { applyOps, applyPatch, keepUiFlags } from "./blockOps";
+import { PresenceBar } from "./presence";
 import SettingsDialog from "./settings";
 import { QuotaMeter } from "./settingsKit";
 import {
@@ -3321,70 +3324,81 @@ export default function App() {
     return () => { cancelled = true; };
   }, [focusedBlockId, shareMode]);
 
-  // Queued autosave. The debounce timer used to be silently cancelled when
-  // navigation replaced the block tree — a highlight made within 500 ms of
-  // switching tabs was lost. Edits are now queued in pendingSaveRef (with the
-  // page id they belong to) and flushed on navigation; failures retry so a
-  // briefly unreachable server doesn't eat them either.
-  const pendingSaveRef = useRef(null); // {pageId, blocks, attempts}
-  function savePending() {
-    const p = pendingSaveRef.current;
-    if (!p) return;
-    pendingSaveRef.current = null;
-    apiJson(`${API}/blocks/${p.pageId}/children`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ blocks: p.blocks }),
-    }).catch((err) => {
-      const attempts = (p.attempts || 0) + 1;
-      if (pendingSaveRef.current) return; // a newer edit supersedes this one
-      if (attempts < 6) {
-        setStatus(`Save failed: ${err.message} — retrying…`);
-        pendingSaveRef.current = { ...p, attempts };
-        setTimeout(savePending, 3000);
-      } else {
-        setStatus(`Save failed: ${err.message}`);
+  // The page's live session (collab.js): the tree's transitions become ops
+  // sent in debounced batches, other clients' batches arrive over the page
+  // socket and apply below, presence rides the same socket. A load (the
+  // suppress flag) makes the tree the session's base instead of a change.
+  const applyRemoteRef = useRef(null);
+  const loadedSeqRef = useRef(null); // the op-log seq the last fetched tree reflects
+  const collab = usePageCollab({
+    pageId: focusedBlockId,
+    enabled: !!focusedBlockId,
+    canWrite: !readOnly,
+    onRemoteOps: (ops, pageId, pos) => applyRemoteRef.current?.(ops, pageId, pos),
+    onReload: (pageId) => {
+      if (pageId === focusedBlockIdRef.current) loadBlocksForBlock(pageId, { keepUi: true });
+    },
+    onStatus: (msg) => setStatus(msg),
+  });
+  const collabRef = useRef(collab);
+  collabRef.current = collab;
+  // Ops from another client (or a server-side writer): the page block's own
+  // changes update the title/properties state, the rest apply to the tree
+  // as a load-like transition (no history entry, nothing re-sent) and fold
+  // into every undo snapshot.
+  applyRemoteRef.current = (ops, pageId, pos) => {
+    if (pageId !== focusedBlockId) return;
+    for (const op of ops) {
+      if (op.op !== "set" || op.id !== pageId) continue;
+      if (op.content !== undefined) setPageTitle(op.content || "Untitled");
+      setFocusedBlock((b) => {
+        if (!b) return b;
+        const props = op.props ? applyPatch(b.properties, op.props) : b.properties;
+        if (op.props) {
+          if ("folder" in op.props) setPageFolders(parseFolderTags(props.folder));
+          if ("category" in op.props) setCategory(props.category || "");
+          if ("summary" in op.props) setSummary(props.summary || "");
+        }
+        return { ...b, ...(op.content !== undefined ? { content: op.content } : {}), properties: props };
+      });
+    }
+    const treeOps = ops.filter((op) => !(op.op === "set" && op.id === pageId));
+    if (!treeOps.length) return;
+    suppressAutosaveRef.current = true;
+    setBlocks((prev) => {
+      try {
+        return applyOps(prev, treeOps, pageId, pos);
+      } catch (err) {
+        // A batch we can't apply (should not happen): resync from the server
+        // rather than take the page down.
+        console.error("remote ops failed to apply", err);
+        queueMicrotask(() => loadBlocksForBlock(pageId, { keepUi: true }));
+        return prev;
       }
     });
-  }
-  // Persist queued edits NOW — called before anything replaces the block tree.
-  function flushPendingSave() {
-    if (autosaveTimerRef.current) { clearTimeout(autosaveTimerRef.current); autosaveTimerRef.current = null; }
-    savePending();
-  }
+    blockHistory.rebase((tree) => { try { return applyOps(tree, treeOps, pageId, pos); } catch { return tree; } });
+  };
+  // Send queued edits NOW — before anything replaces the block tree.
+  function flushPendingSave() { collabRef.current.flush(); }
   useEffect(() => {
-    if (readOnly || !focusedBlockId) return;
+    if (!focusedBlockId) return;
     if (suppressAutosaveRef.current) {
       suppressAutosaveRef.current = false;
+      collab.commit(blocks, { isLoad: true, seq: loadedSeqRef.current });
+      loadedSeqRef.current = null;
       return;
     }
-    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-    pendingSaveRef.current = { pageId: focusedBlockId, blocks };
-    autosaveTimerRef.current = setTimeout(savePending, saveNowRef.current ? 0 : 500);
+    if (readOnly) return;
+    collab.commit(blocks, { now: saveNowRef.current });
     saveNowRef.current = false;
-    return () => {
-      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-    };
   }, [blocks, readOnly]);
-  // Closing/reloading the tab: best-effort keepalive save of queued edits.
+  // Our place on the page for the others: the focused row (an open editor
+  // reports its exact selection through onCaret).
   useEffect(() => {
-    const flush = () => {
-      const p = pendingSaveRef.current;
-      if (!p) return;
-      pendingSaveRef.current = null;
-      try {
-        fetch(withShare(`${API}/blocks/${p.pageId}/children`), {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ blocks: p.blocks }),
-          keepalive: true,
-          credentials: "include",
-        }).catch(() => {});
-      } catch {}
-    };
-    window.addEventListener("pagehide", flush);
-    return () => window.removeEventListener("pagehide", flush);
-  }, []);
+    if (!focusedBlockId) return;
+    if (caretRef.current && caretRef.current.id === focusedId) return;
+    collab.sendCursor({ block: focusedId || "" });
+  }, [focusedId, focusedBlockId]);
 
 
   function deleteHighlight(highlightId) {
@@ -3616,10 +3630,14 @@ export default function App() {
     return () => { if (timer) clearTimeout(timer); };
   }, [pdfUrl, pdfHidden, focusedBlockId, shareMode, recentThumbs]);
 
-  async function loadBlocksForBlock(blockId) {
+  // `keepUi`: a refetch under a live page — the open editor (and its text)
+  // and the folding survive the swap.
+  async function loadBlocksForBlock(blockId, { keepUi = false } = {}) {
     try {
       const data = await apiJson(`${API}/blocks/${blockId}/subtree`);
-      const children = normalizeBlocks((data.block?.children) || []);
+      let children = normalizeBlocks((data.block?.children) || []);
+      if (keepUi) children = keepUiFlags(children, blocksRef.current);
+      loadedSeqRef.current = data.seq ?? null;
       suppressAutosaveRef.current = true;
       setBlocks(children);
       return children;
@@ -3673,20 +3691,19 @@ export default function App() {
     }
     if (!AI_BLOCK_TOOLS.includes(a.tool)) return;
     // The edit landed: drop its preview, mark the block, and show the real
-    // change — unless the user typed meanwhile (their queued whole-subtree
-    // save wins, as in onNotesChange) or has an editor open (a reload would
-    // close it; the final onNotesChange reload catches up).
+    // change. With the page socket up it arrives as ops like any other
+    // client's; otherwise refetch (the open editor survives the swap).
     setAiLive((live) => (live && (live.tool === "create_block" || live.blockId === a.block_id) ? null : live));
     if (a.block_id) markAiBlock(a.block_id, a.kind === "create" ? "create" : a.kind === "move" ? "move" : "edit", 6000);
-    if (pendingSaveRef.current) { flushPendingSave(); return; }
-    if (flattenBlocks(blocksRef.current).some((b) => b.editMode)) return;
-    loadBlocksForBlock(focusedBlockId).then(() => {
+    const reveal = () => {
       if (!a.block_id) return;
       requestAnimationFrame(() => {
         document.querySelector(`[data-block-id="${a.block_id}"]`)
           ?.scrollIntoView({ block: "nearest", behavior: "smooth" });
       });
-    });
+    };
+    if (collabRef.current.me.connected) { reveal(); return; }
+    loadBlocksForBlock(focusedBlockId, { keepUi: true }).then(reveal);
   }
   const agentEventRef = useRef(null);
   agentEventRef.current = handleAgentEvent;
@@ -3768,13 +3785,10 @@ export default function App() {
     }
   }
 
-  async function persistBlocks(nextBlocks) {
+  // Everything queued for the page is on the server when this resolves.
+  async function persistBlocks() {
     if (readOnly || !focusedBlockId) return;
-    await apiJson(`${API}/blocks/${focusedBlockId}/children`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ blocks: nextBlocks })
-    });
+    await collab.flush();
   }
 
   async function uploadOnePdf(file, folder = "") {
@@ -4118,6 +4132,7 @@ export default function App() {
         try {
           const subtreeData = await apiJson(`${API}/blocks/${block.id}/subtree`);
           childBlocks = normalizeBlocks(subtreeData.block?.children || []);
+          loadedSeqRef.current = subtreeData.seq ?? null;
         } catch {}
       }
 
@@ -4161,6 +4176,7 @@ export default function App() {
       if (!block) throw new Error("Block not found");
       const props = block.properties || {};
       const childBlocks = normalizeBlocks(block.children || []);
+      loadedSeqRef.current = subtreeData.seq ?? null;
 
       suppressAutosaveRef.current = true;
       setFocusedBlockId(blockId);
@@ -5743,6 +5759,17 @@ export default function App() {
                 }}
               >{focusedBlockId ? (pageTitle || "Untitled") : "Notes"}</h3>
             )}
+            {focusedBlockId && collab.peers.length ? (
+              <PresenceBar
+                peers={collab.peers}
+                onJump={(id) => {
+                  if (!id) return;
+                  pendingBlockScrollRef.current = id;
+                  suppressAutosaveRef.current = true;
+                  setBlocks((prev) => expandToBlock(prev, id));
+                }}
+              />
+            ) : null}
             {focusedBlockId && !shareMode ? (
               <div className="categoryFrontmatter">
                 <span className="categoryIcon" title="Labels">
@@ -6775,14 +6802,23 @@ export default function App() {
                     caretBeforeRef.current = selectionBefore ? { id, ...selectionBefore } : null;
                     setBlocks((prev) => setBlockText(prev, id, text));
                   },
-                  // The open editor's selection, for the history's caret bookkeeping.
-                  onCaret: (id, from, to) => { caretRef.current = { id, from, to }; },
+                  // The open editor's selection: the history's caret
+                  // bookkeeping, and our caret for the others on the page.
+                  onCaret: (id, from, to) => {
+                    caretRef.current = { id, from, to };
+                    collab.sendCursor({ block: id, anchor: from, head: to });
+                  },
                   onStartEdit: (id, editMode) => {
                     if (readOnly) return;
                     if (editMode) pendingFocusRef.current = id;
-                    else saveNowRef.current = true;
+                    else {
+                      saveNowRef.current = true;
+                      if (caretRef.current?.id === id) caretRef.current = null;
+                      collab.sendCursor({ block: id });
+                    }
                     setBlocks((prev) => setBlockEditMode(prev, id, editMode));
                   },
+                  peers: collab.peers,
                   enterNewNote,
                   // `above` inserts before `id` instead (the "+" handle with
                   // Alt held).
@@ -6816,11 +6852,8 @@ export default function App() {
                   },
                   onDelete: (id) => {
                     if (readOnly) return;
-                    // Eager server delete; 404 = never saved yet, the next
-                    // autosave PUT settles it either way.
-                    apiJson(`${API}/blocks/${id}`, { method: "DELETE" })
-                      .catch((err) => { if (err.status !== 404) setStatus(`Delete failed: ${err.message}`); });
-                    setBlocks(removeBlockTree(blocks, id));
+                    setBlocks(removeBlockTree(blocks, id)); // the transition's delete op
+
                     setStatus("Block deleted — Ctrl+Z to undo.");
                   },
                   // Attach a block to the next chat message (chip with its id).
@@ -6980,13 +7013,11 @@ export default function App() {
           onLibraryChange={fetchHomeBlocks}
           onAgentEvent={(ev) => agentEventRef.current?.(ev)}
           onNotesChange={(pageIds) => {
-            // The AI edited note blocks server-side. If the open page is among
-            // them, reload its tree so the change appears — unless the user
-            // typed during the reply: their queued (whole-subtree) save wins,
-            // and reloading now would drop those keystrokes.
+            // The AI edited note blocks server-side. With the page socket up
+            // they already arrived as ops; otherwise refetch the open page.
             if (!focusedBlockId || !pageIds.includes(focusedBlockId)) return;
-            if (pendingSaveRef.current) { flushPendingSave(); return; }
-            loadBlocksForBlock(focusedBlockId);
+            if (collabRef.current.me.connected) return;
+            loadBlocksForBlock(focusedBlockId, { keepUi: true });
           }}
         />
       );

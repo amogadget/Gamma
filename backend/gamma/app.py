@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 
 from . import config
 from .auth import session_middleware
-from .db import DATA_SCHEMA, connect_users_db
+from .db import DATA_SCHEMA, connect_pages_db, connect_users_db
 from .logbuf import log, setup_logging
 from .migrate import run_all as run_migrations
 from .routers import (
@@ -19,6 +19,7 @@ from .routers import (
     blocks,
     chats,
     clip,
+    collab,
     export,
     imports,
     links,
@@ -78,7 +79,9 @@ def _startup_maintenance():
         uploads_dir = user_dir / "uploads"
         pages_db = user_dir / "pages.db"
         if uploads_dir.exists() and pages_db.exists():
-            with sqlite3.connect(str(pages_db)) as conn:
+            # connect_pages_db also switches the file to WAL and adds the
+            # page_ops table on instances that predate them.
+            with connect_pages_db(user_dir.name) as conn:
                 removed = cleanup_orphan_uploads(conn, uploads_dir)
                 if removed:
                     log.info(f"[startup] removed orphan uploads for {user_dir.name}: {removed}")
@@ -118,6 +121,7 @@ def create_app() -> FastAPI:
     app.include_router(export.router)
     app.include_router(links.router)
     app.include_router(clip.router)
+    app.include_router(collab.router)
 
     # Serve the built frontend (SPA) when GAMMA_STATIC_DIR is set.
     # Registered last so all /api routes take precedence.

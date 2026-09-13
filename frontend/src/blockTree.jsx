@@ -19,6 +19,7 @@ import { BlockCmEditor, scanMathSpans } from "./blockCmEditor";
 import { fenceInnerAt, highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
 import { filterSlashCommands, SlashMenuPopup } from "./slashMenu";
 import { remarkCallouts } from "./callouts";
+import { PeerChips } from "./presence";
 import { ContextMenu, MenuItem } from "./menus";
 import { API, apiJson, copyText, withShare } from "./utils";
 import { CopyIcon, ExportIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "./icons";
@@ -675,9 +676,18 @@ function BlockRow({
   aiLive,
   aiScan,
   onAddToChat,
+  peers,
 }) {
   const ref = useRef(null);
   const clickPosRef = useRef(null);
+  // Other people on this block (collab presence): avatar chips on the row,
+  // a coloured edge while one of them has its editor open, and their
+  // carets inside our editor when we have it open too.
+  const rowPeers = peers?.length ? peers.filter((p) => p.block === block.id) : null;
+  const peerEditing = rowPeers?.find((p) => p.anchor >= 0) || null;
+  const remoteCursors = rowPeers?.length
+    ? rowPeers.filter((p) => p.anchor >= 0).map((p) => ({ anchor: p.anchor, head: p.head, color: p.color, name: p.name }))
+    : null;
   // The AI agent's live footprint on this row (App.handleAgentEvent): a
   // read/edit mark that lights the row up, and — while the agent is still
   // writing an edit_block call for THIS block — the streamed text so far.
@@ -1150,8 +1160,9 @@ function BlockRow({
         onBlockDrop?.(e, block);
       }}
     >
+      {rowPeers?.length ? <PeerChips peers={rowPeers} /> : null}
       <div
-        className={`blockRow ${focusedId === block.id ? "focused" : ""}${aiMark ? ` ai-${aiMark.kind} aiMark${aiMark.n % 2}` : ""}${scanIdx != null ? ` ai-scan aiMark${aiScan.n % 2}` : ""}`}
+        className={`blockRow ${focusedId === block.id ? "focused" : ""}${aiMark ? ` ai-${aiMark.kind} aiMark${aiMark.n % 2}` : ""}${scanIdx != null ? ` ai-scan aiMark${aiScan.n % 2}` : ""}${peerEditing ? ` peerOn peer-${peerEditing.color}` : ""}`}
         style={scanIdx != null ? { animationDelay: `${Math.min(scanIdx * 45, 1600)}ms` } : undefined}
         onMouseDown={(e) => {
           if (e.button !== 0) return; // right-click is the context menu's
@@ -1248,6 +1259,7 @@ function BlockRow({
               dataBlockId={block.id}
               clickPos={clickPosRef.current}
               refLabels={refLabels}
+              remoteCursors={remoteCursors}
               value={block.content || ""}
               onChange={(e) => {
                 onChangeText(block.id, e.target.value, e.selectionBefore);

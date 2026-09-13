@@ -256,7 +256,8 @@ output the model got; only applied mutations count against
 `MAX_TOOL_ACTIONS` and trigger the home-feed refresh (`onLibraryChange`), and
 the note-block tools' actions carry `page_id`/`src_page_id` so the frontend
 reloads the open page's block tree when the AI touched it (`onNotesChange`;
-skipped when the user typed during the reply — their queued autosave wins).
+with the page's live socket up the tools' ops already arrived through it and
+the reload is skipped — [collab.md](collab.md)).
 
 ### Watching the agent work (live footprint)
 
@@ -293,7 +294,7 @@ notes panel shows where the agent is, not just what it did.
 Everything is display-only: marks and previews live in App state
 (`aiMarks`, `aiLive`, `aiScan` → `rowProps` → `BlockRow`/`BlockTree`),
 clear on page switch and when the reply ends, and never enter the block
-tree, the undo history or autosave.
+tree, the undo history or the op queue.
 
 ### Replay across turns
 

@@ -19,14 +19,20 @@ All state is SQLite + files on disk under a data directory (env
   `migrate --drop-share-doc-id` below; rows from before shares were keyed by
   page had NULL `page_id` and were backfilled or deleted once by the
   normalization pass), admin-tunable server settings (`settings` KV).
-- `users/<username>/pages.db` — the core data model: one `unified_blocks`
+- `users/<username>/pages.db` — the core data model: the `unified_blocks`
   table. Everything is a block (self-referential `parent_id`, fractional-index
   `position` strings like `a0`, `a0V` from the `fractional-indexing` package).
   Root-level blocks (parent `'root'`) are pages; a page may CARRY a PDF
   attachment (`doc_id` / `source_url` / `original_filename`, read through
   `blocks_store.page_attachment()`). Highlights are blocks with `highlight_id` /
   `pdf_position` in their JSON `properties` column; free notes are blocks
-  without.
+  without. Next to it, `page_ops` — the per-page operation log (one row per
+  applied batch, `seq` counting up per page, pruned to the newest 2000;
+  [collab.md](collab.md)). Open it ONLY through `db.connect_pages_db(user)`:
+  WAL journal mode (readers never wait on a writer — two browsers of one
+  account, a share editor next to the owner), a 10 s busy timeout, and the
+  schema statements (so a restored backup gains `page_ops`). Backups copy it
+  with the sqlite backup API, which is WAL-safe.
 - `users/<username>/data.db` — AI `chats` history
   + `prefs` (small JSON KV synced across browsers via `/api/prefs/{key}`, e.g.
   `open-tabs`, `recent-views`) + `page_snaps` (the recents-card cover

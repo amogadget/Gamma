@@ -33,7 +33,8 @@ from ..ai_context import pdf_path as _pdf_path
 from ..ai_settings import ai_runtime, require_ai_runtime
 from ..auth import require_user
 from ..blocks_store import page_attachment
-from ..db import page_now, user_db_path, user_uploads_dir
+from ..ops import after_commit, apply_ops, props_patch
+from ..db import connect_pages_db, page_now, user_db_path, user_uploads_dir
 from ..logbuf import log
 from ..pdf_text import PDF_EXTRACT_FAILED
 from ..pdf_text import page_count as _page_count
@@ -600,7 +601,7 @@ def _make_ppt_cite(rt: dict, meta: dict | None, bibtex: str, prompt: str = "", m
 
 
 def _load_page(user: str, block_id: str):
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         row = conn.execute(
             "SELECT content, properties FROM unified_blocks WHERE id = ?", (block_id,)
         ).fetchone()
@@ -622,7 +623,7 @@ def _save_props(user: str, block_id: str, updates: dict | None = None, remove: t
     title, and the page's title as it stands after the write — which may
     already be the paper's, renamed by a concurrent lookup (the extension's
     background lookup races the one the app starts when the page opens)."""
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         # Serialize the read/merge/write. Whichever wins the lock first is
         # safe: a later explicit rename wins after this commit, while a rename
         # that committed first is observed with auto_title already cleared.
@@ -645,16 +646,11 @@ def _save_props(user: str, block_id: str, updates: dict | None = None, remove: t
                       and props.get("auto_title") == content)
         if rename:
             props.pop("auto_title", None)
-            conn.execute(
-                "UPDATE unified_blocks SET content = ?, properties = ?, updated_at = ? WHERE id = ?",
-                (auto_title, json.dumps(props), page_now(), block_id),
-            )
-        else:
-            conn.execute(
-                "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-                (json.dumps(props), page_now(), block_id),
-            )
-        conn.commit()
+        op = {"op": "set", "id": block_id,
+              "props": props_patch(json.loads(row[1] or "{}"), props)}
+        if rename:
+            op["content"] = auto_title
+        after_commit(user, conn, apply_ops(conn, block_id, [op], actor=user))
         return rename, (auto_title if rename else content)
 
 
@@ -669,7 +665,7 @@ def metadata_status(request: Request):
     recorded extraction failures, ver != INDEX_VERSION means stale; papers the
     index never saw report text_chars = null (unknown until indexed)."""
     user = require_user(request)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         rows = conn.execute(
             "SELECT id, content, properties, updated_at FROM unified_blocks WHERE parent_id = 'root'"
         ).fetchall()

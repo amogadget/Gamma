@@ -114,6 +114,22 @@ def set_session_cookie(response, token: str, request: Request | None = None):
                         max_age=SESSION_MAX_AGE, secure=secure)
 
 
+def session_lookup(token: str | None):
+    """``(username, is_guest, is_admin)`` for a live session token, else None.
+    Read-only (no guest-day rollover) — what a websocket handshake uses, since
+    ``session_middleware`` only runs for HTTP requests."""
+    if not token:
+        return None
+    with sqlite3.connect(str(USERS_DB)) as conn:
+        row = conn.execute(
+            "SELECT u.username, u.is_guest, u.is_admin, s.created_at FROM sessions s "
+            "JOIN users u ON s.username = u.username WHERE s.token = ?", (token,),
+        ).fetchone()
+    if not row or _session_expired(row[3]):
+        return None
+    return row[0], bool(row[1]), bool(row[2]) and not row[1]
+
+
 async def session_middleware(request: Request, call_next):
     """Resolve the session cookie to request.state.user / is_guest.
 

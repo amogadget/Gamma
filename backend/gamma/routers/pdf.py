@@ -21,7 +21,7 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ..auth import require_user, resolve_user, share_scope_page
-from ..db import user_db_path, user_uploads_dir
+from ..db import connect_pages_db, user_uploads_dir
 from ..logbuf import log
 from ..net_guard import guarded_urlopen
 from ..server_settings import can_store
@@ -259,7 +259,7 @@ def download_pdf(source_url: str, want_bytes: bool = True) -> tuple[str, bytes]:
 def _share_allows_source(user: str, scope_page_id: str, source_url: str) -> bool:
     """A share link may only proxy the exact source URL recorded on its own
     page block."""
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         row = conn.execute(
             "SELECT json_extract(properties, '$.source_url') FROM unified_blocks WHERE id = ?",
             (scope_page_id,),

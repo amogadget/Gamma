@@ -42,7 +42,8 @@ from fractional_indexing import generate_key_between
 
 from .ai_context import DEPRECATED_TOOLS, canonical_tool, page_report_section
 from .blocks_store import fetch_subtree, page_attachment, page_root_id, root_pages
-from .db import page_now, user_db_path
+from .db import connect_pages_db, page_now, user_db_path
+from .ops import after_commit, apply_ops, note_reload, record_ops
 from .foldertags import add_tag, clean_path, parse_tags, path_within
 from .logbuf import log
 from .pdf_index import pdf_missing, search_pdf
@@ -435,13 +436,9 @@ def _run_edit_block(conn, user: str, scope: dict, args: dict):
         return f"error: content too long (>{_BLOCK_CONTENT_MAX} chars)", None
     if content == block["content"]:
         return "ok — the block already says that", None
-    now = page_now()
-    conn.execute("UPDATE unified_blocks SET content = ?, updated_at = ? WHERE id = ?",
-                 (content, now, block["id"]))
-    # The page root's timestamp drives the home feed's ordering — touch it
-    # like the editor's PUT /children does.
-    conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, page_id))
-    conn.commit()
+    after_commit(user, conn, apply_ops(
+        conn, page_id, [{"op": "set", "id": block["id"], "content": content}],
+        actor=user, client="ai"))
     verb = {"replace": "Edited", "append": "Appended to", "prepend": "Prepended to"}[mode]
     return (f'ok — block [{block["id"]}] updated' + (f" ({mode})" if mode != "replace" else ""),
             {"kind": "edit", "page_id": page_id, "block_id": block["id"], "mode": mode,
@@ -460,13 +457,10 @@ def _run_create_block(conn, user: str, scope: dict, args: dict):
     if error:
         return error, None
     block_id = secrets.token_urlsafe(9)
-    now = page_now()
-    conn.execute(
-        "INSERT INTO unified_blocks (id, parent_id, position, content, properties, "
-        "created_at, updated_at) VALUES (?, ?, ?, ?, '{}', ?, ?)",
-        (block_id, parent["id"], position, content, now, now))
-    conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, page_id))
-    conn.commit()
+    after_commit(user, conn, apply_ops(
+        conn, page_id, [{"op": "insert", "id": block_id, "parent": parent["id"],
+                         "position": position, "content": content}],
+        actor=user, client="ai"))
     return (f"ok — created block [{block_id}]",
             {"kind": "create", "page_id": page_id, "block_id": block_id,
              "summary": f"Added a note in “{page_title[:60]}”"})
@@ -500,12 +494,18 @@ def _run_move_block(conn, user: str, scope: dict, args: dict):
     if parent["id"] == block["parent_id"] and args.get("after_id") in (block["id"], None) \
             and position == block["position"]:
         return "ok — the block is already there", None
-    now = page_now()
-    conn.execute("UPDATE unified_blocks SET parent_id = ?, position = ?, updated_at = ? "
-                 "WHERE id = ?", (parent["id"], position, now, block["id"]))
-    conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id IN (?, ?)",
-                 (now, src_page_id, page_id))
-    conn.commit()
+    if page_id == src_page_id:
+        after_commit(user, conn, apply_ops(
+            conn, page_id, [{"op": "move", "id": block["id"], "parent": parent["id"],
+                             "position": position}], actor=user, client="ai"))
+    else:
+        now = page_now()
+        conn.execute("UPDATE unified_blocks SET parent_id = ?, position = ?, updated_at = ? "
+                     "WHERE id = ?", (parent["id"], position, now, block["id"]))
+        conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id IN (?, ?)",
+                     (now, src_page_id, page_id))
+        record_ops(user, conn, src_page_id, [{"op": "delete", "id": block["id"]}], actor=user)
+        note_reload(user, conn, page_id, user)
     where = (f"page “{page_title[:60]}”" if page_id != src_page_id
              else f"“{page_title[:60]}”")
     action = {"kind": "move", "page_id": page_id, "block_id": block["id"],
@@ -610,9 +610,8 @@ def _run_rename_page(conn, user: str, scope: dict, args: dict):
         return "error: empty title", None
     if new == title:
         return "ok — title already is that", None
-    conn.execute("UPDATE unified_blocks SET content = ?, updated_at = ? WHERE id = ?",
-                 (new, page_now(), page_id))
-    conn.commit()
+    after_commit(user, conn, apply_ops(
+        conn, page_id, [{"op": "set", "id": page_id, "content": new}], actor=user, client="ai"))
     return (f'ok — renamed to "{new}"',
             {"kind": "rename", "page_id": page_id, "summary": f"Renamed “{title}” → “{new}”"})
 
@@ -633,9 +632,9 @@ def _run_move_page(conn, user: str, scope: dict, args: dict):
     if new_tags == tags:
         return "ok — page is already there", None
     props["folder"] = ", ".join(new_tags)
-    conn.execute("UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-                 (json.dumps(props), page_now(), page_id))
-    conn.commit()
+    after_commit(user, conn, apply_ops(
+        conn, page_id, [{"op": "set", "id": page_id, "props": {"folder": props["folder"]}}],
+        actor=user, client="ai"))
     where = target or "the library root"
     return (f'ok — moved to "{where}"',
             {"kind": "move", "page_id": page_id, "summary": f"Moved “{title}” → {where}"})
@@ -974,7 +973,7 @@ def run_agent_tool(user: str, scope: dict, name: str, args: dict) -> tuple[str, 
         result = f"error: unknown tool {name}"
         return result, tool_action("error", result[:200], name, args, result, error=True)
     try:
-        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        with connect_pages_db(user) as conn:
             result, action = tool["run"](conn, user, scope, args)
     except Exception as e:  # a tool failure must never kill the chat stream
         log.warning(f"[ai_tools] {name} failed: {e}")

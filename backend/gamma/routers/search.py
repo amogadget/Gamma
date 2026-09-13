@@ -33,7 +33,7 @@ from ..ai_context import pdf_path as _pdf_path
 from ..auth import require_user
 from ..block_index import fts_query
 from ..blocks_store import root_pages
-from ..db import page_now, user_db_path
+from ..db import connect_pages_db, page_now, user_db_path
 from ..logbuf import log
 from ..pdf_text import extract_pages
 from ..textnorm import INDEX_VERSION, normalize_text
@@ -107,7 +107,7 @@ def search_reindex(request: Request, payload: ReindexRequest | None = None):
     papers (the Library pane's per-paper button — no global stale stamp);
     without, the whole library. Progress is visible via /api/tasks either way."""
     user = require_user(request)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         library = [info["doc_id"] for info in root_pages(conn).values() if info["doc_id"]]
     wanted = [d for d in (payload.doc_ids if payload else []) if d]
     if wanted:
@@ -150,7 +150,7 @@ def library_search(request: Request, q: str = "", limit: int = 20, scope: str = 
     if not q:
         return {"results": [], "indexing": 0}
     match = fts_query(q)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         pages = root_pages(conn, scope)
         # Notes: rebuild what changed (synchronous, batch-capped), then query.
         pending = block_index.refresh(user, conn, list(pages)) if pages else 0
@@ -181,7 +181,7 @@ def pdf_search(request: Request, q: str = "", limit: int = 20):
         return {"results": [], "indexing": 0}
 
     # Library papers: doc_id → page block (title + id to open)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         docs = {info["doc_id"]: {"block_id": page_id, "title": info["title"]}
                 for page_id, info in root_pages(conn).items() if info["doc_id"]}
     if not docs:

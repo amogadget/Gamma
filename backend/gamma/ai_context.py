@@ -9,7 +9,7 @@ import sqlite3
 from urllib.request import Request as URLRequest
 
 from .blocks_store import fetch_subtree, page_attachment, page_for_doc, page_root_id
-from .db import pdf_upload_path, user_db_path
+from .db import connect_pages_db, pdf_upload_path, user_db_path
 from .foldertags import parse_tags
 from .logbuf import log
 from .net_guard import guarded_urlopen
@@ -129,7 +129,7 @@ def notes_focus_section(user: str, payload) -> str:
         return ""
     out = []
     try:
-        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        with connect_pages_db(user) as conn:
             def outline(block_id: str, budget: int) -> str | None:
                 if page_root_id(conn, block_id) not in pages:
                     return None
@@ -294,7 +294,7 @@ def _download_pdf_from_source(user: str, doc_id: str, pdf_path) -> None:
     """Best-effort download of a missing PDF from its recorded source URL."""
     log.info(f"[ai_chat] PDF NOT FOUND at {pdf_path}, attempting download from source_url")
     try:
-        with sqlite3.connect(user_db_path(user, "pages.db")) as connection:
+        with connect_pages_db(user) as connection:
             row = connection.execute(
                 "SELECT properties FROM unified_blocks "
                 "WHERE json_extract(properties, '$.doc_id') = ?",
@@ -725,7 +725,7 @@ def gather_inputs(user: str, payload, allow_native: bool) -> tuple[list[str], st
 
     page_ids = [str(page) for page in (payload.pages or []) if page][:6]
     single = not page_ids
-    with sqlite3.connect(user_db_path(user, "pages.db")) as connection:
+    with connect_pages_db(user) as connection:
         if single:
             page_id = str(getattr(payload, "page_id", "") or "")
             if not page_id or not connection.execute(

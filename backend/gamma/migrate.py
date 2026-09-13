@@ -17,7 +17,7 @@ import sqlite3
 
 from . import config
 from .blocks_store import page_for_doc
-from .db import connect_users_db, page_now, shares_has_doc_id, user_db_path
+from .db import connect_pages_db, connect_users_db, page_now, shares_has_doc_id
 from .logbuf import log
 from .note_markup import LEGACY_WIDTH_RE, obsidian_image_sizes
 
@@ -103,7 +103,7 @@ def normalize_data_db(conn: sqlite3.Connection) -> dict:
 def _page_for_doc(username: str, doc_id: str) -> str | None:
     """The owner's root page carrying PDF ``doc_id``, or None."""
     try:
-        with sqlite3.connect(user_db_path(username, "pages.db")) as conn:
+        with connect_pages_db(username) as conn:
             row = page_for_doc(conn, doc_id)
     except (sqlite3.Error, ValueError):
         return None

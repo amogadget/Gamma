@@ -115,8 +115,9 @@ under a page or block, after the sibling named by `after_id` (default: last).
 `move_block` re-parents/reorders a block with its subtree — cycle-checked, and
 cross-page moves (allowed when both pages are in scope) refuse subtrees
 containing highlight blocks, whose PDF anchors are tied to their own paper.
-All three touch the page root's `updated_at` (like the editor's autosave PUT)
-so the home feed reorders. Their UI actions carry `page_id` (moves across
+All three go through the op path (`ops.apply_ops`, [collab.md](collab.md)):
+logged, fanned out to anyone on the page, and the page root's `updated_at`
+stamped so the home feed reorders. Their UI actions carry `page_id` (moves across
 pages also `src_page_id`) and `block_id` (the edited/moved block, or the
 created block's new id; `read_block` actions carry it too). The frontend
 reloads the open page's block tree when it was touched and lights the block

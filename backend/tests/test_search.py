@@ -110,7 +110,8 @@ def test_dirty_page_reindex_follows_every_write():
 
     # PUT /blocks/{id}: the old text is gone, the new one found.
     assert c.put(f"/api/blocks/{a}", json={"content": "gamma ipsum"}).status_code == 200
-    assert _meta("searcher", page["id"]) is None  # marked dirty, not yet rebuilt
+    # Stale, not yet rebuilt: the op stamped the page root past the fingerprint.
+    assert _meta("searcher", page["id"])[0] != c.get(f"/api/blocks/{page['id']}").json()["updated_at"]
     assert [r["block_id"] for r in _search(c, "gamma ipsum")["results"]] == [a]
     assert a not in {r["block_id"] for r in _search(c, "alpha")["results"]}
     assert _meta("searcher", page["id"]) is not None

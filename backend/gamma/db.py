@@ -93,6 +93,19 @@ PAGES_SCHEMA = [
         updated_at TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_ub_parent ON unified_blocks(parent_id, position)",
+    # page_ops = the per-page operation log (gamma/ops.py): one row per
+    # applied batch, `seq` counting up per page. Live clients follow it over
+    # the page's websocket; a reconnecting client catches up with
+    # GET /api/pages/{id}/ops?since=. Pruned to the newest rows per page.
+    """CREATE TABLE IF NOT EXISTS page_ops (
+        page_id TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        actor TEXT NOT NULL DEFAULT '',
+        client TEXT NOT NULL DEFAULT '',
+        at TEXT NOT NULL,
+        ops TEXT NOT NULL,
+        PRIMARY KEY (page_id, seq)
+    ) WITHOUT ROWID""",
 ]
 
 # data.db = derived / regenerable data (chats, the pdf_fts search index which
@@ -231,6 +244,20 @@ def connect_users_db() -> sqlite3.Connection:
 
 def user_db_path(username: str, db_name: str) -> str:
     return str(USERS_DIR / safe_username(username) / db_name)
+
+
+def connect_pages_db(username: str) -> sqlite3.Connection:
+    """THE way to open a user's pages.db. WAL mode (readers never wait on a
+    writer — several browsers on one account, a share editor next to the
+    owner), a busy timeout instead of an instant "database is locked", and
+    the schema statements (cheap no-ops once applied; they also give a
+    restored backup the page_ops table)."""
+    conn = sqlite3.connect(user_db_path(username, "pages.db"), timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    for stmt in PAGES_SCHEMA:
+        conn.execute(stmt)
+    return conn
 
 
 def user_uploads_dir(username: str) -> Path:

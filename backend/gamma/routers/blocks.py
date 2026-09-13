@@ -3,7 +3,6 @@
 import json
 import re
 import secrets
-import sqlite3
 
 from fastapi import APIRouter, HTTPException, Request
 from fractional_indexing import generate_key_between
@@ -23,9 +22,10 @@ from ..blocks_store import (
     page_for_doc,
     page_root_id,
 )
-from .. import block_index
-from ..db import page_now, user_db_path, user_uploads_dir
+from .. import block_index, collab
+from ..db import connect_pages_db, page_now, user_uploads_dir
 from ..markdown_export import build_tree
+from ..ops import OpError, commit_ops, latest_seq, note_reload, record_ops
 from ..storage import cleanup_orphan_uploads, display_filename
 from ..textnorm import fuzzy_pattern
 
@@ -122,7 +122,7 @@ def _repair_upload_path_titles(conn) -> int:
 async def block_search(request: Request, q: str = "", ids: str = "", limit: int = 10,
                        case: int = 0, whole: int = 0, regex: int = 0):
     results = []
-    with sqlite3.connect(user_db_path(require_user(request), "pages.db")) as conn:
+    with connect_pages_db(require_user(request)) as conn:
         if ids:
             id_list = [i.strip() for i in ids.split(",") if i.strip()]
             if not id_list:
@@ -192,7 +192,7 @@ async def blocks_replace(payload: BlockReplaceRequest, request: Request):
     now = page_now()
     changed = 0
     user = require_user(request)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         rows = conn.execute(
             "SELECT id, content FROM unified_blocks WHERE content != '' AND id != 'root'"
         ).fetchall()
@@ -210,6 +210,7 @@ async def blocks_replace(payload: BlockReplaceRequest, request: Request):
         conn.commit()
     if changed:
         block_index.mark_all_dirty(user)
+        collab.publish_all(user, {"t": "reload"})
     return {"ok": True, "changed": changed}
 
 
@@ -221,7 +222,7 @@ async def blocks_replace(payload: BlockReplaceRequest, request: Request):
 @router.get("/blocks/by-doc/{doc_id}")
 async def ub_get_by_doc(doc_id: str, request: Request):
     scope = share_scope_page(request)
-    with sqlite3.connect(user_db_path(resolve_user(request), "pages.db")) as conn:
+    with connect_pages_db(resolve_user(request)) as conn:
         row = page_for_doc(conn, doc_id, BLOCK_COLUMNS)
     # A share may only learn about its own page — refuse before revealing
     # whether any other doc id exists.
@@ -237,7 +238,7 @@ async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate, request: 
     # The page carrying this PDF, created when absent (PDF ingest from the
     # app and the extension) — a write, so it requires a real session (never
     # the ?share= read principal).
-    with sqlite3.connect(user_db_path(require_user(request), "pages.db")) as conn:
+    with connect_pages_db(require_user(request)) as conn:
         return get_or_create_doc_page(
             conn, doc_id, payload.default_title, payload.source_url, payload.original_filename)
 
@@ -248,7 +249,7 @@ async def ub_get_children(block_id: str, request: Request):
     if scope is not None and block_id == "root":
         # A share link may not enumerate the owner's library root.
         raise HTTPException(status_code=403, detail="not accessible via this share link")
-    with sqlite3.connect(user_db_path(resolve_user(request), "pages.db")) as conn:
+    with connect_pages_db(resolve_user(request)) as conn:
         if block_id != "root":
             if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
                 raise HTTPException(status_code=404, detail="block not found")
@@ -301,13 +302,19 @@ def _page_previews(conn) -> dict:
 
 @router.get("/blocks/{block_id}/subtree")
 async def ub_get_subtree(block_id: str, request: Request):
+    """The block with its whole subtree. For a page, ``seq`` is the op log's
+    position this tree reflects — the live session catches up from it."""
     scope = share_scope_page(request)
-    with sqlite3.connect(user_db_path(resolve_user(request), "pages.db")) as conn:
+    with connect_pages_db(resolve_user(request)) as conn:
         assert_block_in_page(conn, block_id, scope)
         rows = fetch_subtree(conn, block_id)
+        seq = latest_seq(conn, block_id) if rows and rows[0][1] == "root" else None
     if not rows:
         raise HTTPException(status_code=404, detail="block not found")
-    return {"block": build_tree(rows, block_id)}
+    out = {"block": build_tree(rows, block_id)}
+    if seq is not None:
+        out["seq"] = seq
+    return out
 
 
 @router.get("/blocks/{block_id}/backlinks")
@@ -317,7 +324,7 @@ async def ub_get_backlinks(block_id: str, request: Request):
     # can't use them without leaking other pages.
     if share_scope_page(request) is not None:
         raise HTTPException(status_code=403, detail="not accessible via this share link")
-    with sqlite3.connect(user_db_path(resolve_user(request), "pages.db")) as conn:
+    with connect_pages_db(resolve_user(request)) as conn:
         rows = conn.execute(
             "SELECT id, content, parent_id FROM unified_blocks "
             "WHERE id != ? AND content LIKE ? "
@@ -344,7 +351,7 @@ async def ub_get_backlinks(block_id: str, request: Request):
 @router.get("/blocks/{block_id}")
 async def ub_get_block(block_id: str, request: Request):
     scope = share_scope_page(request)
-    with sqlite3.connect(user_db_path(resolve_user(request), "pages.db")) as conn:
+    with connect_pages_db(resolve_user(request)) as conn:
         assert_block_in_page(conn, block_id, scope)
         row = conn.execute(
             f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE id = ?",
@@ -355,77 +362,73 @@ async def ub_get_block(block_id: str, request: Request):
     return block_to_dict(row)
 
 
+def _ops(user: str, page_id: str, ops: list[dict], request: Request, scope) -> dict:
+    """Apply ops to a page on behalf of the request: a share editor is
+    confined to the shared page, every op error is its HTTP status."""
+    if scope is not None and scope != page_id:
+        raise HTTPException(status_code=403, detail="not accessible via this share link")
+    try:
+        return commit_ops(user, page_id, ops, actor=request.state.user or user,
+                          share_scoped=scope is not None)
+    except OpError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+
+
 @router.post("/blocks")
 async def ub_create_block(payload: UBCreateRequest, request: Request):
     block_id = secrets.token_urlsafe(9)
-    now = page_now()
     user = require_writer(request)
     scope = share_scope_page(request)
-    if scope is not None and payload.parent_id == "root":
-        # A share editor may add blocks inside the shared page, never new pages.
-        raise HTTPException(status_code=403, detail="not accessible via this share link")
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        if payload.parent_id != "root":
-            if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (payload.parent_id,)).fetchone():
-                raise HTTPException(status_code=404, detail="parent block not found")
-            assert_block_in_page(conn, payload.parent_id, scope)
-        try:
-            new_pos = generate_key_between(payload.before, payload.after)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"invalid before/after: {e}")
-        conn.execute(
-            "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (block_id, payload.parent_id, new_pos, payload.content,
-             json.dumps(payload.properties), now, now),
-        )
-        conn.commit()
-        if payload.parent_id != "root":
-            block_index.mark_page_dirty(user, page_root_id(conn, block_id))
-    return {
-        "id": block_id, "parent_id": payload.parent_id, "position": new_pos,
-        "content": payload.content, "properties": payload.properties,
-        "created_at": now, "updated_at": now,
-    }
+    if payload.parent_id == "root":
+        # A new page: not an op on any page. Share editors never get here.
+        if scope is not None:
+            raise HTTPException(status_code=403, detail="not accessible via this share link")
+        now = page_now()
+        with connect_pages_db(user) as conn:
+            try:
+                new_pos = generate_key_between(payload.before, payload.after)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"invalid before/after: {e}")
+            conn.execute(
+                "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
+                "VALUES (?, 'root', ?, ?, ?, ?, ?)",
+                (block_id, new_pos, payload.content, json.dumps(payload.properties), now, now))
+            conn.commit()
+        return {"id": block_id, "parent_id": "root", "position": new_pos, "content": payload.content,
+                "properties": payload.properties, "created_at": now, "updated_at": now}
+    with connect_pages_db(user) as conn:
+        page_id = page_root_id(conn, payload.parent_id)
+    if not page_id:
+        raise HTTPException(status_code=404, detail="parent block not found")
+    try:
+        position = generate_key_between(payload.before, payload.after)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"invalid before/after: {e}")
+    result = _ops(user, page_id, [{"op": "insert", "id": block_id, "parent": payload.parent_id,
+                                   "position": position, "content": payload.content,
+                                   "props": payload.properties}], request, scope)
+    applied = result["ops"][0]
+    return {"id": block_id, "parent_id": payload.parent_id, "position": applied["position"],
+            "content": payload.content, "properties": payload.properties,
+            "created_at": result["at"], "updated_at": result["at"]}
 
 
 @router.put("/blocks/{block_id}")
 async def ub_update_block(block_id: str, payload: UBUpdateRequest, request: Request):
-    now = page_now()
+    """Content and/or a properties PATCH (a null value deletes the key)."""
     user = require_writer(request)
     scope = share_scope_page(request)
-    if scope is not None and block_id == scope and payload.properties is not None:
-        # The page's properties (PDF source, folders, metadata) stay the
-        # owner's; share editors may still rename it (content).
-        raise HTTPException(status_code=403, detail="share editors cannot change page settings")
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        row = conn.execute(
-            "SELECT content, properties FROM unified_blocks WHERE id = ?", (block_id,)
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="block not found")
-        assert_block_in_page(conn, block_id, scope)
-        sets = ["updated_at = ?"]
-        values: list = [now]
-        existing = json.loads(row[1] or "{}")
-        if payload.content is not None:
-            sets.append("content = ?")
-            values.append(payload.content)
-            # Any explicit title write is user intent. Clearing this marker in
-            # the same transaction prevents a slow metadata lookup from
-            # overwriting a rename that happened while it was in flight.
-            existing.pop("auto_title", None)
-        if payload.properties is not None:
-            existing.update(payload.properties)
-        if payload.properties is not None or payload.content is not None:
-            sets.append("properties = ?")
-            values.append(json.dumps(existing))
-        values.append(block_id)
-        conn.execute(f"UPDATE unified_blocks SET {', '.join(sets)} WHERE id = ?", values)
-        conn.commit()
-        if payload.content is not None:
-            block_index.mark_page_dirty(user, page_root_id(conn, block_id))
-    return {"ok": True, "updated_at": now}
+    with connect_pages_db(user) as conn:
+        page_id = page_root_id(conn, block_id)
+    if not page_id:
+        raise HTTPException(status_code=404, detail="block not found")
+    op = {"op": "set", "id": block_id}
+    if payload.content is not None:
+        op["content"] = payload.content
+    if payload.properties is not None:
+        op["props"] = payload.properties
+    result = _ops(user, page_id, [op], request, scope)
+    return {"ok": True, "updated_at": result["at"], "seq": result["seq"]}
 
 
 @router.delete("/blocks/{block_id}")
@@ -434,32 +437,37 @@ async def ub_delete_block(block_id: str, request: Request):
         raise HTTPException(status_code=400, detail="cannot delete root block")
     user = require_writer(request)
     scope = share_scope_page(request)
-    if scope is not None and block_id == scope:
-        raise HTTPException(status_code=403, detail="share editors cannot delete the shared page")
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
-            raise HTTPException(status_code=404, detail="block not found")
-        assert_block_in_page(conn, block_id, scope)
+    with connect_pages_db(user) as conn:
         page_id = page_root_id(conn, block_id)
-        deleted_ids = [r[0] for r in fetch_subtree(conn, block_id)]
-        delete_subtree(conn, block_id)
-        conn.commit()
-        removed = cleanup_orphan_uploads(conn, user_uploads_dir(user))
-        block_index.purge_page_data(user, conn, deleted_ids)
-        if page_id != block_id:
-            block_index.mark_page_dirty(user, page_id)  # a page's own rows were just pruned
-    return {"ok": True, "id": block_id, "removed_uploads": removed}
+        if not page_id:
+            raise HTTPException(status_code=404, detail="block not found")
+        if page_id == block_id:
+            # Deleting a page: not an op on the page's blocks. Its room (if
+            # any) is told to reload, which surfaces the 404.
+            if scope is not None:
+                raise HTTPException(status_code=403, detail="share editors cannot delete the shared page")
+            deleted_ids = [r[0] for r in fetch_subtree(conn, block_id)]
+            delete_subtree(conn, block_id)
+            conn.commit()
+            removed = cleanup_orphan_uploads(conn, user_uploads_dir(user))
+            block_index.purge_page_data(user, conn, deleted_ids)
+            collab.publish_reload(user, block_id)
+            return {"ok": True, "id": block_id, "removed_uploads": removed}
+    result = _ops(user, page_id, [{"op": "delete", "id": block_id}], request, scope)
+    return {"ok": True, "id": block_id, "removed_uploads": result["removed_uploads"]}
 
 
 @router.put("/blocks/{block_id}/children")
 async def ub_put_children(block_id: str, payload: UBPutChildrenRequest, request: Request):
-    """Replace all children of a block with the provided nested tree."""
+    """Replace all children of a block with the provided nested tree (bulk
+    paths — imports, tests; the editor sends ops). The page's room is told
+    to reload."""
     now = page_now()
     rows: list = []
     flatten_tree(payload.blocks, block_id, rows, now)
     user = require_writer(request)
     scope = share_scope_page(request)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="block not found")
         assert_block_in_page(conn, block_id, scope)
@@ -474,44 +482,56 @@ async def ub_put_children(block_id: str, payload: UBPutChildrenRequest, request:
         conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, block_id))
         conn.commit()
         removed = cleanup_orphan_uploads(conn, user_uploads_dir(user))
-        # The page root's updated_at already re-fingerprints the notes index
-        # when block_id is the page; a nested target needs the explicit mark.
         page_id = page_root_id(conn, block_id)
         if page_id != block_id:
             block_index.mark_page_dirty(user, page_id)
+        if page_id and page_id != "root":
+            note_reload(user, conn, page_id, request.state.user or user)
     return {"ok": True, "count": len(rows), "updated_at": now, "removed_uploads": removed}
 
 
 @router.post("/blocks/{block_id}/reorder")
 async def ub_reorder_block(block_id: str, payload: UBReorderRequest, request: Request):
+    """Move a block: within its page (an op) or to another page
+    (``parent_id`` there — the source room sees a delete, the target
+    room reloads)."""
     if block_id == "root":
         raise HTTPException(status_code=400, detail="cannot reorder root block")
     user = require_writer(request)
     scope = share_scope_page(request)
     if scope is not None and (block_id == scope or payload.parent_id == "root"):
-        # Share editors rearrange inside the page; the page itself stays put.
         raise HTTPException(status_code=403, detail="not accessible via this share link")
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
-            raise HTTPException(status_code=404, detail="block not found")
-        assert_block_in_page(conn, block_id, scope)
-        if payload.parent_id is not None:
-            assert_block_in_page(conn, payload.parent_id, scope)
-        try:
-            new_pos = generate_key_between(payload.before, payload.after)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"invalid before/after: {e}")
+    try:
+        new_pos = generate_key_between(payload.before, payload.after)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"invalid before/after: {e}")
+    with connect_pages_db(user) as conn:
         src_page = page_root_id(conn, block_id)
-        sets = ["position = ?", "updated_at = ?"]
-        values: list = [new_pos, page_now()]
-        if payload.parent_id is not None:
-            sets.append("parent_id = ?")
-            values.append(payload.parent_id)
-        values.append(block_id)
-        conn.execute(f"UPDATE unified_blocks SET {', '.join(sets)} WHERE id = ?", values)
-        conn.commit()
-        if payload.parent_id is not None:
-            # A cross-page move re-keys the block's index rows on both pages.
+        if not src_page:
+            raise HTTPException(status_code=404, detail="block not found")
+        if src_page == block_id:
+            raise HTTPException(status_code=400, detail="pages are reordered through the library, not here")
+        row = conn.execute("SELECT parent_id FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
+        parent = payload.parent_id or row[0]
+        dst_page = page_root_id(conn, parent)
+        if not dst_page:
+            raise HTTPException(status_code=404, detail="parent block not found")
+        if dst_page != src_page:
+            if scope is not None:
+                raise HTTPException(status_code=403, detail="not accessible via this share link")
+            if parent in {r[0] for r in fetch_subtree(conn, block_id)}:
+                raise HTTPException(status_code=400, detail="cannot move a block into its own subtree")
+            now = page_now()
+            conn.execute(
+                "UPDATE unified_blocks SET parent_id = ?, position = ?, updated_at = ? WHERE id = ?",
+                (parent, new_pos, now, block_id))
+            conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id IN (?, ?)",
+                         (now, src_page, dst_page))
+            record_ops(user, conn, src_page, [{"op": "delete", "id": block_id}], actor=user)
+            note_reload(user, conn, dst_page, user)
             block_index.mark_page_dirty(user, src_page)
-            block_index.mark_page_dirty(user, page_root_id(conn, block_id))
-    return {"ok": True, "id": block_id, "position": new_pos}
+            block_index.mark_page_dirty(user, dst_page)
+            return {"ok": True, "id": block_id, "position": new_pos}
+    result = _ops(user, src_page, [{"op": "move", "id": block_id, "parent": parent,
+                                    "position": new_pos}], request, scope)
+    return {"ok": True, "id": block_id, "position": result["ops"][0]["position"]}

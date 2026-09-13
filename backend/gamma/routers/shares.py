@@ -27,7 +27,7 @@ from pydantic import BaseModel
 from ..auth import (SHARE_AUDIENCES, SHARE_ROLES, require_user, serialize_share_users,
                     share_access, share_lookup)
 from ..blocks_store import page_attachment
-from ..db import connect_users_db, page_now, shares_has_doc_id, user_db_path
+from ..db import connect_pages_db, connect_users_db, page_now, shares_has_doc_id
 
 router = APIRouter(prefix="/api", tags=["shares"])
 
@@ -53,7 +53,7 @@ def _owned_share(user: str, page_id: str) -> dict | None:
 
 def _require_page(user: str, page_id: str) -> None:
     """404/400 unless page_id is one of the user's root pages."""
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         row = conn.execute(
             "SELECT parent_id FROM unified_blocks WHERE id = ?", (page_id,)).fetchone()
     if not row:
@@ -67,7 +67,7 @@ def _page_doc_id(owner: str, page_id: str) -> str:
     from the page, never from the vestigial ``shares.doc_id`` column, so the
     viewer's response keeps its ``doc_id`` field while the column goes."""
     try:
-        with sqlite3.connect(user_db_path(owner, "pages.db")) as conn:
+        with connect_pages_db(owner) as conn:
             row = conn.execute(
                 "SELECT properties FROM unified_blocks WHERE id = ?", (page_id,)).fetchone()
     except (sqlite3.Error, ValueError):

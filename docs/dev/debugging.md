@@ -46,8 +46,13 @@ directory — no server, no network. Run them with the project venv's
 interpreter (`venv/Scripts/python.exe` on Windows): the two vector-math
 tests need `ziamath` from `requirements.txt`, and a system/conda `python`
 without it fails them with "ziamath is not importable" rather than a
-puzzling path count. The frontend has **no test suite or linter**: verify UI
-changes by running the app (at minimum, `npm run build` must pass).
+puzzling path count. The frontend has **no linter** and no component tests:
+verify UI changes by running the app (at minimum, `npm run build` must
+pass). Its pure modules have `node --test` tests — `frontend/tests/`, run
+from `frontend/` with `node --test tests/blockOps.test.mjs` (node is
+fnm-managed; the `/verify` skill shows the PATH). Collaboration is best
+checked end to end with two browser contexts on one page (see
+[collab.md](collab.md) "Testing" and the `/verify` skill).
 
 ## Debugging surfaces
 

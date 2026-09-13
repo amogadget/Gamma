@@ -182,5 +182,13 @@ export function useBlockHistory(blocks, setBlocks, opts) {
     return true;
   }, []);
 
-  return { undo, clear };
+  // Another client's change landed: fold it into every snapshot, so undoing
+  // our own edits never reverts theirs (what a collaborative undo means).
+  const rebase = useCallback((fn) => {
+    const s = st.current;
+    if (s.undo.length) s.undo = s.undo.map((e) => ({ ...e, tree: fn(e.tree) }));
+    if (s.redo.length) s.redo = s.redo.map((e) => ({ ...e, tree: fn(e.tree) }));
+  }, []);
+
+  return { undo, clear, rebase };
 }

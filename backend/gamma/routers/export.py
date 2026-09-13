@@ -19,13 +19,13 @@ from starlette.background import BackgroundTask
 
 from ..auth import resolve_user, share_scope_page
 from ..blocks_store import BLOCK_COLUMNS, assert_block_in_page, block_to_dict, fetch_subtree
+from ..db import connect_pages_db
 from ..db import (
     PAGES_SCHEMA,
     connect_data_db,
     page_now,
     pdf_upload_path,
     safe_doc_id,
-    user_db_path,
     user_uploads_dir,
 )
 from ..logseq_graph_export import (
@@ -524,7 +524,7 @@ class _NotesPdfBuilder(_Builder):
         try:
             # The request's connection is closed by the time response() runs,
             # so [[ref]]/![[embed]] resolution opens its own (read-only use).
-            with sqlite3.connect(user_db_path(self.user, "pages.db")) as conn:
+            with connect_pages_db(self.user) as conn:
                 pdf_bytes = render_document(
                     self.pages, uploads_dir=self.uploads_dir,
                     highlights=self.opts["highlights"], notes=self.opts["notes"],
@@ -587,7 +587,7 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
     scope = share_scope_page(request)
     opts = {"pdf": bool(pdf), "highlights": bool(highlights), "notes": bool(notes),
             "folder_scope": None}
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         assert_block_in_page(conn, block_id, scope)
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="page not found")
@@ -613,7 +613,7 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
     gives a clean PDF carrying only the written notes."""
     user = resolve_user(request)
     scope = share_scope_page(request)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         assert_block_in_page(conn, block_id, scope)
         rows = fetch_subtree(conn, block_id)
     if not rows:
@@ -704,7 +704,7 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
     folder_slug = slugify(name.replace("/", "-"), "")
     opts = {"pdf": bool(pdf), "highlights": bool(highlights), "notes": bool(notes),
             "folder_scope": name}
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         roots = conn.execute(
             f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = 'root'"
         ).fetchall()

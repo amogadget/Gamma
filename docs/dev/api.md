@@ -41,6 +41,7 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   `edit` shares (never valid with `anyone`) let `require_writer` resolve the
   owner for the block writers — `POST /blocks`, `PUT /blocks/{id}`,
   `DELETE /blocks/{id}`, `PUT /blocks/{id}/children`, `POST /blocks/{id}/reorder`,
+  `POST /pages/{id}/ops` (and the page websocket, view or edit),
   `POST /upload-image`, `POST /upload-file` — each of which confines the touched blocks to the
   shared page (no new pages, no deleting/moving the page itself, no changes to
   the page root's properties). Everything else stays session-only.
@@ -83,14 +84,23 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 |---|---|---|
 | GET/POST | `/blocks/by-doc/{doc_id}` | lookup / create the page BY ATTACHMENT — the page whose PDF is `doc_id` (POST creates it: `{default_title, source_url?, original_filename?}`); the PDF-ingest + extension-dedup path. Text-only pages come from `POST /pages` |
 | GET | `/blocks/{id}/children`, `/{id}/subtree`, `/{id}/backlinks` | tree reads; the root listing (`/blocks/root/children`) additionally gives every page a `preview` — the first ~240 chars of its first non-highlight child blocks joined with ` · ` (one window query, `""` when empty) |
-| POST/PUT/DELETE | `/blocks`, `/blocks/{id}` | CRUD |
-| PUT | `/blocks/{id}/children` | replace the whole subtree (delete + reinsert; triggers orphan-upload cleanup) |
-| POST | `/blocks/{id}/reorder` | sibling reorder |
+| POST/PUT/DELETE | `/blocks`, `/blocks/{id}` | CRUD — inside a page these are thin wrappers over the op path (`gamma/ops.py`): logged, fanned out to the page's room; `PUT` takes `content` and/or a properties PATCH (a null value deletes the key). A new page (`parent_id: "root"`) and deleting a page stay direct writes |
+| PUT | `/blocks/{id}/children` | replace the whole subtree (delete + reinsert; triggers orphan-upload cleanup) — bulk paths only (imports, tests); the page's room gets a `reload`. The editor itself sends ops |
+| POST | `/blocks/{id}/reorder` | move within the page (an op) or, with `parent_id` on another page, across pages (the source room sees a `delete`, the target reloads) |
 | GET | `/block-search` | fuzzy note/page/highlight search; empty `q` returns recently edited blocks (feeds the `[[ref]]` popup's initial suggestions) |
 | POST | `/blocks-replace` | bulk replace (no frontend UI currently) |
 
 Route order matters: the static-prefix routes (`by-doc`, `children`,
 `subtree`) must stay registered before `/blocks/{block_id}`.
+`GET /blocks/{id}/subtree` on a page also returns `seq`, the op-log position
+the tree reflects (the live session catches up from it).
+
+### Collaboration (`collab.py`) — see [collab.md](collab.md)
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/pages/{id}/ops` | apply a batch of block ops `{client, ops: [set / insert / move / delete]}` in one transaction → `{seq, at, ops (as applied — re-keyed positions carry their final value), removed_uploads}`; session user or an edit share (confined to the shared page; the page root's properties stay the owner's); a bad op fails the whole batch (400/403/404/413) |
+| GET | `/pages/{id}/ops?since=` | the op log after a seq → `{seq, batches: [{seq, actor, client, at, ops}]}`; 410 when pruned past `since` (reload the tree) |
+| WS | `/ws/page/{id}[?share=&client=]` | the page's live channel: `hello` / `join` / `leave` / `cursor` presence, every applied `ops` batch, `reload`; the client only ever sends `cursor`. Auth like HTTP (session cookie or share token, resolved in the handler — the middleware doesn't run for websockets); viewers join too |
 
 ### Pages (`pages.py`) — page first, PDF as an action on it
 | Method | Path | Purpose |

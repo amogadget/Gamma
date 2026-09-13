@@ -17,7 +17,6 @@ import hashlib
 import json
 import re
 import secrets
-import sqlite3
 import threading
 import urllib.parse
 
@@ -34,9 +33,10 @@ from ..blocks_store import (
     last_child_position,
     page_attachment,
 )
-from ..db import page_now, safe_doc_id, user_db_path, user_uploads_dir
+from ..db import connect_pages_db, page_now, safe_doc_id, user_uploads_dir
 from ..foldertags import add_tag, clean_path, clean_segment, parse_tags
 from ..logbuf import log
+from ..ops import after_commit, apply_ops, props_patch
 from ..server_settings import can_store
 from ..storage import DIGEST_CHARS, url_filename
 from .metadata import fetch_page_metadata, registry_record
@@ -141,11 +141,12 @@ def _apply_tags(conn, block: dict, folder: str, labels: list[str]) -> dict:
             props["category"] = ", ".join(cats)
             changed = True
     if changed:
-        conn.execute(
-            "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(props), page_now(), block["id"]),
-        )
-        conn.commit()
+        user = block.get("_user") or ""
+        result = apply_ops(conn, block["id"], [{"op": "set", "id": block["id"],
+                                                "props": props_patch(block.get("properties") or {}, props)}],
+                           actor=user)
+        if user:
+            after_commit(user, conn, result)
         block = {**block, "properties": props}
     return block
 
@@ -224,11 +225,11 @@ def _clip_web_page(user: str, conn, payload: ClipRequest, source_url: str, title
     now = page_now()
     existing = find_web_page(conn, source_url)
     if existing:
-        block = _apply_tags(conn, existing, payload.folder, labels)
+        block = _apply_tags(conn, {**existing, "_user": user}, payload.folder, labels)
         if (payload.selection or "").strip():
-            _insert_last(conn, block["id"], _quote_content(payload.selection, source_url, title), {}, now)
-            conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, block["id"]))
-            conn.commit()
+            after_commit(user, conn, apply_ops(conn, block["id"], [{
+                "op": "insert", "id": secrets.token_urlsafe(9), "parent": block["id"],
+                "content": _quote_content(payload.selection, source_url, title)}], actor=user))
         return _result(block, existed=True)
     props = {"web_url": source_url} if source_url else {}
     block = create_page(conn, title or _web_title(source_url), props)
@@ -254,12 +255,11 @@ def clip(payload: ClipRequest, request: Request):
     arxiv_id = norm_arxiv(payload.arxiv_id) or norm_arxiv(pdf_url) or norm_arxiv(source_url)
     title = _clean_title(payload.title)
     labels = [str(label) for label in (payload.labels or [])][:50]
-    db_path = user_db_path(user, "pages.db")
     note = ""
 
     # 1. Dedup by identifier — the same paper reached via abs / pdf / DOI
     #    URLs hashes to different doc ids, so URL equality isn't enough.
-    with sqlite3.connect(db_path) as conn:
+    with connect_pages_db(user) as conn:
         existing = find_page(conn, doi, arxiv_id, (pdf_url, source_url))
         if existing:
             block = _apply_tags(conn, existing, payload.folder, labels)
@@ -270,7 +270,7 @@ def clip(payload: ClipRequest, request: Request):
         # its HTML would never pass the PDF check anyway.
         if not (source_url or title or (payload.selection or "").strip()):
             raise HTTPException(status_code=400, detail="nothing to save: no URL, title or selection")
-        with sqlite3.connect(db_path) as conn:
+        with connect_pages_db(user) as conn:
             return _clip_web_page(user, conn, payload, source_url, title, labels, doi, arxiv_id, "")
 
     if payload.doc_id:
@@ -310,23 +310,22 @@ def clip(payload: ClipRequest, request: Request):
             if e.status_code != 400 or not (source_url or title):
                 raise
             log.info(f"[clip] no PDF for {candidate}: {e.detail} — saving as a web page")
-            with sqlite3.connect(db_path) as conn:
+            with connect_pages_db(user) as conn:
                 return _clip_web_page(user, conn, payload, source_url, title, labels,
                                       doi, arxiv_id, str(e.detail))
 
     # 3. The page, filed and tagged.
-    with sqlite3.connect(db_path) as conn:
+    with connect_pages_db(user) as conn:
         # No tab title: the page is named after the URL's file name, else the
         # doc id (attachment_props), marked auto_title for the metadata lookup.
         block = get_or_create_doc_page(conn, doc_id, title, page_source)
         props = dict(block.get("properties") or {})
         if source_url and not props.get("web_url") and source_url != page_source:
             props["web_url"] = source_url
-            conn.execute("UPDATE unified_blocks SET properties = ? WHERE id = ?",
-                         (json.dumps(props), block["id"]))
-            conn.commit()
+            after_commit(user, conn, apply_ops(conn, block["id"], [
+                {"op": "set", "id": block["id"], "props": {"web_url": source_url}}], actor=user))
             block = {**block, "properties": props}
-        block = _apply_tags(conn, block, payload.folder, labels)
+        block = _apply_tags(conn, {**block, "_user": user}, payload.folder, labels)
 
     # 4. Metadata, off the request.
     if payload.fetch_metadata and not (block.get("properties") or {}).get("meta"):
@@ -343,7 +342,7 @@ def library_lookup(request: Request, doi: str = "", arxiv_id: str = "", url: str
     arxiv_id = norm_arxiv(arxiv_id) or norm_arxiv(url)
     if not (doi or arxiv_id or url):
         raise HTTPException(status_code=400, detail="doi, arxiv_id, or url required")
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         block = find_page(conn, doi, arxiv_id, (url,)) or find_web_page(conn, url)
     if not block:
         raise HTTPException(status_code=404, detail="not in library")
@@ -377,7 +376,7 @@ def library_folders(request: Request):
     user = require_user(request)
     folders: set[str] = set()
     labels: set[str] = set()
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         rows = conn.execute(
             "SELECT json_extract(properties, '$.folder'), json_extract(properties, '$.category') "
             "FROM unified_blocks WHERE parent_id = 'root'"
@@ -419,7 +418,7 @@ def clip_note(payload: ClipNoteRequest, request: Request):
         raise HTTPException(status_code=400, detail="nothing selected")
     content = _quote_content(payload.text, payload.source_url, payload.title)
     now = page_now()
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         page_id = (payload.page_id or "").strip()
         if page_id:
             if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (page_id,)).fetchone():
@@ -430,8 +429,8 @@ def clip_note(payload: ClipNoteRequest, request: Request):
                 "AND json_extract(properties, '$.web_clips') = 1 LIMIT 1"
             ).fetchone()
             page_id = row[0] if row else _insert_last(conn, "root", WEB_CLIPS_TITLE, {"web_clips": 1}, now)
-        block_id = _insert_last(conn, page_id, content, {}, now)
-        conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, page_id))
-        conn.commit()
+        block_id = secrets.token_urlsafe(9)
+        after_commit(user, conn, apply_ops(conn, page_id, [
+            {"op": "insert", "id": block_id, "parent": page_id, "content": content}], actor=user))
     return {"block_id": block_id, "page_id": page_id,
             "open_url": f"/?block={urllib.parse.quote(block_id)}"}

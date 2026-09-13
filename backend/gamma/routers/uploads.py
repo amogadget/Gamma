@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 
 from ..auth import require_user, require_writer, resolve_user, share_scope_page
 from ..blocks_store import fetch_subtree
-from ..db import user_db_path, user_uploads_dir
+from ..db import connect_pages_db, user_uploads_dir
 from ..server_settings import check_upload_allowed, usage_bytes, user_limits
 from ..storage import (
     ALLOWED_IMAGE_TYPES,
@@ -108,7 +108,7 @@ def _share_can_read_upload(user: str, scope_page_id: str, filename: str) -> bool
     """A share link may read only its own page's PDF (``<doc_id>.pdf``) or a
     file the page's subtree references (embedded images, file chips — any
     extension, matched textually)."""
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         doc = conn.execute(
             "SELECT json_extract(properties, '$.doc_id') FROM unified_blocks WHERE id = ?",
             (scope_page_id,),

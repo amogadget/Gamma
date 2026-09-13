@@ -7,7 +7,6 @@ import os
 import posixpath
 import re
 import secrets
-import sqlite3
 import tempfile
 import zipfile
 
@@ -16,10 +15,11 @@ from pydantic import BaseModel
 from fractional_indexing import generate_key_between, generate_n_keys_between
 
 from ..auth import require_user
-from ..db import page_now, pdf_upload_path, user_db_path, user_uploads_dir
+from ..db import connect_pages_db, page_now, pdf_upload_path, user_uploads_dir
 from ..blocks_store import last_child_position
 from ..foldertags import clean_path, parse_tags
 from ..logbuf import log
+from ..ops import note_reload
 from ..markdown_import import MAX_MARKDOWN_BYTES, md_to_blocks, parse_frontmatter
 from ..markdown_zip_import import import_markdown_zip, insert_note_page
 from ..storage import content_digest, display_filename, is_pdf, store_pdf
@@ -92,7 +92,7 @@ async def import_logseq(
     # 4. Get or create unified_block for this doc
     title = (pdf.filename or digest).removesuffix(".pdf")
     now = page_now()
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         row = conn.execute(
             "SELECT id FROM unified_blocks WHERE json_extract(properties,'$.doc_id') = ?",
             (digest,),
@@ -139,6 +139,8 @@ async def import_logseq(
             inserted += 1
         conn.execute("UPDATE unified_blocks SET updated_at=? WHERE id=?", (now, block_id))
         conn.commit()
+        if row and inserted:
+            note_reload(user, conn, block_id, user)
 
     return {"ok": True, "block_id": block_id, "doc_id": digest, "source_url": source_url, "imported": inserted}
 
@@ -177,7 +179,7 @@ async def import_markdown(request: Request, file: UploadFile = File(...),
 
     now = page_now()
     page_id = secrets.token_urlsafe(9)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         imported = insert_note_page(conn, page_id, title, props, tree, now)
         conn.commit()
 
@@ -197,7 +199,7 @@ def import_markdown_zip_endpoint(request: Request, file: UploadFile = File(...),
         zf = zipfile.ZipFile(file.file)
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400, detail="not a zip file")
-    with zf, sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with zf, connect_pages_db(user) as conn:
         report = import_markdown_zip(user, zf, conn, folder, page_now())
         conn.commit()
     return {"ok": True, **report}
@@ -398,7 +400,7 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
 
     now = page_now()
     inserted = 0
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id=?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="page block not found")
         # Idempotent: each embedded annotation carries a stable key
@@ -423,6 +425,7 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
                 inserted += 1
             conn.execute("UPDATE unified_blocks SET updated_at=? WHERE id=?", (now, block_id))
             conn.commit()
+            note_reload(user, conn, block_id, user)
 
     # Strip AFTER the blocks are committed: if the rewrite fails the file is
     # untouched and the import still stands; a re-run can strip again.
@@ -436,7 +439,7 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
             # The embedded originals are gone from the file, so PDF export must
             # start writing these blocks again (it skips imported ones only
             # while the original annotation still lives in the PDF).
-            with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+            with connect_pages_db(user) as conn:
                 rows = conn.execute(
                     "SELECT id, properties FROM unified_blocks WHERE parent_id=? "
                     "AND json_extract(properties,'$.imported_annot') IS NOT NULL",
@@ -621,7 +624,7 @@ def import_zotero(request: Request, file: UploadFile = File(...),
                   "pdfs_stored": 0, "annotations_imported": 0, "notes_imported": 0,
                   "pages": [], "skipped": [], "warnings": []}
         annot_jobs = []
-        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        with connect_pages_db(user) as conn:
             for item in items:
                 try:
                     job = _zotero_item_page(conn, user, uploads, zf, names, base,

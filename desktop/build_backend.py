@@ -51,6 +51,7 @@ def main():
         "--add-data", f"{frontend_dist}{sep}frontend_dist",
         # uvicorn resolves loop/protocol classes from strings at runtime.
         "--collect-all", "uvicorn",
+        "--collect-all", "websockets",  # uvicorn loads its websocket protocol lazily
         # pypdfium2 ships its native library outside normal imports.
         "--collect-all", "pypdfium2",
         "--collect-all", "pypdfium2_raw",

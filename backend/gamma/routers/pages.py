@@ -9,8 +9,6 @@ pages or changes a page's attachment (page properties stay the owner's, same
 rule as PUT /blocks/{id} under a share).
 """
 
-import json
-import sqlite3
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -26,9 +24,9 @@ from ..blocks_store import (
     page_attachment,
     page_for_doc,
 )
-from ..db import page_now, safe_doc_id, user_db_path, user_uploads_dir
+from ..db import connect_pages_db, safe_doc_id
 from ..foldertags import clean_path
-from ..storage import cleanup_orphan_uploads
+from ..ops import after_commit, apply_ops, props_patch
 
 router = APIRouter(prefix="/api", tags=["pages"])
 
@@ -66,7 +64,7 @@ async def create_page_endpoint(payload: PageCreate, request: Request):
     folder = clean_path(payload.folder or "")
     if folder:
         props["folder"] = folder
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         return create_page(conn, payload.title, props)
 
 
@@ -91,7 +89,7 @@ async def attach_pdf(page_id: str, payload: AttachRequest, request: Request):
             raise HTTPException(status_code=400, detail="invalid doc_id")
     if not doc_id and not source_url:
         raise HTTPException(status_code=400, detail="doc_id or source_url required")
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         page = _load_page(conn, page_id)
         props = dict(page["properties"])
         if page_attachment(props):
@@ -110,12 +108,11 @@ async def attach_pdf(page_id: str, payload: AttachRequest, request: Request):
             # replace an automatic title, an explicit rename clears the marker.
             content = auto or content
             props["auto_title"] = content
-        now = page_now()
-        conn.execute(
-            "UPDATE unified_blocks SET content = ?, properties = ?, updated_at = ? WHERE id = ?",
-            (content, json.dumps(props), now, page_id))
-        conn.commit()
-    return {**page, "content": content, "properties": props, "updated_at": now}
+        op = {"op": "set", "id": page_id, "props": props_patch(page["properties"], props)}
+        if content != page["content"]:
+            op["content"] = content
+        result = after_commit(user, conn, apply_ops(conn, page_id, [op], actor=user))
+    return {**page, "content": content, "properties": props, "updated_at": result["at"]}
 
 
 @router.delete("/pages/{page_id}/attachment")
@@ -125,18 +122,16 @@ async def detach_pdf(page_id: str, request: Request):
     the file itself is deleted by the orphan sweep unless another page still
     references it. → ``{"ok", "block", "removed_uploads"}``."""
     user = require_user(request)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(user) as conn:
         page = _load_page(conn, page_id)
         props = dict(page["properties"])
         if not page_attachment(props):
             raise HTTPException(status_code=404, detail="page has no attachment")
         for key in ATTACHMENT_KEYS:
             props.pop(key, None)
-        now = page_now()
-        conn.execute("UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-                     (json.dumps(props), now, page_id))
-        conn.commit()
-        removed = cleanup_orphan_uploads(conn, user_uploads_dir(user))
+        result = after_commit(user, conn, apply_ops(
+            conn, page_id, [{"op": "set", "id": page_id,
+                             "props": props_patch(page["properties"], props)}], actor=user))
         block_index.purge_page_data(user, conn, [])
-    return {"ok": True, "block": {**page, "properties": props, "updated_at": now},
-            "removed_uploads": removed}
+    return {"ok": True, "block": {**page, "properties": props, "updated_at": result["at"]},
+            "removed_uploads": result["removed_uploads"]}
