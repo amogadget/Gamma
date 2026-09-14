@@ -200,6 +200,53 @@ def test_guest_cannot_create_or_join(guest):
     assert len(s["workspaces"]) == 1 and s["workspaces"][0]["personal"]
 
 
+def test_workspace_update_is_atomic(boss, ann):
+    home = workspace_of("ws_ann")
+    ws = ann.post("/api/workspaces", json={"name": "Atomic"}).json()["id"]
+    url = f"/api/workspaces/{ws}"
+    before = ann.get(url).json()
+    # Authorization failure must not apply the otherwise permitted rename.
+    assert ann.put(url, json={"name": "Changed", "access": "public"}).status_code == 403
+    assert ann.get(url).json() == before
+    # Validation failure must also undo conversion and a default-pointer move.
+    assert ann.put(url, json={"default": True}).status_code == 200
+    assert boss.put(url, json={"name": "Changed", "kind": "shared", "public_role": "owner"}).status_code == 400
+    assert ann.get(url).json()["kind"] == "personal"
+    assert ann.get(url).json()["name"] == "Atomic"
+    assert ann.get("/api/session").json()["default_workspace"] == ws
+    # All fields in a valid combined edit apply against its final kind.
+    result = boss.put(url, json={"kind": "shared", "access": "public", "public_role": "editor", "quota_mb": 2})
+    assert result.status_code == 200, result.text
+    assert result.json()["public_role"] == "editor" and result.json()["quota_mb"] == 2
+    assert ann.get("/api/session").json()["default_workspace"] == home
+    result = boss.put(url, json={"kind": "personal"})
+    assert result.status_code == 200
+    assert result.json()["access"] == "private" and result.json()["public_role"] == "viewer"
+    assert result.json()["quota_mb"] is None
+    assert ann.delete(url).status_code == 200
+
+
+def test_public_access_does_not_consume_workspace_creation_slots(boss, ann, monkeypatch):
+    from gamma import workspaces
+    public = boss.post("/api/workspaces", json={"name": "Public reading room", "kind": "shared", "access": "public"}).json()["id"]
+    monkeypatch.setattr(workspaces, "MAX_WORKSPACES_PER_USER", workspaces.membership_count("ws_ann") + 1)
+    created = ann.post("/api/workspaces", json={"name": "My extra library"})
+    assert created.status_code == 200, created.text
+    assert ann.post("/api/workspaces", json={"name": "Over the limit"}).status_code == 400
+    assert ann.delete(f"/api/workspaces/{created.json()['id']}").status_code == 200
+    assert boss.delete(f"/api/workspaces/{public}").status_code == 200
+
+
+def test_account_preferences_do_not_require_workspace_access(ann):
+    headers = _in("inaccessible-workspace")
+    value = {"theme": "dark"}
+    assert ann.put("/api/prefs/appearance", headers=headers, json={"value": value}).status_code == 200
+    assert ann.get("/api/prefs/appearance", headers=headers).json()["value"] == value
+    assert ann.get("/api/prefs/open-tabs", headers=headers).status_code == 403
+    assert ann.put("/api/prefs/open-tabs", headers=headers, json={"value": []}).status_code == 403
+    assert ann.get("/api/prefs/ai-settings", headers=headers).status_code == 400
+
+
 def test_find_page_across_my_workspaces(ann, lab):
     page = ann.post("/api/blocks", json={"parent_id": "root", "content": "Deep link"}, headers=_in(lab)).json()
     assert ann.get(f"/api/workspaces/find-page/{page['id']}").json()["workspace_id"] == lab

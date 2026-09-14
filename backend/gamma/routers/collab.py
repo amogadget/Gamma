@@ -26,15 +26,23 @@ def _scope_page(request: Request, page_id: str):
 
 @router.post("/pages/{page_id}/ops")
 async def post_ops(page_id: str, payload: OpsRequest, request: Request):
-    """Apply a batch of block ops to a page: ``{client, ops}`` →
+    """Apply a batch of block ops to a page: ``{client, ops, cursor?}`` →
     ``{seq, at, ops}`` with the ops as applied (positions the server had to
-    re-key carry their final value). A workspace editor or an edit share."""
+    re-key carry their final value). ``cursor`` (``{block, anchor, head}``,
+    the writer's caret in the text after the batch) is fanned out with the
+    batch and stored as the writer's presence. A workspace editor or an
+    edit share."""
     ws = require_ws_writer(request)
     scope = _scope_page(request, page_id)
     ops = [op.model_dump(exclude_unset=True) for op in payload.ops]
+    cursor = None
+    if payload.cursor is not None:
+        cursor = {"block": payload.cursor.block[:64], "anchor": payload.cursor.anchor,
+                  "head": payload.cursor.head}
     try:
         result = commit_ops(ws, page_id, ops, actor=request.state.user or "",
-                            client=payload.client[:32], share_scoped=scope is not None)
+                            client=payload.client[:32], share_scoped=scope is not None,
+                            cursor=cursor)
     except OpError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)
     return {"seq": result["seq"], "at": result["at"], "ops": result["ops"],

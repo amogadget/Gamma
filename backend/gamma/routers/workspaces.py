@@ -65,7 +65,9 @@ def _admin_only(request: Request, what: str) -> None:
 
 def _quota(mb) -> int | None:
     """A workspace quota as stored: None for unlimited (0, null, omitted)."""
-    return validate_quota_mb(mb) or None if mb else None
+    if mb is None:
+        return None
+    return validate_quota_mb(mb) or None
 
 
 def _valid_owner(username: str) -> str:
@@ -104,7 +106,7 @@ async def create_workspace(payload: WorkspaceCreate, request: Request):
         _admin_only(request, "create a shared workspace, name another owner, or set access and quota")
     if owner != user:
         _valid_owner(owner)
-    if len(workspaces.list_for_user(owner)) >= workspaces.MAX_WORKSPACES_PER_USER:
+    if workspaces.membership_count(owner) >= workspaces.MAX_WORKSPACES_PER_USER:
         raise HTTPException(status_code=400, detail="too many workspaces")
     try:
         info = workspaces.create(
@@ -150,23 +152,13 @@ async def update_workspace(ws: str, payload: WorkspaceUpdate, request: Request):
     workspace); set kind, access + public role, or the workspace's own
     quota (admin). Fields left out stay as they are."""
     user = _member(request, ws, "owner")
+    changes = payload.model_dump(exclude_none=True, exclude={"default", "quota_mb"})
+    if "quota_mb" in payload.model_fields_set:
+        changes["quota_mb"] = _quota(payload.quota_mb)
+    if {"kind", "access", "public_role", "quota_mb"} & changes.keys():
+        _admin_only(request, "change a workspace's kind, access or quota")
     try:
-        if payload.name is not None:
-            workspaces.rename(ws, payload.name)
-        if payload.default:
-            workspaces.set_default(user, ws)
-        if payload.kind is not None:
-            _admin_only(request, "change a workspace's kind")
-            workspaces.set_kind(ws, payload.kind)
-        if payload.access is not None:
-            _admin_only(request, "set access")
-            workspaces.set_access(ws, payload.access, payload.public_role or workspaces.get(ws)["public_role"])
-        elif payload.public_role is not None:
-            _admin_only(request, "set access")
-            workspaces.set_access(ws, workspaces.get(ws)["access"], payload.public_role)
-        if "quota_mb" in payload.model_fields_set:
-            _admin_only(request, "set a workspace quota")
-            workspaces.set_quota(ws, _quota(payload.quota_mb))
+        workspaces.update(ws, changes, default_for=user if payload.default else "")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {**_payload(ws, user), "quota": workspace_quota(ws)}

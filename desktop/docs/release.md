@@ -247,7 +247,11 @@ certification (still 1–3 days; the Store then rolls the update out). The
 CLI only accepts `.msix` file names, and electron-builder's `.appx` is the
 same format, so the workflow copies it under that name. The package
 version is the computed release version plus `.0`, which satisfies the
-Store's must-increase rule. Only one submission can be in certification at
+Store's must-increase rule. The submission API also rejects MSIX packages
+whose `MinVersion` is ≤ 10.0.17134.0 — the web upload form let
+electron-builder's default (10.0.14316.0) through as a legacy `.appx`, the
+CLI path did not — hence `appx.minVersion: '10.0.17763.0'` (Windows 10
+1809, Electron's own floor) in `electron-builder.cjs`. Only one submission can be in certification at
 a time, so the step is `continue-on-error`: a second release the same day
 logs a warning and the next release submits. Where the secrets come from
 (set each with `gh secret set NAME` from a terminal):

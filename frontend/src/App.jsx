@@ -58,7 +58,7 @@ import {
 } from "./logseqPdfModel";
 import { loadSession, saveSession, clearSession, setSessionScope } from "./sessionState";
 import { ROLE_LABEL, useAccounts, workspaceMeta } from "./settingsWorkspace";
-import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage } from "./LoginPage";
+import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage, WorkspaceUnavailablePage } from "./LoginPage";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
 import { usePageCollab } from "./collab";
@@ -312,6 +312,7 @@ export default function App() {
   const [workspace, setWorkspace] = useState(null);   // {id, name, role, personal, members}
   const [workspaces, setWorkspaces] = useState([]);
   const [wsReady, setWsReady] = useState(shareMode);
+  const [workspaceUnavailable, setWorkspaceUnavailable] = useState(false);
   const wsId = workspace?.id || "";
 
   // Auth state: null=loading, false=logged out, {user, is_guest}=logged in
@@ -368,14 +369,14 @@ export default function App() {
     };
   }, [sessionUser, shareMode]);
 
-  // Which of the account's workspaces this tab opens: the URL's ?ws= when
-  // the account belongs to it; else, for a deep link without one, the
+  // Explicit ?ws= is authoritative: an inaccessible workspace shows a gate.
+  // For a deep link without one, try the
   // workspace holding that page; else the last one used in this browser;
   // else the personal workspace.
   async function chooseWorkspace(user, list, dflt) {
     const ids = new Set(list.map((w) => w.id));
     const urlWs = new URLSearchParams(window.location.search).get("ws") || "";
-    if (urlWs && ids.has(urlWs)) return urlWs;
+    if (urlWs) return ids.has(urlWs) ? urlWs : null;
     if (!urlWs && initialBlockId) {
       try {
         const d = await apiJson(`${API}/workspaces/find-page/${encodeURIComponent(initialBlockId)}`);
@@ -385,13 +386,14 @@ export default function App() {
     let last = "";
     try { last = localStorage.getItem(`gamma-last-ws:${user}`) || ""; } catch {}
     if (last && ids.has(last)) return last;
-    return ids.has(dflt) ? dflt : (list[0]?.id || dflt);
+    return ids.has(dflt) ? dflt : (list[0]?.id || null);
   }
 
   function applyWorkspace(user, id, list) {
-    const w = list.find((x) => x.id === id) || { id, name: "Workspace", role: "owner", personal: true, members: 1 };
+    const w = list.find((x) => x.id === id);
+    if (!w) throw new Error("Workspace is unavailable");
     setCurrentWorkspace(id);
-    setSessionScope(id);
+    setSessionScope(user, id);
     setWorkspace(w);
     setWorkspaces(list);
     setReadOnly(w.role === "viewer");
@@ -411,6 +413,11 @@ export default function App() {
       if (data.user) {
         const list = data.workspaces || [];
         const chosen = await chooseWorkspace(data.user, list, data.default_workspace || "");
+        if (!chosen) {
+          setWorkspaceUnavailable(true);
+          return;
+        }
+        setWorkspaceUnavailable(false);
         applyWorkspace(data.user, chosen, list);
         setAuthUser({ user: data.user, is_guest: data.is_guest, is_admin: data.is_admin });
       } else {
@@ -3626,13 +3633,14 @@ export default function App() {
     }
   }, [wsReady]);
 
-  // Restore viewer/layout prefs from session on mount
+  // Restore only after the account and workspace scope is known.
   useEffect(() => {
+    if (!wsReady || shareMode) return;
     const session = loadSession();
     if (session.pdfScale != null) setPdfScale(session.pdfScale);
     if (session.pdfHidden != null) setPdfHidden(session.pdfHidden);
     if (session.notesVisible != null) setNotesVisible(session.notesVisible);
-  }, []);
+  }, [wsReady, shareMode]);
 
   // Control size (Settings → General): app.css zooms every button/toggle by it.
   useEffect(() => {
@@ -3672,6 +3680,7 @@ export default function App() {
   // Persist session state on relevant changes (skip initial mount)
   const firstRenderRef = useRef(true);
   useEffect(() => {
+    if (!wsReady || shareMode) return;
     if (firstRenderRef.current) {
       firstRenderRef.current = false;
       return;
@@ -5792,6 +5801,7 @@ export default function App() {
   }
 
   // Login page state
+  if (workspaceUnavailable) return <WorkspaceUnavailablePage />;
   if (authUser === null) return <AuthLoading />;
 
   if (authUser === false) {

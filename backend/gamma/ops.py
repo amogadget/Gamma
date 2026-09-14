@@ -86,9 +86,17 @@ class DeleteOp(BaseModel):
 Op = Annotated[Union[SetOp, InsertOp, MoveOp, DeleteOp], Field(discriminator="op")]
 
 
+class CursorState(BaseModel):
+    """The writer's caret at the moment it sent the batch (see collab.py)."""
+    block: str = ""
+    anchor: int = -1
+    head: int = -1
+
+
 class OpsRequest(BaseModel):
     client: str = ""
     ops: list[Op]
+    cursor: CursorState | None = None
 
 
 def props_patch(old: dict, new: dict) -> dict:
@@ -338,11 +346,17 @@ def after_commit(ws: str, conn, result: dict) -> dict:
 
 
 def commit_ops(ws: str, page_id: str, ops: list[dict], *, actor: str, client: str = "",
-               share_scoped: bool = False) -> dict:
-    """``apply_ops`` + ``after_commit`` on a fresh connection."""
+               share_scoped: bool = False, cursor: dict | None = None) -> dict:
+    """``apply_ops`` + ``after_commit`` on a fresh connection. ``cursor``
+    (``{block, anchor, head}``): the writer's caret in the text the batch
+    produces, fanned out with the batch so peers place it against the same
+    text (a standalone presence message would reach them first, in
+    offsets their copy doesn't have yet)."""
     with connect_pages_db(ws) as conn:
         result = apply_ops(conn, page_id, ops, actor=actor, client=client,
                            share_scoped=share_scoped)
+        if cursor is not None:
+            result["cursor"] = cursor
         return after_commit(ws, conn, result)
 
 

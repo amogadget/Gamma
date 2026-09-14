@@ -84,12 +84,12 @@ The unit people edit in an outliner is the block, and blocks are already
 rows. A block-op protocol (`set` / `insert` / `move` / `delete` with
 fractional-index positions) therefore needs no new model: the server applies
 a batch in one transaction, assigns a per-page sequence number, logs it and
-fans it out. Structural edits from different people merge for free; the
-only real conflict is two carets typing in one block at the same moment,
-which visible presence makes rare and last-writer-wins by server order makes
-harmless. If that conflict ever matters, the upgrade path is character-level
-OT (CodeMirror's collab rebase) on *just the open block*, not a CRDT for the
-page.
+fans it out. Independent block changes can coexist, but edits to a deleted
+block and incompatible moves still need rejection or reconciliation. Two
+people typing in the same block can overwrite each other's text. Presence
+helps coordination; last-writer-wins is a tradeoff, not protection against
+data loss. Character-level OT on an open block is one possible future
+approach if preserving simultaneous typing becomes a requirement.
 
 A CRDT was ruled out precisely because of the second-source-of-truth cost:
 every backend writer (importers, the AI agent's tools, the clip endpoint,
@@ -100,7 +100,8 @@ SQL.
 
 - **Writes travel over HTTP; the socket only fans out.** Authorisation and
   scoping stay in one code path, a `keepalive` fetch can still flush on tab
-  close, and a dropped socket never loses an edit. A socket that also
+  close, and a dropped socket does not interrupt the HTTP write path. This
+  alone does not provide durable offline storage. A socket that also
   accepted writes would need all of that duplicated.
 - **Conflict resolution is per record and per property.** Content is one
   last-writer-wins value; properties are a patch, so unrelated properties

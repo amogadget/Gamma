@@ -58,10 +58,12 @@ The **Gamma Connector** extension ([extension/](./extension/)) saves the paper y
 
 ## Share, sync and move your data
 
+- **Workspaces** — keep separate personal libraries or collaborate in a shared library created by a server administrator. Owners manage members; editors change pages; viewers read. Switch from the account menu and manage libraries in Settings → Workspaces.
 - **Share a page** — send a link to an annotated paper; invite people with view or edit rights, or open it to anyone with the link.
-- **Tabs follow you** — open tabs sync to your account, so another browser or device picks up right where you left off.
+- **Edit together** — changes and cursors appear live. Edits to different blocks can coexist; simultaneous typing in the same block uses the last content write accepted by the server.
+- **Tabs follow you** — open tabs and reading positions sync separately for each account and workspace. Chats in a shared workspace are visible to its members.
 - **Import** — Logseq PDF exports and Zotero libraries come in as pages with their annotations; Markdown folders and Notion exports come in as notes.
-- **Export** — download a zip of all your data (SQLite snapshots + every upload) from the account menu, and restore it on another instance.
+- **Export and back up** — export a workspace, or all your personal workspaces, from Settings → Workspaces. Restore or merge a workspace export there; keep server-side workspace snapshots in Settings → Backups. Account credentials and private AI keys are not included.
 
 ---
 
@@ -92,7 +94,9 @@ cp docker-compose.yml.example docker-compose.yml
 docker compose up -d
 ```
 
-Open <http://localhost:9001> and log in with the seeded `admin` password from `docker logs gamma` (printed once on first start). Everything — accounts, notes, and uploaded PDFs — lives under the container's `/data` volume, so your library survives upgrades. Back it up by copying that volume, with an admin's **Server backups** snapshot (Settings → Advanced: databases, or everything, downloadable as a zip), or per workspace with **Export** in Settings → Members & sharing; restore a workspace zip with **Import** in the same pane, a server snapshot with `manage.py backups --restore`. If you bind-mount `/data` to a host folder, set `PUID`/`PGID` to your user's ids (`id -u` / `id -g`) so the files belong to you instead of root.
+Open <http://localhost:9001> and log in with the seeded `admin` password from `docker logs gamma` (printed once on first start). Accounts, notes and uploaded PDFs live under the container's `/data` volume and survive upgrades.
+
+For one library, use **Export / Import** in Settings → Workspaces or keep snapshots in Settings → Backups. For the whole instance, administrators use **Server backups** in Settings → Server; restore these with the server stopped using `manage.py backups --restore`. See the [backup guide](./docs/dev/workspaces.md#export-and-backups) for the distinction. If you bind-mount `/data` to a host folder, set `PUID`/`PGID` to your user's ids (`id -u` / `id -g`) so the files belong to you instead of root.
 
 Users are managed in the app: sign in with an admin account → account menu → *Manage users…* (create/delete accounts, reset passwords, grant or revoke the admin privilege — admin is a flag, not a special name). The CLI equivalent still works:
 
@@ -187,8 +191,8 @@ A single service: a **FastAPI** backend that also serves the built **React** fro
 For source and asset locations, see the [repository map](./docs/dev/repository.md).
 
 - **Everything is a block.** Highlights and free notes are rows in one `unified_blocks` table (self-referential `parent_id`, fractional-index `position`). Root-level blocks are pages; a page with a PDF is a paper.
-- **Workspaces.** `users.db` holds accounts, tokens and memberships; every workspace (each account's personal one, plus shared ones you create and invite people to as owner / editor / viewer) has its own `pages.db` and `uploads/` folder under `GAMMA_DATA_DIR`. Switch workspaces from the account menu.
-- **View modes come from the URL** (no router lib): `/` home · `/?page=<id>` a page · `/?block=<id>` jump to a block · `/?share=<token>` a shared page.
+- **Workspaces.** `users.db` holds accounts, sessions, memberships and private preferences. Each personal or shared workspace has its own `pages.db`, `data.db` and `uploads/` under `GAMMA_DATA_DIR`. Accounts may have several personal libraries; administrators create shared ones. See the [workspace guide](./docs/dev/workspaces.md).
+- **View modes come from the URL** (no router lib): `/?ws=<id>` a workspace · `/?ws=<id>&page=<id>` a page · `/?ws=<id>&block=<id>` jump to a block · `/?share=<token>` a shared page.
 
 <details>
 <summary><b>Inspired by Logseq</b></summary>
@@ -199,7 +203,8 @@ Gamma borrows the ideas from Logseq that fit PDF annotation: everything is a blo
 
 ## Known limitations
 
-- Simultaneous editing merges per block: when two people type in the *same* block at the same moment, the last write to reach the server wins for that block (you can see who is where, so this is rare).
+- Simultaneous typing in the same block can overwrite another person's text. Presence helps coordinate, but there is no character-level merge.
+- Offline retries are held in memory. Closing the tab before a save succeeds can lose unsaved changes.
 - Paywalled papers can't be fetched server-side; Gamma substitutes an open-access copy when one exists, otherwise download in your browser and drop the file in.
 - `src/App.jsx` is still one large component; see the [decomposition plan](./docs/dev/frontend-refactor.md).
 

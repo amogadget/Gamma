@@ -688,7 +688,9 @@ function BlockRow({
   const rowPeers = peers?.length ? peers.filter((p) => p.block === block.id) : null;
   const peerEditing = rowPeers?.find((p) => p.anchor >= 0) || null;
   const remoteCursors = rowPeers?.length
-    ? rowPeers.filter((p) => p.anchor >= 0).map((p) => ({ anchor: p.anchor, head: p.head, color: p.color, name: p.name }))
+    ? rowPeers.filter((p) => p.anchor >= 0).map((p) => ({
+      client: p.client, rev: p.rev || 0, anchor: p.anchor, head: p.head, color: p.color, name: p.name,
+    }))
     : null;
   // The AI agent's live footprint on this row (App.handleAgentEvent): a
   // read/edit mark that lights the row up, and — while the agent is still

@@ -17,6 +17,11 @@ Adding a browser preference = one line in `useAppPrefs()` (with a codec if the
 value needs validation) plus a control in the matching settings pane. Don't
 scatter `usePersistedState` calls through App.jsx.
 
+The last open page and viewer layout use `sessionState.js`, separately from
+synced preferences. Its key is `gamma-session:<user>@<workspace>`. Reads wait
+for workspace selection; changing scope cancels pending saves. Old unscoped
+session caches are ignored because their account owner cannot be determined.
+
 ## The Settings dialog
 
 Thirteen panes in four rail groups (`NAV_GROUPS` in

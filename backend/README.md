@@ -22,7 +22,7 @@ data/                repo-root runtime data, outside backend source
 ```bash
 python -m venv venv && venv\Scripts\activate     # or: source venv/bin/activate
 pip install -r requirements.txt
-python manage.py setup                            # seed guest + per-user DBs (idempotent)
+python manage.py setup                            # seed guest + missing workspace files (idempotent)
 uvicorn app:app --host 127.0.0.1 --port 9001 --reload
 ```
 

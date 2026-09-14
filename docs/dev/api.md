@@ -9,9 +9,10 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   `request.state.user`). Identity-only endpoints use `require_user`.
 - Every data endpoint works in a **workspace** ([workspaces.md](workspaces.md)):
   `?ws=` or the `X-Gamma-Workspace` header names it, nothing means the
-  account's personal workspace. `require_ws(request)` admits any member,
+  account's default personal workspace. `require_ws(request)` admits any member
+  or signed-in non-guest account allowed by public workspace access,
   `require_ws(request, write=True)` editors and owners (a viewer gets 403);
-  a non-member gets 403. The returned workspace id is what the data helpers
+  a caller without effective access gets 403. The returned workspace id is what the data helpers
   take; `request.state.user` stays the actor.
 - Share tokens (`?share=<token>`) are the ONLY unauthenticated **read** path.
   `resolve_ws` returns the session's workspace, or the workspace of the page
@@ -100,6 +101,16 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 | PUT/DELETE | `/workspaces/{id}/members/{user}` | shared workspaces: invite or set a role `{role}`, incl. owner (owner) / remove (owner) or leave (yourself) |
 | GET | `/workspaces/find-page/{page_id}` | which of my workspaces holds the page (deep links without `ws`) |
 
+`PUT /workspaces/{id}` applies all supplied changes in one transaction.
+Authorization or validation failure leaves the name, kind, access, quota and
+account default unchanged. Creation limits count explicit memberships, not
+public workspaces the account can merely open.
+
+The generic preference endpoints scope `appearance` and `ai-provider` to the
+account without requiring workspace access. Other supported preference keys
+require access to the named workspace. `ai-settings` remains reserved and is
+never returned by the generic endpoint.
+
 ### Blocks (`blocks.py`) — the core data model
 | Method | Path | Purpose |
 |---|---|---|
@@ -119,9 +130,9 @@ the tree reflects (the live session catches up from it).
 ### Collaboration (`collab.py`) — see [collab.md](collab.md)
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/pages/{id}/ops` | apply a batch of block ops `{client, ops: [set / insert / move / delete]}` in one transaction → `{seq, at, ops (as applied — re-keyed positions carry their final value), removed_uploads}`; a workspace editor or an edit share (confined to the shared page; the page root's properties stay the workspace's); a bad op fails the whole batch (400/403/404/413) |
+| POST | `/pages/{id}/ops` | apply a batch of block ops `{client, ops: [set / insert / move / delete], cursor?: {block, anchor, head}}` (`cursor`: the writer's caret in the text after the batch, fanned out with it and stored as the writer's presence) in one transaction → `{seq, at, ops (as applied — re-keyed positions carry their final value), removed_uploads}`; a workspace editor or an edit share (confined to the shared page; the page root's properties stay the workspace's); a bad op fails the whole batch (400/403/404/413) |
 | GET | `/pages/{id}/ops?since=` | the op log after a seq → `{seq, batches: [{seq, actor, client, at, ops}]}`; 410 when pruned past `since` (reload the tree) |
-| WS | `/ws/page/{id}[?ws=&share=&client=]` | the page's live channel: `hello` / `join` / `leave` / `cursor` presence, every applied `ops` batch, `reload`; the client only ever sends `cursor`. Auth like HTTP (session cookie + `?ws=` (else the default workspace) or share token, resolved in the handler — the middleware doesn't run for websockets); viewers join too |
+| WS | `/ws/page/{id}[?ws=&share=&client=]` | the page's live channel: `hello` / `join` / `leave` / `cursor` presence, every applied `ops` batch (with the writer's `cursor` when the batch carried one), `reload`; the client only ever sends `cursor`. Auth like HTTP (session cookie + `?ws=` (else the default workspace) or share token, resolved in the handler — the middleware doesn't run for websockets); viewers join too |
 
 ### Pages (`pages.py`) — page first, PDF as an action on it
 | Method | Path | Purpose |
