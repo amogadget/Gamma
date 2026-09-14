@@ -2,8 +2,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  appendStroke, decodeStroke, encodeStroke, hitStrokes, inkBounds, newInk, pdfPositionOf,
-  removeStrokes, strokePath, strokeWidth,
+  appendStroke, boundsOf, decodeStroke, encodeStroke, eraseAt, hitStrokes, inkBounds, newInk, pdfPositionOf,
+  removeStrokes, strokePath, strokeWidth, strokesInLasso, translateStrokes,
 } from "../src/ink.js";
 
 const samples = (n = 5, x0 = 100, y0 = 200) =>
@@ -50,6 +50,44 @@ test("eraser hit test finds the stroke under the point and nothing else", () => 
   assert.deepEqual(hitStrokes(ink, 310, 303, 2), ["b"]);
   assert.deepEqual(hitStrokes(ink, 200, 250, 2), []);
   assert.deepEqual(hitStrokes(ink, 120, 230, 30), ["a"], "radius reaches the stroke");
+});
+
+test("translate moves only the named strokes, by editing two integers", () => {
+  let ink = newInk(1, 612, 792);
+  ink = appendStroke(ink, encodeStroke({ id: "a", samples: samples() }));
+  ink = appendStroke(ink, encodeStroke({ id: "b", samples: samples(3, 300, 300) }));
+  const moved = translateStrokes(ink, ["a"], 10.5, -20);
+  const a = decodeStroke(moved.strokes[0]), b = decodeStroke(moved.strokes[1]);
+  assert.deepEqual([a[0].x, a[0].y, a[4].x, a[4].y], [110.5, 180, 150.5, 192]);
+  assert.deepEqual([b[0].x, b[0].y], [300, 300]);
+  assert.equal(translateStrokes(ink, ["a"], 0.001, 0), ink, "a sub-unit move is a no-op");
+});
+
+test("partial eraser cuts a stroke into the pieces outside the eraser", () => {
+  let ink = newInk(1, 612, 792);
+  ink = appendStroke(ink, encodeStroke({ id: "a", samples: samples(9) }));   // x = 100 … 180
+  const { ink: cut, changed } = eraseAt(ink, 140, 212, 3);                   // hits the middle sample (140, 212)
+  assert.equal(changed, true);
+  assert.equal(cut.strokes.length, 2);
+  const [p, q] = cut.strokes.map(decodeStroke);
+  assert.deepEqual([p[0].x, p[p.length - 1].x], [100, 130]);
+  assert.deepEqual([q[0].x, q[q.length - 1].x], [150, 180]);
+  assert.ok(cut.strokes.every((s) => s.id !== "a" && s.tool === "pen" && s.size === 2), "pieces keep the look, get fresh ids");
+  assert.equal(eraseAt(ink, 400, 400, 3).changed, false, "a miss changes nothing");
+  // a piece of one sample is dropped
+  assert.equal(eraseAt(ink, 110, 203, 3).ink.strokes.length, 1);
+});
+
+test("lasso selects strokes with most samples inside the polygon", () => {
+  let ink = newInk(1, 612, 792);
+  ink = appendStroke(ink, encodeStroke({ id: "a", samples: samples() }));          // 100..140 × 200..212
+  ink = appendStroke(ink, encodeStroke({ id: "b", samples: samples(3, 300, 300) })); // 300..320 × 300..306
+  const box = [[90, 190], [150, 190], [150, 220], [90, 220]];
+  assert.deepEqual(strokesInLasso(ink, box), ["a"]);
+  assert.deepEqual(strokesInLasso(ink, [[0, 0], [400, 0], [400, 400], [0, 400]]), ["a", "b"]);
+  assert.deepEqual(strokesInLasso(ink, [[125, 190], [150, 190], [150, 220], [125, 220]]), [], "two of five samples inside");
+  const b = boundsOf(ink, ["b"]);
+  assert.ok(b[0] < 300 && b[2] > 320 && boundsOf(ink, ["zz"]) === null);
 });
 
 test("paths: pens are filled outlines, highlighters stroked polylines", () => {

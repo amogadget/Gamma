@@ -56,14 +56,62 @@ export async function inkScenarios({ server, browser, alice, makePdf, step, unti
     await page.click("button[aria-label='Handwriting tools']");
     await page.waitForSelector(".pdfInkBar");
     await page.keyboard.press("e");
-    await until(async () => (await page.$$(".pdfInkBar .modeActive")).length === 1
-      && (await page.getAttribute(".pdfInkBar .modeActive", "title")).startsWith("Eraser"), { what: "eraser armed by its key" });
+    await page.waitForSelector(".pdfInkBar button[title^='Eraser'].modeActive", { timeout: 5000 });
     box = await page.locator('[data-page="1"]').boundingBox();
     await drawLine(page, [box.x + 175, box.y + 140], [box.x + 178, box.y + 185]);
     await until(async () => (await page.$$('[data-page="1"] .inkLayer path')).length === 1, { what: "one path left" });
     await until(async () => (await inkBlockOnServer())?.properties.ink_strokes === 1, { what: "one stroke on the server" });
     await page.keyboard.press("Escape");
     await until(async () => !(await page.$(".pdfInkBar")), { what: "strip closed by Escape" });
+    assertNoProblems(page);
+  });
+
+  await step("ink: Ctrl+Z undoes the erasure and a stroke; Ctrl+Shift+Z redoes", async () => {
+    await page.click("button[aria-label='Handwriting tools']");
+    await page.waitForSelector(".pdfInkBar");
+    // The history is per visit: after the reload only the erasure is on it.
+    await page.keyboard.press("Control+z");
+    await until(async () => (await page.$$('[data-page="1"] .inkLayer path')).length === 2, { what: "erased stroke back" });
+    await page.keyboard.press("p");
+    box = await page.locator('[data-page="1"]').boundingBox();
+    await drawLine(page, [box.x + 100, box.y + 400], [box.x + 250, box.y + 420]);
+    await until(async () => (await page.$$('[data-page="1"] .inkLayer path')).length === 3, { what: "a third stroke" });
+    await page.keyboard.press("Control+z");
+    await until(async () => (await page.$$('[data-page="1"] .inkLayer path')).length === 2, { what: "third stroke undone" });
+    await page.keyboard.press("Control+Shift+z");
+    await until(async () => (await page.$$('[data-page="1"] .inkLayer path')).length === 3, { what: "redone" });
+    await page.keyboard.press("Control+z");
+    await until(async () => (await page.$$('[data-page="1"] .inkLayer path')).length === 2, { what: "undone again" });
+    await until(async () => (await inkBlockOnServer())?.properties.ink_strokes === 2, { what: "two strokes on the server" });
+    assert((await page.$$(".blockRow")).length >= 1, "the block is still there");
+    assertNoProblems(page);
+  });
+
+  await step("ink: the partial eraser cuts a stroke in two; the lasso selects and moves them", async () => {
+    await page.keyboard.press("e");
+    await page.click(".pdfInkBar button[aria-label='Erase partially']");
+    if (flags.keep) await page.screenshot({ path: `${server.dir}/ink-eraser.png` });
+    box = await page.locator('[data-page="1"]').boundingBox();
+    // straight down through the middle of the first stroke (y ≈ 160 at x = 175)
+    await drawLine(page, [box.x + 175, box.y + 140], [box.x + 175, box.y + 185]);
+    await until(async () => (await page.$$('[data-page="1"] .inkLayer path')).length === 3, { what: "three pieces" });
+    await until(async () => (await inkBlockOnServer())?.properties.ink_strokes === 3, { what: "three strokes on the server" });
+    // lasso around the whole second stroke (100..250 × 250..280)
+    await page.keyboard.press("l");
+    await page.mouse.move(box.x + 80, box.y + 235);
+    await page.mouse.down();
+    for (const [x, y] of [[270, 235], [270, 300], [80, 300], [80, 235]]) await page.mouse.move(box.x + x, box.y + y, { steps: 4 });
+    await page.mouse.up();
+    await page.waitForSelector('[data-page="1"] .inkSelRect', { timeout: 5000 });
+    const before = (await inkBlockOnServer()).properties.pdf_position.boundingRect;
+    await drawLine(page, [box.x + 170, box.y + 265], [box.x + 170, box.y + 365]);   // drag the box 100 px down
+    await until(async () => {
+      const b = await inkBlockOnServer();
+      return b && b.properties.pdf_position.boundingRect.y2 > before.y2 + 50 ? b : null;
+    }, { what: "the group's box moved down" });
+    await page.keyboard.press("Delete");
+    await until(async () => (await page.$$('[data-page="1"] .inkLayer path')).length === 2, { what: "selection deleted" });
+    await page.keyboard.press("Escape");
     assertNoProblems(page);
   });
 

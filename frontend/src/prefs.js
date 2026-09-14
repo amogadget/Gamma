@@ -223,6 +223,10 @@ export function useAppPrefs() {
   const [inkPenSize, setInkPenSize] = usePersistedState("gamma-ink-pen-size", 1, SIZE_INDEX_CODEC);
   const [inkHlColor, setInkHlColor] = usePersistedState("gamma-ink-hl-color", "rgba(255, 226, 143, 0.65)");
   const [inkHlSize, setInkHlSize] = usePersistedState("gamma-ink-hl-size", 1, SIZE_INDEX_CODEC);
+  // "stroke" erases whole strokes, "partial" cuts through them.
+  const [inkEraserMode, setInkEraserMode] = usePersistedState("gamma-ink-eraser", "stroke", {
+    parse: (raw) => (["stroke", "partial"].includes(raw) ? raw : undefined),
+  });
 
   // --- Chat behavior (Settings → Assistant) ---
   // Off by default: rectangle snapshots stay attached until removed or sent.
@@ -252,5 +256,6 @@ export function useAppPrefs() {
     chatImgAutoClear, setChatImgAutoClear,
     inkPenOnly, setInkPenOnly, inkAutoPen, setInkAutoPen, inkPressure, setInkPressure,
     inkPenColor, setInkPenColor, inkPenSize, setInkPenSize, inkHlColor, setInkHlColor, inkHlSize, setInkHlSize,
+    inkEraserMode, setInkEraserMode,
   };
 }

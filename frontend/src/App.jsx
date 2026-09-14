@@ -63,7 +63,7 @@ import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage, Workspac
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
 import { InkToolbar } from "./inkLayer";
-import { HIGHLIGHTER_SIZES, PEN_SIZES, appendStroke, newInk, removeStrokes } from "./ink";
+import { HIGHLIGHTER_SIZES, PEN_SIZES, appendStroke, eraseAt, newInk, removeStrokes, translateStrokes } from "./ink";
 import * as inkStore from "./inkStore";
 import { usePageCollab } from "./collab";
 import { applyOps, applyPatch, keepUiFlags } from "./blockOps";
@@ -2285,6 +2285,7 @@ export default function App() {
     snapVertical, setSnapVertical, embAnnots, setEmbAnnots,
     inkPenOnly, setInkPenOnly, inkAutoPen, setInkAutoPen, inkPressure, setInkPressure,
     inkPenColor, setInkPenColor, inkPenSize, setInkPenSize, inkHlColor, setInkHlColor, inkHlSize, setInkHlSize,
+    inkEraserMode, setInkEraserMode,
     translateEnabled, setTranslateEnabled,
     translateLang, setTranslateLang, translateModel, setTranslateModel,
     translateEffort, setTranslateEffort, translateParallel, setTranslateParallel,
@@ -3331,6 +3332,10 @@ export default function App() {
   const inkActiveRef = useRef(null);
   const inkTimerRef = useRef(0);
   const prevInkRef = useRef({ json: "", value: [] });
+  // Stroke-level history for the strip's Ctrl+Z (entries: [{id, page,
+  // before, after}] per action) and the lasso selection {page, items}.
+  const inkHistRef = useRef({ undo: [], redo: [] });
+  const [inkSelection, setInkSelection] = useState(null);
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
   const [focusedId, setFocusedId] = useState(null);
@@ -5246,7 +5251,7 @@ export default function App() {
   const inkTool = useMemo(() => {
     const t = inkUi.tool;
     if (!t || readOnly) return null;
-    if (t === "eraser") return { tool: "eraser" };
+    if (t === "eraser" || t === "select") return { tool: t };
     if (t === "highlighter") return { tool: "highlighter", color: inkHlColor, size: HIGHLIGHTER_SIZES[inkHlSize] ?? 12, opacity: 1 };
     return { tool: "pen", color: inkPenColor, size: PEN_SIZES[inkPenSize] ?? 2, opacity: 1 };
   }, [inkUi.tool, readOnly, inkHlColor, inkHlSize, inkPenColor, inkPenSize]);
@@ -5300,36 +5305,106 @@ export default function App() {
     // a fresh group.
     if (inkTimerRef.current) flushInk();
     inkActiveRef.current = null;
+    inkHistRef.current = { undo: [], redo: [] };
+    setInkSelection(null);
     setInkUi((s) => (s.tool ? { ...s, tool: null } : s));
   }, [focusedBlockId, flushInk]);
+
+  // The strokes a group has right now: its draft, else its loaded file.
+  function inkOf(blockId) {
+    const block = flattenBlocks(blocksRef.current).find((b) => b.id === blockId);
+    return inkStore.draft(blockId)?.ink || (block ? inkStore.inkFor(block) : null);
+  }
+  // Every ink edit goes through here: the drafts change, the action lands
+  // on the stroke history, the upload is scheduled. A group whose block is
+  // not in the tree (undone away, or erased empty and deleted) gets its
+  // block back first.
+  function applyInk(changes, { record = true } = {}) {
+    if (!changes.length) return;
+    const present = new Set(flattenBlocks(blocksRef.current).map((b) => b.id));
+    const missing = changes.filter((c) => c.after.strokes.length && !present.has(c.id));
+    if (missing.length) {
+      setBlocks((prev) => [...prev, ...missing.map((c) => ({
+        id: c.id, parentId: null, children: [], collapsed: false, editMode: false, content: "",
+        properties: { ink_url: "", pdf_page: c.page, ink_strokes: 0 },
+      }))]);
+    }
+    for (const c of changes) inkStore.setDraft(c.id, c.after, { pageId: focusedBlockId });
+    if (record) {
+      const h = inkHistRef.current;
+      h.undo.push(changes);
+      if (h.undo.length > 200) h.undo.shift();
+      h.redo = [];
+    }
+    scheduleInk();
+  }
+  function inkUndo(redo) {
+    const h = inkHistRef.current;
+    const entry = (redo ? h.redo : h.undo).pop();
+    if (!entry) return false;
+    // Entries are stored forward (before → after); undo applies them backward.
+    applyInk(redo ? entry : entry.map((c) => ({ ...c, before: c.after, after: c.before })), { record: false });
+    (redo ? h.undo : h.redo).push(entry);
+    setInkSelection(null);
+    return true;
+  }
 
   async function handleInkStroke(page, stroke, size) {
     if (readOnly || !focusedBlockId) return;
     let id = inkActiveRef.current?.page === page ? inkActiveRef.current.id : null;
     const existing = id ? flattenBlocks(blocksRef.current).find((b) => b.id === id && b.properties?.ink_url !== undefined) : null;
-    if (!existing) {
-      id = makeId();
-      const block = { id, parentId: null, children: [], collapsed: false, editMode: false, content: "",
-        properties: { ink_url: "", pdf_page: page, ink_strokes: 0 } };
-      setBlocks((prev) => [...prev, block]);
-      inkStore.setDraft(id, newInk(page, size.width, size.height), { pageId: focusedBlockId });
-    }
+    if (!existing) id = makeId();
     inkActiveRef.current = { page, id };
     // The group's strokes so far: the draft, else its file (loaded first —
     // a stroke must never replace strokes that just have not arrived yet).
     const loaded = !inkStore.draft(id) && existing?.properties.ink_url
       ? await inkStore.loadInk(existing.properties.ink_url) : null;
-    const cur = inkStore.draft(id)?.ink || loaded || newInk(page, size.width, size.height);
-    inkStore.setDraft(id, appendStroke(cur, stroke), { pageId: focusedBlockId });
-    scheduleInk();
+    const before = inkStore.draft(id)?.ink || loaded || newInk(page, size.width, size.height);
+    applyInk([{ id, page, before, after: appendStroke(before, stroke) }]);
   }
   function handleInkErase(page, blockId, ids) {
     if (readOnly) return;
-    const block = flattenBlocks(blocksRef.current).find((b) => b.id === blockId);
-    const cur = inkStore.draft(blockId)?.ink || (block && inkStore.inkFor(block));
-    if (!cur) return;
-    inkStore.setDraft(blockId, removeStrokes(cur, ids), { pageId: focusedBlockId });
-    scheduleInk();
+    const before = inkOf(blockId);
+    if (!before) return;
+    applyInk([{ id: blockId, page, before, after: removeStrokes(before, ids) }]);
+  }
+  // The partial eraser fires per pointer move: successive cuts through one
+  // group fold into the same history entry, so Ctrl+Z undoes the pass.
+  function handleInkErasePartial(page, blockId, x, y, r) {
+    if (readOnly) return;
+    const before = inkOf(blockId);
+    if (!before) return;
+    const { ink: after, changed } = eraseAt(before, x, y, r);
+    if (!changed) return;
+    const h = inkHistRef.current;
+    const last = h.undo[h.undo.length - 1];
+    const fold = last && last.length === 1 && last[0].id === blockId && last[0].after === before && last[0].pass;
+    applyInk([{ id: blockId, page, before: fold ? last[0].before : before, after, pass: true }], { record: !fold });
+    if (fold) last[0].after = after;
+  }
+  function handleInkSelect(page, items) {
+    setInkSelection(items.length ? { page, items } : null);
+  }
+  function handleInkMoveSelection(page, dx, dy) {
+    if (readOnly || !inkSelection) return;
+    const changes = [];
+    for (const item of inkSelection.items) {
+      const before = inkOf(item.id);
+      if (!before) continue;
+      changes.push({ id: item.id, page, before, after: translateStrokes(before, item.ids, dx, dy) });
+    }
+    applyInk(changes);
+  }
+  function deleteInkSelection() {
+    if (readOnly || !inkSelection) return;
+    const changes = [];
+    for (const item of inkSelection.items) {
+      const before = inkOf(item.id);
+      if (!before) continue;
+      changes.push({ id: item.id, page: inkSelection.page, before, after: removeStrokes(before, item.ids) });
+    }
+    applyInk(changes);
+    setInkSelection(null);
   }
   // From the notes (marker / card): show the group on the page. From the
   // page (a click on ink): show its block in the notes.
@@ -5346,21 +5421,45 @@ export default function App() {
     pendingBlockScrollRef.current = id;
     setBlocks((prev) => expandToBlock(prev, id));
   }
-  // The strip's keys while it is open: P / H / E pick a tool, Esc closes.
+  // The strip's keys while it is open: P / H / E / L pick a tool, Esc
+  // drops the selection then closes, Delete removes the selection, and
+  // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y step the STROKE history — registered in
+  // the capture phase so the page's block undo (a bubble listener on the
+  // window) never sees them. A focused text field keeps its own keys.
+  const inkKeysRef = useRef(null);
+  inkKeysRef.current = { inkUndo, deleteInkSelection, hasSelection: !!inkSelection };
   useEffect(() => {
     if (!inkUi.open) return;
     const onKey = (e) => {
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (e.key === "Escape") { setInkUi({ open: false, tool: null }); return; }
+      const K = inkKeysRef.current;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && ["z", "y"].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+        e.stopPropagation();
+        K.inkUndo(e.key.toLowerCase() === "y" || e.shiftKey);
+        return;
+      }
+      if (e.key === "Escape") {
+        if (K.hasSelection) setInkSelection(null);
+        else setInkUi({ open: false, tool: null });
+        return;
+      }
+      if ((e.key === "Delete" || e.key === "Backspace") && K.hasSelection) {
+        e.preventDefault();
+        K.deleteInkSelection();
+        return;
+      }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      const tool = k === "p" ? "pen" : k === "h" ? "highlighter" : k === "e" ? "eraser" : null;
+      const tool = k === "p" ? "pen" : k === "h" ? "highlighter" : k === "e" ? "eraser" : k === "l" ? "select" : null;
       if (tool) setInkUi((s) => ({ ...s, tool }));
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [inkUi.open]);
+  // A selection belongs to the lasso tool: switching away drops it.
+  useEffect(() => { if (inkUi.tool !== "select") setInkSelection(null); }, [inkUi.tool]);
 
   useEffect(() => { attachModeBlockIdRef.current = attachModeBlockId; }, [attachModeBlockId]);
 
@@ -8262,7 +8361,7 @@ export default function App() {
           ) : null}
           {pdfUrl && !pdfHidden && inkUi.open && !readOnly ? (
             <InkToolbar
-              state={{ tool: inkUi.tool, penColor: inkPenColor, penSize: inkPenSize, hlColor: inkHlColor, hlSize: inkHlSize }}
+              state={{ tool: inkUi.tool, penColor: inkPenColor, penSize: inkPenSize, hlColor: inkHlColor, hlSize: inkHlSize, eraserMode: inkEraserMode }}
               highlightColors={COLORS}
               onChange={(patch) => {
                 if ("tool" in patch) setInkUi((s) => ({ ...s, tool: patch.tool }));
@@ -8270,6 +8369,7 @@ export default function App() {
                 if ("penSize" in patch) setInkPenSize(patch.penSize);
                 if ("hlColor" in patch) setInkHlColor(patch.hlColor);
                 if ("hlSize" in patch) setInkHlSize(patch.hlSize);
+                if ("eraserMode" in patch) setInkEraserMode(patch.eraserMode);
               }}
               onNewGroup={() => { inkActiveRef.current = null; setStatus("Next strokes start a new handwriting note."); }}
               onClose={() => setInkUi({ open: false, tool: null })}
@@ -8310,6 +8410,11 @@ export default function App() {
               inkFlash={inkFlash}
               onInkStroke={readOnly ? undefined : handleInkStroke}
               onInkErase={readOnly ? undefined : handleInkErase}
+              onInkErasePartial={readOnly ? undefined : handleInkErasePartial}
+              inkEraserMode={inkEraserMode}
+              inkSelection={inkSelection}
+              onInkSelect={readOnly ? undefined : handleInkSelect}
+              onInkMoveSelection={readOnly ? undefined : handleInkMoveSelection}
               onInkJump={showInkInNotes}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}

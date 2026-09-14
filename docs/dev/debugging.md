@@ -125,7 +125,9 @@ The scenarios live in `tests/e2e/scenarios/`:
   the find bar hitting page 2, the library card.
 - `ink.mjs`: handwriting — the tool strip, two mouse strokes becoming an
   ink block with an `.ink` upload, persistence across a reload, the eraser
-  (by its key), the notes card's jump + outline, `/Ink` in the exported PDF.
+  (by its key), stroke undo/redo, the partial eraser cutting a stroke, a
+  lasso move + delete, the notes card's jump + outline, `/Ink` in the
+  exported PDF.
 - `files.mjs`: files dropped on a block row / the page body become file
   chips (a `dropFiles` helper builds a real DataTransfer; the paste step
   builds a `ClipboardEvent` in the page, since Playwright's `dispatchEvent`

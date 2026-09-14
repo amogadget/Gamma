@@ -11,9 +11,16 @@ reasons behind the shape are in
 ## What the user sees
 
 - The pen button in the viewer's zoom column opens the **tool strip** at
-  the top of the page: pen / highlighter / eraser, colours, S/M/L, *New
-  group* (+), close. Keys while it is open: `P` `H` `E`, `Esc`. Opening it
-  arms the pen.
+  the top of the page: pen / highlighter / eraser / lasso, colours, S/M/L,
+  *New group* (+), close. Keys while it is open: `P` `H` `E` `L`, `Esc`,
+  `Delete` (the lasso selection), and **`Ctrl+Z` / `Ctrl+Shift+Z` step the
+  strokes** (each stroke, erasure, move or delete is one entry; the history
+  is per visit of the page). Opening the strip arms the pen.
+- The **eraser** has two modes on the strip (two icons next to it): *whole
+  strokes* removes anything it touches, *partial* cuts through them (the pieces on either side become their own
+  strokes; one pass is one undo entry). The **lasso** circles strokes (more
+  than half their samples inside); the dashed box then moves by dragging
+  and deletes with `Delete`. Both work across groups on the page.
 - **A stylus draws right away** even with the strip closed (Settings →
   Editor → PDF viewer → Handwriting; on by default). **Fingers never draw**
   when *Fingers never draw* is on (default on touch screens): they keep
@@ -24,7 +31,7 @@ reasons behind the shape are in
   text as its caption (children allowed). The marker or the card scrolls
   the PDF to the group and outlines it briefly; clicking ink on the page
   scrolls the notes to its block.
-- The eraser removes whole strokes; a group erased empty deletes its block.
+- A group erased empty deletes its block (and comes back on undo).
 - Read-only views (workspace viewers, view shares) show ink without tools;
   edit shares draw.
 
@@ -84,8 +91,11 @@ sample bytes.
 
 ## Client
 
-- `ink.js` (pure): codec, bounds, `pdfPositionOf`, the eraser hit test,
-  and rendering — a pen stroke is perfect-freehand's outline as one filled
+- `ink.js` (pure): codec, bounds, `pdfPositionOf`, the stroke edits
+  (`hitStrokes` / `eraseAt` — the partial eraser re-encodes the surviving
+  runs as new strokes — `translateStrokes`, which only touches the first
+  sample's two absolute integers, `strokesInLasso`, `boundsOf`), and
+  rendering — a pen stroke is perfect-freehand's outline as one filled
   SVG path (page units; the layer's `viewBox` does the zoom), a highlighter
   a stroked polyline with `mix-blend-mode: multiply`. Paths and decoded
   samples are cached per stroke object.
@@ -101,11 +111,18 @@ sample bytes.
   selection and the area drag never see it; other pointers pass through
   untouched. `getCoalescedEvents()` where available (Safari has none but
   delivers 120/240 Hz moves). Pointer-up encodes the stroke and swallows
-  the click it would deliver to whatever lies beneath. `InkCard` is the
-  picture in the notes; `InkToolbar` the strip.
-- `App.jsx` owns the tool state (`inkUi`, the S/M/L + colour prefs), the
-  group the next stroke joins (`inkActiveRef`), and the commits: a stroke
-  or erasure updates the draft and schedules `flushInk` (700 ms after the
+  the click it would deliver to whatever lies beneath. The lasso tool
+  draws its polygon on the same canvas; a drag inside the selection box
+  moves the selected strokes (previewed as a translated copy, committed on
+  pointer-up). `InkCard` is the picture in the notes; `InkToolbar` the
+  strip.
+- `App.jsx` owns the tool state (`inkUi`, the S/M/L + colour + eraser-mode
+  prefs), the group the next stroke joins (`inkActiveRef`), the lasso
+  selection (`inkSelection`) and the **stroke history** (`inkHistRef`:
+  entries of `[{id, page, before, after}]`, one per action; a group whose
+  block is gone is re-inserted when an entry brings strokes back). Every
+  edit funnels through `applyInk`, which updates the drafts, records the
+  entry and schedules `flushInk` (700 ms after the
   last one, and on `pagehide` / `visibilitychange` / leaving the page).
   The flush uploads the draft (`POST /api/upload-ink`) and PATCHes the
   block through `PUT /api/blocks/{id}` — a server-side writer, so the
@@ -113,8 +130,10 @@ sample bytes.
   op; only the group's block itself (first stroke) is inserted through the
   tree. An empty group is deleted the same way. A 404 (the insert still
   queued) retries after two seconds.
-- Undo (Ctrl+Z) covers the block's insertion, not individual strokes; the
-  eraser is the way back. Two clients drawing into one group resolve by
+- With the strip open, Ctrl+Z is the stroke history (a capture-phase key
+  handler, so the page's block undo never sees it); with it closed, Ctrl+Z
+  is the page's block history, which knows the group's block but not its
+  strokes. Two clients drawing into one group resolve by
   server order on `ink_url` (property-level last writer wins, as every
   property); each keeps a fresh group after *New group*.
 
@@ -145,8 +164,7 @@ sample bytes.
 
 ## Not built yet
 
-Point-level eraser (splitting strokes), lasso select/move, shape tools, a
-`canvas` space for ink blocks on pages without a PDF, Xournal++ `.xopp`
+Shape tools, resizing or rotating a lasso selection, a `canvas` space for ink blocks on pages without a PDF, Xournal++ `.xopp`
 import, *Transcribe with AI*, live co-drawing over presence, audio replay
 (the per-sample `t` and stroke ids are stored for it). Obsidian vault
 export writes an ink block's caption only.

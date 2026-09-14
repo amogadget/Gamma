@@ -271,6 +271,16 @@ export const HighlightIcon = (p) => (
   <Icon {...p}><path d="m9 11-4 4v3h3l4-4" /><path d="m13 7 4 4" /><path d="M15 3.5 20.5 9 13 16.5 7.5 11z" /><path d="M4 21h16" /></Icon>
 );
 
+export const LassoIcon = (p) => (
+  <Icon {...p}><path d="M7 22a5 5 0 0 1-2-4" /><path d="M7 16.93c.96.43 1.96.74 2.99.91" /><path d="M3.34 14A6.8 6.8 0 0 1 2 10c0-4.42 4.48-8 10-8s10 3.58 10 8a7.19 7.19 0 0 1-.33 2" /><path d="M5 18a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" /><path d="M14.33 22h-.09a.35.35 0 0 1-.24-.32v-10a.34.34 0 0 1 .33-.34c.08 0 .15.03.21.08l7.34 6a.33.33 0 0 1-.21.59h-4.49l-2.57 3.85a.35.35 0 0 1-.28.14z" /></Icon>
+);
+// Eraser modes: a whole squiggle struck out; a line with a piece rubbed out.
+export const EraseStrokeIcon = (p) => (
+  <Icon {...p}><path d="M3 15c3-6 5-6 8 0s5 6 8 0" /><path d="m5 5 14 14" /></Icon>
+);
+export const ErasePartialIcon = (p) => (
+  <Icon {...p}><path d="M3 12h5" /><path d="M16 12h5" /><rect x="9.5" y="8.5" width="5" height="7" rx="1" /></Icon>
+);
 export const EraserIcon = (p) => (
   <Icon {...p}><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" /><path d="M22 21H7" /><path d="m5 11 9 9" /></Icon>
 );

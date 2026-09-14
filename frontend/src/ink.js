@@ -163,6 +163,91 @@ export function removeStrokes(ink, ids) {
   return { ...ink, strokes: (ink.strokes || []).filter((s) => !drop.has(s.id)) };
 }
 
+// Move strokes by (dx, dy) points. Only the first sample is absolute in
+// the delta encoding, so a translation touches two integers per stroke.
+export function translateStrokes(ink, ids, dx, dy) {
+  const move = new Set(ids);
+  const ex = Math.round(dx * COORD_UNIT), ey = Math.round(dy * COORD_UNIT);
+  if (!ex && !ey) return ink;
+  return { ...ink, strokes: (ink.strokes || []).map((s) => {
+    if (!move.has(s.id) || s.pts.length < 2) return s;
+    const pts = s.pts.slice();
+    pts[0] += ex;
+    pts[1] += ey;
+    return { ...s, pts };
+  }) };
+}
+
+// A stroke's samples → a stroke of the same look (fresh id).
+function restroke(stroke, samples) {
+  return encodeStroke({ tool: stroke.tool, color: stroke.color, size: stroke.size, opacity: stroke.opacity,
+    pen: stroke.pen !== false, t0: stroke.t0 ?? null, samples, ch: stroke.ch });
+}
+
+// Partial eraser: cut every sample within `radius` (plus half the width)
+// of (x, y) out of the strokes it touches; each remaining run of at least
+// two samples becomes its own stroke. → {ink, changed}.
+export function eraseAt(ink, x, y, radius) {
+  let changed = false;
+  const strokes = [];
+  for (const s of ink?.strokes || []) {
+    const b = strokeBounds(s);
+    if (!b || x < b[0] - radius || x > b[2] + radius || y < b[1] - radius || y > b[3] + radius) { strokes.push(s); continue; }
+    const pts = decodeStroke(s);
+    const keep = pts.map((q) => {
+      const tol = radius + strokeWidth(s, q.p) / 2;
+      return (q.x - x) ** 2 + (q.y - y) ** 2 > tol * tol;
+    });
+    if (keep.every(Boolean)) { strokes.push(s); continue; }
+    changed = true;
+    let run = [];
+    const flush = () => { if (run.length >= 2) strokes.push(restroke(s, run)); run = []; };
+    pts.forEach((q, i) => { if (keep[i]) run.push(q); else flush(); });
+    flush();
+  }
+  return { ink: changed ? { ...ink, strokes } : ink, changed };
+}
+
+function pointInPolygon(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+// Lasso: ids of the strokes with more than half their samples inside the
+// polygon ([[x, y], …] in page units).
+export function strokesInLasso(ink, polygon) {
+  if (!polygon || polygon.length < 3) return [];
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [px, py] of polygon) { x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py); }
+  const out = [];
+  for (const s of ink?.strokes || []) {
+    const b = strokeBounds(s);
+    if (!b || b[2] < x0 || b[0] > x1 || b[3] < y0 || b[1] > y1) continue;
+    const pts = decodeStroke(s);
+    let inside = 0;
+    for (const q of pts) if (pointInPolygon(q.x, q.y, polygon)) inside++;
+    if (inside * 2 > pts.length) out.push(s.id);
+  }
+  return out;
+}
+
+// [x0, y0, x1, y1] around the named strokes, or null.
+export function boundsOf(ink, ids) {
+  const want = new Set(ids);
+  let out = null;
+  for (const s of ink?.strokes || []) {
+    if (!want.has(s.id)) continue;
+    const b = strokeBounds(s);
+    if (!b) continue;
+    out = out ? [Math.min(out[0], b[0]), Math.min(out[1], b[1]), Math.max(out[2], b[2]), Math.max(out[3], b[3])] : [...b];
+  }
+  return out;
+}
+
 // --- rendering -------------------------------------------------------------
 
 const avg = (a, b) => (a + b) / 2;

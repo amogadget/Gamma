@@ -245,7 +245,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
 // inkPenTool what a stylus draws with when nothing is armed, inkFlash
 // {id, nonce} outlines a group after a jump; strokes and erasures report
 // back through onInkStroke / onInkErase, a click on ink through onInkJump.
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkFlash = null, onInkStroke, onInkErase, onInkJump }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -268,7 +268,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // parent state change recreates the handler closures. The wrappers always
   // dispatch to the latest handlers via the ref.
   const cbRef = useRef({});
-  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLinkContext, onLoadState, onZoomTo, onAreaSelection, onTranslate, onTranslateState, onInkStroke, onInkErase, onInkJump };
+  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLinkContext, onLoadState, onZoomTo, onAreaSelection, onTranslate, onTranslateState, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump };
   const stableCbs = useMemo(() => ({
     onJump: (...a) => cbRef.current.onJump?.(...a),
     onHighlightJump: (...a) => cbRef.current.onHighlightJump?.(...a),
@@ -278,6 +278,9 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     onLinkContext: (...a) => cbRef.current.onLinkContext?.(...a),
     onInkStroke: (...a) => cbRef.current.onInkStroke?.(...a),
     onInkErase: (...a) => cbRef.current.onInkErase?.(...a),
+    onInkErasePartial: (...a) => cbRef.current.onInkErasePartial?.(...a),
+    onInkSelect: (...a) => cbRef.current.onInkSelect?.(...a),
+    onInkMoveSelection: (...a) => cbRef.current.onInkMoveSelection?.(...a),
     onInkJump: (...a) => cbRef.current.onInkJump?.(...a),
   }), []);
 
@@ -1454,7 +1457,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
       ) : null}
       {/* overflow-anchor off: the browser's own scroll anchoring would fight
           the zoom re-placement above with adjustments of its own. */}
-      <div ref={viewerRef} className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "") + (darkPage ? " pdfDark" : "") + (transPeek ? " transPeek" : "") + (inkTool ? " inkArmed" : "") + (inkTool && !inkPenOnly ? " inkTouchDraw" : "")}
+      <div ref={viewerRef} className={"pdfViewer" + (areaCursor || areaMode ? " areaCursor" : "") + (areaMode ? " areaMode" : "") + (darkPage ? " pdfDark" : "") + (transPeek ? " transPeek" : "") + (inkTool ? " inkArmed" : "") + (inkTool && !inkPenOnly ? " inkTouchDraw" : "") + (inkTool?.tool === "select" ? " inkSelect" : "")}
         style={{ height: "100%", overflowY: "auto", overflowX: "auto", overflowAnchor: "none" }}
         onScroll={(e) => {
           lastScrollRef.current = e.currentTarget.scrollTop;
@@ -1488,9 +1491,14 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           inkPenTool={inkPenTool}
           inkPenOnly={inkPenOnly}
           inkPressure={inkPressure}
+          inkEraserMode={inkEraserMode}
+          inkSelection={inkSelection && inkSelection.page === i + 1 ? inkSelection : null}
           inkFlash={inkFlash && inkByPage.get(i + 1)?.some((b) => b.id === inkFlash.id) ? inkFlash : null}
           onInkStroke={onInkStroke ? stableCbs.onInkStroke : undefined}
           onInkErase={onInkErase ? stableCbs.onInkErase : undefined}
+          onInkErasePartial={onInkErasePartial ? stableCbs.onInkErasePartial : undefined}
+          onInkSelect={onInkSelect ? stableCbs.onInkSelect : undefined}
+          onInkMoveSelection={onInkMoveSelection ? stableCbs.onInkMoveSelection : undefined}
           onInkJump={onInkJump ? stableCbs.onInkJump : undefined}
         />
       ))}
@@ -1675,7 +1683,7 @@ function TransPending({ lines, busy }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkFlash, onInkStroke, onInkErase, onInkJump }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1956,8 +1964,9 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         <InkLayer pageNumber={pageNumber} wrapRef={wrapRef}
           width={pageSize?.width} height={pageSize?.height}
           blocks={inkBlocks} tool={onInkStroke ? inkTool : null} penTool={onInkStroke ? inkPenTool : null}
-          penOnly={inkPenOnly} pressure={inkPressure} flash={inkFlash}
-          onStroke={onInkStroke} onErase={onInkErase} onJump={onInkJump} />
+          penOnly={inkPenOnly} pressure={inkPressure} eraserMode={inkEraserMode} selection={inkSelection} flash={inkFlash}
+          onStroke={onInkStroke} onErase={onInkErase} onErasePartial={onInkErasePartial}
+          onSelect={onInkSelect} onMoveSelection={onInkMoveSelection} onJump={onInkJump} />
       ) : null}
       {links.map((l, i) => (
         <div

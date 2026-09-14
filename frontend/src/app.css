@@ -4621,3 +4621,13 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   cursor: pointer;
 }
 .blockInkPending { min-height: 28px; width: 100%; opacity: 0.5; }
+/* The lasso selection: a dashed box the pointer drags to move. */
+.inkSelRect {
+  fill: rgba(80, 140, 255, 0.06);
+  stroke: rgba(80, 140, 255, 0.95);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.pdfViewer.inkSelect .pdfPageWrap { cursor: default; }
