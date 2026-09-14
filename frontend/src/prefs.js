@@ -59,6 +59,15 @@ const AGENT_PERMS_CODEC = {
   serialize: JSON.stringify,
 };
 
+// Handwriting size choice: an S/M/L index.
+const SIZE_INDEX_CODEC = {
+  parse: (raw) => {
+    const value = Number.parseInt(raw, 10);
+    return value >= 0 && value <= 2 ? value : undefined;
+  },
+  serialize: String,
+};
+
 export const THEMES = ["system", "light", "dark", "sepia", "gray"];
 
 // Control size (Settings → General): a CSS `zoom` on every button and toggle
@@ -200,6 +209,21 @@ export function useAppPrefs() {
   // A chat can still turn tools off for itself from its header.
   const [agentEnabled, setAgentEnabled] = usePersistedFlag("gamma-ai-agent-enabled", true);
 
+  // --- Handwriting (Settings → Editor → PDF viewer; docs/dev/handwriting.md) ---
+  // Device-specific, so none of these sync. inkPenOnly: fingers never draw
+  // (they scroll and pinch) — default on where the primary pointer is coarse
+  // (tablets). inkAutoPen: a stylus draws with the pen even when no tool is
+  // armed. inkPressure: use the stylus pressure for stroke width.
+  const coarse = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+  const [inkPenOnly, setInkPenOnly] = usePersistedFlag("gamma-ink-pen-only", coarse);
+  const [inkAutoPen, setInkAutoPen] = usePersistedFlag("gamma-ink-auto-pen", true);
+  const [inkPressure, setInkPressure] = usePersistedFlag("gamma-ink-pressure", true);
+  // The tool strip's last choices (colours are CSS strings, sizes S/M/L = 0..2).
+  const [inkPenColor, setInkPenColor] = usePersistedState("gamma-ink-pen-color", "#1f1f1f");
+  const [inkPenSize, setInkPenSize] = usePersistedState("gamma-ink-pen-size", 1, SIZE_INDEX_CODEC);
+  const [inkHlColor, setInkHlColor] = usePersistedState("gamma-ink-hl-color", "rgba(255, 226, 143, 0.65)");
+  const [inkHlSize, setInkHlSize] = usePersistedState("gamma-ink-hl-size", 1, SIZE_INDEX_CODEC);
+
   // --- Chat behavior (Settings → Assistant) ---
   // Off by default: rectangle snapshots stay attached until removed or sent.
   // On, a plain click elsewhere in the PDF drops them — the same gesture that
@@ -226,5 +250,7 @@ export function useAppPrefs() {
     toolRounds, setToolRounds, agentReadChars, setAgentReadChars, agentPerms, setAgentPerms,
     agentEnabled, setAgentEnabled,
     chatImgAutoClear, setChatImgAutoClear,
+    inkPenOnly, setInkPenOnly, inkAutoPen, setInkAutoPen, inkPressure, setInkPressure,
+    inkPenColor, setInkPenColor, inkPenSize, setInkPenSize, inkHlColor, setInkHlColor, inkHlSize, setInkHlSize,
   };
 }

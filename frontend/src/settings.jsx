@@ -152,6 +152,32 @@ function ViewerSettings({ value }) {
             options={[["hide", "Keep PDF unchanged"], ["strip", "Remove originals after import"]]} />
         </Row>
       </Section>
+      <Section title="Handwriting">
+        <Toggle
+          icon={PenIcon}
+          label="Stylus draws right away"
+          hint="A pen writes without opening the tools first"
+          title="With a stylus (Apple Pencil, Surface Pen, Wacom…), touching the page draws with the pen tool even when the handwriting tools are closed. Fingers and the mouse still select text. Turn off if your stylus keeps leaving marks while you navigate."
+          checked={value.inkAutoPen}
+          onChange={value.setInkAutoPen}
+        />
+        <Toggle
+          icon={HighlightIcon}
+          label="Fingers never draw"
+          hint="Touch scrolls and zooms; only a stylus or mouse draws"
+          title="With the handwriting tools open, a finger on the page keeps scrolling and pinch-zooming instead of drawing. Turn off on a device without a stylus to draw with a finger. Defaults on for touch screens."
+          checked={value.inkPenOnly}
+          onChange={value.setInkPenOnly}
+        />
+        <Toggle
+          icon={ActivityIcon}
+          label="Pressure-sensitive strokes"
+          hint="Pen strokes thicken with pressure"
+          title="Use the stylus pressure for stroke width, like ink on paper. Off gives even strokes. Mouse and finger strokes are always even."
+          checked={value.inkPressure}
+          onChange={value.setInkPressure}
+        />
+      </Section>
       <Section title="Translation">
         <Toggle
           icon={LanguagesIcon}

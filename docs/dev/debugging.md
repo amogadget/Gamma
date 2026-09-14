@@ -123,6 +123,9 @@ The scenarios live in `tests/e2e/scenarios/`:
 - `pdf.mjs`: upload + page by attachment, the viewer's text layer, a
   highlight from a text selection (overlay, quote row, persisted position),
   the find bar hitting page 2, the library card.
+- `ink.mjs`: handwriting — the tool strip, two mouse strokes becoming an
+  ink block with an `.ink` upload, persistence across a reload, the eraser
+  (by its key), the notes card's jump + outline, `/Ink` in the exported PDF.
 - `files.mjs`: files dropped on a block row / the page body become file
   chips (a `dropFiles` helper builds a real DataTransfer; the paste step
   builds a `ClipboardEvent` in the page, since Playwright's `dispatchEvent`

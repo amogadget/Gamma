@@ -17,6 +17,10 @@ fileChip.jsx        the file chip a `[name](/api/uploads/…)` link renders as; 
                     menu: download, and for a PDF "Open page" / "Add to library" (FileChipContext)
 logseqPdfModel.js   pure tree ops (insert/indent/outdent/flatten/cycle-check)
 pdfViewer.jsx       custom pdf.js viewer — pages, highlights, links, text search; exports COLORS
+ink.js              handwriting: the gamma-ink stroke codec, bounds, eraser hit test,
+                    perfect-freehand outlines (pure; mirror of backend gamma/ink.py)
+inkStore.js         ink files by URL + per-block drafts ahead of upload (plain module state)
+inkLayer.jsx        InkLayer (a page's strokes + pointer capture), InkCard (notes), InkToolbar
 search.jsx          workspace search (Ctrl+F): SearchPanel popover, result groups
 textnorm.js         search normalization + fuzzy regex (mirror of backend
                     gamma/textnorm.py; tests/shared/textnorm.json pins both)

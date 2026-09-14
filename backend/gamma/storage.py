@@ -25,6 +25,7 @@ FILE_MEDIA_TYPES = {
     ".txt": "text/plain; charset=utf-8",
     ".csv": "text/csv; charset=utf-8",
     ".json": "application/json",
+    ".ink": "application/json",   # handwriting groups (gamma/ink.py)
     ".yaml": "application/yaml",
     ".yml": "application/yaml",
     ".toml": "application/toml",

@@ -271,6 +271,10 @@ export const HighlightIcon = (p) => (
   <Icon {...p}><path d="m9 11-4 4v3h3l4-4" /><path d="m13 7 4 4" /><path d="M15 3.5 20.5 9 13 16.5 7.5 11z" /><path d="M4 21h16" /></Icon>
 );
 
+export const EraserIcon = (p) => (
+  <Icon {...p}><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" /><path d="M22 21H7" /><path d="m5 11 9 9" /></Icon>
+);
+
 // PDF viewer chrome.
 export const ZoomOutIcon = (p) => (
   <Icon {...p}><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /><path d="M8 11h6" /></Icon>

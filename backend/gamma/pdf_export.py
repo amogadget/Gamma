@@ -56,27 +56,39 @@ def parse_css_color(value):
     return DEFAULT_COLOR
 
 
-def _viewer_rect_to_pdf(rect, rotation, crop):
-    """One stored viewer rect → (x1, y1, x2, y2) in PDF user space (bottom-left
-    origin). ``crop`` is (cx0, cy0, cx1, cy1); ``rotation`` a multiple of 90."""
+def viewer_point_to_pdf(u, v, rotation, crop):
+    """A display-space point, normalized (``u`` right, ``v`` down from the
+    top of the page as shown) → PDF user space (bottom-left origin).
+    ``crop`` is (cx0, cy0, cx1, cy1); ``rotation`` a multiple of 90."""
     cx0, cy0, cx1, cy1 = crop
     cw, ch = cx1 - cx0, cy1 - cy0
+    if rotation == 90:
+        return cx0 + v * cw, cy0 + u * ch
+    if rotation == 180:
+        return cx1 - u * cw, cy0 + v * ch
+    if rotation == 270:
+        return cx1 - v * cw, cy1 - u * ch
+    return cx0 + u * cw, cy1 - v * ch
+
+
+def _viewer_rect_to_pdf(rect, rotation, crop):
+    """One stored viewer rect → (x1, y1, x2, y2) in PDF user space."""
     w = float(rect.get("width") or 0) or 1.0
     h = float(rect.get("height") or 0) or 1.0
-    pts = []
-    for vx, vy in ((rect["x1"], rect["y1"]), (rect["x2"], rect["y2"])):
-        u, v = float(vx) / w, float(vy) / h  # normalized, v measured from the top
-        if rotation == 90:
-            px, py = cx0 + v * cw, cy0 + u * ch
-        elif rotation == 180:
-            px, py = cx1 - u * cw, cy0 + v * ch
-        elif rotation == 270:
-            px, py = cx1 - v * cw, cy1 - u * ch
-        else:
-            px, py = cx0 + u * cw, cy1 - v * ch
-        pts.append((px, py))
-    (ax, ay), (bx, by) = pts
+    (ax, ay), (bx, by) = (viewer_point_to_pdf(float(vx) / w, float(vy) / h, rotation, crop)
+                          for vx, vy in ((rect["x1"], rect["y1"]), (rect["x2"], rect["y2"])))
     return (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
+
+
+def _page_frame(page):
+    """(crop box, rotation) of a PyPDF2 page — the frame both mappers need."""
+    crop = tuple(float(v) for v in (page.cropbox.left, page.cropbox.bottom,
+                                    page.cropbox.right, page.cropbox.top))
+    try:
+        rotation = int(page.rotation) % 360
+    except Exception:
+        rotation = 0
+    return crop, rotation
 
 
 def _finish_annotation(annot, color, note, author):
@@ -141,6 +153,63 @@ def _square_annotation(rects, color, note, author, highlight_id=""):
     return _finish_annotation(annot, color, note, author)
 
 
+def _ink_annotations(ink, rotation, crop, note, author, block_id=""):
+    """One handwriting group → ``/Ink`` annotations, one per look bucket
+    (``ink.ink_buckets``): ``/InkList`` polylines in user space, ``/BS /W``
+    the bucket's mean drawn width, ``/C`` + ``/CA`` its colour. Every
+    annotation also carries its strokes as ``/GammaInk`` (the gamma-ink JSON)
+    so a Gamma re-import keeps pressure and time; other readers ignore the
+    private key. The note rides on the first bucket only."""
+    from . import ink as inkmod
+    sw, sh = float(ink.space.width), float(ink.space.height)
+    # Display points are pdf.js scale-1 points, so the crop box has the same
+    # size unless the page was replaced; widths scale by the ratio.
+    cw, ch = crop[2] - crop[0], crop[3] - crop[1]
+    k = ((cw if rotation in (0, 180) else ch) / sw) if sw else 1.0
+    out = []
+    for n, bucket in enumerate(inkmod.ink_buckets(ink)):
+        first = bucket[0]
+        r, g, b, a = inkmod.parse_color(first.color)
+        paths, xs, ys, widths = [], [], [], []
+        for stroke in bucket:
+            poly = inkmod.stroke_polyline(stroke)
+            flat = []
+            for x, y, w in poly:
+                px, py = viewer_point_to_pdf(x / sw, y / sh, rotation, crop)
+                flat.extend((px, py))
+                xs.append(px)
+                ys.append(py)
+                widths.append(w)
+            if len(poly) == 1:
+                flat.extend(flat[:2])
+            paths.append(ArrayObject(FloatObject(round(v, 2)) for v in flat))
+        if not paths:
+            continue
+        width = (sum(widths) / len(widths)) * k
+        pad = width / 2 + 1
+        annot = DictionaryObject({
+            NameObject("/Type"): NameObject("/Annot"),
+            NameObject("/Subtype"): NameObject("/Ink"),
+            NameObject("/Rect"): ArrayObject(
+                FloatObject(v) for v in (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)),
+            NameObject("/InkList"): ArrayObject(paths),
+            NameObject("/BS"): DictionaryObject({
+                NameObject("/W"): FloatObject(round(width, 2)),
+                NameObject("/S"): NameObject("/S"),
+            }),
+            NameObject("/GammaInk"): TextStringObject(inkmod.dumps({
+                "format": inkmod.FORMAT, "version": inkmod.VERSION,
+                "space": ink.space.model_dump(exclude_none=True),
+                "strokes": [s.model_dump(exclude_none=True) for s in bucket],
+            }).decode("utf-8")),
+        })
+        if block_id:
+            annot[NameObject("/NM")] = TextStringObject(f"Zotero-{zotero_annot_key(f'{block_id}:{n}')}")
+        out.append(_finish_annotation(annot, (r, g, b, min(a, first.opacity)),
+                                      note if n == 0 else "", author))
+    return out
+
+
 def highlight_note_text(block, children_by_id):
     """The annotation popup text: the highlight's own comment plus its nested
     notes as an indented bullet list."""
@@ -162,19 +231,30 @@ def highlight_note_text(block, children_by_id):
     return "\n".join(parts)
 
 
-def annotate_pdf(pdf_bytes: bytes, highlights, author: str = "") -> tuple[bytes, int]:
+def annotate_pdf(pdf_bytes: bytes, highlights, author: str = "", ink=()) -> tuple[bytes, int]:
     """Return (annotated pdf bytes, number of annotations written).
 
     ``highlights``: [{position: <pdf_position dict>, color: <css string>,
     note: <str>, id: <highlight block id, optional>}]. Positions with no
     usable rects or an out-of-range page are skipped rather than failing the
-    whole export.
+    whole export. ``ink``: [{ink: <gamma.ink.InkFile>, note, id}], the
+    handwriting groups, written as ``/Ink`` (``_ink_annotations``).
     """
     reader = PdfReader(io.BytesIO(pdf_bytes))
     writer = PdfWriter()
     writer.append(reader)
 
     written = 0
+    for group in ink:
+        ink_file = group.get("ink")
+        page_num = ink_file.space.page if ink_file and ink_file.space.kind == "pdf-page" else None
+        if not page_num or page_num < 1 or page_num > len(writer.pages):
+            continue
+        crop, rotation = _page_frame(writer.pages[page_num - 1])
+        for annot in _ink_annotations(ink_file, rotation, crop, group.get("note") or "",
+                                      author, block_id=group.get("id") or ""):
+            writer.add_annotation(page_number=page_num - 1, annotation=annot)
+            written += 1
     for h in highlights:
         pos = h.get("position") or {}
         page_num = pos.get("pageNumber") or (pos.get("boundingRect") or {}).get("pageNumber")
@@ -184,13 +264,7 @@ def annotate_pdf(pdf_bytes: bytes, highlights, author: str = "") -> tuple[bytes,
         viewer_rects = [r for r in viewer_rects if r and r.get("x1") is not None]
         if not viewer_rects:
             continue
-        page = writer.pages[page_num - 1]
-        crop = tuple(float(v) for v in (page.cropbox.left, page.cropbox.bottom,
-                                        page.cropbox.right, page.cropbox.top))
-        try:
-            rotation = int(page.rotation) % 360
-        except Exception:
-            rotation = 0
+        crop, rotation = _page_frame(writer.pages[page_num - 1])
         pdf_rects = [_viewer_rect_to_pdf(r, rotation, crop) for r in viewer_rects]
         color = parse_css_color(h.get("color"))
         if pos.get("area"):

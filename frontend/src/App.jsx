@@ -62,6 +62,9 @@ import { ROLE_LABEL, useAccounts, workspaceMeta } from "./settingsWorkspace";
 import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage, WorkspaceUnavailablePage } from "./LoginPage";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
+import { InkToolbar } from "./inkLayer";
+import { HIGHLIGHTER_SIZES, PEN_SIZES, appendStroke, newInk, removeStrokes } from "./ink";
+import * as inkStore from "./inkStore";
 import { usePageCollab } from "./collab";
 import { applyOps, applyPatch, keepUiFlags } from "./blockOps";
 import { PresenceBar } from "./presence";
@@ -2280,6 +2283,8 @@ export default function App() {
     fileLabels, setFileLabels,
     oaFallback, setOaFallback, metaAutoFetch, setMetaAutoFetch, pdfSaveLocal, setPdfSaveLocal,
     snapVertical, setSnapVertical, embAnnots, setEmbAnnots,
+    inkPenOnly, setInkPenOnly, inkAutoPen, setInkAutoPen, inkPressure, setInkPressure,
+    inkPenColor, setInkPenColor, inkPenSize, setInkPenSize, inkHlColor, setInkHlColor, inkHlSize, setInkHlSize,
     translateEnabled, setTranslateEnabled,
     translateLang, setTranslateLang, translateModel, setTranslateModel,
     translateEffort, setTranslateEffort, translateParallel, setTranslateParallel,
@@ -3318,6 +3323,14 @@ export default function App() {
   // Desktop expresses this by holding Ctrl; a phone has no Ctrl, so it gets a
   // sticky toggle button in the viewer's zoom column instead.
   const [areaSelectMode, setAreaSelectMode] = useState(false);
+  // Handwriting (docs/dev/handwriting.md): the tool strip (open, armed tool),
+  // the group the next stroke on a page joins, the pending-upload timer, the
+  // group outlined after a jump, and the viewer's identity-stable ink list.
+  const [inkUi, setInkUi] = useState({ open: false, tool: null });
+  const [inkFlash, setInkFlash] = useState(null);
+  const inkActiveRef = useRef(null);
+  const inkTimerRef = useRef(0);
+  const prevInkRef = useRef({ json: "", value: [] });
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
   const [focusedId, setFocusedId] = useState(null);
@@ -5225,6 +5238,130 @@ export default function App() {
     setStatus("Highlight saved.");
   }
 
+  // --- Handwriting ----------------------------------------------------------
+  // Strokes live in inkStore drafts and reach the server as an .ink upload
+  // plus a properties PATCH through the block API (a server-side writer, so
+  // the change fans out over the page socket and lands in this tree like a
+  // remote op); only the group's block itself is inserted through the tree.
+  const inkTool = useMemo(() => {
+    const t = inkUi.tool;
+    if (!t || readOnly) return null;
+    if (t === "eraser") return { tool: "eraser" };
+    if (t === "highlighter") return { tool: "highlighter", color: inkHlColor, size: HIGHLIGHTER_SIZES[inkHlSize] ?? 12, opacity: 1 };
+    return { tool: "pen", color: inkPenColor, size: PEN_SIZES[inkPenSize] ?? 2, opacity: 1 };
+  }, [inkUi.tool, readOnly, inkHlColor, inkHlSize, inkPenColor, inkPenSize]);
+  const inkPenTool = useMemo(() => (inkAutoPen && !readOnly
+    ? { tool: "pen", color: inkPenColor, size: PEN_SIZES[inkPenSize] ?? 2, opacity: 1 } : null),
+  [inkAutoPen, readOnly, inkPenColor, inkPenSize]);
+  const inkBlocks = useMemo(() => {
+    const next = flattenBlocks(blocks).filter((b) => b.properties?.ink_url !== undefined)
+      .map((b) => ({ id: b.id, properties: b.properties }));
+    const json = JSON.stringify(next);
+    if (json === prevInkRef.current.json) return prevInkRef.current.value;
+    prevInkRef.current = { json, value: next };
+    return next;
+  }, [blocks]);
+
+  const flushInk = useCallback(async () => {
+    clearTimeout(inkTimerRef.current);
+    inkTimerRef.current = 0;
+    const json = { "Content-Type": "application/json" };
+    for (const { id, ink } of inkStore.dirtyDrafts()) {
+      try {
+        if (!ink.strokes.length) {
+          inkStore.clearDraft(id);
+          await apiJson(`${API}/blocks/${id}`, { method: "DELETE" });
+          continue;
+        }
+        const r = await apiJson(`${API}/upload-ink`, { method: "POST", headers: json, body: JSON.stringify(ink) });
+        const properties = { ink_url: r.url, pdf_position: r.pdf_position, ink_strokes: r.strokes, pdf_page: ink.space.page };
+        await apiJson(`${API}/blocks/${id}`, { method: "PUT", headers: json, body: JSON.stringify({ properties }) });
+        inkStore.markSaved(id, ink, r.url);
+      } catch (err) {
+        // The block's insert may still be queued (404): try again shortly.
+        setStatus(`Handwriting not saved yet: ${err.message || err}`);
+        if (!inkTimerRef.current) inkTimerRef.current = setTimeout(flushInk, 2000);
+      }
+    }
+  }, []);
+  function scheduleInk() {
+    clearTimeout(inkTimerRef.current);
+    inkTimerRef.current = setTimeout(flushInk, 700);
+  }
+  useEffect(() => {
+    const flush = () => { if (inkTimerRef.current) flushInk(); };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flush);
+    return () => { window.removeEventListener("pagehide", flush); document.removeEventListener("visibilitychange", flush); };
+  }, [flushInk]);
+  useEffect(() => () => {
+    // Leaving a page: pending strokes still save (through the block API,
+    // which needs no open tree); the tool disarms, the next stroke starts
+    // a fresh group.
+    if (inkTimerRef.current) flushInk();
+    inkActiveRef.current = null;
+    setInkUi((s) => (s.tool ? { ...s, tool: null } : s));
+  }, [focusedBlockId, flushInk]);
+
+  async function handleInkStroke(page, stroke, size) {
+    if (readOnly || !focusedBlockId) return;
+    let id = inkActiveRef.current?.page === page ? inkActiveRef.current.id : null;
+    const existing = id ? flattenBlocks(blocksRef.current).find((b) => b.id === id && b.properties?.ink_url !== undefined) : null;
+    if (!existing) {
+      id = makeId();
+      const block = { id, parentId: null, children: [], collapsed: false, editMode: false, content: "",
+        properties: { ink_url: "", pdf_page: page, ink_strokes: 0 } };
+      setBlocks((prev) => [...prev, block]);
+      inkStore.setDraft(id, newInk(page, size.width, size.height), { pageId: focusedBlockId });
+    }
+    inkActiveRef.current = { page, id };
+    // The group's strokes so far: the draft, else its file (loaded first —
+    // a stroke must never replace strokes that just have not arrived yet).
+    const loaded = !inkStore.draft(id) && existing?.properties.ink_url
+      ? await inkStore.loadInk(existing.properties.ink_url) : null;
+    const cur = inkStore.draft(id)?.ink || loaded || newInk(page, size.width, size.height);
+    inkStore.setDraft(id, appendStroke(cur, stroke), { pageId: focusedBlockId });
+    scheduleInk();
+  }
+  function handleInkErase(page, blockId, ids) {
+    if (readOnly) return;
+    const block = flattenBlocks(blocksRef.current).find((b) => b.id === blockId);
+    const cur = inkStore.draft(blockId)?.ink || (block && inkStore.inkFor(block));
+    if (!cur) return;
+    inkStore.setDraft(blockId, removeStrokes(cur, ids), { pageId: focusedBlockId });
+    scheduleInk();
+  }
+  // From the notes (marker / card): show the group on the page. From the
+  // page (a click on ink): show its block in the notes.
+  function showInkOnPage(id) {
+    const b = flattenBlocks(blocksRef.current).find((x) => x.id === id);
+    if (!b) return;
+    const position = b.properties.pdf_position || { pageNumber: b.properties.pdf_page };
+    const wasHidden = pdfHidden;
+    if (wasHidden) setPdfHidden(false);
+    setTimeout(() => scrollToRef.current?.({ position, offset: 120 }), wasHidden ? 300 : 0);
+    setInkFlash({ id, nonce: Date.now() });
+  }
+  function showInkInNotes(id) {
+    pendingBlockScrollRef.current = id;
+    setBlocks((prev) => expandToBlock(prev, id));
+  }
+  // The strip's keys while it is open: P / H / E pick a tool, Esc closes.
+  useEffect(() => {
+    if (!inkUi.open) return;
+    const onKey = (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "Escape") { setInkUi({ open: false, tool: null }); return; }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      const tool = k === "p" ? "pen" : k === "h" ? "highlighter" : k === "e" ? "eraser" : null;
+      if (tool) setInkUi((s) => ({ ...s, tool }));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inkUi.open]);
+
   useEffect(() => { attachModeBlockIdRef.current = attachModeBlockId; }, [attachModeBlockId]);
 
   // Escape cancels attach mode
@@ -6992,6 +7129,7 @@ export default function App() {
                   aiScan,
                   rootId: focusedBlockId,
                   onJump: jumpToHighlightId,
+                  onInkJump: showInkOnPage,
                   onEnterAttachMode: readOnly ? null : setAttachModeBlockId,
                   onUnlinkHighlight: readOnly ? null : unlinkHighlightFromBlock,
                   onOpenLinkTarget: (b) => {
@@ -8100,6 +8238,16 @@ export default function App() {
               {translateEnabled && !shareMode && pdfTransState.running ? (
                 <div className="pdfTransPct">{Math.round(pdfTransState.progress * 100)}%</div>
               ) : null}
+              {!readOnly ? (
+                <button
+                  className={inkUi.open ? "modeActive" : ""}
+                  onClick={() => setInkUi((s) => (s.open ? { open: false, tool: null } : { open: true, tool: "pen" }))}
+                  title={inkUi.open ? "Close the handwriting tools (Esc)" : "Handwriting: draw on the page with a pen, highlighter or eraser"}
+                  aria-label="Handwriting tools"
+                >
+                  <PenIcon size={15} />
+                </button>
+              ) : null}
               {isPhone && !shareMode ? (
                 <button
                   className={areaSelectMode ? "modeActive" : ""}
@@ -8111,6 +8259,21 @@ export default function App() {
                 </button>
               ) : null}
             </div>
+          ) : null}
+          {pdfUrl && !pdfHidden && inkUi.open && !readOnly ? (
+            <InkToolbar
+              state={{ tool: inkUi.tool, penColor: inkPenColor, penSize: inkPenSize, hlColor: inkHlColor, hlSize: inkHlSize }}
+              highlightColors={COLORS}
+              onChange={(patch) => {
+                if ("tool" in patch) setInkUi((s) => ({ ...s, tool: patch.tool }));
+                if ("penColor" in patch) setInkPenColor(patch.penColor);
+                if ("penSize" in patch) setInkPenSize(patch.penSize);
+                if ("hlColor" in patch) setInkHlColor(patch.hlColor);
+                if ("hlSize" in patch) setInkHlSize(patch.hlSize);
+              }}
+              onNewGroup={() => { inkActiveRef.current = null; setStatus("Next strokes start a new handwriting note."); }}
+              onClose={() => setInkUi({ open: false, tool: null })}
+            />
           ) : null}
           {pdfUrl && !pdfHidden ? (
             <div className="pdfCtlBox pdfFullscreenBox">
@@ -8139,6 +8302,15 @@ export default function App() {
               translateCtlRef={pdfTranslateCtl}
               onTranslateState={handleTranslateState}
               areaMode={areaSelectMode && isPhone && !shareMode}
+              inkBlocks={inkBlocks}
+              inkTool={inkTool}
+              inkPenTool={inkPenTool}
+              inkPenOnly={inkPenOnly}
+              inkPressure={inkPressure}
+              inkFlash={inkFlash}
+              onInkStroke={readOnly ? undefined : handleInkStroke}
+              onInkErase={readOnly ? undefined : handleInkErase}
+              onInkJump={showInkInNotes}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
               captureRef={pdfCaptureRef}
@@ -8495,6 +8667,12 @@ export default function App() {
           setEmbAnnots,
           snapVertical,
           setSnapVertical,
+          inkPenOnly,
+          setInkPenOnly,
+          inkAutoPen,
+          setInkAutoPen,
+          inkPressure,
+          setInkPressure,
           translateEnabled,
           setTranslateEnabled,
           translateLang,

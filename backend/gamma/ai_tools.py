@@ -344,6 +344,9 @@ def _run_read_block(conn, ws: str, scope: dict, args: dict):
         bits = [f"[{block_id}]"]
         if quote:
             bits.append(f'(highlight: "{quote[:200]}")')
+        if props.get("ink_url"):
+            bits.append(f"(handwriting on p. {props.get('pdf_page')}, {props.get('ink_strokes', 0)} strokes; "
+                        "the text is its caption)")
         bits.append(text or "(empty)")
         pad = "  " * depth
         return pad + "- " + "\n".join(

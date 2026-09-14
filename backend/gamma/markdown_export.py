@@ -166,7 +166,7 @@ def _render_readable_block(node, depth, lines, highlights=True, notes=True,
     # The two export switches. A highlight block carries both a PDF region and
     # (often) writing of your own, so dropping highlights keeps its text as a
     # plain bullet rather than losing the note with the quote.
-    if not highlights and (props.get("highlight_id") or props.get("link_url")):
+    if not highlights and (props.get("highlight_id") or props.get("link_url") or props.get("ink_url")):
         props = {}
     if not notes:
         content = ""
@@ -206,6 +206,15 @@ def _render_readable_block(node, depth, lines, highlights=True, notes=True,
             else:
                 lines.append(f"{indent}- {content}")
                 emitted = True
+    elif props.get("ink_url"):
+        # A handwriting group: its picture (the builder renders the .ink file
+        # to an SVG of the same stem — ink_svg_name) and the caption under it.
+        page_no = props.get("pdf_page")
+        label = f"Handwriting (p.{page_no})" if page_no else "Handwriting"
+        lines.append(f"{indent}- ![{label}]({ink_svg_name(props['ink_url'])})")
+        for c in content.split("\n") if content else []:
+            lines.append(f"{indent}  {c}")
+        emitted = True
     elif content:
         clines = content.split("\n")
         lines.append(f"{indent}- {clines[0]}")
@@ -222,6 +231,14 @@ def _render_readable_block(node, depth, lines, highlights=True, notes=True,
 
 
 # --- asset handling ----------------------------------------------------------
+
+def ink_svg_name(ink_url: str) -> str:
+    """The upload URL a handwriting group's rendered picture is written
+    under: the ``.ink`` file's stem with ``.svg``. No such upload exists —
+    the export builders generate the SVG (``gamma.ink.to_svg``) as a blob at
+    the rewritten asset path, so the link resolves inside the zip."""
+    return re.sub(r"\.ink$", ".svg", ink_url or "")
+
 
 def collect_and_rewrite(md, include_pdf=True, prefix="assets/"):
     """Rewrite ``/api/uploads/<sha>.<ext>`` refs to ``<prefix><sha>.<ext>`` and

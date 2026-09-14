@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from starlette.background import BackgroundTask
 
+from .. import ink as inkmod
 from ..auth import resolve_ws, share_scope_page
 from ..blocks_store import BLOCK_COLUMNS, assert_block_in_page, block_to_dict, fetch_subtree
 from ..db import connect_pages_db
@@ -163,6 +164,32 @@ def _collect_marks(blocks) -> list[dict]:
     return marks
 
 
+def _collect_ink(blocks, uploads_dir) -> list[dict]:
+    """Handwriting blocks → ``annotate_pdf``'s ink groups (the parsed file,
+    the caption + nested notes, the block id). Same skip rule as marks for
+    ink that came from the PDF and is still embedded in it; a missing or
+    unreadable file skips just that group."""
+    children_by_id: dict = {}
+    for b in sorted(blocks, key=lambda b: b["position"] or ""):
+        children_by_id.setdefault(b["parent_id"], []).append(b)
+    groups = []
+    for b in blocks:
+        props = b["properties"]
+        url = props.get("ink_url")
+        if not url or (props.get("imported_annot") and not props.get("annot_stripped")):
+            continue
+        m = UPLOAD_RE.search(url)
+        path = uploads_dir / m.group(1) if m else None
+        if not path or not path.is_file():
+            continue
+        try:
+            ink_file = inkmod.parse_ink(path.read_bytes())
+        except inkmod.InkError:
+            continue
+        groups.append({"ink": ink_file, "note": highlight_note_text(b, children_by_id), "id": b["id"]})
+    return groups
+
+
 # Pasted images above this size stay attachments only — a data URI this big
 # would bloat the note beyond what Zotero's editor handles gracefully.
 _EMBED_IMAGE_CAP = 4_000_000
@@ -220,6 +247,24 @@ class _Builder:
         return _zip_response(self.entries, self.assets, self.uploads_dir,
                              f"{self.base}{self.suffix}", self.files, self.blobs)
 
+    def render_ink_svgs(self, page_assets, prefix="assets/"):
+        """Handwriting pictures for a rendered page: the Markdown names a
+        ``<stem>.svg`` next to each ``<stem>.ink`` upload (``ink_svg_name``);
+        no such file exists, so it is generated here as a zip blob."""
+        for name in page_assets:
+            if not name.endswith(".svg"):
+                continue
+            source = self.uploads_dir / (name[:-4] + ".ink")
+            arc = f"{prefix}{name}"
+            if not source.is_file() or (self.uploads_dir / name).is_file() \
+                    or any(b[0] == arc for b in self.blobs):
+                continue
+            try:
+                svg = inkmod.to_svg(inkmod.parse_ink(source.read_bytes()))
+            except (inkmod.InkError, OSError):
+                continue
+            self.blobs.append((arc, svg.encode("utf-8")))
+
 
 class _MarkdownBuilder(_Builder):
     """One readable .md per page plus a shared assets/ folder (deduped by
@@ -257,6 +302,7 @@ class _MarkdownBuilder(_Builder):
                             folder_scope=self.opts.get("folder_scope")),
             include_pdf=self.opts["pdf"])
         self.assets |= page_assets
+        self.render_ink_svgs(page_assets)
         arcname = self.filenames.get(page["id"]) \
             or f"{slugify(page.get('content'), page['id'])}.md"
         self.entries.append((arcname, md))
@@ -706,7 +752,8 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
     pdf_bytes = pdf_path.read_bytes()
     if highlights:
         try:
-            pdf_bytes, written = annotate_pdf(pdf_bytes, marks, author=request.state.user or "")
+            pdf_bytes, written = annotate_pdf(pdf_bytes, marks, author=request.state.user or "",
+                                              ink=_collect_ink(blocks, ws_uploads_dir(ws)))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"could not annotate PDF: {e}")
 

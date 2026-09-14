@@ -9,6 +9,8 @@ import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
 import { COLORS } from "./pdfViewer";
+import { InkCard } from "./inkLayer";
+import { PenIcon } from "./icons";
 import { handleMarkdownCopy } from "./widgets";
 import { LinkIcon } from "./icons";
 import { FileChip, parseUploadUrl, postFile, uploadFilesAsLines } from "./fileChip";
@@ -618,6 +620,7 @@ function BlockRow({
   focusedId,
   setFocusedId,
   onJump,
+  onInkJump,
   onEnterAttachMode,
   onUnlinkHighlight,
   onOpenLinkTarget,
@@ -897,6 +900,9 @@ function BlockRow({
   }, [block.editMode]);
 
   const isHighlight = !!block.highlightId;
+  // A handwriting group (docs/dev/handwriting.md): pen marker + the strokes
+  // as a card; its content is the caption.
+  const isInk = block.properties?.ink_url !== undefined;
   const hasChildren = (block.children?.length || 0) > 0;
 
   function handleFileDragOver(e) {
@@ -1217,6 +1223,14 @@ function BlockRow({
               >⊕</button>
             ) : null}
           </>
+        ) : isInk && !block.editMode ? (
+          <button
+            className="collapseBtn highlightDotBtn dotSlot"
+            onClick={(e) => { e.stopPropagation(); onInkJump?.(block.id); }}
+            title={block.page ? `Handwriting on page ${block.page} — click to show it` : "Handwriting"}
+          >
+            <span className="inkMarker"><PenIcon size={9} strokeWidth={2.4} /></span>
+          </button>
         ) : (
           <span className="dotSlot dotSlotEmpty"><span className="noteBulletDot" /></span>
         )}
@@ -1419,6 +1433,7 @@ function BlockRow({
           {block.position?.area && captureArea ? (
             <AreaSnapshot block={block} captureArea={captureArea} docNonce={docNonce} />
           ) : null}
+          {isInk ? <InkCard block={block} onJump={onInkJump} /> : null}
           {(block.properties?.link_url || block.properties?.link_page_id) ? (
             <button
               type="button"

@@ -4539,3 +4539,85 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   padding: 1px 4px; border-radius: 3px; white-space: nowrap; pointer-events: none;
   opacity: 0.95;
 }
+
+/* --- Handwriting (inkLayer.jsx, docs/dev/handwriting.md) ------------------ */
+/* While a tool is armed the page is a drawing surface: no text selection, a
+   crosshair; touch-action stays until fingers are meant to draw too. */
+.pdfViewer.inkArmed .pdfPageWrap { cursor: crosshair; }
+.pdfViewer.inkArmed .textLayer,
+.pdfViewer.inkArmed .textLayer span {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+.pdfViewer.inkTouchDraw .pdfPageWrap { touch-action: none; }
+.pdfViewer.pdfDark .inkLayer { filter: invert(1) hue-rotate(180deg); }
+/* The brief outline after a jump from the notes. */
+.inkFlash {
+  fill: none;
+  stroke: rgba(80, 140, 255, 0.95);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+  animation: inkFlashFade 1.8s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes inkFlashFade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+
+/* The tool strip: top-centre of the viewer, the control-box surface laid flat. */
+.pdfInkBar {
+  position: absolute;
+  z-index: 21;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 5px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-width: calc(100% - 120px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfInkBar {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+.pdfInkSep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
+.inkSwatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15);
+}
+.inkSwatch.active { border-color: var(--accent); }
+.inkSizeBtn { font-size: 11px; font-weight: 600; }
+
+/* The notes: a rounded-square pen marker in the dot slot, the strokes as a
+   picture above the caption. */
+.inkMarker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  color: var(--text-tertiary);
+}
+.blockInkCard {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  height: auto;
+  margin: 4px 0 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.blockInkPending { min-height: 28px; width: 100%; opacity: 0.5; }

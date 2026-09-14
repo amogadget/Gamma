@@ -22,7 +22,8 @@ from ..logbuf import log
 from ..ops import note_reload
 from ..markdown_import import MAX_MARKDOWN_BYTES, fm_text, md_to_blocks, parse_frontmatter
 from ..markdown_zip_import import import_markdown_zip, insert_note_page, markdown_page
-from ..storage import content_digest, display_filename, is_pdf, store_pdf
+from ..ink import InkError, dumps as ink_dumps, from_pdf_ink, parse_ink, pdf_position as ink_position
+from ..storage import content_digest, display_filename, is_pdf, store_file, store_pdf
 from ..logseq_import import (
     edn_highlight_position,
     edn_highlight_to_block,
@@ -207,7 +208,47 @@ _NOTE_TYPES = {"/Text", "/FreeText"}
 # Rectangle/ellipse drawings → area highlights (position carries area: true),
 # the inverse of what pdf_export.py writes for Gamma's own area notes.
 _AREA_TYPES = {"/Square", "/Circle"}
-_IMPORT_TYPES = _MARKUP_TYPES | _NOTE_TYPES | _AREA_TYPES
+# Freehand drawings → handwriting groups (gamma/ink.py), the inverse of the
+# /Ink annotations pdf_export.py writes.
+_INK_TYPES = {"/Ink"}
+_IMPORT_TYPES = _MARKUP_TYPES | _NOTE_TYPES | _AREA_TYPES | _INK_TYPES
+
+
+def _ink_from_annotation(obj, pnum: int, pw: float, ph: float, contents: str):
+    """One /Ink annotation → an importer record carrying the parsed ink file
+    (``kind: "ink"``). A Gamma export's ``/GammaInk`` private key restores
+    pressure and time; foreign ink is polylines at the annotation's width."""
+    ink_list = [[float(_resolve(v)) for v in (_resolve(path) or [])]
+                for path in (_resolve(obj.get("/InkList")) or [])]
+    bs = _resolve(obj.get("/BS")) or {}
+    try:
+        width = float(_resolve(bs.get("/W", 1)))
+    except (TypeError, ValueError):
+        width = 1.0
+    color = "#1f1f1f"
+    c = _resolve(obj.get("/C"))
+    try:
+        if c is not None and len(c) == 3:
+            color = "#%02x%02x%02x" % tuple(min(255, max(0, int(round(float(_resolve(v)) * 255)))) for v in c)
+    except (TypeError, ValueError):
+        pass
+    try:
+        alpha = min(max(float(_resolve(obj.get("/CA"))), 0.05), 1.0)
+    except (TypeError, ValueError):
+        alpha = 1.0
+    private = _resolve(obj.get("/GammaInk"))
+    try:
+        ink = parse_ink(from_pdf_ink(ink_list, width, color, alpha, pnum, pw, ph,
+                                     str(private) if private else None))
+    except InkError as e:
+        log.warning(f"[pdf-annots] skipping unreadable ink on p.{pnum}: {e}")
+        return None
+    if not ink.strokes:
+        return None
+    first = ink_list[0][:2] if ink_list and len(ink_list[0]) >= 2 else (0, 0)
+    key = f"{pnum}:/Ink:{round(first[0])}:{round(first[1])}:{len(ink.strokes)}"
+    return {"key": key, "page": pnum, "content": contents, "quote": "", "color": color,
+            "position": ink_position(ink), "kind": "ink", "ink": ink}
 
 
 def _page_text_chunks(page):
@@ -251,6 +292,11 @@ def _extract_pdf_annotations(reader):
                 if subtype not in _IMPORT_TYPES:
                     continue
                 contents = str(_resolve(obj.get("/Contents")) or "").strip()
+                if subtype in _INK_TYPES:
+                    record = _ink_from_annotation(obj, pnum, pw, ph, contents)
+                    if record:
+                        found.append(record)
+                    continue
                 # Quad rects in PDF space (origin bottom-left)
                 quads = []
                 qp = _resolve(obj.get("/QuadPoints"))
@@ -389,11 +435,20 @@ def import_embedded_annotations(ws: str, block_id: str, pdf_path, strip: bool, a
             positions = generate_n_keys_between(last_child_position(conn, block_id), None, n=len(todo))
             for f, pos in zip(todo, positions):
                 bid = secrets.token_urlsafe(9)
-                props = {
-                    "highlight_id": bid, "color": f["color"], "quote": f["quote"],
-                    "pdf_page": f["page"], "pdf_position": f["position"],
-                    "imported_annot": f["key"],
-                }
+                if f.get("kind") == "ink":
+                    # The strokes live in an .ink upload like any drawn group.
+                    filename, _ = store_file(ws, ink_dumps(f["ink"]), ".ink")
+                    props = {
+                        "ink_url": f"/api/uploads/{filename}", "pdf_page": f["page"],
+                        "pdf_position": f["position"], "ink_strokes": len(f["ink"].strokes),
+                        "color": f["color"], "imported_annot": f["key"],
+                    }
+                else:
+                    props = {
+                        "highlight_id": bid, "color": f["color"], "quote": f["quote"],
+                        "pdf_page": f["page"], "pdf_position": f["position"],
+                        "imported_annot": f["key"],
+                    }
                 conn.execute(
                     "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
                     "VALUES (?,?,?,?,?,?,?)",

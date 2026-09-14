@@ -20,6 +20,7 @@ from .routers import (
     collab,
     export,
     imports,
+    ink,
     links,
     metadata,
     pages,
@@ -116,6 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(shares.router)
     app.include_router(pdf.router)
     app.include_router(uploads.router)
+    app.include_router(ink.router)
     app.include_router(blocks.router)
     app.include_router(pages.router)
     app.include_router(imports.router)
