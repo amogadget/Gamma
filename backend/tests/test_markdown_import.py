@@ -1,9 +1,10 @@
 """Plain .md uploads become note pages, including inside folder uploads."""
 
 import json
+from conftest import workspace_of
 import sqlite3
 
-from gamma.db import user_db_path
+from gamma.db import ws_db_path
 
 
 def test_markdown_upload_creates_nested_note_page(guest):
@@ -81,7 +82,7 @@ def test_library_load_repairs_old_automatic_path_title(guest):
         "/api/import/markdown",
         files={"file": ("CODE_INDEX.md", b"Index body", "text/markdown")},
     ).json()
-    with sqlite3.connect(user_db_path("guest", "pages.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of("guest"), "pages.db")) as conn:
         row = conn.execute(
             "SELECT properties FROM unified_blocks WHERE id=?", (created["block_id"],)
         ).fetchone()
@@ -120,7 +121,7 @@ def test_markdown_blocks_endpoint_parses_without_storing(guest):
     assert [b["content"] for b in items] == ["pasted-first", "pasted-second"]
     assert items[0]["children"][0]["content"] == "pasted-nested"
 
-    with sqlite3.connect(user_db_path("guest", "pages.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of("guest"), "pages.db")) as conn:
         n = conn.execute("SELECT COUNT(*) FROM unified_blocks "
                          "WHERE content LIKE 'pasted-%'").fetchone()[0]
     assert n == 0

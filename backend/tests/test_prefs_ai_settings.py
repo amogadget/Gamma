@@ -13,7 +13,7 @@ def alice(client):
     """A separate TestClient logged in as a real (non-guest) user."""
     from gamma.app import app
     from gamma.db import connect_users_db, page_now
-    from gamma.seed import create_user_dbs
+    from gamma import workspaces
 
     with connect_users_db() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE username = 'alice'").fetchone():
@@ -22,7 +22,7 @@ def alice(client):
                 ("alice", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode(), page_now()),
             )
             conn.commit()
-    create_user_dbs("alice")
+    workspaces.ensure_personal("alice")
     c = TestClient(app)
     r = c.post("/api/login", json={"username": "alice", "password": "pw"})
     assert r.status_code == 200, r.text
@@ -327,15 +327,17 @@ def test_deleting_all_providers_disables_ai(alice):
 
 def test_rename_user_moves_rows_and_directory(client):
     import manage
-    from gamma.config import USERS_DIR
+    from conftest import workspace_of
+    from gamma.db import ws_dir
     from gamma.app import app
 
     manage.create_user("bob", "pw2")
-    assert (USERS_DIR / "bob" / "pages.db").exists()
+    ws = workspace_of("bob")
+    assert (ws_dir(ws) / "pages.db").exists()
 
     manage.rename_user("bob", "bobby")
-    assert not (USERS_DIR / "bob").exists()
-    assert (USERS_DIR / "bobby" / "pages.db").exists()
+    # Rows follow the account; the workspace directory (named by id) stays put.
+    assert workspace_of("bobby") == ws and (ws_dir(ws) / "pages.db").exists()
 
     c = TestClient(app)
     assert c.post("/api/login", json={"username": "bob", "password": "pw2"}).status_code == 401

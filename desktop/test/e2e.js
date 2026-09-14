@@ -1,7 +1,7 @@
 // End-to-end check of the desktop shell — the executable half of
 // docs/checklist.md. Drives the real app (dev tree by default, the packaged build
 // with --packaged) through Playwright's Electron driver over a throwaway
-// profile, so the real registry, cookies and workspaces are never touched.
+// profile, so the real registry, cookies and servers are never touched.
 //
 //   npm run e2e               # dev: sidecars from backend/venv + frontend/dist
 //   npm run e2e:packaged      # after `npm run pack`: the frozen bundle
@@ -185,7 +185,7 @@ async function main() {
       bar = await findPage(app, isBar);
       content = await findPage(app, isLauncher);
       await content.waitForSelector('#btnAddLocal');
-      await waitFor(async () => (await bar.textContent('#wsName')).trim() === 'Workspaces', 'bar idle label');
+      await waitFor(async () => (await bar.textContent('#wsName')).trim() === 'Servers', 'bar idle label');
       const b = await hook(app, (s) => s.bounds());
       assert(b.bar.height === 38 && b.content.y === 38, `layout ${JSON.stringify(b)}`);
       const version = await content.textContent('#version');
@@ -193,12 +193,12 @@ async function main() {
       return version.trim();
     });
 
-    await step('create a local workspace from the launcher', async () => {
+    await step('create a local server from the launcher', async () => {
       await content.click('#btnAddLocal');
       await content.fill('#localName', 'Alpha');
       await content.click('#btnCreateLocal');
       await content.locator('.card', { hasText: 'Alpha' }).waitFor();
-      const ws = await hook(app, (s) => s.registry.load().workspaces);
+      const ws = await hook(app, (s) => s.registry.load().servers);
       assert.equal(ws.length, 1);
       ids.alpha = ws[0].id;
       assert(fs.existsSync(ws[0].dataDir), 'data dir created');
@@ -219,10 +219,14 @@ async function main() {
 
     await step('data dir has the standard GAMMA_DATA_DIR layout', async () => {
       const dir = await hook(app, (s, id) => s.registry.get(id).dataDir, ids.alpha);
-      for (const f of ['users.db', 'users/admin/pages.db', 'users/admin/data.db']) {
-        assert(fs.existsSync(path.join(dir, f)), `missing ${f}`);
+      assert(fs.existsSync(path.join(dir, 'users.db')), 'missing users.db');
+      // One directory per Gamma workspace, named by id (the admin's personal one here).
+      const wsDirs = fs.readdirSync(path.join(dir, 'workspaces'));
+      assert(wsDirs.length >= 1, 'no workspace directory');
+      for (const f of ['pages.db', 'data.db', 'uploads']) {
+        assert(fs.existsSync(path.join(dir, 'workspaces', wsDirs[0], f)), `missing workspaces/<id>/${f}`);
       }
-      return fs.readdirSync(dir).join(', ');
+      return fs.readdirSync(dir).join(', ') + ' / workspaces: ' + wsDirs.join(', ');
     });
 
     await step('upload a PDF + create a paper page with a math note', async () => {
@@ -243,7 +247,8 @@ async function main() {
       pageId = r.pageId;
       sourceUrl = r.sourceUrl;
       const dir = await hook(app, (s, id) => s.registry.get(id).dataDir, ids.alpha);
-      const uploads = fs.readdirSync(path.join(dir, 'users', 'admin', 'uploads'));
+      const wsDir = fs.readdirSync(path.join(dir, 'workspaces'))[0];
+      const uploads = fs.readdirSync(path.join(dir, 'workspaces', wsDir, 'uploads'));
       assert.equal(uploads.length, 1, 'one upload on disk');
       return `${sourceUrl} → ${uploads[0]}`;
     });
@@ -304,7 +309,7 @@ async function main() {
       return `${file} (${r.size} B)`;
     });
 
-    await step('second workspace; switch from the shell bar while Alpha keeps running', async () => {
+    await step('second server; switch from the shell bar while Alpha keeps running', async () => {
       ids.beta = await hook(app, (s) => s.registry.addLocal('Beta').id);
       await bar.click('#wsBtn');
       await waitFor(async () => {
@@ -355,9 +360,28 @@ async function main() {
       return `${Date.now() - t0} ms`;
     });
 
-    await step('remote workspace: a URL, loads without auto-login', async () => {
+    await step('Gamma workspaces: the bar lists them and switches with ?ws=', async () => {
+      // A second Gamma workspace inside Alpha, made through the public API
+      // from the signed-in page (the shell never touches Gamma's data itself).
+      const lab = await content.evaluate(async () => {
+        const r = await fetch('/api/workspaces', { method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'E2E lab' }) });
+        return (await r.json()).id;
+      });
+      await bar.click('#wsBtn');
+      await waitFor(async () => (await bar.locator(`#menu .wsItem[data-ws="${lab}"]`).count()) === 1, 'lab listed in the bar menu', 15_000);
+      await bar.locator(`#menu .wsItem[data-ws="${lab}"]`).click();
+      await waitFor(async () => new URL(content.url()).searchParams.get('ws') === lab, 'content navigated to ?ws=', 15_000);
+      await waitFor(async () => (await bar.textContent('#wsWorkspace')).includes('E2E lab'), 'bar names the workspace', 15_000);
+      const g = await hook(app, (s) => s.gamma());
+      assert(g && g.current === lab && g.list.length === 2, 'shell knows the workspaces: ' + JSON.stringify(g));
+      assert.equal(new URL(content.url()).origin, urls.alpha, 'same server');
+      return `${lab} on ${urls.alpha}`;
+    });
+
+    await step('remote server: a URL, loads without auto-login', async () => {
       ids.remote = await hook(app, (s, url) => s.registry.addRemote('Alpha by URL', url).id, urls.alpha);
-      await hook(app, (s, id) => s.openWorkspace(id), ids.remote);
+      await hook(app, (s, id) => s.openServer(id), ids.remote);
       await waitFor(async () => new URL(content.url()).origin === urls.alpha, 'remote loaded');
       const cur = await hook(app, (s) => s.current());
       assert.equal(cur.type, 'remote');
@@ -416,7 +440,7 @@ async function main() {
       try {
         const err = await hook(app, async (s, id) => {
           try {
-            await s.openWorkspace(id);
+            await s.openServer(id);
             return null;
           } catch (e) {
             s.loadLauncher(e.message);
@@ -435,14 +459,14 @@ async function main() {
     });
 
     await step('navigation guard: foreign URLs open outside, the window stays', async () => {
-      await hook(app, (s, id) => s.openWorkspace(id), ids.alpha);
+      await hook(app, (s, id) => s.openServer(id), ids.alpha);
       await waitLoggedIn(content);
       await content.evaluate(() => {
         window.open('https://example.org/popup');
         setTimeout(() => { location.href = 'https://example.com/leave'; }, 0);
       });
       await sleep(1200);
-      assert.equal(new URL(content.url()).origin, urls.alpha, 'still on the workspace');
+      assert.equal(new URL(content.url()).origin, urls.alpha, 'still on the server');
       const opened = await hook(app, (s) => s.externalOpens.slice());
       assert(opened.includes('https://example.org/popup'), 'window.open went external: ' + opened);
       assert(opened.includes('https://example.com/leave'), 'location change went external: ' + opened);
@@ -487,21 +511,21 @@ async function main() {
       await content.click('#btnRename');
       await content.locator('.card', { hasText: 'Beta renamed' }).waitFor();
       const dead = content.locator('.card', { hasText: 'Alpha by URL' }).first();
-      await dead.locator('button[title="Remove workspace"]').click();
+      await dead.locator('button[title="Remove server"]').click();
       await content.click('#btnRemoveWipe');
       await waitFor(async () => (await content.locator('.card', { hasText: 'Alpha by URL' }).count()) === 0, 'card gone');
-      const names = await hook(app, (s) => s.registry.load().workspaces.map((w) => w.name));
+      const names = await hook(app, (s) => s.registry.load().servers.map((w) => w.name));
       assert.deepEqual(names.sort(), ['Alpha', 'Beta renamed']);
       return names.join(', ');
     });
 
-    await step('storage folder: change the root, existing workspaces move, data intact', async () => {
+    await step('storage folder: change the root, existing servers move, data intact', async () => {
       const newRoot = path.join(profile, 'moved-root');
-      const before = await hook(app, (s) => s.registry.load().workspaces.filter((w) => w.type === 'local').map((w) => w.dataDir));
-      assert(before.length === 2, 'two local workspaces');
+      const before = await hook(app, (s) => s.registry.load().servers.filter((w) => w.type === 'local').map((w) => w.dataDir));
+      assert(before.length === 2, 'two local servers');
       const r = await content.evaluate((dir) => gammaShell.setDataRoot(dir, { move: true }), newRoot);
       assert.deepEqual(r.moved.sort(), ['Alpha', 'Beta renamed'], JSON.stringify(r));
-      const after = await hook(app, (s) => s.registry.load().workspaces.filter((w) => w.type === 'local').map((w) => w.dataDir));
+      const after = await hook(app, (s) => s.registry.load().servers.filter((w) => w.type === 'local').map((w) => w.dataDir));
       for (const d of after) {
         assert(d.startsWith(newRoot + path.sep), `moved: ${d}`);
         assert(fs.existsSync(path.join(d, 'users.db')), `users.db in ${d}`);
@@ -511,7 +535,7 @@ async function main() {
       await waitFor(async () => (await content.textContent('#dataRootText')).trim() === newRoot, 'launcher shows the new root');
       assert.equal(await content.isHidden('#btnDataRootReset'), false, 'reset button visible');
       assert(!pidAlive(pids.alpha) && !pidAlive(pids.beta), 'old sidecars stopped for the move');
-      await hook(app, (s, id) => s.openWorkspace(id), ids.alpha);
+      await hook(app, (s, id) => s.openServer(id), ids.alpha);
       await waitLoggedIn(content);
       const titles = await rootTitles(content);
       assert(titles.includes('E2E paper'), 'data intact after the move: ' + titles.join(' | '));
@@ -521,19 +545,19 @@ async function main() {
     });
 
     await step('quit: every sidecar stops, window bounds persist', async () => {
-      await hook(app, (s, id) => s.openWorkspace(id), ids.alpha);
+      await hook(app, (s, id) => s.openServer(id), ids.alpha);
       await waitLoggedIn(content);
       const live = Object.values(pids).filter(Boolean);
       assert(live.length, 'have sidecar pids');
       await app.close();
       await waitFor(() => live.every((p) => !pidAlive(p)), 'sidecars gone', 15_000, 500);
-      const reg = JSON.parse(fs.readFileSync(path.join(profile, 'workspaces.json'), 'utf8'));
+      const reg = JSON.parse(fs.readFileSync(path.join(profile, 'servers.json'), 'utf8'));
       assert(reg.windowBounds && reg.windowBounds.width > 0, 'bounds saved');
       assert.equal(reg.lastOpened, ids.alpha);
       return `pids ${live.join(', ')} exited; bounds ${reg.windowBounds.width}x${reg.windowBounds.height}`;
     });
 
-    await step('relaunch reopens the last workspace with its data intact', async () => {
+    await step('relaunch reopens the last server with its data intact', async () => {
       app = await launch(profile, downloads);
       bar = await findPage(app, isBar);
       content = await findPage(app, (u) => u.startsWith('http://127.0.0.1'), 90_000);

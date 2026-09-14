@@ -42,7 +42,8 @@ from fractional_indexing import generate_key_between
 
 from .ai_context import DEPRECATED_TOOLS, canonical_tool, page_report_section
 from .blocks_store import fetch_subtree, page_attachment, page_root_id, root_pages
-from .db import page_now, user_db_path
+from .db import connect_pages_db, page_now, ws_db_path
+from .ops import after_commit, apply_ops, note_reload, record_ops
 from .foldertags import add_tag, clean_path, parse_tags, path_within
 from .logbuf import log
 from .pdf_index import pdf_missing, search_pdf
@@ -204,7 +205,7 @@ def _sibling_position(conn, parent_id: str, after_id, block_id: str = "") -> tup
 # action is the {kind, summary} event streamed to the UI and saved with the
 # chat message, for every successful call (reads included); errors carry None.
 
-def _run_list_pages(conn, user: str, scope: dict, args: dict):
+def _run_list_pages(conn, ws: str, scope: dict, args: dict):
     path = _scope_folder(scope)
     # Optional filters, so "papers labeled X" is one small call instead of a
     # full dump the model has to sift by eye.
@@ -292,7 +293,7 @@ def _read_cap(value) -> int:
     return min(cap, READ_CHARS_MAX) if cap > 0 else READ_CHARS_CAP
 
 
-def _run_read_page(conn, user: str, scope: dict, args: dict):
+def _run_read_page(conn, ws: str, scope: dict, args: dict):
     loaded, error = _load_scoped_page(conn, scope, args)
     if error:
         return error, None
@@ -311,13 +312,13 @@ def _run_read_page(conn, user: str, scope: dict, args: dict):
         page = max(1, int(args.get("pdf_page", 1)))
     except (TypeError, ValueError):
         page = 1
-    section = page_report_section(conn, user, page_id, budget, offset, page)
+    section = page_report_section(conn, ws, page_id, budget, offset, page)
     if not section:
         return f'"{title}" has no readable content', None
     return section, {"kind": "read", "page_id": page_id, "summary": f"Read “{title[:60]}”"}
 
 
-def _run_read_block(conn, user: str, scope: dict, args: dict):
+def _run_read_block(conn, ws: str, scope: dict, args: dict):
     """The note outline under a block (or a whole page), every line prefixed
     with its block id — the ids the editing tools take. The requested block's
     own text is never truncated; children are snipped per line and the listing
@@ -411,7 +412,7 @@ def join_block_text(existing: str, addition: str, mode: str) -> str:
     return head + ("\n\n" if blank else "\n") + tail
 
 
-def _run_edit_block(conn, user: str, scope: dict, args: dict):
+def _run_edit_block(conn, ws: str, scope: dict, args: dict):
     loaded, error = _load_scoped_block(conn, scope, args.get("block_id"))
     if error:
         return error, None
@@ -435,20 +436,16 @@ def _run_edit_block(conn, user: str, scope: dict, args: dict):
         return f"error: content too long (>{_BLOCK_CONTENT_MAX} chars)", None
     if content == block["content"]:
         return "ok — the block already says that", None
-    now = page_now()
-    conn.execute("UPDATE unified_blocks SET content = ?, updated_at = ? WHERE id = ?",
-                 (content, now, block["id"]))
-    # The page root's timestamp drives the home feed's ordering — touch it
-    # like the editor's PUT /children does.
-    conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, page_id))
-    conn.commit()
+    after_commit(ws, conn, apply_ops(
+        conn, page_id, [{"op": "set", "id": block["id"], "content": content}],
+        actor=scope.get("actor", ""), client="ai"))
     verb = {"replace": "Edited", "append": "Appended to", "prepend": "Prepended to"}[mode]
     return (f'ok — block [{block["id"]}] updated' + (f" ({mode})" if mode != "replace" else ""),
             {"kind": "edit", "page_id": page_id, "block_id": block["id"], "mode": mode,
              "summary": f"{verb} a note in “{page_title[:60]}”"})
 
 
-def _run_create_block(conn, user: str, scope: dict, args: dict):
+def _run_create_block(conn, ws: str, scope: dict, args: dict):
     loaded, error = _load_scoped_block(conn, scope, args.get("parent_id"))
     if error:
         return error.replace("no such block", "no such parent block"), None
@@ -460,19 +457,16 @@ def _run_create_block(conn, user: str, scope: dict, args: dict):
     if error:
         return error, None
     block_id = secrets.token_urlsafe(9)
-    now = page_now()
-    conn.execute(
-        "INSERT INTO unified_blocks (id, parent_id, position, content, properties, "
-        "created_at, updated_at) VALUES (?, ?, ?, ?, '{}', ?, ?)",
-        (block_id, parent["id"], position, content, now, now))
-    conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, page_id))
-    conn.commit()
+    after_commit(ws, conn, apply_ops(
+        conn, page_id, [{"op": "insert", "id": block_id, "parent": parent["id"],
+                         "position": position, "content": content}],
+        actor=scope.get("actor", ""), client="ai"))
     return (f"ok — created block [{block_id}]",
             {"kind": "create", "page_id": page_id, "block_id": block_id,
              "summary": f"Added a note in “{page_title[:60]}”"})
 
 
-def _run_move_block(conn, user: str, scope: dict, args: dict):
+def _run_move_block(conn, ws: str, scope: dict, args: dict):
     loaded, error = _load_scoped_block(conn, scope, args.get("block_id"))
     if error:
         return error, None
@@ -500,12 +494,18 @@ def _run_move_block(conn, user: str, scope: dict, args: dict):
     if parent["id"] == block["parent_id"] and args.get("after_id") in (block["id"], None) \
             and position == block["position"]:
         return "ok — the block is already there", None
-    now = page_now()
-    conn.execute("UPDATE unified_blocks SET parent_id = ?, position = ?, updated_at = ? "
-                 "WHERE id = ?", (parent["id"], position, now, block["id"]))
-    conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id IN (?, ?)",
-                 (now, src_page_id, page_id))
-    conn.commit()
+    if page_id == src_page_id:
+        after_commit(ws, conn, apply_ops(
+            conn, page_id, [{"op": "move", "id": block["id"], "parent": parent["id"],
+                             "position": position}], actor=scope.get("actor", ""), client="ai"))
+    else:
+        now = page_now()
+        conn.execute("UPDATE unified_blocks SET parent_id = ?, position = ?, updated_at = ? "
+                     "WHERE id = ?", (parent["id"], position, now, block["id"]))
+        conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id IN (?, ?)",
+                     (now, src_page_id, page_id))
+        record_ops(ws, conn, src_page_id, [{"op": "delete", "id": block["id"]}], actor=scope.get("actor", ""))
+        note_reload(ws, conn, page_id, scope.get("actor", ""))
     where = (f"page “{page_title[:60]}”" if page_id != src_page_id
              else f"“{page_title[:60]}”")
     action = {"kind": "move", "page_id": page_id, "block_id": block["id"],
@@ -516,7 +516,7 @@ def _run_move_block(conn, user: str, scope: dict, args: dict):
     return f'ok — block [{block["id"]}] moved', action
 
 
-def _run_search_library(conn, user: str, scope: dict, args: dict):
+def _run_search_library(conn, ws: str, scope: dict, args: dict):
     """FTS snippets from the in-scope pages: their notes (block_fts, rebuilt
     for changed pages first) and the text of their PDF attachments (pdf_fts —
     same index and query rules as /api/search). Notes hits come first, with
@@ -539,7 +539,7 @@ def _run_search_library(conn, user: str, scope: dict, args: dict):
     from .block_index import fts_query, refresh, search_blocks
     from .routers.search import _index_missing_async
 
-    pending = refresh(user, conn, list(pages))
+    pending = refresh(ws, conn, list(pages))
 
     def fts(database, text):
         match = fts_query(text)
@@ -555,11 +555,11 @@ def _run_search_library(conn, user: str, scope: dict, args: dict):
 
     relaxed = ""
     missing: list = []
-    with sqlite3.connect(user_db_path(user, "data.db")) as database:
+    with sqlite3.connect(ws_db_path(ws, "data.db")) as database:
         if docs:
             missing = pdf_missing(database, docs)
             if missing:
-                _index_missing_async(user, missing)
+                _index_missing_async(ws, missing)
         lines = fts(database, query)
         if not lines:
             # The MATCH ANDs every term, and agents write long natural-language
@@ -600,7 +600,7 @@ def _run_search_library(conn, user: str, scope: dict, args: dict):
                             f"{about}{len(lines)} hit{'s' if len(lines) != 1 else ''}"}
 
 
-def _run_rename_page(conn, user: str, scope: dict, args: dict):
+def _run_rename_page(conn, ws: str, scope: dict, args: dict):
     loaded, error = _load_scoped_page(conn, scope, args)
     if error:
         return error, None
@@ -610,14 +610,13 @@ def _run_rename_page(conn, user: str, scope: dict, args: dict):
         return "error: empty title", None
     if new == title:
         return "ok — title already is that", None
-    conn.execute("UPDATE unified_blocks SET content = ?, updated_at = ? WHERE id = ?",
-                 (new, page_now(), page_id))
-    conn.commit()
+    after_commit(ws, conn, apply_ops(
+        conn, page_id, [{"op": "set", "id": page_id, "content": new}], actor=scope.get("actor", ""), client="ai"))
     return (f'ok — renamed to "{new}"',
             {"kind": "rename", "page_id": page_id, "summary": f"Renamed “{title}” → “{new}”"})
 
 
-def _run_move_page(conn, user: str, scope: dict, args: dict):
+def _run_move_page(conn, ws: str, scope: dict, args: dict):
     loaded, error = _load_scoped_page(conn, scope, args)
     if error:
         return error, None
@@ -633,9 +632,9 @@ def _run_move_page(conn, user: str, scope: dict, args: dict):
     if new_tags == tags:
         return "ok — page is already there", None
     props["folder"] = ", ".join(new_tags)
-    conn.execute("UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-                 (json.dumps(props), page_now(), page_id))
-    conn.commit()
+    after_commit(ws, conn, apply_ops(
+        conn, page_id, [{"op": "set", "id": page_id, "props": {"folder": props["folder"]}}],
+        actor=scope.get("actor", ""), client="ai"))
     where = target or "the library root"
     return (f'ok — moved to "{where}"',
             {"kind": "move", "page_id": page_id, "summary": f"Moved “{title}” → {where}"})
@@ -957,7 +956,7 @@ def tool_action(kind: str, summary: str, name: str, args: dict, result: str,
     return {**out, **extra}
 
 
-def run_agent_tool(user: str, scope: dict, name: str, args: dict) -> tuple[str, dict]:
+def run_agent_tool(ws: str, scope: dict, name: str, args: dict) -> tuple[str, dict]:
     """Execute one agent tool call against the chat's scope.
 
     Returns ``(result_text, action)`` — result_text goes back to the model;
@@ -973,9 +972,12 @@ def run_agent_tool(user: str, scope: dict, name: str, args: dict) -> tuple[str, 
     if not tool or (scope.get("type") or "") not in tool["scopes"]:
         result = f"error: unknown tool {name}"
         return result, tool_action("error", result[:200], name, args, result, error=True)
+    if tool["mutating"] and not scope.get("can_write", True):
+        result = "error: you can only view this workspace — no changes are possible"
+        return result, tool_action("error", result[:200], name, args, result, error=True)
     try:
-        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-            result, action = tool["run"](conn, user, scope, args)
+        with connect_pages_db(ws) as conn:
+            result, action = tool["run"](conn, ws, scope, args)
     except Exception as e:  # a tool failure must never kill the chat stream
         log.warning(f"[ai_tools] {name} failed: {e}")
         result, action = f"error: {e}", None

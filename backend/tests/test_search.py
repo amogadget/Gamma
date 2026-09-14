@@ -4,15 +4,15 @@ scope, and the lazy per-page rebuild that follows every kind of block write."""
 
 import sqlite3
 
-from conftest import login, make_page, make_user
-from gamma.db import user_db_path
+from conftest import login, make_page, make_user, workspace_of
+from gamma.db import ws_db_path
 from gamma.textnorm import INDEX_VERSION, normalize_text
 
 
 def _index_pdf(user, doc_id, pages):
     from gamma.pdf_index import ensure_schema
 
-    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of(user), "data.db")) as conn:
         ensure_schema(conn)
         conn.execute("DELETE FROM pdf_fts WHERE doc_id = ?", (doc_id,))
         conn.executemany("INSERT INTO pdf_fts (doc_id, page, content) VALUES (?, ?, ?)",
@@ -35,7 +35,7 @@ def _search(c, q, **params):
 
 
 def _meta(user, page_id):
-    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of(user), "data.db")) as conn:
         return conn.execute("SELECT updated_at, ver FROM block_fts_meta WHERE page_id = ?",
                             (page_id,)).fetchone()
 
@@ -110,7 +110,8 @@ def test_dirty_page_reindex_follows_every_write():
 
     # PUT /blocks/{id}: the old text is gone, the new one found.
     assert c.put(f"/api/blocks/{a}", json={"content": "gamma ipsum"}).status_code == 200
-    assert _meta("searcher", page["id"]) is None  # marked dirty, not yet rebuilt
+    # Stale, not yet rebuilt: the op stamped the page root past the fingerprint.
+    assert _meta("searcher", page["id"])[0] != c.get(f"/api/blocks/{page['id']}").json()["updated_at"]
     assert [r["block_id"] for r in _search(c, "gamma ipsum")["results"]] == [a]
     assert a not in {r["block_id"] for r in _search(c, "alpha")["results"]}
     assert _meta("searcher", page["id"]) is not None
@@ -141,7 +142,7 @@ def test_dirty_page_reindex_follows_every_write():
 
     # A stale index version rebuilds lazily too (what search-reindex stamps).
     from gamma.block_index import mark_all_dirty
-    mark_all_dirty("searcher")
+    mark_all_dirty(workspace_of("searcher"))
     assert _meta("searcher", other["id"])[1] == 0
     assert _search(c, "lorem")["results"] == []  # other's only block moved away
     assert _meta("searcher", other["id"])[1] == INDEX_VERSION

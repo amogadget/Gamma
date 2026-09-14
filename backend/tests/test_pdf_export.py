@@ -3,7 +3,7 @@ annotation importer, note flattening, and the HTTP endpoint end to end."""
 
 import io
 
-from conftest import make_page, require_math_renderer
+from conftest import make_page, require_math_renderer, workspace_of
 
 from gamma.pdf_export import annotate_pdf, parse_css_color
 
@@ -382,7 +382,7 @@ def test_render_notes_draws_math_and_images(guest):
     """A note is markdown with LaTeX and image refs, not plain text: the box
     typesets the math as vector paths and draws the picture, never the source."""
     import pypdfium2 as pdfium
-    from gamma.db import user_uploads_dir
+    from gamma.db import ws_uploads_dir
     from gamma.pdf_notes import render_notes
 
     png = _blank_png(24, 16)
@@ -393,7 +393,7 @@ def test_render_notes_draws_math_and_images(guest):
     out, drawn = render_notes(_blank_pdf(), [{
         "position": _position(x1=120, y1=300, x2=420, y2=320),
         "note": f"weight $\\phi_j$ over $$\\frac{{\\sum_i x^2}}{{n}}$$\n![shot]({src})",
-    }], uploads_dir=user_uploads_dir("guest"))
+    }], uploads_dir=ws_uploads_dir(workspace_of("guest")))
     assert drawn == 1
 
     doc = pdfium.PdfDocument(out)

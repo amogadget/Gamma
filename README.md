@@ -1,7 +1,7 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-logo-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-logo-light.svg">
-  <img alt="Gamma" src="./docs/assets/branding/gamma-logo-light.svg" width="240">
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-hero-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-hero-light.svg">
+  <img alt="Gamma PDF — read papers, keep what you learn: a highlighted paper next to its outliner notes with a live-rendered equation" src="./docs/assets/branding/gamma-hero-light.svg" width="100%">
 </picture>
 
 # Gamma PDF Annotator
@@ -71,7 +71,7 @@ The **Gamma Connector** extension ([extension/](./extension/)) saves the paper y
 
 Everything a user installs is on the [**Releases**](https://github.com/tim4431/Gamma/releases/latest) page:
 
-- **Desktop app** (Windows installer, macOS dmg, Debian/Ubuntu deb) — a self-contained Gamma with local libraries on your disk, no Docker, Python, or Node. It also opens any Gamma server you host (the NAS, a VPS) as another workspace and switches between them from the toolbar. Details: [desktop/](./desktop/). Builds are unsigned: Windows SmartScreen → *More info → Run anyway*; macOS → right-click → *Open*; Linux: `sudo apt install ./Gamma-<version>-linux-amd64.deb`.
+- **Desktop app** (Windows installer, macOS dmg, Debian/Ubuntu deb) — a self-contained Gamma with local libraries on your disk, no Docker, Python, or Node. It also opens any Gamma server you host (the NAS, a VPS) as another workspace and switches between them from the toolbar. Details: [desktop/](./desktop/). Builds are not notarized: Windows SmartScreen → *More info → Run anyway*; macOS says *Apple could not verify Gamma* on first launch → *System Settings → Privacy & Security → Open Anyway* (once); Linux: `sudo apt install ./Gamma-<version>-linux-amd64.deb`. Windows and Linux apps update themselves.
 - **Gamma Connector** browser extension (`gamma-connector-<version>.zip`, in its own `extension-v<version>` release) — unzip, then `chrome://extensions` → *Developer mode* → *Load unpacked*.
 - **Server** — the Docker image below, built from `main` on every merge.
 
@@ -92,7 +92,7 @@ cp docker-compose.yml.example docker-compose.yml
 docker compose up -d
 ```
 
-Open <http://localhost:9001> and log in with the seeded `admin` password from `docker logs gamma` (printed once on first start). Everything — accounts, notes, and uploaded PDFs — lives under the container's `/data` volume, so your library survives upgrades. Back it up by copying that volume or using the in-app **Export my data** zip; restore a zip with **Import data** in the same menu. If you bind-mount `/data` to a host folder, set `PUID`/`PGID` to your user's ids (`id -u` / `id -g`) so the files belong to you instead of root.
+Open <http://localhost:9001> and log in with the seeded `admin` password from `docker logs gamma` (printed once on first start). Everything — accounts, notes, and uploaded PDFs — lives under the container's `/data` volume, so your library survives upgrades. Back it up by copying that volume, with an admin's **Server backups** snapshot (Settings → Advanced: databases, or everything, downloadable as a zip), or per workspace with **Export** in Settings → Members & sharing; restore a workspace zip with **Import** in the same pane, a server snapshot with `manage.py backups --restore`. If you bind-mount `/data` to a host folder, set `PUID`/`PGID` to your user's ids (`id -u` / `id -g`) so the files belong to you instead of root.
 
 Users are managed in the app: sign in with an admin account → account menu → *Manage users…* (create/delete accounts, reset passwords, grant or revoke the admin privilege — admin is a flag, not a special name). The CLI equivalent still works:
 
@@ -154,7 +154,7 @@ Put a TLS-terminating reverse proxy (Caddy, nginx) in front of 9001 for a domain
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
-| `GAMMA_DATA_DIR` | No | `backend/` (`/data` in Docker) | Where users.db and per-user data live |
+| `GAMMA_DATA_DIR` | No | `data/` at the repo root (`/data` in Docker) | Where `users.db` and the per-workspace data live |
 | `GAMMA_STATIC_DIR` | No | unset (`/app/static` in Docker) | Built frontend to serve as SPA; unset = API only |
 | `GAMMA_PORT` | No | `9001` | Listen port (Docker entrypoint only) |
 | `GAMMA_ADMIN_USER` / `GAMMA_ADMIN_PASSWORD` | No | `admin` / random, printed to the log once | Overrides the account a **fresh** instance seeds itself at startup (only while no real accounts exist; never touched afterwards). Admins manage users from the GUI (account menu → *Manage users…*) |
@@ -187,7 +187,7 @@ A single service: a **FastAPI** backend that also serves the built **React** fro
 For source and asset locations, see the [repository map](./docs/dev/repository.md).
 
 - **Everything is a block.** Highlights and free notes are rows in one `unified_blocks` table (self-referential `parent_id`, fractional-index `position`). Root-level blocks are pages; a page with a PDF is a paper.
-- **Per-user isolation.** `users.db` holds accounts and tokens; each user gets their own `pages.db` and `uploads/` folder under `GAMMA_DATA_DIR`.
+- **Workspaces.** `users.db` holds accounts, tokens and memberships; every workspace (each account's personal one, plus shared ones you create and invite people to as owner / editor / viewer) has its own `pages.db` and `uploads/` folder under `GAMMA_DATA_DIR`. Switch workspaces from the account menu.
 - **View modes come from the URL** (no router lib): `/` home · `/?page=<id>` a page · `/?block=<id>` jump to a block · `/?share=<token>` a shared page.
 
 <details>
@@ -199,8 +199,7 @@ Gamma borrows the ideas from Logseq that fit PDF annotation: everything is a blo
 
 ## Known limitations
 
-- Autosave is debounced at 500 ms; closing the tab within that window can lose the last keystroke.
-- No conflict handling for simultaneous edits across tabs/devices — last write wins.
+- Simultaneous editing merges per block: when two people type in the *same* block at the same moment, the last write to reach the server wins for that block (you can see who is where, so this is rare).
 - Paywalled papers can't be fetched server-side; Gamma substitutes an open-access copy when one exists, otherwise download in your browser and drop the file in.
 - `src/App.jsx` is still one large component; see the [decomposition plan](./docs/dev/frontend-refactor.md).
 

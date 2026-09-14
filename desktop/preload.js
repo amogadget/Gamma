@@ -2,7 +2,7 @@
 //
 // - file: pages (the launcher + the shell bar — the shell's own chrome) get
 //   the `gammaShell` IPC bridge.
-// - http(s) pages (a workspace's Gamma frontend) get NOTHING exposed. The
+// - http(s) pages (a server's Gamma frontend) get NOTHING exposed. The
 //   only thing that happens there is a read-only mirror: the page's
 //   `data-theme` attribute is reported to the main process so the shell
 //   chrome paints in the same theme. Gamma stays a black box.
@@ -19,6 +19,7 @@ if (window.location.protocol === 'file:') {
     rename: (id, name) => ipcRenderer.invoke('shell:rename', id, name),
     remove: (id, opts) => ipcRenderer.invoke('shell:remove', id, opts),
     open: (id) => ipcRenderer.invoke('shell:open', id),
+    openWorkspace: (id) => ipcRenderer.invoke('shell:open-workspace', id),
     launcher: () => ipcRenderer.invoke('shell:launcher'),
     reload: () => ipcRenderer.invoke('shell:reload'),
     revealData: (id) => ipcRenderer.invoke('shell:reveal-data', id),

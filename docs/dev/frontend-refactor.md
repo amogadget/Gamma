@@ -27,7 +27,7 @@ Paths below are relative to `frontend/src/`.
 | `app/navigation.js`, `app/useNavigation.js` | Parse/build URLs, home/page transitions, link-jump back stack | `homeUrlFor`, initial query parsing, `openBlock`, `goHome`, `pushNav`, `goBackNav` orchestration |
 | `app/preferences/` | Account-scoped tabs, recents, pinned folders, appearance, and reading positions | `pushPrefSoon`, `applyServerTabs`, read-position and recents synchronization |
 | `features/pages/usePageSession.js` | Active page identity, tree, load state, and metadata updates | Page fields, `loadBlocksForBlock`, the data-loading portion of `openBlock` |
-| `features/editor/usePageSave.js` | Queued writes, debounce, retries, explicit flush, unload handling | `pendingSaveRef`, `savePending`, `flushPendingSave`, autosave effects |
+| `features/editor/` (done: `src/collab.js`) | Queued writes, debounce, retries, explicit flush, unload handling — now the live session hook `usePageCollab` ([collab.md](collab.md)); App keeps only the transition effect and the remote-apply glue | `commit`, `flush`, `onRemoteOps` |
 | `features/editor/` | Block editing, caret/focus, undo, and notes rendering | Existing editor files, `editTail`, notes-window markup and editor actions |
 | `features/library/` | Listing derivation, selection, page/folder/label operations, and library UI | `pageBlocks` through `homeEntries`, click handlers, retagging, rename/move/delete, carousels |
 | `features/workspace/` | Dock arrangement, visibility, panel sizes, drag geometry, and phone presentation | `moveWindow`, `startWindowDock`, `renderSlotGroup`, per-page layout snapshots |
@@ -183,6 +183,6 @@ for this work.
   here so proposed paths are never mistaken for the implemented layout.
 
 Completion means App only composes the session/view and feature boundaries;
-it no longer implements save queues, provider forms, folder mutations, or
+it does not implement save queues, provider forms, folder mutations, or
 pointer geometry. A few hundred lines is a useful direction, not a line-count
 target that justifies hiding complexity in a replacement giant hook.

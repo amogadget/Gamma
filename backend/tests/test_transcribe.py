@@ -14,7 +14,7 @@ def bob(client):
     """A separate TestClient logged in as a real (non-guest) user."""
     from gamma.app import app
     from gamma.db import connect_users_db, page_now
-    from gamma.seed import create_user_dbs
+    from gamma import workspaces
 
     with connect_users_db() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE username = 'bob'").fetchone():
@@ -23,7 +23,7 @@ def bob(client):
                 ("bob", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode(), page_now()),
             )
             conn.commit()
-    create_user_dbs("bob")
+    workspaces.ensure_personal("bob")
     c = TestClient(app)
     r = c.post("/api/login", json={"username": "bob", "password": "pw"})
     assert r.status_code == 200, r.text

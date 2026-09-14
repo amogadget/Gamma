@@ -1,24 +1,18 @@
-// Settings → Users: the GUI for /api/admin/users*, plus the backup/restore
-// actions for each account (the Export/Import menus). Two separate editors per
+// Settings → Users: the GUI for /api/admin/users*. Two separate editors per
 // account — credentials (rename/password/privilege) and storage limits.
 //
 // Non-admins get this pane too, as "You": a single read-only row for
-// themselves with the data menus. /api/admin/* is admin-only, so their row is
-// built from the session + /api/quota instead of the accounts listing, and
-// there is no editor — the same rule the backend enforces on /api/export and
-// /api/import-data (your own account, unless you are an admin).
+// themselves. /api/admin/* is admin-only, so their row is built from the
+// session + /api/quota instead of the accounts listing, and there is no
+// editor. Backups of anyone's workspaces live in Settings → Backups (and,
+// for admins, Settings → Server), not here.
 import React from "react";
 import { API, apiJson } from "./utils";
-import { ActionMenu } from "./menus";
 import { PaneHead, SubDialog, Field, UnitInput, Empty, QuotaMeter, PasswordInput } from "./settingsKit";
-import {
-  DatabaseIcon, ExportIcon, HardDriveIcon, ImportIcon, PenIcon, PlusIcon,
-  ShieldIcon, Trash2Icon, UserIcon, UsersIcon,
-} from "./icons";
+import { HardDriveIcon, PenIcon, PlusIcon, ShieldIcon, Trash2Icon, UserIcon, UsersIcon } from "./icons";
 
 export function UsersSettings({ value }) {
-  const { setStatus, confirm, onSelfRenamed, refreshQuota, closeSettings,
-          isAdmin, me, isGuest, quotaInfo, exportUserData, importUserData } = value;
+  const { setStatus, confirm, onSelfRenamed, refreshQuota, isAdmin, me, isGuest, quotaInfo } = value;
   const [info, setInfo] = React.useState(null); // {users, me}
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -76,14 +70,6 @@ export function UsersSettings({ value }) {
     } finally {
       setBusy(false);
     }
-  }
-
-  // Export/import report progress in the status pill and the background-tasks
-  // popover, and the import confirm box wants the screen — so get out of the
-  // settings modal first.
-  function runDataAction(fn) {
-    closeSettings?.();
-    fn();
   }
 
   // Two separate editors per account: credentials (rename/password/privilege)
@@ -176,49 +162,6 @@ export function UsersSettings({ value }) {
     if (!d) return;
     setStatus(`Created ${f.username.trim()}.`);
     setAddForm(null);
-  }
-
-  // Backup/restore, as Export/Import dropdowns on every row. Admins get them
-  // on each account; everyone else only ever sees their own row.
-  function dataMenus(u) {
-    const mine = u.username === myName;
-    const who = mine ? "your" : `${u.username}'s`;
-    return (
-      <>
-        <ActionMenu
-          label="Export" icon={ExportIcon}
-          items={[
-            {
-              icon: ExportIcon, label: "Everything (.zip)",
-              title: `Download a zip backup: ${who} notes databases + every uploaded PDF`,
-              onClick: () => runDataAction(() => exportUserData(true, u.username)),
-            },
-            {
-              icon: DatabaseIcon, label: "Database only (.zip)",
-              title: "A small zip with just the databases (notes, chats, settings) — no uploaded PDFs",
-              onClick: () => runDataAction(() => exportUserData(false, u.username)),
-            },
-          ]}
-        />
-        {u.is_guest ? null : (
-          <ActionMenu
-            label="Import" icon={ImportIcon}
-            items={[
-              {
-                icon: ImportIcon, label: "Restore backup…",
-                title: `Restore an exported zip: ${who} notes and settings are replaced by the backup, uploaded files are merged in`,
-                onClick: () => runDataAction(() => importUserData("replace", u.username)),
-              },
-              {
-                icon: PlusIcon, label: "Merge in…",
-                title: `Add pages from an exported zip that are missing there; everything already in ${mine ? "your" : "that"} account is kept unchanged`,
-                onClick: () => runDataAction(() => importUserData("merge", u.username)),
-              },
-            ]}
-          />
-        )}
-      </>
-    );
   }
 
   const closeEdit = () => { setEdit(null); setError(""); };
@@ -325,7 +268,6 @@ export function UsersSettings({ value }) {
           <QuotaMeter usedBytes={u.used_bytes} quotaMb={u.quota_mb ?? defaults?.quota_mb} />
         </span>
         <span className="aiProvActions">
-          {dataMenus(u)}
           {isAdmin ? (
             <>
               <button
@@ -361,7 +303,7 @@ export function UsersSettings({ value }) {
         </PaneHead>
       ) : (
         <PaneHead icon={UserIcon} title="You">
-          Your account and its storage. Only an admin can rename it or change its limits.
+          Your account and its storage. Only an admin can rename it or change its limits; your workspaces and their backups have panes of their own.
         </PaneHead>
       )}
       {isAdmin && !info && !error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}

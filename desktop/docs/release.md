@@ -31,24 +31,30 @@ on Ubuntu ≥ 24.04), so `test/smoke.js` and `test/e2e.js` start it with
 
 ## The `desktop` workflow
 
-**Releasing** is `.github/workflows/desktop.yml`. It runs on every push to
-`main` that touches `desktop/`, `backend/` or `frontend/` (the app bundles
-all three) and by hand (`gh workflow run desktop.yml --ref main`; the
-`release` skill wraps it). Every run builds Windows + macOS + Linux
-(frontend build → backend freeze → frozen-server health check →
+**A merge to `main` is a release.** `.github/workflows/desktop.yml` runs on
+every push to `main` that touches `desktop/`, `backend/` or `frontend/`
+(the app bundles all three) and by hand (`gh workflow run desktop.yml
+--ref main`). Every run builds Windows + macOS + Linux (pin the version →
+frontend build → backend freeze → frozen-server health check →
 electron-builder → signature verification → packaged `--smoke`; the Linux
 job additionally `apt install`s the `.deb` on the runner and runs the
-`--smoke` self-test from `/opt/Gamma/gamma`, sandbox on, under Xvfb). The
-GitHub Release `Gamma <version>` is created only when the `v<version>` tag
-does not exist yet — the workflow creates that tag itself, so no tags are
-pushed by hand. The version is `desktop/package.json`'s: bump it and merge,
-and the merge releases; a merge without a bump is a build check whose
-installers stay workflow artifacts for 14 days. Dispatch inputs: `version`
-override, `prerelease`, and `publish=false` to force build-only. The
-browser extension (`extension.yml`, releases tagged `extension-v<version>`,
+`--smoke` self-test from `/opt/Gamma/gamma`, sandbox on, under Xvfb) and,
+when all three pass, publishes the GitHub Release `Gamma <version>` and its
+`v<version>` tag from the merged commit. **The version is computed**: the
+newest `v*` tag with the patch number + 1, unless `desktop/package.json`'s
+`"version"` is higher — raise that "floor" and merge to make a minor or
+major release. The number is pinned into the app on each runner
+(`npm version`, no git tag), so About, the update feed and the MSIX carry
+it while the repo file stays a floor. Release notes are the commit
+subjects since the previous tag. Dispatch inputs: `version` override,
+`prerelease`, and `publish=false` for build-only artifacts (14 days). The
+publish job also dispatches `docker.yml` on the new tag so the server image
+gets a `<version>` tag, and the Windows job submits the MSIX to the
+Microsoft Store when the Partner Center secrets exist (below). The browser
+extension (`extension.yml`, releases tagged `extension-v<version>`,
 published with `make_latest: false` so the desktop release stays the
-repository's "latest" — the updater depends on that) and the Docker image
-(`docker.yml`) are separate workflows; all three side by side:
+repository's "latest" — the updater depends on that) is a separate
+workflow; everything side by side, with the version rule spelled out:
 [docs/dev/github_actions.md](../../docs/dev/github_actions.md).
 
 ## Code signing (optional, secret-gated)
@@ -75,13 +81,26 @@ whether the build is signed.
 
 **Unsigned builds** (the state until the accounts exist): Windows shows
 SmartScreen's *More info → Run anyway* (Edge's download shelf: *… → Keep →
-Keep anyway*); macOS ≥ 15 reports the app as *damaged* until
-`xattr -dr com.apple.quarantine /Applications/Gamma.app` (or *Open Anyway*
-in System Settings → Privacy & Security). SmartScreen reputation is per
-certificate: even signed, a brand-new certificate can still trigger Edge's
-"not commonly downloaded" notice for the first downloads (EV certificates
-skip that). Once mac builds are signed, also flip `IN_APP_INSTALL` for
-darwin in `lib/updater.js` so macOS updates install in place.
+Keep anyway*). SmartScreen reputation is per certificate: even signed, a
+brand-new certificate can still trigger Edge's "not commonly downloaded"
+notice for the first downloads (EV certificates skip that).
+
+**macOS without a Developer ID is ad-hoc signed**, not left unsigned.
+electron-builder skips signing entirely when it finds no identity, and on
+macOS 14/15 an unsigned app from the internet gets the dead-end *Gamma is
+damaged and can't be opened* dialog — only `xattr -dr com.apple.quarantine`
+in a terminal gets past it. `scripts/adhoc-sign.cjs`, an `afterPack` hook,
+runs `codesign --force --deep --sign - Gamma.app` before the dmg/zip are
+made (it does nothing when `CSC_LINK`/`CSC_NAME` is set; osx-sign then
+signs with the real identity). An ad-hoc signed app gets *Apple could not
+verify Gamma is free of malware* instead, and after that first attempt
+*System Settings → Privacy & Security → Security* shows an **Open Anyway**
+button: one click, once per download. The workflow's *Verify signature*
+step checks `Signature=adhoc` on cert-less builds. Limits that only a
+Developer ID removes: the dialog itself (notarization), and in-place
+updates — Squirrel.Mac refuses to swap in an app without a matching real
+signature, so `IN_APP_INSTALL` in `lib/updater.js` stays off for darwin and
+the shell only notifies. Flip it once the builds are signed and notarized.
 
 ### Cheaper distribution routes
 
@@ -163,7 +182,7 @@ The package version must increase per submission
 (`package.json` `<version>` becomes `<version>.0`; the Store requires the
 fourth part to be 0, which electron-builder guarantees). Certification takes one
 to three days; the reviewer launches the app, so a fresh install must reach
-the launcher with no workspace configured.
+the launcher with no server configured.
 
 **Runtime differences of the Store install:**
 
@@ -171,15 +190,15 @@ the launcher with no workspace configured.
   (reason `store`) and the launcher / *Help → Check for Updates…* say the
   Store delivers updates. `electron-updater` is never initialized.
 - MSIX virtualizes AppData: Electron's userData (the registry and every
-  local workspace's data dir under it, see
+  local server's data dir under it, see
   [architecture.md](architecture.md#shell-state)) lands in
   `%LOCALAPPDATA%\Packages\xwtim.GammaPDF_<hash>\LocalCache\Roaming\gamma-desktop`.
-  A Store install and an NSIS install never see each other's workspaces, and
+  A Store install and an NSIS install never see each other's servers, and
   **uninstalling the Store app deletes that folder**, including local
-  workspaces' PDFs and databases.
-- The launcher's *Local workspace storage* setting is the way out of that
+  servers' PDFs and databases.
+- The launcher's *Local server storage* setting is the way out of that
   folder: pick one outside the package (e.g. under *Documents*) and *Move
-  data* relocates the existing workspaces there
+  data* relocates the existing servers there
   ([architecture.md](architecture.md#shell-state)).
 - The install directory (`C:\Program Files\WindowsApps\…`) is read-only.
   Fine for the onedir sidecar, which writes only to `GAMMA_DATA_DIR`.
@@ -213,9 +232,33 @@ Get-AppxPackage *GammaPDF* | Remove-AppxPackage   # before re-installing the sam
 Do not point `CSC_LINK` at the dev pfx instead: electron-builder would
 then sign the NSIS build with the throwaway certificate too.
 
-Automating the upload later: the `msstore` CLI or the
-`microsoft/store-submission` action, both driven by an Entra app
-registration linked to the Partner Center account.
+**Automatic submission.** The desktop workflow's Windows job submits the
+MSIX itself when four repository secrets exist, using Microsoft's `msstore`
+CLI (installed on the runner by `microsoft/microsoft-store-apppublisher`;
+the older `microsoft/store-submission` action is deprecated in its favour):
+
+```bash
+msstore reconfigure --tenantId … --sellerId … --clientId … --clientSecret …
+msstore publish Gamma-<version>.msix --appId 9N8WGWR2J2MV
+```
+
+`publish` uploads the package, creates a submission and commits it to
+certification (still 1–3 days; the Store then rolls the update out). The
+CLI only accepts `.msix` file names, and electron-builder's `.appx` is the
+same format, so the workflow copies it under that name. The package
+version is the computed release version plus `.0`, which satisfies the
+Store's must-increase rule. Only one submission can be in certification at
+a time, so the step is `continue-on-error`: a second release the same day
+logs a warning and the next release submits. Where the secrets come from
+(set each with `gh secret set NAME` from a terminal):
+
+| Secret | Partner Center |
+|---|---|
+| `PARTNER_CENTER_TENANT_ID`, `PARTNER_CENTER_CLIENT_ID`, `PARTNER_CENTER_CLIENT_SECRET` | *Account settings → User management → Azure AD applications*: add (or create) an Azure AD app registration with the *Manager* role, then create a client secret for it. Tenant id = the Azure AD tenant it lives in. |
+| `PARTNER_CENTER_SELLER_ID` | *Account settings → Organization profile → Legal info* (a numeric id). |
+
+Without the secrets the step prints a notice and the MSIX stays the
+`store-windows` workflow artifact for manual upload as described above.
 
 ## Auto-update feed
 

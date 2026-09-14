@@ -4,18 +4,18 @@ import io
 import sqlite3
 import zipfile
 
-from conftest import make_page
+from conftest import make_page, workspace_of
 
 
 def _index_rows(user, doc_id, pages):
     """Insert index rows directly, the way _index_doc stores them (normalized
     text, current version — otherwise the endpoint schedules a re-index that
     would race the test and delete these rows)."""
-    from gamma.db import user_db_path
+    from gamma.db import ws_db_path
     from gamma.pdf_index import ensure_schema
     from gamma.textnorm import INDEX_VERSION, normalize_text
 
-    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of(user), "data.db")) as conn:
         ensure_schema(conn)
         conn.execute("DELETE FROM pdf_fts WHERE doc_id = ?", (doc_id,))
         conn.executemany("INSERT INTO pdf_fts (doc_id, page, content) VALUES (?, ?, ?)",
@@ -55,12 +55,12 @@ def test_pdf_search_is_separator_tolerant(guest):
 
 
 def test_stale_index_version_counts_as_missing(guest):
-    from gamma.db import user_db_path
+    from gamma.db import ws_db_path
     from gamma.pdf_index import ensure_schema
 
     user = guest.get("/api/session").json()["user"]
     make_page(guest, "Stale paper", properties={"doc_id": "ftsdoc003"})
-    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of(user), "data.db")) as conn:
         ensure_schema(conn)
         conn.execute("INSERT OR REPLACE INTO pdf_fts_docs (doc_id, indexed_at, pages, ver) "
                      "VALUES ('ftsdoc003', '2025', 1, 0)")  # pre-normalization row
@@ -71,7 +71,7 @@ def test_stale_index_version_counts_as_missing(guest):
 
 
 def test_search_reindex_marks_everything_stale(guest):
-    from gamma.db import user_db_path
+    from gamma.db import ws_db_path
     from gamma.textnorm import INDEX_VERSION
 
     user = guest.get("/api/session").json()["user"]
@@ -85,7 +85,7 @@ def test_search_reindex_marks_everything_stale(guest):
 
     # The doc's bookkeeping row survives (ver may be 0 = stale or already
     # re-stamped by the background thread — no PDF file makes that instant).
-    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of(user), "data.db")) as conn:
         ver = conn.execute("SELECT ver FROM pdf_fts_docs WHERE doc_id = 'ftsdoc004'").fetchone()[0]
     assert ver in (0, INDEX_VERSION)
 
@@ -93,7 +93,7 @@ def test_search_reindex_marks_everything_stale(guest):
 def test_search_reindex_targeted_single_doc(guest):
     """doc_ids re-indexes just those papers: no global stale stamp, and ids
     outside the caller's library are ignored."""
-    from gamma.db import user_db_path
+    from gamma.db import ws_db_path
     from gamma.textnorm import INDEX_VERSION
 
     user = guest.get("/api/session").json()["user"]
@@ -108,7 +108,7 @@ def test_search_reindex_targeted_single_doc(guest):
 
     # The untouched doc keeps its current-version stamp (a full rebuild would
     # have zeroed it).
-    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of(user), "data.db")) as conn:
         ver = conn.execute(
             "SELECT ver FROM pdf_fts_docs WHERE doc_id = 'ftsdoc005'").fetchone()[0]
     assert ver == INDEX_VERSION

@@ -1,6 +1,6 @@
 """Library-wide full-text search: notes (block_fts) and PDF contents (pdf_fts).
 
-Both indexes are SQLite FTS5 tables in the per-user data.db. The PDF one is
+Both indexes are SQLite FTS5 tables in the workspace's data.db. The PDF one is
 built here: each paper's text is extracted once, so searching ~1000 papers is
 a millisecond-range query instead of opening a thousand PDFs; missing papers
 are indexed lazily by a background thread the first time a search runs, and
@@ -30,10 +30,10 @@ from pydantic import BaseModel
 
 from .. import block_index, pdf_index
 from ..ai_context import pdf_path as _pdf_path
-from ..auth import require_user
+from ..auth import require_ws
 from ..block_index import fts_query
 from ..blocks_store import root_pages
-from ..db import page_now, user_db_path
+from ..db import connect_pages_db, page_now, ws_db_path
 from ..logbuf import log
 from ..pdf_text import extract_pages
 from ..textnorm import INDEX_VERSION, normalize_text
@@ -43,7 +43,7 @@ router = APIRouter(prefix="/api", tags=["search"])
 _MAX_PAGE_CHARS = 20000   # per page
 
 _index_threads: dict[str, threading.Thread] = {}
-_index_progress: dict[str, dict] = {}  # user -> {"total": n, "done": m}
+_index_progress: dict[str, dict] = {}  # workspace -> {"total": n, "done": m}
 _index_lock = threading.Lock()
 
 
@@ -52,12 +52,12 @@ def _extract_pages(path) -> list[str]:
     return extract_pages(str(path))
 
 
-def _index_doc(user: str, doc_id: str):
+def _index_doc(ws: str, doc_id: str):
     """Extract a PDF's text into the FTS index. Failures are recorded (pages=0)
     so a broken file isn't re-parsed on every search."""
     rows = []
     try:
-        path = _pdf_path(user, doc_id)
+        path = _pdf_path(ws, doc_id)
         if path:
             for i, raw in enumerate(_extract_pages(path), start=1):
                 text = normalize_text(raw)
@@ -65,7 +65,7 @@ def _index_doc(user: str, doc_id: str):
                     rows.append((doc_id, i, text[:_MAX_PAGE_CHARS]))
     except Exception as e:
         log.warning(f"[pdf-search] indexing {doc_id} failed: {e}")
-    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(ws, "data.db")) as conn:
         pdf_index.ensure_schema(conn)
         conn.execute("DELETE FROM pdf_fts WHERE doc_id = ?", (doc_id,))
         conn.executemany("INSERT INTO pdf_fts (doc_id, page, content) VALUES (?, ?, ?)", rows)
@@ -76,23 +76,23 @@ def _index_doc(user: str, doc_id: str):
         conn.commit()
 
 
-def _index_missing_async(user: str, doc_ids: list[str]) -> bool:
-    """One background indexer per user at a time, with visible progress.
+def _index_missing_async(ws: str, doc_ids: list[str]) -> bool:
+    """One background indexer per workspace at a time, with visible progress.
     Returns False if one is already running (the request is dropped, not
     queued — the next search re-computes what's missing anyway)."""
     with _index_lock:
-        t = _index_threads.get(user)
+        t = _index_threads.get(ws)
         if t and t.is_alive():
             return False
 
         def run():
-            prog = _index_progress[user] = {"total": len(doc_ids), "done": 0}
+            prog = _index_progress[ws] = {"total": len(doc_ids), "done": 0}
             for d in doc_ids:
-                _index_doc(user, d)
+                _index_doc(ws, d)
                 prog["done"] += 1
 
         t = threading.Thread(target=run, daemon=True)
-        _index_threads[user] = t
+        _index_threads[ws] = t
         t.start()
         return True
 
@@ -106,8 +106,8 @@ def search_reindex(request: Request, payload: ReindexRequest | None = None):
     """Settings: re-extract papers into the FTS index. With doc_ids, just those
     papers (the Library pane's per-paper button — no global stale stamp);
     without, the whole library. Progress is visible via /api/tasks either way."""
-    user = require_user(request)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    ws = require_ws(request, write=True)
+    with connect_pages_db(ws) as conn:
         library = [info["doc_id"] for info in root_pages(conn).values() if info["doc_id"]]
     wanted = [d for d in (payload.doc_ids if payload else []) if d]
     if wanted:
@@ -116,13 +116,13 @@ def search_reindex(request: Request, payload: ReindexRequest | None = None):
         doc_ids = library
         # Stamp everything stale first: if the run is interrupted, the next
         # search still sees the remainder as missing and finishes the job.
-        with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+        with sqlite3.connect(ws_db_path(ws, "data.db")) as conn:
             pdf_index.ensure_schema(conn)
             conn.execute("UPDATE pdf_fts_docs SET ver = 0")
             conn.commit()
-    started = doc_ids and _index_missing_async(user, doc_ids)
+    started = doc_ids and _index_missing_async(ws, doc_ids)
     if not wanted:
-        block_index.mark_all_dirty(user)  # notes rebuild on the next search
+        block_index.mark_all_dirty(ws)  # notes rebuild on the next search
     return {"scheduled": len(doc_ids) if started else 0,
             "busy": bool(doc_ids) and not started}
 
@@ -130,41 +130,41 @@ def search_reindex(request: Request, payload: ReindexRequest | None = None):
 @router.get("/tasks")
 def background_tasks(request: Request):
     """Server-side background work for the tasks popover (extensible)."""
-    user = require_user(request)
+    ws = require_ws(request)
     with _index_lock:
-        t = _index_threads.get(user)
-        prog = _index_progress.get(user) or {"total": 0, "done": 0}
+        t = _index_threads.get(ws)
+        prog = _index_progress.get(ws) or {"total": 0, "done": 0}
         return {"indexing": {**prog, "active": bool(t and t.is_alive())}}
 
 
 @router.get("/search")
 def library_search(request: Request, q: str = "", limit: int = 20, scope: str = ""):
-    """One search over the user's knowledge base: notes (block_fts) and the
+    """One search over the workspace's knowledge base: notes (block_fts) and the
     text of PDF attachments (pdf_fts). Owner-only, like /pdf-search. Results
     are notes first (bm25 order), then PDF hits, each capped at ``limit``;
     ``indexing`` counts what is still being built (note pages waiting for a
     rebuild batch + PDFs the background extractor hasn't reached)."""
-    user = require_user(request)
+    ws = require_ws(request)
     q = (q or "").strip()
     limit = max(1, min(int(limit or 20), 100))
     if not q:
         return {"results": [], "indexing": 0}
     match = fts_query(q)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         pages = root_pages(conn, scope)
         # Notes: rebuild what changed (synchronous, batch-capped), then query.
-        pending = block_index.refresh(user, conn, list(pages)) if pages else 0
+        pending = block_index.refresh(ws, conn, list(pages)) if pages else 0
     docs = {info["doc_id"]: page_id for page_id, info in pages.items() if info["doc_id"]}
     results = []
     missing: list = []
-    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(ws, "data.db")) as conn:
         for block_id, page_id, snippet in block_index.search_blocks(conn, match, limit, pages):
             results.append({"source": "notes", "block_id": block_id, "page_id": page_id,
                             "title": pages[page_id]["title"], "snippet": snippet})
         if docs:
             missing = pdf_index.pdf_missing(conn, docs)
             if missing:
-                _index_missing_async(user, missing)
+                _index_missing_async(ws, missing)
             for doc_id, page, snippet in pdf_index.search_pdf(conn, match, limit, docs):
                 page_id = docs[doc_id]
                 results.append({"source": "pdf", "block_id": page_id, "page_id": page_id,
@@ -175,22 +175,22 @@ def library_search(request: Request, q: str = "", limit: int = 20, scope: str = 
 
 @router.get("/pdf-search")
 def pdf_search(request: Request, q: str = "", limit: int = 20):
-    user = require_user(request)
+    ws = require_ws(request)
     q = (q or "").strip()
     if not q:
         return {"results": [], "indexing": 0}
 
     # Library papers: doc_id → page block (title + id to open)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         docs = {info["doc_id"]: {"block_id": page_id, "title": info["title"]}
                 for page_id, info in root_pages(conn).items() if info["doc_id"]}
     if not docs:
         return {"results": [], "indexing": 0}
 
-    with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+    with sqlite3.connect(ws_db_path(ws, "data.db")) as conn:
         missing = pdf_index.pdf_missing(conn, docs)  # never indexed or stale version
         if missing:
-            _index_missing_async(user, missing)
+            _index_missing_async(ws, missing)
         results = [{"block_id": docs[doc_id]["block_id"], "doc_id": doc_id,
                     "title": docs[doc_id]["title"], "page": page, "snippet": snip}
                    for doc_id, page, snip in pdf_index.search_pdf(conn, fts_query(q), limit, docs)]

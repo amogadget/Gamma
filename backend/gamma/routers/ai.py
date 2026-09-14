@@ -66,9 +66,9 @@ from ..ai_settings import (
     require_ai_runtime,
     save_provider_entries,
 )
-from ..auth import require_user
+from ..auth import require_user, require_ws, ws_role
 from ..config import AI_PROTOCOLS
-from ..db import page_now, user_db_path
+from ..db import page_now, ws_db_path
 from ..logbuf import log
 from ..pdf_text import extract_text
 from ..textnorm import INDEX_VERSION
@@ -153,11 +153,11 @@ def _resolve_effort(requested: str) -> str:
     return requested if requested in EFFORT_LEVELS else ""
 
 
-def _search_index_status(user: str, doc_id: str) -> dict:
+def _search_index_status(ws: str, doc_id: str) -> dict:
     """Whether the search index covers this doc — same rules as
     /api/metadata/status (ver mismatch = stale, re-indexed lazily)."""
     try:
-        with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+        with sqlite3.connect(ws_db_path(ws, "data.db")) as conn:
             row = conn.execute(
                 "SELECT ver FROM pdf_fts_docs WHERE doc_id = ?", (doc_id,)
             ).fetchone()
@@ -175,10 +175,10 @@ def pdf_text_status(doc_id: str, request: Request, preview: int = 0):
     scanned/image-only PDF is why AI answers blind and metadata lookups come
     up empty. `preview` > 0 additionally returns that many characters of the
     text itself (capped)."""
-    user = require_user(request)
+    ws = require_ws(request)
     preview = min(max(preview, 0), 20000)
-    index = _search_index_status(user, doc_id)
-    pdf_path = _pdf_path(user, doc_id)
+    index = _search_index_status(ws, doc_id)
+    pdf_path = _pdf_path(ws, doc_id)
     if not pdf_path:
         return {"found": False, "ok": False, "chars": 0, **index}
     try:
@@ -1167,6 +1167,9 @@ _NATIVE_PDF_REJECTED: set = set()
 @router.post("/ai/chat")
 def ai_chat(payload: AIChatRequest, request: Request):
     user = require_user(request)
+    # The chat reads (and its tools edit) the request's workspace; the AI
+    # providers are the account's own. A viewer gets no mutating tools.
+    ws = require_ws(request)
     rt = require_ai_runtime(user)
 
     entry = _resolve_model(rt, payload.model)
@@ -1180,7 +1183,8 @@ def ai_chat(payload: AIChatRequest, request: Request):
              # The agent prompt names the cursor block / attached chips so
              # "this block" resolves without a read_block round-trip.
              "focus_block_id": (payload.focus_block_id or "").strip()[:64],
-             "context_blocks": [str(b)[:64] for b in payload.context_blocks[:MAX_CONTEXT_BLOCKS]]}
+             "context_blocks": [str(b)[:64] for b in payload.context_blocks[:MAX_CONTEXT_BLOCKS]],
+             "actor": user, "can_write": ws_role(request) != "viewer"}
     valid_scope = payload.agent_scope in ("folder", "page") and (
         payload.agent_scope != "page" or payload.page_id)
     tools = (agent_tools(payload.agent_scope, payload.permissions,
@@ -1189,7 +1193,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
     state = {}
 
     def prepared(allow_native):
-        pdf_b64s, context, coverage = _gather_inputs(user, payload, allow_native)
+        pdf_b64s, context, coverage = _gather_inputs(ws, payload, allow_native)
         state["coverage"] = coverage
         # Agent chats replay each saved reply's tool calls/results so the
         # model keeps what it already listed/read/changed across turns.
@@ -1295,7 +1299,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                     action = tool_action("error", f'{name} — change limit reached',
                                          name, call["arguments"], result, error=True)
                 else:
-                    result, action = run_agent_tool(user, scope, name, call["arguments"])
+                    result, action = run_agent_tool(ws, scope, name, call["arguments"])
                 # Reads and failures render as chips too, but only applied
                 # mutations count against the change budget.
                 if name in MUTATING_TOOLS and not action.get("error"):

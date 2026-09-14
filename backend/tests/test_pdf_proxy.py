@@ -3,10 +3,11 @@ clients can show progress), saves a local copy only on a complete download,
 and rejects non-PDF upstreams. Upstream fetches are faked — no network."""
 
 import hashlib
+from conftest import workspace_of
 import io
 
 import gamma.routers.pdf as pdf_mod
-from gamma.db import user_uploads_dir
+from gamma.db import ws_uploads_dir
 
 PDF_BYTES = b"%PDF-1.4 fake pdf body\n" + b"x" * 200_000
 
@@ -71,7 +72,7 @@ def test_proxy_save_writes_complete_file_then_redirects(guest, monkeypatch):
     r = guest.get("/api/pdf", params={"source_url": url, "save": "1"})
     assert r.status_code == 200
     assert r.content == PDF_BYTES
-    saved = user_uploads_dir("guest") / f"{doc_id}.pdf"
+    saved = ws_uploads_dir(workspace_of("guest")) / f"{doc_id}.pdf"
     assert saved.read_bytes() == PDF_BYTES
     # Second request must not hit upstream at all: it redirects to the saved copy.
     monkeypatch.setattr(pdf_mod, "guarded_urlopen", None)

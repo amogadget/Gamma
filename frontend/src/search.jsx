@@ -166,7 +166,7 @@ export default function SearchPanel({
   focusedBlockId, homeBlocks, allFolderPaths,
   openBlock, pendingBlockScrollRef,
   pdfSearchRef, scrollToRef, cancelCoarseRestoreRef, setPdfHidden, docNonce,
-  onFindMarks, detailsDefault,
+  onFindMarks, detailsDefault, wakeTasks,
 }) {
   const [query, setQuery] = useState("");
   const [labels, setLabels] = useState([]); // confirmed filter chips
@@ -313,7 +313,14 @@ export default function SearchPanel({
       // word matching — the Aa/ab toggles only apply to notes and the
       // open document)
       const libReq = apiJson(`${API}/pdf-search?q=${encodeURIComponent(q)}&limit=15`)
-        .then((d) => { setLibHits(d.results || []); setLibIndexing(d.indexing || 0); })
+        .then((d) => {
+          setLibHits(d.results || []);
+          setLibIndexing(d.indexing || 0);
+          // Missing papers were just scheduled for extraction: wake the
+          // tasks poller so the progress button appears without waiting
+          // for its idle heartbeat.
+          if (d.indexing) wakeTasks?.();
+        })
         .catch(() => { setLibHits([]); setLibIndexing(0); });
       let pdfReq = Promise.resolve();
       const re = pdfSearchRef.current ? buildSearchRegex(q, { caseSensitive, wholeWord }) : null;

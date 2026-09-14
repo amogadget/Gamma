@@ -6,8 +6,8 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import login, make_page, make_user
-from gamma.db import user_uploads_dir
+from conftest import login, make_page, make_user, workspace_of
+from gamma.db import ws_uploads_dir
 
 PDF_BYTES = b"%PDF-1.4 pages test\n" + b"z" * 2000
 
@@ -121,13 +121,13 @@ def test_detach_clears_attachment_and_sweeps_the_file(guest):
     hl = guest.post("/api/blocks", json={
         "parent_id": page["id"], "content": "quoted",
         "properties": {"highlight_id": "h1", "pdf_position": {"page": 1}}}).json()
-    assert (user_uploads_dir("guest") / f"{doc_id}.pdf").is_file()
+    assert (ws_uploads_dir(workspace_of("guest")) / f"{doc_id}.pdf").is_file()
 
     r = guest.delete(f"/api/pages/{page['id']}/attachment")
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["ok"] and f"{doc_id}.pdf" in body["removed_uploads"]
-    assert not (user_uploads_dir("guest") / f"{doc_id}.pdf").exists()
+    assert not (ws_uploads_dir(workspace_of("guest")) / f"{doc_id}.pdf").exists()
     props = body["block"]["properties"]
     assert not any(k in props for k in ("doc_id", "source_url", "original_filename"))
     assert guest.get(f"/api/blocks/{hl['id']}").json()["properties"]["pdf_position"] == {"page": 1}
@@ -145,7 +145,7 @@ def test_detach_keeps_a_file_another_page_still_uses(guest):
     guest.post("/api/blocks", json={"parent_id": other["id"], "content": f"[paper](/api/uploads/{doc_id}.pdf)"})
     r = guest.delete(f"/api/pages/{keeper['id']}/attachment")
     assert r.status_code == 200 and r.json()["removed_uploads"] == []
-    assert (user_uploads_dir("guest") / f"{doc_id}.pdf").is_file()
+    assert (ws_uploads_dir(workspace_of("guest")) / f"{doc_id}.pdf").is_file()
 
 
 @pytest.fixture
@@ -279,10 +279,10 @@ def test_orphan_cleanup_spares_fresh_uploads(guest, monkeypatch):
     """A file is stored BEFORE the page/block referencing it is written; an
     autosave of another page in that window must not sweep it."""
     from gamma import storage
-    from gamma.db import user_uploads_dir
+    from gamma.db import ws_uploads_dir
     monkeypatch.setattr(storage, "UPLOAD_GRACE_S", 15 * 60)
     up = guest.post("/api/uploads", files={"file": ("fresh.pdf", io.BytesIO(PDF_BYTES + b"fresh"), "application/pdf")}).json()
-    path = user_uploads_dir("guest") / f"{up['doc_id']}.pdf"
+    path = ws_uploads_dir(workspace_of("guest")) / f"{up['doc_id']}.pdf"
     assert path.is_file()
     stray = guest.post("/api/blocks", json={"parent_id": "root", "content": "stray"}).json()
     assert guest.delete(f"/api/blocks/{stray['id']}").json()["removed_uploads"] == []

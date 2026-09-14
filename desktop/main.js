@@ -1,7 +1,10 @@
-// Gamma desktop shell. The app itself is untouched Gamma: a workspace is just
-// a Gamma server (local sidecar or remote URL) and opening one navigates the
-// content view to it — the frontend always loads from the server it talks
-// to, so there is no version skew and no API-base plumbing.
+// Gamma desktop shell. The app itself is untouched Gamma: a server is a
+// local sidecar or a remote URL, and opening one navigates the content view
+// to it — the frontend always loads from the server it talks to, so there is
+// no version skew and no API-base plumbing. Gamma's own workspaces (the
+// libraries inside a server) are switched from the same shell-bar menu: the
+// shell reads them off `/api/session` with the page's cookies and navigates
+// to `?ws=<id>`.
 //
 // Window layout (Electron BaseWindow + two WebContentsViews):
 //
@@ -13,10 +16,10 @@
 //   │ workspace's own Gamma frontend (http://…)         │
 //   └──────────────────────────────────────────────────┘
 //
-// The shell owns only its chrome (bar + launcher), the workspace registry
-// and sidecar lifecycles. Its single read of the Gamma page is the
-// `data-theme` attribute the preload mirrors so the chrome paints in the
-// same theme.
+// The shell owns only its chrome (bar + launcher), the server registry and
+// sidecar lifecycles. It reads two things off Gamma: the `data-theme`
+// attribute the preload mirrors so the chrome paints in the same theme, and
+// `/api/session` (public HTTP API) for the workspace list.
 
 const { app, BaseWindow, WebContentsView, Menu, shell, ipcMain, net, dialog } = require('electron');
 const path = require('path');
@@ -48,17 +51,20 @@ const THEMES = {
 let win = null;
 let bar = null; // shell bar view
 let content = null; // Gamma / launcher view
-let current = null; // { id, name, type, url } while a workspace is open
-let busy = null; // status text while a workspace is starting
+let current = null; // { id, name, type, url } while a server is open
+let busy = null; // status text while a server is starting
+// Gamma's workspaces on the open server: { list, current, user } or null.
+let gamma = null;
+let gammaFetch = null; // in-flight /api/session read
 let theme = ''; // last data-theme the content page reported
 let barExpanded = false;
-// Origins the content view may navigate to (workspace servers). Anything
+// Origins the content view may navigate to (registered servers). Anything
 // else is handed to the system browser.
 const allowedOrigins = new Set();
 // Test hook: records what would have opened externally.
 const externalOpens = [];
 
-// Remote reachability: a cached `/api/health` probe per remote workspace so
+// Remote reachability: a cached `/api/health` probe per remote server so
 // the launcher and the bar menu can show a dot like the local running one
 // (Gamma's health endpoint is public, no session needed). Probes run on
 // demand — launcher refresh, bar menu open — behind a short TTL, and their
@@ -69,7 +75,7 @@ const HEALTH_TTL_MS = 20_000;
 const HEALTH_TIMEOUT_MS = 5_000;
 
 function probeRemotes(force) {
-  for (const ws of registry.load().workspaces) {
+  for (const ws of registry.load().servers) {
     if (ws.type !== 'remote' || remoteProbes.has(ws.id)) continue;
     const cached = remoteHealth.get(ws.id);
     if (!force && cached && Date.now() - cached.at < HEALTH_TTL_MS) continue;
@@ -201,8 +207,9 @@ function createWindow() {
   cwc.on('page-title-updated', (_e, title) => {
     if (win) win.setTitle(title || 'Gamma');
   });
-  cwc.on('did-navigate', pushState);
-  cwc.on('did-navigate-in-page', pushState);
+  cwc.on('did-navigate', () => { pushState(); refreshGamma(); });
+  cwc.on('did-navigate-in-page', () => { pushState(); refreshGamma(); });
+  cwc.on('did-finish-load', refreshGamma);
   cwc.on('focus', () => {
     if (barExpanded) setBarExpanded(false);
   });
@@ -239,6 +246,7 @@ function setBarExpanded(on) {
 function loadLauncher(error) {
   if (!win) return;
   current = null;
+  gamma = null;
   busy = null;
   const q = error ? '?error=' + encodeURIComponent(String(error)) : '';
   content.webContents.loadURL(pathToFileURL(path.join(__dirname, 'ui', 'launcher.html')).href + q);
@@ -247,6 +255,53 @@ function loadLauncher(error) {
 }
 
 // -------------------------------------------------------------- state --------
+
+// The workspace id the content view is showing (its URL's ?ws=), or ''.
+function currentWsId() {
+  try {
+    return new URL(content.webContents.getURL()).searchParams.get('ws') || '';
+  } catch {
+    return '';
+  }
+}
+
+// Gamma's workspaces on the open server, read from `/api/session` with the
+// content session's cookies (a public API call, nothing injected into the
+// page). Anonymous (not signed in) → null. Lands asynchronously via pushState.
+function refreshGamma() {
+  if (!current || !content || content.webContents.isDestroyed()) return;
+  const url = content.webContents.getURL();
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    return;
+  }
+  if (origin !== new URL(current.url).origin) return;
+  if (gammaFetch) return;
+  const ses = content.webContents.session;
+  gammaFetch = ses
+    .fetch(origin + '/api/session', { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(5000) })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      gamma = j && j.user
+        ? { user: j.user, current: currentWsId() || j.default_workspace || '', list: j.workspaces || [] }
+        : null;
+    })
+    .catch(() => { gamma = null; })
+    .finally(() => {
+      gammaFetch = null;
+      pushState();
+    });
+}
+
+// Navigate the open server to one of its Gamma workspaces.
+function openGammaWorkspace(id) {
+  if (!current || !content) throw new Error('No server open');
+  const target = new URL(current.url);
+  target.search = '?ws=' + encodeURIComponent(String(id || ''));
+  return content.webContents.loadURL(target.href);
+}
 
 // What the shell bar (and the launcher, for the switcher part) renders.
 function barState() {
@@ -259,7 +314,10 @@ function barState() {
     current,
     busy,
     update: updater.state(),
-    workspaces: state.workspaces.map((ws) => ({
+    // Gamma's workspaces on the open server (null until known / signed in),
+    // with the one the content view shows.
+    gamma: gamma ? { ...gamma, current: currentWsId() || gamma.current } : null,
+    servers: state.servers.map((ws) => ({
       id: ws.id,
       name: ws.name,
       type: ws.type,
@@ -275,7 +333,7 @@ function fullState() {
   const state = registry.load();
   return {
     ...barState(),
-    workspaces: state.workspaces.map((ws) => ({
+    servers: state.servers.map((ws) => ({
       ...ws,
       running: ws.type === 'local' ? Boolean(sidecar.status(ws.id)) : undefined,
       reachable: remoteReachable(ws),
@@ -288,7 +346,7 @@ function fullState() {
     userDataDir: app.getPath('userData'),
     dataRoot: registry.dataRoot(state),
     defaultDataRoot: registry.defaultDataRoot(),
-    // Names of the local workspaces a root change would move.
+    // Names of the local servers a root change would move.
     movable: registry.localsUnderRoot(state).map((w) => w.name),
   };
 }
@@ -303,7 +361,7 @@ function pushState() {
 
 // ----------------------------------------------------------- auto-login -----
 
-// Local workspaces log in silently with the credentials the shell seeded.
+// Local servers log in silently with the credentials the shell seeded.
 // Runs in the page after load: if /api/session says anonymous, POST the
 // stored credentials and reload. Harmless when already logged in.
 function autoLoginScript(username, password) {
@@ -328,9 +386,9 @@ function autoLoginScript(username, password) {
 
 let opening = null; // serialize opens: a second click while one is in flight waits
 
-async function openWorkspace(id) {
+async function openServer(id) {
   if (opening) await opening.catch(() => {});
-  opening = openWorkspaceNow(id);
+  opening = openServerNow(id);
   try {
     return await opening;
   } finally {
@@ -338,9 +396,9 @@ async function openWorkspace(id) {
   }
 }
 
-async function openWorkspaceNow(id) {
+async function openServerNow(id) {
   const ws = registry.get(id);
-  if (!ws) throw new Error('Unknown workspace');
+  if (!ws) throw new Error('Unknown server');
   if (!win) createWindow();
   if (current && current.id === id) return { url: current.url, autoLogin: 'already-open' };
   busy = ws.type === 'local' ? `Starting ${ws.name}…` : `Connecting to ${ws.name}…`;
@@ -359,12 +417,14 @@ async function openWorkspaceNow(id) {
     await content.webContents.loadURL(url);
     if (ws.type === 'remote') remoteHealth.set(ws.id, { ok: true, at: Date.now() });
     current = { id: ws.id, name: ws.name, type: ws.type, url };
+    gamma = null;
     registry.markOpened(ws.id);
     content.webContents.focus();
     if (creds) {
       const result = await content.webContents
         .executeJavaScript(autoLoginScript(creds.username, creds.password))
         .catch((e) => 'exec-error:' + e);
+      refreshGamma();
       return { url, autoLogin: String(result) };
     }
     return { url };
@@ -413,20 +473,20 @@ async function checkForUpdatesInteractive() {
 // ----------------------------------------------------------------- menu -----
 
 function buildMenu() {
-  const { workspaces } = registry.load();
+  const { servers } = registry.load();
   const wc = () => (content ? content.webContents : null);
   const template = [
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
     {
-      label: 'Workspace',
+      label: 'Server',
       submenu: [
-        { label: 'All Workspaces…', accelerator: 'CmdOrCtrl+Shift+L', click: () => loadLauncher() },
+        { label: 'All Servers…', accelerator: 'CmdOrCtrl+Shift+L', click: () => loadLauncher() },
         { type: 'separator' },
-        ...workspaces.map((ws) => ({
+        ...servers.map((ws) => ({
           label: `${ws.name}${ws.type === 'remote' ? '  (remote)' : ''}`,
           type: 'checkbox',
           checked: Boolean(current && current.id === ws.id),
-          click: () => openWorkspace(ws.id).catch((e) => loadLauncher(e.message || e)),
+          click: () => openServer(ws.id).catch((e) => loadLauncher(e.message || e)),
         })),
         { type: 'separator' },
         process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' },
@@ -472,7 +532,7 @@ function shellOnly(handler) {
 }
 
 function registerIpc() {
-  ipcMain.handle('shell:state', shellOnly(() => { probeRemotes(); return barState(); }));
+  ipcMain.handle('shell:state', shellOnly(() => { probeRemotes(); refreshGamma(); return barState(); }));
   ipcMain.handle('shell:list', shellOnly(() => { probeRemotes(); return fullState(); }));
   ipcMain.handle('shell:update-check', shellOnly(() => updater.check()));
   ipcMain.handle('shell:update-install', shellOnly(() => updater.install()));
@@ -492,10 +552,14 @@ function registerIpc() {
     buildMenu();
     pushState();
   }));
+  ipcMain.handle('shell:open-workspace', shellOnly(async (id) => {
+    setBarExpanded(false);
+    await openGammaWorkspace(id);
+  }));
   ipcMain.handle('shell:open', shellOnly(async (id) => {
     setBarExpanded(false);
     try {
-      const r = await openWorkspace(id);
+      const r = await openServer(id);
       buildMenu();
       return r;
     } catch (e) {
@@ -519,10 +583,10 @@ function registerIpc() {
     const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
     return r.canceled ? null : r.filePaths[0] || null;
   }));
-  // Storage root for local workspaces ('' = default). Moving needs the
-  // SQLite files closed, so every sidecar under the old root is stopped
-  // first; they restart on the next open. A local workspace that is open
-  // goes back to the launcher (its server is about to be killed).
+  // Storage root for local servers ('' = default). Moving needs the SQLite
+  // files closed, so every sidecar under the old root is stopped first; they
+  // restart on the next open. A local server that is open goes back to the
+  // launcher (its process is about to be killed).
   ipcMain.handle('shell:set-data-root', shellOnly((dir, { move = true } = {}) => {
     if (move) {
       const moving = new Set(registry.localsUnderRoot().map((w) => w.id));
@@ -550,7 +614,7 @@ function registerIpc() {
 
 // ---------------------------------------------------------------- smoke -----
 // `electron . --smoke`: headless-ish end-to-end check used by dev + CI.
-// Spins up a throwaway local workspace, waits for health, loads it, verifies
+// Spins up a throwaway local server, waits for health, loads it, verifies
 // the auto-login lands, prints one JSON line, exits 0/1.
 
 async function runSmoke() {
@@ -612,7 +676,7 @@ app.whenReady().then(async () => {
   // Reopen where the user left off; the launcher is one click away in the bar.
   const last = registry.getSettings().openLastOnLaunch ? registry.getLastOpened() : null;
   if (last) {
-    openWorkspace(last.id).then(buildMenu).catch((e) => loadLauncher(e.message || e));
+    openServer(last.id).then(buildMenu).catch((e) => loadLauncher(e.message || e));
   } else {
     loadLauncher();
   }
@@ -638,9 +702,11 @@ if (process.env.GAMMA_SHELL_TEST) {
   global.__gammaShell = {
     registry,
     sidecar,
-    openWorkspace,
+    openServer,
+    openGammaWorkspace,
     loadLauncher,
     current: () => current,
+    gamma: () => gamma,
     theme: () => currentTheme(),
     externalOpens,
     update: () => updater.state(),

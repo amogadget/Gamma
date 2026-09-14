@@ -1,7 +1,14 @@
 // Session persistence localStorage wrapper.
 // Saves viewer layout state so bare `/` restores the last workspace.
 
-const STORAGE_KEY = "gamma-session";
+// One saved session per workspace (App.jsx sets the scope once the session
+// resolves): the restored page belongs to the library that is open.
+let scope = "";
+const STORAGE_KEY = () => (scope ? `gamma-session:${scope}` : "gamma-session");
+
+export function setSessionScope(ws) {
+  scope = ws || "";
+}
 
 // Fields to persist. Add new ones here and they'll auto-save + restore.
 const SESSION_FIELDS = [
@@ -19,7 +26,7 @@ let saveTimer = null;
 
 export function loadSession() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY());
     if (!raw) return {};
     return JSON.parse(raw);
   } catch {
@@ -37,7 +44,7 @@ export function saveSession(state) {
       for (const k of SESSION_FIELDS) {
         if (k in merged) pruned[k] = merged[k];
       }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(pruned));
+      localStorage.setItem(STORAGE_KEY(), JSON.stringify(pruned));
     } catch {
       // localStorage full or blocked; silently ignore
     }
@@ -47,6 +54,6 @@ export function saveSession(state) {
 export function clearSession() {
   clearTimeout(saveTimer);
   try {
-    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEY());
   } catch {}
 }

@@ -7,11 +7,13 @@ launcher, and desktop release workflows use these locations.
 |---|---|
 | `backend/gamma/` | FastAPI application, routers, and backend logic |
 | `backend/tests/` | Backend tests using temporary data directories |
+| `frontend/tests/` | `node --test` tests of the pure modules; `e2e/` the Playwright browser suite (`npm run e2e`, [debugging.md](debugging.md)) |
 | `frontend/src/` | React application and code-defined UI icons |
 | `frontend/public/` | Files copied as-is into the frontend build |
 | `desktop/` | Electron shell and desktop packaging |
 | `extension/` | Browser connector, loaded unpacked without a build step |
 | `docs/dev/` | Architecture, implementation notes, and plans |
+| `docs/research/` | Design research: surveys, findings, and the reasoning behind chosen shapes |
 | `docs/user_guide.md` | User documentation |
 | `docs/assets/` | Documentation images and animations |
 | `data/` | Ignored runtime databases and uploads, controlled by `GAMMA_DATA_DIR` |
@@ -24,7 +26,7 @@ folders; those folders have not been created yet.
 
 | Location | Contents and consumers |
 |---|---|
-| `docs/assets/branding/` | Light/dark SVG wordmarks used by the root README |
+| `docs/assets/branding/` | Light/dark SVG wordmarks, and the light/dark hero image (`gamma-hero-*.svg`, hand-authored vector; the `.png` renders are for the Microsoft Store listing) used by the root README |
 | `docs/assets/demos/` | README demo GIFs |
 | `docs/assets/screenshots/` | Documentation stills; guest welcome blocks reference their GitHub raw URLs |
 | `frontend/public/media/icons/` | Favicon, served at `/media/icons/favicon.svg` |

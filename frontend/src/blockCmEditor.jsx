@@ -6,7 +6,7 @@
 // moving the caret into it (arrow keys, or clicking the rendered chip)
 // expands it back to source.
 import React, { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef } from "react";
-import { Compartment, EditorState, Prec, StateField } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, Prec, StateEffect, StateField } from "@codemirror/state";
 import {
   Decoration, EditorView, WidgetType, keymap,
   placeholder as cmPlaceholder,
@@ -436,6 +436,56 @@ function inlineRenderField(labelsRef) {
   });
 }
 
+// --- other people's carets ------------------------------------------------
+// The peers editing THIS block (collab.js presence: {anchor, head, color,
+// name}) render as a coloured caret with a name tag plus a tinted selection.
+// A StateField, replaced whenever new presence arrives and mapped through
+// our own edits in between, so a remote caret stays put while we type.
+const setRemoteCursors = StateEffect.define();
+
+class RemoteCaretWidget extends WidgetType {
+  constructor(name, color) {
+    super();
+    this.name = name;
+    this.color = color;
+  }
+  eq(other) { return other.name === this.name && other.color === this.color; }
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = `cmRemoteCaret peer-${this.color}`;
+    span.setAttribute("data-name", this.name);
+    return span;
+  }
+  ignoreEvent() { return true; }
+}
+
+function buildRemoteDecos(state, cursors) {
+  const len = state.doc.length;
+  const clamp = (n) => Math.max(0, Math.min(Number(n) || 0, len));
+  const ranges = [];
+  for (const c of cursors || []) {
+    const a = clamp(c.anchor), h = clamp(c.head);
+    const from = Math.min(a, h), to = Math.max(a, h);
+    if (from < to) ranges.push(Decoration.mark({ class: `cmRemoteSel peer-${c.color}` }).range(from, to));
+    ranges.push(Decoration.widget({ widget: new RemoteCaretWidget(c.name || "", c.color || 0), side: 1 }).range(h));
+  }
+  return Decoration.set(ranges, true);
+}
+
+const remoteCursorField = StateField.define({
+  create: () => Decoration.none,
+  update(deco, tr) {
+    for (const e of tr.effects) if (e.is(setRemoteCursors)) return buildRemoteDecos(tr.state, e.value);
+    return tr.docChanged ? deco.map(tr.changes) : deco;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+// A value change that came from outside the editor (a remote edit, an undo
+// restore): applied as the smallest replacement so the caret and the remote
+// carets map through, and never reported back as a local change.
+const externalSync = Annotation.define();
+
 // Textarea-compatible facade + component. blockTree talks to ref.current
 // exactly like it talked to the textarea (value / selectionStart / focus /
 // setSelectionRange / getBoundingClientRect), plus caretCoords(index) which
@@ -633,7 +683,7 @@ const markHotkeys = keymap.of([
 
 const BlockCmEditor = React.forwardRef(function BlockCmEditor({
   value, onChange, onSelect, onKeyDown, onBlur, onPaste,
-  placeholder, autoFocus, clickPos, dataBlockId, className, refLabels,
+  placeholder, autoFocus, clickPos, dataBlockId, className, refLabels, remoteCursors,
 }, forwardedRef) {
   const hostRef = useRef(null);
   const viewRef = useRef(null);
@@ -703,7 +753,9 @@ const BlockCmEditor = React.forwardRef(function BlockCmEditor({
         keymap.of(defaultKeymap),
         cmPlaceholder(placeholder || ""),
         chipCompartment.of(inlineRenderField(labelsRef)),
+        remoteCursorField,
         EditorView.updateListener.of((u) => {
+          if (u.transactions.some((tr) => tr.annotation(externalSync))) return;
           if (u.docChanged) {
             // The selection the change started from — the history stores it
             // with the entry so undo can put the cursor back there.
@@ -730,16 +782,34 @@ const BlockCmEditor = React.forwardRef(function BlockCmEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // External value changes (programmatic inserts, autocomplete accepts) sync
-  // in; self-originated edits arrive equal and no-op.
+  // External value changes (a remote edit, an undo restore, programmatic
+  // inserts) sync in as the minimal prefix/suffix replacement — the caret
+  // maps through instead of jumping; self-originated edits arrive equal.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     const cur = view.state.doc.toString();
-    if ((value || "") !== cur) {
-      view.dispatch({ changes: { from: 0, to: cur.length, insert: value || "" } });
-    }
+    const next = value || "";
+    if (next === cur) return;
+    const max = Math.min(cur.length, next.length);
+    let head = 0;
+    while (head < max && cur.charCodeAt(head) === next.charCodeAt(head)) head++;
+    let tail = 0;
+    while (tail < max - head && cur.charCodeAt(cur.length - 1 - tail) === next.charCodeAt(next.length - 1 - tail)) tail++;
+    view.dispatch({
+      changes: { from: head, to: cur.length - tail, insert: next.slice(head, next.length - tail) },
+      annotations: externalSync.of(true),
+    });
   }, [value]);
+
+  // Peers' carets in this block.
+  const cursorsKey = (remoteCursors || []).map((c) => `${c.color}:${c.anchor}:${c.head}:${c.name}`).join("|");
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: setRemoteCursors.of(remoteCursors || []) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cursorsKey]);
 
   // Ref labels resolve asynchronously (onFetchRefs); refresh the chip
   // decorations when their text actually changes, not on every render.

@@ -55,6 +55,16 @@ The home page is a recents feed of all your pages, with a **Recently viewed** st
 - **Sort** (modified / added / viewed / title) is remembered per folder; toggles switch grid/list and folders/files. Pin papers to keep them in a strip at the top.
 - Card strips scroll sideways with a plain mouse wheel.
 
+## Workspaces
+
+A workspace is a separate library — its own pages, PDFs and chats. Your account starts with a personal one; the account menu (top right) lists every workspace you belong to and switches between them, and **Workspace settings…** opens Settings → Members & sharing.
+
+- **Create** more for separate projects (papers vs. reading), or for a group: a lab workspace that several accounts share.
+- **Invite** people by username as **owner** (manages members, can rename or delete), **can edit**, or **view only**. Members switch to the shared workspace from their own account menu; viewers see everything but change nothing.
+- Links you copy carry the workspace, so a teammate opening one lands in the right library. Page share links still work for people outside the workspace.
+- Uploads into a workspace count against the storage quota of whoever created it. Backups (Export / Import) are per workspace, in the same pane. Admins can additionally snapshot the whole server (every account and workspace) from Settings → Advanced → *Server backups* and download the snapshot as a zip.
+- In the desktop app the toolbar's switcher lists your workspaces on the open server, then the servers themselves.
+
 ## Search
 
 **Ctrl+F** searches everything at once: page titles, this paper's notes, this PDF's text, other notes, reference links, and the full text of every PDF in the library.
@@ -66,7 +76,7 @@ The home page is a recents feed of all your pages, with a **Recently viewed** st
 ## Metadata, citations & sharing
 
 - The **(i) button** in the Notes panel's title row opens the metadata popover: title, authors, venue, year, DOI, arXiv — all editable (Enter saves), with **↻ refetch**, an AI title-fill button, and a health check of the extracted PDF text (with a preview of what the AI actually reads).
-- The **chain-link (share) button** in the topbar creates a read-only share link — anyone with the link sees the PDF, highlights and notes, no login. The same popover holds the **BibTeX** entry and a slide-ready **citation** that pastes into PowerPoint with real italics, each with a copy button.
+- The **chain-link (share) button** in the topbar shares the page by link: invite people with view or edit rights, or open it to anyone with the link (or to signed-in users) — viewers see the PDF, highlights and notes, no login needed; editors edit alongside you. The same popover holds the **BibTeX** entry and a slide-ready **citation** that pastes into PowerPoint with real italics, each with a copy button.
 - Settings → Library shows a per-paper metadata and search-index health table with batch retry.
 
 ## Import & export

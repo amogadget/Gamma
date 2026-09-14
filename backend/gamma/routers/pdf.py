@@ -20,8 +20,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ..auth import require_user, resolve_user, share_scope_page
-from ..db import user_db_path, user_uploads_dir
+from ..auth import require_user, resolve_ws, share_scope_page
+from ..db import connect_pages_db, ws_uploads_dir
 from ..logbuf import log
 from ..net_guard import guarded_urlopen
 from ..server_settings import can_store
@@ -256,10 +256,10 @@ def download_pdf(source_url: str, want_bytes: bool = True) -> tuple[str, bytes]:
         resp.close()
 
 
-def _share_allows_source(user: str, scope_page_id: str, source_url: str) -> bool:
+def _share_allows_source(ws: str, scope_page_id: str, source_url: str) -> bool:
     """A share link may only proxy the exact source URL recorded on its own
     page block."""
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         row = conn.execute(
             "SELECT json_extract(properties, '$.source_url') FROM unified_blocks WHERE id = ?",
             (scope_page_id,),
@@ -269,11 +269,11 @@ def _share_allows_source(user: str, scope_page_id: str, source_url: str) -> bool
 
 @router.get("/pdf")
 def proxy_pdf(source_url: str, request: Request):
-    user = resolve_user(request)
+    ws = resolve_ws(request)
     scope = share_scope_page(request)
-    if scope is not None and not _share_allows_source(user, scope, source_url):
+    if scope is not None and not _share_allows_source(ws, scope, source_url):
         raise HTTPException(status_code=403, detail="not accessible via this share link")
-    uploads = user_uploads_dir(user)
+    uploads = ws_uploads_dir(ws)
     # Proxy cache ids hash the URL (the bytes aren't known yet), same length
     # as the content-hash upload names.
     pdf_doc_id = hashlib.sha256(source_url.encode()).hexdigest()[:DIGEST_CHARS]
@@ -331,7 +331,7 @@ def proxy_pdf(source_url: str, request: Request):
                 data = b"".join(chunks)
                 # best-effort cache: over the user's storage limits, just skip
                 # the save — the PDF still streamed through fine
-                if can_store(user, len(data)):
+                if can_store(ws, len(data)):
                     uploads.mkdir(parents=True, exist_ok=True)
                     local_path.write_bytes(data)
                 else:

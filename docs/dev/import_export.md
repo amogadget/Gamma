@@ -174,7 +174,7 @@ returns one PDF).
 ## Gamma-to-Gamma export
 
 `?mode=gamma` (`_GammaBuilder`): a *scoped account backup* in the same
-`gamma-backup-1` layout as `/api/export` — a `pages.db` holding just the
+`gamma-backup-1` layout as `/api/export` (`gamma/ws_backup.py`) — a `pages.db` holding just the
 selected page subtrees verbatim (same block ids), a `data.db` with their AI
 chats (plus the folder view's own `home:<path>` chat buckets on a folder
 export), `uploads/` with just the referenced files (doc_id PDFs + anything

@@ -1,12 +1,15 @@
 import React from "react";
-import { API, apiJson, fmtBytes, copyText, isUnverifiedPaperMeta, metaSourceInfo } from "./utils";
+import { API, apiJson, fmtBytes, isUnverifiedPaperMeta, metaSourceInfo } from "./utils";
 import { MenuSelect } from "./menus";
 import {
   PaneHead, Section, Row, Toggle, Segmented, Stepper, ToggleGroup, UnitInput, CharSlider, approxPages,
-  Stat, Empty, QuotaMeter,
+  Stat, Empty, QuotaMeter, LogBox,
 } from "./settingsKit";
 import { AiSettings } from "./settingsAi";
 import { UsersSettings } from "./settingsUsers";
+import { WorkspacesSettings } from "./settingsWorkspace";
+import { WorkspaceBackups } from "./settingsBackups";
+import { ServerSettings } from "./settingsServer";
 import { TRANSLATE_LANGS, UI_SCALE } from "./prefs";
 import {
   ActivityIcon,
@@ -14,6 +17,7 @@ import {
   BugIcon,
   CloudDownloadIcon,
   ContrastIcon,
+  DatabaseIcon,
   CornerDownLeftIcon,
   EyeIcon,
   EyeOffIcon,
@@ -24,7 +28,6 @@ import {
   HardDriveIcon,
   HighlightIcon,
   HomeIcon,
-  ImportIcon,
   KeyIcon,
   LabelIcon,
   LanguagesIcon,
@@ -53,7 +56,7 @@ import {
   UsersIcon,
 } from "./icons";
 
-// Nine panes in four groups. Each pane is a stack of Sections, each Section a
+// Thirteen panes in four groups. Each pane is a stack of Sections, each Section a
 // stack of Rows — icon · label · one short hint · control (primitives in
 // settingsKit.jsx; the Providers and Users panes live in settingsAi.jsx /
 // settingsUsers.jsx). The paragraph that used to sit under every label now
@@ -63,6 +66,8 @@ const NAV_GROUPS = [
   ["Workspace", [
     ["general", "General", SettingsIcon],
     ["library", "Library", ListIcon],
+    ["workspaces", "Workspaces", UsersIcon], // hidden for guests (see SettingsDialog)
+    ["backups", "Backups", DatabaseIcon],    // hidden for guests
   ]],
   ["Editor", [
     ["notes", "Notes", FileTextIcon],
@@ -76,6 +81,7 @@ const NAV_GROUPS = [
   ]],
   ["Account", [
     ["users", "Users", UsersIcon], // relabelled "You" for non-admins (see SettingsDialog)
+    ["server", "Server", ServerIcon], // admins only: storage defaults, every workspace, server backups + log
     ["advanced", "Advanced", ActivityIcon],
   ]],
 ];
@@ -84,6 +90,7 @@ const PANE_ALIASES = {
   papers: "general",
   context: "assistant",
   diagnostics: "advanced", account: "users",
+  workspace: "workspaces",
 };
 
 // --- General: reading, notes, interface -------------------------------------
@@ -335,9 +342,10 @@ function NotesSettings({ value }) {
 }
 
 // Kick off a full search-index rebuild (the Library pane's Index section).
-async function requestReindex(setStatus, scheduledSuffix) {
+async function requestReindex(setStatus, scheduledSuffix, wakeTasks) {
   try {
     const result = await apiJson(`${API}/search-reindex`, { method: "POST" });
+    if (result.scheduled || result.busy) wakeTasks?.();
     setStatus(result.busy
       ? "Indexing is already running—see the tasks popover."
       : result.scheduled
@@ -349,65 +357,6 @@ async function requestReindex(setStatus, scheduledSuffix) {
 }
 
 // --- Library: storage + per-paper health ------------------------------------
-
-// Admin-only server-wide default storage limits (users.db via
-// /api/admin/settings). Per-account overrides live in the Users pane.
-function ServerLimitRows({ setStatus, refreshQuota }) {
-  const [saved, setSaved] = React.useState(null); // {max_upload_mb, quota_mb}
-  const [draft, setDraft] = React.useState({ max_upload_mb: "", quota_mb: "" });
-  const [error, setError] = React.useState("");
-  React.useEffect(() => {
-    apiJson(`${API}/admin/settings`)
-      .then((d) => {
-        setSaved(d);
-        setDraft({ max_upload_mb: String(d.max_upload_mb), quota_mb: String(d.quota_mb) });
-      })
-      .catch((err) => setError(err.message));
-  }, []);
-  async function save(key, label) {
-    try {
-      const d = await apiJson(`${API}/admin/settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [key]: parseInt(draft[key], 10) }),
-      });
-      setSaved((prev) => ({ ...prev, ...d }));
-      setDraft({ max_upload_mb: String(d.max_upload_mb), quota_mb: String(d.quota_mb) });
-      refreshQuota?.();
-      setStatus(`${label} saved.`);
-    } catch (err) {
-      setStatus(`Could not save: ${err.message}`);
-    }
-  }
-  function row(key, icon, label, hint, title, min, saveLabel) {
-    const parsed = parseInt(draft[key], 10);
-    const valid = Number.isFinite(parsed) && parsed >= min;
-    const dirty = saved && valid && parsed !== saved[key];
-    return (
-      <Row icon={icon} label={label} hint={error || hint} title={title}>
-        {error ? null : (
-          <span className="setSlider">
-            <UnitInput
-              unit="MB" min={min}
-              value={draft[key]}
-              onChange={(next) => setDraft((f) => ({ ...f, [key]: next }))}
-              onEnter={() => { if (dirty) save(key, saveLabel); }}
-            />
-            <button className="uiBtn sm" disabled={!dirty} onClick={() => save(key, saveLabel)}>Save</button>
-          </span>
-        )}
-      </Row>
-    );
-  }
-  return (
-    <>
-      {row("max_upload_mb", ImportIcon, "Default max upload", "Largest single PDF or image, per account",
-        "Server-wide cap on a single uploaded PDF or image. Override it per account from the Users pane. Admins only.", 1, "Upload limit")}
-      {row("quota_mb", ServerIcon, "Default quota", "Total uploads per account · 0 = unlimited",
-        "Server-wide total uploads storage per account; 0 means unlimited. Override it per account from the Users pane. Admins only.", 0, "Storage quota")}
-    </>
-  );
-}
 
 // Everyone sees their own usage against their effective limits (GET /api/quota).
 function StorageCard() {
@@ -474,7 +423,6 @@ function LibrarySettings({ value }) {
       </Section>
       <Section title="Storage">
         <StorageCard />
-        {value.isAdmin ? <ServerLimitRows setStatus={value.setStatus} refreshQuota={value.refreshQuota} /> : null}
       </Section>
       <Section title="Index">
         <Row
@@ -483,7 +431,7 @@ function LibrarySettings({ value }) {
           hint={value.indexTask?.active ? "Rebuilding — progress in the tasks popover" : "Re-extract every paper if results look stale"}
           title="Full-text search reads a per-user index built from the extracted PDF text. Rebuild it when library-wide results look stale or incomplete."
         >
-          <button className="uiBtn sm" disabled={value.indexTask?.active} onClick={() => requestReindex(value.setStatus, "in the background.")}>
+          <button className="uiBtn sm" disabled={value.indexTask?.active} onClick={() => requestReindex(value.setStatus, "in the background.", value.wakeTasks)}>
             {value.indexTask?.active ? "Indexing…" : "Rebuild"}
           </button>
         </Row>
@@ -541,6 +489,7 @@ function MetaStatusSection({ value }) {
       value.setStatus(r.busy
         ? "Indexing is already running—try again when it finishes."
         : `Indexing ${docIds.length === 1 ? "1 paper" : `${docIds.length} papers`} in the background.`);
+      value.wakeTasks?.();
       pollRefresh();
     } catch (err) {
       value.setStatus(`Indexing failed: ${err.message}`);
@@ -681,7 +630,7 @@ function MetaStatusSection({ value }) {
           />
           <button className="uiBtn sm iconSq" aria-label="Reindex"
             title="Re-extract every paper into the search index (also fills in the text column)"
-            onClick={() => { requestReindex(value.setStatus, "— text status fills in as it runs."); pollRefresh(); }}>
+            onClick={() => { requestReindex(value.setStatus, "— text status fills in as it runs.", value.wakeTasks); pollRefresh(); }}>
             <RefreshIcon size={13} />
           </button>
           <button className="uiBtn sm iconSq" onClick={refresh} disabled={!!busy} title="Reload this table" aria-label="Reload">
@@ -986,85 +935,11 @@ function AssistantSettings({ value }) {
 
 // --- Advanced: logs ---------------------------------------------------------
 
-// Newest-first log list with a Copy button — one rendering for the session
-// log and the admin server log. Entries are normalized to {key, timeMs, text}.
-function LogBox({ icon, label, description, entries, emptyText, copyStatus, setStatus }) {
-  function copy() {
-    const text = entries
-      .map((entry) => `${new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })} ${entry.text}`)
-      .join("\n");
-    copyText(text).then((ok) => setStatus(ok ? copyStatus : "Copy failed—copy manually."));
-  }
-  return (
-    <>
-      <Row icon={icon} label={label} hint={description}>
-        <button className="uiBtn sm" disabled={!entries.length} onClick={copy}>Copy</button>
-      </Row>
-      <div className="sysLogBox">
-        {entries.length ? [...entries].reverse().map((entry) => (
-          <div key={entry.key} className="sysLogRow">
-            <span className="sysLogTime">{new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })}</span>
-            <span className="sysLogMsg">{entry.text}</span>
-          </div>
-        )) : <div className="sysLogEmpty">{emptyText}</div>}
-      </div>
-    </>
-  );
-}
-
-// Admin-only view of the backend in-memory log (GET /api/admin/logs).
-// Polls with a seq cursor while the pane is open; secrets are scrubbed
-// server-side before entries ever reach the buffer.
-function ServerLogBox({ setStatus }) {
-  const [entries, setEntries] = React.useState(null); // null = first poll pending
-  const [error, setError] = React.useState("");
-  const stateRef = React.useRef({ cursor: 0, entries: [] });
-  React.useEffect(() => {
-    let alive = true;
-    async function poll() {
-      try {
-        const data = await apiJson(`${API}/admin/logs?after=${stateRef.current.cursor}`);
-        if (!alive) return;
-        const fresh = data.entries || [];
-        if (fresh.length) {
-          stateRef.current.cursor = fresh[fresh.length - 1].seq;
-          stateRef.current.entries = [...stateRef.current.entries, ...fresh].slice(-500);
-        }
-        setEntries([...stateRef.current.entries]);
-        setError("");
-      } catch (err) {
-        if (alive) { setError(err.message); setEntries((prev) => prev || []); }
-      }
-    }
-    poll();
-    const timer = setInterval(poll, 2000);
-    return () => { alive = false; clearInterval(timer); };
-  }, []);
-  const shown = (entries || []).map((entry) => ({
-    key: entry.seq,
-    timeMs: entry.t * 1000,
-    text: `${entry.level !== "INFO" ? `[${entry.level}] ` : ""}${entry.msg}`,
-  }));
-  return (
-    <LogBox
-      icon={ServerIcon}
-      label="Server log"
-      description="Backend events since startup · secrets masked · admins only"
-      entries={shown}
-      emptyText={error ? `Server log unavailable: ${error}`
-        : entries ? "Nothing logged since the server started."
-          : "Loading…"}
-      copyStatus="Server log copied."
-      setStatus={setStatus}
-    />
-  );
-}
-
 function AdvancedSettings({ value }) {
   return (
     <>
       <PaneHead icon={ActivityIcon} title="Advanced">
-        Status surface, tracing and logs — the things worth attaching to a bug report.
+        Status surface, tracing and this browser's log — the things worth attaching to a bug report.
       </PaneHead>
       <Section title="Interface">
         <Toggle
@@ -1096,7 +971,6 @@ function AdvancedSettings({ value }) {
           copyStatus="Log copied."
           setStatus={value.setStatus}
         />
-        {value.isAdmin ? <ServerLogBox setStatus={value.setStatus} /> : null}
       </Section>
     </>
   );
@@ -1116,6 +990,9 @@ export default function SettingsDialog({
   context,
   search,
   users,
+  workspace,
+  backups,
+  server,
   diagnostics,
 }) {
   if (!activePane) return null;
@@ -1127,7 +1004,9 @@ export default function SettingsDialog({
       group,
       items
         .map(([id, label, Icon]) => (id === "users" && !users?.isAdmin ? [id, "You", UserIcon] : [id, label, Icon]))
-        .filter(([id]) => id !== "users" || users),
+        .filter(([id]) => id !== "users" || users)
+        .filter(([id]) => (id !== "workspaces" && id !== "backups") || workspace)
+        .filter(([id]) => id !== "server" || server),
     ])
     .filter(([, items]) => items.length);
 
@@ -1154,9 +1033,7 @@ export default function SettingsDialog({
           {pane === "viewer" ? <ViewerSettings value={papers} /> : null}
           {pane === "search" ? <SearchSettings value={search} /> : null}
           {pane === "notes" ? <NotesSettings value={notes} /> : null}
-          {pane === "library" ? (
-            <LibrarySettings value={{ ...library, isAdmin: papers.isAdmin, refreshQuota: papers.refreshQuota }} />
-          ) : null}
+          {pane === "library" ? <LibrarySettings value={library} /> : null}
           {pane === "ai" ? <AiSettings value={ai} /> : null}
           {pane === "assistant" ? (
             <AssistantSettings value={{
@@ -1166,6 +1043,9 @@ export default function SettingsDialog({
           ) : null}
           {pane === "prompts" ? <PromptsSettings value={prompts} /> : null}
           {pane === "users" && users ? <UsersSettings value={users} /> : null}
+          {pane === "workspaces" && workspace ? <WorkspacesSettings value={workspace} /> : null}
+          {pane === "backups" && backups ? <WorkspaceBackups value={backups} /> : null}
+          {pane === "server" && server ? <ServerSettings value={server} /> : null}
           {pane === "advanced" ? <AdvancedSettings value={diagnostics} /> : null}
         </div>
       </div>

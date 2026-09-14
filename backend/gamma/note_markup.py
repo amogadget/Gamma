@@ -30,7 +30,7 @@ TEXT, MATH = "t", "m"
 
 # Image sizes are stored in the Obsidian dialect ``![alt|N](url)``. The legacy
 # Logseq ``![alt](url){:width N}`` suffix is normalized away by the one-time
-# migration pass (gamma/migrate.py) and on export; this is the ONE place that
+# normalization pass (gamma/normalize.py) and on export; this is the ONE place that
 # knows the old syntax.
 LEGACY_WIDTH_RE = re.compile(r"(!\[[^\]]*)(\]\([^)]+\))\{:width\s+(\d+)\}")
 

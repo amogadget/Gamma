@@ -1,0 +1,75 @@
+// Browser end-to-end suite: drives the built app (frontend/dist) served by an
+// ISOLATED backend over a throwaway data dir, through Playwright's Chromium.
+//
+//   npm run e2e                 # everything (build first: npm run build)
+//   npm run e2e -- --only pdf   # steps whose name contains "pdf"
+//   npm run e2e -- --continue   # keep going after a failure
+//   npm run e2e -- --headed     # watch it
+//   npm run e2e -- --keep       # leave the temp data dir + server.log behind
+//
+// One line per step and a summary; exit 1 on any failure. Each step asserts
+// both the visible outcome AND that no API call failed, no console error and
+// no page error happened meanwhile (harness.openPage records them).
+import {
+  Account, Server, assert, assertEq, assertNoProblems, flags, launchBrowser, makePdf,
+  openPage, results, sleep, step, until,
+} from "./harness.mjs";
+import { noteScenarios } from "./scenarios/notes.mjs";
+import { pdfScenarios } from "./scenarios/pdf.mjs";
+import { collabScenarios } from "./scenarios/collab.mjs";
+import { shareScenarios } from "./scenarios/share.mjs";
+
+const server = new Server();
+let browser;
+try {
+  console.log("starting isolated backend...");
+  await server.start();
+  console.log(`  ${server.base}  data: ${server.dataDir}`);
+  server.manage("create-user", "alice", "alice-pw");
+  server.manage("create-user", "bob", "bob-pw");
+  const alice = await new Account(server, "alice", "alice-pw").login();
+  const bob = await new Account(server, "bob", "bob-pw").login();
+  browser = await launchBrowser();
+
+  const env = { server, browser, alice, bob, makePdf, step, until, sleep, assert, assertEq, assertNoProblems, openPage, flags };
+
+  await step("auth: login page, wrong password, then sign in", async () => {
+    const ctx = await browser.newContext();
+    const page = await openPage(ctx, `${server.base}/`);
+    await page.waitForSelector(".loginInput");
+    await page.fill(".loginInput >> nth=0", "alice");
+    await page.fill("input[type=password]", "nope");
+    await page.click(".loginBtn");
+    await page.waitForSelector(".loginError");
+    await page.fill("input[type=password]", "alice-pw");
+    await page.click(".loginBtn");
+    await page.waitForSelector(".folderNewBtn", { timeout: 15000 });
+    assertNoProblems(page, [/401/]);
+    await ctx.close();
+  });
+
+  await step("auth: guest login lands on the welcome page", async () => {
+    const ctx = await browser.newContext();
+    const page = await openPage(ctx, `${server.base}/`);
+    await page.waitForSelector(".loginGuestBtn");
+    await page.click(".loginGuestBtn");
+    await page.waitForSelector(".folderNewBtn, .cm-content, .blockRow", { timeout: 15000 });
+    assertNoProblems(page);
+    await ctx.close();
+  });
+
+  const notes = await noteScenarios(env);
+  const pdf = await pdfScenarios(env, notes);
+  await collabScenarios(env);
+  await shareScenarios(env, { ...notes, ...pdf });
+} catch (e) {
+  if (!results.length || results[results.length - 1].ok) console.log(`\nsetup failed: ${e.stack || e}`);
+} finally {
+  if (browser) await browser.close().catch(() => {});
+  await server.stop();
+}
+
+const failed = results.filter((r) => !r.ok);
+console.log(`\n${results.length - failed.length}/${results.length} steps passed${failed.length ? `; failed: ${failed.map((f) => f.name).join(", ")}` : ""}`);
+if (flags.keep) console.log(`kept: ${server.dir}`);
+process.exit(failed.length || !results.length ? 1 : 0);

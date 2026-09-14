@@ -4,15 +4,18 @@ The Windows/macOS/Linux app. It is deliberately a **thin shell**: Gamma's backen
 and frontend are untouched — the shell is an Electron window plus a process
 manager, and the app the window shows always loads from the Gamma server it
 is connected to (exactly like a browser tab). No API-base plumbing, no CORS,
-no version skew: each workspace serves its own matching frontend.
+no version skew: each server serves its own matching frontend. Gamma's own
+workspaces (the libraries inside a server) are switched from the same shell
+bar as the servers.
 
 This folder is self-contained; the rest of the repo only knows the shell
 through the black-box contract listed under *Invariants* in the
 architecture doc. **Read the relevant doc before working in that area and
 keep it in sync:**
 
-- [docs/architecture.md](docs/architecture.md) — the workspace model (local
-  sidecar servers + remote URLs), the window (shell bar + content view),
+- [docs/architecture.md](docs/architecture.md) — servers (local sidecars +
+  remote URLs) and Gamma's workspaces in the switcher, the window (shell bar
+  + content view),
   remote reachability probes, in-app updates, shell state on disk, the file
   map, invariants.
 - [docs/release.md](docs/release.md) — package, the `desktop` workflow,
@@ -29,7 +32,7 @@ keep it in sync:**
 cd desktop && npm install       # once (needs the fnm node on PATH)
 npm start                       # dev mode: sidecars run from backend/venv,
                                 # frontend served from frontend/dist (build it first)
-npm run smoke                   # quick self-test: temp workspace → health → auto-login
+npm run smoke                   # quick self-test: temp local server → health → auto-login
 npm run e2e                     # full suite (docs/checklist.md), ~3 min
 ```
 

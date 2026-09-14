@@ -2,7 +2,7 @@
 
 import pytest
 
-from conftest import login as _login, make_user as _make_user
+from conftest import login as _login, make_user as _make_user, workspace_of
 
 
 def _pdf_of_mb(mb, filler=b"x"):
@@ -38,7 +38,7 @@ def sizeuser(client):
 def restore_defaults():
     """Each test starts from stock limits (50 MB per file, no quota, no
     per-user overrides) and empty uploads dirs so order doesn't matter."""
-    from gamma.db import connect_users_db, user_uploads_dir
+    from gamma.db import connect_users_db, ws_uploads_dir
     from gamma.server_settings import (DEFAULT_MAX_UPLOAD_MB, DEFAULT_QUOTA_MB,
                                        set_default_max_upload_mb, set_default_quota_mb)
 
@@ -50,7 +50,7 @@ def restore_defaults():
                          "WHERE username IN ('sizeadmin', 'sizeuser')")
             conn.commit()
         for username in ("sizeadmin", "sizeuser"):
-            uploads = user_uploads_dir(username)
+            uploads = ws_uploads_dir(workspace_of(username))
             if uploads.exists():
                 for f in uploads.iterdir():
                     if f.is_file():

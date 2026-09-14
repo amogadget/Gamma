@@ -249,9 +249,9 @@ class _Plan:
         self.existing = False
 
 
-def import_markdown_zip(user: str, zf: zipfile.ZipFile, conn, folder: str = "",
+def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
                         now: str = "") -> dict:
-    """Import every note in ``zf`` for ``user`` through the open ``pages.db``
+    """Import every note in ``zf`` into workspace ``ws`` through the open ``pages.db``
     connection (the caller commits). Returns the report dict."""
     prefix = clean_path(folder)
     entries, opened = [], []
@@ -370,7 +370,7 @@ def import_markdown_zip(user: str, zf: zipfile.ZipFile, conn, folder: str = "",
                 warn(path, "not a valid PDF")
             else:
                 try:
-                    filename, _ = store_file(user, data, ext)
+                    filename, _ = store_file(ws, data, ext)
                     url = f"/api/uploads/{filename}"
                     report["assets_stored"] += 1
                 except HTTPException as exc:

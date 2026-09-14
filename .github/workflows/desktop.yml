@@ -1,16 +1,20 @@
 # Desktop app: the Windows installer, macOS dmg/zip and Debian/Ubuntu deb,
-# published as the GitHub Release `v<version>` (version =
-# desktop/package.json). Overview of every workflow: docs/dev/github_actions.md.
+# released automatically. Overview of every workflow: docs/dev/github_actions.md.
 #
-# Runs on every push to main that touches the app or what it bundles
-# (desktop/, backend/, frontend/) and by hand from the Actions tab. Every run
-# builds and smoke-tests all three platforms; the GitHub Release is created
-# only when the `v<version>` tag does not exist yet. So a merge without a
-# version bump is a build check whose installers stay workflow artifacts,
-# and bumping desktop/package.json is what releases. The tag is created by
-# the release step itself — nobody pushes tags by hand. The browser
-# extension has its own workflow (extension.yml), the Docker image too
-# (docker.yml).
+# Trigger: every push to main that touches the app or what it bundles
+# (desktop/, backend/, frontend/), plus manual dispatch. Every run builds and
+# smoke-tests all three platforms and, when they all pass, publishes the
+# GitHub Release `v<version>` — a merge IS a release. Nobody bumps or tags:
+#   version = desktop/package.json if it is higher than the newest v* tag
+#             (that is how a minor/major bump is made — raise the "floor"),
+#             otherwise the newest v* tag with the patch number + 1.
+# The computed version is pinned into the app on every runner, so the app,
+# the update feed and the Store package all carry it. The tag is created by
+# the release step from the merged commit. The publish job then dispatches
+# docker.yml with the version so the server image gets a matching tag, and
+# the Windows job submits the MSIX to the Microsoft Store when the Partner
+# Center secrets exist. The browser extension has its own workflow
+# (extension.yml).
 #
 # Every installer bundles the frozen backend (PyInstaller) + built frontend,
 # so a released app is fully self-contained — no Python or Node needed.
@@ -26,15 +30,18 @@
 #   macOS, Developer ID + notarization:  MAC_CERT_P12 (base64 of the
 #     "Developer ID Application" .p12), MAC_CERT_PASSWORD, APPLE_ID,
 #     APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID.
-# Unsigned builds: Windows shows SmartScreen (More info -> Run anyway), macOS
-# refuses to open ("damaged") until `xattr -dr com.apple.quarantine`. The
-# Linux .deb has no signing at all (apt trusts repositories, not files);
-# the Linux job installs it on the runner and runs the smoke test from
-# /opt/Gamma to prove the package and its dependency list are sound.
-#
-# The Windows job also builds the Microsoft Store package (unsigned MSIX,
-# `store-windows` artifact) for manual upload to Partner Center; it is NOT a
-# release asset because nobody can install it before the Store signs it.
+#   Microsoft Store submission (msstore CLI):  PARTNER_CENTER_TENANT_ID,
+#     PARTNER_CENTER_SELLER_ID, PARTNER_CENTER_CLIENT_ID,
+#     PARTNER_CENTER_CLIENT_SECRET (an Azure AD app registration linked to
+#     the Partner Center account). Without them the MSIX stays the
+#     `store-windows` artifact for manual upload.
+# Unsigned builds: Windows shows SmartScreen (More info -> Run anyway). macOS
+# is AD-HOC signed by desktop/scripts/adhoc-sign.cjs when no certificate is
+# present, so Gatekeeper offers "Open Anyway" in Privacy & Security instead
+# of the dead-end "damaged" dialog an unsigned app gets. The Linux .deb has
+# no signing at all (apt trusts repositories, not files); the Linux job
+# installs it on the runner and runs the smoke test from /opt/Gamma to
+# prove the package and its dependency list are sound.
 
 name: desktop
 
@@ -49,19 +56,19 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (blank = desktop/package.json)"
+        description: "Version override (blank = computed: package.json floor or newest tag + patch)"
         required: false
         default: ""
       prerelease:
-        description: "Mark as pre-release (installed apps ignore those)"
+        description: "Mark as pre-release (installed apps ignore those; not marked Latest)"
         type: boolean
         default: false
       publish:
-        description: "Create the GitHub Release when the tag is new (off = artifacts only)"
+        description: "Publish the GitHub Release (off = build + artifacts only)"
         type: boolean
         default: true
 
-# Two merges in a row queue instead of racing for the same tag.
+# Two merges in a row queue instead of racing for the next version number.
 concurrency:
   group: desktop-${{ github.ref }}
   cancel-in-progress: false
@@ -72,6 +79,7 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
+      prev: ${{ steps.v.outputs.prev }}
       publish: ${{ steps.v.outputs.publish }}
     steps:
       - uses: actions/checkout@v7
@@ -81,21 +89,35 @@ jobs:
           IN_VERSION: ${{ inputs.version }}
           IN_PUBLISH: ${{ inputs.publish }}
         run: |
-          version="$IN_VERSION"
-          [ -z "$version" ] && version=$(node -p "require('./desktop/package.json').version")
+          # Newest published desktop tag. Only plain vX.Y.Z counts: extension-v*
+          # and the historical desktop-v* are other series.
+          prev=$(git ls-remote --tags --refs origin 'refs/tags/v*' | awk -F/ '{print $NF}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          floor=$(node -p "require('./desktop/package.json').version")
+          if [ -n "$IN_VERSION" ]; then
+            version="$IN_VERSION"; how="dispatch input"
+          else
+            version=$(node -e '
+              const [floor, prev] = process.argv.slice(1);
+              const p = (s) => s.replace(/^v/, "").split(".").map(Number);
+              const gt = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; };
+              if (!prev || gt(p(floor), p(prev))) { console.log(floor); process.exit(0); }
+              const v = p(prev); v[2] += 1; console.log(v.join("."));
+            ' "$floor" "$prev")
+            if [ "$version" = "$floor" ]; then how="package.json floor"; else how="patch after $prev"; fi
+          fi
           tag="v$version"
           publish=true
           if [ "$IN_PUBLISH" = "false" ]; then
             publish=false
             echo "::notice::publish=false — building artifacts only"
           elif git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            publish=false
-            echo "::notice::tag $tag already exists — build only; bump desktop/package.json to release"
+            echo "::error::tag $tag already exists (version from $how) — a version is never reused; pass a new one" >&2
+            exit 1
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "publish=$publish" >> "$GITHUB_OUTPUT"
-          echo "Gamma $version from $GITHUB_SHA (publish=$publish)"
+          {
+            echo "version=$version"; echo "tag=$tag"; echo "prev=$prev"; echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::Gamma $version ($how; previous release ${prev:-none}; publish=$publish)"
 
   desktop:
     needs: meta
@@ -105,6 +127,7 @@ jobs:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     env:
+      VERSION: ${{ needs.meta.outputs.version }}
       # Signing credentials (see the header). Empty secrets = unsigned build;
       # electron-builder must then not go hunting for certs in the runner's
       # keychain. The mac certificate is NOT exported as CSC_LINK here: an
@@ -126,6 +149,9 @@ jobs:
       AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGN_ACCOUNT }}
       AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGN_PROFILE }}
       AZURE_SIGN_PUBLISHER: ${{ secrets.AZURE_SIGN_PUBLISHER }}
+      # Store submission runs only when the Partner Center secrets exist
+      # (secrets are not readable in a step `if`, hence this env flag).
+      STORE_SUBMIT: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -137,11 +163,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The computed version goes into the app itself: About, the update
+      # feed's latest*.yml, the deb/MSIX manifests all read package.json.
       - name: Pin the app version
-        if: inputs.version != ''
         working-directory: desktop
         shell: bash
-        run: npm version "${{ needs.meta.outputs.version }}" --no-git-tag-version --allow-same-version
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
       - name: Build frontend
         working-directory: frontend
@@ -196,7 +223,7 @@ jobs:
             echo "::notice::macOS: signing with Developer ID (notarize=$([ -n "$APPLE_ID" ] && echo yes || echo no))"
             export CSC_LINK="$MAC_CERT_P12" CSC_KEY_PASSWORD="$MAC_CERT_PASSWORD"
           else
-            echo "::warning::macOS: UNSIGNED build (no MAC_CERT_P12 secret)"
+            echo "::warning::macOS: no Developer ID (no MAC_CERT_P12 secret) — ad-hoc signed; users get Gatekeeper's Open Anyway, the updater stays notify-only"
           fi
           npm ci
           npx electron-builder --publish never
@@ -220,9 +247,13 @@ jobs:
             exe=$(ls dist/*.exe | head -1)
             powershell -NoProfile -Command "\$s = Get-AuthenticodeSignature '$exe'; \$s | Format-List Status, StatusMessage, SignerCertificate; if (\$s.Status -ne 'Valid') { exit 1 }"
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            [ -z "$MAC_CERT_P12" ] && exit 0
             app=$(ls -d dist/mac*/Gamma.app | head -1)
             codesign --verify --deep --strict --verbose=2 "$app"
+            if [ -z "$MAC_CERT_P12" ]; then
+              # No certificate: the afterPack hook must have ad-hoc signed it.
+              codesign -dv "$app" 2>&1 | tee /dev/stderr | grep -q 'Signature=adhoc'
+              exit 0
+            fi
             codesign -d --entitlements - "$app/Contents/Resources/gamma-server/gamma-server" | head -20
             if [ -n "$APPLE_ID" ]; then
               spctl --assess --type execute --verbose=2 "$app"
@@ -284,6 +315,44 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # Microsoft Store submission (docs/release.md "Microsoft Store"). The
+      # msstore CLI uploads the package and sends the submission to
+      # certification (1–3 days; the Store then delivers the update itself).
+      # Only one submission can be in certification at a time, so a second
+      # release the same day is refused — that is not a build failure, hence
+      # continue-on-error; the next release goes through once the queue is
+      # clear. The CLI only accepts .msix file names, and an .appx from
+      # electron-builder is the same format, so it is copied under that name.
+      - uses: microsoft/microsoft-store-apppublisher@v1.4
+        if: runner.os == 'Windows' && env.STORE_SUBMIT == 'true' && needs.meta.outputs.publish == 'true'
+      - name: Submit to the Microsoft Store
+        if: runner.os == 'Windows' && env.STORE_SUBMIT == 'true' && needs.meta.outputs.publish == 'true'
+        continue-on-error: true
+        working-directory: desktop
+        shell: bash
+        env:
+          PARTNER_CENTER_TENANT_ID: ${{ secrets.PARTNER_CENTER_TENANT_ID }}
+          PARTNER_CENTER_SELLER_ID: ${{ secrets.PARTNER_CENTER_SELLER_ID }}
+          PARTNER_CENTER_CLIENT_ID: ${{ secrets.PARTNER_CENTER_CLIENT_ID }}
+          PARTNER_CENTER_CLIENT_SECRET: ${{ secrets.PARTNER_CENTER_CLIENT_SECRET }}
+          STORE_PRODUCT_ID: 9N8WGWR2J2MV
+        run: |
+          msix="Gamma-$VERSION.msix"
+          cp dist-store/Gamma-*.appx "$msix"
+          msstore reconfigure --tenantId "$PARTNER_CENTER_TENANT_ID" --sellerId "$PARTNER_CENTER_SELLER_ID" --clientId "$PARTNER_CENTER_CLIENT_ID" --clientSecret "$PARTNER_CENTER_CLIENT_SECRET"
+          if msstore publish "$msix" --appId "$STORE_PRODUCT_ID"; then
+            echo "::notice::Microsoft Store: $VERSION submitted for certification"
+          else
+            echo "::warning::Microsoft Store: submission of $VERSION failed (a previous submission still in certification?) — upload dist-store/*.appx by hand or wait for the next release"
+            exit 1
+          fi
+      - name: Microsoft Store (skipped)
+        if: runner.os == 'Windows' && (env.STORE_SUBMIT != 'true' || needs.meta.outputs.publish != 'true')
+        shell: bash
+        run: |
+          if [ "$STORE_SUBMIT" = "true" ]; then why="build-only run"; else why="no PARTNER_CENTER_* secrets"; fi
+          echo "::notice::Microsoft Store: not submitting ($why) — the MSIX is the store-windows artifact"
+
       - uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.os }}
@@ -302,9 +371,12 @@ jobs:
     if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # the release + its tag
+      actions: write # dispatching docker.yml with the version
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # release notes: commits since the previous tag
       - uses: actions/download-artifact@v8
         with:
           path: assets
@@ -314,6 +386,7 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ needs.meta.outputs.version }}
+          PREV: ${{ needs.meta.outputs.prev }}
           REPO: ${{ github.repository }}
           TAG: ${{ needs.meta.outputs.tag }}
           WIN_SIGNED: ${{ secrets.AZURE_CLIENT_ID != '' }}
@@ -323,6 +396,10 @@ jobs:
           base="https://github.com/$REPO/releases/download/$TAG"
           asset() { ls assets | grep -E "$1" | head -1; }
           exe=$(asset '\.exe$'); dmg=$(asset '\.dmg$'); zipmac=$(asset 'mac.*\.zip$|darwin.*\.zip$'); deb=$(asset '\.deb$')
+          # The changelog: this repo's commit subjects are short and
+          # descriptive, PR titles are all "Merge pull request #N from dev".
+          if [ -n "$PREV" ]; then range="$PREV..HEAD"; else range="HEAD"; fi
+          git log "$range" --no-merges --format='- %s' -- desktop backend frontend > changes.md
           {
             echo "## Desktop app $VERSION"
             echo
@@ -335,11 +412,17 @@ jobs:
             echo
             echo -n "Self-contained: no Python or Node needed."
             [ "$WIN_SIGNED" = "true" ] && echo -n " Windows build is code-signed (Azure Trusted Signing)." || echo -n " Windows build is unsigned — SmartScreen: *More info → Run anyway* (Edge: *… → Keep → Keep anyway*)."
-            [ "$MAC_SIGNED" = "true" ] && echo -n " macOS build is signed and notarized." || echo -n " macOS build is unsigned — if it says *damaged*, run \`xattr -dr com.apple.quarantine /Applications/Gamma.app\` once (or *Open Anyway* in System Settings → Privacy & Security)."
+            [ "$MAC_SIGNED" = "true" ] && echo -n " macOS build is signed and notarized." || echo -n " macOS: the first launch says *Apple could not verify Gamma* — close it, open *System Settings → Privacy & Security*, scroll to *Security* and click *Open Anyway* (once per download; the build is ad-hoc signed, not notarized)."
             [ -n "$deb" ] && echo " Linux: \`sudo apt install ./$deb\` (installs to \`/opt/Gamma\`, command \`gamma\`)." || echo
             echo
-            echo "Installed apps update themselves from this page (Help → *Check for Updates…*; Windows installs on restart, Linux asks for your password to run dpkg, macOS offers the download until builds are signed). The \`latest*.yml\` and \`.blockmap\` assets are that update feed."
+            echo "Installed apps update themselves from this page (Help → *Check for Updates…*; Windows installs on restart, Linux asks for your password to run dpkg, macOS offers the download until builds are notarized). The \`latest*.yml\` and \`.blockmap\` assets are that update feed."
             echo
+            if [ -s changes.md ]; then
+              echo "## Changes${PREV:+ since $PREV}"
+              echo
+              cat changes.md
+              echo
+            fi
             echo "## Browser extension"
             echo
             echo "The Gamma Connector has its own releases, tagged \`extension-v<version>\`: [latest extension release](https://github.com/$REPO/releases?q=extension-v&expanded=true)."
@@ -347,10 +430,8 @@ jobs:
             echo "## Server (Docker)"
             echo
             echo '```bash'
-            echo "docker run -d --name gamma -p 9001:9001 -v gamma-data:/data ghcr.io/${REPO,,}:latest"
+            echo "docker run -d --name gamma -p 9001:9001 -v gamma-data:/data ghcr.io/${REPO,,}:$VERSION   # or :latest"
             echo '```'
-            echo
-            echo "The image is built from \`main\` by the separate Docker workflow; \`latest\` always tracks the newest merge."
             echo
           } > notes.md
           cat notes.md
@@ -363,8 +444,16 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Gamma ${{ needs.meta.outputs.version }}
           body_path: notes.md
-          generate_release_notes: true
           prerelease: ${{ inputs.prerelease == true }}
           make_latest: ${{ inputs.prerelease != true }}
           files: assets/*
           fail_on_unmatched_files: true
+      # Tags created with GITHUB_TOKEN never trigger other workflows, so the
+      # server image gets its version tag through an explicit dispatch on
+      # the tag the release step just created.
+      - name: Tag the Docker image with this version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: gh workflow run docker.yml --ref "$TAG" -f "version=$VERSION"

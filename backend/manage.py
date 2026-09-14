@@ -1,62 +1,126 @@
 #!/usr/bin/env python3
-"""CLI for managing Gamma users. Run from the backend/ directory.
+"""CLI for managing Gamma accounts, workspaces and the data directory. Run
+from the backend/ directory, with the server STOPPED for anything that moves
+files (migrate on Windows, delete-user).
 
 Usage:
   python manage.py create-user <username> [password]
   python manage.py set-password <username> <password>
   python manage.py set-admin <username> <on|off>   # admin = privilege flag, manages users in the GUI
   python manage.py rename-user <old> <new>
-  python manage.py delete-user <username>
+  python manage.py delete-user <username>          # + the workspaces only they owned
   python manage.py list-users
-  python manage.py reset-guest      # wipe guest data (auto-runs daily)
-  python manage.py setup            # idempotent: create guest + repair missing per-user DBs
-  python manage.py migrate          # idempotent: normalize old data shapes (also runs at server start)
-  python manage.py migrate --drop-share-doc-id   # + drop the vestigial shares.doc_id column (by hand only,
-                                                 #   after every deployed binary stopped writing it)
+  python manage.py list-workspaces                 # every workspace, access, members, size
+  python manage.py create-workspace <name> <owner> [shared [public [viewer|editor]]]
+  python manage.py set-member <workspace-id> <username> <owner|editor|viewer|none>
+  python manage.py set-access <workspace-id> <private|public> [viewer|editor]
+  python manage.py reset-guest                     # wipe guest data (auto-runs daily)
+  python manage.py setup                           # idempotent: guest account + missing workspace files
+  python manage.py migrate [--status] [--dry-run]  # upgrade the data directory (also runs at server start)
+  python manage.py backups                         # list the snapshots under backups/
+  python manage.py backups --create [--uploads] [--label x]   # take one now (databases; + uploads)
+  python manage.py backups --restore <name>        # copy one back over the data dir (server stopped!)
+  python manage.py backups --delete <name> | --prune
 
-Respects GAMMA_DATA_DIR (defaults to this directory).
+Respects GAMMA_DATA_DIR (defaults to the repo's data/ folder).
 """
 
 import re
-import shutil
 import sys
 
 import bcrypt
 
-from gamma.config import USERS_DIR
-from gamma.db import connect_users_db, page_now
-from gamma.seed import create_user_dbs, ensure_guest_user, reset_guest_data
+from gamma import backups as backups_mod, migrations, workspaces
+from gamma.db import SchemaOutdated, connect_users_db, page_now, ws_dir
+from gamma.seed import create_account, ensure_guest_user, reset_guest_data
+
+
+def _guard_schema():
+    """Every command but `migrate` needs the data directory at the current
+    schema version."""
+    try:
+        connect_users_db().close()
+    except SchemaOutdated as e:
+        print(f"{e}")
+        sys.exit(2)
 
 
 def create_user(username, password=None):
-    USERS_DIR.mkdir(parents=True, exist_ok=True)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", username):
+        print("Username must be 1-64 chars of letters, digits, '_', '.', '-'.")
+        return
     with connect_users_db() as conn:
         if conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
             print(f"User '{username}' already exists.")
             return
-        pwhash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode() if password else ""
-        is_guest = 0 if password else 1
-        conn.execute(
-            "INSERT INTO users (username, password_hash, is_guest, created_at) VALUES (?, ?, ?, ?)",
-            (username, pwhash, is_guest, page_now()),
-        )
-        conn.commit()
-
-    create_user_dbs(username)
+    ws = create_account(username, password)
     tag = " (no password)" if not password else ""
-    print(f"Created user '{username}'{tag}")
+    print(f"Created user '{username}'{tag} with personal workspace {ws}")
 
 
 def list_users():
     with connect_users_db() as conn:
         rows = conn.execute(
-            "SELECT username, is_guest, is_admin, created_at FROM users ORDER BY created_at"
+            "SELECT username, is_guest, is_admin, created_at, default_workspace FROM users ORDER BY created_at"
         ).fetchall()
     if not rows:
         print("No users.")
-    for user, is_guest, is_admin, created in rows:
+    for user, is_guest, is_admin, created, ws in rows:
         tag = " [guest]" if is_guest else (" [admin]" if is_admin else "")
-        print(f"  {user}{tag}  ({created})")
+        print(f"  {user}{tag}  ({created})  personal workspace: {ws or '-'}")
+
+
+def list_workspaces():
+    rows = workspaces.all_workspaces()
+    if not rows:
+        print("No workspaces.")
+    for w in rows:
+        kind = f"personal:{w['personal']}{' (default)' if w['default'] else ''}" if w["personal"] else (
+            f"shared public:{w['public_role']}" if w["access"] == "public" else "shared private")
+        quota = f"/{w['quota_mb']} MB" if w.get("quota_mb") else ""
+        members = ", ".join(f"{m['username']}:{m['role']}" for m in w["members"])
+        print(f"  {w['id']}  {w['name']!r}  [{kind}]  {w['used_bytes'] // (1024 * 1024)} MB{quota}  members: {members}")
+    orphans = workspaces.orphan_dirs()
+    if orphans:
+        print("  directories without a workspace row (inspect / delete by hand): " + ", ".join(orphans))
+
+
+def set_member(ws, username, role):
+    if not workspaces.get(ws):
+        print(f"Workspace '{ws}' not found.")
+        return
+    try:
+        if role == "none":
+            workspaces.remove_member(ws, username)
+            print(f"Removed '{username}' from workspace {ws}.")
+        else:
+            workspaces.set_member(ws, username, role, by="manage.py")
+            print(f"'{username}' is now {role} of workspace {ws}.")
+    except ValueError as e:
+        print(f"Refused: {e}")
+
+
+def create_workspace(name, owner, kind="personal", access="private", public_role="viewer"):
+    try:
+        info = workspaces.create(name, owner, kind=kind, by="manage.py", access=access, public_role=public_role)
+    except ValueError as e:
+        print(f"Refused: {e}")
+        return
+    print(f"Created {info['kind']} workspace {info['id']} {info['name']!r} ({info['access']}), owner {owner}.")
+
+
+def set_access(ws, access, public_role=None):
+    info = workspaces.get(ws)
+    if not info:
+        print(f"Workspace '{ws}' not found.")
+        return
+    try:
+        info = workspaces.set_access(ws, access, public_role or info["public_role"])
+    except ValueError as e:
+        print(f"Refused: {e}")
+        return
+    print(f"Workspace {ws} is now {info['access']}"
+          + (f" (everyone {info['public_role']})." if info["access"] == "public" else "."))
 
 
 def set_admin(username, value):
@@ -81,14 +145,16 @@ def delete_user(username):
         print("Use 'reset-guest' to reset the guest account.")
         return
     with connect_users_db() as conn:
+        if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
+            print(f"User '{username}' not found.")
+            return
         conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
-        conn.execute("DELETE FROM shares WHERE username = ?", (username,))
+        conn.commit()
+    deleted = workspaces.delete_account_workspaces(username)
+    with connect_users_db() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
         conn.commit()
-    user_dir = USERS_DIR / username
-    if user_dir.exists():
-        shutil.rmtree(str(user_dir))
-    print(f"Deleted user '{username}'")
+    print(f"Deleted user '{username}'" + (f" and workspace(s) {', '.join(deleted)}" if deleted else ""))
 
 
 def reset_guest():
@@ -102,16 +168,15 @@ def reset_guest():
 
 
 def rename_user(old, new):
-    """Rename an account: users/sessions/shares rows + the users/<name> data dir.
+    """Rename an account: every row that names it. Sessions and share tokens
+    keep working; no files move (workspace directories are named by id)."""
+    from gamma.routers.admin import rename_account_rows
 
-    Sessions and share tokens keep working (they are keyed by token, the
-    username column is updated in place), so nobody gets logged out.
-    """
     if old == "guest":
         print("The guest account cannot be renamed.")
         return
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", new):
-        print("New username must be 1-64 chars of letters, digits, '_', '.', '-' (it names a data directory).")
+        print("New username must be 1-64 chars of letters, digits, '_', '.', '-'.")
         return
     with connect_users_db() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE username = ?", (old,)).fetchone():
@@ -120,19 +185,8 @@ def rename_user(old, new):
         if conn.execute("SELECT 1 FROM users WHERE username = ?", (new,)).fetchone():
             print(f"User '{new}' already exists.")
             return
-        conn.execute("UPDATE users SET username = ? WHERE username = ?", (new, old))
-        conn.execute("UPDATE sessions SET username = ? WHERE username = ?", (new, old))
-        conn.execute("UPDATE shares SET username = ? WHERE username = ?", (new, old))
+        rename_account_rows(conn, old, new)
         conn.commit()
-    old_dir, new_dir = USERS_DIR / old, USERS_DIR / new
-    if old_dir.exists():
-        try:
-            old_dir.rename(new_dir)
-        except OSError as e:
-            print(f"Account row renamed, but moving {old_dir} -> {new_dir} failed: {e}")
-            print("Stop the server (open database handles lock the directory on Windows), "
-                  "move the folder manually, then everything is consistent.")
-            return
     print(f"Renamed user '{old}' -> '{new}'")
 
 
@@ -151,39 +205,88 @@ def set_password(username, password):
 
 
 def setup():
-    """Idempotent setup: create guest if absent, repair missing per-user DBs."""
+    """Idempotent setup: the guest account, a personal workspace for every
+    account, missing workspace files recreated."""
     with connect_users_db() as conn:
-        rows = conn.execute("SELECT username, is_guest FROM users").fetchall()
-    for user, _is_guest in rows:
-        if not (USERS_DIR / user / "pages.db").exists():
-            create_user_dbs(user)
-            print(f"  repaired: created missing DBs for '{user}'")
+        rows = conn.execute("SELECT username FROM users").fetchall()
+    for (user,) in rows:
+        ws = workspaces.ensure_personal(user, welcome=user == "guest")
+        if not (ws_dir(ws) / "pages.db").exists():
+            print(f"  repaired: created missing files for '{user}' ({ws})")
     if not any(r[0] == "guest" for r in rows):
         ensure_guest_user()
-        create_user_dbs("guest")
         print("  created guest account")
     print("Setup complete.")
 
 
-def migrate(drop_share_doc_id: bool = False):
-    """Run gamma/migrate.py's normalization pass and print what it touched.
-    ``--drop-share-doc-id`` additionally rebuilds the global shares table
-    without its vestigial doc_id column — a one-way schema step that is never
-    part of the automatic pass; run it only once every deployed Gamma binary
-    ships code that no longer writes the column (docs/dev/user_db.md)."""
-    from gamma.migrate import drop_shares_doc_id, run_all
+def migrate(status_only: bool = False, dry_run: bool = False):
+    """Upgrade the data directory to this Gamma's schema version (also done
+    at every server start). ``--status`` only reports; ``--dry-run`` reports
+    what would run. On Windows stop the server first: an upgrade may move
+    directories that open database handles would lock."""
+    st = migrations.status()
+    if st["fresh"]:
+        print("No data directory yet — nothing to migrate.")
+        return
+    print(f"Data directory schema version: {st['version']} (this Gamma: {st['target']})")
+    if not st["pending"]:
+        print("Up to date.")
+    else:
+        print("Pending steps: " + ", ".join(f"{p['version']} {p['name']}" for p in st["pending"]))
+    if status_only or not st["pending"]:
+        return
+    try:
+        result = migrations.ensure_current(dry_run=dry_run)
+    except migrations.MigrationError as e:
+        print(f"Refused: {e}")
+        sys.exit(2)
+    if dry_run:
+        print("Dry run: nothing changed.")
+        return
+    print(f"Snapshot of the databases before the upgrade: {result['backup']}")
+    print("Applied: " + ", ".join(result["applied"]))
+    print(f"Now at schema version {result['to']}.")
 
-    summary = run_all()
-    for user, counts in summary["users"].items():
-        print(f"  {user}: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
-    if summary["shares"]:
-        print("  shares: " + ", ".join(f"{k}={v}" for k, v in summary["shares"].items()))
-    print(f"Migration complete: {summary['changed']} row(s) changed.")
-    if drop_share_doc_id:
-        if drop_shares_doc_id():
-            print("  shares: dropped the doc_id column")
-        else:
-            print("  shares: doc_id column already gone")
+
+def backups(args: list):
+    """List / create / delete / restore / prune the snapshots under backups/."""
+    def arg(flag):
+        return args[args.index(flag) + 1] if flag in args and args.index(flag) + 1 < len(args) else ""
+    if "--create" in args:
+        label = arg("--label") or "manual"
+        try:
+            b = backups_mod.create(label, uploads="--uploads" in args)
+        except ValueError as e:
+            print(f"Refused: {e}")
+            sys.exit(2)
+        print(f"Created {b['name']} ({b['size_bytes'] // (1024 * 1024)} MB, "
+              f"{'with' if b.get('uploads') else 'without'} uploads)")
+        return
+    if "--delete" in args:
+        print("Deleted." if backups_mod.delete(arg("--delete")) else "No such backup.")
+        return
+    if "--restore" in args:
+        name = arg("--restore")
+        if not backups_mod.info(name):
+            print("No such backup.")
+            sys.exit(2)
+        try:
+            r = backups_mod.restore(name)
+        except OSError as e:
+            print(f"Restore failed (is the server stopped?): {e}")
+            sys.exit(2)
+        print(f"Restored {r['files']} file(s) from {name}. Start the server; it will migrate the "
+              f"restored data if the snapshot predates this Gamma.")
+        return
+    rows = backups_mod.list_backups()
+    if not rows:
+        print("No backups.")
+    for b in rows:
+        print(f"  {b['name']}  schema v{b.get('schema_version', '?')}  {len(b.get('files', []))} db file(s)"
+              f"{' + uploads' if b.get('uploads') else ''}  {b['size_bytes'] // (1024 * 1024)} MB")
+    if "--prune" in args:
+        removed = backups_mod.prune_backups()
+        print("Pruned: " + (", ".join(removed) if removed else "nothing"))
 
 
 def main():
@@ -192,39 +295,65 @@ def main():
         sys.exit(1)
 
     cmd = sys.argv[1]
+    args = sys.argv[2:]
+    if cmd == "migrate":
+        migrate(status_only="--status" in args, dry_run="--dry-run" in args)
+        return
+    if cmd == "backups":
+        backups(args)
+        return
+    _guard_schema()
     if cmd == "create-user":
-        if len(sys.argv) < 3:
+        if len(args) < 1:
             print("Usage: python manage.py create-user <username> [password]")
             sys.exit(1)
-        create_user(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
+        create_user(args[0], args[1] if len(args) > 1 else None)
     elif cmd == "set-password":
-        if len(sys.argv) < 4:
+        if len(args) < 2:
             print("Usage: python manage.py set-password <username> <password>")
             sys.exit(1)
-        set_password(sys.argv[2], sys.argv[3])
+        set_password(args[0], args[1])
     elif cmd == "set-admin":
-        if len(sys.argv) < 4:
+        if len(args) < 2:
             print("Usage: python manage.py set-admin <username> <on|off>")
             sys.exit(1)
-        set_admin(sys.argv[2], sys.argv[3])
+        set_admin(args[0], args[1])
     elif cmd == "rename-user":
-        if len(sys.argv) < 4:
+        if len(args) < 2:
             print("Usage: python manage.py rename-user <old> <new>")
             sys.exit(1)
-        rename_user(sys.argv[2], sys.argv[3])
+        rename_user(args[0], args[1])
     elif cmd == "delete-user":
-        if len(sys.argv) < 3:
+        if len(args) < 1:
             print("Usage: python manage.py delete-user <username>")
             sys.exit(1)
-        delete_user(sys.argv[2])
+        delete_user(args[0])
     elif cmd == "list-users":
         list_users()
+    elif cmd == "list-workspaces":
+        list_workspaces()
+    elif cmd == "create-workspace":
+        if len(args) < 2:
+            print("Usage: python manage.py create-workspace <name> <owner> [public [viewer|editor]]")
+            sys.exit(1)
+        shared = len(args) > 2 and args[2] == "shared"
+        create_workspace(args[0], args[1], "shared" if shared else "personal",
+                         "public" if shared and len(args) > 3 and args[3] == "public" else "private",
+                         args[4] if len(args) > 4 else "viewer")
+    elif cmd == "set-access":
+        if len(args) < 2:
+            print("Usage: python manage.py set-access <workspace-id> <private|public> [viewer|editor]")
+            sys.exit(1)
+        set_access(args[0], args[1], args[2] if len(args) > 2 else None)
+    elif cmd == "set-member":
+        if len(args) < 3:
+            print("Usage: python manage.py set-member <workspace-id> <username> <owner|editor|viewer|none>")
+            sys.exit(1)
+        set_member(args[0], args[1], args[2])
     elif cmd == "reset-guest":
         reset_guest()
     elif cmd == "setup":
         setup()
-    elif cmd == "migrate":
-        migrate(drop_share_doc_id="--drop-share-doc-id" in sys.argv[2:])
     else:
         print(f"Unknown command: {cmd}")
         sys.exit(1)

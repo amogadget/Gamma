@@ -1,4 +1,4 @@
-// Runs the shell's built-in `--smoke` self-test (throwaway local workspace →
+// Runs the shell's built-in `--smoke` self-test (throwaway local server →
 // sidecar health → auto-login) against the dev tree (default) or the
 // packaged app (`--packaged`, after `npm run pack`/`dist`), and fails on a
 // non-OK result. Used by CI after electron-builder; `npm run smoke` locally.

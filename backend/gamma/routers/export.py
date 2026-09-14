@@ -17,16 +17,16 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from starlette.background import BackgroundTask
 
-from ..auth import resolve_user, share_scope_page
+from ..auth import resolve_ws, share_scope_page
 from ..blocks_store import BLOCK_COLUMNS, assert_block_in_page, block_to_dict, fetch_subtree
+from ..db import connect_pages_db
 from ..db import (
     PAGES_SCHEMA,
     connect_data_db,
     page_now,
     pdf_upload_path,
     safe_doc_id,
-    user_db_path,
-    user_uploads_dir,
+    ws_uploads_dir,
 )
 from ..logseq_graph_export import (
     CONFIG_EDN,
@@ -196,11 +196,11 @@ class _Builder:
     "folder_scope": path | None}."""
     suffix = ".zip"  # appended to the base slug for the download name
 
-    def __init__(self, user, base: str, opts: dict):
-        self.user = user
+    def __init__(self, ws, base: str, opts: dict):
+        self.ws = ws
         self.base = base
         self.opts = opts
-        self.uploads_dir = user_uploads_dir(user)
+        self.uploads_dir = ws_uploads_dir(ws)
         self.entries, self.assets = [], set()
         self.files, self.blobs = [], []
 
@@ -226,8 +226,8 @@ class _MarkdownBuilder(_Builder):
     resolve against the export set: a target page that is part of the same
     export is linked by relative filename, so the zip is self-contained."""
 
-    def __init__(self, user, base, opts):
-        super().__init__(user, base, opts)
+    def __init__(self, ws, base, opts):
+        super().__init__(ws, base, opts)
         self.used = set()
         self.filenames = {}          # page id → arcname inside the zip
         self.resolve_ref = None
@@ -288,8 +288,8 @@ class _ZoteroBuilder(_Builder):
     placeholder since they can't hold pictures."""
     suffix = "-zotero.zip"
 
-    def __init__(self, user, base, opts):
-        super().__init__(user, base, opts)
+    def __init__(self, ws, base, opts):
+        super().__init__(ws, base, opts)
         self.items = []
         self.resolve_image = _image_resolver(self.uploads_dir)
 
@@ -303,7 +303,7 @@ class _ZoteroBuilder(_Builder):
         doc_id = props.get("doc_id")
         if include_pdf and doc_id:
             try:
-                pdf_path = pdf_upload_path(self.user, doc_id)
+                pdf_path = pdf_upload_path(self.ws, doc_id)
             except ValueError:
                 pdf_path = None
             if pdf_path and pdf_path.is_file():
@@ -314,7 +314,7 @@ class _ZoteroBuilder(_Builder):
                         m["note"] = strip_image_md(m["note"])
                     if marks:
                         try:
-                            data, _ = annotate_pdf(data, marks, author=self.user)
+                            data, _ = annotate_pdf(data, marks, author=self.ws)
                         except Exception as e:
                             log(f"zotero export: annotating '{title}' failed, exporting bare PDF: {e}")
                             data = pdf_path.read_bytes()
@@ -406,8 +406,8 @@ class _GammaBuilder(_Builder):
     switches don't apply to this format."""
     suffix = "-gamma.zip"
 
-    def __init__(self, user, base, opts):
-        super().__init__(user, base, opts)
+    def __init__(self, ws, base, opts):
+        super().__init__(ws, base, opts)
         self.db = sqlite3.connect(":memory:")
         for stmt in PAGES_SCHEMA:
             self.db.execute(stmt)
@@ -439,7 +439,7 @@ class _GammaBuilder(_Builder):
         chat_keys = list(self.page_ids)
         scope = self.opts.get("folder_scope")
         data_bytes = None
-        with connect_data_db(self.user) as src:
+        with connect_data_db(self.ws) as src:
             marks = ",".join("?" for _ in chat_keys)
             rows = src.execute(
                 f"SELECT block_id, messages, updated_at FROM chats WHERE block_id IN ({marks})",
@@ -513,8 +513,8 @@ class _NotesPdfBuilder(_Builder):
     overrides ``response`` instead of accumulating zip parts."""
     suffix = "-notes.pdf"
 
-    def __init__(self, user, base, opts):
-        super().__init__(user, base, opts)
+    def __init__(self, ws, base, opts):
+        super().__init__(ws, base, opts)
         self.pages = []
 
     def add_page(self, n, rows, page):
@@ -524,7 +524,7 @@ class _NotesPdfBuilder(_Builder):
         try:
             # The request's connection is closed by the time response() runs,
             # so [[ref]]/![[embed]] resolution opens its own (read-only use).
-            with sqlite3.connect(user_db_path(self.user, "pages.db")) as conn:
+            with connect_pages_db(self.ws) as conn:
                 pdf_bytes = render_document(
                     self.pages, uploads_dir=self.uploads_dir,
                     highlights=self.opts["highlights"], notes=self.opts["notes"],
@@ -548,14 +548,14 @@ _BUILDERS = {
 }
 
 
-def _run_export(conn, user, mode: str, root_ids, base: str, opts: dict,
+def _run_export(conn, ws, mode: str, root_ids, base: str, opts: dict,
                 progress: dict | None = None) -> _Builder:
     """The shared export driver: one pass over the selected pages, each handed
     to the mode's builder. ``progress`` is the /folders/export-progress dict."""
     cls = _BUILDERS.get(mode)
     if cls is None:
         raise HTTPException(status_code=400, detail=f"unknown export mode: {mode}")
-    builder = cls(user, base, opts)
+    builder = cls(ws, base, opts)
     builder.begin(conn, root_ids)
     for n, root_id in enumerate(root_ids, 1):
         rows = fetch_subtree(conn, root_id)
@@ -583,17 +583,17 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
     graph, both switches pinned on), ``zotero-rdf`` (a one-item Zotero RDF
     library), or ``gamma`` (a scoped account backup any Gamma imports via
     /api/import-data?mode=merge)."""
-    user = resolve_user(request)
+    ws = resolve_ws(request)
     scope = share_scope_page(request)
     opts = {"pdf": bool(pdf), "highlights": bool(highlights), "notes": bool(notes),
             "folder_scope": None}
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         assert_block_in_page(conn, block_id, scope)
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="page not found")
         row = conn.execute("SELECT content FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
         slug = slugify(row[0], block_id)
-        builder = _run_export(conn, user, mode, [block_id], slug, opts)
+        builder = _run_export(conn, ws, mode, [block_id], slug, opts)
 
     # A single readable page referencing no local assets is just the .md.
     if mode == "readable" and not builder.assets:
@@ -611,9 +611,9 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
     back to its highlight — readable without opening popups, and printable.
     ``highlights=0`` skips the annotation layer, so ``highlights=0&notes=1``
     gives a clean PDF carrying only the written notes."""
-    user = resolve_user(request)
+    ws = resolve_ws(request)
     scope = share_scope_page(request)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         assert_block_in_page(conn, block_id, scope)
         rows = fetch_subtree(conn, block_id)
     if not rows:
@@ -624,7 +624,7 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
     if not doc_id:
         raise HTTPException(status_code=400, detail="page has no PDF")
     try:
-        pdf_path = pdf_upload_path(user, doc_id)
+        pdf_path = pdf_upload_path(ws, doc_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="invalid document id")
     if not pdf_path.is_file():
@@ -636,7 +636,7 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
     pdf_bytes = pdf_path.read_bytes()
     if highlights:
         try:
-            pdf_bytes, written = annotate_pdf(pdf_bytes, marks, author=user)
+            pdf_bytes, written = annotate_pdf(pdf_bytes, marks, author=request.state.user or "")
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"could not annotate PDF: {e}")
 
@@ -645,7 +645,7 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
         # Still positioned from the highlight rects, annotation layer or not.
         try:
             pdf_bytes, drawn = render_notes(pdf_bytes, marks,
-                                            uploads_dir=user_uploads_dir(user))
+                                            uploads_dir=ws_uploads_dir(ws))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"could not render notes: {e}")
 
@@ -662,7 +662,7 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
     )
 
 
-# Per-user progress of a running /folders/export, for the frontend's percent
+# Per-workspace progress of a running /folders/export, for the frontend's percent
 # display (same in-memory pattern as auth.py's backup _export_progress).
 _folder_export_progress: dict[str, dict] = {}
 
@@ -671,8 +671,8 @@ _folder_export_progress: dict[str, dict] = {}
 def folder_export_progress(request: Request):
     if share_scope_page(request) is not None:
         raise HTTPException(status_code=403, detail="not accessible via this share link")
-    user = resolve_user(request)
-    return _folder_export_progress.get(user) or {"active": False, "total": 0, "done": 0}
+    ws = resolve_ws(request)
+    return _folder_export_progress.get(ws) or {"active": False, "total": 0, "done": 0}
 
 
 def _page_in_folder(props: dict, name: str) -> bool:
@@ -700,11 +700,11 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
     # A share link is scoped to one page, never a whole folder.
     if share_scope_page(request) is not None:
         raise HTTPException(status_code=403, detail="not accessible via this share link")
-    user = resolve_user(request)
+    ws = resolve_ws(request)
     folder_slug = slugify(name.replace("/", "-"), "")
     opts = {"pdf": bool(pdf), "highlights": bool(highlights), "notes": bool(notes),
             "folder_scope": name}
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         roots = conn.execute(
             f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = 'root'"
         ).fetchall()
@@ -714,9 +714,9 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
             raise HTTPException(status_code=404, detail="no pages in that folder")
 
         prog = {"active": True, "total": len(matches), "done": 0, "title": ""}
-        _folder_export_progress[user] = prog
+        _folder_export_progress[ws] = prog
         try:
-            builder = _run_export(conn, user, mode, [b["id"] for b in matches],
+            builder = _run_export(conn, ws, mode, [b["id"] for b in matches],
                                   folder_slug, opts, progress=prog)
         finally:
             prog["active"] = False

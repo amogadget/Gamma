@@ -8,7 +8,7 @@ import zipfile
 
 import pytest
 
-from conftest import login as _login, make_page, make_user as _make_user
+from conftest import login as _login, make_page, make_user as _make_user, workspace_of
 
 
 @pytest.fixture(scope="module")
@@ -108,7 +108,7 @@ def test_gamma_export_delete_reimport_is_near_identical(gdonor):
     regenerates to append after the existing pages. Files and chats too."""
     import sqlite3
 
-    from gamma.db import user_db_path, user_uploads_dir
+    from gamma.db import ws_db_path, ws_uploads_dir
 
     up = gdonor.post("/api/uploads", files={"file": ("rt.pdf", _blank_pdf_bytes(width=611), "application/pdf")})
     assert up.status_code == 200, up.text
@@ -135,7 +135,7 @@ def test_gamma_export_delete_reimport_is_near_identical(gdonor):
                       json={"messages": [{"role": "user", "content": "rt chat"}]}).status_code == 200
 
     def rows_of(ids):
-        with sqlite3.connect(user_db_path("gdonor", "pages.db")) as conn:
+        with sqlite3.connect(ws_db_path(workspace_of("gdonor"), "pages.db")) as conn:
             placeholders = ",".join("?" for _ in ids)
             return sorted(conn.execute(
                 "WITH RECURSIVE sub(id) AS ("
@@ -148,7 +148,7 @@ def test_gamma_export_delete_reimport_is_near_identical(gdonor):
     page_ids = [paper["id"], note["id"]]
     before = rows_of(page_ids)
     assert len(before) == 5  # 2 roots + highlight + nested note + free note
-    pdf_bytes_before = (user_uploads_dir("gdonor") / pdf_name).read_bytes()
+    pdf_bytes_before = (ws_uploads_dir(workspace_of("gdonor")) / pdf_name).read_bytes()
 
     exp = gdonor.get("/api/folders/export", params={"name": "rtfolder", "mode": "gamma"})
     assert exp.status_code == 200, exp.text
@@ -157,7 +157,7 @@ def test_gamma_export_delete_reimport_is_near_identical(gdonor):
         assert gdonor.delete(f"/api/blocks/{pid}").status_code == 200
     assert rows_of(page_ids) == []
     # orphan cleanup took the now-unreferenced PDF with the pages
-    assert not (user_uploads_dir("gdonor") / pdf_name).exists()
+    assert not (ws_uploads_dir(workspace_of("gdonor")) / pdf_name).exists()
 
     imp = gdonor.post("/api/import-data", params={"mode": "merge"},
                       files={"file": ("rt.zip", exp.content, "application/zip")})
@@ -176,7 +176,7 @@ def test_gamma_export_delete_reimport_is_near_identical(gdonor):
         else:
             assert row == want
     # the PDF is back byte-identical, and the chat survived the round trip
-    assert (user_uploads_dir("gdonor") / pdf_name).read_bytes() == pdf_bytes_before
+    assert (ws_uploads_dir(workspace_of("gdonor")) / pdf_name).read_bytes() == pdf_bytes_before
     chat = gdonor.get(f"/api/chats/{paper['id']}").json()
     assert chat["messages"][0]["content"] == "rt chat"
 

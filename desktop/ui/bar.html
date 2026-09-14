@@ -31,10 +31,12 @@
     height: 28px; padding: 0 9px 0 8px;
     border: 1px solid transparent; border-radius: 8px;
     background: transparent; color: var(--text-primary);
-    font: inherit; font-weight: 600; cursor: pointer; max-width: 320px;
+    font: inherit; font-weight: 600; cursor: pointer; max-width: 360px;
   }
   .wsBtn:hover, .wsBtn.open { background: var(--bg-hover); border-color: var(--border); }
   .wsBtn .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wsBtn .workspace { color: var(--text-muted); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .wsBtn .workspace:empty { display: none; }
   .wsBtn .kind { color: var(--text-muted); display: inline-flex; }
   .wsBtn .kind svg { width: 15px; height: 15px; }
   .wsBtn .chev { color: var(--text-dim); display: inline-flex; }
@@ -51,7 +53,7 @@
   .updPill svg { width: 13px; height: 13px; }
 
   .menu {
-    position: absolute; top: 36px; left: 34px; min-width: 260px; max-width: 360px;
+    position: absolute; top: 36px; left: 34px; min-width: 280px; max-width: 380px;
     background: var(--bg-elevated); border: 1px solid var(--border);
     border-radius: var(--radius-surface); box-shadow: var(--shadow-surface);
     padding: 5px; z-index: 2;
@@ -66,6 +68,11 @@
   .item:hover { background: var(--bg-hover); }
   .item .ico { color: var(--text-muted); display: inline-flex; flex-shrink: 0; }
   .item .ico svg { width: 15px; height: 15px; }
+  .item .badge {
+    width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; background: var(--accent-bg-light); color: var(--accent);
+  }
   .item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .item .sub { color: var(--text-dim); font-size: 11px; margin-left: 6px; }
   .item .check { color: var(--accent); display: inline-flex; width: 14px; }
@@ -88,9 +95,10 @@
       <rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/>
     </svg>
   </div>
-  <button class="wsBtn" id="wsBtn" title="Switch workspace">
+  <button class="wsBtn" id="wsBtn" title="Switch workspace or server">
     <span class="kind" id="wsKind"></span>
-    <span class="name" id="wsName">Workspaces</span>
+    <span class="name" id="wsName">Servers</span>
+    <span class="workspace" id="wsWorkspace"></span>
     <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span>
   </button>
   <span class="status" id="status"></span>
@@ -113,15 +121,27 @@
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
   };
+  const ROLE = { owner: 'owner', editor: 'can edit', viewer: 'view only' };
   const $ = (id) => document.getElementById(id);
   document.body.dataset.platform = gammaShell.platform;
-  let state = { workspaces: [], current: null, busy: null, theme: '' };
+  let state = { servers: [], gamma: null, current: null, busy: null, theme: '' };
   let open = false;
+
+  // Gamma's workspace the content view shows (null when not signed in / unknown).
+  function currentWorkspace() {
+    const g = state.gamma;
+    if (!g) return null;
+    return g.list.find((w) => w.id === g.current) || null;
+  }
 
   function render() {
     document.documentElement.setAttribute('data-theme', state.theme || 'dark');
     const cur = state.current;
-    $('wsName').textContent = cur ? cur.name : 'Workspaces';
+    const ws = currentWorkspace();
+    // The button names the server and, once known, the Gamma workspace open
+    // on it ("Alpha · Rydberg lab"); idle: "Servers".
+    $('wsName').textContent = cur ? cur.name : 'Servers';
+    $('wsWorkspace').textContent = ws && cur ? `· ${ws.name}` : '';
     $('wsKind').innerHTML = cur ? ICONS[cur.type] || '' : ICONS.grid;
     $('btnReload').hidden = !cur;
     const upd = state.update || {};
@@ -147,38 +167,55 @@
     renderMenu();
   }
 
+  function label(text) {
+    const l = document.createElement('div');
+    l.className = 'menuLabel';
+    l.textContent = text;
+    return l;
+  }
+
   function renderMenu() {
     const menu = $('menu');
     menu.innerHTML = '';
-    const label = document.createElement('div');
-    label.className = 'menuLabel';
-    label.textContent = 'Workspaces';
-    menu.appendChild(label);
-    for (const ws of state.workspaces) {
-      const isCur = state.current && state.current.id === ws.id;
+    // Gamma's workspaces on the open server first: the everyday switch.
+    const g = state.gamma;
+    if (state.current && g && g.list.length) {
+      menu.appendChild(label(`Workspaces · ${state.current.name}`));
+      for (const w of g.list) {
+        const isCur = w.id === g.current;
+        const b = document.createElement('button');
+        b.className = 'item wsItem' + (isCur ? ' current' : '');
+        b.dataset.ws = w.id;
+        b.title = w.personal ? 'Your personal workspace' : `Shared · ${w.members} member${w.members === 1 ? '' : 's'} · you ${ROLE[w.role] || w.role}`;
+        b.innerHTML = `<span class="badge"></span><span class="label"></span><span class="sub">${w.personal ? 'personal' : (ROLE[w.role] || w.role)}</span><span class="check">${isCur ? ICONS.check : ''}</span>`;
+        b.querySelector('.badge').textContent = (w.name || '?').charAt(0).toUpperCase();
+        b.querySelector('.label').textContent = w.name;
+        b.onclick = () => { closeMenu(); if (!isCur) gammaShell.openWorkspace(w.id).catch(() => {}); };
+        menu.appendChild(b);
+      }
+      const sep = document.createElement('div'); sep.className = 'sep'; menu.appendChild(sep);
+    }
+    menu.appendChild(label('Servers'));
+    for (const srv of state.servers) {
+      const isCur = state.current && state.current.id === srv.id;
       const b = document.createElement('button');
       b.className = 'item' + (isCur ? ' current' : '');
-      b.dataset.id = ws.id;
-      b.innerHTML = `<span class="ico">${ICONS[ws.type] || ''}</span><span class="label"></span>` +
-        (ws.type === 'local'
-          ? `<span class="dot ${ws.running ? 'on' : ''}" title="${ws.running ? 'server running' : 'stopped'}"></span>`
-          : `<span class="sub">remote</span><span class="dot ${ws.reachable === true ? 'on' : ws.reachable === false ? 'off' : ''}" title="${ws.reachable === true ? 'reachable' : ws.reachable === false ? 'unreachable' : 'checking…'}"></span>`) +
+      b.dataset.id = srv.id;
+      b.innerHTML = `<span class="ico">${ICONS[srv.type] || ''}</span><span class="label"></span>` +
+        (srv.type === 'local'
+          ? `<span class="dot ${srv.running ? 'on' : ''}" title="${srv.running ? 'server running' : 'stopped'}"></span>`
+          : `<span class="sub">remote</span><span class="dot ${srv.reachable === true ? 'on' : srv.reachable === false ? 'off' : ''}" title="${srv.reachable === true ? 'reachable' : srv.reachable === false ? 'unreachable' : 'checking…'}"></span>`) +
         `<span class="check">${isCur ? ICONS.check : ''}</span>`;
-      b.querySelector('.label').textContent = ws.name;
-      b.onclick = () => { closeMenu(); if (!isCur) gammaShell.open(ws.id).catch(() => {}); };
+      b.querySelector('.label').textContent = srv.name;
+      b.onclick = () => { closeMenu(); if (!isCur) gammaShell.open(srv.id).catch(() => {}); };
       menu.appendChild(b);
     }
-    if (!state.workspaces.length) {
-      const e = document.createElement('div');
-      e.className = 'menuLabel';
-      e.textContent = 'none yet';
-      menu.appendChild(e);
-    }
+    if (!state.servers.length) menu.appendChild(label('none yet'));
     const sep = document.createElement('div'); sep.className = 'sep'; menu.appendChild(sep);
     const all = document.createElement('button');
     all.className = 'item';
     all.id = 'menuLauncher';
-    all.innerHTML = `<span class="ico">${ICONS.plus}</span><span class="label">All workspaces…</span><span class="sub">Ctrl+Shift+L</span>`;
+    all.innerHTML = `<span class="ico">${ICONS.plus}</span><span class="label">All servers…</span><span class="sub">Ctrl+Shift+L</span>`;
     all.onclick = () => { closeMenu(); gammaShell.launcher(); };
     menu.appendChild(all);
   }
@@ -188,7 +225,7 @@
     $('wsBtn').classList.add('open');
     $('menu').hidden = false;
     gammaShell.barExpand(true);
-    // Fresh list on every open (workspaces added since the last push).
+    // Fresh list on every open (servers added, workspaces joined since the last push).
     gammaShell.state().then((s) => { state = s; render(); });
   }
   function closeMenu() {

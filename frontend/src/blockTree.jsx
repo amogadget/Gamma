@@ -19,8 +19,9 @@ import { BlockCmEditor, scanMathSpans } from "./blockCmEditor";
 import { fenceInnerAt, highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
 import { filterSlashCommands, SlashMenuPopup } from "./slashMenu";
 import { remarkCallouts } from "./callouts";
+import { PeerChips } from "./presence";
 import { ContextMenu, MenuItem } from "./menus";
-import { API, apiJson, copyText, withShare } from "./utils";
+import { API, apiJson, assetUrl, copyText, withShare, withWorkspace } from "./utils";
 import { CopyIcon, ExportIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "./icons";
 import {
   applyImageEdit, applyTableEdit, formatTables, htmlTableToMarkdown,
@@ -180,11 +181,11 @@ function toggleTaskMarker(content, idx, checked) {
 // — what a dropped non-image file becomes) renders as a file chip: no
 // preview fetch, opens/downloads in a new tab.
 function FileChip({ href, text }) {
-  const name = (text || "").trim() || decodeURIComponent(href.split("/").pop() || "file");
+  const name = (text || "").trim() || decodeURIComponent((href.split("/").pop() || "file").split("?")[0]);
   return (
     <a
       className="linkChip fileChip"
-      href={withShare(href)}
+      href={assetUrl(href)}
       target="_blank"
       rel="noreferrer"
       title={name}
@@ -512,7 +513,9 @@ const BlockMarkdown = React.memo(function BlockMarkdown({ content, blockId, refL
       // remarkCallouts must run before it (it eats the marker line's "\n").
       remarkPlugins={[remarkGfm, remarkMath, remarkCallouts, remarkBreaks]}
       rehypePlugins={[rehypeRaw, rehypeKatex]}
-      urlTransform={(url) => url.startsWith("blockref:") || url.startsWith("blockembed:") ? url : defaultUrlTransform(url)}
+      // Upload URLs get the workspace / share token here (assetUrl): the
+      // browser fetches <img> src and link hrefs without the API header.
+      urlTransform={(url) => url.startsWith("blockref:") || url.startsWith("blockembed:") ? url : assetUrl(defaultUrlTransform(url))}
       components={{
         a: ({ href, children }) => {
           if (href?.startsWith("blockref:")) {
@@ -675,9 +678,18 @@ function BlockRow({
   aiLive,
   aiScan,
   onAddToChat,
+  peers,
 }) {
   const ref = useRef(null);
   const clickPosRef = useRef(null);
+  // Other people on this block (collab presence): avatar chips on the row,
+  // a coloured edge while one of them has its editor open, and their
+  // carets inside our editor when we have it open too.
+  const rowPeers = peers?.length ? peers.filter((p) => p.block === block.id) : null;
+  const peerEditing = rowPeers?.find((p) => p.anchor >= 0) || null;
+  const remoteCursors = rowPeers?.length
+    ? rowPeers.filter((p) => p.anchor >= 0).map((p) => ({ anchor: p.anchor, head: p.head, color: p.color, name: p.name }))
+    : null;
   // The AI agent's live footprint on this row (App.handleAgentEvent): a
   // read/edit mark that lights the row up, and — while the agent is still
   // writing an edit_block call for THIS block — the streamed text so far.
@@ -1150,8 +1162,9 @@ function BlockRow({
         onBlockDrop?.(e, block);
       }}
     >
+      {rowPeers?.length ? <PeerChips peers={rowPeers} /> : null}
       <div
-        className={`blockRow ${focusedId === block.id ? "focused" : ""}${aiMark ? ` ai-${aiMark.kind} aiMark${aiMark.n % 2}` : ""}${scanIdx != null ? ` ai-scan aiMark${aiScan.n % 2}` : ""}`}
+        className={`blockRow ${focusedId === block.id ? "focused" : ""}${aiMark ? ` ai-${aiMark.kind} aiMark${aiMark.n % 2}` : ""}${scanIdx != null ? ` ai-scan aiMark${aiScan.n % 2}` : ""}${peerEditing ? ` peerOn peer-${peerEditing.color}` : ""}`}
         style={scanIdx != null ? { animationDelay: `${Math.min(scanIdx * 45, 1600)}ms` } : undefined}
         onMouseDown={(e) => {
           if (e.button !== 0) return; // right-click is the context menu's
@@ -1248,6 +1261,7 @@ function BlockRow({
               dataBlockId={block.id}
               clickPos={clickPosRef.current}
               refLabels={refLabels}
+              remoteCursors={remoteCursors}
               value={block.content || ""}
               onChange={(e) => {
                 onChangeText(block.id, e.target.value, e.selectionBefore);
@@ -1584,7 +1598,7 @@ function SortableBlockRow({ block, ...rowProps }) {
             icon={LinkIcon}
             title="Paste it in a note to choose mention / synced block, or open it anywhere"
             onClick={() => copy(
-              `${window.location.origin}/?block=${encodeURIComponent(block.id)}`,
+              withWorkspace(`${window.location.origin}/?block=${encodeURIComponent(block.id)}`),
               "Block link copied — paste into a note for mention / synced block",
             )}
           >Copy link to block</MenuItem>

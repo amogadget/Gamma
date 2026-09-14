@@ -1,7 +1,10 @@
-"""Per-user database creation and guest seeding.
+"""Workspace file creation and seeding: the empty pages.db / data.db /
+uploads/ of a new workspace, the guest welcome page, the first admin.
 
-Shared by the app (daily guest reset) and manage.py (user CRUD) so the
-welcome page and schemas never drift between the two.
+Shared by the app (daily guest reset, first run) and manage.py (user CRUD)
+so the welcome page and schemas never drift between the two. Account and
+membership rows are gamma/workspaces.py's job; this module only writes
+files.
 """
 
 import os
@@ -14,8 +17,8 @@ import bcrypt
 
 from fractional_indexing import generate_key_between
 
-from .config import USERS_DIR
-from .db import DATA_SCHEMA, PAGES_SCHEMA, connect_users_db, page_now
+from .config import WORKSPACES_DIR
+from .db import DATA_SCHEMA, PAGES_SCHEMA, connect_users_db, page_now, safe_ws_id
 from .logbuf import log
 
 # GitHub raw base for screenshots embedded in the guest welcome page.
@@ -52,19 +55,17 @@ def _welcome_blocks():
     ]
 
 
-def create_user_dbs(username: str):
-    """Create fresh pages.db, data.db, and uploads/ for a user.
-
-    Guest gets the welcome page seeded into pages.db.
-    """
-    user_dir = USERS_DIR / username
-    user_dir.mkdir(parents=True, exist_ok=True)
+def create_workspace_files(ws_id: str, welcome: bool = False):
+    """Create fresh pages.db, data.db and uploads/ under workspaces/<id>/
+    (existing files are kept). ``welcome`` seeds the guest welcome page."""
+    target = WORKSPACES_DIR / safe_ws_id(ws_id)
+    target.mkdir(parents=True, exist_ok=True)
     nw = page_now()
 
     # closing(), not just the context manager: sqlite3's `with` commits but
     # does NOT close, and the open handle would block renaming/deleting the
-    # user directory on Windows (manage.py rename-user right after create).
-    with closing(sqlite3.connect(str(user_dir / "pages.db"))) as pages_db:
+    # directory on Windows.
+    with closing(sqlite3.connect(str(target / "pages.db"))) as pages_db:
         for stmt in PAGES_SCHEMA:
             pages_db.execute(stmt)
         if not pages_db.execute("SELECT 1 FROM unified_blocks WHERE id = 'root'").fetchone():
@@ -73,7 +74,8 @@ def create_user_dbs(username: str):
                 "VALUES ('root', NULL, 'a0', '', '{}', ?, ?)",
                 (nw, nw),
             )
-        if username == "guest":
+        if welcome and not pages_db.execute(
+                "SELECT 1 FROM unified_blocks WHERE parent_id = 'root' LIMIT 1").fetchone():
             for bid, pid, pos, content, props in _welcome_blocks():
                 pages_db.execute(
                     "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
@@ -82,20 +84,40 @@ def create_user_dbs(username: str):
                 )
         pages_db.commit()
 
-    with closing(sqlite3.connect(str(user_dir / "data.db"))) as data_db:
+    with closing(sqlite3.connect(str(target / "data.db"))) as data_db:
         for stmt in DATA_SCHEMA:
             data_db.execute(stmt)
         data_db.commit()
 
-    (user_dir / "uploads").mkdir(parents=True, exist_ok=True)
+    (target / "uploads").mkdir(parents=True, exist_ok=True)
+
+
+def ensure_guest_user() -> str:
+    """The guest account row and its workspace; returns the workspace id."""
+    from . import workspaces  # local: workspaces imports this module
+
+    with connect_users_db() as conn:
+        if not conn.execute("SELECT 1 FROM users WHERE username = 'guest'").fetchone():
+            conn.execute(
+                "INSERT INTO users (username, password_hash, is_guest, created_at) VALUES ('guest', '', 1, ?)",
+                (page_now(),),
+            )
+            conn.commit()
+    return workspaces.ensure_personal("guest", welcome=True)
 
 
 def reset_guest_data():
     """Wipe the guest workspace and recreate it with the welcome page."""
-    guest_dir = USERS_DIR / "guest"
-    if guest_dir.exists():
-        shutil.rmtree(str(guest_dir))
-    create_user_dbs("guest")
+    from . import workspaces
+
+    ws_id = workspaces.default_workspace("guest")
+    if ws_id:
+        guest_dir = WORKSPACES_DIR / safe_ws_id(ws_id)
+        if guest_dir.exists():
+            shutil.rmtree(str(guest_dir))
+        create_workspace_files(ws_id, welcome=True)
+    else:
+        ensure_guest_user()
 
 
 def ensure_admin_seed():
@@ -111,6 +133,8 @@ def ensure_admin_seed():
     admin exists", because silently adding an admin login to an upgraded
     multi-user instance would be a backdoor; those grant the privilege via
     `manage.py set-admin`."""
+    from . import workspaces
+
     username = os.environ.get("GAMMA_ADMIN_USER", "").strip() or "admin"
     env_password = os.environ.get("GAMMA_ADMIN_PASSWORD", "")
     password = env_password or secrets.token_urlsafe(9)  # 12 chars, URL-safe alphabet
@@ -126,7 +150,7 @@ def ensure_admin_seed():
             (username, pwhash, page_now()),
         )
         conn.commit()
-    create_user_dbs(username)
+    workspaces.ensure_personal(username)
     # ASCII only: this prints during startup, and a redirected Windows console
     # (GBK) raises UnicodeEncodeError on characters it can't encode.
     # Raw print()s on purpose — the one-time password must go to the console
@@ -139,12 +163,17 @@ def ensure_admin_seed():
     return username, password
 
 
-def ensure_guest_user():
-    """Make sure the guest account row exists in users.db."""
+def create_account(username: str, password: str | None, is_admin: bool = False) -> str:
+    """Insert an account row (a missing password makes a guest-style
+    account) and its personal workspace. Returns the workspace id. Shared by
+    manage.py and the admin API."""
+    from . import workspaces
+
+    pwhash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode() if password else ""
     with connect_users_db() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE username = 'guest'").fetchone():
-            conn.execute(
-                "INSERT INTO users (username, password_hash, is_guest, created_at) VALUES ('guest', '', 1, ?)",
-                (page_now(),),
-            )
-            conn.commit()
+        conn.execute(
+            "INSERT INTO users (username, password_hash, is_guest, is_admin, created_at) VALUES (?, ?, ?, ?, ?)",
+            (username, pwhash, 0 if password else 1, 1 if is_admin else 0, page_now()),
+        )
+        conn.commit()
+    return workspaces.ensure_personal(username)

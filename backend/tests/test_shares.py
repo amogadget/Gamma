@@ -1,11 +1,11 @@
 """Share links are keyed by page, not by PDF — with per-share permissions.
 
 Every page is a root block; a paper's PDF is just a doc_id/source_url on it.
-Shares follow the block model: a token names one page and confines reads (and
-edit writes) to that page's subtree and assets — so note pages without any PDF
-share exactly like papers. Rows minted by the old doc-keyed model were keyed
-by page once, by ``migrate.run_all`` (server start / ``manage.py migrate``);
-a row still without a page is dead (tests/test_migrate.py covers the pass).
+Shares follow the block model: a token names one page (in one workspace) and
+confines reads (and edit writes) to that page's subtree and assets — so note
+pages without any PDF share exactly like papers. Rows minted by the old
+doc-keyed model were re-keyed once by the schema migration
+(tests/test_migrations.py covers it).
 
 Permissions: audience (anyone / signed-in users / a list of usernames) gates
 who may open the link; role (view / edit) says what they may do. Editing is
@@ -89,56 +89,6 @@ def test_share_token_is_stable_per_page(bob):
 def test_share_requires_a_session(anon, bob):
     page = make_page(bob, "No anon sharing")
     assert anon.post(f"/api/share/{page['id']}").status_code == 401
-
-
-def test_legacy_doc_keyed_share_row_still_resolves(bob, anon):
-    """Rows minted before shares were keyed by page carry only doc_id; the
-    one-time migration (gamma/migrate.py, run at every server start) resolves
-    them to their page and backfills page_id — auth itself no longer does."""
-    from gamma.db import connect_users_db, page_now
-    from gamma.migrate import run_all
-
-    page = make_page(bob, "Old paper", properties={"doc_id": "legacy_doc_1"})
-    token = "legacy-token-abc"
-    with connect_users_db() as conn:
-        conn.execute(
-            "INSERT INTO shares (token, username, doc_id, page_id, created_at) VALUES (?, ?, ?, NULL, ?)",
-            (token, "bob_share", "legacy_doc_1", page_now()),
-        )
-        conn.commit()
-    assert anon.get(f"/api/share/{token}").status_code == 404  # dead until migrated
-    assert run_all()["shares"] == {"shares_backfilled": 1}
-
-    r = anon.get(f"/api/share/{token}")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert (body["page_id"], body["doc_id"], body["username"]) == (page["id"], "legacy_doc_1", "bob_share")
-    assert (body["audience"], body["role"], body["can_edit"]) == ("anyone", "view", False)
-    assert anon.get(f"/api/blocks/{page['id']}/subtree", params={"share": token}).status_code == 200
-    assert anon.get("/api/blocks/by-doc/legacy_doc_1", params={"share": token}).status_code == 200
-
-    with connect_users_db() as conn:
-        row = conn.execute("SELECT page_id FROM shares WHERE token = ?", (token,)).fetchone()
-    assert row[0] == page["id"]
-
-
-def test_legacy_row_for_a_deleted_document_is_dead(bob, anon):
-    from gamma.db import connect_users_db, page_now
-    from gamma.migrate import run_all
-
-    token = "legacy-token-gone"
-    with connect_users_db() as conn:
-        conn.execute(
-            "INSERT INTO shares (token, username, doc_id, page_id, created_at) VALUES (?, ?, ?, NULL, ?)",
-            (token, "bob_share", "doc_that_never_existed", page_now()),
-        )
-        conn.commit()
-    assert anon.get(f"/api/share/{token}").status_code == 404
-    assert run_all()["shares"] == {"shares_deleted": 1}  # unresolvable → removed
-    with connect_users_db() as conn:
-        assert conn.execute("SELECT 1 FROM shares WHERE token = ?", (token,)).fetchone() is None
-    page = make_page(bob, "Unrelated")
-    assert anon.get(f"/api/blocks/{page['id']}", params={"share": token}).status_code == 401
 
 
 def test_share_reads_only_assets_its_page_references(bob, anon):

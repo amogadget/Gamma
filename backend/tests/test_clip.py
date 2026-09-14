@@ -4,6 +4,7 @@ paper" ingest), /api/library/lookup + /preview + /folders (popup helpers), and
 and the metadata thread is stubbed out."""
 
 import hashlib
+from conftest import workspace_of
 import io
 import json
 import sqlite3
@@ -14,7 +15,7 @@ from fastapi.testclient import TestClient
 import gamma.routers.clip as clip_mod
 import gamma.routers.metadata as metadata_mod
 import gamma.routers.pdf as pdf_mod
-from gamma.db import user_db_path, user_uploads_dir
+from gamma.db import ws_db_path, ws_uploads_dir
 
 PDF_BYTES = b"%PDF-1.4 clip test\n" + b"y" * 10_000
 
@@ -61,12 +62,12 @@ def upstream(monkeypatch):
 def meta_calls(monkeypatch):
     calls = []
     monkeypatch.setattr(clip_mod, "_start_metadata",
-                        lambda user, block_id, doi="", arxiv_id="": calls.append((user, block_id, doi, arxiv_id)))
+                        lambda ws, actor, block_id, doi="", arxiv_id="": calls.append((actor, block_id, doi, arxiv_id)))
     return calls
 
 
 def _props(block_id):
-    with sqlite3.connect(user_db_path("guest", "pages.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of("guest"), "pages.db")) as conn:
         row = conn.execute("SELECT content, properties FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
     return row[0], json.loads(row[1])
 
@@ -84,7 +85,7 @@ def test_clip_url_creates_filed_page_and_stores_pdf(guest, upstream, meta_calls)
     assert body["doc_id"] == doc_id and body["existed"] is False
     assert body["title"] == "Clip One"
     assert body["open_url"] == f"/?block={body['block_id']}"
-    assert (user_uploads_dir("guest") / f"{doc_id}.pdf").read_bytes() == PDF_BYTES
+    assert (ws_uploads_dir(workspace_of("guest")) / f"{doc_id}.pdf").read_bytes() == PDF_BYTES
     title, props = _props(body["block_id"])
     assert title == "Clip One" and props["auto_title"] == "Clip One"
     assert props["source_url"] == url
@@ -108,7 +109,7 @@ def test_clip_dedups_by_doi_and_adds_folder(guest, upstream, meta_calls):
     r = guest.post("/api/clip", json={"pdf_url": url, "title": "Dedup", "folder": "a"})
     block_id = r.json()["block_id"]
     # Pretend metadata landed with a DOI, as the lookup thread would.
-    with sqlite3.connect(user_db_path("guest", "pages.db")) as conn:
+    with sqlite3.connect(ws_db_path(workspace_of("guest"), "pages.db")) as conn:
         _, props = _props(block_id)
         props["meta"] = {"doi": "10.1000/DeDup.1", "title": "Dedup"}
         conn.execute("UPDATE unified_blocks SET properties = ? WHERE id = ?", (json.dumps(props), block_id))
@@ -184,7 +185,7 @@ def test_clip_no_copy_probes_only(guest, upstream, meta_calls):
     r = guest.post("/api/clip", json={"pdf_url": url, "title": "No copy", "save_copy": False})
     assert r.status_code == 200, r.text
     doc_id = r.json()["doc_id"]
-    assert not (user_uploads_dir("guest") / f"{doc_id}.pdf").exists()
+    assert not (ws_uploads_dir(workspace_of("guest")) / f"{doc_id}.pdf").exists()
     _, props = _props(r.json()["block_id"])
     assert props["source_url"] == url  # the app proxies it on open
 

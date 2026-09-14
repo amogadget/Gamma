@@ -1,20 +1,22 @@
-"""Share links — one per (owner, page), Notion-style people + general access.
+"""Share links — one per (workspace, page), Notion-style people + general access.
 
 A share names a page's root block, so any page can be shared: papers (the
-PDF, highlights and notes) and plain note pages alike. Settings:
+PDF, highlights and notes) and plain note pages alike. Any editor or owner
+of the page's workspace manages it. Settings:
 
-- ``users``: the people the owner invited — ``[{"name", "role"}]``, each with
-  their own ``view``/``edit``; they get in whatever the general access says.
+- ``users``: the people invited — ``[{"name", "role"}]``, each with their
+  own ``view``/``edit``; they get in whatever the general access says.
 - ``audience`` (general access): ``anyone`` (the link alone, no login),
   ``users`` (any signed-in non-guest account on this server), ``list`` (only
   the invited people).
 - ``role``: what general access grants — ``view`` or ``edit``. Editing is
-  confined to the page's block tree (gamma/auth.py require_writer + the
+  confined to the page's block tree (gamma/auth.py require_ws_writer + the
   blocks router's scope checks) and needs a signed-in editor — ``edit`` with
   ``anyone`` is refused.
 
-The token confines reads (and edit writes) to that page's subtree and assets
-(gamma/auth.py share_grant / share_scope_page).
+Workspace members keep their workspace role on top (gamma/auth.py
+share_access). The token confines reads (and edit writes) to that page's
+subtree and assets (share_grant / share_scope_page).
 """
 
 import json
@@ -24,10 +26,10 @@ import sqlite3
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..auth import (SHARE_AUDIENCES, SHARE_ROLES, require_user, serialize_share_users,
+from ..auth import (SHARE_AUDIENCES, SHARE_ROLES, require_ws, serialize_share_users,
                     share_access, share_lookup)
 from ..blocks_store import page_attachment
-from ..db import connect_users_db, page_now, shares_has_doc_id, user_db_path
+from ..db import connect_pages_db, connect_users_db, page_now
 
 router = APIRouter(prefix="/api", tags=["shares"])
 
@@ -40,20 +42,20 @@ class ShareSettings(BaseModel):
 
 def _settings(share: dict) -> dict:
     return {"token": share["token"], "page_id": share["page_id"], "audience": share["audience"],
-            "role": share["role"], "users": share["users"]}
+            "role": share["role"], "users": share["users"], "created_by": share["created_by"]}
 
 
-def _owned_share(user: str, page_id: str) -> dict | None:
+def _page_share(ws: str, page_id: str) -> dict | None:
     with connect_users_db() as conn:
         row = conn.execute(
-            "SELECT token FROM shares WHERE username = ? AND page_id = ?", (user, page_id)
+            "SELECT token FROM shares WHERE workspace_id = ? AND page_id = ?", (ws, page_id)
         ).fetchone()
     return share_lookup(row[0]) if row else None
 
 
-def _require_page(user: str, page_id: str) -> None:
-    """404/400 unless page_id is one of the user's root pages."""
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+def _require_page(ws: str, page_id: str) -> None:
+    """404/400 unless page_id is one of the workspace's root pages."""
+    with connect_pages_db(ws) as conn:
         row = conn.execute(
             "SELECT parent_id FROM unified_blocks WHERE id = ?", (page_id,)).fetchone()
     if not row:
@@ -62,12 +64,10 @@ def _require_page(user: str, page_id: str) -> None:
         raise HTTPException(status_code=400, detail="only pages can be shared")
 
 
-def _page_doc_id(owner: str, page_id: str) -> str:
-    """The id of the shared page's PDF attachment ("" without one) — derived
-    from the page, never from the vestigial ``shares.doc_id`` column, so the
-    viewer's response keeps its ``doc_id`` field while the column goes."""
+def _page_doc_id(ws: str, page_id: str) -> str:
+    """The id of the shared page's PDF attachment ("" without one)."""
     try:
-        with sqlite3.connect(user_db_path(owner, "pages.db")) as conn:
+        with connect_pages_db(ws) as conn:
             row = conn.execute(
                 "SELECT properties FROM unified_blocks WHERE id = ?", (page_id,)).fetchone()
     except (sqlite3.Error, ValueError):
@@ -81,7 +81,7 @@ def _page_doc_id(owner: str, page_id: str) -> str:
     return attachment["id"] if attachment else ""
 
 
-def _validated(owner: str, current: dict, payload: ShareSettings) -> dict:
+def _validated(editor: str, current: dict, payload: ShareSettings) -> dict:
     audience = payload.audience if payload.audience is not None else current["audience"]
     role = payload.role if payload.role is not None else current["role"]
     users = payload.users if payload.users is not None else current["users"]
@@ -100,7 +100,7 @@ def _validated(owner: str, current: dict, payload: ShareSettings) -> dict:
             name, person_role = str(entry or "").strip(), "view"
         if person_role not in SHARE_ROLES:
             raise HTTPException(status_code=400, detail="a person's role must be view or edit")
-        if name and name != owner and all(u["name"] != name for u in cleaned):
+        if name and name != editor and all(u["name"] != name for u in cleaned):
             cleaned.append({"name": name, "role": person_role})
     if cleaned:
         names = [u["name"] for u in cleaned]
@@ -119,26 +119,20 @@ async def create_share(page_id: str, request: Request, payload: ShareSettings | 
     """Create the page's share link (defaults: anyone, view) — or, when one
     exists, return it unchanged so re-sharing never invalidates a link already
     sent around. An optional body applies settings to a NEW link only."""
-    user = require_user(request)
-    _require_page(user, page_id)
-    existing = _owned_share(user, page_id)
+    ws = require_ws(request, write=True)
+    _require_page(ws, page_id)
+    existing = _page_share(ws, page_id)
     if existing:
         return _settings(existing)
-    fields = _validated(user, {"audience": "anyone", "role": "view", "users": []},
+    fields = _validated(request.state.user, {"audience": "anyone", "role": "view", "users": []},
                         payload or ShareSettings())
     token = secrets.token_urlsafe(12)
     with connect_users_db() as conn:
-        # shares.doc_id is vestigial (NOT NULL, never read): written as ""
-        # while the column exists, omitted once migrate.drop_shares_doc_id ran.
-        columns = ["token", "username", "page_id", "audience", "role", "allowed_users", "created_at"]
-        values = [token, user, page_id, fields["audience"], fields["role"],
-                  serialize_share_users(fields["users"]), page_now()]
-        if shares_has_doc_id(conn):
-            columns.insert(2, "doc_id")
-            values.insert(2, "")
         conn.execute(
-            f"INSERT INTO shares ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))})",
-            values,
+            "INSERT INTO shares (token, workspace_id, page_id, created_by, audience, role, allowed_users, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (token, ws, page_id, request.state.user, fields["audience"], fields["role"],
+             serialize_share_users(fields["users"]), page_now()),
         )
         conn.commit()
     return _settings(share_lookup(token))
@@ -146,22 +140,22 @@ async def create_share(page_id: str, request: Request, payload: ShareSettings | 
 
 @router.get("/share-settings/{page_id}")
 async def get_share_settings(page_id: str, request: Request):
-    """The owner's view of a page's share: its settings, or ``{"token": null}``
+    """A member's view of a page's share: its settings, or ``{"token": null}``
     when the page isn't shared."""
-    user = require_user(request)
-    _require_page(user, page_id)
-    share = _owned_share(user, page_id)
+    ws = require_ws(request)
+    _require_page(ws, page_id)
+    share = _page_share(ws, page_id)
     return _settings(share) if share else {"token": None, "page_id": page_id}
 
 
 @router.put("/share-settings/{page_id}")
 async def update_share_settings(page_id: str, payload: ShareSettings, request: Request):
     """Change who may open the link and what they may do. The token stays."""
-    user = require_user(request)
-    share = _owned_share(user, page_id)
+    ws = require_ws(request, write=True)
+    share = _page_share(ws, page_id)
     if not share:
         raise HTTPException(status_code=404, detail="page is not shared")
-    fields = _validated(user, share, payload)
+    fields = _validated(request.state.user, share, payload)
     with connect_users_db() as conn:
         conn.execute(
             "UPDATE shares SET audience = ?, role = ?, allowed_users = ? WHERE token = ?",
@@ -174,9 +168,9 @@ async def update_share_settings(page_id: str, payload: ShareSettings, request: R
 @router.delete("/share-settings/{page_id}")
 async def delete_share(page_id: str, request: Request):
     """Stop sharing: the token dies; sharing again mints a new one."""
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     with connect_users_db() as conn:
-        cur = conn.execute("DELETE FROM shares WHERE username = ? AND page_id = ?", (user, page_id))
+        cur = conn.execute("DELETE FROM shares WHERE workspace_id = ? AND page_id = ?", (ws, page_id))
         conn.commit()
     return {"ok": True, "removed": cur.rowcount}
 
@@ -186,10 +180,10 @@ async def get_share(token: str, request: Request):
     """Resolve a link for the viewer: 404 unknown, 401 when signing in could
     grant access, 403 when this signed-in account isn't allowed. Otherwise the
     page plus what this viewer may do (``can_edit``). ``doc_id`` is the
-    page's PDF attachment id ("" without one), derived from the page.
-    ``viewer`` / ``viewer_is_guest`` tell the share view whether to offer
-    "Open in my library" (the owner) or "Add to my library" (an account that
-    can import)."""
+    page's PDF attachment id ("" without one). ``username`` is who shared it;
+    ``workspace_id`` the page's workspace. ``viewer`` / ``viewer_is_guest``
+    tell the share view whether to offer "Open in my library" (a member) or
+    "Add to my library" (an account that can import)."""
     share = share_lookup(token)
     if not share:
         raise HTTPException(status_code=404, detail="share not found")
@@ -198,7 +192,7 @@ async def get_share(token: str, request: Request):
         if reason == "login":
             raise HTTPException(status_code=401, detail="sign in to open this shared page")
         raise HTTPException(status_code=403, detail="this page is shared with specific people only")
-    return {"page_id": share["page_id"], "doc_id": _page_doc_id(share["username"], share["page_id"]),
-            "username": share["username"],
+    return {"page_id": share["page_id"], "doc_id": _page_doc_id(share["workspace_id"], share["page_id"]),
+            "username": share["created_by"], "workspace_id": share["workspace_id"],
             "audience": share["audience"], "role": share["role"], "can_edit": level == "edit",
             "viewer": request.state.user or "", "viewer_is_guest": bool(request.state.is_guest)}

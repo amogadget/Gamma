@@ -17,7 +17,6 @@ import hashlib
 import json
 import re
 import secrets
-import sqlite3
 import threading
 import urllib.parse
 
@@ -25,7 +24,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fractional_indexing import generate_key_between
 from pydantic import BaseModel
 
-from ..auth import require_user
+from ..auth import require_user, require_ws
 from ..blocks_store import (
     BLOCK_COLUMNS,
     block_to_dict,
@@ -34,9 +33,10 @@ from ..blocks_store import (
     last_child_position,
     page_attachment,
 )
-from ..db import page_now, safe_doc_id, user_db_path, user_uploads_dir
+from ..db import connect_pages_db, page_now, safe_doc_id, ws_uploads_dir
 from ..foldertags import add_tag, clean_path, clean_segment, parse_tags
 from ..logbuf import log
+from ..ops import after_commit, apply_ops, props_patch
 from ..server_settings import can_store
 from ..storage import DIGEST_CHARS, url_filename
 from .metadata import fetch_page_metadata, registry_record
@@ -141,23 +141,23 @@ def _apply_tags(conn, block: dict, folder: str, labels: list[str]) -> dict:
             props["category"] = ", ".join(cats)
             changed = True
     if changed:
-        conn.execute(
-            "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-            (json.dumps(props), page_now(), block["id"]),
-        )
-        conn.commit()
+        result = apply_ops(conn, block["id"], [{"op": "set", "id": block["id"],
+                                                "props": props_patch(block.get("properties") or {}, props)}],
+                           actor=block.get("_actor") or "")
+        if block.get("_ws"):
+            after_commit(block["_ws"], conn, result)
         block = {**block, "properties": props}
     return block
 
 
-def _start_metadata(user: str, block_id: str, doi: str = "", arxiv_id: str = "") -> None:
+def _start_metadata(ws: str, actor: str, block_id: str, doi: str = "", arxiv_id: str = "") -> None:
     """Metadata lookup off the request: arXiv → DOI → AI fallback can take
     seconds to minutes and the extension only needs the page id back. The
     detector's doi/arxiv_id ride along as trusted hints — they come from the
     publisher page's own meta tags, exactly what the lookup wants."""
     def run():
         try:
-            fetch_page_metadata(user, block_id, doi=doi, arxiv_id=arxiv_id)
+            fetch_page_metadata(ws, block_id, actor, doi=doi, arxiv_id=arxiv_id)
         except HTTPException as e:
             log.info(f"[clip] metadata for {block_id}: {e.detail}")
         except Exception as e:  # a failed lookup must not take the thread down noisily
@@ -215,7 +215,7 @@ class ClipRequest(BaseModel):
     fetch_metadata: bool = True
 
 
-def _clip_web_page(user: str, conn, payload: ClipRequest, source_url: str, title: str,
+def _clip_web_page(ws: str, actor: str, conn, payload: ClipRequest, source_url: str, title: str,
                    labels: list[str], doi: str, arxiv_id: str, reason: str) -> dict:
     """The no-PDF outcome of a clip: a page carrying the tab as
     ``properties.web_url`` (title from the tab, else the URL), the clipped
@@ -224,11 +224,11 @@ def _clip_web_page(user: str, conn, payload: ClipRequest, source_url: str, title
     now = page_now()
     existing = find_web_page(conn, source_url)
     if existing:
-        block = _apply_tags(conn, existing, payload.folder, labels)
+        block = _apply_tags(conn, {**existing, "_ws": ws, "_actor": actor}, payload.folder, labels)
         if (payload.selection or "").strip():
-            _insert_last(conn, block["id"], _quote_content(payload.selection, source_url, title), {}, now)
-            conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, block["id"]))
-            conn.commit()
+            after_commit(ws, conn, apply_ops(conn, block["id"], [{
+                "op": "insert", "id": secrets.token_urlsafe(9), "parent": block["id"],
+                "content": _quote_content(payload.selection, source_url, title)}], actor=actor))
         return _result(block, existed=True)
     props = {"web_url": source_url} if source_url else {}
     block = create_page(conn, title or _web_title(source_url), props)
@@ -239,7 +239,7 @@ def _clip_web_page(user: str, conn, payload: ClipRequest, source_url: str, title
     # A DOI/arXiv id found on the page still identifies the work — the
     # lookup needs no PDF for those, so the note can cite even without one.
     if payload.fetch_metadata and (doi or arxiv_id):
-        _start_metadata(user, block["id"], doi=doi, arxiv_id=arxiv_id)
+        _start_metadata(ws, actor, block["id"], doi=doi, arxiv_id=arxiv_id)
     note = "No PDF found — saved as a page with its web source"
     return _result(block, existed=False, note=f"{note} ({reason})." if reason else note + ".")
 
@@ -247,19 +247,19 @@ def _clip_web_page(user: str, conn, payload: ClipRequest, source_url: str, title
 # Sync on purpose: resolving and downloading run in FastAPI's threadpool.
 @router.post("/clip")
 def clip(payload: ClipRequest, request: Request):
-    user = require_user(request)
+    ws = require_ws(request, write=True)
+    actor = request.state.user or ""
     source_url = (payload.source_url or "").strip()
     pdf_url = (payload.pdf_url or "").strip()
     doi = norm_doi(payload.doi) or norm_doi(pdf_url) or norm_doi(source_url)
     arxiv_id = norm_arxiv(payload.arxiv_id) or norm_arxiv(pdf_url) or norm_arxiv(source_url)
     title = _clean_title(payload.title)
     labels = [str(label) for label in (payload.labels or [])][:50]
-    db_path = user_db_path(user, "pages.db")
     note = ""
 
     # 1. Dedup by identifier — the same paper reached via abs / pdf / DOI
     #    URLs hashes to different doc ids, so URL equality isn't enough.
-    with sqlite3.connect(db_path) as conn:
+    with connect_pages_db(ws) as conn:
         existing = find_page(conn, doi, arxiv_id, (pdf_url, source_url))
         if existing:
             block = _apply_tags(conn, existing, payload.folder, labels)
@@ -270,8 +270,8 @@ def clip(payload: ClipRequest, request: Request):
         # its HTML would never pass the PDF check anyway.
         if not (source_url or title or (payload.selection or "").strip()):
             raise HTTPException(status_code=400, detail="nothing to save: no URL, title or selection")
-        with sqlite3.connect(db_path) as conn:
-            return _clip_web_page(user, conn, payload, source_url, title, labels, doi, arxiv_id, "")
+        with connect_pages_db(ws) as conn:
+            return _clip_web_page(ws, actor, conn, payload, source_url, title, labels, doi, arxiv_id, "")
 
     if payload.doc_id:
         # 2a. The extension uploaded the bytes itself (its browser session got
@@ -280,7 +280,7 @@ def clip(payload: ClipRequest, request: Request):
             doc_id = safe_doc_id(payload.doc_id)
         except ValueError:
             raise HTTPException(status_code=400, detail="invalid doc_id")
-        if not (user_uploads_dir(user) / f"{doc_id}.pdf").is_file():
+        if not (ws_uploads_dir(ws) / f"{doc_id}.pdf").is_file():
             raise HTTPException(status_code=404, detail="no uploaded PDF with this doc_id — upload it first")
         page_source = f"/api/uploads/{doc_id}.pdf"
     else:
@@ -295,11 +295,11 @@ def clip(payload: ClipRequest, request: Request):
             page_source = resolved["source_url"]
             note = resolved.get("note", "")
             doc_id = url_doc_id(page_source)
-            local = user_uploads_dir(user) / f"{doc_id}.pdf"
+            local = ws_uploads_dir(ws) / f"{doc_id}.pdf"
             if not local.is_file():
                 _, data = download_pdf(page_source, want_bytes=payload.save_copy)
                 if payload.save_copy:
-                    if can_store(user, len(data)):
+                    if can_store(ws, len(data)):
                         local.parent.mkdir(parents=True, exist_ok=True)
                         local.write_bytes(data)
                     else:
@@ -310,40 +310,39 @@ def clip(payload: ClipRequest, request: Request):
             if e.status_code != 400 or not (source_url or title):
                 raise
             log.info(f"[clip] no PDF for {candidate}: {e.detail} — saving as a web page")
-            with sqlite3.connect(db_path) as conn:
-                return _clip_web_page(user, conn, payload, source_url, title, labels,
+            with connect_pages_db(ws) as conn:
+                return _clip_web_page(ws, actor, conn, payload, source_url, title, labels,
                                       doi, arxiv_id, str(e.detail))
 
     # 3. The page, filed and tagged.
-    with sqlite3.connect(db_path) as conn:
+    with connect_pages_db(ws) as conn:
         # No tab title: the page is named after the URL's file name, else the
         # doc id (attachment_props), marked auto_title for the metadata lookup.
         block = get_or_create_doc_page(conn, doc_id, title, page_source)
         props = dict(block.get("properties") or {})
         if source_url and not props.get("web_url") and source_url != page_source:
             props["web_url"] = source_url
-            conn.execute("UPDATE unified_blocks SET properties = ? WHERE id = ?",
-                         (json.dumps(props), block["id"]))
-            conn.commit()
+            after_commit(ws, conn, apply_ops(conn, block["id"], [
+                {"op": "set", "id": block["id"], "props": {"web_url": source_url}}], actor=actor))
             block = {**block, "properties": props}
-        block = _apply_tags(conn, block, payload.folder, labels)
+        block = _apply_tags(conn, {**block, "_ws": ws, "_actor": actor}, payload.folder, labels)
 
     # 4. Metadata, off the request.
     if payload.fetch_metadata and not (block.get("properties") or {}).get("meta"):
-        _start_metadata(user, block["id"], doi=doi, arxiv_id=arxiv_id)
+        _start_metadata(ws, actor, block["id"], doi=doi, arxiv_id=arxiv_id)
     return _result(block, existed=False, note=note)
 
 
 @router.get("/library/lookup")
 def library_lookup(request: Request, doi: str = "", arxiv_id: str = "", url: str = ""):
     """Is this paper already in the library? 404 when not."""
-    user = require_user(request)
+    ws = require_ws(request)
     url = (url or "").strip()
     doi = norm_doi(doi) or norm_doi(url)
     arxiv_id = norm_arxiv(arxiv_id) or norm_arxiv(url)
     if not (doi or arxiv_id or url):
         raise HTTPException(status_code=400, detail="doi, arxiv_id, or url required")
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         block = find_page(conn, doi, arxiv_id, (url,)) or find_web_page(conn, url)
     if not block:
         raise HTTPException(status_code=404, detail="not in library")
@@ -374,10 +373,10 @@ def library_preview(request: Request, doi: str = "", arxiv_id: str = "", url: st
 def library_folders(request: Request):
     """Folder paths (with their ancestors) and flat labels in use — the
     popup's pickers, without pulling every page down."""
-    user = require_user(request)
+    ws = require_ws(request)
     folders: set[str] = set()
     labels: set[str] = set()
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         rows = conn.execute(
             "SELECT json_extract(properties, '$.folder'), json_extract(properties, '$.category') "
             "FROM unified_blocks WHERE parent_id = 'root'"
@@ -414,12 +413,12 @@ def clip_note(payload: ClipNoteRequest, request: Request):
     """Append a quoted selection (with its source link) as the last block of
     a page — the one matching this tab, or the "Web clips" page (created on
     first use)."""
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     if not (payload.text or "").strip():
         raise HTTPException(status_code=400, detail="nothing selected")
     content = _quote_content(payload.text, payload.source_url, payload.title)
     now = page_now()
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         page_id = (payload.page_id or "").strip()
         if page_id:
             if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (page_id,)).fetchone():
@@ -430,8 +429,9 @@ def clip_note(payload: ClipNoteRequest, request: Request):
                 "AND json_extract(properties, '$.web_clips') = 1 LIMIT 1"
             ).fetchone()
             page_id = row[0] if row else _insert_last(conn, "root", WEB_CLIPS_TITLE, {"web_clips": 1}, now)
-        block_id = _insert_last(conn, page_id, content, {}, now)
-        conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, page_id))
-        conn.commit()
+        block_id = secrets.token_urlsafe(9)
+        after_commit(ws, conn, apply_ops(conn, page_id, [
+            {"op": "insert", "id": block_id, "parent": page_id, "content": content}],
+            actor=request.state.user or ""))
     return {"block_id": block_id, "page_id": page_id,
             "open_url": f"/?block={urllib.parse.quote(block_id)}"}

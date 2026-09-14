@@ -31,9 +31,10 @@ from ..ai_context import ensure_indexed as _ensure_indexed
 from ..ai_context import pdf_excerpt as _pdf_excerpt
 from ..ai_context import pdf_path as _pdf_path
 from ..ai_settings import ai_runtime, require_ai_runtime
-from ..auth import require_user
+from ..auth import require_ws
 from ..blocks_store import page_attachment
-from ..db import page_now, user_db_path, user_uploads_dir
+from ..ops import after_commit, apply_ops, props_patch
+from ..db import connect_pages_db, page_now, ws_db_path, ws_uploads_dir
 from ..logbuf import log
 from ..pdf_text import PDF_EXTRACT_FAILED
 from ..pdf_text import page_count as _page_count
@@ -599,8 +600,8 @@ def _make_ppt_cite(rt: dict, meta: dict | None, bibtex: str, prompt: str = "", m
                     _resolve_model(rt, model), rt, max_tokens=4000, timeout=120).strip()
 
 
-def _load_page(user: str, block_id: str):
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+def _load_page(ws: str, block_id: str):
+    with connect_pages_db(ws) as conn:
         row = conn.execute(
             "SELECT content, properties FROM unified_blocks WHERE id = ?", (block_id,)
         ).fetchone()
@@ -609,8 +610,8 @@ def _load_page(user: str, block_id: str):
     return row[0] or "", json.loads(row[1] or "{}")
 
 
-def _save_props(user: str, block_id: str, updates: dict | None = None, remove: tuple = (),
-                auto_title: str = "") -> tuple[bool, str]:
+def _save_props(ws: str, block_id: str, updates: dict | None = None, remove: tuple = (),
+                auto_title: str = "", actor: str = "") -> tuple[bool, str]:
     """Apply a delta to the page's properties, re-reading them inside the write.
 
     Lookups take seconds to minutes, and the user can label the page (which
@@ -622,7 +623,7 @@ def _save_props(user: str, block_id: str, updates: dict | None = None, remove: t
     title, and the page's title as it stands after the write — which may
     already be the paper's, renamed by a concurrent lookup (the extension's
     background lookup races the one the app starts when the page opens)."""
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         # Serialize the read/merge/write. Whichever wins the lock first is
         # safe: a later explicit rename wins after this commit, while a rename
         # that committed first is observed with auto_title already cleared.
@@ -640,21 +641,16 @@ def _save_props(user: str, block_id: str, updates: dict | None = None, remove: t
         # Rename only while the current title still matches the server-side
         # automatic-title marker (an explicit PUT title edit clears auto_title
         # in blocks.py; pages from before the marker existed were given one by
-        # gamma/migrate.py).
+        # gamma/normalize.py).
         rename = bool(auto_title and props.get("auto_title")
                       and props.get("auto_title") == content)
         if rename:
             props.pop("auto_title", None)
-            conn.execute(
-                "UPDATE unified_blocks SET content = ?, properties = ?, updated_at = ? WHERE id = ?",
-                (auto_title, json.dumps(props), page_now(), block_id),
-            )
-        else:
-            conn.execute(
-                "UPDATE unified_blocks SET properties = ?, updated_at = ? WHERE id = ?",
-                (json.dumps(props), page_now(), block_id),
-            )
-        conn.commit()
+        op = {"op": "set", "id": block_id,
+              "props": props_patch(json.loads(row[1] or "{}"), props)}
+        if rename:
+            op["content"] = auto_title
+        after_commit(ws, conn, apply_ops(conn, block_id, [op], actor=actor))
         return rename, (auto_title if rename else content)
 
 
@@ -668,14 +664,14 @@ def metadata_status(request: Request):
     Text/index state comes from the FTS index (data.db) — pages=0 rows are
     recorded extraction failures, ver != INDEX_VERSION means stale; papers the
     index never saw report text_chars = null (unknown until indexed)."""
-    user = require_user(request)
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    ws = require_ws(request)
+    with connect_pages_db(ws) as conn:
         rows = conn.execute(
             "SELECT id, content, properties, updated_at FROM unified_blocks WHERE parent_id = 'root'"
         ).fetchall()
     index = {}
     try:
-        with sqlite3.connect(user_db_path(user, "data.db")) as conn:
+        with sqlite3.connect(ws_db_path(ws, "data.db")) as conn:
             for doc_id, ver, pages, chars in conn.execute(
                 "SELECT d.doc_id, d.ver, d.pages,"
                 " (SELECT COALESCE(SUM(LENGTH(content)), 0) FROM pdf_fts f WHERE f.doc_id = d.doc_id)"
@@ -684,7 +680,7 @@ def metadata_status(request: Request):
                 index[doc_id] = {"ver": ver, "pages": pages or 0, "chars": chars or 0}
     except sqlite3.OperationalError:
         pass  # index tables don't exist yet — search has never run
-    uploads = user_uploads_dir(user)
+    uploads = ws_uploads_dir(ws)
     papers = []
     for block_id, content, props_json, updated_at in rows:
         props = json.loads(props_json or "{}")
@@ -728,25 +724,27 @@ class MetaFetchRequest(BaseModel):
 # Sync endpoints: external lookups + PyPDF2 text extraction run in the threadpool.
 @router.post("/metadata/fetch")
 def metadata_fetch(payload: MetaFetchRequest, request: Request):
-    user = require_user(request)
-    return fetch_page_metadata(user, payload.block_id, prompt=payload.prompt, model=payload.model,
+    ws = require_ws(request, write=True)
+    return fetch_page_metadata(ws, payload.block_id, request.state.user, prompt=payload.prompt, model=payload.model,
                                force=payload.force, context_char_limit=payload.context_char_limit,
                                cite_prompt=payload.cite_prompt, cite_model=payload.cite_model)
 
 
-def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str = "",
+def fetch_page_metadata(ws: str, block_id: str, actor: str, prompt: str = "", model: str = "",
                         force: bool = False, context_char_limit: int = 6000,
                         doi: str = "", arxiv_id: str = "",
                         cite_prompt: str = "", cite_model: str = "") -> dict:
     """The lookup behind POST /api/metadata/fetch, callable off-request (the
-    extension's /api/clip runs it in a background thread). doi/arxiv_id are
+    extension's /api/clip runs it in a background thread). ``actor`` is the
+    account on whose behalf it runs — its AI providers do the AI part, its
+    name goes on the op. doi/arxiv_id are
     caller-supplied hints — the extension's detector reads them off the
     publisher page's own meta tags, so they are trusted like URL-derived ids.
     A successful lookup also generates the slide citation (when AI is
     configured) so it is ready the moment the metadata is — not the first
     time someone opens the share popover. Raises HTTPException(404) when
     nothing was found (after negative-caching it)."""
-    content, props = _load_page(user, block_id)
+    content, props = _load_page(ws, block_id)
     if props.get("meta") and not force:
         return {"meta": props["meta"], "bibtex": props.get("bibtex", ""),
                 "ppt_cite": props.get("ppt_cite", ""),
@@ -764,24 +762,24 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
     # the AI later gets only the pref-sized head slice.
     text, tail = "", ""
     if doc_id:
-        text, next_offset, _ = _pdf_excerpt(user, doc_id, max(context_char_limit, SCAN_CHARS))
+        text, next_offset, _ = _pdf_excerpt(ws, doc_id, max(context_char_limit, SCAN_CHARS))
         if text == PDF_EXTRACT_FAILED:  # nothing to read or match against
             text, next_offset = "", None
         if next_offset is not None:
             # The document continues past the scan window. The paper's own DOI
             # is often printed only in the end-of-article trailer (Science
             # issue-clipped PDFs), so scan the last page too.
-            path = _pdf_path(user, doc_id)
+            path = _pdf_path(ws, doc_id)
             npages = _page_count(str(path)) if path else 0
             if npages > 1:
-                tail = _pdf_excerpt(user, doc_id, 4000, start_page=npages)[0]
+                tail = _pdf_excerpt(ws, doc_id, 4000, start_page=npages)[0]
                 if tail == PDF_EXTRACT_FAILED:
                     tail = ""
         # The paper is being set up — index it now (background) so search,
         # the AI document map and the library-wide Ctrl+F don't wait for the
         # first search to discover it. After our own head extraction: pdfium
         # is serialized behind one lock and the lookup needs its text now.
-        _ensure_indexed(user, doc_id)
+        _ensure_indexed(ws, doc_id)
 
     meta, bibtex = None, ""
     # "confirmed" = the record demonstrably describes THIS paper: its id came
@@ -850,7 +848,7 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
                 meta, bibtex, confirmed = (better or cand), bib, True
                 break
 
-    rt = ai_runtime(user)
+    rt = ai_runtime(actor)
     if not meta and rt["enabled"] and text:
         meta = _ai_extract_meta(text[:context_char_limit], prompt, model, rt)
         if meta:
@@ -862,8 +860,9 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
         # Negative cache: remember the failed attempt on the page so clients
         # stop auto-retrying on every open. Manual ↻ (force) still retries,
         # and a success below clears the marker.
-        _save_props(user, block_id, {
-            "meta_error": {"at": page_now(), "detail": "no arXiv id, DOI, Crossref, or AI match"}})
+        _save_props(ws, block_id, {
+            "meta_error": {"at": page_now(), "detail": "no arXiv id, DOI, Crossref, or AI match"}},
+            actor=actor)
         raise HTTPException(status_code=404, detail="no metadata found (no arXiv id, DOI, Crossref, or AI match)")
 
     if not bibtex:
@@ -888,9 +887,9 @@ def fetch_page_metadata(user: str, block_id: str, prompt: str = "", model: str =
     if ppt_cite:
         updates["ppt_cite"] = ppt_cite
     title_updated, page_title = _save_props(
-        user, block_id, updates,
+        ws, block_id, updates,
         # a stale citation (generated from the previous record) is dropped
-        remove=("meta_error",) + (() if ppt_cite else ("ppt_cite",)), auto_title=title,
+        remove=("meta_error",) + (() if ppt_cite else ("ppt_cite",)), auto_title=title, actor=actor,
     )
     # page_title is ALWAYS the page's current title, not only when this call
     # renamed it: a concurrent lookup may have done the rename first, and the
@@ -909,8 +908,8 @@ def metadata_update(payload: MetaUpdateRequest, request: Request):
     """Save hand-edited metadata. BibTeX is rebuilt from the edited fields and
     the cached slide citation is invalidated. All-blank fields clear the
     cached metadata entirely."""
-    user = require_user(request)
-    _, props = _load_page(user, payload.block_id)  # 404 before validating the edit
+    ws = require_ws(request, write=True)
+    _, props = _load_page(ws, payload.block_id)  # 404 before validating the edit
     m = payload.meta or {}
     authors = m.get("authors") or []
     if isinstance(authors, str):
@@ -937,10 +936,10 @@ def metadata_update(payload: MetaUpdateRequest, request: Request):
     # reset) by the hand-edit either way
     stale = ("ppt_cite", "meta_error")
     if not any(v for k, v in meta.items() if k != "source"):
-        _save_props(user, payload.block_id, remove=stale + ("meta", "bibtex"))
+        _save_props(ws, payload.block_id, remove=stale + ("meta", "bibtex"), actor=request.state.user)
         return {"meta": None, "bibtex": "", "source": "", "cached": False}
     bibtex = _build_bibtex(meta)
-    _save_props(user, payload.block_id, {"meta": meta, "bibtex": bibtex}, remove=stale)
+    _save_props(ws, payload.block_id, {"meta": meta, "bibtex": bibtex}, remove=stale, actor=request.state.user)
     return {"meta": meta, "bibtex": bibtex, "source": "manual", "cached": False}
 
 
@@ -953,11 +952,11 @@ class CiteRequest(BaseModel):
 
 @router.post("/metadata/cite")
 def metadata_cite(payload: CiteRequest, request: Request):
-    user = require_user(request)
-    _, props = _load_page(user, payload.block_id)
+    ws = require_ws(request, write=True)
+    _, props = _load_page(ws, payload.block_id)
     if props.get("ppt_cite") and not payload.force:
         return {"citation": props["ppt_cite"], "cached": True}
-    rt = require_ai_runtime(user)
+    rt = require_ai_runtime(request.state.user)
     meta = props.get("meta")
     bibtex = props.get("bibtex", "")
     if not meta and not bibtex:
@@ -967,5 +966,5 @@ def metadata_cite(payload: CiteRequest, request: Request):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI call failed: {e}")
     # cache alongside the rest of the metadata
-    _save_props(user, payload.block_id, {"ppt_cite": citation})
+    _save_props(ws, payload.block_id, {"ppt_cite": citation}, actor=request.state.user)
     return {"citation": citation, "cached": False}
