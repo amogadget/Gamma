@@ -2145,24 +2145,38 @@ export default function App() {
     [],
   );
 
-  // Poll server-side task progress: slow heartbeat while logged in (so the
-  // button appears even if the work was kicked off elsewhere), fast while
-  // the popover is open or indexing is known to run.
+  // Poll server-side task progress. Fast (2s) only while the popover is
+  // open or indexing is known to run; otherwise a slow heartbeat so the
+  // button still appears for work kicked off elsewhere (another tab, the
+  // extension). Nothing is fetched while the tab is hidden — a hidden tab
+  // refreshes once it comes back. Callers that start indexing bump
+  // `tasksNonce` (wakeTasks) so the first fast poll happens right away.
+  const [tasksNonce, setTasksNonce] = useState(0);
+  const wakeTasks = useCallback(() => setTasksNonce((n) => n + 1), []);
   useEffect(() => {
     if (!authUser?.user || shareMode) return;
     let cancelled = false;
-    const refresh = () => apiJson(`${API}/tasks`)
-      .then((d) => {
-        if (cancelled) return;
-        setIndexTask(d.indexing || null);
-        if (d.indexing?.active) setIndexTaskCleared(false);
-      })
-      .catch(() => {});
+    const refresh = () => {
+      if (document.hidden) return;
+      apiJson(`${API}/tasks`)
+        .then((d) => {
+          if (cancelled) return;
+          setIndexTask(d.indexing || null);
+          if (d.indexing?.active) setIndexTaskCleared(false);
+        })
+        .catch(() => {});
+    };
     refresh();
     const fast = openPopover === "downloads" || indexTask?.active;
-    const t = setInterval(refresh, fast ? 2000 : 8000);
-    return () => { cancelled = true; clearInterval(t); };
-  }, [openPopover, authUser?.user, shareMode, indexTask?.active]);
+    const t = setInterval(refresh, fast ? 2000 : 60000);
+    const onVisible = () => { if (!document.hidden) refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [openPopover, authUser?.user, shareMode, indexTask?.active, tasksNonce]);
 
   // Every folder path in use (from page tags + manually created empties),
   // plus all ancestor prefixes — "readout" exists once "readout/destructive"
@@ -7365,6 +7379,7 @@ export default function App() {
         openBlock={openBlock}
         pendingBlockScrollRef={pendingBlockScrollRef}
         pdfSearchRef={pdfSearchRef}
+        wakeTasks={wakeTasks}
         scrollToRef={scrollToRef}
         cancelCoarseRestoreRef={cancelCoarseRestoreRef}
         setPdfHidden={setPdfHidden}
@@ -8350,6 +8365,7 @@ export default function App() {
           metaFetchModel,
           metaContextChars,
           indexTask,
+          wakeTasks,
           setStatus,
           // status-table row click: jump to the paper (closing the dialog)
           openPaper: (id) => { setSettingsOpen(null); openPage(id); },

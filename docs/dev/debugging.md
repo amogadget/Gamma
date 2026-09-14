@@ -65,7 +65,13 @@ checked end to end with two browser contexts on one page (see
   log; the "Debug logging" toggle traces reading-position/restore/sync
   events into it and the console.
 - **Background tasks** — the tasks popover (`GET /api/tasks`) shows indexing
-  and download progress.
+  and download progress. The client polls it every 2 s only while the popover
+  is open or indexing is known to run; otherwise a 60 s heartbeat, and
+  nothing at all while the tab is hidden (one refresh when it comes back).
+  Anything that starts indexing (the search panel's library query, the
+  Settings reindex buttons) calls `wakeTasks` so the button appears at once
+  instead of waiting for the heartbeat. Work started elsewhere (the AI chat's
+  own extraction, another tab) shows up within the heartbeat.
 - **Status bar** — Settings → Advanced turns the floating status pill into a
   persistent bar under the tabs.
 - **Library health** — Settings → Library lists, per paper: metadata state,

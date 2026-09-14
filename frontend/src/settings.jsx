@@ -338,9 +338,10 @@ function NotesSettings({ value }) {
 }
 
 // Kick off a full search-index rebuild (the Library pane's Index section).
-async function requestReindex(setStatus, scheduledSuffix) {
+async function requestReindex(setStatus, scheduledSuffix, wakeTasks) {
   try {
     const result = await apiJson(`${API}/search-reindex`, { method: "POST" });
+    if (result.scheduled || result.busy) wakeTasks?.();
     setStatus(result.busy
       ? "Indexing is already running—see the tasks popover."
       : result.scheduled
@@ -486,7 +487,7 @@ function LibrarySettings({ value }) {
           hint={value.indexTask?.active ? "Rebuilding — progress in the tasks popover" : "Re-extract every paper if results look stale"}
           title="Full-text search reads a per-user index built from the extracted PDF text. Rebuild it when library-wide results look stale or incomplete."
         >
-          <button className="uiBtn sm" disabled={value.indexTask?.active} onClick={() => requestReindex(value.setStatus, "in the background.")}>
+          <button className="uiBtn sm" disabled={value.indexTask?.active} onClick={() => requestReindex(value.setStatus, "in the background.", value.wakeTasks)}>
             {value.indexTask?.active ? "Indexing…" : "Rebuild"}
           </button>
         </Row>
@@ -544,6 +545,7 @@ function MetaStatusSection({ value }) {
       value.setStatus(r.busy
         ? "Indexing is already running—try again when it finishes."
         : `Indexing ${docIds.length === 1 ? "1 paper" : `${docIds.length} papers`} in the background.`);
+      value.wakeTasks?.();
       pollRefresh();
     } catch (err) {
       value.setStatus(`Indexing failed: ${err.message}`);
@@ -684,7 +686,7 @@ function MetaStatusSection({ value }) {
           />
           <button className="uiBtn sm iconSq" aria-label="Reindex"
             title="Re-extract every paper into the search index (also fills in the text column)"
-            onClick={() => { requestReindex(value.setStatus, "— text status fills in as it runs."); pollRefresh(); }}>
+            onClick={() => { requestReindex(value.setStatus, "— text status fills in as it runs.", value.wakeTasks); pollRefresh(); }}>
             <RefreshIcon size={13} />
           </button>
           <button className="uiBtn sm iconSq" onClick={refresh} disabled={!!busy} title="Reload this table" aria-label="Reload">
