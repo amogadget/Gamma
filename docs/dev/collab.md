@@ -1,23 +1,25 @@
 # Real-time collaboration
 
-Several people (or one account in two browsers) can edit one page at the same
-time and see who is where. This doc is the whole picture; the code comments
-carry the details. Backend: `gamma/ops.py`, `gamma/collab.py`,
+Several people can edit a page together through a shared workspace or an
+editable page share. Their changes and cursor positions appear live. Two
+browsers signed into the same account also work. Backend: `gamma/ops.py`, `gamma/collab.py`,
 `gamma/routers/collab.py`. Frontend: `src/collab.js`, `src/blockOps.js`,
 `src/presence.jsx`, plus small hooks in `App.jsx`, `blockTree.jsx`,
 `blockCmEditor.jsx` and `blockHistory.js`.
 
 ## The model in one paragraph
 
-A page's notes change through small typed **operations** on blocks, never by
-replacing the tree. The server applies each batch in one transaction, orders
+A page's editor sends small **operations** on blocks. The server applies each batch in one transaction, orders
 it (a per-page `seq`), logs it, and fans it out to everyone on the page over a
-websocket. Concurrent edits to *different* blocks or different properties of
-one block never conflict; two people typing in the *same* block resolve
-last-writer-wins by server order (what Notion does), made rare by the visible
-presence. Presence (who is on which block, the caret inside an open editor)
-is a separate, never-persisted message type on the same socket. SQLite stays
-the only source of truth; there is no CRDT.
+websocket. Edits to different blocks or property keys can coexist. When two
+people type in the same block, the last content write accepted by the server
+wins; the other version can be lost. Structural changes can also conflict,
+such as editing a block someone else deletes. Presence helps people coordinate
+but does not prevent conflicts.
+
+SQLite is the source of truth; there is no character-level merge or CRDT.
+Presence is temporary: standalone cursor messages and optional cursors on
+operation batches are broadcast but never written to the operation log.
 
 ## Ops (`gamma/ops.py`)
 
@@ -83,13 +85,15 @@ before accept. Messages:
 
 - server → client: `hello {client, color, seq, peers}` on join; `join {peer}`
   / `leave {client}`; `cursor {client, block, anchor, head}`; `ops {seq, at,
-  actor, client, ops}` for every applied batch (the sender's own included, it
-  filters by client id); `reload {seq}`.
+  actor, client, ops, cursor?}` for every applied batch (the sender's own
+  included, it filters by client id; `cursor` is the writer's caret in the
+  text after the batch, when the POST carried one — the server also stores
+  it as the writer's presence); `reload {seq}`.
 - client → server: `cursor {block, anchor, head}` only (`anchor`/`head` = -1
   when no editor is open on that block). **Writes never travel over the
   socket**: they are `POST /api/pages/{id}/ops`, so auth and scoping live in
-  one place, a dropped socket loses nothing, and a closing tab flushes with a
-  keepalive fetch.
+  one place. A dropped socket does not stop HTTP saves; a closing tab attempts
+  to flush queued edits with a keepalive fetch.
 
 A peer is `{client, user, name, color, can_edit, block, anchor, head}`; colour
 is an index into an 8-slot palette handed out per room (CSS `--peer-N`);
@@ -110,26 +114,48 @@ anonymous share viewers are `Anonymous`.
   `insert`, never as a `set` the server would 404. Positions live in
   one `Map id → key` shared with `blockOps`, so tree objects and history
   snapshots stay untouched.
-- **the queue**: `set` ops on one block coalesce (`pushOp`); typing flushes
+- **per-page save state**: each page keeps its own queue, positions, pending
+  content counts and retries. Navigating while a save is in progress does not
+  retarget its queued edits or let its response change the next page's state.
+  `set` ops on one block coalesce (`pushOp`); typing flushes
   after 350 ms, a structural op after 80 ms, an editor closing at once
   (`saveNowRef`), `flush()` before navigation. The POST response is the ack:
-  re-keyed positions are adopted from it. 4xx → status + reload (resync rather
-  than loop); network errors retry with the ops kept in front of the queue.
+  re-keyed positions are adopted from it. Most 4xx responses reject the queue
+  and reload the page. Network failures, 408 and 429 retry up to eight times;
+  pending content stays protected during retries. After retry exhaustion,
+  unsaved operations remain in memory for a later flush, with an error status.
 - **reconciliation**: `inflight` counts queued-or-sent content sets per
-  block. A remote `set` for a block with one in flight is *deferred* and, on
+  block. The content of a remote `set` for a block with one in flight is *deferred* and, on
   the ack, applied only if its seq is higher than the ack's (theirs is the
-  newer server value), else dropped (ours is). Everything else applies at
+  newer server value), else dropped (ours is). Its property patch still
+  applies immediately, so successive updates to different keys are preserved.
+  Other operations apply at
   once — to the base, to the on-screen tree through `onRemoteOps` (a
   load-like transition: no history entry, nothing re-sent), and to every
   undo snapshot (`blockHistory.rebase`), so undoing your own edit never
   reverts someone else's.
-- **catch-up**: `seq` is seeded from the tree fetch; a hello with a higher
-  seq, or any reconnect, reads `…/ops?since=`; 410 or a `reload` message
+- **ordered catch-up**: `seq` means the last contiguous batch processed,
+  initially seeded from the tree fetch. HTTP acknowledgements and socket
+  batches enter the same ordered inbox. If batch 12 arrives before 11, the
+  client fetches `…/ops?since=10` before advancing. A hello with a higher
+  sequence triggers the same recovery. Only one catch-up request runs at a
+  time; old-page responses are ignored. A 410 or a `reload` message
   refetches the subtree with `keepUiFlags` (the open editor, its text and the
   folding survive the swap).
-- **presence**: `peers` state from `hello`/`join`/`leave`/`cursor`;
+- **presence**: `peers` state from `hello`/`join`/`leave`/`cursor` and the
+  `cursor` on an `ops` batch; every update bumps the peer's `rev`, which is
+  how the editor tells a fresh caret report from one it should keep mapping.
   `sendCursor` throttled to 80 ms, fed by the editor's selection (`onCaret`),
-  editor open/close and the focused row.
+  editor open/close and the focused row — but while a batch is queued or in
+  flight the standalone message waits and the caret rides on the batch
+  instead. Carets are offsets in the sender's text; sent on their own they
+  reach the others up to a typing debounce before the text does, and an
+  offset past the typed characters lands a few characters off in the older
+  copy — and stays off once the batch maps it further along. Carried with
+  the batch, the receiver syncs the text and places the caret in one render.
+  After the ack a held-back caret move goes out standalone; a `hello`
+  (reconnect) resends the current caret, since the server starts a joiner
+  with none.
 
 `diffTrees(base, next, pageId, pos)` emits inserts (unknown ids), moves (a
 known id under another parent, or out of order — the longest increasing run
@@ -153,10 +179,13 @@ state in App instead of the tree.
   an embed card's controls), and a coloured left edge
   while someone has that block's editor open;
 - inside an open editor, each peer's caret with a name tag and a tinted
-  selection (`remoteCursorField` in `blockCmEditor.jsx`, mapped through local
-  edits and replaced on new presence). External value changes reach the
-  editor as the minimal prefix/suffix replacement, tagged so they are not
-  re-reported as local edits — the caret maps through instead of jumping.
+  selection (`remoteCursorField` in `blockCmEditor.jsx`, keyed by peer: a
+  peer whose `rev` changed is placed fresh from its offsets, the others keep
+  mapping through every change — ours and other peers' — so a caret stays
+  put while we type and shifts correctly when someone else edits before
+  it). External value changes reach the editor as the minimal prefix/suffix
+  replacement, tagged so they are not re-reported as local edits — the
+  caret maps through instead of jumping.
 
 ## Testing
 
@@ -165,17 +194,26 @@ state in App instead of the tree.
   context-managed client), AI-tool and cross-page fan-out.
 - `frontend/tests/blockOps.test.mjs`: `node --test tests/blockOps.test.mjs`
   from `frontend/` (pure diff/apply round-trips).
+- `frontend/tests/collabSession.test.mjs`: deterministic HTTP/socket ordering,
+  content versus property reconciliation, retries and navigation during a
+  save. Runs the hook with controlled transports and a stubbed React layer;
+  browser behavior is covered separately below.
 - End to end: `npm run e2e -- --only collab` from `frontend/`
   (`tests/e2e/scenarios/collab.mjs`, [debugging.md](debugging.md)): two
   browser contexts on one page of a shared workspace — presence stack and row
   chips, typing in one tab appears in the other, edits to different blocks
-  converge, same-block typing settles on one value, undo after a remote edit
+  converge, same-block typing settles on one value, a caret after a
+  mid-block edit sits where the person typed (and the other caret shifts
+  along), undo after a remote edit
   keeps the remote edit, a rename reaches the other tab, an edit made offline
   lands once the network is back, a remote delete, a highlight made by the
   other person; `share.mjs` covers the invited editor on a share link.
 
 ## Limits and next steps
 
+- Queued edits live in memory, not in durable offline storage. Keepalive
+  saves on tab close are best effort and subject to browser limits; a network
+  outage followed by closing the tab can lose unsaved work.
 - Same-block simultaneous typing is last-writer-wins per block. The upgrade
   path, if it ever matters, is CodeMirror's collab rebase on just the open
   block; not a CRDT.

@@ -166,6 +166,12 @@ def members(ws: str) -> list[dict]:
     return [{"username": r[0], "role": r[1], "added_by": r[2], "added_at": r[3]} for r in rows]
 
 
+def membership_count(username: str) -> int:
+    """Count explicit memberships; public access consumes no membership slot."""
+    with connect_users_db() as conn:
+        return conn.execute("SELECT COUNT(*) FROM workspace_members WHERE username = ?", (username,)).fetchone()[0]
+
+
 def default_workspace(username: str) -> str:
     with connect_users_db() as conn:
         row = conn.execute(
@@ -241,44 +247,23 @@ def ensure_personal(username: str, *, welcome: bool = False) -> str:
 
 def set_default(username: str, ws: str) -> None:
     """Make one of the account's personal workspaces its default."""
-    if personal_owner(ws) != username:
-        raise ValueError("only one of your personal workspaces can be your default")
-    with connect_users_db() as conn:
-        conn.execute("UPDATE users SET default_workspace = ? WHERE username = ?", (ws, username))
-        conn.commit()
+    update(ws, {}, default_for=username)
 
 
 def rename(ws: str, name: str) -> dict:
-    name = clean_name(name)
-    if not name:
-        raise ValueError("workspace name cannot be empty")
-    with connect_users_db() as conn:
-        conn.execute("UPDATE workspaces SET name = ? WHERE id = ?", (name, ws))
-        conn.commit()
-    return get(ws)
+    return update(ws, {"name": name})
 
 
 def set_access(ws: str, access: str, public_role: str) -> dict:
     """Private (members only) or public (every signed-in account gets
     ``public_role``). Shared workspaces only."""
-    _check_access(access, public_role)
-    if personal_owner(ws):
-        raise ValueError("a personal workspace is always private")
-    with connect_users_db() as conn:
-        conn.execute("UPDATE workspaces SET access = ?, public_role = ? WHERE id = ?", (access, public_role, ws))
-        conn.commit()
-    return get(ws)
+    return update(ws, {"access": access, "public_role": public_role})
 
 
 def set_quota(ws: str, quota_mb: int | None) -> dict:
     """A shared workspace's own upload cap in MB (None = unlimited). A
     personal workspace is metered through its account instead."""
-    if personal_owner(ws):
-        raise ValueError("a personal workspace uses its account's storage quota")
-    with connect_users_db() as conn:
-        conn.execute("UPDATE workspaces SET quota_mb = ? WHERE id = ?", (quota_mb, ws))
-        conn.commit()
-    return get(ws)
+    return update(ws, {"quota_mb": quota_mb})
 
 
 def set_kind(ws: str, kind: str) -> dict:
@@ -287,23 +272,37 @@ def set_kind(ws: str, kind: str) -> dict:
     default moves to another personal workspace (refused when it is their
     last). Shared → personal: needs exactly one member, who becomes its
     account; access resets to private and the workspace quota is cleared."""
-    if kind not in KINDS:
-        raise ValueError("kind must be personal or shared")
+    return update(ws, {"kind": kind})
+
+
+def update(ws: str, changes: dict, *, default_for: str = "") -> dict:
+    """Apply a workspace edit atomically, including kind and default changes.
+
+    Validate against the resulting kind. Any failure rolls back the whole
+    edit; callers must authorize all supplied fields before calling this.
+    The write lock also keeps the membership/default checks consistent.
+    """
     with connect_users_db() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row = _row(conn, ws)
         if not row:
             raise ValueError("workspace not found")
         info = _info(row)
-        if info["kind"] == kind:
-            return info
+        kind = changes.get("kind", info["kind"])
+        if kind not in KINDS:
+            raise ValueError("kind must be personal or shared")
+        if "name" in changes:
+            info["name"] = clean_name(changes["name"])
+            if not info["name"]:
+                raise ValueError("workspace name cannot be empty")
         people = _members_of(conn, ws)
-        if kind == "personal":
+        if kind != info["kind"] and kind == "personal":
             if len(people) != 1:
                 raise ValueError("only a workspace with a single member can become personal")
             _check_account(conn, people[0][0])
             conn.execute("UPDATE workspace_members SET role = 'owner' WHERE workspace_id = ?", (ws,))
-            conn.execute("UPDATE workspaces SET kind = 'personal', access = 'private', quota_mb = NULL WHERE id = ?", (ws,))
-        else:
+            info.update(access="private", public_role="viewer", quota_mb=None)
+        elif kind != info["kind"]:
             owner = people[0][0] if people else ""
             others = [w for w in _personal_ids(conn, owner) if w != ws] if owner else []
             if owner and not others:
@@ -311,9 +310,26 @@ def set_kind(ws: str, kind: str) -> dict:
             if owner and conn.execute("SELECT 1 FROM users WHERE username = ? AND default_workspace = ?",
                                       (owner, ws)).fetchone():
                 conn.execute("UPDATE users SET default_workspace = ? WHERE username = ?", (others[0], owner))
-            conn.execute("UPDATE workspaces SET kind = 'shared' WHERE id = ?", (ws,))
+        info["kind"] = kind
+        if "access" in changes or "public_role" in changes:
+            if kind == "personal":
+                raise ValueError("a personal workspace is always private")
+            info["access"] = changes.get("access", info["access"])
+            info["public_role"] = changes.get("public_role", info["public_role"])
+            _check_access(info["access"], info["public_role"])
+        if "quota_mb" in changes:
+            if kind == "personal":
+                raise ValueError("a personal workspace uses its account's storage quota")
+            info["quota_mb"] = changes["quota_mb"]
+        if default_for:
+            if kind != "personal" or len(people) != 1 or people[0][0] != default_for:
+                raise ValueError("only one of your personal workspaces can be your default")
+            conn.execute("UPDATE users SET default_workspace = ? WHERE username = ?", (ws, default_for))
+        conn.execute(
+            "UPDATE workspaces SET name = ?, kind = ?, access = ?, public_role = ?, quota_mb = ? WHERE id = ?",
+            (info["name"], kind, info["access"], info["public_role"], info["quota_mb"], ws))
         conn.commit()
-    return get(ws)
+    return info
 
 
 def set_member(ws: str, username: str, role: str, by: str) -> None:

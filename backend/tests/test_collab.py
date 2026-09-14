@@ -273,10 +273,29 @@ def test_socket_hello_fanout_and_presence(guest):
                 hc = c.receive_json()
                 assert next(p for p in hc["peers"] if p["client"] == "aa")["block"] == "wsA"
             assert _recv(a, "leave")["client"] == "cc"
+            # a caret sent with a batch rides along on the fan-out (to the
+            # writer too — it is the batch's ack for the others' bookkeeping),
+            # and is the writer's presence from then on
+            r = guest.post(f"/api/pages/{page['id']}/ops", json={
+                "client": "aa", "ops": [{"op": "set", "id": "wsA", "content": "hi there"}],
+                "cursor": {"block": "wsA", "anchor": 8, "head": 8}})
+            assert r.status_code == 200
+            for ws in (a, b):
+                m = _recv(ws, "ops")
+                assert m["client"] == "aa" and m["cursor"] == {"block": "wsA", "anchor": 8, "head": 8}
+            with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=cc") as c:
+                hc = c.receive_json()
+                pa = next(p for p in hc["peers"] if p["client"] == "aa")
+                assert (pa["block"], pa["anchor"], pa["head"]) == ("wsA", 8, 8)
+            assert _recv(a, "leave")["client"] == "cc"
+            # a batch without one changes nothing about presence
+            r = _ops(guest, page["id"], [{"op": "set", "id": "wsA", "content": "hi"}], client_id="aa")
+            assert r.status_code == 200
+            assert "cursor" not in _recv(b, "ops")
         assert _recv(a, "leave")["client"] == "bb"
     # the single-block endpoints and page writers reach the room too
     with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=dd") as d:
-        assert d.receive_json()["seq"] == 1
+        assert d.receive_json()["seq"] == 3
         assert guest.put("/api/blocks/wsA", json={"content": "edited", "properties": {"x": 1}}).status_code == 200
         m = _recv(d, "ops")
         assert m["ops"] == [{"op": "set", "id": "wsA", "content": "edited", "props": {"x": 1}}]
@@ -286,8 +305,8 @@ def test_socket_hello_fanout_and_presence(guest):
         assert _recv(d, "ops")["ops"] == [{"op": "delete", "id": "wsA"}]
         # a whole-subtree replace can't be expressed as ops: reload
         assert guest.put(f"/api/blocks/{page['id']}/children", json={"blocks": [{"content": "bulk"}]}).status_code == 200
-        assert _recv(d, "reload")["seq"] == 5
-        assert guest.get(f"/api/pages/{page['id']}/ops", params={"since": 4}).json()["batches"][0]["ops"] == [{"op": "reload"}]
+        assert _recv(d, "reload")["seq"] == 7
+        assert guest.get(f"/api/pages/{page['id']}/ops", params={"since": 6}).json()["batches"][0]["ops"] == [{"op": "reload"}]
 
 
 def test_socket_cross_page_move_and_ai_edit(guest):

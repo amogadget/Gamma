@@ -18,6 +18,21 @@ export function AuthLoading() {
   return <AuthShell><p className="loginLoading">Loading...</p></AuthShell>;
 }
 
+export function WorkspaceUnavailablePage() {
+  return (
+    <AuthShell>
+      <p className="loginSubtitle">This workspace is unavailable</p>
+      <p className="loginConflictText">
+        It may have been deleted, or your account may no longer have access.
+        Ask a workspace owner to invite you if you need access.
+      </p>
+      <button type="button" className="loginBtn" onClick={() => window.location.assign("/")}>
+        Open my workspaces
+      </button>
+    </AuthShell>
+  );
+}
+
 // Shown when another tab of the same browser signed into a different account:
 // the session cookie is browser-wide, so this tab's identity changed under it.
 // The tab is frozen (its API calls are refused with 409 by the backend) until

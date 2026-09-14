@@ -8,7 +8,7 @@ Backend (FastAPI, Python 3.11+):
 cd backend
 python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-python manage.py setup          # idempotent: guest account + missing per-user DBs
+python manage.py setup          # idempotent: guest account + missing workspace files
 uvicorn app:app --host 127.0.0.1 --port 9001 --reload
 ```
 
@@ -47,9 +47,10 @@ directory — no server, no network. Run them with the project venv's
 interpreter (`venv/Scripts/python.exe` on Windows): the two vector-math
 tests need `ziamath` from `requirements.txt`, and a system/conda `python`
 without it fails them with "ziamath is not importable" rather than a
-puzzling path count. The frontend has **no linter** and no component tests.
-Its pure modules have `node --test` tests (`npm test` from `frontend/`, the
-files in `frontend/tests/*.test.mjs`).
+puzzling path count. The frontend has **no linter**. `npm test` from
+`frontend/` runs the block-operation tests, session-storage isolation tests,
+and collaboration transport tests with a stubbed React layer. Actual React
+rendering and interactions are exercised by the browser suite below.
 
 ### Browser end-to-end suite
 
@@ -84,6 +85,8 @@ The scenarios live in `tests/e2e/scenarios/`:
   to different blocks, same-block last-writer-wins, undo after a remote edit,
   rename propagation, edits made offline replaying, remote delete, a
   highlight made by the other person.
+- `run.mjs`: login, guest access, and refusing an inaccessible explicit
+  workspace without opening a different library.
 - `share.mjs`: the share dialog, the anonymous share view (PDF, highlight,
   image through the share token, no editor), an edit share.
 
@@ -96,7 +99,7 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
 
 ## Debugging surfaces
 
-- **Server log** — Settings → Advanced → "Server log" (admin only): the
+- **Server log** — Settings → Server → "Server log" (admin only): the
   in-memory ring buffer behind `GET /api/admin/logs`. Backend code must log
   through `gamma/logbuf.py`'s `log` (never `print()`); secrets are masked at
   insert time. Gone on restart.

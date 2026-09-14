@@ -437,10 +437,14 @@ function inlineRenderField(labelsRef) {
 }
 
 // --- other people's carets ------------------------------------------------
-// The peers editing THIS block (collab.js presence: {anchor, head, color,
-// name}) render as a coloured caret with a name tag plus a tinted selection.
-// A StateField, replaced whenever new presence arrives and mapped through
-// our own edits in between, so a remote caret stays put while we type.
+// The peers editing THIS block (collab.js presence: {client, rev, anchor,
+// head, color, name}) render as a coloured caret with a name tag plus a
+// tinted selection. A StateField keyed by peer: a peer whose `rev` changed
+// (a new caret report — standalone, or riding on its batch) is placed fresh
+// from its offsets, in the text of the transaction that carries the effect
+// (the batch's text change comes in the same render, and runs first); the
+// others keep their carets mapped through every change, so a remote caret
+// stays put while we type and someone else's edit shifts it correctly.
 const setRemoteCursors = StateEffect.define();
 
 class RemoteCaretWidget extends WidgetType {
@@ -459,26 +463,48 @@ class RemoteCaretWidget extends WidgetType {
   ignoreEvent() { return true; }
 }
 
-function buildRemoteDecos(state, cursors) {
-  const len = state.doc.length;
-  const clamp = (n) => Math.max(0, Math.min(Number(n) || 0, len));
+function buildRemoteDecos(peers) {
   const ranges = [];
-  for (const c of cursors || []) {
-    const a = clamp(c.anchor), h = clamp(c.head);
-    const from = Math.min(a, h), to = Math.max(a, h);
+  for (const c of peers.values()) {
+    const from = Math.min(c.anchor, c.head), to = Math.max(c.anchor, c.head);
     if (from < to) ranges.push(Decoration.mark({ class: `cmRemoteSel peer-${c.color}` }).range(from, to));
-    ranges.push(Decoration.widget({ widget: new RemoteCaretWidget(c.name || "", c.color || 0), side: 1 }).range(h));
+    ranges.push(Decoration.widget({ widget: new RemoteCaretWidget(c.name || "", c.color || 0), side: 1 }).range(c.head));
   }
   return Decoration.set(ranges, true);
 }
 
+// state: { peers: Map<client, {rev, anchor, head, color, name}> (positions
+// kept current in this editor's text), deco: the decorations built from it }
 const remoteCursorField = StateField.define({
-  create: () => Decoration.none,
-  update(deco, tr) {
-    for (const e of tr.effects) if (e.is(setRemoteCursors)) return buildRemoteDecos(tr.state, e.value);
-    return tr.docChanged ? deco.map(tr.changes) : deco;
+  create: () => ({ peers: new Map(), deco: Decoration.none }),
+  update(st, tr) {
+    let peers = st.peers;
+    let changed = false;
+    if (tr.docChanged && peers.size) {
+      // Like a caret: an insertion at the position lands before it.
+      peers = new Map([...peers].map(([k, c]) => [k, {
+        ...c, anchor: tr.changes.mapPos(c.anchor, 1), head: tr.changes.mapPos(c.head, 1),
+      }]));
+      changed = true;
+    }
+    for (const e of tr.effects) {
+      if (!e.is(setRemoteCursors)) continue;
+      const len = tr.state.doc.length;
+      const clamp = (n) => Math.max(0, Math.min(Number(n) || 0, len));
+      const next = new Map();
+      for (const c of e.value || []) {
+        const key = c.client || `${c.color}:${c.name}`;
+        const prev = peers.get(key);
+        next.set(key, prev && prev.rev === c.rev && prev.color === c.color && prev.name === c.name
+          ? prev
+          : { rev: c.rev, anchor: clamp(c.anchor), head: clamp(c.head), color: c.color || 0, name: c.name || "" });
+      }
+      peers = next;
+      changed = true;
+    }
+    return changed ? { peers, deco: buildRemoteDecos(peers) } : st;
   },
-  provide: (f) => EditorView.decorations.from(f),
+  provide: (f) => EditorView.decorations.from(f, (st) => st.deco),
 });
 
 // A value change that came from outside the editor (a remote edit, an undo
@@ -803,7 +829,7 @@ const BlockCmEditor = React.forwardRef(function BlockCmEditor({
   }, [value]);
 
   // Peers' carets in this block.
-  const cursorsKey = (remoteCursors || []).map((c) => `${c.color}:${c.anchor}:${c.head}:${c.name}`).join("|");
+  const cursorsKey = (remoteCursors || []).map((c) => `${c.client}:${c.rev}:${c.color}:${c.anchor}:${c.head}:${c.name}`).join("|");
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;

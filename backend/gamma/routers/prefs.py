@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from ..ai_settings import AI_SETTINGS_PREF_KEY
 from ..auth import require_user, require_ws
 from ..db import (
+    USER_PREF_KEYS,
     delete_page_snap,
     get_page_snaps,
     get_pref,
@@ -57,7 +58,7 @@ class PrefWriteRequest(BaseModel):
 async def read_pref(key: str, request: Request):
     user = require_user(request)
     _check_key(key)
-    value, updated_at = get_pref(user, key, require_ws(request))
+    value, updated_at = get_pref(user, key, "" if key in USER_PREF_KEYS else require_ws(request))
     return {"key": key, "value": value, "updated_at": updated_at}
 
 
@@ -67,7 +68,7 @@ async def write_pref(key: str, payload: PrefWriteRequest, request: Request):
     _check_key(key)
     if len(json.dumps(payload.value)) > MAX_VALUE_BYTES:
         raise HTTPException(status_code=413, detail="pref value too large")
-    updated_at = set_pref(user, key, payload.value, require_ws(request))
+    updated_at = set_pref(user, key, payload.value, "" if key in USER_PREF_KEYS else require_ws(request))
     return {"key": key, "updated_at": updated_at}
 
 

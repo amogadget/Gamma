@@ -62,21 +62,65 @@ export async function collabScenarios({ server, browser, alice, bob, makePdf, st
   await step("collab: same-block typing settles on one value everywhere (last writer wins)", async () => {
     await editRow(A, "alpha (alice)");
     await editRow(B, "alpha (alice)");
+    const saved = (page, content) => page.waitForResponse((response) =>
+      response.url().includes(`/api/pages/${pageId}/ops`) && response.request().method() === "POST"
+      && response.request().postDataJSON()?.ops?.some((op) => op.content === content));
+    const saves = [saved(A, "alpha (alice) A1"), saved(B, "alpha (alice) B1")];
     await A.keyboard.type(" A1");
     await B.keyboard.type(" B1");
     await closeEditor(A);
     await closeEditor(B);
+    // A blur queues a save; it does not await its response. Selecting the
+    // winner after only the first commit can mistake a transient value for
+    // the final one and fail even when both clients converge correctly.
+    for (const response of await Promise.all(saves)) assert(response.ok(), "both concurrent edits saved");
     const final = await until(async () => {
       const t = await tree(aliceT, pageId);
       const c = t[0]?.content || "";
-      return /^alpha \(alice\)( A1| B1)$/.test(c) ? c : null;
-    }, { what: "server holds one of the two versions" });
-    await bodyHas(A, final); await bodyHas(B, final);
+      if (!/^alpha \(alice\)( A1| B1)$/.test(c)) return null;
+      const bodies = await Promise.all([A.textContent("body"), B.textContent("body")]);
+      const losing = c.endsWith("A1") ? "B1" : "A1";
+      return bodies.every((body) => body.includes(c) && !body.includes(losing)) ? c : null;
+    }, { what: "both screens and the server agree after both saves" });
     const bodies = [await A.textContent("body"), await B.textContent("body")];
     const other = final.endsWith("A1") ? "B1" : "A1";
     assert(!bodies[0].includes(other) && !bodies[1].includes(other), `the losing version "${other}" still shows`);
     assertNoProblems(A); assertNoProblems(B);
     return final;
+  });
+
+  await step("collab: a peer's caret lands where they typed, mid-block, and the other caret shifts along", async () => {
+    // Where an editor draws the remote caret: (line, column) of the widget.
+    const remoteCaret = (p) => p.evaluate(() => {
+      const ed = document.querySelector(".blockEditorCm .cm-content");
+      const w = ed?.querySelector(".cmRemoteCaret");
+      if (!w) return null;
+      const lines = [...ed.querySelectorAll(".cm-line")];
+      const i = lines.findIndex((l) => l.contains(w));
+      const r = document.createRange(); r.setStart(lines[i], 0); r.setEndBefore(w);
+      return { line: i + 1, col: r.toString().length };
+    });
+    const multi = await aliceT.api("/api/blocks", { method: "POST", body: { parent_id: pageId, content: ["first line here", "second line", "", "last line"].join("\n") } });
+    await bodyHas(A, "last line"); await bodyHas(B, "last line");
+    // Alice keeps the editor open at the very end; bob types at the end of line 1.
+    await editRow(A, "last line");
+    await A.keyboard.press("Control+End");
+    await editRow(B, "last line");
+    await B.keyboard.press("Control+Home");
+    await B.keyboard.press("End");
+    await until(async () => JSON.stringify(await remoteCaret(A)) === JSON.stringify({ line: 1, col: 15 }), { what: "bob's caret at the end of line 1 on alice's side" });
+    await B.keyboard.type("xyz", { delay: 40 });
+    await bodyHas(A, "first line herexyz");
+    await sleep(600);
+    // Offsets past the typed text used to land it on line 2 and stay there.
+    assertEq(JSON.stringify(await remoteCaret(A)), JSON.stringify({ line: 1, col: 18 }), "bob's caret after typing");
+    // Alice's caret, after the insertion, moved along with the text on bob's side.
+    assertEq(JSON.stringify(await remoteCaret(B)), JSON.stringify({ line: 4, col: 9 }), "alice's caret on bob's side");
+    await closeEditor(A);
+    await closeEditor(B);
+    await aliceT.api(`/api/blocks/${multi.id}`, { method: "DELETE" });
+    await until(async () => !(await B.textContent("body")).includes("last line"), { what: "the scratch block gone" });
+    assertNoProblems(A); assertNoProblems(B);
   });
 
   await step("collab: alice's undo reverts only her own edit", async () => {

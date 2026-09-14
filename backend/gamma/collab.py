@@ -118,11 +118,24 @@ def publish(ws: str, page_id: str, message: dict, exclude: str = "") -> None:
 
 
 def publish_ops(ws: str, result: dict) -> None:
-    """Fan out an applied batch (the dict ``ops.apply_ops`` returns)."""
-    publish(ws, result["page_id"], {
+    """Fan out an applied batch (the dict ``ops.apply_ops`` returns). A
+    ``cursor`` on the result (the writer's caret after the batch) rides
+    along and becomes the writer's stored presence, so a later joiner's
+    ``hello`` shows it too."""
+    msg = {
         "t": "ops", "seq": result["seq"], "at": result["at"],
         "actor": result["actor"], "client": result["client"], "ops": result["ops"],
-    })
+    }
+    cursor = result.get("cursor")
+    if cursor is not None:
+        msg["cursor"] = cursor
+        room = _rooms.get((ws, result["page_id"]))
+        peer = room.peers.get(result["client"]) if room else None
+        if peer is not None:
+            peer.block = str(cursor.get("block") or "")[:64]
+            peer.anchor = int(cursor.get("anchor", -1))
+            peer.head = int(cursor.get("head", -1))
+    publish(ws, result["page_id"], msg)
 
 
 def publish_reload(ws: str, page_id: str, seq: int | None = None) -> None:
