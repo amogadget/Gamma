@@ -4996,6 +4996,10 @@ export default function App() {
       try {
         if (o.format === "logseq") {
           await downloadExport(`${base}&mode=logseq-graph&${bundle}`, "graph.zip");
+        } else if (o.format === "obsidian") {
+          if (await downloadExport(`${base}&mode=obsidian&${flags}&${bundle}`, "vault.zip")) {
+            setStatus("Obsidian vault saved — unzip it into a vault, or open the folder as one.");
+          }
         } else if (o.format === "zotero") {
           if (await downloadExport(`${base}&mode=zotero-rdf&${flags}&${bundle}`, "zotero.zip")) {
             setStatus("Zotero library saved — unzip it, then import the .rdf in Zotero (File → Import).");
@@ -5029,6 +5033,12 @@ export default function App() {
     }
     if (o.format === "logseq") {
       await downloadExport(`/pages/${id}/export?mode=logseq-graph&${bundle}`, "graph.zip");
+      return;
+    }
+    if (o.format === "obsidian") {
+      if (await downloadExport(`/pages/${id}/export?mode=obsidian&${flags}&${bundle}`, "vault.zip")) {
+        setStatus("Obsidian vault saved — unzip it into a vault, or open the folder as one.");
+      }
       return;
     }
     if (o.format === "zotero") {
@@ -7225,11 +7235,6 @@ export default function App() {
             <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
               <span className="check">{!chatHidden ? "✓" : ""}</span>
               <SparklesIcon className="popoverItemIcon" size={15} /> AI Chat
-            </button>
-          ) : null}
-          {!menuReadOnly && homeMode ? (
-            <button className="popoverItem" onClick={() => { setOpenPopover(null); setSettingsOpen("maintenance"); }}>
-              <DatabaseIcon className="popoverItemIcon" size={15} />Library maintenance
             </button>
           ) : null}
           {!menuReadOnly ? <div className="popoverDivider" /> : null}

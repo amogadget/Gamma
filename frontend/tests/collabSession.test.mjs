@@ -253,3 +253,31 @@ test("a read-only session sends nothing", (t) => {
   assert.equal(h.calls.length, 0);
   assert.equal(h.session.hasPending(), false);
 });
+
+test("the ack of a set the server merged lands the stored text, with our base on the wire", async (t) => {
+  const h = setup(t, async () => ({ ...batch(1, [{ op: "set", id: "a", content: "theirs mine" }], ME), cursor: { block: "a", anchor: 11, head: 11 } }));
+  h.edit([block("a", "mine"), block("b")]);
+  await h.session.flush();
+  assert.equal(h.calls[0].body.ops[0].base, "a");
+  assert.equal(h.tree[0].content, "theirs mine");
+  assert.deepEqual(h.remote, [{ op: "set", id: "a", content: "theirs mine" }]);
+  assert.equal(h.session.hasPending(), false);
+});
+
+test("a merged ack waits while a newer set of ours is queued; that set's ack brings the whole result", async (t) => {
+  const first = deferred();
+  let calls = 0;
+  const h = setup(t, () => (++calls === 1 ? first.promise : Promise.resolve(batch(2, [{ op: "set", id: "a", content: "theirs mine more" }], ME))));
+  h.edit([block("a", "mine"), block("b")]);
+  h.fire(); // the typing debounce: the first batch goes out
+  h.edit([block("a", "mine more"), block("b")]); // queued behind the in-flight batch
+  first.resolve(batch(1, [{ op: "set", id: "a", content: "theirs mine" }], ME));
+  await settle();
+  assert.equal(h.tree[0].content, "mine more"); // the merge is not applied under queued keystrokes
+  assert.deepEqual(h.remote, []);
+  h.fire(); // the second batch
+  await settle();
+  assert.equal(h.calls[1].body.ops[0].base, "mine"); // the queued set's base is the text we sent
+  assert.equal(h.tree[0].content, "theirs mine more");
+  assert.equal(h.session.hasPending(), false);
+});

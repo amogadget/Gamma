@@ -146,10 +146,17 @@ export function createCollabSession({ clientId, api, openSocket, keepalivePost, 
           body: JSON.stringify({ client: clientId, ops, ...(cur ? { cursor: cur } : {}) }),
         });
         s.retries = 0;
-        if (cur && s === st.session) c.last = cur;
-        // The ack: final positions, and the deferred remote sets decided.
+        // What the others were told: the caret as the server stored it (it
+        // is remapped when a merge moved the text under it).
+        if (cur && s === st.session) c.last = res.cursor && res.cursor.block ? res.cursor : cur;
+        // The ack: final positions, the text the server actually stored
+        // for each content set (a merge onto someone else's change comes
+        // back different from what we sent), and the deferred remote sets
+        // decided.
+        const stored = new Map();
         for (const op of res.ops || []) {
           if ((op.op === "insert" || op.op === "move") && op.position) s.pos.set(op.id, op.position);
+          if (op.op === "set" && op.content !== undefined) stored.set(op.id, op.content);
         }
         const ackSeq = res.seq || 0;
         // An ack proves only that this batch committed; earlier remote
@@ -166,6 +173,14 @@ export function createCollabSession({ clientId, api, openSocket, keepalivePost, 
           if (d && d.seq > ackSeq) { // theirs is newer: it wins
             late.push(d.op);
             if (d.cursor) lateCursors.push(d);
+          } else if (stored.has(op.id) && stored.get(op.id) !== op.content) {
+            // The server merged our change onto text someone else wrote
+            // since our base: their spans and ours both survive. Lands
+            // like a remote op — only now that no newer set of ours for the
+            // block is queued or in flight (that one's base is the text we
+            // sent, so the server patches it onto the merge and its ack
+            // brings the whole result).
+            late.push({ op: "set", id: op.id, content: stored.get(op.id) });
           }
         }
         if (late.length && s === st.session) {

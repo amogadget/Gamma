@@ -156,6 +156,20 @@ export async function noteScenarios({ server, browser, alice, step, until, sleep
     return src;
   });
 
+  await step("notes: Export… as an Obsidian vault downloads a zip", async () => {
+    await page.click("button[aria-label='Settings']");
+    await page.locator(".popoverItem", { hasText: "Export…" }).click();
+    await page.waitForSelector(".exportModal");
+    await page.locator(".exportModal .uiSelectBtn").first().click();
+    await page.locator(".ctxMenuItem", { hasText: "Obsidian vault" }).click();
+    const download = page.waitForEvent("download", { timeout: 15000 });
+    await page.locator(".exportModal .uiBtn.primary", { hasText: "Export" }).click();
+    const file = await download;
+    assert(/-obsidian\.zip$/.test(file.suggestedFilename()), `vault zip name: ${file.suggestedFilename()}`);
+    await until(async () => (await page.textContent("body")).includes("Obsidian vault saved"), { what: "export status" });
+    assertNoProblems(page);
+  });
+
   await step("notes: the account menu lists both workspaces and switches", async () => {
     await page.click("button[aria-label='Account & settings']");
     await page.waitForSelector(".userPopover .wsItem");

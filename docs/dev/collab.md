@@ -225,7 +225,8 @@ state in App instead of the tree.
   from `frontend/` (pure diff/apply round-trips).
 - `frontend/tests/collabSession.test.mjs`: `createCollabSession` over fake
   HTTP, socket and timers — ack/socket ordering and catch-up, content versus
-  property reconciliation, retries and their limit, rejection, navigation
+  property reconciliation, the merged text on an ack (landed at once, or
+  held while a newer set of ours is queued), retries and their limit, rejection, navigation
   during a save, presence messages, the caret throttle, reconnect backoff,
   read-only sessions; browser behavior is covered separately below.
 - End to end: `npm run e2e -- --only collab` from `frontend/`

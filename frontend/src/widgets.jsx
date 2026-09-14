@@ -333,6 +333,7 @@ const EXPORT_FORMATS = [
   ["pdf", "PDF (the paper, annotated)"],
   ["notespdf", "Notes as PDF"],
   ["markdown", "Markdown (.md)"],
+  ["obsidian", "Obsidian vault (.zip)"],
   ["logseq", "Logseq graph (.zip)"],
   ["zotero", "Zotero RDF (.zip)"],
   ["gamma", "Gamma (.zip)"],
@@ -349,6 +350,8 @@ const EXPORT_SWITCH_TEXT = {
       "Each highlighted passage as a quote with its page number, in the colour you highlighted it."],
     markdown: ["Blockquotes with page numbers",
       "Each highlighted passage as a blockquote with its page number."],
+    obsidian: ["Quote callouts linking the PDF page",
+      "Each highlighted passage as a [!quote] callout whose title opens the bundled PDF at that page."],
     logseq: ["Always in a graph (hls page + .edn)",
       "Always included: a graph's highlights are its hls page and .edn."],
     zotero: ["Embedded into the exported PDF copies",
@@ -363,6 +366,8 @@ const EXPORT_SWITCH_TEXT = {
       "Your own writing, typeset under the highlight it belongs to — headings, lists, code, math and pasted images included."],
     markdown: ["Nested under their highlights",
       "Your own writing, nested under the highlight it belongs to."],
+    obsidian: ["Headings, paragraphs and lists",
+      "Your own writing as a document: top-level headings and paragraphs, deeper blocks as nested lists, mentions and synced blocks as wikilinks."],
     logseq: ["Always in a graph",
       "Always included: the graph's notes page."],
     zotero: ["Zotero notes on each item",
@@ -373,6 +378,8 @@ const EXPORT_SWITCH_TEXT = {
   bundle: {
     markdown: ["Pack the PDF and images into the .zip",
       "Pack the PDF and any pasted images into the .zip. Off: they stay as links back to this server."],
+    obsidian: ["PDF and images into attachments/",
+      "Put the PDF (named after its page) and any pasted images into the vault's attachments/ folder. Off: they stay as links back to this server."],
     logseq: ["Pack the PDF and images into the .zip",
       "Pack the PDF and any pasted images into the .zip. Off: they stay as links back to this server."],
     zotero: ["Include the PDF files (Zotero's “Export Files”)",
@@ -423,6 +430,7 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, onCancel, onEx
   const isGraph = format === "logseq";
   const isZotero = format === "zotero";
   const isGamma = format === "gamma";
+  const isVault = format === "obsidian";
   const set = (patch) => setOpts((o) => ({ ...o, ...patch }));
   const text = (row) => EXPORT_SWITCH_TEXT[row][format] || EXPORT_SWITCH_TEXT[row].markdown;
 
@@ -436,6 +444,8 @@ function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, onCancel, onEx
 
   const summary = isGraph
     ? "A Logseq graph: the notes page plus native PDF highlights (hls page + .edn)."
+    : isVault
+      ? `An Obsidian vault: one note per page${folder ? ", subfolders as folders" : ""}, links as [[wikilinks]], labels as tags${highlights ? ", highlights as quote callouts" : ""}${notes ? ", your notes as headings, paragraphs and lists" : ""}. Unzip it into a vault, or open it as one.`
     : isGamma
       ? `A 1:1 copy${folder ? " of the folder" : ""}: pages with all blocks, metadata, AI chats and files. Another Gamma imports it via Import → Gamma export — merging, never overwriting.`
       : isPdf
@@ -538,7 +548,7 @@ function ImportDialog({ hasPdf, stripDefault, busy, onCancel, onImport }) {
     annots: "Highlights, notes and boxes saved inside this PDF (a Gamma export, SumatraPDF, Acrobat…) become regular blocks. Importing twice adds nothing — each annotation is matched to the block it already made.",
     logseq: "Pick a Logseq .pdf and its .edn (a .md of notes is optional). The paper and its highlights land in your library as a new page.",
     gamma: "A zip made by another Gamma's Export → Gamma format (a full backup works too). Its pages, files and chats merge into your library — nothing existing is touched, and re-importing the same zip adds nothing. (A single shared page needs no zip: paste its share link into the + menu.)",
-    markdown: "A single .md becomes a note page. A .zip of Markdown — Notion's Export → Markdown & CSV (subpages included), a Gamma Markdown export, or any zipped folder of notes — becomes one page per file: folders become folder labels, links between the notes become mentions, images and files come along. Notes already imported are skipped.",
+    markdown: "A single .md becomes a note page. A .zip of Markdown — a zipped Obsidian vault, Notion's Export → Markdown & CSV (subpages included), a Gamma Markdown export, or any zipped folder of notes — becomes one page per file: folders become folder labels, links between the notes ([[wikilinks]] included) become mentions, ![[block]] embeds synced blocks, tags labels, and images and files come along. Notes already imported are skipped.",
   };
 
   return (
@@ -552,7 +562,7 @@ function ImportDialog({ hasPdf, stripDefault, busy, onCancel, onImport }) {
             options={[
               ...(hasPdf ? [["annots", "Annotations in this PDF"]] : []),
               ["zotero", "Zotero library (.zip)"],
-              ["markdown", "Markdown notes (.md or .zip, Notion export)"],
+              ["markdown", "Markdown notes (.md or .zip: Obsidian vault, Notion export)"],
               ["logseq", "Logseq highlights (.pdf + .edn)"],
               ["gamma", "Gamma export (.zip)"],
             ]}

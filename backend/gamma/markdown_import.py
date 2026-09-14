@@ -37,21 +37,66 @@ _FENCE_LINE_RE = re.compile(r"^[ \t]*(```|~~~)")
 
 def parse_frontmatter(text: str):
     """Return ``(fields, body)`` — YAML front matter is dropped and its
-    top-level scalar ``key: value`` lines are returned as a dict (keys
-    lower-cased, quotes stripped; nested keys and multi-line values are
-    ignored)."""
+    top-level ``key: value`` lines are returned as a dict (keys lower-cased,
+    quotes stripped). A value is a string, or a list of strings for the two
+    YAML list forms Obsidian's properties use — a flow list ``[a, b]`` and a
+    block list (``key:`` followed by ``- item`` lines). Nested mappings and
+    multi-line scalars are ignored."""
     match = _FRONTMATTER_RE.match(text)
     if not match:
         return {}, text
     fields = {}
+    pending = None    # key whose block-list items may follow
     for line in match.group(1).splitlines():
-        if not line.strip() or line[:1].isspace() or line.lstrip().startswith("#"):
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        item = _FM_ITEM_RE.match(line)
+        if item and pending is not None:
+            fields[pending].append(_fm_scalar(item.group(1) or ""))
+            continue
+        if line[:1].isspace():
             continue
         key, sep, value = line.partition(":")
-        if not sep:
+        if not sep or not key.strip():
+            pending = None
             continue
-        fields[key.strip().lower()] = value.strip().strip("'\"")
+        key, value = key.strip().lower(), value.strip()
+        pending = None
+        if not value:
+            fields[key] = []
+            pending = key
+        elif value.startswith("[") and value.endswith("]"):
+            fields[key] = [_fm_scalar(v) for v in value[1:-1].split(",") if v.strip()]
+        else:
+            fields[key] = _fm_scalar(value)
     return fields, text[match.end():]
+
+
+# ``- item`` (indented or not) under a ``key:`` line
+_FM_ITEM_RE = re.compile(r"^\s*-(?:\s+(.*))?$")
+
+
+def _fm_scalar(value: str) -> str:
+    return value.strip().strip("'\"").strip()
+
+
+def fm_text(fields: dict, key: str) -> str:
+    """A front-matter value as text (a list reads as its first item)."""
+    value = fields.get(key)
+    if isinstance(value, list):
+        return value[0] if value else ""
+    return value or ""
+
+
+def fm_list(fields: dict, key: str) -> list:
+    """A front-matter value as a list of strings — a list as is, a string
+    split on commas (``tags: a, b``)."""
+    value = fields.get(key)
+    if isinstance(value, list):
+        items = value
+    else:
+        items = (value or "").split(",")
+    return [v.strip() for v in items if v and v.strip()]
 
 
 def _open_construct(content: str) -> bool:
@@ -77,8 +122,15 @@ def _dedent(raw: str, col: int) -> str:
     return line[min(lead, col):]
 
 
+# Obsidian's foldable callout marker — ``> [!note]+ Title`` / ``[!note]-`` —
+# has no meaning here; the ``+``/``-`` would only keep the callout from
+# rendering, so it is dropped wherever markdown is parsed into blocks.
+_CALLOUT_FOLD_RE = re.compile(r"^(\s*(?:>\s*)+\[![^\]\n]+\])[+-](?=\s|$)", re.M)
+
+
 def md_to_blocks(text: str) -> list:
     """Parse markdown into a tree of ``{"content": str, "children": [...]}``."""
+    text = _CALLOUT_FOLD_RE.sub(r"\1", text)
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     root = {"content": "", "children": []}
     headings = [(0, root)]   # (heading level, node) — nesting for everything

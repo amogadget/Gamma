@@ -44,6 +44,7 @@ from ..markdown_export import (
     slugify,
 )
 from ..logbuf import log
+from ..obsidian_export import APP_JSON, VaultContext, referenced_blocks, render_vault_page
 from ..pdf_document import render_document
 from ..pdf_export import annotate_pdf, highlight_note_text
 from ..pdf_notes import render_notes
@@ -259,6 +260,72 @@ class _MarkdownBuilder(_Builder):
         arcname = self.filenames.get(page["id"]) \
             or f"{slugify(page.get('content'), page['id'])}.md"
         self.entries.append((arcname, md))
+
+
+class _ObsidianBuilder(_Builder):
+    """An Obsidian vault (``obsidian_export``): ``<dir>/<Title>.md`` per page
+    (directories = folder labels relative to the exported folder),
+    ``attachments/`` with the images and — with the bundle switch — the PDFs
+    named after their page, wikilinks / ``^id`` anchors resolved against the
+    export set, and an ``.obsidian/app.json`` that marks the folder as a
+    vault (the importer reads it back as one)."""
+    suffix = "-obsidian.zip"
+
+    def __init__(self, ws, base, opts):
+        super().__init__(ws, base, opts)
+        self.ctx = None
+
+    def begin(self, conn, root_ids):
+        self.ctx = VaultContext(_block_ref_resolver(conn), include_pdf=self.opts["pdf"])
+        pages = []
+        for rid in root_ids:
+            row = conn.execute("SELECT content, properties FROM unified_blocks WHERE id = ?",
+                               (rid,)).fetchone()
+            if row is None:
+                continue
+            try:
+                props = json.loads(row[1] or "{}")
+            except (TypeError, ValueError):
+                props = {}
+            pages.append((rid, row[0] or "", props.get("folder") or ""))
+        self.ctx.name_pages(pages, self.opts.get("folder_scope"))
+        # Every block that something links to needs its ^anchor written, and
+        # a page may be rendered before the page that links into it — so the
+        # link-bearing blocks are scanned up front (links from outside the
+        # export only add harmless anchors).
+        texts = (r[0] for r in conn.execute(
+            "SELECT content FROM unified_blocks WHERE content LIKE '%[[%'"))
+        referenced_blocks(texts, self.ctx)
+        if self.opts["pdf"]:
+            for rid, title, _ in pages:
+                self._bundle_pdf(conn, rid, title)
+
+    def _bundle_pdf(self, conn, rid, title):
+        row = conn.execute("SELECT properties FROM unified_blocks WHERE id = ?", (rid,)).fetchone()
+        try:
+            doc_id = json.loads(row[0] or "{}").get("doc_id") if row else None
+            path = pdf_upload_path(self.ws, doc_id) if doc_id else None
+        except (TypeError, ValueError):
+            path = None
+        if path and path.is_file():
+            arcname = self.ctx.name_pdf(rid, title, doc_id)
+            if all(f[0] != arcname for f in self.files):
+                self.files.append((arcname, path))
+
+    def add_page(self, n, rows, page):
+        md, page_assets = collect_and_rewrite(
+            render_vault_page(page, self.ctx, highlights=self.opts["highlights"],
+                              notes=self.opts["notes"]),
+            include_pdf=self.opts["pdf"], prefix="attachments/")
+        self.assets |= page_assets
+        self.entries.append((self.ctx.page_file[page["id"]], md))
+
+    def finish(self):
+        # Attachments live in attachments/, not the readable export's assets/.
+        self.files += [(f"attachments/{name}", self.uploads_dir / name)
+                       for name in sorted(self.assets)]
+        self.assets = set()
+        self.entries.append((".obsidian/app.json", APP_JSON))
 
 
 class _LogseqBuilder(_Builder):
@@ -541,6 +608,7 @@ class _NotesPdfBuilder(_Builder):
 
 _BUILDERS = {
     "readable": _MarkdownBuilder,
+    "obsidian": _ObsidianBuilder,
     "logseq-graph": _LogseqBuilder,
     "zotero-rdf": _ZoteroBuilder,
     "gamma": _GammaBuilder,
@@ -577,7 +645,9 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
     """One page in any export format (see the _Builder classes): ``readable``
     Markdown (bare .md when it references no local assets, else a .zip with an
     assets/ folder; ``highlights=0``/``notes=0`` — the dialog's switches —
-    leave out the quoted PDF text or your own writing), ``notes-pdf`` (the
+    leave out the quoted PDF text or your own writing), ``obsidian`` (an
+    Obsidian vault zip: the page as ``<folder>/<Title>.md`` with wikilinks,
+    the PDF and images under attachments/), ``notes-pdf`` (the
     notes typeset as their own PDF document — the one format a page without a
     PDF can still export as one), ``logseq-graph`` (a complete Logseq file
     graph, both switches pinned on), ``zotero-rdf`` (a one-item Zotero RDF
@@ -688,7 +758,8 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
                   highlights: int = 1, notes: int = 1):
     """Every page tagged into folder ``name`` (or a subfolder of it), in any
     export format (see the _Builder classes): ``readable`` (one .md per page +
-    a shared assets/ folder), ``notes-pdf`` (every page's notes in one PDF
+    a shared assets/ folder), ``obsidian`` (a vault: subfolders as
+    directories, attachments/), ``notes-pdf`` (every page's notes in one PDF
     document, each starting on a fresh sheet), ``logseq-graph`` (a complete
     Logseq file graph), ``zotero-rdf`` (a Zotero RDF library — subfolders
     become collections), or ``gamma`` (a scoped account backup any Gamma

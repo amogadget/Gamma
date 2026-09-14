@@ -9,13 +9,14 @@
 // remark-breaks (the marker line's trailing newline is still a plain "\n"
 // inside the first text node at that point).
 
-// Canonical types (each has a color in app.css); everything else aliases in.
+// Canonical types (each has a color in app.css); everything else aliases in —
+// the alias list covers every callout type Obsidian names.
 const CANON = {
-  note: "note", info: "note", abstract: "note", summary: "note",
-  tip: "tip", hint: "tip", success: "tip", check: "tip",
+  note: "note", info: "note", abstract: "note", summary: "note", tldr: "note", todo: "note",
+  tip: "tip", hint: "tip", success: "tip", check: "tip", done: "tip",
   warning: "warning", caution: "warning", attention: "warning",
-  danger: "danger", error: "danger", bug: "danger", fail: "danger", failure: "danger",
-  important: "important", example: "important",
+  danger: "danger", error: "danger", bug: "danger", fail: "danger", failure: "danger", missing: "danger",
+  important: "important", example: "important", question: "important", help: "important", faq: "important",
   quote: "quote", cite: "quote",
 };
 

@@ -120,7 +120,6 @@ never returned by the generic endpoint.
 | PUT | `/blocks/{id}/children` | replace the whole subtree (delete + reinsert; triggers orphan-upload cleanup) — bulk paths only (imports, tests); the page's room gets a `reload`. The editor itself sends ops |
 | POST | `/blocks/{id}/reorder` | move within the page (an op) or, with `parent_id` on another page, across pages (the source room sees a `delete`, the target reloads) |
 | GET | `/block-search` | fuzzy note/page/highlight search; empty `q` returns recently edited blocks (feeds the `[[ref]]` popup's initial suggestions) |
-| POST | `/blocks-replace` | bulk replace (no frontend UI currently) |
 
 Route order matters: the static-prefix routes (`by-doc`, `children`,
 `subtree`) must stay registered before `/blocks/{block_id}`.
@@ -171,7 +170,7 @@ page whose `block_fts_meta` row is missing, older than `textnorm.INDEX_VERSION`,
 or no longer matches the page root's `updated_at`; the block writers that
 change a child without touching the root (`POST /blocks`, `PUT /blocks/{id}`,
 `DELETE /blocks/{id}`, `PUT /blocks/{id}/children` on a nested block, a
-re-parenting `reorder`, `blocks-replace`) call `block_index.mark_page_dirty`.
+re-parenting `reorder`) call `block_index.mark_page_dirty`.
 Deleting a page or detaching its PDF prunes its rows (`block_index.purge_page_data`,
 which also drops the `pdf_fts` rows of papers no page carries and the deleted
 blocks' chats). The `pdf_fts` schema and its shared queries (`pdf_missing`,
@@ -234,13 +233,13 @@ the request's workspace — the extension names none, so its personal one.
 |---|---|---|
 | POST | `/import/logseq` | Logseq .pdf + .edn import |
 | POST | `/import/markdown` | UTF-8 `.md`/`.markdown` file → note page and nested blocks (optional `folder`; a front-matter `folder:` files it below that) |
-| POST | `/import/markdown-zip` | zip of Markdown notes → one page per `.md` (multipart `file`, optional `folder` prefix): Notion "Markdown & CSV" exports (subpage folders → folder labels, databases → table pages, links → mentions, images uploaded), Gamma Markdown exports (folder/source/meta/bibtex restored) or any zipped notes. Idempotent by file digest / `notion_id` |
+| POST | `/import/markdown-zip` | zip of Markdown notes → one page per `.md` (multipart `file`, optional `folder` prefix): Obsidian vaults (wikilinks/embeds → mentions and synced blocks, `^id` anchors and headings as link targets, `tags` → labels, `aliases` kept, comments and fold markers dropped, `.obsidian/` skipped), Notion "Markdown & CSV" exports (subpage folders → folder labels, databases → table pages, links → mentions, images uploaded), Gamma Markdown / Obsidian exports (folder/source/meta/bibtex restored) or any zipped notes. Idempotent by file digest / `notion_id`; the report says `obsidian: true` for a vault |
 | POST | `/markdown-blocks` | parse markdown text into a `{content, children}` tree without storing anything (the editor's paste-as-blocks helper; same parser as `/import/markdown`, 5 MB cap) |
 | POST | `/import/pdf-annotations` | import annotations embedded in the PDF (idempotent; optional `strip`) |
 | POST | `/import/zotero` | Zotero library import: zip of a "Zotero RDF" export (multipart `file`; `strip`, optional `folder` prefix). Items→pages+metadata, collections→folders, tags→labels, notes→blocks; embedded annotations via the same importer. Idempotent by file hash / `zotero_key` |
-| GET | `/pages/{id}/export` | page export (`?mode=readable|notes-pdf|logseq-graph|zotero-rdf|gamma` + `highlights=&notes=&pdf=`); `notes-pdf` = the notes typeset as their own PDF (works without a paper); `gamma` = scoped backup for `/import-data?mode=merge` |
+| GET | `/pages/{id}/export` | page export (`?mode=readable|obsidian|notes-pdf|logseq-graph|zotero-rdf|gamma` + `highlights=&notes=&pdf=`); `obsidian` = a vault zip (`<folder>/<Title>.md`, wikilinks, `attachments/`, `.obsidian/app.json`); `notes-pdf` = the notes typeset as their own PDF (works without a paper); `gamma` = scoped backup for `/import-data?mode=merge` |
 | GET | `/pages/{id}/export-pdf` | the page's own PDF with annotations written back (`?highlights=&notes=`) |
-| GET | `/folders/export` | whole-folder export, same modes/flags (`?name=` + `mode=`); subfolders become Zotero collections, `notes-pdf` one PDF for the whole folder |
+| GET | `/folders/export` | whole-folder export, same modes/flags (`?name=` + `mode=`); subfolders become Zotero collections or vault directories, `notes-pdf` one PDF for the whole folder |
 | GET | `/folders/export-progress` | per-page progress of a running folder export (`{active, total, done, title}`) |
 
 ### Prefs (`prefs.py`)

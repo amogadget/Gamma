@@ -1,18 +1,34 @@
 """Import a zip of Markdown notes as pages — Notion's "Markdown & CSV" export,
-Gamma's own Markdown export, or any zipped folder of ``.md`` files. One logic
-serves all three, because they only differ in naming conventions:
+an Obsidian vault, Gamma's own Markdown export, or any zipped folder of
+``.md`` files. One logic serves all of them, because they only differ in
+naming and link conventions:
 
 - every ``.md`` becomes a note page; its title is the front-matter ``title``,
   else the leading ``# H1``, else the filename (Notion's ``Title <32-hex id>``
-  suffix stripped);
+  suffix stripped). In an Obsidian vault the filename IS the title, so there
+  the H1 stays in the body unless it repeats the title;
 - directories become folder labels (Notion puts a page's subpages in a folder
   named after the page, so the page tree becomes the folder tree); a
   front-matter ``folder:`` (what Gamma's export writes, relative to the
   exported folder) wins over the directory; the caller's ``folder`` prefix
   goes in front of both;
-- relative links to other ``.md`` files in the zip become ``[[page]]``
-  mentions, links to bundled images / PDFs / files upload the file (content-
-  hash dedup, storage limits per file) and point at ``/api/uploads/…``;
+- links to other notes in the zip become ``[[page]]`` mentions — Markdown
+  links (relative paths, Notion's percent-encoded ones) and Obsidian
+  wikilinks alike, both resolved by path first and by basename anywhere in
+  the zip second, case-insensitively, the way Obsidian resolves them.
+  ``[[Note#Heading]]`` and ``[[Note#^id]]`` point at that heading / anchored
+  block, ``![[Note#^id]]`` becomes a synced block, whole-note and section
+  embeds degrade to mentions (a Gamma embed shows one block), and the
+  ``^id`` anchors themselves are removed from the text;
+- links and embeds of bundled images / PDFs / files upload the file
+  (content-hash dedup, storage limits per file) and point at
+  ``/api/uploads/…``; an Obsidian image embed's ``|300`` size becomes the
+  ``![alt|300](url)`` form the editor renders;
+- Obsidian properties: ``tags`` become labels (``properties.category``),
+  ``aliases`` are kept in ``properties.aliases``; foldable callout markers
+  are dropped; ``%%comments%%`` are removed (vaults only — the ``.obsidian/``
+  folder marks one); ``.obsidian/``, ``.trash/`` and ``.canvas`` files are
+  skipped;
 - a Notion database (``Name <id>.csv`` — the ``_all`` variant when both exist,
   it carries every row) becomes a page holding the table, its row pages
   (``Name <id>/Row <id>.md``) land in a folder of the same name; Notion's
@@ -42,7 +58,7 @@ from fractional_indexing import generate_key_between, generate_n_keys_between
 from .blocks_store import last_child_position
 from .foldertags import clean_path, clean_segment
 from .logbuf import log
-from .markdown_import import MAX_MARKDOWN_BYTES, md_to_blocks, parse_frontmatter
+from .markdown_import import MAX_MARKDOWN_BYTES, fm_list, fm_text, md_to_blocks, parse_frontmatter
 from .storage import FILE_MEDIA_TYPES, IMAGE_MEDIA_TYPES, content_digest, is_pdf, store_file
 
 MAX_PAGES = 2000
@@ -55,12 +71,25 @@ _MD_EXTS = (".md", ".markdown")
 _NOTION_ID_RE = re.compile(r"\s+[0-9a-f]{32}$", re.I)
 _EXPORT_WRAPPER_RE = re.compile(r"^Export-[0-9a-f-]{8,}$", re.I)
 _H1_RE = re.compile(r"^#\s+(.+?)\s*#*\s*$")
+_HEADING_TEXT_RE = re.compile(r"^#{1,6}\s+(.+?)\s*#*\s*$")
 _BIBTEX_RE = re.compile(r"^```bibtex[ \t]*\n(.*?)\n```[ \t]*\n?", re.S)
 _ASIDE_RE = re.compile(r"<aside>\s*(.*?)\s*</aside>", re.S)
 # [label](target "title") / ![alt](target) — label may hold one level of []
 _LINK_RE = re.compile(r"(!?)\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*(<[^>]*>|[^)\s]+)((?:\s+\"[^\"]*\")?)\s*\)")
+# [[target#sub#sub|alias]] / ![[…]] — Obsidian's wikilink and embed; the
+# alias pipe may be escaped (``\|``) inside a table cell. The same shape
+# matches Gamma's own [[id]] refs, which simply resolve to nothing here.
+_WIKILINK_RE = re.compile(r"(!?)\[\[([^\[\]|#]*)((?:#[^\[\]|]*)*)(?:\\?\|([^\[\]]*))?\]\]")
 _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 _ASSET_EXTS = set(IMAGE_MEDIA_TYPES) | set(FILE_MEDIA_TYPES) | {".pdf"}
+# Obsidian block anchors: `` ^id`` at the end of a line, or ``^id`` alone on
+# a line after a list / quote / table / fence.
+_ANCHOR_END_RE = re.compile(r"[ \t]+\^([A-Za-z0-9-]+)[ \t]*$")
+_ANCHOR_LINE_RE = re.compile(r"^\^([A-Za-z0-9-]+)$")
+_IMAGE_SIZE_RE = re.compile(r"^\d+(?:x\d+)?$")
+_FENCE_LINE_RE = re.compile(r"^[ \t]*(```|~~~)")
+_COMMENT_RE = re.compile(r"%%.*?%%", re.S)
+_SKIP_DIRS = {".obsidian", ".trash"}
 
 
 # --- zip walking -------------------------------------------------------------
@@ -155,16 +184,28 @@ def _split_ext(path: str):
     return (leaf[:dot], leaf[dot:].lower()) if dot > 0 else (leaf, "")
 
 
+def _norm_heading(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
 # --- body preparation --------------------------------------------------------
 
-def _take_title(body: str, fm_title):
-    """Use (and strip) a leading ``# H1`` as the title when there is no front-
-    matter title or it repeats it — Notion and Gamma both write one."""
+def _take_title(body: str, fm_title, vault_stem=None):
+    """The title and the body without its title line. Outside a vault a
+    leading ``# H1`` is the title when there is no front-matter title or it
+    repeats it — Notion and Gamma both write one. In a vault the filename
+    (``vault_stem``) is the title unless the front matter says otherwise, and
+    the H1 is only stripped when it repeats that title."""
     lines = body.lstrip("\n").split("\n")
     m = _H1_RE.match(lines[0]) if lines else None
     if not m:
-        return fm_title, body
+        return fm_title or vault_stem, body
     h1 = m.group(1).strip()
+    if vault_stem is not None:
+        title = fm_title or vault_stem
+        if h1.casefold() != title.casefold():
+            return title, body
+        return title, "\n".join(lines[1:]).lstrip("\n")
     if fm_title and h1 != fm_title:
         return fm_title, body
     return h1, "\n".join(lines[1:]).lstrip("\n")
@@ -182,6 +223,34 @@ def _convert_asides(body: str) -> str:
         lines = [ln.rstrip() for ln in m.group(1).strip().split("\n")]
         return "\n".join([f"> [!info] {lines[0]}"] + [f"> {ln}" for ln in lines[1:]])
     return _ASIDE_RE.sub(repl, body)
+
+
+def _strip_comments(body: str) -> str:
+    """Remove Obsidian ``%%…%%`` comments (inline or block) outside fences."""
+    out, run, in_fence = [], [], False
+
+    def flush():
+        if run:
+            out.append(_COMMENT_RE.sub("", "\n".join(run)))
+            run.clear()
+
+    for line in body.split("\n"):
+        if _FENCE_LINE_RE.match(line):
+            flush()
+            out.append(line)
+            in_fence = not in_fence
+        elif in_fence:
+            out.append(line)
+        else:
+            run.append(line)
+    flush()
+    return "\n".join(out)
+
+
+def _wiki_source(value: str) -> str:
+    """A front-matter ``source: "[[paper.pdf]]"`` → ``paper.pdf``."""
+    m = re.match(r"^\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]$", value.strip())
+    return m.group(1).strip() if m else value.strip()
 
 
 def _csv_to_markdown(data: bytes) -> str:
@@ -205,11 +274,51 @@ def _csv_to_markdown(data: bytes) -> str:
     return "\n".join(out)
 
 
+# --- the block tree: ids, anchors, headings ----------------------------------
+
+def _prepare_tree(nodes, anchors, headings):
+    """Give every node an id, take Obsidian ``^id`` anchors out of the text
+    (``anchors``: marker → block id; an anchor on its own line belongs to the
+    block before it) and index heading texts (``headings``: normalized text →
+    block id, first wins) so ``[[Note#…]]`` links can target blocks."""
+    kept = []
+    for node in nodes:
+        content = node.get("content", "")
+        alone = _ANCHOR_LINE_RE.match(content.strip())
+        if alone and kept and not node.get("children"):
+            anchors.setdefault(alone.group(1).lower(), kept[-1]["id"])
+            continue
+        node["id"] = secrets.token_urlsafe(9)
+        lines = content.split("\n")
+        if len(lines) > 1 and _ANCHOR_LINE_RE.match(lines[-1].strip()):
+            anchors.setdefault(lines[-1].strip()[1:].lower(), node["id"])
+            lines.pop()
+        for idx in {len(lines) - 1, 0}:
+            m = _ANCHOR_END_RE.search(lines[idx])
+            if m:
+                anchors.setdefault(m.group(1).lower(), node["id"])
+                lines[idx] = lines[idx][:m.start()]
+        node["content"] = "\n".join(lines).strip("\n")
+        hm = _HEADING_TEXT_RE.match(node["content"].split("\n")[0])
+        if hm:
+            headings.setdefault(_norm_heading(hm.group(1)), node["id"])
+        node["children"] = _prepare_tree(node.get("children") or [], anchors, headings)
+        kept.append(node)
+    return kept
+
+
+def _walk(nodes):
+    for node in nodes:
+        yield node
+        yield from _walk(node.get("children") or [])
+
+
 # --- storing -----------------------------------------------------------------
 
 def insert_note_page(conn, page_id, title, props, tree, now) -> int:
     """Insert a root page (last on root) plus its ``{content, children}``
-    tree; returns the number of note blocks written."""
+    tree (a node's own ``id`` is honoured); returns the number of note blocks
+    written."""
     pos = generate_key_between(last_child_position(conn, "root"), None)
     conn.execute(
         "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
@@ -224,7 +333,7 @@ def insert_note_page(conn, page_id, title, props, tree, now) -> int:
             continue
         positions = generate_n_keys_between(None, None, n=len(nodes))
         for node, child_pos in zip(nodes, positions):
-            child_id = secrets.token_urlsafe(9)
+            child_id = node.get("id") or secrets.token_urlsafe(9)
             conn.execute(
                 "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
                 "VALUES (?,?,?,?,?,?,?)",
@@ -237,7 +346,8 @@ def insert_note_page(conn, page_id, title, props, tree, now) -> int:
 
 
 class _Plan:
-    __slots__ = ("entry", "page_id", "title", "folder", "body", "props", "existing")
+    __slots__ = ("entry", "page_id", "title", "folder", "body", "props", "existing",
+                 "tree", "anchors", "headings")
 
     def __init__(self, entry):
         self.entry = entry
@@ -247,6 +357,9 @@ class _Plan:
         self.body = ""
         self.props = {}
         self.existing = False
+        self.tree = []
+        self.anchors = {}
+        self.headings = {}
 
 
 def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
@@ -258,12 +371,21 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
     _walk_zip(zf, "", entries, {"bytes": 0}, opened)
     _strip_wrappers(entries)
     report = {"pages_created": 0, "pages_skipped": 0, "blocks_imported": 0,
-              "assets_stored": 0, "links_resolved": 0, "notion": False,
+              "assets_stored": 0, "links_resolved": 0, "notion": False, "obsidian": False,
               "pages": [], "warnings": []}
 
     def warn(title, reason):
         if len(report["warnings"]) < 200:
             report["warnings"].append({"title": title, "reason": reason})
+
+    # An Obsidian vault carries its settings folder; the folder itself (and
+    # the vault's trash) holds no notes.
+    vault = any(".obsidian" in e.path.split("/") for e in entries)
+    report["obsidian"] = vault
+    entries = [e for e in entries if not (set(e.path.split("/")[:-1]) & _SKIP_DIRS)]
+    for e in entries:
+        if _split_ext(e.path)[1] == ".canvas":
+            warn(e.path, "Obsidian canvas files are not imported")
 
     notes = sorted((e for e in entries if _split_ext(e.path)[1] in _MD_EXTS),
                    key=lambda e: (e.path.count("/"), e.path.lower()))
@@ -300,7 +422,7 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
         if props.get("notion_id"):
             by_notion.setdefault(props["notion_id"], pid)
 
-    plans, targets = [], {}
+    plans, targets, plan_of = [], {}, {}
     for e in notes + list(databases.values()):
         if len(plans) >= MAX_PAGES:
             warn(e.path, f"more than {MAX_PAGES} notes — the rest were skipped")
@@ -328,32 +450,90 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
                 warn(e.path, "not UTF-8")
                 continue
             fm, body = parse_frontmatter(text)
-            title, body = _take_title(body, fm.get("title") or None)
+            title, body = _take_title(body, fm_text(fm, "title") or None,
+                                      vault_stem=_clean_stem(stem) if vault else None)
             plan.title = (title or _clean_stem(stem)).strip()[:500] or "Untitled note"
             if fm.get("folder") is not None:
-                plan.folder = clean_path(fm["folder"])
+                plan.folder = clean_path(fm_text(fm, "folder"))
             bibtex, body = _take_bibtex(body)
             if bibtex:
                 plan.props["bibtex"] = bibtex
             if any(fm.get(k) for k in ("doi", "authors", "year")):
                 plan.props["meta"] = {
-                    "title": plan.title, "doi": fm.get("doi", ""),
-                    "authors": [a.strip() for a in fm.get("authors", "").split(",") if a.strip()],
-                    "year": fm.get("year", ""), "source": "manual",
+                    "title": plan.title, "doi": fm_text(fm, "doi"),
+                    "authors": fm_list(fm, "authors"),
+                    "year": fm_text(fm, "year"), "source": "manual",
                 }
-            if fm.get("source"):
-                plan.props["_source"] = fm["source"]
+            if fm_text(fm, "source"):
+                plan.props["_source"] = _wiki_source(fm_text(fm, "source"))
+            # Obsidian's built-in properties (and their pre-1.9 singular
+            # names): tags are labels, aliases ride along.
+            tags = [t.lstrip("#").replace(",", " ").strip()
+                    for t in fm_list(fm, "tags") + fm_list(fm, "tag")]
+            tags = [t for t in tags if t]
+            if tags:
+                plan.props["category"] = ", ".join(dict.fromkeys(tags))
+            aliases = [a for a in fm_list(fm, "aliases") + fm_list(fm, "alias") if a]
+            if aliases:
+                plan.props["aliases"] = list(dict.fromkeys(aliases))
+            if vault:
+                body = _strip_comments(body)
             plan.body = _convert_asides(body)
         plan.folder = clean_path("/".join(p for p in (prefix, plan.folder) if p))
         existing = by_digest.get(digest) or (by_notion.get(notion_id) if notion_id else None)
         if existing:
             plan.existing = True
             plan.page_id = existing
+        elif plan.body.strip():
+            plan.tree = _prepare_tree(md_to_blocks(plan.body), plan.anchors, plan.headings)
         plans.append(plan)
         targets[e.path] = plan.page_id
+        plan_of[plan.page_id] = plan
     for path, db_entry in csv_alias.items():
         if db_entry.path in targets:
             targets[path] = targets[db_entry.path]
+
+    # Basename lookup, the way Obsidian resolves a bare [[Note]] or
+    # ![[image.png]] wherever the file sits: lower-cased stem (notes) or
+    # filename (assets) → zip paths.
+    notes_by_stem, assets_by_name, by_lower = {}, {}, {}
+    for path in targets:
+        by_lower[path.lower()] = path
+        notes_by_stem.setdefault(_split_ext(path)[0].lower(), []).append(path)
+    for path in assets:
+        by_lower[path.lower()] = path
+        assets_by_name.setdefault(posixpath.basename(path).lower(), []).append(path)
+
+    def nearest(base_dir, paths):
+        same = [p for p in paths if posixpath.dirname(p) == base_dir]
+        return min(same or paths, key=lambda p: (p.count("/"), p.lower()))
+
+    def resolve(base_dir, href):
+        """A link target → the zip path it names, or None. Relative to the
+        note first (Markdown links), then by exact vault path, then by
+        basename anywhere (wikilinks, "shortest path" Markdown links)."""
+        if not href or _SCHEME_RE.match(href) or href.startswith(("#", "/")):
+            return None
+        target = re.split(r"[#?]", href, maxsplit=1)[0].strip()
+        if not target:
+            return None
+        cands = list(dict.fromkeys((unquote(target), target)))
+        for cand in cands:
+            cand = unicodedata.normalize("NFC", cand)
+            for full in (posixpath.normpath(posixpath.join(base_dir, cand)) if base_dir else cand,
+                         posixpath.normpath(cand)):
+                for variant in (full, full + ".md"):
+                    hit = by_lower.get(variant.lower())
+                    if hit:
+                        return hit
+        for cand in cands:
+            leaf = unicodedata.normalize("NFC", posixpath.basename(cand)).lower()
+            stem, ext = _split_ext(leaf)
+            paths = (notes_by_stem.get(stem) if ext in _MD_EXTS or not ext else None) \
+                or notes_by_stem.get(leaf) or assets_by_name.get(leaf)
+            if paths:
+                return nearest(base_dir, paths)
+        return None
 
     stored = {}
 
@@ -378,32 +558,63 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
         stored[path] = url
         return url
 
-    def resolve(base_dir, href):
-        """A relative link target → the zip path it names, or None."""
-        if not href or _SCHEME_RE.match(href) or href.startswith(("#", "/")):
-            return None
-        target = re.split(r"[#?]", href, maxsplit=1)[0]
-        for cand in dict.fromkeys((unquote(target), target)):
-            full = posixpath.normpath(posixpath.join(base_dir, cand) if base_dir else cand)
-            full = unicodedata.normalize("NFC", full)
-            if full in targets or full in assets:
-                return full
-        return None
+    def block_target(page_id, sub):
+        """``#Heading`` / ``#^id`` inside a link to ``page_id`` → the block it
+        names, else the page itself."""
+        plan = plan_of.get(page_id)
+        last = sub.split("#")[-1].strip() if sub else ""
+        if plan is None or not last:
+            return page_id
+        if last.startswith("^"):
+            return plan.anchors.get(last[1:].lower(), page_id)
+        return plan.headings.get(_norm_heading(last), page_id)
 
-    def rewrite_links(body, base_dir):
-        def repl(m):
+    def rewrite_links(body, base_dir, page_id):
+        def md_repl(m):
             bang, label, href, title = m.groups()
-            path = resolve(base_dir, href.strip("<>").strip())
+            href = href.strip("<>").strip()
+            path = resolve(base_dir, href)
             if path is None:
                 return m.group(0)
             if path in targets:
                 report["links_resolved"] += 1
-                return f"[[{targets[path]}]]"
+                sub = unquote(href.partition("#")[2])
+                return f"[[{block_target(targets[path], '#' + sub if sub else '')}]]"
             url = store_asset(path)
             if not url:
                 return m.group(0)
             return f"{bang}[{label}]({url}{title})"
-        return _LINK_RE.sub(repl, body)
+
+        def wiki_repl(m):
+            bang, target, sub, alias = m.groups()
+            target = target.strip()
+            if target:
+                path = resolve(base_dir, target)
+            else:
+                path = None if not sub else "#self"      # [[#Heading]] — this note
+            if path is None:
+                return m.group(0)
+            if path == "#self" or path in targets:
+                report["links_resolved"] += 1
+                pid = page_id if path == "#self" else targets[path]
+                bid = block_target(pid, sub)
+                # An embed of one anchored block is a synced block; a whole
+                # note or a section has no single block to sync (a Gamma
+                # embed shows one block), so those are mentions.
+                anchored = sub.split("#")[-1].startswith("^") and bid != pid
+                return f"![[{bid}]]" if bang and anchored else f"[[{bid}]]"
+            url = store_asset(path)
+            if not url:
+                return m.group(0)
+            leaf = posixpath.basename(path)
+            alias = (alias or "").strip()
+            if bang and _split_ext(path)[1] in IMAGE_MEDIA_TYPES:
+                size = alias if _IMAGE_SIZE_RE.match(alias) else ""
+                alt = "" if size else alias
+                return f"![{alt}|{size}]({url})" if size else f"![{alt}]({url})"
+            return f"[{alias or leaf}]({url})"
+
+        return _LINK_RE.sub(md_repl, _WIKILINK_RE.sub(wiki_repl, body))
 
     for plan in plans:
         if plan.existing:
@@ -422,8 +633,10 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
                 plan.props["source_url"] = source
         if plan.folder:
             plan.props["folder"] = plan.folder
-        tree = md_to_blocks(rewrite_links(plan.body, base_dir)) if plan.body.strip() else []
-        report["blocks_imported"] += insert_note_page(conn, plan.page_id, plan.title, plan.props, tree, now)
+        for node in _walk(plan.tree):
+            node["content"] = rewrite_links(node["content"], base_dir, plan.page_id)
+        report["blocks_imported"] += insert_note_page(conn, plan.page_id, plan.title, plan.props,
+                                                      plan.tree, now)
         report["pages_created"] += 1
         if len(report["pages"]) < 200:
             report["pages"].append({"id": plan.page_id, "title": plan.title, "folder": plan.folder})
@@ -432,5 +645,5 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
         inner.close()
     log.info(f"[markdown-zip] {report['pages_created']} pages, {report['pages_skipped']} skipped, "
              f"{report['assets_stored']} files, {report['links_resolved']} links"
-             f"{' (Notion)' if report['notion'] else ''}")
+             f"{' (Notion)' if report['notion'] else ''}{' (Obsidian vault)' if vault else ''}")
     return report

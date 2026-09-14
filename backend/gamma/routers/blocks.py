@@ -172,48 +172,6 @@ async def block_search(request: Request, q: str = "", ids: str = "", limit: int 
     return {"blocks": results}
 
 
-class BlockReplaceRequest(BaseModel):
-    query: str
-    replacement: str = ""
-    case: bool = False
-    whole: bool = False
-    regex: bool = False
-
-
-@router.post("/blocks-replace")
-async def blocks_replace(payload: BlockReplaceRequest, request: Request):
-    """Search-and-replace across all block contents (VSCode-style options)."""
-    if not payload.query:
-        raise HTTPException(status_code=400, detail="empty query")
-    pattern = fuzzy_pattern(payload.query, payload.case, payload.whole, payload.regex)
-    if pattern is None:
-        raise HTTPException(status_code=400, detail="invalid regex")
-    replacement = payload.replacement if payload.regex else payload.replacement.replace("\\", "\\\\")
-    now = page_now()
-    changed = 0
-    ws = require_ws(request, write=True)
-    with connect_pages_db(ws) as conn:
-        rows = conn.execute(
-            "SELECT id, content FROM unified_blocks WHERE content != '' AND id != 'root'"
-        ).fetchall()
-        for block_id, content in rows:
-            try:
-                new_content = pattern.sub(replacement, content)
-            except re.error:
-                raise HTTPException(status_code=400, detail="invalid replacement pattern")
-            if new_content != content:
-                conn.execute(
-                    "UPDATE unified_blocks SET content = ?, updated_at = ? WHERE id = ?",
-                    (new_content, now, block_id),
-                )
-                changed += 1
-        conn.commit()
-    if changed:
-        block_index.mark_all_dirty(ws)
-        collab.publish_all(ws, {"t": "reload"})
-    return {"ok": True, "changed": changed}
-
-
 # Route order matters: static-prefix routes must come before /{block_id}
 
 # Lookup / create BY ATTACHMENT: the page whose PDF is `doc_id`. Text-only

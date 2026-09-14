@@ -20,7 +20,7 @@ from ..blocks_store import last_child_position
 from ..foldertags import clean_path, parse_tags
 from ..logbuf import log
 from ..ops import note_reload
-from ..markdown_import import MAX_MARKDOWN_BYTES, md_to_blocks, parse_frontmatter
+from ..markdown_import import MAX_MARKDOWN_BYTES, fm_text, md_to_blocks, parse_frontmatter
 from ..markdown_zip_import import import_markdown_zip, insert_note_page
 from ..storage import content_digest, display_filename, is_pdf, store_pdf
 from ..logseq_import import (
@@ -168,11 +168,11 @@ async def import_markdown(request: Request, file: UploadFile = File(...),
     original = display_filename(file.filename, "note.md")
     fields, body = parse_frontmatter(text)
     fallback = re.sub(r"\.(?:md|markdown)$", "", original, flags=re.I).strip() or "Untitled note"
-    title = (fields.get("title") or fallback).strip()[:500]
+    title = (fm_text(fields, "title") or fallback).strip()[:500]
     tree = md_to_blocks(body)
     # The upload's folder, then a front-matter `folder:` below it (what
     # Gamma's own Markdown export writes) — same rule as the zip import.
-    clean_folder = clean_path("/".join(p for p in (folder, fields.get("folder", "")) if p))
+    clean_folder = clean_path("/".join(p for p in (folder, fm_text(fields, "folder")) if p))
     props = {"original_filename": original, "markdown_import": content_digest(raw)}
     if clean_folder:
         props["folder"] = clean_folder
@@ -192,8 +192,9 @@ async def import_markdown(request: Request, file: UploadFile = File(...),
 def import_markdown_zip_endpoint(request: Request, file: UploadFile = File(...),
                                  folder: str = Form("")):
     """A zip of Markdown notes → one page per .md (see markdown_zip_import):
-    Notion's Markdown & CSV export, a Gamma Markdown export, or any zipped
-    folder of notes. ``folder`` prefixes every page's folder label."""
+    an Obsidian vault, Notion's Markdown & CSV export, a Gamma Markdown or
+    vault export, or any zipped folder of notes. ``folder`` prefixes every
+    page's folder label."""
     ws = require_ws(request, write=True)
     try:
         zf = zipfile.ZipFile(file.file)
