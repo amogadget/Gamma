@@ -3,9 +3,9 @@
 // server-side FTS index over every paper's PDF. Extracted from App.jsx.
 //
 // Matching is separator-tolerant everywhere ("3000" finds "3,000-qubit"):
-// buildSearchRegex mirrors the backend's gamma/textnorm.py rules, and the
-// PDF viewer searches through the same normalized view of the page text
-// (see pdfViewer.jsx) — keep the three in sync.
+// textnorm.js mirrors the backend's gamma/textnorm.py rules (the cases in
+// tests/shared/textnorm.json pin both), and the PDF viewer searches through
+// the same normalized view of the page text (normalizeChars).
 //
 // Results are grouped by how directly they answer the query: matching paper
 // titles first (relevance-ranked via scoreTitle — the filter-chip listing
@@ -21,50 +21,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson } from "./utils";
 import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, FolderIcon, LabelIcon, SearchIcon } from "./icons";
 
-const DASH_CLASS = "\\-\\u2010-\\u2015";
-const DIGIT_SEP_CLASS = ",\\u00A0\\u202F\\u2009";
+import { DASH_CLASS, buildSearchRegex, normalizeQuery } from "./textnorm";
 
-// Query text → canonical searchable form (mirror of textnorm.normalize_text
-// minus the line-break rule, which can't occur in a query box).
-export function normalizeQuery(s) {
-  return (s || "")
-    .normalize("NFKC")
-    .replace(/­/g, "")
-    .replace(new RegExp(`(\\d)[${DIGIT_SEP_CLASS}](?=\\d)`, "g"), "$1")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Query → RegExp (null = empty/invalid). Non-regex queries are fuzzy: digits
-// tolerate grouping separators, spaces and hyphens are interchangeable.
-export function buildSearchRegex(q, { caseSensitive = false, wholeWord = false, regex = false } = {}) {
-  let body;
-  if (regex) {
-    body = q;
-  } else {
-    q = normalizeQuery(q);
-    const sep = new RegExp(`[\\s${DASH_CLASS}]`);
-    const parts = [];
-    for (let i = 0; i < q.length; i++) {
-      const c = q[i];
-      if (sep.test(c)) {
-        parts.push(`[\\s${DASH_CLASS}]+`);
-        while (i + 1 < q.length && sep.test(q[i + 1])) i++;
-      } else {
-        parts.push(c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-        if (/\d/.test(c) && /\d/.test(q[i + 1] || "")) parts.push(`[${DIGIT_SEP_CLASS}\\s]?`);
-      }
-    }
-    if (!parts.length) return null;
-    body = parts.join("");
-  }
-  if (wholeWord) body = `\\b(?:${body})\\b`;
-  try {
-    return new RegExp(body, caseSensitive ? "g" : "gi");
-  } catch {
-    return null;
-  }
-}
+export { buildSearchRegex, normalizeQuery };
 
 // Damerau-Levenshtein distance (adjacent transpositions count as one edit),
 // capped: returns max+1 as soon as the budget is provably blown. Both inputs

@@ -62,7 +62,8 @@ The **Gamma Connector** extension ([extension/](./extension/)) saves the paper y
 - **Share a page** — send a link to an annotated paper; invite people with view or edit rights, or open it to anyone with the link.
 - **Edit together** — changes and cursors appear live. Edits to different blocks can coexist; simultaneous typing in the same block uses the last content write accepted by the server.
 - **Tabs follow you** — open tabs and reading positions sync separately for each account and workspace. Chats in a shared workspace are visible to its members.
-- **Import** — Logseq PDF exports and Zotero libraries come in as pages with their annotations; Markdown folders and Notion exports come in as notes.
+- **Import** — Logseq PDF exports and Zotero libraries come in as pages with their annotations; Markdown folders, Obsidian vaults (wikilinks, block embeds, tags) and Notion exports come in as notes.
+- **Export a page or folder** — as annotated PDF, Markdown, an Obsidian vault (wikilinks, `^id` anchors, highlights as quote callouts linking the PDF page), a Logseq graph, a Zotero library, or a Gamma zip another Gamma can merge.
 - **Export and back up** — export a workspace, or all your personal workspaces, from Settings → Workspaces. Restore or merge a workspace export there; keep server-side workspace snapshots in Settings → Backups. Account credentials and private AI keys are not included.
 
 ---

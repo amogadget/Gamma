@@ -45,8 +45,8 @@ function propsEqual(a, b) {
 }
 
 // null: nothing undoable changed; true: structural/property edit;
-// a block id: only that block's content changed.
-function classify(prev, next) {
+// a block id: only that block's content changed. Exported for its tests.
+export function classifyTransition(prev, next) {
   if (prev === next) return null;
   if (prev.length !== next.length) return true;
   let only = null;
@@ -56,7 +56,7 @@ function classify(prev, next) {
     if (a.id !== b.id) return true;
     if (a.content !== b.content) only = only === null ? a.id : true;
     if (!propsEqual(a.properties, b.properties)) return true;
-    const sub = classify(a.children || [], b.children || []);
+    const sub = classifyTransition(a.children || [], b.children || []);
     if (sub === true) return true;
     if (sub) only = only === null ? sub : true;
     if (only === true) return true;
@@ -134,7 +134,7 @@ export function useBlockHistory(blocks, setBlocks, opts) {
       if (loadRef.current || prev === blocks) return;
       if (intent === "undo") { s.redo.push({ tree: prev, caret: displaced }); return; }
       if (intent === "redo") { s.undo.push({ tree: prev, caret: displaced }); return; }
-      const kind = classify(prev, blocks);
+      const kind = classifyTransition(prev, blocks);
       if (kind === null) {
         // The editor of the block being merged into closed: the run ends.
         if (s.lastEdit?.editing && editingId(blocks) !== s.lastEdit.id) s.lastEdit = null;

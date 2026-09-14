@@ -1,9 +1,11 @@
 # Import and export
 
 The ⋮ menu's Import…/Export… dialogs and every pipeline behind them: embedded
-PDF annotations, Logseq graphs, Zotero libraries, Markdown export, the notes
+PDF annotations, Logseq graphs, Zotero libraries, Markdown notes (Obsidian
+vaults, Notion exports), Markdown and Obsidian vault export, the notes
 typeset as their own PDF, and the annotated-PDF writer. Code: `gamma/routers/imports.py`, `gamma/zotero_import.py`,
-`gamma/zotero_export.py`, `gamma/logseq_import.py`, `gamma/markdown_export.py`, `gamma/pdf_export.py`,
+`gamma/zotero_export.py`, `gamma/logseq_import.py`, `gamma/markdown_import.py`,
+`gamma/markdown_zip_import.py`, `gamma/markdown_export.py`, `gamma/obsidian_export.py`, `gamma/pdf_export.py`,
 `gamma/pdf_notes.py`, `gamma/pdf_document.py`, `gamma/pdf_typeset.py`,
 `gamma/note_markup.py`, `gamma/vector_text.py`, `gamma/pdf_glyphs.py`,
 `gamma/pdf_image.py`; frontend dialogs in
@@ -59,41 +61,63 @@ indented deeper after a blank line becomes a child block, which is how Notion
 exports a toggle's content. In mixed folder uploads, Markdown note pages and PDF pages
 receive the same subfolder labels; unsupported files are skipped.
 
-## Markdown zips: Notion exports, Gamma exports, zipped notes
+## Markdown zips: Obsidian vaults, Notion exports, Gamma exports, zipped notes
 
 `POST /api/import/markdown-zip` (Import dialog → "Markdown notes", pick a
 `.zip`; `gamma/markdown_zip_import.py`) turns a zip of `.md` files into one
-page per file. One logic covers Notion's Export → "Markdown & CSV" (with
-subpages), Gamma's own Markdown export and any zipped folder of notes,
-because the three only differ in naming conventions:
+page per file. One logic covers a zipped Obsidian vault, Notion's Export →
+"Markdown & CSV" (with subpages), Gamma's own Markdown export and any zipped
+folder of notes, because they only differ in naming and link conventions
+(the survey behind the Obsidian mapping: [docs/research/obsidian.md](../research/obsidian.md)):
 
 - **Title**: front-matter `title`, else the leading `# H1` (stripped from
   the body — Notion and Gamma both write one), else the filename with
-  Notion's `Title <32-hex id>` suffix removed.
+  Notion's `Title <32-hex id>` suffix removed. In an Obsidian vault
+  (recognised by its `.obsidian/` folder) the filename is the title, as in
+  Obsidian itself, and the H1 stays in the body unless it repeats the title.
 - **Folders**: directories become folder labels, ids stripped. Notion puts
   a page's subpages (and its images) in a folder named after the page, so
   the Notion page tree becomes the folder tree. A front-matter `folder:`
   wins over the directory; the dialog's target folder (the open library
   folder) prefixes everything. One common root directory (a zipped folder)
   and Notion's `Export-<uuid>/` wrappers are dropped; Notion's `Part-N.zip`
-  members (big exports) are read in place.
-- **Links**: a relative link to another `.md` in the zip becomes a
-  `[[page]]` mention of the page it produced (Notion's percent-encoded
+  members (big exports) are read in place; `.obsidian/`, `.trash/` and
+  `.canvas` files are skipped (a canvas is a warning).
+- **Links**: a link to another note in the zip becomes a `[[page]]` mention
+  of the page it produced — Markdown links (Notion's percent-encoded
   `[Sub](Parent%20<id>/Sub%20<id>.md)`, Gamma's `[label](Page-id.md)` and
-  `*(from [title](file.md))*` alike); a link or image pointing at a bundled
-  file uploads it (`store_file`, content-hash dedup, storage limits per file
-  — an over-limit file is a warning and the link stays as typed) and points
-  at `/api/uploads/…`. Other links stay as typed.
+  `*(from [title](file.md))*`) and Obsidian wikilinks (`[[Note]]`,
+  `[[Note|alias]]`, `[[folder/Note]]`) alike. A target is resolved relative
+  to the note, then as an exact vault path, then by basename anywhere in the
+  zip (nearest directory wins), case-insensitively — Obsidian's own rule.
+  `[[Note#Heading]]` and `[[Note#^id]]` point at that heading block or
+  anchored block (`^id` markers are indexed per note and removed from the
+  text; an anchor on its own line belongs to the block before it),
+  `![[Note#^id]]` becomes a Gamma synced block `![[id]]`, while `![[Note]]`
+  and `![[Note#Heading]]` degrade to mentions (a Gamma embed shows one
+  block). A link or image pointing at a bundled file uploads it
+  (`store_file`, content-hash dedup, storage limits per file — an over-limit
+  file is a warning and the link stays as typed) and points at
+  `/api/uploads/…`; `![[img.png|300]]` / `|300x200` becomes the editor's
+  `![|300](url)` size form, other pipe text the alt. Links that resolve to
+  nothing stay as typed (so a Gamma `[[id]]` is never touched).
+- **Obsidian specifics**: front-matter `tags` (list, flow list or comma
+  string; `tag` too) become labels in `properties.category`, `aliases`
+  are kept in `properties.aliases`; `> [!type]+`/`-` fold markers are
+  dropped (in `md_to_blocks`, so pasted text loses them too);
+  `%%comments%%` are removed in a vault (inline or block, never inside
+  fences). Inline `#tags`, footnotes and task states pass through as text.
 - **Notion specifics**: a database `Name <id>.csv` becomes a page holding
   the table (`_all.csv` preferred when both exist — it has every row; capped
   at 500 rows × 40 columns) and its row pages `Name <id>/Row <id>.md` land in
   the folder of that name; `<aside>` callouts become `> [!info]` callouts;
   the row pages' `Property: value` lines stay as text.
 - **Gamma specifics**: the front matter's `source:` restores the PDF when it
-  is bundled (`assets/<sha>.pdf` → `doc_id`/`source_url`, the page becomes a
-  paper again) or the remote URL when it isn't; `doi`/`authors`/`year` →
-  `properties.meta` (`source: manual`), the ```` ```bibtex ```` block →
-  `properties.bibtex`. Highlights come back as their quote blocks, not as
+  is bundled (`assets/<sha>.pdf`, or the vault export's quoted
+  `"[[Paper.pdf]]"` → `doc_id`/`source_url`, the page becomes a paper
+  again) or the remote URL when it isn't; `doi`/`authors`/`year` →
+  `properties.meta` (`source: manual`; `authors` as a YAML list or a comma
+  string), the ```` ```bibtex ```` block → `properties.bibtex`. Highlights come back as their quote blocks, not as
   positioned highlights — the Gamma format (`?mode=gamma`) is the lossless
   route; Markdown is for notes and for other apps.
 - **Idempotent**: a `.md` already imported (same bytes — `markdown_import`
@@ -219,8 +243,8 @@ status line and the transfer row.
 ## The Export dialog
 
 The ⋮ menu's single "Export…" entry → `ExportDialog` in `widgets.jsx`: one
-Notion-style dialog — format (PDF / Notes as PDF / Markdown / Logseq graph /
-Zotero RDF / Gamma) plus Highlights, Notes and Bundle-the-files switches (per-format hint
+Notion-style dialog — format (PDF / Notes as PDF / Markdown / Obsidian vault /
+Logseq graph / Zotero RDF / Gamma) plus Highlights, Notes and Bundle-the-files switches (per-format hint
 text lives in the `EXPORT_SWITCH_TEXT` table), remembered in `localStorage`
 (`gamma-export-opts`). The switches are query flags on two endpoints:
 `/pages/{id}/export?mode=readable&highlights=&notes=&pdf=` (Markdown,
@@ -250,8 +274,64 @@ exists behind the proxy).
 The dialog can also target a whole folder: opened from home with a folder open
 (the ⋮ Export… entry) or from a folder card's context menu (`exportFolder`
 state in App.jsx), it drops the single-PDF format and sends the same
-format/switch flags to `/folders/export?name=` (readable, `logseq-graph` or
-`zotero-rdf`).
+format/switch flags to `/folders/export?name=` (readable, `obsidian`,
+`logseq-graph` or `zotero-rdf`).
+
+## Obsidian vault export
+
+`?mode=obsidian` on both export endpoints (`_ObsidianBuilder` →
+`gamma/obsidian_export.py`) writes a zip that IS a vault: unzip it into an
+existing vault or open the folder as one. The readable Markdown export is
+for reading anywhere; this one speaks Obsidian's dialect so links, embeds and
+attachments work inside the app (what Obsidian expects and why:
+[docs/research/obsidian.md](../research/obsidian.md)). Always a zip, even for
+one page.
+
+- **Files**: `<dir>/<Title>.md`, the directory tree = the page's first folder
+  label relative to the exported folder (a single page keeps its whole
+  label). `vault_name` strips what Obsidian refuses in a name
+  (`* " \ / < > : | ? # ^ [ ]`, leading dots); same-named pages in one
+  directory get ` 2`, ` 3` suffixes. No `# Title` H1 — the filename is the
+  title, and a `title:` property is written only when the name had to be
+  sanitised. `.obsidian/app.json` (attachment folder = `attachments/`) marks
+  the zip as a vault, which is also how the importer recognises it.
+- **Front matter**: `tags` (the `category` labels), `aliases`, `source`
+  (the bundled PDF as a quoted wikilink `"[[Paper.pdf]]"`, else the URL),
+  `doi`, `authors` (list), `year`; then the BibTeX fence as in the readable
+  export.
+- **Outline → document** (the Logseq importer's flattening): a top-level
+  heading block is a heading and its children follow as document content;
+  a top-level leaf block is a paragraph; a top-level block with children is
+  a list item with its subtree as a nested list (2-space indents,
+  multi-line content indented under the bullet). Re-importing therefore
+  nests everything after a heading under it — the one lossy step; the Gamma
+  format stays the lossless route.
+- **Links**: `[[id]]` / `![[id]]` whose target is in the export become
+  `[[Title]]` for a page (`[[dir/Title]]` when two exported pages share a
+  name — Obsidian's rule), `[[Title#^id]]` / `![[Title#^id]]` for a block
+  (`[[#^id]]` on the same page), and the target block gets ` ^id` written:
+  on its bullet line in a list, at the end of a paragraph, on its own line
+  after a fence / table / quote / callout. `anchor_marker` makes the id
+  Obsidian-legal (letters, digits, dashes). Only linked blocks carry
+  anchors; `begin` scans the workspace's link-bearing blocks up front so a
+  target renders with its anchor even when the linking page comes later.
+  Targets outside the export degrade like the readable export (text /
+  materialised embed). PDF link regions become `[[Title|label]]` or
+  `[label](url)`.
+- **Highlights**: a `> [!quote]` callout whose title links the bundled PDF's
+  page — `[[Paper.pdf#page=3|p. 3]]` (`p. 3` without the bundle) — then the
+  highlight's own note as a paragraph and its children as a list; inside a
+  list, `- > quote` with the page link on the next line. The Highlights /
+  Notes switches mean what they do in the Markdown export.
+- **Attachments**: images as `![alt|300](attachments/<sha>.<ext>)` (the
+  form Gamma stores, which Obsidian reads too), the PDF as
+  `attachments/<Title>.pdf` (shared by pages of one document); the Bundle
+  switch off leaves server links instead.
+
+The vault importer above reads all of this back (titles from filenames,
+`^id` anchors and wikilinks into mentions and synced blocks, `tags` into
+labels, the quoted `source` into the paper) — `test_obsidian.py` has the
+round trip.
 
 ## Notes as a PDF document
 

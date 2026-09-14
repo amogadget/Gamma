@@ -3,8 +3,8 @@
 import io
 import zlib
 
-import pytest
 
+from conftest import require_math_renderer
 from gamma.note_markup import MATH, SUB, SUP, SYMBOLS, TEXT, latex_spans, parse_note
 from gamma.pdf_image import image_xobject
 from gamma.pdf_typeset import CID, font_of
@@ -150,7 +150,7 @@ def test_boxed_math_is_stroked_not_filled():
     boxed = math(r"\boxed{w = \frac{a}{b}}", 8)
     plain = math(r"w = \frac{a}{b}", 8)
     if boxed is None or plain is None:
-        pytest.skip("ziamath not installed")
+        require_math_renderer()  # fails with the cause, never a silent skip
     assert b"re\nS" in boxed[0].shapes, "the box outline must be stroked"
     assert b"re\nS" not in plain[0].shapes, "…and only where there is a box"
     assert b"re\nf" in plain[0].shapes, "the fraction bar stays a filled rect"

@@ -24,71 +24,103 @@ session caches are ignored because their account owner cannot be determined.
 
 ## The Settings dialog
 
-Thirteen panes in four rail groups (`NAV_GROUPS` in
-[frontend/src/settings.jsx](../../frontend/src/settings.jsx)):
+Five everyday destinations are defined by `PREFERENCE_NAV` in
+[settings.jsx](../../frontend/src/settings.jsx):
 
-- **Workspace** — Workspaces (every workspace I can open: my storage
-  meter, the Personal and Shared lists, each row with Open, Export, Import
-  and Manage — rename, members and roles, Make default, Leave, Delete —
-  plus New workspace and Export all —
-  [settingsWorkspace.jsx](../../frontend/src/settingsWorkspace.jsx)), Backups
-  (my workspaces' server-kept snapshots: take, download, restore, delete,
-  Back up all — [settingsBackups.jsx](../../frontend/src/settingsBackups.jsx));
-  both hidden for guests, General (theme incl. the Sepia/Gray eye-comfort modes and
-  flip page colors — both synced per account; the control size — a −/+
-  `Stepper` (70–160 %) that zooms every button and toggle, see [ui-design.md](ui-design.md); paper-fetching prefs),
-  Library (home-card thumbnails and folder/label chips, storage
-  usage, search index, per-paper metadata health table — status
-  filter incl. "Unverified AI" / "Needs attention", verified/text/index
-  coverage tiles, click a title to open the paper, select-all works on the
-  filtered view, and the batch fetch targets missing + unverified records)
-- **Editor** — Notes (Enter behavior, note badges), Search (auto-expand
-  defaults), PDF viewer (snap scrolling, embedded annotations, the
-  translated view's target language + model) — the viewer is one pane of
-  the editor group, not a group of its own (the app is block-centric,
-  see [block_centric.md](block_centric.md))
-- **AI** — Provider and models (credentials, automatic subscription usage,
-  provider model catalogs, metadata and dictation model choices, the login
-  connection check — `gamma-ai-login-check`, default the free credential
-  ping — in [settingsAi.jsx](../../frontend/src/settingsAi.jsx)),
-  Assistant (Tools: the single master switch; Tool
-  configuration: one `ToggleGroup` chip row of tool permissions per chat
-  kind (folder / PDF / notes; the chat header's ⚙ popover edits the same
-  map for its own kind), tool rounds, agent read window; context
-  budgets — the chat header's ⚙ popover edits the model, reasoning effort, the
-  single-paper context budget and the per-tool permissions in place; same
-  prefs),
-  Prompts (the four editable prompts, as an accordion)
-- **Account** — Users (admin account management / "You" for non-admins, in
-  [settingsUsers.jsx](../../frontend/src/settingsUsers.jsx)), Server (admins
-  only, everything about the server rather than one account: the storage
-  defaults, every workspace with a Manage dialog — access, quota, members
-  and ownership, kind conversion, join — and New shared workspace for any
-  owner, *Server backups* of the whole data directory, and the server log,
-  in [settingsServer.jsx](../../frontend/src/settingsServer.jsx) +
-  [settingsWorkspacesAdmin.jsx](../../frontend/src/settingsWorkspacesAdmin.jsx)),
-  Advanced (status bar, debug tracing, this browser's log)
+- **Appearance**: theme choices and dark PDF pages (account-synced), control
+  size and status bar (this browser).
+- **Reading & editing**: PDF scrolling, imported annotations, translation
+  shortcut and language, Enter behavior, highlight badges, search expansion.
+- **Library**: thumbnails, folder/label display, metadata lookup, open-access
+  fallback and saving external PDFs. These are browser preferences.
+- **AI**: opens a second-level sidebar with Connections & models, Assistant,
+  Advanced and Prompts. Assistant contains permissions and context presets;
+  Advanced contains exact context budgets, technical limits and translation
+  performance. Connections & models includes connection checks and models for
+  metadata, translation and dictation.
+- **Account**: the signed-in account only, including for admins. Existing
+  administrator-only account editing rules still apply.
 
-Old pane ids keep resolving through `PANE_ALIASES`. App.jsx owns all the
-state and passes it in as prop groups; the dialog only renders.
+Larger management areas open their own navigation with Back to settings.
+Shorter pages keep the main sidebar:
 
-Panes are composed exclusively from the primitives in
-[frontend/src/settingsKit.jsx](../../frontend/src/settingsKit.jsx) — see
-[ui-design.md](ui-design.md). The visible UI per row is icon · label · one
-short hint · control; the long explanation goes in the row's `title`
-(hover), never on screen.
+- **Manage workspaces**: workspaces and backups. A workspace's Manage action
+  opens an inline detail page; rename and invite are small editor dialogs.
+  Import/export, Export all and Back up all remain available. The account
+  popover links to this manager beside the workspace switcher.
+- **Library maintenance** (main sidebar): workspace storage, search-index rebuilding and the
+  per-paper metadata/text/index health table. Also linked from the Library
+  preferences page and the library operations menu.
+- **Administration** (admins only): Users and Server, including workspace
+  administration, server-wide storage defaults, server backups and logs.
+- **Diagnostics** (main sidebar): browser tracing and the browser session log.
+
+Search is backed by [settingsNavigation.js](../../frontend/src/settingsNavigation.js).
+It searches labels and synonyms, filters out inaccessible management pages,
+then opens the destination, focusing the
+matching `data-setting` element. Add an entry when adding a new setting.
+Legacy pane names resolve through `resolveSettingsPane`; old notes, search,
+viewer and context entry points also jump to their section.
+
+The desktop surface has a persistent search header and labeled sidebar. On
+phones the Back button opens a labeled category list, replacing the old strip
+of unlabeled icons. All controls remain reachable by keyboard and touch.
+
+Most preferences apply immediately. Prompts use Save/Cancel. Credential,
+account and workspace editor dialogs protect unsaved drafts on Cancel,
+Escape and backdrop dismissal. `useSettingsDraft` registers dirty editors
+with the settings navigation guard. Server storage defaults save together,
+so saving one limit cannot discard an unsaved change to the other.
+
+## Chat settings are global
+
+The chat header shortcut edits the **same shared preferences** as Settings:
+model, reasoning effort, single-paper context budget and tool permissions.
+The Tools button and checkbox also edit the global `agentEnabled` preference;
+there is no conversation-local tools override or reset on New chat.
+Permissions remain scoped by chat kind (folder, PDF, notes), applying to all
+chats of that kind in this browser. Read & search / Read, search & edit /
+Custom presets retain access to the individual permissions. Existing custom
+maps are preserved until the user explicitly picks a preset.
+
+These browser preferences persist locally; this does not make them
+account-synced. Provider selection and credentials retain their existing
+account scope. Context presets change the three budgets together: Standard
+is 60,000 / 6,000 / 120,000 characters, Larger doubles them, and Custom exposes
+the exact values without changing them.
+
+## Settings primitives
+
+[settingsKit.jsx](../../frontend/src/settingsKit.jsx) provides `PaneHead`,
+`Section`, `Row`, `Toggle`, `SubDialog` and the shared controls.
+Ordinary rows show a small icon, a label, a short hint and a control, with the
+shared hover background. Put consequences in the visible
+hint; supplementary `title` text appears on hover, without a Details toggle.
+Use the existing shared controls, including `Segmented` for theme choices.
+Editor dialogs accept a `draft` value for dismissal protection. See
+[ui-design.md](ui-design.md) for shared control styling.
+
+## Verification
+
+`npm test` covers permission presets, search visibility and legacy pane aliases.
+After building, `npm run e2e -- --only settings` exercises the actual UI:
+preferences and reload, management navigation, prompt/connection draft guards,
+shared chat settings, mobile layout and administrator account separation.
+Use `--keep` to retain desktop/mobile screenshots. For concurrent development,
+build into a private directory and set `GAMMA_E2E_DIST` to that directory so
+another build cannot replace the assets while the suite runs.
 
 ## Storage limits
 
 Two limits per account: max upload size per file (`max_upload_mb`, default
 50) and total uploads quota (`quota_mb`, 0 = unlimited). Server-wide defaults
-are admin-editable in Settings → Server; per-account overrides (NULL =
+are admin-editable in Settings / Administration / Server; per-account overrides (NULL =
 inherit) in the Users pane. They apply to the account's personal workspaces
 together; a shared workspace has its own optional quota (admins, Settings →
 Workspaces / Members & sharing — [workspaces.md](workspaces.md)). `GET
 /api/quota` reports the limits that apply to the current workspace and its
 usage — it feeds the pre-upload size check and the shared `QuotaMeter` bar
-(account popover, Library pane, Users rows, the Members & sharing pane).
+(account popover, Library maintenance, Users rows, the workspace manager).
 Uploads are hard-gated (413 over per-file, 507 over quota); best-effort
 caches (proxy save, AI re-download) just skip saving when full. Dedup'd
 files (same hash) are always allowed.

@@ -5,13 +5,13 @@ release: nothing is bumped, tagged or dispatched by hand.
 
 | Workflow | File | Runs when | Produces |
 |---|---|---|---|
-| `check` | `check.yml` | every pull request to `main` | pass/fail: backend pytest, frontend build, extension zip (~3 min) |
+| `check` | `check.yml` | every pull request to `main` | pass/fail: backend pytest, frontend unit tests + build, the browser suite, extension zip (~4 min) |
 | `desktop` | `desktop.yml` | push to `main` touching `desktop/`, `backend/`, `frontend/` or the workflow itself; manual | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files → GitHub Release `v<version>`; the MSIX artifact + a Microsoft Store submission when the secrets exist; a Docker tag `<version>` |
 | `extension` | `extension.yml` | push to `main` touching `extension/` or the workflow itself; manual | `gamma-connector-<version>.zip` → GitHub Release `extension-v<version>` |
 | `docker` | `docker.yml` | every push to `main`; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64 |
 
 ```
-PR → main ──▶ check (pytest, frontend build, extension zip)   ← merge skill waits for this
+PR → main ──▶ check (pytest, npm test + build, e2e, extension zip)   ← merge skill waits for this
 merge ───┬──▶ desktop.yml  meta: version = max(package.json, newest v* tag + patch)
          │        build Win/mac/Linux with that version pinned, smoke on all three
          │        publish: Release v<version> (notes = commits since previous tag)
@@ -77,7 +77,10 @@ Windows also builds the unsigned Microsoft Store MSIX (`store-windows`
 artifact) and, when the `PARTNER_CENTER_*` secrets exist and the run
 publishes, submits it with the `msstore` CLI (`continue-on-error`: the Store
 allows one submission in certification at a time, so a second release the
-same day is refused and simply waits for the next). macOS is ad-hoc signed
+same day is refused and simply waits for the next). The step's verdict is
+`msstore submission status` after the publish, not the CLI's exit code —
+the first run exited 1 on a transient re-read after the package was
+already in certification. macOS is ad-hoc signed
 by `desktop/scripts/adhoc-sign.cjs` when no Developer ID is available (see
 [release.md](../../desktop/docs/release.md#code-signing-optional-secret-gated)).
 Linux additionally `apt install`s the `.deb` on the runner and runs the
@@ -108,9 +111,14 @@ The Chrome Web Store upload stays manual
 
 ## `check.yml`
 
-Three parallel Ubuntu jobs on every PR to `main`: backend pytest (Python
-3.12, `requirements.txt` + `requirements-dev.txt`), the frontend build
-(Node 22), and a manifest parse + `node --check` + zip of the extension. No
+Four parallel Ubuntu jobs on every PR to `main`: backend pytest (Python
+3.12, `requirements.txt` + `requirements-dev.txt`, `-n auto` over pytest-xdist), the frontend unit tests
++ build (Node 22, `npm test` then `npm run build`), the browser suite
+(`npm run e2e -- --continue` against a backend started from the checkout
+with `GAMMA_E2E_PYTHON=python`, Playwright's Chromium installed with its
+system deps; on a failure the harness's `failures/` folders — screenshots,
+page problems, the error, the server log tail — are uploaded as the
+`e2e-failures` artifact), and a manifest parse + zip of the extension. No
 installers. The `merge` skill waits for it before merging; a red check is
 fixed on the branch as normal work.
 

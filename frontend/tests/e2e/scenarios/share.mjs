@@ -43,7 +43,7 @@ export async function shareScenarios({ server, browser, alice, bob, step, until,
       return imgs.length === 1 && imgs[0][0].includes("share=") && imgs[0][1] === 1;
     }, { what: "image served through the share token" });
     await page.locator(".blockRow", { hasText: "figure" }).locator(".blockBody").click();
-    await sleep(400);
+    await sleep(400); // a negative check: nothing to wait for, so give an editor time to (not) appear
     assert((await page.$(".blockEditorCm")) == null, "no editor opens on a view-only share");
     assertNoProblems(page);
     await ctx.close();

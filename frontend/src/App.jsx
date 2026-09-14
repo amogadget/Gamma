@@ -2343,7 +2343,7 @@ export default function App() {
 
   // The settings page (account popover → Settings…): two-column modal,
   // categories on the left, the selected pane on the right.
-  const [settingsOpen, setSettingsOpen] = useState(null); // null | pane id — see NAV_GROUPS in settings.jsx
+  const [settingsOpen, setSettingsOpen] = useState(null); // null | pane id — see settingsNavigation.js
   const [importOpen, setImportOpen] = useState(false);
   // Export dialog: one "Export…" menu entry, the shape of the export chosen
   // here. Remembered across sessions — most people export the same way twice.
@@ -2517,7 +2517,7 @@ export default function App() {
   }, [authUser?.user, shareMode]);
   // Entering the AI pane always refetches the masked key list.
   useEffect(() => {
-    if (settingsOpen === "ai" && authUser?.user && !shareMode) loadAiKeys();
+    if (["ai", "assistant", "ai-advanced", "context", "prompts"].includes(settingsOpen) && authUser?.user && !shareMode) loadAiKeys();
   }, [settingsOpen]);
 
   function openAiKeysEditor() {
@@ -4996,6 +4996,10 @@ export default function App() {
       try {
         if (o.format === "logseq") {
           await downloadExport(`${base}&mode=logseq-graph&${bundle}`, "graph.zip");
+        } else if (o.format === "obsidian") {
+          if (await downloadExport(`${base}&mode=obsidian&${flags}&${bundle}`, "vault.zip")) {
+            setStatus("Obsidian vault saved — unzip it into a vault, or open the folder as one.");
+          }
         } else if (o.format === "zotero") {
           if (await downloadExport(`${base}&mode=zotero-rdf&${flags}&${bundle}`, "zotero.zip")) {
             setStatus("Zotero library saved — unzip it, then import the .rdf in Zotero (File → Import).");
@@ -5029,6 +5033,12 @@ export default function App() {
     }
     if (o.format === "logseq") {
       await downloadExport(`/pages/${id}/export?mode=logseq-graph&${bundle}`, "graph.zip");
+      return;
+    }
+    if (o.format === "obsidian") {
+      if (await downloadExport(`/pages/${id}/export?mode=obsidian&${flags}&${bundle}`, "vault.zip")) {
+        setStatus("Obsidian vault saved — unzip it into a vault, or open the folder as one.");
+      }
       return;
     }
     if (o.format === "zotero") {
@@ -5147,10 +5157,10 @@ export default function App() {
     await loadBlocksForBlock(focusedBlockId);
   }
 
-  // (Re)entering the Assistant pane rebuilds the prompt drafts from the saved
-  // values — switching away without saving is the cancel path.
+  // Entering AI settings initializes prompt drafts; navigation guards protect
+  // any subsequent edits until Save or Cancel.
   useEffect(() => {
-    if (settingsOpen !== "prompts" && settingsOpen !== "assistant") return;
+    if (!["ai", "prompts", "assistant", "ai-advanced", "context"].includes(settingsOpen)) return;
     setPromptDraft(chatSystem || aiInfo?.default_prompt || "");
     setMetaPromptDraft(metaPrompt || aiInfo?.metadata_prompt || "");
     setCitePromptDraft(citePrompt || aiInfo?.cite_prompt || "");
@@ -7145,7 +7155,7 @@ export default function App() {
           setStatus={setStatus} askConfirm={setConfirmBox}
           organizeFolder={!focusedBlockId && !shareMode ? folderFilter : null}
           toolRounds={toolRounds} agentReadChars={agentReadChars} agentPerms={agentPerms} setAgentPerms={setAgentPerms} agentSystem={agentSystem}
-          agentEnabled={agentEnabled}
+          agentEnabled={agentEnabled} setAgentEnabled={setAgentEnabled}
           onLibraryChange={fetchHomeBlocks}
           onAgentEvent={(ev) => agentEventRef.current?.(ev)}
           onNotesChange={(pageIds) => {
@@ -7699,7 +7709,7 @@ export default function App() {
                   title="All your workspaces: rename, members, export and import, create another"
                 >
                   <UsersIcon className="popoverItemIcon" size={15} />
-                  Workspaces…
+                  Manage workspaces…
                 </button>
               ) : null}
               <div className="popoverDivider" />
@@ -7724,7 +7734,7 @@ export default function App() {
                   title="Accounts, every workspace, storage defaults, server backups and log"
                 >
                   <ServerIcon className="popoverItemIcon" size={15} />
-                  Server…
+                  Administration…
                 </button>
               ) : null}
               <div className="popoverDivider" />
@@ -8421,6 +8431,10 @@ export default function App() {
           openPaper: (id) => { setSettingsOpen(null); openPage(id); },
         }}
         ai={{
+          chatModel: chatSendModel,
+          setChatModel,
+          chatEffort,
+          setChatEffort,
           aiKeysInfo,
           aiKeysError,
           setAiKeysError,

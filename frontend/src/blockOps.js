@@ -119,7 +119,13 @@ export function diffTrees(base, next, pageId, pos) {
       if (r.b) {
         const set = { op: "set", id: r.n.id };
         let changed = false;
-        if ((r.b.node.content || "") !== (r.n.content || "")) { set.content = r.n.content || ""; changed = true; }
+        if ((r.b.node.content || "") !== (r.n.content || "")) {
+          // `base`: the text this change was made from — the server applies
+          // the change as a patch if the block moved on meanwhile.
+          set.content = r.n.content || "";
+          set.base = r.b.node.content || "";
+          changed = true;
+        }
         const patch = propsPatch(r.b.node.properties, r.n.properties);
         if (Object.keys(patch).length) { set.props = patch; changed = true; }
         if (changed) ops.push(set);
@@ -227,7 +233,12 @@ export function pushOp(queue, op) {
       if (q.id !== op.id) continue;
       if (q.op !== "set") break;
       const merged = { ...q };
-      if (op.content !== undefined) merged.content = op.content;
+      if (op.content !== undefined) {
+        merged.content = op.content;
+        // The queued op keeps its own base (the earliest text this run of
+        // keystrokes started from); only a props-only op adopts the new one.
+        if (q.content === undefined) merged.base = op.base;
+      }
       if (op.props) merged.props = { ...(q.props || {}), ...op.props };
       queue[i] = merged;
       return true;

@@ -11,7 +11,7 @@ import { API, apiJson } from "./utils";
 import { PaneHead, SubDialog, Field, UnitInput, Empty, QuotaMeter, PasswordInput } from "./settingsKit";
 import { HardDriveIcon, PenIcon, PlusIcon, ShieldIcon, Trash2Icon, UserIcon, UsersIcon } from "./icons";
 
-export function UsersSettings({ value }) {
+export function UsersSettings({ value, selfOnly = false }) {
   const { setStatus, confirm, onSelfRenamed, refreshQuota, isAdmin, me, isGuest, quotaInfo } = value;
   const [info, setInfo] = React.useState(null); // {users, me}
   const [error, setError] = React.useState("");
@@ -169,7 +169,7 @@ export function UsersSettings({ value }) {
   function accountDialog() {
     const u = edit.original;
     return (
-      <SubDialog title={`Edit ${u.username}`} onClose={closeEdit}>
+      <SubDialog title={`Edit ${u.username}`} onClose={closeEdit} draft={edit}>
         <div className="settingsForm">
           <Field label="Username" hint="renaming keeps sessions and share links working">
             <input
@@ -216,7 +216,7 @@ export function UsersSettings({ value }) {
       ? `server default (${defaults.quota_mb || "unlimited"})`
       : "server default";
     return (
-      <SubDialog title={`Storage limits — ${u.username}`} onClose={closeEdit}>
+      <SubDialog title={`Storage limits — ${u.username}`} onClose={closeEdit} draft={edit}>
         <div className="settingsForm">
           <QuotaMeter usedBytes={u.used_bytes} quotaMb={effQuota} />
           <Field label="Max upload size" hint="largest single PDF or image · blank inherits">
@@ -297,21 +297,21 @@ export function UsersSettings({ value }) {
 
   return (
     <>
-      {isAdmin ? (
+      {isAdmin && !selfOnly ? (
         <PaneHead icon={UsersIcon} title="Users">
           Accounts on this server. The last admin can never be demoted or deleted.
         </PaneHead>
       ) : (
-        <PaneHead icon={UserIcon} title="You">
-          Your account and its storage. Only an admin can rename it or change its limits; your workspaces and their backups have panes of their own.
+        <PaneHead icon={UserIcon} title="Account">
+          Your profile and storage limits. Account changes are managed by an administrator.
         </PaneHead>
       )}
       {isAdmin && !info && !error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
-      {rows.map(userRow)}
+      {(selfOnly ? rows.filter((row) => row.username === me) : rows).map(userRow)}
       {edit?.kind === "account" ? accountDialog() : null}
       {edit?.kind === "storage" ? storageDialog() : null}
-      {!isAdmin ? null : addForm ? (
-        <SubDialog title="Add user" onClose={() => { setAddForm(null); setError(""); }}>
+      {!isAdmin || selfOnly ? null : addForm ? (
+        <SubDialog title="Add user" draft={addForm} onClose={() => { setAddForm(null); setError(""); }}>
           <div className="settingsForm">
           <Field label="Username" hint="letters, digits, _ . -">
             <input

@@ -6,7 +6,7 @@
 // Backups.
 import React from "react";
 import { API, apiJson } from "./utils";
-import { PaneHead, Section, Row, UnitInput, LogBox } from "./settingsKit";
+import { PaneHead, Section, Row, UnitInput, LogBox, useSettingsDraft } from "./settingsKit";
 import { WorkspacesAdmin } from "./settingsWorkspacesAdmin";
 import { ServerBackups } from "./settingsBackups";
 import { ImportIcon, ServerIcon } from "./icons";
@@ -32,60 +32,50 @@ export function ServerSettings({ value }) {
 // Server-wide default storage limits (users.db via /api/admin/settings).
 // Per-account overrides live in the Users pane.
 function ServerLimitRows({ setStatus, refreshQuota }) {
-  const [saved, setSaved] = React.useState(null); // {max_upload_mb, quota_mb}
+  const [saved, setSaved] = React.useState(null);
   const [draft, setDraft] = React.useState({ max_upload_mb: "", quota_mb: "" });
   const [error, setError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const asDraft = (value) => ({ max_upload_mb: String(value.max_upload_mb), quota_mb: String(value.quota_mb) });
   React.useEffect(() => {
-    apiJson(`${API}/admin/settings`)
-      .then((d) => {
-        setSaved(d);
-        setDraft({ max_upload_mb: String(d.max_upload_mb), quota_mb: String(d.quota_mb) });
-      })
+    apiJson(`${API}/admin/settings`).then((value) => { setSaved(value); setDraft(asDraft(value)); })
       .catch((err) => setError(err.message));
   }, []);
-  async function save(key, label) {
+  const dirty = !!saved && Object.keys(draft).some((key) => draft[key] !== String(saved[key]));
+  const valid = /^\d+$/.test(draft.max_upload_mb) && Number(draft.max_upload_mb) >= 1
+    && /^\d+$/.test(draft.quota_mb);
+  const discard = () => { if (saved) setDraft(asDraft(saved)); setError(""); };
+  useSettingsDraft("server-limits", dirty, discard);
+  async function save() {
+    if (!dirty || !valid || busy) return;
+    setBusy(true); setError("");
     try {
-      const d = await apiJson(`${API}/admin/settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [key]: parseInt(draft[key], 10) }),
+      const value = await apiJson(`${API}/admin/settings`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ max_upload_mb: Number(draft.max_upload_mb), quota_mb: Number(draft.quota_mb) }),
       });
-      setSaved((prev) => ({ ...prev, ...d }));
-      setDraft({ max_upload_mb: String(d.max_upload_mb), quota_mb: String(d.quota_mb) });
-      refreshQuota?.();
-      setStatus(`${label} saved.`);
-    } catch (err) {
-      setStatus(`Could not save: ${err.message}`);
-    }
+      setSaved(value); setDraft(asDraft(value)); refreshQuota?.();
+      setStatus("Storage defaults saved.");
+    } catch (err) { setError(`Could not save: ${err.message}`); }
+    finally { setBusy(false); }
   }
-  function row(key, icon, label, hint, title, min, saveLabel) {
-    const parsed = parseInt(draft[key], 10);
-    const valid = Number.isFinite(parsed) && parsed >= min;
-    const dirty = saved && valid && parsed !== saved[key];
-    return (
-      <Row icon={icon} label={label} hint={error || hint} title={title}>
-        {error ? null : (
-          <span className="setSlider">
-            <UnitInput
-              unit="MB" min={min}
-              value={draft[key]}
-              onChange={(next) => setDraft((f) => ({ ...f, [key]: next }))}
-              onEnter={() => { if (dirty) save(key, saveLabel); }}
-            />
-            <button className="uiBtn sm" disabled={!dirty} onClick={() => save(key, saveLabel)}>Save</button>
-          </span>
-        )}
+  return <>
+    {saved ? <>
+      <Row icon={ImportIcon} label="Default max upload" hint="Largest single PDF or image per account. Users can have individual overrides.">
+        <UnitInput unit="MB" min={1} value={draft.max_upload_mb}
+          onChange={(next) => setDraft((previous) => ({ ...previous, max_upload_mb: next }))} onEnter={save} />
       </Row>
-    );
-  }
-  return (
-    <>
-      {row("max_upload_mb", ImportIcon, "Default max upload", "Largest single PDF or image, per account",
-        "Server-wide cap on a single uploaded PDF or image. Override it per account from the Users pane.", 1, "Upload limit")}
-      {row("quota_mb", ServerIcon, "Default quota", "Total uploads per account · 0 = unlimited",
-        "Server-wide total of an account's personal workspaces; 0 means unlimited. Override it per account from the Users pane; shared workspaces carry their own quota.", 0, "Storage quota")}
-    </>
-  );
+      <Row icon={ServerIcon} label="Default quota" hint="Total personal-workspace uploads per account. 0 means unlimited; shared workspaces have their own quota.">
+        <UnitInput unit="MB" min={0} value={draft.quota_mb}
+          onChange={(next) => setDraft((previous) => ({ ...previous, quota_mb: next }))} onEnter={save} />
+      </Row>
+      <div className="reportModalBtns">
+        <button className="uiBtn sm" disabled={!dirty || busy} onClick={discard}>Cancel</button>
+        <button className="uiBtn sm primary" disabled={!dirty || !valid || busy} onClick={save}>{busy ? "Saving..." : "Save limits"}</button>
+      </div>
+    </> : !error ? <p className="setNotice">Loading storage defaults...</p> : null}
+    {error ? <p className="settingsPaneHint aiKeysError" role="alert">{error}</p> : null}
+  </>;
 }
 
 // The backend's in-memory log (GET /api/admin/logs). Polls with a seq

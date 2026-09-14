@@ -4,8 +4,8 @@
 import React from "react";
 import { parseFolderTags } from "./libraryUtils";
 import { MenuSelect } from "./menus";
-import { PaneHead, Section, SubDialog, Step, Field, Empty, PercentMeter, Row, PasswordInput } from "./settingsKit";
-import { GlobeIcon, KeyIcon, MicIcon, PaperIcon, PenIcon, RefreshIcon, SparklesIcon, Trash2Icon } from "./icons";
+import { Section, SubDialog, Step, Field, Empty, PercentMeter, Row, PasswordInput } from "./settingsKit";
+import { GlobeIcon, KeyIcon, MicIcon, PaperIcon, RefreshIcon, SparklesIcon, Trash2Icon } from "./icons";
 
 const DICTATION_LANGS = [
   ["", "Auto-detect"], ["en", "English"], ["zh", "中文"], ["ja", "日本語"], ["ko", "한국어"],
@@ -72,18 +72,31 @@ function ProviderForm({ value, onCancel }) {
     removeModel,
     submitAiProvider,
   } = value;
+  const [service, setService] = React.useState(() => {
+    const protocol = aiProtocolOf(aiKeysForm.protocol);
+    return aiKeysForm.base_url && aiKeysForm.base_url.replace(/\/$/, "") !== protocol?.default_base_url?.replace(/\/$/, "")
+      ? "custom" : aiKeysForm.protocol;
+  });
   const oauth = isOauthProto(aiKeysForm.protocol);
   const protocol = aiProtocolOf(aiKeysForm.protocol);
 
   return (
     <div className="settingsForm">
-      <Step n={1} title="Protocol" hint="Pick the API format, not the vendor — most services speak one of these.">
-        <MenuSelect
-          block label="API protocol"
-          value={aiKeysForm.protocol}
-          onChange={(protocol) => setAiKeysForm((form) => ({ ...form, protocol }))}
-          options={aiKeysInfo.protocols.map((item) => [item.id, item.label])}
-        />
+      <Step n={1} title="Connect a service" hint="Choose a service, or use your own endpoint.">
+        <MenuSelect block label="AI service" value={service}
+          onChange={(next) => {
+            setService(next);
+            if (next !== "custom") setAiKeysForm((form) => ({ ...form, protocol: next, base_url: "", models: "", test_model: "" }));
+            else if (oauth) setAiKeysForm((form) => ({ ...form, protocol: "openai", base_url: "", models: "", test_model: "" }));
+          }} options={[
+            ...aiKeysInfo.protocols.map((item) => [item.id, ({ openai: "OpenAI API", anthropic: "Anthropic", chatgpt: "ChatGPT subscription" })[item.id] || item.label]),
+            ["custom", "Custom endpoint"],
+          ]} />
+        {service === "custom" ? <Field label="API format" hint="Use the format supported by your service">
+          <MenuSelect block label="API protocol" value={aiKeysForm.protocol}
+            onChange={(protocol) => setAiKeysForm((form) => ({ ...form, protocol }))}
+            options={aiKeysInfo.protocols.filter((item) => !isOauthProto(item.id)).map((item) => [item.id, item.label])} />
+        </Field> : null}
       </Step>
 
       <Step
@@ -126,14 +139,14 @@ function ProviderForm({ value, onCancel }) {
                 onBlur={() => { if (aiKeysForm.api_key?.trim()) loadModelCatalog(); }}
               />
             </Field>
-            <Field label="Base URL" hint={`optional — default ${protocol?.default_base_url || ""}`}>
+            {service === "custom" ? <Field label="Base URL" hint={`optional — default ${protocol?.default_base_url || ""}`}>
               <input
                 className="aiKeyInput" type="text" spellCheck={false}
                 placeholder={protocol?.default_base_url || ""}
                 value={aiKeysForm.base_url}
                 onChange={(event) => setAiKeysForm((form) => ({ ...form, base_url: event.target.value }))}
               />
-            </Field>
+            </Field> : null}
           </>
         )}
         <Field label="Name" hint={'optional — e.g. "DeepSeek", "work key"'}>
@@ -243,7 +256,7 @@ function ProviderForm({ value, onCancel }) {
   );
 }
 
-export function AiSettings({ value }) {
+export function AiSettings({ value, taskModels }) {
   const closeKeyForm = () => { value.setAiKeysForm(null); value.setAiKeysError(""); };
   const activeKeyId = value.aiKeysInfo?.providers.some((item) => item.id === value.aiProvider)
     ? value.aiProvider
@@ -252,45 +265,8 @@ export function AiSettings({ value }) {
   const providers = value.aiKeysInfo?.providers || [];
   return (
     <>
-      <PaneHead icon={KeyIcon} title="Provider and models">
-        Connect AI providers and configure every model available to chat and AI jobs.
-      </PaneHead>
-      <Section title="AI jobs">
-        <Row icon={PaperIcon} label="Metadata model"
-          hint="Used only when identifiers cannot resolve the paper"
-          title="Metadata first tries arXiv and DOI records. This model is used only when metadata has to be AI-extracted from PDF text; a fast, cheap model is usually enough.">
-          <MenuSelect
-            label="Metadata model"
-            value={value.metaModel && (value.aiModels || []).some((model) => model.id === value.metaModel)
-              ? value.metaModel : ""}
-            onChange={value.setMetaModel}
-            options={[
-              ["", "Same as chat"],
-              ...(value.aiModels || []).map((model) => [model.id, model.model]),
-            ]}
-          />
-        </Row>
-        <Row icon={MicIcon} label="Dictation model"
-          hint="Speech-to-text for the chat mic button"
-          title="gpt-4o-transcribe is what ChatGPT dictation uses; it needs an OpenAI-protocol provider key.">
-          <MenuSelect
-            label="Dictation model" value={value.dictationModel} onChange={value.setDictationModel}
-            options={[
-              ["gpt-4o-transcribe", "gpt-4o-transcribe"],
-              ["gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"],
-              ["whisper-1", "whisper-1"],
-            ]}
-          />
-        </Row>
-        <Row icon={GlobeIcon} label="Dictation language"
-          hint="Naming the language improves accuracy"
-          title="Telling the model the spoken language improves accuracy; auto-detect handles mixed or unlisted languages.">
-          <MenuSelect
-            label="Dictation language" value={value.dictationLang} onChange={value.setDictationLang}
-            options={DICTATION_LANGS}
-          />
-        </Row>
-      </Section>
+      <Section title="Connections" />
+
       {!value.aiKeysInfo && !value.aiKeysError ? <Empty icon={KeyIcon}>Loading…</Empty> : null}
       {value.aiKeysInfo ? (
         <>
@@ -301,7 +277,7 @@ export function AiSettings({ value }) {
                 : "Guest accounts cannot store API keys. Ask the admin for an account."}
             </Empty>
           ) : null}
-          {providers.length ? <Section title={providers.length > 1 ? "Providers · pick the one AI requests use" : "Provider"} /> : null}
+          <p className="setNotice">Choose the connection used by AI requests. Credentials are saved to your account.</p>
           {providers.map((provider) => {
             const protocol = value.aiProtocolOf(provider.protocol);
             const test = value.aiKeyTests?.[provider.id];
@@ -383,14 +359,7 @@ export function AiSettings({ value }) {
                       Usage
                     </button>
                     <button className="uiBtn sm" disabled={value.aiKeysBusy}
-                      title="Configure all models offered by this provider"
-                      onClick={() => value.startEditAiProvider(provider)}>
-                      Models
-                    </button>
-                    <button className="uiBtn sm iconSq" disabled={value.aiKeysBusy} title="Edit this key"
-                      aria-label="Edit key" onClick={() => value.startEditAiProvider(provider)}>
-                      <PenIcon size={13} />
-                    </button>
+                      title="Edit connection and available models" onClick={() => value.startEditAiProvider(provider)}>Manage</button>
                     <button className="uiBtn sm iconSq danger" disabled={value.aiKeysBusy} title="Remove this key"
                       aria-label="Remove key" onClick={() => value.deleteAiProvider(provider)}>
                       <Trash2Icon size={13} />
@@ -406,7 +375,7 @@ export function AiSettings({ value }) {
             </div>
           ) : null}
           {canEdit ? (
-            <Section title="Connection">
+            <Section title="Connection check">
               <Row icon={RefreshIcon} label="Check at login"
                 hint="Verify the active provider when Gamma opens"
                 title="Runs a connection check on the active provider at login; a failure (expired ChatGPT sign-in, rejected key, unreachable provider) shows a warning in the chat window instead of surfacing as a broken chat later. The credential check is free — OAuth entries query subscription usage, API keys list models; the test request sends a tiny completion (through the provider's test model — by default your metadata model) and spends a few tokens.">
@@ -424,7 +393,7 @@ export function AiSettings({ value }) {
             </Section>
           ) : null}
           {value.aiKeysForm ? (
-            <SubDialog
+            <SubDialog draft={value.aiKeysForm}
               title={value.aiKeysForm.id ? "Edit key" : "Add key"}
               onClose={closeKeyForm}
             >
@@ -433,6 +402,50 @@ export function AiSettings({ value }) {
           ) : null}
         </>
       ) : null}
+      <Section title="Models - this browser">
+        {(value.aiModels || []).length ? <Row icon={SparklesIcon} label="Default chat model"
+          hint="Also used by citations and generated titles. The chat settings shortcut changes this same preference.">
+          <MenuSelect label="Default chat model" value={value.chatModel} onChange={value.setChatModel}
+            options={(value.aiModels || []).map((model) => [model.id, model.model])} />
+        </Row> : <p className="setNotice">Connect a service to choose models.</p>}
+      </Section>
+      <Section title="Models for other tasks">
+        <Row icon={PaperIcon} label="Metadata model"
+          hint="Used only when identifiers cannot resolve the paper"
+          title="Metadata first tries arXiv and DOI records. This model is used only when metadata has to be AI-extracted from PDF text; a fast, cheap model is usually enough.">
+          <MenuSelect
+            label="Metadata model"
+            value={value.metaModel && (value.aiModels || []).some((model) => model.id === value.metaModel)
+              ? value.metaModel : ""}
+            onChange={value.setMetaModel}
+            options={[
+              ["", `Same as chat: ${(value.aiModels || []).find((m) => m.id === value.chatModel)?.model || "provider default"}`],
+              ...(value.aiModels || []).map((model) => [model.id, model.model]),
+            ]}
+          />
+        </Row>
+        <Row icon={MicIcon} label="Dictation model"
+          hint="Speech-to-text for the chat mic button"
+          title="gpt-4o-transcribe is what ChatGPT dictation uses; it needs an OpenAI-protocol provider key.">
+          <MenuSelect
+            label="Dictation model" value={value.dictationModel} onChange={value.setDictationModel}
+            options={[
+              ["gpt-4o-transcribe", "gpt-4o-transcribe"],
+              ["gpt-4o-mini-transcribe", "gpt-4o-mini-transcribe"],
+              ["whisper-1", "whisper-1"],
+            ]}
+          />
+        </Row>
+        <Row icon={GlobeIcon} label="Dictation language"
+          hint="Naming the language improves accuracy"
+          title="Telling the model the spoken language improves accuracy; auto-detect handles mixed or unlisted languages.">
+          <MenuSelect
+            label="Dictation language" value={value.dictationLang} onChange={value.setDictationLang}
+            options={DICTATION_LANGS}
+          />
+        </Row>
+      {taskModels}
+      </Section>
       {!value.aiKeysForm && value.aiKeysError ? <div className="settingsPaneHint aiKeysError">{value.aiKeysError}</div> : null}
     </>
   );

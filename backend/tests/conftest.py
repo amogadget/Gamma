@@ -2,7 +2,9 @@
 with AI providers unconfigured, using FastAPI's in-process TestClient (no
 network, no running server needed)."""
 
+import ipaddress
 import os
+import socket
 import sys
 import tempfile
 from pathlib import Path
@@ -40,11 +42,62 @@ def _reset_ratelimit():
     yield
 
 
+_LOOPBACK = {"localhost", "127.0.0.1", "::1", None, ""}
+_socket_connect = socket.socket.connect
+_getaddrinfo = socket.getaddrinfo
+
+
+def _host_is_local(host):
+    """Loopback names, and numeric addresses: the SSRF guard test hands
+    getaddrinfo IP literals such as 169.254.169.254, which resolve without
+    any network and are refused before a connect."""
+    if host in _LOOPBACK:
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def _blocked_connect(self, addr):
+    host = addr[0] if isinstance(addr, tuple) else str(addr)
+    if host in _LOOPBACK or (isinstance(host, str) and host.startswith("127.")):
+        return _socket_connect(self, addr)
+    raise AssertionError(f"test tried to open a network connection to {addr!r} — stub the fetch")
+
+
+def _blocked_getaddrinfo(host, *args, **kwargs):
+    if _host_is_local(host):
+        return _getaddrinfo(host, *args, **kwargs)
+    raise AssertionError(f"test tried to resolve {host!r} — stub the fetch")
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """The suite is offline by construction: every metadata / PDF / AI fetch
+    is stubbed, and a test that forgets to is a failure here, not a slow
+    pass that depends on the network. TestClient talks to the app in-process,
+    so only loopback ever needs a real socket."""
+    monkeypatch.setattr(socket.socket, "connect", _blocked_connect)
+    monkeypatch.setattr(socket, "getaddrinfo", _blocked_getaddrinfo)
+    yield
+
+
 @pytest.fixture(scope="session")
 def client():
     from gamma.app import app
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def anon():
+    """A TestClient with no session at all — for "not signed in" checks.
+    (`client` is shared by the whole run and carries whatever cookie the
+    last login left, so it is never anonymous by the time most tests run.)"""
+    from gamma.app import app
+    return TestClient(app)
 
 
 @pytest.fixture(scope="session")

@@ -1,0 +1,161 @@
+{
+  "_": "Search normalization cases shared by backend/gamma/textnorm.py (normalize_text, fuzzy_pattern) and the frontend mirrors in frontend/src/textnorm.js (normalizeQuery, normalizeChars, buildSearchRegex). Read by backend/tests/test_shared_fixtures.py and frontend/tests/textnorm.test.mjs. A `normalize` case with `hyphen_break` contains a line break, which a query box never has, so normalizeQuery skips it and normalizeChars covers it.",
+  "normalize": [
+    {
+      "note": "NFKC folds ligatures",
+      "input": "e\ufb03cient",
+      "output": "efficient"
+    },
+    {
+      "note": "a comma between digits is a group separator",
+      "input": "3,000 qubits",
+      "output": "3000 qubits"
+    },
+    {
+      "note": "a no-break space between digits is a group separator",
+      "input": "3\u00a0000",
+      "output": "3000"
+    },
+    {
+      "note": "narrow no-break and thin spaces too",
+      "input": "3\u202f000\u2009000",
+      "output": "3000000"
+    },
+    {
+      "note": "a plain space between digits is not",
+      "input": "in 2019 3 people",
+      "output": "in 2019 3 people"
+    },
+    {
+      "note": "a comma followed by a space is punctuation",
+      "input": "2019, 3 people",
+      "output": "2019, 3 people"
+    },
+    {
+      "note": "soft hyphens vanish",
+      "input": "a\u00adb",
+      "output": "ab"
+    },
+    {
+      "note": "whitespace collapses and trims",
+      "input": "  x   y\tz  ",
+      "output": "x y z"
+    },
+    {
+      "note": "case is kept",
+      "input": "Rydberg Atoms",
+      "output": "Rydberg Atoms"
+    },
+    {
+      "note": "empty stays empty",
+      "input": "",
+      "output": ""
+    },
+    {
+      "note": "a hyphenated line break re-joins the word",
+      "input": "sys-\ntem",
+      "output": "system",
+      "hyphen_break": true
+    },
+    {
+      "note": "any dash, with spaces around the break",
+      "input": "sys\u2010 \n  tem",
+      "output": "system",
+      "hyphen_break": true
+    },
+    {
+      "note": "letters beyond ASCII count as word characters",
+      "input": "caf\u00e9-\nol\u00e9",
+      "output": "caf\u00e9ol\u00e9",
+      "hyphen_break": true
+    },
+    {
+      "note": "digits count as word characters",
+      "input": "12-\n34",
+      "output": "1234",
+      "hyphen_break": true
+    },
+    {
+      "note": "a spaced dash is not a hyphenation",
+      "input": "end -\nstart",
+      "output": "end - start",
+      "hyphen_break": true
+    },
+    {
+      "note": "a line break without a dash is a space",
+      "input": "one\ntwo",
+      "output": "one two",
+      "hyphen_break": true
+    }
+  ],
+  "fuzzy": [
+    {
+      "note": "digits tolerate a group separator, space and hyphen are interchangeable",
+      "query": "3000 qubit",
+      "text": "a 3,000-qubit array",
+      "match": true
+    },
+    {
+      "note": "a separator in the query is normalized away first",
+      "query": "3,000 qubit",
+      "text": "3000 qubit",
+      "match": true
+    },
+    {
+      "note": "a space in the query matches a hyphen",
+      "query": "sys tem",
+      "text": "sys-tem",
+      "match": true
+    },
+    {
+      "note": "a run of separators matches one",
+      "query": "a - b",
+      "text": "a-b",
+      "match": true
+    },
+    {
+      "note": "regex characters are literal",
+      "query": "a.b",
+      "text": "axb",
+      "match": false
+    },
+    {
+      "note": "case-insensitive by default",
+      "query": "Cat",
+      "text": "cat",
+      "match": true
+    },
+    {
+      "note": "case-sensitive on request",
+      "query": "Cat",
+      "text": "cat",
+      "match": false,
+      "case": true
+    },
+    {
+      "note": "substring by default",
+      "query": "cat",
+      "text": "concatenate",
+      "match": true
+    },
+    {
+      "note": "whole word on request",
+      "query": "cat",
+      "text": "concatenate",
+      "match": false,
+      "whole": true
+    },
+    {
+      "note": "whole word still finds the word",
+      "query": "cat",
+      "text": "a cat sat",
+      "match": true,
+      "whole": true
+    },
+    {
+      "note": "a blank query is no pattern",
+      "query": "   ",
+      "pattern": null
+    }
+  ]
+}

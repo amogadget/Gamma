@@ -12,6 +12,7 @@ import "pdfjs-dist/web/pdf_viewer.css";
 import { createPortal } from "react-dom";
 import { ChevronRightIcon, LinkIcon, MessageSquareIcon, OutlineIcon } from "./icons";
 import { segmentPage } from "./pdfTranslate";
+import { normalizeChars } from "./textnorm";
 import { ChatMarkdown } from "./widgets";
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.mjs";
 // Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
@@ -535,15 +536,14 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // Expose full-text search over the loaded document (used by the search
   // panel). Each page's text runs are joined into one string — so matches can
   // span runs — and searched through a normalized view (ligatures folded,
-  // hyphenated line breaks re-joined, digit-group separators dropped) that
-  // mirrors the server index's rules in gamma/textnorm.py. Every normalized
-  // character remembers its source run, so a match maps back to exact rects
-  // (at scale 1) even when normalization changed lengths.
+  // hyphenated line breaks re-joined, digit-group separators dropped:
+  // textnorm.normalizeChars, the mirror of the server index's rules). Every
+  // normalized character remembers its source run, so a match maps back to
+  // exact rects (at scale 1) even when normalization changed lengths.
   useEffect(() => {
     if (!searchRef) return;
     searchRef.current = pdfDoc ? async (re) => {
       const out = [];
-      const isDash = (c) => c === "-" || (c >= "‐" && c <= "―");
       for (let p = 1; p <= pdfDoc.numPages && out.length < 200; p++) {
         const page = await pdfDoc.getPage(p);
         const vp = page.getViewport({ scale: 1 });
@@ -560,25 +560,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
             chars.push({ ch: " ", it: -1, off: 0 });
           }
         }
-        // Normalized view + map back into `chars`.
-        const norm = [];
-        const src = [];
-        for (let i = 0; i < chars.length; i++) {
-          let ch = chars[i].ch;
-          if (ch === "­") continue; // soft hyphen
-          if (isDash(ch) && /[a-zA-Z]/.test(chars[i - 1]?.ch || "")) {
-            // Hyphenated line break: "sys-⏎tem" → "system"
-            let j = i + 1, brk = false;
-            while (j < chars.length && /\s/.test(chars[j].ch)) { if (chars[j].ch === "\n") brk = true; j++; }
-            if (brk && /[a-zA-Z]/.test(chars[j]?.ch || "")) { i = j - 1; continue; }
-          }
-          if ((ch === "," || ch === " " || ch === " " || ch === " ")
-              && /\d/.test(chars[i - 1]?.ch || "") && /\d/.test(chars[i + 1]?.ch || "")) {
-            continue; // digit-group separator: "3,000" → "3000"
-          }
-          if (/\s/.test(ch)) ch = " ";
-          for (const c of ch.normalize("NFKC")) { norm.push(c); src.push(i); }
-        }
+        const { norm, src } = normalizeChars(chars);
         const pageStr = norm.join("");
         const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
         let m;

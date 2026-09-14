@@ -89,7 +89,12 @@ export async function noteScenarios({ server, browser, alice, step, until, sleep
     await page.keyboard.press("Shift+Tab");
     await reopenFocused(page);
     await page.keyboard.press("Shift+Enter");
-    await sleep(150);
+    // The new (empty) block's editor has the focus before Backspace removes it
+    // (an empty CodeMirror doc shows its placeholder widget, so test for that).
+    await page.waitForFunction(() => {
+      const ed = document.activeElement?.closest(".cm-content");
+      return !!ed && (ed.querySelector(".cm-placeholder") != null || ed.textContent === "");
+    }, null, { timeout: 5000 });
     await page.keyboard.press("Backspace");
     await closeEditor(page);
     await saved([{ content: "first", children: [{ content: "second", children: [] }] }, { content: "third", children: [] }]);
@@ -149,6 +154,20 @@ export async function noteScenarios({ server, browser, alice, step, until, sleep
     const src = await until(check, { what: "rendered image after reload" });
     assertNoProblems(page);
     return src;
+  });
+
+  await step("notes: Export… as an Obsidian vault downloads a zip", async () => {
+    await page.click("button[aria-label='Settings']");
+    await page.locator(".popoverItem", { hasText: "Export…" }).click();
+    await page.waitForSelector(".exportModal");
+    await page.locator(".exportModal .uiSelectBtn").first().click();
+    await page.locator(".ctxMenuItem", { hasText: "Obsidian vault" }).click();
+    const download = page.waitForEvent("download", { timeout: 15000 });
+    await page.locator(".exportModal .uiBtn.primary", { hasText: "Export" }).click();
+    const file = await download;
+    assert(/-obsidian\.zip$/.test(file.suggestedFilename()), `vault zip name: ${file.suggestedFilename()}`);
+    await until(async () => (await page.textContent("body")).includes("Obsidian vault saved"), { what: "export status" });
+    assertNoProblems(page);
   });
 
   await step("notes: the account menu lists both workspaces and switches", async () => {

@@ -1,6 +1,8 @@
-"""GET /api/search — one query over the notes index (block_fts, gamma/
-block_index.py) and the PDF index (pdf_fts): result shape, ordering, folder
-scope, and the lazy per-page rebuild that follows every kind of block write."""
+"""Search: GET /api/search — one query over the notes index (block_fts,
+gamma/block_index.py) and the PDF index (pdf_fts): result shape, ordering,
+folder scope, and the lazy per-page rebuild that follows every kind of block
+write — plus the PDF index itself: /api/pdf-search hits and separator
+tolerance, stale index versions, the reindex endpoint, the tasks shape."""
 
 import sqlite3
 
@@ -10,6 +12,9 @@ from gamma.textnorm import INDEX_VERSION, normalize_text
 
 
 def _index_pdf(user, doc_id, pages):
+    """Insert index rows directly, the way _index_doc stores them (normalized
+    text, current version — otherwise the endpoint schedules a re-index that
+    would race the test and delete these rows)."""
     from gamma.pdf_index import ensure_schema
 
     with sqlite3.connect(ws_db_path(workspace_of(user), "data.db")) as conn:
@@ -157,3 +162,101 @@ def test_pdf_search_and_block_search_unchanged():
     assert hit["page"] == 4 and "source" not in hit
     r = c.get("/api/block-search", params={"q": "wombat"})
     assert r.status_code == 200 and r.json()["blocks"]
+
+
+# --- the PDF index ---------------------------------------------------------------
+
+def test_pdf_search_hits_indexed_docs(guest):
+    user = guest.get("/api/session").json()["user"]
+    make_page(guest, "FTS paper", properties={"doc_id": "ftsdoc001"})
+    _index_pdf(user, "ftsdoc001", [(3, "the wombat considered superconducting qubits carefully")])
+
+    r = guest.get("/api/pdf-search", params={"q": "wombat superconducting"})
+    assert r.status_code == 200
+    hits = r.json()["results"]
+    assert any(h["page"] == 3 and h["title"] == "FTS paper" and h["doc_id"] == "ftsdoc001"
+               for h in hits)
+
+    # unknown terms → no hits, no error
+    r = guest.get("/api/pdf-search", params={"q": "zzznothingzzz"})
+    assert r.json()["results"] == []
+
+
+def test_pdf_search_is_separator_tolerant(guest):
+    """"3000" must find "3,000-qubit": the index stores normalized text and
+    the query is normalized the same way."""
+    user = guest.get("/api/session").json()["user"]
+    make_page(guest, "Qubit paper", properties={"doc_id": "ftsdoc002"})
+    _index_pdf(user, "ftsdoc002",
+                [(1, "Continuous operation of a coherent 3,000-qubit system")])
+
+    for q in ("3000", "3,000", "3000-qubit", "3000 qubit system"):
+        hits = guest.get("/api/pdf-search", params={"q": q}).json()["results"]
+        assert any(h["doc_id"] == "ftsdoc002" for h in hits), f"query {q!r} missed"
+
+
+def test_stale_index_version_counts_as_missing(guest):
+    from gamma.db import ws_db_path
+    from gamma.pdf_index import ensure_schema
+
+    user = guest.get("/api/session").json()["user"]
+    make_page(guest, "Stale paper", properties={"doc_id": "ftsdoc003"})
+    with sqlite3.connect(ws_db_path(workspace_of(user), "data.db")) as conn:
+        ensure_schema(conn)
+        conn.execute("INSERT OR REPLACE INTO pdf_fts_docs (doc_id, indexed_at, pages, ver) "
+                     "VALUES ('ftsdoc003', '2025', 1, 0)")  # pre-normalization row
+        conn.commit()
+
+    r = guest.get("/api/pdf-search", params={"q": "anything"})
+    assert r.json()["indexing"] >= 1  # stale doc scheduled for re-indexing
+
+
+def test_search_reindex_marks_everything_stale(guest):
+    from gamma.db import ws_db_path
+    from gamma.textnorm import INDEX_VERSION
+
+    user = guest.get("/api/session").json()["user"]
+    make_page(guest, "Rebuild me", properties={"doc_id": "ftsdoc004"})
+    _index_pdf(user, "ftsdoc004", [(1, "some indexed text")])
+
+    r = guest.post("/api/search-reindex")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scheduled"] >= 1 or body["busy"]  # started, or an indexer already runs
+
+    # The doc's bookkeeping row survives (ver may be 0 = stale or already
+    # re-stamped by the background thread — no PDF file makes that instant).
+    with sqlite3.connect(ws_db_path(workspace_of(user), "data.db")) as conn:
+        ver = conn.execute("SELECT ver FROM pdf_fts_docs WHERE doc_id = 'ftsdoc004'").fetchone()[0]
+    assert ver in (0, INDEX_VERSION)
+
+
+def test_search_reindex_targeted_single_doc(guest):
+    """doc_ids re-indexes just those papers: no global stale stamp, and ids
+    outside the caller's library are ignored."""
+    from gamma.db import ws_db_path
+    from gamma.textnorm import INDEX_VERSION
+
+    user = guest.get("/api/session").json()["user"]
+    make_page(guest, "Keep me", properties={"doc_id": "ftsdoc005"})
+    make_page(guest, "Reindex me", properties={"doc_id": "ftsdoc006"})
+    _index_pdf(user, "ftsdoc005", [(1, "already indexed text")])
+
+    r = guest.post("/api/search-reindex", json={"doc_ids": ["ftsdoc006", "not-my-doc"]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["scheduled"] == 1 or body["busy"]
+
+    # The untouched doc keeps its current-version stamp (a full rebuild would
+    # have zeroed it).
+    with sqlite3.connect(ws_db_path(workspace_of(user), "data.db")) as conn:
+        ver = conn.execute(
+            "SELECT ver FROM pdf_fts_docs WHERE doc_id = 'ftsdoc005'").fetchone()[0]
+    assert ver == INDEX_VERSION
+
+
+def test_tasks_endpoint_shape(guest):
+    r = guest.get("/api/tasks")
+    assert r.status_code == 200
+    idx = r.json()["indexing"]
+    assert set(idx) >= {"total", "done", "active"}

@@ -115,13 +115,14 @@ def test_ops_rejects_bad_structure(guest):
     assert _ops(guest, page["id"], [{"op": "set", "id": "nope", "content": "x"}]).status_code == 404
     assert _ops(guest, page["id"], [{"op": "insert", "id": "ruC", "parent": other["id"], "content": "c"}]).status_code == 403
     # a bad batch writes nothing (the earlier op in it is rolled back)
+    seq = guest.get(f"/api/pages/{page['id']}/ops").json()["seq"]
     r = _ops(guest, page["id"], [
         {"op": "set", "id": "ruA", "content": "rolled back"},
         {"op": "insert", "id": "bad id!", "parent": page["id"], "content": "x"},
     ])
     assert r.status_code == 400
     assert guest.get("/api/blocks/ruA").json()["content"] == "a"
-    assert guest.get(f"/api/pages/{page['id']}/ops").json()["seq"] == 1
+    assert guest.get(f"/api/pages/{page['id']}/ops").json()["seq"] == seq
     # empty / oversized batches, unknown ops (pydantic: 422), not a page (404)
     assert _ops(guest, page["id"], []).status_code == 400
     assert _ops(guest, page["id"], [{"op": "explode", "id": "ruA"}]).status_code == 422
@@ -152,9 +153,10 @@ def test_ops_touch_only_changed_rows(guest):
 def test_ops_insert_retry_is_idempotent(guest):
     page = make_page(guest, "Retry page")
     batch = [{"op": "insert", "id": "reA", "parent": page["id"], "content": "a", "props": {"k": 1}}]
-    assert _ops(guest, page["id"], batch).status_code == 200
+    first = _ops(guest, page["id"], batch)
+    assert first.status_code == 200
     r = _ops(guest, page["id"], batch)  # the network ate the first response
-    assert r.status_code == 200 and r.json()["seq"] == 2
+    assert r.status_code == 200 and r.json()["seq"] == first.json()["seq"] + 1
     kids = _tree(guest, page["id"])
     assert len(kids) == 1 and kids[0]["properties"] == {"k": 1}
 
@@ -247,66 +249,94 @@ def _recv(ws, kind):
     raise AssertionError(f"no {kind} message")
 
 
-def test_socket_hello_fanout_and_presence(guest):
+def _hello(ws):
+    """The hello a fresh socket receives; its seq is the page's log position,
+    the base every later sequence number is checked against."""
+    msg = ws.receive_json()
+    assert msg["t"] == "hello"
+    return msg
+
+
+def test_socket_hello_and_fanout(guest):
     page = make_page(guest, "Socket page")
     with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=aa") as a:
-        hello = a.receive_json()
-        assert hello["t"] == "hello" and hello["client"] == "aa" and hello["seq"] == 0
+        hello = _hello(a)
+        assert hello["client"] == "aa"
         assert [p["client"] for p in hello["peers"]] == ["aa"] and hello["peers"][0]["name"] == "guest"
         with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=bb") as b:
-            hb = b.receive_json()
+            hb = _hello(b)
             assert hb["color"] != hello["color"] and {p["client"] for p in hb["peers"]} == {"aa", "bb"}
             assert _recv(a, "join")["peer"]["client"] == "bb"
-            # a write reaches both, tagged with the writer's client id and seq
+            # a write reaches both, tagged with the writer's client id and the next seq
             r = _ops(guest, page["id"], [{"op": "insert", "id": "wsA", "parent": page["id"], "content": "hi"}], client_id="aa")
             assert r.status_code == 200
             for ws in (a, b):
                 m = _recv(ws, "ops")
-                assert m["seq"] == 1 and m["client"] == "aa" and m["actor"] == "guest"
+                assert m["seq"] == hello["seq"] + 1 and m["client"] == "aa" and m["actor"] == "guest"
                 assert m["ops"][0]["id"] == "wsA" and m["ops"][0]["position"]
-            # presence: a cursor travels to the others only
-            a.send_json({"t": "cursor", "block": "wsA", "anchor": 1, "head": 2})
-            m = _recv(b, "cursor")
-            assert m == {"t": "cursor", "client": "aa", "block": "wsA", "anchor": 1, "head": 2}
-            # a later joiner sees the cursor in the hello
-            with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=cc") as c:
-                hc = c.receive_json()
-                assert next(p for p in hc["peers"] if p["client"] == "aa")["block"] == "wsA"
-            assert _recv(a, "leave")["client"] == "cc"
-            # a caret sent with a batch rides along on the fan-out (to the
-            # writer too — it is the batch's ack for the others' bookkeeping),
-            # and is the writer's presence from then on
-            r = guest.post(f"/api/pages/{page['id']}/ops", json={
-                "client": "aa", "ops": [{"op": "set", "id": "wsA", "content": "hi there"}],
-                "cursor": {"block": "wsA", "anchor": 8, "head": 8}})
-            assert r.status_code == 200
-            for ws in (a, b):
-                m = _recv(ws, "ops")
-                assert m["client"] == "aa" and m["cursor"] == {"block": "wsA", "anchor": 8, "head": 8}
-            with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=cc") as c:
-                hc = c.receive_json()
-                pa = next(p for p in hc["peers"] if p["client"] == "aa")
-                assert (pa["block"], pa["anchor"], pa["head"]) == ("wsA", 8, 8)
-            assert _recv(a, "leave")["client"] == "cc"
-            # a batch without one changes nothing about presence
-            r = _ops(guest, page["id"], [{"op": "set", "id": "wsA", "content": "hi"}], client_id="aa")
-            assert r.status_code == 200
-            assert "cursor" not in _recv(b, "ops")
         assert _recv(a, "leave")["client"] == "bb"
-    # the single-block endpoints and page writers reach the room too
+
+
+def test_socket_cursor_presence(guest):
+    page = make_page(guest, "Socket cursor page")
+    assert _ops(guest, page["id"], [{"op": "insert", "id": "wsC", "parent": page["id"], "content": "hi"}]).status_code == 200
+    with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=aa") as a, \
+            guest.websocket_connect(f"/api/ws/page/{page['id']}?client=bb") as b:
+        _hello(a), _hello(b)
+        # a cursor travels to the others only
+        a.send_json({"t": "cursor", "block": "wsC", "anchor": 1, "head": 2})
+        assert _recv(b, "cursor") == {"t": "cursor", "client": "aa", "block": "wsC", "anchor": 1, "head": 2}
+        # a later joiner sees it in the hello
+        with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=cc") as c:
+            assert next(p for p in _hello(c)["peers"] if p["client"] == "aa")["block"] == "wsC"
+        assert _recv(a, "leave")["client"] == "cc"
+
+
+def test_socket_cursor_rides_on_a_batch(guest):
+    page = make_page(guest, "Socket batch cursor page")
+    assert _ops(guest, page["id"], [{"op": "insert", "id": "wsR", "parent": page["id"], "content": "hi"}]).status_code == 200
+    with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=aa") as a, \
+            guest.websocket_connect(f"/api/ws/page/{page['id']}?client=bb") as b:
+        _hello(a), _hello(b)
+        # a caret sent with a batch rides along on the fan-out (to the writer
+        # too — it is the batch's ack for the others' bookkeeping), and is
+        # the writer's presence from then on
+        r = guest.post(f"/api/pages/{page['id']}/ops", json={
+            "client": "aa", "ops": [{"op": "set", "id": "wsR", "content": "hi there"}],
+            "cursor": {"block": "wsR", "anchor": 8, "head": 8}})
+        assert r.status_code == 200
+        for ws in (a, b):
+            m = _recv(ws, "ops")
+            assert m["client"] == "aa" and m["cursor"] == {"block": "wsR", "anchor": 8, "head": 8}
+        with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=cc") as c:
+            pa = next(p for p in _hello(c)["peers"] if p["client"] == "aa")
+            assert (pa["block"], pa["anchor"], pa["head"]) == ("wsR", 8, 8)
+        assert _recv(a, "leave")["client"] == "cc"
+        # a batch without one changes nothing about presence
+        assert _ops(guest, page["id"], [{"op": "set", "id": "wsR", "content": "hi"}], client_id="aa").status_code == 200
+        assert "cursor" not in _recv(b, "ops")
+
+
+def test_socket_server_side_writers_reach_the_room(guest):
+    """The single-block endpoints and the page writers publish ops too; a
+    whole-subtree replace can't be expressed as ops and publishes a reload."""
+    page = make_page(guest, "Socket writers page")
+    assert _ops(guest, page["id"], [{"op": "insert", "id": "wsD", "parent": page["id"], "content": "hi"}]).status_code == 200
     with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=dd") as d:
-        assert d.receive_json()["seq"] == 3
-        assert guest.put("/api/blocks/wsA", json={"content": "edited", "properties": {"x": 1}}).status_code == 200
+        seq = _hello(d)["seq"]
+        assert guest.put("/api/blocks/wsD", json={"content": "edited", "properties": {"x": 1}}).status_code == 200
         m = _recv(d, "ops")
-        assert m["ops"] == [{"op": "set", "id": "wsA", "content": "edited", "props": {"x": 1}}]
+        assert m["seq"] == seq + 1
+        assert m["ops"] == [{"op": "set", "id": "wsD", "content": "edited", "props": {"x": 1}}]
         assert guest.put(f"/api/blocks/{page['id']}", json={"content": "Renamed socket page"}).status_code == 200
         assert _recv(d, "ops")["ops"][0] == {"op": "set", "id": page["id"], "content": "Renamed socket page"}
-        assert guest.delete("/api/blocks/wsA").status_code == 200
-        assert _recv(d, "ops")["ops"] == [{"op": "delete", "id": "wsA"}]
-        # a whole-subtree replace can't be expressed as ops: reload
+        assert guest.delete("/api/blocks/wsD").status_code == 200
+        assert _recv(d, "ops")["ops"] == [{"op": "delete", "id": "wsD"}]
         assert guest.put(f"/api/blocks/{page['id']}/children", json={"blocks": [{"content": "bulk"}]}).status_code == 200
-        assert _recv(d, "reload")["seq"] == 7
-        assert guest.get(f"/api/pages/{page['id']}/ops", params={"since": 6}).json()["batches"][0]["ops"] == [{"op": "reload"}]
+        reload = _recv(d, "reload")
+        assert reload["seq"] == seq + 4  # one batch per write above
+        log = guest.get(f"/api/pages/{page['id']}/ops", params={"since": reload["seq"] - 1}).json()
+        assert log["batches"][0]["ops"] == [{"op": "reload"}]
 
 
 def test_socket_cross_page_move_and_ai_edit(guest):
@@ -365,3 +395,48 @@ def test_socket_auth(guest, owner, editor):
         with pytest.raises(WebSocketDisconnect):
             with ow.websocket_connect("/api/ws/page/nope"):
                 pass
+
+
+def test_set_with_base_merges_concurrent_edits(guest):
+    from gamma import textmerge
+    # the pure merge: different spans both survive, an equal base is a plain replace
+    assert textmerge.merge("hello world", "hello brave world", "hello world!") == ("hello brave world!", True)
+    assert textmerge.merge("hello world", "hello brave world", "hello world") == ("hello brave world", True)
+    lines = lambda *xs: chr(10).join(xs)  # noqa: E731
+    assert textmerge.merge(lines("a", "b", "c"), lines("a", "b", "c", "d"), lines("A", "b", "c"))[0] == lines("A", "b", "c", "d")
+    assert textmerge.map_offset("hello world!", "hello brave world!", 12) == 18
+    assert textmerge.map_offset("hello world!", "hello brave world!", 3) == 3
+
+    page = make_page(guest, "Merge page")
+    blk = guest.post("/api/blocks", json={"parent_id": page["id"], "content": "hello world"}).json()
+    # two clients edit from the same base: the second is merged, not replaced
+    assert _ops(guest, page["id"], [{"op": "set", "id": blk["id"], "content": "hello brave world", "base": "hello world"}], client_id="a").status_code == 200
+    r = _ops(guest, page["id"], [{"op": "set", "id": blk["id"], "content": "hello world!", "base": "hello world"}], client_id="b")
+    assert r.status_code == 200
+    assert r.json()["ops"] == [{"op": "set", "id": blk["id"], "content": "hello brave world!"}]  # merged text echoed, no base
+    assert _tree(guest, page["id"])[0]["content"] == "hello brave world!"
+    # a base equal to the current text, or no base at all: plain replace
+    assert _ops(guest, page["id"], [{"op": "set", "id": blk["id"], "content": "fresh", "base": "hello brave world!"}]).status_code == 200
+    assert _tree(guest, page["id"])[0]["content"] == "fresh"
+    assert _ops(guest, page["id"], [{"op": "set", "id": blk["id"], "content": "plain"}]).status_code == 200
+    assert _tree(guest, page["id"])[0]["content"] == "plain"
+    # the log holds the merged text, never the base
+    batches = guest.get(f"/api/pages/{page['id']}/ops", params={"since": 0}).json()["batches"]
+    assert all("base" not in op for b in batches for op in b["ops"])
+    assert batches[2]["ops"][0]["content"] == "hello brave world!"
+
+
+def test_merged_batch_remaps_the_writers_caret(guest):
+    page = make_page(guest, "Caret merge page")
+    blk = guest.post("/api/blocks", json={"parent_id": page["id"], "content": "hello world"}).json()
+    with guest.websocket_connect(f"/api/ws/page/{page['id']}?client=w") as w:
+        w.receive_json()
+        assert _ops(guest, page["id"], [{"op": "set", "id": blk["id"], "content": "hello brave world", "base": "hello world"}], client_id="a").status_code == 200
+        _recv(w, "ops")
+        r = guest.post(f"/api/pages/{page['id']}/ops", json={
+            "client": "b", "ops": [{"op": "set", "id": blk["id"], "content": "hello world!", "base": "hello world"}],
+            "cursor": {"block": blk["id"], "anchor": 12, "head": 12}})
+        assert r.status_code == 200
+        m = _recv(w, "ops")
+        assert m["ops"][0]["content"] == "hello brave world!"
+        assert m["cursor"] == {"block": blk["id"], "anchor": 18, "head": 18}

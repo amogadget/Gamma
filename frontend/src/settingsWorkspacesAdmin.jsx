@@ -142,7 +142,7 @@ function NewWorkspaceDialog({ me, accounts, setStatus, onCreated, onClose }) {
   }
 
   return (
-    <SubDialog title="New shared workspace" onClose={onClose}>
+    <SubDialog title="New shared workspace" onClose={onClose} draft={form}>
       <div className="settingsForm">
         <Field label="Name" hint="a lab, a course, a reading room — personal workspaces are made from Members & sharing">
           <input

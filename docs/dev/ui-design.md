@@ -24,7 +24,7 @@ already exists. Bespoke CSS classes are for **layout only**.
 
 Two separate size levers, deliberately not one "zoom":
 
-- **Control size** (Settings → General, `gamma-ui-scale`, a `Stepper` over
+- **Control size** (Settings / Appearance, `gamma-ui-scale`, a `Stepper` over
   the `UI_SCALE` range in `prefs.js`, 70–160 % in 10 % steps) is a CSS
   `zoom` on every button and toggle —
   `:where(button, .uiBtn, .ctlBtn, .uiClose, .switch)` in `app.css` reads
@@ -99,13 +99,17 @@ are layout only. The read-only view shows the counterpart `.shareBadge`
 Settings panes are built only from
 [settingsKit.jsx](../../frontend/src/settingsKit.jsx):
 
-- `PaneHead` › `Section` › `Row` / `Toggle` — a pane is a stack of sections,
-  a section a stack of rows: icon · label · one short hint · control. Nothing
-  expands inline between rows; the long explanation lives in the row's
-  `title` attribute (hover only).
+- `PaneHead` / `Section` / `Row` / `Toggle`: small icon, readable label, short
+  hint and shared control. Rows use the shared hover background without a drop
+  shadow. Important effects stay visible; supplementary help uses a hover
+  tooltip, without an explicit Details toggle.
+- Larger areas (AI, workspace management and administration) get second-level
+  navigation with Back to settings. Short pages keep the main sidebar. Search
+  opens the relevant page and focuses the matching setting.
 - Editor dialogs: `SubDialog` › `.settingsForm` › `Step` (numbered wizard
   stages) or `Field` (caption + hint + one control), closed by a
-  `.reportModalBtns` footer.
+  `.reportModalBtns` footer. Pass the draft to `SubDialog` so unsaved edits are
+  protected on Cancel, Escape and backdrop clicks.
 - Shared controls: `Segmented` (joined pills for exclusive choices),
   `ToggleGroup` (its multi-select counterpart: a wrapping row of small
   icon + short-name chips, each an independent on/off — `uiBtn sm` with the
@@ -113,7 +117,7 @@ Settings panes are built only from
   chat's ⚙ popover are one of these, never a column of checkboxes),
   `UnitInput` (number + unit suffix — units never live in labels),
   `Stepper` (−/+ around a readout for a small numeric range; the readout
-  click resets to the default),
+  is followed by the shared Reset button),
   `PasswordInput` (a password box with a show/hide eye — a `ctlBtn` over the
   input's right edge, outside the Tab order; it wraps the input's own class,
   so the login page uses it with `loginInput` and every secret field in

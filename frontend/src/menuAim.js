@@ -49,7 +49,8 @@ function aimTriangle(fromX, fromY, rect, slack = 6) {
 }
 
 // Is the cursor at (x, y) heading into `rect`, coming from (fromX, fromY)?
-function isAimingAt(x, y, fromX, fromY, rect, slack) {
+// Exported for its tests.
+export function isAimingAt(x, y, fromX, fromY, rect, slack) {
   if (!rect) return false;
   const [ax, ay, bx, by, cx, cy] = aimTriangle(fromX, fromY, rect, slack);
   // A degenerate triangle (cursor parked exactly on the panel edge) can't
