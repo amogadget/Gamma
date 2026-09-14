@@ -4541,15 +4541,22 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 
 /* --- Handwriting (inkLayer.jsx, docs/dev/handwriting.md) ------------------ */
-/* While a tool is armed the page is a drawing surface: no text selection, a
-   crosshair; touch-action stays until fingers are meant to draw too. */
+/* While a tool is armed the page is a drawing surface (PdfPage turns the
+   text layer's user-select off): a crosshair; touch-action stays until
+   fingers are meant to draw too. The retained strokes sit with the
+   highlight overlays (z 2), the in-progress canvas above everything. */
 .pdfViewer.inkArmed .pdfPageWrap { cursor: crosshair; }
-.pdfViewer.inkArmed .textLayer,
-.pdfViewer.inkArmed .textLayer span {
-  user-select: none !important;
-  -webkit-user-select: none !important;
-}
 .pdfViewer.inkTouchDraw .pdfPageWrap { touch-action: none; }
+.inkLayer, .inkCanvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.inkLayer { z-index: 2; overflow: visible; }
+.inkCanvas { z-index: 5; display: none; }
 .pdfViewer.pdfDark .inkLayer { filter: invert(1) hue-rotate(180deg); }
 /* The brief outline after a jump from the notes. */
 .inkFlash {
@@ -4585,20 +4592,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 .pdfInkSep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
-.inkSwatch {
-  width: 16px;
-  height: 16px;
-  border-radius: 999px;
-  border: 2px solid transparent;
-  padding: 0;
-  cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15);
-}
-.inkSwatch.active { border-color: var(--accent); }
 .inkSizeBtn { font-size: 11px; font-weight: 600; }
 
 /* The notes: a rounded-square pen marker in the dot slot, the strokes as a
-   picture above the caption. */
+   picture above the caption (on white: the card is a piece of the page,
+   the same rule as .pdfAreaMarquee). */
 .inkMarker {
   display: inline-flex;
   align-items: center;

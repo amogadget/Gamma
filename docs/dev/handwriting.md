@@ -1,8 +1,8 @@
 # Handwriting (ink) annotations
 
 Draw on a PDF page with a stylus, mouse or finger; the strokes become a
-block in the page's notes. Implemented 2026-09-14; the survey and the
-reasons behind the shape are in
+block in the page's notes. The survey behind the shape, and how Notability
+does the same things, is in
 [research/handwriting.md](../research/handwriting.md). Code:
 `gamma/ink.py` + `gamma/routers/ink.py` (server), `frontend/src/ink.js`,
 `inkStore.js`, `inkLayer.jsx` (client), tests `backend/tests/test_ink.py`,
@@ -91,14 +91,16 @@ sample bytes.
 
 ## Client
 
-- `ink.js` (pure): codec, bounds, `pdfPositionOf`, the stroke edits
-  (`hitStrokes` / `eraseAt` — the partial eraser re-encodes the surviving
-  runs as new strokes — `translateStrokes`, which only touches the first
-  sample's two absolute integers, `strokesInLasso`, `boundsOf`), and
-  rendering — a pen stroke is perfect-freehand's outline as one filled
-  SVG path (page units; the layer's `viewBox` does the zoom), a highlighter
-  a stroked polyline with `mix-blend-mode: multiply`. Paths and decoded
-  samples are cached per stroke object.
+- `ink.js` (pure): the codec, bounds (`strokeBounds`, `inkBounds`,
+  `boundsOf`, `unionBox`), `pdfPositionOf`, the stroke edits and the
+  rendering. `hitStrokes` is the whole-stroke eraser's test; `eraseAt` the
+  partial eraser, which re-encodes the surviving runs as new strokes;
+  `translateStrokes` only touches the first sample's two absolute integers;
+  `strokesInLasso` picks strokes with more than half their samples inside
+  the polygon. A pen stroke renders as perfect-freehand's outline in one
+  filled SVG path (page units; the layer's `viewBox` does the zoom), a
+  highlighter as a stroked polyline with `mix-blend-mode: multiply`. Paths
+  and decoded samples are cached per stroke object.
 - `inkStore.js`: files by URL, and per-block **drafts** — the strokes as
   edited here, ahead of upload. A draft wins over the block's file until
   the upload replaces `ink_url` with the draft's; a remote `ink_url` change
@@ -128,8 +130,8 @@ sample bytes.
   block through `PUT /api/blocks/{id}` — a server-side writer, so the
   change fans out over the page socket and reaches this tree like a remote
   op; only the group's block itself (first stroke) is inserted through the
-  tree. An empty group is deleted the same way. A 404 (the insert still
-  queued) retries after two seconds.
+  tree. An empty group is deleted the same way. A failed flush (the block's
+  insert may still be queued) retries after two seconds.
 - With the strip open, Ctrl+Z is the stroke history (a capture-phase key
   handler, so the page's block undo never sees it); with it closed, Ctrl+Z
   is the page's block history, which knows the group's block but not its
@@ -139,7 +141,9 @@ sample bytes.
 
 ## Server
 
-- `gamma/ink.py`: the pydantic schema and limits, the codec,
+- `gamma/ink.py`: the pydantic schema and limits, the codec, `read_upload`
+  (the parsed file behind a block's `ink_url`, None when unreadable — the
+  exporters' one loader),
   `stroke_polyline` (variable-width polylines every renderer draws from),
   `bounding_box` / `pdf_position`, `to_svg`, `pdf_path_ops` (content-stream
   operators for the notes-as-PDF writer), `ink_buckets` and `from_pdf_ink`
@@ -164,7 +168,11 @@ sample bytes.
 
 ## Not built yet
 
-Shape tools, resizing or rotating a lasso selection, a `canvas` space for ink blocks on pages without a PDF, Xournal++ `.xopp`
-import, *Transcribe with AI*, live co-drawing over presence, audio replay
-(the per-sample `t` and stroke ids are stored for it). Obsidian vault
-export writes an ink block's caption only.
+Shape tools, resizing or rotating a lasso selection, a `canvas` space for
+ink blocks on pages without a PDF, Xournal++ `.xopp` import, *Transcribe
+with AI*, live co-drawing over presence, audio replay (the per-sample `t`
+and stroke ids are stored for it). Obsidian vault export writes an ink
+block's caption only. The Notability comparison in the research note lists
+what a closer pen experience still needs (draw-and-hold straightening,
+more sizes behind three slots, custom colours, an eraser that returns to
+the last tool, the highlighter behind the ink).

@@ -118,6 +118,21 @@ def parse_ink(data: bytes | str | dict) -> InkFile:
         raise InkError(str(e)) from e
 
 
+def read_upload(uploads_dir, url: str) -> InkFile | None:
+    """The parsed file a block's ``ink_url`` (``/api/uploads/<sha>.ink``)
+    names, or None when the reference, the file or its contents are off;
+    the exporters skip such a group."""
+    from .markdown_export import UPLOAD_RE
+    m = UPLOAD_RE.search(url or "")
+    path = uploads_dir / m.group(1) if (m and uploads_dir) else None
+    if not path or not path.is_file():
+        return None
+    try:
+        return parse_ink(path.read_bytes())
+    except (InkError, OSError):
+        return None
+
+
 # --- codec -------------------------------------------------------------------
 
 def decode_stroke(stroke: Stroke) -> list[dict]:

@@ -5248,16 +5248,16 @@ export default function App() {
   // plus a properties PATCH through the block API (a server-side writer, so
   // the change fans out over the page socket and lands in this tree like a
   // remote op); only the group's block itself is inserted through the tree.
+  const inkPen = useMemo(() => ({ tool: "pen", color: inkPenColor, size: PEN_SIZES[inkPenSize] ?? 2, opacity: 1 }),
+    [inkPenColor, inkPenSize]);
   const inkTool = useMemo(() => {
     const t = inkUi.tool;
     if (!t || readOnly) return null;
     if (t === "eraser" || t === "select") return { tool: t };
     if (t === "highlighter") return { tool: "highlighter", color: inkHlColor, size: HIGHLIGHTER_SIZES[inkHlSize] ?? 12, opacity: 1 };
-    return { tool: "pen", color: inkPenColor, size: PEN_SIZES[inkPenSize] ?? 2, opacity: 1 };
-  }, [inkUi.tool, readOnly, inkHlColor, inkHlSize, inkPenColor, inkPenSize]);
-  const inkPenTool = useMemo(() => (inkAutoPen && !readOnly
-    ? { tool: "pen", color: inkPenColor, size: PEN_SIZES[inkPenSize] ?? 2, opacity: 1 } : null),
-  [inkAutoPen, readOnly, inkPenColor, inkPenSize]);
+    return inkPen;
+  }, [inkUi.tool, readOnly, inkHlColor, inkHlSize, inkPen]);
+  const inkPenTool = inkAutoPen && !readOnly ? inkPen : null;
   const inkBlocks = useMemo(() => {
     const next = flattenBlocks(blocks).filter((b) => b.properties?.ink_url !== undefined)
       .map((b) => ({ id: b.id, properties: b.properties }));
@@ -5385,25 +5385,22 @@ export default function App() {
   function handleInkSelect(page, items) {
     setInkSelection(items.length ? { page, items } : null);
   }
-  function handleInkMoveSelection(page, dx, dy) {
+  // The lasso selection, edited group by group: edit(ink, ids) -> ink.
+  function editInkSelection(edit) {
     if (readOnly || !inkSelection) return;
     const changes = [];
     for (const item of inkSelection.items) {
       const before = inkOf(item.id);
       if (!before) continue;
-      changes.push({ id: item.id, page, before, after: translateStrokes(before, item.ids, dx, dy) });
+      changes.push({ id: item.id, page: inkSelection.page, before, after: edit(before, item.ids) });
     }
     applyInk(changes);
   }
+  function handleInkMoveSelection(page, dx, dy) {
+    editInkSelection((ink, ids) => translateStrokes(ink, ids, dx, dy));
+  }
   function deleteInkSelection() {
-    if (readOnly || !inkSelection) return;
-    const changes = [];
-    for (const item of inkSelection.items) {
-      const before = inkOf(item.id);
-      if (!before) continue;
-      changes.push({ id: item.id, page: inkSelection.page, before, after: removeStrokes(before, item.ids) });
-    }
-    applyInk(changes);
+    editInkSelection(removeStrokes);
     setInkSelection(null);
   }
   // From the notes (marker / card): show the group on the page. From the

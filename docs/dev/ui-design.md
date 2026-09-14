@@ -183,6 +183,7 @@ extend that list, don't add another copy.
 | `settings.jsx` + `settingsKit/Ai/Users/Workspace/WorkspacesAdmin/Backups/Server.jsx` | the Settings dialog (`settingsKit` holds the shared primitives incl. `AccountPicker`, the search-box-over-account-rows people picker, and `LogBox`) |
 | `chatDock.jsx` | the AI chat panel (incl. agent wiring); header = a `.ctlBtnRow` of `.ctlBtn` icon buttons (the PDF zoom column's buttons laid flat) with the ⚙ settings popover |
 | `pdfViewer.jsx` | the custom pdf.js viewer |
+| `ink.js`, `inkStore.js`, `inkLayer.jsx` | handwriting ([handwriting.md](handwriting.md)): the stroke codec + geometry (pure), the files/drafts store, and the page layer + notes card + tool strip (`.pdfInkBar`: `ctlBtn`s and `colorBtn` swatches) |
 | `search.jsx` | workspace search (Ctrl+F) |
 | `blockTree.jsx`, `logseqPdfModel.js` | outliner rendering / pure tree ops |
 | `fileChip.jsx` | the file chip an upload link renders as — a small card (kind icon in a tinted square, name, download arrow), inline so it sits in a sentence, identical for every type; a PDF or markdown chip whose page exists gets an accent "open page" button before the arrow; a `ContextMenu` on right-click with "Open page" / "Add to library" (fed by `FileChipContext` from App and one batched `POST /pages/by-docs` per render) and download; also the shared `postFile` / `uploadFilesAsLines` upload helpers |

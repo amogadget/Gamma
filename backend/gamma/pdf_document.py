@@ -442,13 +442,7 @@ class _Canvas:
         (never enlarged). False when the ink file is missing or unreadable —
         the caller falls back to text."""
         from . import ink as inkmod
-        from .markdown_export import UPLOAD_RE
-        m = UPLOAD_RE.search(ink_url or "")
-        path = self.uploads_dir / m.group(1) if (m and self.uploads_dir) else None
-        try:
-            ink_file = inkmod.parse_ink(path.read_bytes()) if path and path.is_file() else None
-        except inkmod.InkError:
-            ink_file = None
+        ink_file = inkmod.read_upload(self.uploads_dir, ink_url)
         box = inkmod.bounding_box(ink_file) if ink_file else None
         if not box:
             return False

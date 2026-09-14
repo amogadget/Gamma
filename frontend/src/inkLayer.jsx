@@ -12,7 +12,7 @@ import { getStroke } from "perfect-freehand";
 import { ErasePartialIcon, EraserIcon, EraseStrokeIcon, HighlightIcon, LassoIcon, PenIcon, PlusIcon, XIcon } from "./icons";
 import {
   HIGHLIGHTER_SIZES, PEN_COLORS, PEN_SIZES, boundsOf, encodeStroke, hitStrokes, inkBounds, outlineOptions,
-  strokePath, strokesInLasso, svgPathFromPoints,
+  strokePath, strokesInLasso, svgPathFromPoints, unionBox,
 } from "./ink";
 import * as inkStore from "./inkStore";
 
@@ -24,7 +24,7 @@ export function useInkVersion() {
 }
 
 const ERASER_PX = 9;          // eraser radius on screen
-const SIZE_LABELS = ["S", "M", "L"];
+const SIZES = [["S", "Thin"], ["M", "Medium"], ["L", "Thick"]];
 
 function Strokes({ ink, onClick, hide }) {
   return ink.strokes.map((s) => {
@@ -39,8 +39,6 @@ function Strokes({ ink, onClick, hide }) {
   });
 }
 
-const unionBox = (a, b) => (a ? [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])] : [...b]);
-
 // tool: the armed tool {tool: pen|highlighter|eraser|select, color, size}
 // or null; penTool: what a stylus draws with when nothing is armed;
 // eraserMode: "stroke" (whole strokes) | "partial" (cuts through them);
@@ -48,7 +46,7 @@ const unionBox = (a, b) => (a ? [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Mat
 // flash: {id, nonce} outlines a group briefly.
 export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, penTool, penOnly, pressure, eraserMode,
   selection, flash, onStroke, onErase, onErasePartial, onSelect, onMoveSelection, onJump }) {
-  const version = useInkVersion();
+  useInkVersion();
   const canvasRef = useRef(null);
   const [dragOffset, setDragOffset] = useState(null);   // while moving the selection: {dx, dy} in pt
   const live = useRef({});
@@ -67,11 +65,10 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       const g = groups.find((x) => x.id === item.id);
       if (!g) continue;
       item.ids.forEach((id) => selectedIds.add(id));
-      const b = boundsOf(g.ink, item.ids);
-      if (b) selBox = unionBox(selBox, b);
+      selBox = unionBox(selBox, boundsOf(g.ink, item.ids));
     }
   }
-  live.current = { tool, penTool, penOnly, pressure, eraserMode, width, height, blocks, groups, selBox,
+  live.current = { tool, penTool, penOnly, pressure, eraserMode, width, height, groups, selBox,
     onStroke, onErase, onErasePartial, onSelect, onMoveSelection };
 
   useEffect(() => {
@@ -95,7 +92,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       return { use, eraser, rect, k, toPt: (ev) => ({ x: (ev.clientX - rect.left) / k, y: (ev.clientY - rect.top) / k }) };
     };
 
-    const eraseAt = (ctx, ev) => {
+    const eraseUnder = (ctx, ev) => {
       const { x, y } = ctx.toPt(ev);
       const r = ERASER_PX / ctx.k;
       const L = live.current;
@@ -178,7 +175,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       try { el.setPointerCapture(e.pointerId); } catch { /* capture is a nicety */ }
       if (ctx.eraser) {
         drawing = { ...ctx, id: e.pointerId, mode: "erase" };
-        eraseAt(ctx, e);
+        eraseUnder(ctx, e);
         return;
       }
       if (ctx.use.tool === "select") {
@@ -200,7 +197,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       const d = drawing;
       if (!d || e.pointerId !== d.id) return;
       e.preventDefault();
-      if (d.mode === "erase") { eraseAt(d, e); return; }
+      if (d.mode === "erase") { eraseUnder(d, e); return; }
       if (d.mode === "move") {
         const pt = d.toPt(e);
         d.dx = pt.x - d.start.x;
@@ -279,10 +276,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
   const dragging = !!(dragOffset && selectedIds.size);
   return (
     <>
-      <svg className="inkLayer" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none"
-        data-ink-version={version}
-        style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 2,
-          overflow: "visible", pointerEvents: "none" }}>
+      <svg className="inkLayer" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
         {groups.map((g) => (
           <g key={g.id} data-ink-id={g.id}
             style={{ pointerEvents: armed || !onJump ? "none" : "visiblePainted", cursor: "pointer" }}>
@@ -307,9 +301,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
             width={fb[2] - fb[0] + 12} height={fb[3] - fb[1] + 12} rx={4} />
         ) : null}
       </svg>
-      <canvas ref={canvasRef} className="inkCanvas"
-        style={{ position: "absolute", left: 0, top: 0, width: "100%", height: "100%", zIndex: 5,
-          pointerEvents: "none", display: "none" }} />
+      <canvas ref={canvasRef} className="inkCanvas" />
     </>
   );
 }
@@ -357,13 +349,13 @@ export function InkToolbar({ state, onChange, highlightColors, onNewGroup, onClo
       {tool && tool !== "eraser" && tool !== "select" ? (
         <>
           {colors.map((c) => (
-            <button key={c} type="button" className={"inkSwatch" + (state[colorKey] === c ? " active" : "")}
+            <button key={c} type="button" className={"colorBtn" + (state[colorKey] === c ? " selected" : "")}
               style={{ background: c }} onClick={() => onChange({ [colorKey]: c })} title={c} aria-label={`Colour ${c}`} />
           ))}
           <span className="pdfInkSep" />
-          {SIZE_LABELS.map((label, i) => (
+          {SIZES.map(([label, name], i) => (
             <button key={label} type="button" className={"ctlBtn inkSizeBtn" + (state[sizeKey] === i ? " modeActive" : "")}
-              onClick={() => onChange({ [sizeKey]: i })} title={`${label === "S" ? "Thin" : label === "M" ? "Medium" : "Thick"} (${(hl ? HIGHLIGHTER_SIZES : PEN_SIZES)[i]} pt)`}>{label}</button>
+              onClick={() => onChange({ [sizeKey]: i })} title={`${name} (${(hl ? HIGHLIGHTER_SIZES : PEN_SIZES)[i]} pt)`}>{label}</button>
           ))}
           <span className="pdfInkSep" />
         </>

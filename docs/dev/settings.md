@@ -29,8 +29,10 @@ Five everyday destinations are defined by `PREFERENCE_NAV` in
 
 - **Appearance**: theme choices and dark PDF pages (account-synced), control
   size and status bar (this browser).
-- **Reading & editing**: PDF scrolling, imported annotations, translation
-  shortcut and language, Enter behavior, highlight badges, search expansion.
+- **Reading & editing**: PDF scrolling, imported annotations, the
+  handwriting input rules (stylus draws right away, fingers never draw,
+  pressure), translation shortcut and language, Enter behavior, highlight
+  badges, search expansion.
 - **Library**: thumbnails, folder/label display, metadata lookup, open-access
   fallback and saving external PDFs. These are browser preferences.
 - **AI**: opens a second-level sidebar with Connections & models, Assistant,

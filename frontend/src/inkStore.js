@@ -32,8 +32,6 @@ export function loadInk(url) {
   return p;
 }
 
-export function rememberFile(url, ink) { files.set(url, ink); }
-
 // The strokes to show for a block: its draft, else its file (fetch kicked
 // off when unseen — the caller re-renders on the store's next bump).
 export function inkFor(block) {
@@ -70,4 +68,3 @@ export function dirtyDrafts() {
   return [...drafts.entries()].filter(([, d]) => d.dirty)
     .map(([id, d]) => ({ id, ink: d.ink, pageId: d.pageId }));
 }
-export function reset() { drafts.clear(); bump(); }

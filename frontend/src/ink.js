@@ -104,13 +104,16 @@ export function strokeBounds(stroke) {
   return out;
 }
 
+// The box around two boxes (either may be null).
+export function unionBox(a, b) {
+  if (!a) return b ? [...b] : null;
+  if (!b) return [...a];
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+}
+
 export function inkBounds(ink) {
   let out = null;
-  for (const s of ink?.strokes || []) {
-    const b = strokeBounds(s);
-    if (!b) continue;
-    out = out ? [Math.min(out[0], b[0]), Math.min(out[1], b[1]), Math.max(out[2], b[2]), Math.max(out[3], b[3])] : [...b];
-  }
+  for (const s of ink?.strokes || []) out = unionBox(out, strokeBounds(s));
   return out;
 }
 
@@ -239,12 +242,7 @@ export function strokesInLasso(ink, polygon) {
 export function boundsOf(ink, ids) {
   const want = new Set(ids);
   let out = null;
-  for (const s of ink?.strokes || []) {
-    if (!want.has(s.id)) continue;
-    const b = strokeBounds(s);
-    if (!b) continue;
-    out = out ? [Math.min(out[0], b[0]), Math.min(out[1], b[1]), Math.max(out[2], b[2]), Math.max(out[3], b[3])] : [...b];
-  }
+  for (const s of ink?.strokes || []) if (want.has(s.id)) out = unionBox(out, strokeBounds(s));
   return out;
 }
 

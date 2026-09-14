@@ -1958,7 +1958,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         </div>
       ) : null}
       <div ref={textRef} className="textLayer" style={{
-        userSelect: readOnly ? "none" : "text", WebkitUserSelect: readOnly ? "none" : "text",
+        userSelect: readOnly || inkTool ? "none" : "text", WebkitUserSelect: readOnly || inkTool ? "none" : "text",
       }} />
       {inkBlocks.length || onInkStroke ? (
         <InkLayer pageNumber={pageNumber} wrapRef={wrapRef}

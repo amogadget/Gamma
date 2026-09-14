@@ -10,9 +10,8 @@ import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
 import { COLORS } from "./pdfViewer";
 import { InkCard } from "./inkLayer";
-import { PenIcon } from "./icons";
 import { handleMarkdownCopy } from "./widgets";
-import { LinkIcon } from "./icons";
+import { LinkIcon, PenIcon } from "./icons";
 import { FileChip, parseUploadUrl, postFile, uploadFilesAsLines } from "./fileChip";
 import {
   envCompletions, findMathAtCursor, insertionFor, latexCompletions,

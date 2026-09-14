@@ -167,8 +167,7 @@ def _collect_marks(blocks) -> list[dict]:
 def _collect_ink(blocks, uploads_dir) -> list[dict]:
     """Handwriting blocks → ``annotate_pdf``'s ink groups (the parsed file,
     the caption + nested notes, the block id). Same skip rule as marks for
-    ink that came from the PDF and is still embedded in it; a missing or
-    unreadable file skips just that group."""
+    ink that came from the PDF and is still embedded in it."""
     children_by_id: dict = {}
     for b in sorted(blocks, key=lambda b: b["position"] or ""):
         children_by_id.setdefault(b["parent_id"], []).append(b)
@@ -178,13 +177,8 @@ def _collect_ink(blocks, uploads_dir) -> list[dict]:
         url = props.get("ink_url")
         if not url or (props.get("imported_annot") and not props.get("annot_stripped")):
             continue
-        m = UPLOAD_RE.search(url)
-        path = uploads_dir / m.group(1) if m else None
-        if not path or not path.is_file():
-            continue
-        try:
-            ink_file = inkmod.parse_ink(path.read_bytes())
-        except inkmod.InkError:
+        ink_file = inkmod.read_upload(uploads_dir, url)
+        if not ink_file:
             continue
         groups.append({"ink": ink_file, "note": highlight_note_text(b, children_by_id), "id": b["id"]})
     return groups
