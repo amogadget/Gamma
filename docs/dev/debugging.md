@@ -161,9 +161,12 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
   own extraction, another tab) shows up within the heartbeat.
 - **Status bar** — Settings → Advanced turns the floating status pill into a
   persistent bar under the tabs.
-- **Library health** — Settings → Library lists, per paper: metadata state,
-  extracted-text chars, and search-index coverage, with retry/reindex
-  buttons.
+- **Library health** — Settings → Library maintenance lists, per paper:
+  metadata state, extracted-text chars, and search-index coverage, with
+  per-row retry/reindex buttons plus batch actions: Fetch needed / Refetch
+  all for metadata, and Reindex needed (only papers the index is missing,
+  holds stale, or hasn't visited — a targeted `/api/search-reindex` with
+  `doc_ids`, unlike the Index section's full Rebuild).
 
 ## Gotchas worth knowing
 

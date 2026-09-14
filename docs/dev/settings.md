@@ -51,8 +51,9 @@ Shorter pages keep the main sidebar:
 - **Library maintenance** (main sidebar): workspace storage, search-index rebuilding and the
   per-paper metadata/text/index health table. Also linked from the Library
   preferences page and the library operations menu.
-- **Administration** (admins only): Users and Server, including workspace
-  administration, server-wide storage defaults, server backups and logs.
+- **Administration** (admins only): Users (accounts, each with its personal
+  workspaces) and Server (shared workspaces, server-wide storage defaults,
+  server backups and logs).
 - **Diagnostics** (main sidebar): browser tracing and the browser session log.
 
 Search is backed by [settingsNavigation.js](../../frontend/src/settingsNavigation.js).

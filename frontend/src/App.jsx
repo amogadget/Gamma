@@ -8555,14 +8555,18 @@ export default function App() {
           closeSettings: () => setSettingsOpen(null),
         } : null}
         users={authUser?.user ? {
-          // Everyone gets this pane; only admins see the other accounts and
-          // the account editor.
+          // Everyone gets this pane; only admins see the other accounts, the
+          // account editor and each account's personal workspaces.
           isAdmin: !!authUser?.is_admin,
           me: authUser.user,
           isGuest: !!authUser?.is_guest,
           quotaInfo,
+          workspaces,
+          switchWorkspace,
+          refreshSession: checkSession,
           setStatus,
           confirm: setConfirmBox,
+          closeSettings: () => setSettingsOpen(null),
           onSelfRenamed: checkSession, // self-rename re-keys the whole app
           refreshQuota,
         } : null}

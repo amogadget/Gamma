@@ -21,7 +21,10 @@ workspace's files), `db.SCHEMA_VERSION`, `manage.py migrate` / `backups`.
    directory that is *ahead* of the binary (`NewerDataError`) or older than
    `MIN_UPGRADABLE` (`TooOldDataError`) stops the server with a clear message.
    `db.connect_users_db()` refuses an outdated file too (`SchemaOutdated`), so
-   no code path can read old shapes with new assumptions.
+   no code path can read old shapes with new assumptions. That refusal
+   covers every `manage.py` command but `migrate`, which is why the Docker
+   entrypoint runs `manage.py migrate` before `manage.py setup` — `setup`
+   alone would exit on an old volume before the server ever starts.
 4. **Backup, then step, then stamp.** Before the first pending step every
    SQLite file is snapshotted with the backup API into
    `backups/<time>-v<N>/` (relative paths kept, plus `manifest.json`);

@@ -133,7 +133,10 @@ memberships, prefs) — no files move.
 frontend [settingsUsers.jsx](../../frontend/src/settingsUsers.jsx): admins
 manage accounts from Settings → Users; non-admins get the same pane as "You"
 (their single row from session + `/api/quota`, since `/api/admin/*` is
-admin-only). Workspaces are managed from Settings → Workspaces
+admin-only). Each account row lists the account's personal workspaces
+(from `/api/admin/workspaces`) with Open / Manage — the workspace dialog in
+admin mode. Shared workspaces are not per account and are managed from
+Settings → Server
 ([settingsWorkspacesAdmin.jsx](../../frontend/src/settingsWorkspacesAdmin.jsx),
 on top of `/api/admin/workspaces` + the workspace API, which admins pass
 without membership — [workspaces.md](workspaces.md)). Backups are not here: every workspace's

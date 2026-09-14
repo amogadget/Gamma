@@ -1,16 +1,16 @@
-// Settings → Server → Workspaces (admins): every workspace on the server —
-// shared ones with their access, owners, members and size; personal ones
-// per account — each with Manage (the shared workspace dialog from
-// settingsWorkspace.jsx, in admin mode: access, quota, ownership, kind
-// conversion, join) and New workspace (a shared one, for any owner, private
-// or public). GUI for GET /api/admin/workspaces + /api/workspaces*
-// (docs/dev/workspaces.md).
+// Settings → Server → Shared workspaces (admins): every shared workspace on
+// the server with its access, owners, members and size, each with Manage
+// (the workspace dialog from settingsWorkspace.jsx, in admin mode: access,
+// quota, ownership, kind conversion, join) and New workspace (for any
+// owner, private or public). Personal workspaces belong to an account, so
+// they sit under its row in Settings → Users (settingsUsers.jsx). GUI for
+// GET /api/admin/workspaces + /api/workspaces* (docs/dev/workspaces.md).
 import React from "react";
 import { API, apiJson, fmtBytes } from "./utils";
 import { MenuSelect } from "./menus";
 import { Section, SubDialog, Field, Empty, UnitInput, AccountPicker } from "./settingsKit";
 import { ManageWorkspaceDialog, useAccounts, ACCESS_OPTIONS, PUBLIC_ROLE_OPTIONS } from "./settingsWorkspace";
-import { GlobeIcon, PenIcon, PlusIcon, UserIcon, UsersIcon } from "./icons";
+import { GlobeIcon, PenIcon, PlusIcon, UsersIcon } from "./icons";
 
 export function WorkspacesAdmin({ value }) {
   const { me, workspaces: mine, switchWorkspace, refreshSession, setStatus, confirm, closeSettings } = value;
@@ -25,9 +25,7 @@ export function WorkspacesAdmin({ value }) {
   }, []);
   React.useEffect(() => { refresh(); }, [refresh]);
 
-  const rows = listing?.workspaces || [];
-  const shared = rows.filter((w) => !w.personal);
-  const personal = rows.filter((w) => w.personal);
+  const shared = (listing?.workspaces || []).filter((w) => !w.personal);
   const openable = new Set((mine || []).map((w) => w.id));
 
   function row(w) {
@@ -36,21 +34,17 @@ export function WorkspacesAdmin({ value }) {
     return (
       <div key={w.id} className="aiProvRow">
         <span className={`aiProvAvatar ${isPublic ? "active" : ""}`}>
-          {w.personal ? <UserIcon size={15} /> : isPublic ? <GlobeIcon size={15} /> : <UsersIcon size={15} />}
+          {isPublic ? <GlobeIcon size={15} /> : <UsersIcon size={15} />}
         </span>
         <span className="aiProvMeta">
           <span className="aiProvName">
             {w.name}
-            {w.personal ? <span className="uiTag">{w.personal === me ? "you" : w.personal}</span> : null}
-            {w.personal && w.default ? <span className="uiTag">default</span> : null}
             {isPublic ? <span className="uiTag">public · everyone {w.public_role === "editor" ? "edits" : "views"}</span> : null}
           </span>
           <span className="aiProvDesc">
-            {w.personal
-              ? `${w.personal}'s personal library`
-              : `${owners.length ? `owner ${owners.join(", ")}` : "no owner"} · ${w.members.length} member${w.members.length === 1 ? "" : "s"}`}
+            {`${owners.length ? `owner ${owners.join(", ")}` : "no owner"} · ${w.members.length} member${w.members.length === 1 ? "" : "s"}`}
             {` · ${fmtBytes(w.used_bytes)}`}
-            {!w.personal && w.quota_mb ? ` of ${w.quota_mb} MB` : ""}
+            {w.quota_mb ? ` of ${w.quota_mb} MB` : ""}
           </span>
         </span>
         <span className="aiProvActions">
@@ -79,10 +73,7 @@ export function WorkspacesAdmin({ value }) {
               </button>
             )}
           >
-            {shared.length ? shared.map(row) : <Empty icon={UsersIcon}>No shared workspaces yet.</Empty>}
-          </Section>
-          <Section title="Personal workspaces">
-            {[...personal].sort((a, b) => a.personal.localeCompare(b.personal) || (b.default - a.default) || a.name.localeCompare(b.name)).map(row)}
+            {shared.length ? shared.map(row) : <Empty icon={UsersIcon}>No shared workspaces yet. Personal workspaces are listed under each account in Users.</Empty>}
           </Section>
           {listing.orphans?.length ? (
             <div className="settingsPaneHint">
@@ -144,7 +135,7 @@ function NewWorkspaceDialog({ me, accounts, setStatus, onCreated, onClose }) {
   return (
     <SubDialog title="New shared workspace" onClose={onClose} draft={form}>
       <div className="settingsForm">
-        <Field label="Name" hint="a lab, a course, a reading room — personal workspaces are made from Members & sharing">
+        <Field label="Name" hint="a lab, a course, a reading room — personal workspaces are made from Manage workspaces">
           <input
             className="aiKeyInput" type="text" autoFocus value={form.name}
             onChange={(e) => set({ name: e.target.value })}
