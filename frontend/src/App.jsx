@@ -14,7 +14,7 @@ import {
   useTextScale,
 } from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
-import { FileChipContext, forgetDocPages, rememberDocPage, uploadFilesAsLines } from "./fileChip";
+import { FileChipContext, forgetDocPages, rememberDocPage, setUploadReporter, uploadFilesAsLines } from "./fileChip";
 import { CardLabels, KindToggle, ListFindBox, PageCard, ViewToggle } from "./fileBrowser";
 import ChatDock from "./chatDock";
 import SearchPanel from "./search";
@@ -4238,7 +4238,7 @@ export default function App() {
     });
   }
 
-  // "Open as page" on a file chip, filed in this page's first folder, then
+  // "Add to library" on a file chip, filed in this page's first folder, then
   // opened. A PDF: the file is already stored under its hash, so this is the
   // lookup-or-create BY ATTACHMENT — a root page carrying it (the metadata
   // fetch starts when the page opens). A markdown file: a note page imported
@@ -4265,7 +4265,7 @@ export default function App() {
       fetchHomeBlocks();
       await openBlock(page.id, { pushNav: true });
     } catch (err) {
-      setStatus(`Could not open as page: ${err.message}`);
+      setStatus(`Could not add to library: ${err.message}`);
     }
   }
   // The file chips reach App through a context: navigation and promotion
@@ -4279,6 +4279,39 @@ export default function App() {
     openPage: (id) => fileChipActionsRef.current.openBlock(id, { pushNav: true }),
     promoteFile: (hash, ext, name) => fileChipActionsRef.current.promoteFile(hash, ext, name),
   }), [readOnly, shareMode]);
+
+  // Every upload a drop or paste makes (fileChip.postFile) lands in the
+  // background-tasks list, and in the status pill with a percentage once it
+  // has run for a moment — a screenshot flashes by, a 200 MB dataset shows
+  // its progress.
+  const uploadPillRef = useRef({ shown: 0 });
+  useEffect(() => {
+    const pill = uploadPillRef.current;
+    const showPill = (msg) => { pill.shown++; postPill("upload", { msg, spinner: true }); };
+    const dropPill = () => { if (pill.shown) { pill.shown = 0; postPill("upload", null); } };
+    setUploadReporter({
+      start: (file) => ({
+        tid: addTransfer({ name: uploadLeafName(file, "file"), kind: "upload", info: fmtBytes(file.size) }),
+        name: uploadLeafName(file, "file"), size: file.size, at: Date.now(), lastPct: -1,
+      }),
+      progress: (u, loaded, total) => {
+        if (!u) return;
+        const pct = total ? Math.min(99, Math.floor((loaded / total) * 100)) : 0;
+        if (pct === u.lastPct) return;
+        u.lastPct = pct;
+        updateTransfer(u.tid, { info: `${fmtBytes(loaded)} / ${fmtBytes(total)} — ${pct}%` });
+        if (Date.now() - u.at > 400 || total > 2 * 1024 * 1024) showPill(`Uploading ${u.name}… ${pct}%`);
+      },
+      done: (u, ok, detail) => {
+        if (!u) return;
+        updateTransfer(u.tid, ok ? { status: "done", info: fmtBytes(u.size) } : { status: "error", info: detail || "failed" });
+        dropPill();
+        if (!ok) setStatus(`Upload of ${u.name} failed: ${detail || "refused"}`);
+        else if (Date.now() - u.at > 400) setStatus(`Uploaded ${u.name}.`);
+      },
+    });
+    return () => setUploadReporter(null);
+  }, []);
 
   // Files dropped on the open page outside any block row: one new block per
   // file at the end of the page (images inline, the rest as file chips). The

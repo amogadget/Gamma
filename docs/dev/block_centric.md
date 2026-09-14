@@ -58,7 +58,7 @@ one. `meta.kind` (paper / book / thesis / …) generalizes the record without a
 schema change. The metadata popover (the ⓘ header button) is its one
 surface — the header itself stays title + labels, nothing repeated.
 
-**Promotion.** A PDF dropped into a page is a file. "Open as page" in its
+**Promotion.** A PDF dropped into a page is a file. "Add to library" in its
 chip's right-click menu makes the page that carries it: `POST /blocks/by-doc/<hash>` — the
 generic upload already stored the bytes under the same hash the PDF ingest
 mints, so nothing is uploaded twice, and the 409 rule keeps one page per
@@ -76,10 +76,10 @@ file, and the file never updates the page. The page records the file's hash
 as `markdown_import` (the importer always did), which is how the chip
 finds it afterwards (`pages_for_docs` matches `doc_id` and
 `markdown_import`). Same rule as the PDF: one page per file, the second
-"Open as page" opens the existing one.
+"Add to library" opens the existing one.
 
 **Sub-pages.** Not a new structure: the tree already nests arbitrarily and
-`?block=<id>` opens any block on its page. "Open as page" = Logseq-style
+`?block=<id>` opens any block on its page. "Add to library" = Logseq-style
 zoom-in on a subtree (focus mode), not a second page table. The flat library
 with folder labels stays the navigation model.
 
@@ -364,11 +364,16 @@ A multi-PDF viewer with `attachment_id` on highlights is not planned.
 - **Frontend.** `fileChip.jsx`: the chip — every file looks the same (a
   small card: kind icon, name, download arrow). A PDF or markdown chip
   whose page exists shows an "open page" button before the arrow; its
-  right-click menu says "Open page", or "Open as page" when there is none
+  right-click menu says "Open page", or "Add to library" when there is none
   (via `FileChipContext`, which App provides around the tree with
   `openBlock` and `promoteFile`; the hash → page lookup is one batched
   `POST /pages/by-docs` per page render, forgotten on every page open).
-  Drop and paste semantics: a file dropped on a block row lands
+  Every such upload goes through `fileChip.postFile` — an XMLHttpRequest
+  (fetch cannot report upload progress) that reports to the hook App
+  installs with `setUploadReporter`: a row in the background-tasks list
+  (bytes and a percentage while the file goes up), and the status pill once
+  an upload has run for a moment or is large, so a screenshot flashes by
+  and a big dataset shows its progress. Drop and paste semantics: a file dropped on a block row lands
   in that block (all files, one line each, PDFs included), and so does any
   file on the clipboard pasted into the editor (`clipboardFiles`: images
   inline, the rest as chips — a PDF copied in the file manager pastes like a
@@ -379,7 +384,7 @@ A multi-PDF viewer with `attachment_id` on highlights is not planned.
   never attaches. A property strip under the title was tried and removed
   the same day: it repeated what the metadata popover shows.
 
-Still open from the old stage 4: "Open as page" zoom-in on any block
+Still open from the old stage 4: "Add to library" zoom-in on any block
 (breadcrumb back to the page); tabs and `?block=` already carry the id.
 
 ## Non-goals (for now)

@@ -2,7 +2,7 @@
 // `[name](/api/uploads/<hash>.<ext>)`, what a dropped or pasted file becomes.
 // Files are content, any type, any number per page (docs/dev/block_centric.md,
 // "Files and documents"). Every chip looks the same. A PDF or markdown file
-// can become a page: "Open as page" in the right-click menu — a PDF through
+// can become a page: "Add to library" in the right-click menu — a PDF through
 // `POST /blocks/by-doc/<hash>` (the page CARRIES the file: viewer,
 // highlights, metadata; nothing is uploaded twice), a markdown file through
 // `POST /pages/from-file` (a note page imported from it — a copy, the file
@@ -13,9 +13,9 @@
 // line.
 
 import React, { createContext, useContext, useEffect, useReducer, useState } from "react";
-import { DownloadIcon, ExternalLinkIcon, FileIcon, PaperIcon } from "./icons";
+import { DownloadIcon, ExternalLinkIcon, FileIcon, PaperIcon, PlusIcon } from "./icons";
 import { ContextMenu, MenuItem } from "./menus";
-import { API, apiJson, assetUrl, withShare } from "./utils";
+import { API, apiJson, assetUrl, getCurrentWorkspace, getExpectedUser, withShare, withWorkspace } from "./utils";
 
 // What the page around the chip provides: navigation and promotion come from
 // App (they need the page's folder and openBlock); a chip rendered with no
@@ -92,17 +92,47 @@ export function fileBlockMarkdown(up) {
   return `[${(up.name || "file").replace(/[\[\]]/g, "")}](${up.url})`;
 }
 
+// Where uploads report themselves: App installs {start(file) → id,
+// progress(id, loaded, total), done(id, ok, detail)} so every upload made
+// from a drop or paste shows in the background-tasks list and the status
+// pill (with a percentage while the bytes go up). Without one (tests, the
+// share view) uploads are silent.
+let reporter = null;
+export function setUploadReporter(r) { reporter = r; }
+
 // Multipart POST of one file → the JSON reply, or null on refusal/failure
-// (callers treat null as "nothing inserted"). Shared with the image upload.
-export async function postFile(endpoint, file) {
-  try {
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch(withShare(endpoint), { method: "POST", body: form, credentials: "include" });
-    return res.ok ? await res.json() : null;
-  } catch (_) {
-    return null;
-  }
+// (callers treat null as "nothing inserted"). XMLHttpRequest rather than
+// fetch because only it reports upload progress; it bypasses the fetch
+// wrapper, so the workspace header and the tab-identity guard are set by
+// hand. Shared with the image upload.
+export function postFile(endpoint, file) {
+  const id = reporter?.start(file);
+  return new Promise((resolve) => {
+    let xhr;
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      xhr = new XMLHttpRequest();
+      xhr.open("POST", withShare(withWorkspace(endpoint)));
+      xhr.withCredentials = true;
+      const expected = getExpectedUser();
+      if (expected) xhr.setRequestHeader("X-Gamma-User", expected);
+      if (getCurrentWorkspace()) xhr.setRequestHeader("X-Gamma-Workspace", getCurrentWorkspace());
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) reporter?.progress(id, e.loaded, e.total); };
+      xhr.onload = () => {
+        let data = null;
+        try { data = JSON.parse(xhr.responseText); } catch {}
+        const ok = xhr.status >= 200 && xhr.status < 300;
+        reporter?.done(id, ok, ok ? "" : String(data?.detail || xhr.statusText || `HTTP ${xhr.status}`));
+        resolve(ok ? data : null);
+      };
+      xhr.onerror = () => { reporter?.done(id, false, "network error"); resolve(null); };
+      xhr.send(form);
+    } catch (err) {
+      reporter?.done(id, false, String(err?.message || err));
+      resolve(null);
+    }
+  });
 }
 
 // POST /api/upload-file → {url, name} | null: any non-image file a block
@@ -155,8 +185,8 @@ const stop = (e) => e.stopPropagation();
 
 // Every file looks the same: icon, name, a download arrow. A PDF or a
 // markdown file that already has a page additionally shows a small "open
-// page" button before the arrow; making that page ("Open as page") lives in
-// the right-click menu, so a chip never advertises it inline.
+// page" button before the arrow; making that page ("Add to library") lives
+// in the right-click menu, so a chip never advertises it inline.
 const PAGEABLE = /^(pdf|md|markdown)$/;
 
 export function FileChip({ href, text }) {
@@ -180,11 +210,11 @@ export function FileChip({ href, text }) {
     );
   } else if (canOpen && page === null && !ctx.readOnly) {
     pageItem = (
-      <MenuItem icon={PaperIcon}
+      <MenuItem icon={PlusIcon}
         title={isPdf
           ? "Make a page for this PDF: the viewer, highlights, chat and metadata — the file is not uploaded again"
           : "Import this markdown as a note page — a copy; the file stays as it is"}
-        onClick={() => { close(); makePage(); }}>Open as page</MenuItem>
+        onClick={() => { close(); makePage(); }}>Add to library</MenuItem>
     );
   }
   return (

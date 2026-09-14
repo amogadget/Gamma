@@ -1,6 +1,6 @@
 // Files and documents (docs/dev/block_centric.md, stage 4): any file dropped
 // on a block row or on the page body becomes a file chip; a PDF chip promotes
-// to a DOCUMENT page (right-click → "Open as page" → by-doc, no re-upload)
+// to a DOCUMENT page (right-click → "Add to library" → by-doc, no re-upload)
 // filed in the project's folder, and offers "Open page" afterwards; the
 // upload endpoint takes lab files and refuses executables.
 import { editRow, tree } from "./notes.mjs";
@@ -54,14 +54,19 @@ export async function fileScenarios({ server, browser, alice, makePdf, step, unt
     assertEq((await page.$$(".fileChip button")).length, 0, "no inline actions");
     // the PDF has no document page yet → its right-click menu offers to make one
     await page.locator(".fileChip", { hasText: "supplement.pdf" }).click({ button: "right" });
-    await page.locator(".ctxMenuItem", { hasText: "Open as page" }).waitFor({ timeout: 8000 });
+    await page.locator(".ctxMenuItem", { hasText: "Add to library" }).waitFor({ timeout: 8000 });
     await page.keyboard.press("Escape");
     await page.locator(".fileChip", { hasText: "sim.nb" }).click({ button: "right" });
     await page.locator(".ctxMenuItem", { hasText: "Download" }).waitFor();
-    assertEq((await page.$$(".ctxMenuItem:has-text('Open as page')")).length, 0, "a notebook cannot become a page");
+    assertEq((await page.$$(".ctxMenuItem:has-text('Add to library')")).length, 0, "a notebook cannot become a page");
     assertEq((await page.$$(".ctxMenuItem")).length, 1, "download is the whole menu for a notebook");
     await page.keyboard.press("Escape");
     assertEq((await page.$$(".fileChipOpen")).length, 0, "no open-page buttons before any promotion");
+    // both uploads are listed as finished background tasks
+    await page.click("button[aria-label='Background tasks']");
+    await page.locator(".transferRow", { hasText: "supplement.pdf" }).waitFor({ timeout: 5000 });
+    assert((await page.$$(".transferRow .transferStatus.done")).length >= 2, "both uploads done");
+    await page.keyboard.press("Escape");
     assertNoProblems(page);
   });
 
@@ -78,9 +83,9 @@ export async function fileScenarios({ server, browser, alice, makePdf, step, unt
     assertNoProblems(page);
   });
 
-  await step("files: 'Open as page' makes the document page in the same folder", async () => {
+  await step("files: 'Add to library' makes the document page in the same folder", async () => {
     await page.locator(".fileChip", { hasText: "supplement.pdf" }).click({ button: "right" });
-    await page.click(".ctxMenuItem:has-text('Open as page')");
+    await page.click(".ctxMenuItem:has-text('Add to library')");
     await waitForPdf(page, 1);
     await until(async () => (await page.textContent(".titleText")) === "supplement.pdf", { what: "title = file name" });
     docPageId = new URL(page.url()).searchParams.get("block");
@@ -106,7 +111,7 @@ export async function fileScenarios({ server, browser, alice, makePdf, step, unt
     assertEq((await page.$$(".fileChipOpen")).length, 1, "only the promoted PDF has the button");
     await chip.click({ button: "right" });
     await page.locator(".ctxMenuItem", { hasText: "Open page" }).waitFor({ timeout: 8000 });
-    assertEq((await page.$$(".ctxMenuItem:has-text('Open as page')")).length, 0, "no promotion offered any more");
+    assertEq((await page.$$(".ctxMenuItem:has-text('Add to library')")).length, 0, "no promotion offered any more");
     await page.keyboard.press("Escape");
     await chip.locator(".fileChipOpen").click();
     await until(async () => new URL(page.url()).searchParams.get("block") === docPageId, { what: "document page opened" });
@@ -115,7 +120,7 @@ export async function fileScenarios({ server, browser, alice, makePdf, step, unt
     await ctx.close();
   });
 
-  await step("files: a markdown chip's 'Open as page' imports it as a note page; the file stays", async () => {
+  await step("files: a markdown chip's 'Add to library' imports it as a note page; the file stays", async () => {
     ctx = await account.context(browser);
     page = await openPage(ctx, `${server.base}/?page=${projectId}&ws=${account.ws}`);
     await page.waitForSelector(".blockRow", { timeout: 15000 });
@@ -125,7 +130,7 @@ export async function fileScenarios({ server, browser, alice, makePdf, step, unt
     await chip.waitFor({ timeout: 8000 });
     await until(async () => (await tree(account, projectId)).some((b) => /Squeezing notes\.md/.test(b.content)), { what: "md chip saved" });
     await chip.click({ button: "right" });
-    await page.click(".ctxMenuItem:has-text('Open as page')");
+    await page.click(".ctxMenuItem:has-text('Add to library')");
     await until(async () => (await page.textContent(".titleText")) === "Squeezing notes", { what: "note page titled after the file" });
     const noteId = new URL(page.url()).searchParams.get("block");
     const note = await account.api(`/api/blocks/${noteId}`);
