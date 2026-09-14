@@ -8,6 +8,7 @@ launcher, and desktop release workflows use these locations.
 | `backend/gamma/` | FastAPI application, routers, and backend logic |
 | `backend/tests/` | Backend tests using temporary data directories |
 | `frontend/tests/` | `node --test` tests of the pure modules; `e2e/` the Playwright browser suite (`npm run e2e`, [debugging.md](debugging.md)) |
+| `tests/shared/` | JSON cases for rules mirrored between backend and frontend (search normalization, folder paths), read by both test suites |
 | `frontend/src/` | React application and code-defined UI icons |
 | `frontend/public/` | Files copied as-is into the frontend build |
 | `desktop/` | Electron shell and desktop packaging |

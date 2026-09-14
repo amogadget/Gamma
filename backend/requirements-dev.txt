@@ -1,3 +1,4 @@
 # Development / test dependencies (production deps live in requirements.txt)
 pytest
+pytest-xdist   # python -m pytest tests -n auto --dist loadfile
 httpx

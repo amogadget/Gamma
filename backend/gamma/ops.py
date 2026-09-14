@@ -4,9 +4,13 @@ A page's notes change through small, typed operations rather than a whole-
 tree replace, so several clients (two browsers of one account, share editors)
 can edit one page at once and only the touched rows move:
 
-- ``set {id, content?, props?}`` — ``content`` is one last-writer-wins
-  value; ``props`` is a PATCH (``{key: value | null}``, null deletes), so
-  unrelated properties never conflict (Figma's property-level rule).
+- ``set {id, content?, base?, props?}`` — ``content`` replaces the text;
+  with ``base`` (the text the client's change was computed from) it is
+  applied as a patch when the block changed meanwhile, so two people
+  editing different spans of one block both keep their edit
+  (gamma/textmerge.py; the applied op carries the merged text). ``props``
+  is a PATCH (``{key: value | null}``, null deletes), so unrelated
+  properties never conflict (Figma's property-level rule).
 - ``insert {id, parent, position?, content, props}`` — the client mints the
   id and the fractional position; a position that collides with a sibling is
   re-keyed here and the applied op carries the final value. Re-inserting a
@@ -36,7 +40,7 @@ from typing import Annotated, Literal, Union
 from fractional_indexing import FIError, generate_key_between, validate_order_key
 from pydantic import BaseModel, Field
 
-from . import block_index, collab
+from . import block_index, collab, textmerge
 from .blocks_store import delete_subtree, fetch_subtree, last_child_position
 from .db import connect_pages_db, page_now, ws_uploads_dir
 from .storage import cleanup_orphan_uploads
@@ -59,6 +63,7 @@ class SetOp(BaseModel):
     op: Literal["set"]
     id: str
     content: str | None = None
+    base: str | None = None  # the text `content` was edited from (three-way merge)
     props: dict | None = None
 
 
@@ -113,11 +118,12 @@ def props_patch(old: dict, new: dict) -> dict:
 class _Batch:
     """One apply_ops call: the page, the timestamp, an ancestry cache."""
 
-    def __init__(self, conn, page_id: str, now: str, share_scoped: bool):
+    def __init__(self, conn, page_id: str, now: str, share_scoped: bool, cursor: dict | None = None):
         self.conn = conn
         self.page_id = page_id
         self.now = now
         self.share_scoped = share_scoped
+        self.cursor = cursor  # the writer's caret, remapped when its block's text is merged
         self._page_of: dict[str, str | None] = {page_id: page_id}
         self.applied: list[dict] = []
         self.deleted: list[str] = []
@@ -192,6 +198,17 @@ class _Batch:
             raise OpError(403, "share editors cannot change page settings")
         if content is not None and len(content) > MAX_CONTENT:
             raise OpError(413, "content too long")
+        base = op.get("base")
+        if (content is not None and base is not None and len(base) <= MAX_CONTENT
+                and base != (row[0] or "") and base != content):
+            # Someone else changed the block since this client read it:
+            # apply the client's edit as a patch on the current text.
+            merged, _clean = textmerge.merge(base, content, row[0] or "")
+            cur = self.cursor
+            if cur and cur.get("block") == block_id and merged != content:
+                cur["anchor"] = textmerge.map_offset(content, merged, cur.get("anchor", -1)) if cur.get("anchor", -1) >= 0 else -1
+                cur["head"] = textmerge.map_offset(content, merged, cur.get("head", -1)) if cur.get("head", -1) >= 0 else -1
+            content = merged
         props = json.loads(row[1] or "{}")
         echo = {"op": "set", "id": block_id}
         sets, values = ["updated_at = ?"], [self.now]
@@ -293,11 +310,14 @@ def _log(conn, page_id: str, actor: str, client: str, now: str, applied: list) -
 
 
 def apply_ops(conn, page_id: str, ops: list[dict], *, actor: str, client: str = "",
-              share_scoped: bool = False) -> dict:
+              share_scoped: bool = False, cursor: dict | None = None) -> dict:
     """Apply one batch inside one transaction (committed here) and log it.
     Returns ``{page_id, seq, at, actor, client, ops (as applied), deleted_ids,
-    sweep}`` — hand it to ``after_commit`` for the derived-data work and the
-    room fan-out. Raises ``OpError`` (nothing written) on a bad op."""
+    sweep, cursor?}`` — hand it to ``after_commit`` for the derived-data work
+    and the room fan-out. ``cursor`` (``{block, anchor, head}``, the writer's
+    caret in the text it sent) comes back remapped into the text actually
+    stored when a merge changed it. Raises ``OpError`` (nothing written) on a
+    bad op."""
     if not ops:
         raise OpError(400, "no ops")
     if len(ops) > MAX_OPS:
@@ -310,7 +330,8 @@ def apply_ops(conn, page_id: str, ops: list[dict], *, actor: str, client: str = 
         if not root or root[0] != "root":
             raise OpError(404, "page not found")
         now = page_now()
-        batch = _Batch(conn, page_id, now, share_scoped)
+        cursor = dict(cursor) if cursor else None
+        batch = _Batch(conn, page_id, now, share_scoped, cursor)
         for op in ops:
             kind = op.get("op")
             if kind == "set":
@@ -329,8 +350,11 @@ def apply_ops(conn, page_id: str, ops: list[dict], *, actor: str, client: str = 
     except BaseException:
         conn.rollback()
         raise
-    return {"page_id": page_id, "seq": seq, "at": now, "actor": actor, "client": client,
-            "ops": batch.applied, "deleted_ids": batch.deleted, "sweep": batch.sweep}
+    result = {"page_id": page_id, "seq": seq, "at": now, "actor": actor, "client": client,
+              "ops": batch.applied, "deleted_ids": batch.deleted, "sweep": batch.sweep}
+    if cursor is not None:
+        result["cursor"] = cursor
+    return result
 
 
 def after_commit(ws: str, conn, result: dict) -> dict:
@@ -354,9 +378,7 @@ def commit_ops(ws: str, page_id: str, ops: list[dict], *, actor: str, client: st
     offsets their copy doesn't have yet)."""
     with connect_pages_db(ws) as conn:
         result = apply_ops(conn, page_id, ops, actor=actor, client=client,
-                           share_scoped=share_scoped)
-        if cursor is not None:
-            result["cursor"] = cursor
+                           share_scoped=share_scoped, cursor=cursor)
         return after_commit(ws, conn, result)
 
 

@@ -781,7 +781,12 @@ const BlockCmEditor = React.forwardRef(function BlockCmEditor({
         chipCompartment.of(inlineRenderField(labelsRef)),
         remoteCursorField,
         EditorView.updateListener.of((u) => {
-          if (u.transactions.some((tr) => tr.annotation(externalSync))) return;
+          if (u.transactions.some((tr) => tr.annotation(externalSync))) {
+            // Not our edit, but it moved our caret (a remote change before
+            // it, a merged save): tell the others where we are now.
+            if (u.docChanged) cbRef.current.onSelect?.({ target: api });
+            return;
+          }
           if (u.docChanged) {
             // The selection the change started from — the history stores it
             // with the entry so undo can put the cursor back there.

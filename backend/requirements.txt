@@ -1,6 +1,7 @@
 fastapi==0.136.0
 uvicorn==0.44.0
 websockets==17.1
+diff-match-patch==20241021
 bcrypt==5.0.0
 pydantic==2.13.2
 PyPDF2==3.0.1

@@ -436,8 +436,10 @@ def _run_edit_block(conn, ws: str, scope: dict, args: dict):
         return f"error: content too long (>{_BLOCK_CONTENT_MAX} chars)", None
     if content == block["content"]:
         return "ok — the block already says that", None
+    # `base`: the text the agent edited from, so a person typing in the same
+    # block meanwhile keeps their keystrokes (three-way merge in ops.py).
     after_commit(ws, conn, apply_ops(
-        conn, page_id, [{"op": "set", "id": block["id"], "content": content}],
+        conn, page_id, [{"op": "set", "id": block["id"], "content": content, "base": block["content"] or ""}],
         actor=scope.get("actor", ""), client="ai"))
     verb = {"replace": "Edited", "append": "Appended to", "prepend": "Prepended to"}[mode]
     return (f'ok — block [{block["id"]}] updated' + (f" ({mode})" if mode != "replace" else ""),

@@ -7,9 +7,20 @@ import React from "react";
 import { copyText, fmtBytes } from "./utils";
 import { CheckIcon, EyeIcon, EyeOffIcon, ShieldIcon, UserIcon } from "./icons";
 
+export const SettingsDraftContext = React.createContext(null);
+
+export function useSettingsDraft(key, dirty, discard) {
+  const drafts = React.useContext(SettingsDraftContext);
+  React.useEffect(() => {
+    if (dirty) drafts?.current.set(key, discard);
+    else drafts?.current.delete(key);
+    return () => drafts?.current.delete(key);
+  }, [drafts, key, dirty, discard]);
+}
+
 export function PaneHead({ icon: Icon, title, children }) {
   return (
-    <div className="setHead">
+    <div className="setHead" data-setting={title}>
       <span className="setHeadIcon"><Icon size={17} /></span>
       <span className="settingText">
         <span className="settingsPaneTitle">{title}</span>
@@ -22,7 +33,7 @@ export function PaneHead({ icon: Icon, title, children }) {
 export function Section({ title, action, children }) {
   return (
     <>
-      <div className="setSection">
+      <div className="setSection" data-setting={title}>
         <span className="setSectionLabel">{title}</span>
         <span className="setSectionRule" />
         {action}
@@ -32,28 +43,27 @@ export function Section({ title, action, children }) {
   );
 }
 
-// `title` is the long explanation — deliberately not rendered, only hovered.
-// Rows are plain containers: the control on the right is the only click target,
-// so a stray click on the label or hint never flips a setting.
-export function Row({ icon: Icon, label, hint, title, children }) {
+// Keep the row compact: icon, label, short hint, and a shared control.
+// Longer explanations use the native hover tooltip.
+export function Row({ icon: Icon, label, hint, title, scope, children }) {
   return (
-    <div className="settingRow setRow" title={title}>
+    <div className="settingRow setRow" data-setting={label} title={title}>
       <span className="setIcon">{Icon ? <Icon size={15} /> : null}</span>
-      <span className="settingText">
-        <span className="settingLabel">{label}</span>
+      <div className="settingText">
+        <span className="settingLabel">{label}{scope ? <small className="setScope">{scope}</small> : null}</span>
         {hint ? <span className="settingDesc">{hint}</span> : null}
-      </span>
+      </div>
       {children}
     </div>
   );
 }
 
-export function Toggle({ checked, onChange, label, ...row }) {
+export function Toggle({ checked, onChange, disabled, label, ...row }) {
   return (
     <Row label={label} {...row}>
       <span className="switch">
         <input
-          type="checkbox" checked={checked} aria-label={label}
+          type="checkbox" checked={checked} disabled={disabled} aria-label={label}
           onChange={(event) => onChange(event.target.checked)}
         />
         <span className="switchTrack" />
@@ -70,6 +80,7 @@ export function Segmented({ value, onChange, options }) {
       {options.map(([val, label, Icon, tip]) => (
         <button
           key={val} type="button" title={tip || label}
+          aria-pressed={value === val}
           className={`uiBtn sm ${value === val ? "on" : ""}`}
           onClick={() => onChange(val)}
         >
@@ -104,17 +115,54 @@ export function ToggleGroup({ selected, onToggle, options, disabled }) {
   );
 }
 
-// Centered popup dialog opened from inside the settings modal — same shape as
+// Draft-aware editor dialog opened from inside the settings surface — same shape as
 // the PDF export dialog (reportModal), stacked above the settings overlay.
 // Every editor dialog is composed the same way: SubDialog › .settingsForm ›
 // Step (numbered stages, for flows) or Field (label + hint + one control),
 // closed by a .reportModalBtns footer.
-export function SubDialog({ title, onClose, children }) {
+export function SubDialog({ title, onClose, children, draft }) {
+  const key = React.useId();
+  const [initial] = React.useState(() => JSON.stringify(draft));
+  const dirty = draft !== undefined && JSON.stringify(draft) !== initial;
+  const [confirmClose, setConfirmClose] = React.useState(false);
+  const ref = React.useRef(null);
+  useSettingsDraft(key, dirty, onClose);
+  const close = () => dirty ? setConfirmClose(true) : onClose();
+  React.useEffect(() => {
+    const previous = document.activeElement;
+    if (!ref.current?.contains(document.activeElement)) ref.current?.focus();
+    return () => previous?.focus?.();
+  }, []);
   return (
-    <div className="reportOverlay subDialog" onClick={onClose}>
-      <div className="reportModal" onClick={(event) => event.stopPropagation()}>
+    <div className="reportOverlay subDialog" onClick={(event) => { event.stopPropagation(); close(); }}>
+      <div className="reportModal" role="dialog" aria-modal="true" aria-label={title}
+        ref={ref} tabIndex={-1} onClick={(event) => event.stopPropagation()}
+        onClickCapture={(event) => {
+          if (dirty && event.target.closest("button")?.textContent.trim() === "Cancel") {
+            event.preventDefault(); event.stopPropagation(); close();
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault(); event.stopPropagation();
+            if (confirmClose) setConfirmClose(false); else close();
+          }
+          if (event.key === "Tab") {
+            event.stopPropagation();
+            const targets = [...ref.current.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), summary')]
+              .filter((el) => el.getClientRects().length && !el.closest("[inert]"));
+            const first = targets[0], last = targets.at(-1);
+            if (event.shiftKey && (document.activeElement === first || document.activeElement === ref.current)) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && (document.activeElement === last || document.activeElement === ref.current)) { event.preventDefault(); first?.focus(); }
+          }
+        }}>
         <div className="reportModalTitle">{title}</div>
-        {children}
+        <div className="settingsDialogContent" inert={confirmClose ? "" : undefined}>{children}</div>
+        {confirmClose ? <div className="settingsUnsaved" role="alertdialog" aria-label="Unsaved changes">
+          <span>Discard your unsaved edits?</span>
+          <button className="uiBtn" autoFocus onClick={() => setConfirmClose(false)}>Keep editing</button>
+          <button className="uiBtn danger" onClick={onClose}>Discard changes</button>
+        </div> : null}
       </div>
     </div>
   );
@@ -213,6 +261,8 @@ export function Stepper({ value, onChange, min, max, step, format, reset }) {
         onClick={() => reset != null && onChange(reset)}>{format ? format(value) : value}</button>
       <button type="button" className="uiBtn sm iconSq" aria-label="Larger"
         disabled={value >= max} onClick={() => onChange(clamp(value + step))}>+</button>
+      {reset != null ? <button type="button" className="uiBtn sm" disabled={value === reset}
+        onClick={() => onChange(reset)}>Reset</button> : null}
     </span>
   );
 }

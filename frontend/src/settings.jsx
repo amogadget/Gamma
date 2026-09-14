@@ -3,13 +3,15 @@ import { API, apiJson, fmtBytes, isUnverifiedPaperMeta, metaSourceInfo } from ".
 import { MenuSelect } from "./menus";
 import {
   PaneHead, Section, Row, Toggle, Segmented, Stepper, ToggleGroup, UnitInput, CharSlider, approxPages,
-  Stat, Empty, QuotaMeter, LogBox,
+  Stat, Empty, QuotaMeter, LogBox, SettingsDraftContext, useSettingsDraft,
 } from "./settingsKit";
 import { AiSettings } from "./settingsAi";
 import { UsersSettings } from "./settingsUsers";
 import { WorkspacesSettings } from "./settingsWorkspace";
 import { WorkspaceBackups } from "./settingsBackups";
 import { ServerSettings } from "./settingsServer";
+import { permissionPreset, presetPermissions } from "./chatSettings";
+import { resolveSettingsPane, searchSettings } from "./settingsNavigation";
 import { TRANSLATE_LANGS, UI_SCALE } from "./prefs";
 import {
   ActivityIcon,
@@ -20,15 +22,12 @@ import {
   DatabaseIcon,
   CornerDownLeftIcon,
   EyeIcon,
-  EyeOffIcon,
-  FileIcon,
   FileTextIcon,
   FolderIcon,
   GlobeIcon,
   HardDriveIcon,
   HighlightIcon,
   HomeIcon,
-  KeyIcon,
   LabelIcon,
   LanguagesIcon,
   MaximizeIcon,
@@ -44,10 +43,8 @@ import {
   PencilIcon,
   RectSelectIcon,
   RefreshIcon,
-  ScissorsIcon,
   SearchIcon,
   ServerIcon,
-  SettingsIcon,
   SparklesIcon,
   SunIcon,
   TerminalIcon,
@@ -56,81 +53,60 @@ import {
   UsersIcon,
 } from "./icons";
 
-// Thirteen panes in four groups. Each pane is a stack of Sections, each Section a
-// stack of Rows — icon · label · one short hint · control (primitives in
-// settingsKit.jsx; the Providers and Users panes live in settingsAi.jsx /
-// settingsUsers.jsx). The paragraph that used to sit under every label now
-// lives in the row's `title`, so a pane scans as a column of pictures and
-// still explains itself on hover.
-const NAV_GROUPS = [
-  ["Workspace", [
-    ["general", "General", SettingsIcon],
-    ["library", "Library", ListIcon],
-    ["workspaces", "Workspaces", UsersIcon], // hidden for guests (see SettingsDialog)
-    ["backups", "Backups", DatabaseIcon],    // hidden for guests
-  ]],
-  ["Editor", [
-    ["notes", "Notes", FileTextIcon],
-    ["search", "Search", SearchIcon],
-    ["viewer", "PDF viewer", FileIcon],
-  ]],
-  ["AI", [
-    ["ai", "Provider and models", KeyIcon],
-    ["assistant", "Assistant", SparklesIcon],
-    ["prompts", "Prompts", MessageSquareIcon],
-  ]],
-  ["Account", [
-    ["users", "Users", UsersIcon], // relabelled "You" for non-admins (see SettingsDialog)
-    ["server", "Server", ServerIcon], // admins only: storage defaults, every workspace, server backups + log
-    ["advanced", "Advanced", ActivityIcon],
-  ]],
+// Everyday preferences and management tasks have separate navigation.
+const PREFERENCE_NAV = [
+  ["appearance", "Appearance", ContrastIcon],
+  ["reading", "Reading & editing", BookIcon],
+  ["library", "Library", ListIcon],
+  ["ai", "AI", SparklesIcon],
+  ["account", "Account", UserIcon],
 ];
-// Older entry points (and anything that remembered a pane id) still resolve.
-const PANE_ALIASES = {
-  papers: "general",
-  context: "assistant",
-  diagnostics: "advanced", account: "users",
-  workspace: "workspaces",
-};
+const MANAGEMENT_NAV = [
+  ["workspaces", "Manage workspaces", UsersIcon],
+  ["maintenance", "Library maintenance", DatabaseIcon],
+  ["server", "Administration", ServerIcon],
+  ["diagnostics", "Diagnostics", ActivityIcon],
+];
+
+const AI_NAV = [
+  ["ai", "Connections & models", SparklesIcon],
+  ["assistant", "Assistant", MessageSquareIcon],
+  ["ai-advanced", "Advanced", ActivityIcon],
+  ["prompts", "Prompts", TypeIcon],
+];
 
 // --- General: reading, notes, interface -------------------------------------
 
-const THEME_ICON = { dark: MoonIcon, light: SunIcon, sepia: EyeIcon, gray: ContrastIcon, system: MonitorIcon };
+const THEME_ICON = { system: MonitorIcon, light: SunIcon, dark: MoonIcon, sepia: EyeIcon, gray: ContrastIcon };
 
-function GeneralSettings({ value }) {
+function GeneralSettings({ value, diagnostics }) {
   return (
     <>
-      <PaneHead icon={SettingsIcon} title="General">
-        Appearance follows your account across devices; paper preferences are saved in this browser.
+      <PaneHead icon={ContrastIcon} title="Appearance">
+        Make Gamma comfortable to read. Each group shows where its preferences are saved.
       </PaneHead>
-      <Section title="Appearance">
+      <Section title="Theme - your account">
         <Row
           icon={THEME_ICON[value.theme] || MonitorIcon}
           label="Theme"
           hint="Sepia and Gray are eye-comfort modes; System follows the OS"
           title="Light or dark interface. System tracks the operating system's appearance and switches live when it changes. Sepia and Gray are eye-comfort modes that soften both the interface and the PDF page: Sepia a warm Solarized-Light paper tone that also cuts blue light, Gray a neutral light-gray with no color cast. Both replace the glare of a white background and soften pure-black ink to charcoal."
         >
-          <Segmented
-            value={value.theme}
-            onChange={value.setTheme}
-            options={[
-              // values = THEMES in prefs.js (its codec validates them)
-              ["system", "System", MonitorIcon, "Follow the OS light/dark setting"],
-              ["light", "Light", SunIcon, "Always light"],
-              ["dark", "Dark", MoonIcon, "Always dark"],
-              ["sepia", "Sepia", EyeIcon, "Eye comfort: warm paper tones for the interface and PDF pages"],
-              ["gray", "Gray", ContrastIcon, "Eye comfort: neutral light gray, no color cast"],
-            ]}
-          />
+          <Segmented value={value.theme} onChange={value.setTheme}
+            options={Object.entries(THEME_ICON).map(([theme, Icon]) => [
+              theme, theme[0].toUpperCase() + theme.slice(1), Icon,
+            ])} />
         </Row>
         <Toggle
           icon={MoonIcon}
-          label="Flip page colors"
-          hint="Dark PDF pages — light text on a dark background"
+          label="Dark PDF pages"
+          hint="Light text on a dark page. Photos and figures are inverted too."
           title="Render PDF pages inverted for reading in the dark. Display-only: highlights, exports and the stored file keep their real colors. Figures and photos come out as negatives, so scanned papers may look better with this off. Takes precedence over the Sepia theme's warm page tint."
           checked={value.pdfDarkPage}
           onChange={value.setPdfDarkPage}
         />
+      </Section>
+      <Section title="Interface - this browser">
         <Row
           icon={MaximizeIcon}
           label="Control size"
@@ -145,32 +121,8 @@ function GeneralSettings({ value }) {
           />
         </Row>
       </Section>
-      <Section title="PDFs">
-        <Toggle
-          icon={CloudDownloadIcon}
-          label="Open-access fallback"
-          hint="Fetch a free copy when a publisher blocks the PDF"
-          title="When a publisher PDF is paywalled or refuses to download, load a legal open-access copy instead — usually the arXiv version. A note tells you when the substitute isn't the published version."
-          checked={value.oaFallback}
-          onChange={value.setOaFallback}
-        />
-        <Toggle
-          icon={SparklesIcon}
-          label="Auto-fetch metadata"
-          hint="Title, authors and BibTeX on first open"
-          title="Look up title, authors, venue and BibTeX the first time a paper opens (arXiv → DOI → AI). Turn this off to fetch only via the refresh button in the metadata popover."
-          checked={value.metaAutoFetch}
-          onChange={value.setMetaAutoFetch}
-        />
-        <Toggle
-          icon={HardDriveIcon}
-          label="Save external PDFs"
-          hint="Keep a server copy of PDFs opened from a URL"
-          title="Keep a server copy of PDFs opened from a URL, so they load instantly next time and survive dead links."
-          checked={value.pdfSaveLocal}
-          onChange={value.setPdfSaveLocal}
-        />
-      </Section>
+      <Toggle icon={LayoutIcon} label="Status bar" hint="Keep the latest status message visible below the tabs"
+        checked={diagnostics.statusBarVisible} onChange={diagnostics.setStatusBarVisible} />
     </>
   );
 }
@@ -180,10 +132,8 @@ function GeneralSettings({ value }) {
 function ViewerSettings({ value }) {
   return (
     <>
-      <PaneHead icon={FileIcon} title="PDF viewer">
-        How the PDF pane scrolls and what it paints.
-      </PaneHead>
-      <Section title="Viewing">
+
+      <Section title="PDF viewer">
         <Toggle
           icon={MoveVerticalIcon}
           label="Snap vertical scrolling"
@@ -194,25 +144,19 @@ function ViewerSettings({ value }) {
         />
         <Row
           icon={HighlightIcon}
-          label="Annotations inside the file"
-          hint="Imported as highlights — what happens to the originals"
+          label="Imported annotations"
+          hint="Annotations become Gamma highlights. Removing originals also rewrites the stored PDF."
           title={"Highlights, notes and rectangles saved inside a PDF file (a Gamma export, SumatraPDF, Acrobat…) are imported as regular highlights. This controls the embedded originals so they don't render twice: Hide leaves the file untouched, Strip removes them from the stored PDF on import."}
         >
-          <Segmented
-            value={value.embAnnots}
-            onChange={value.setEmbAnnots}
-            options={[
-              ["hide", "Hide", EyeOffIcon, "Leave the file untouched; the viewer just doesn't paint them"],
-              ["strip", "Strip", ScissorsIcon, "Rewrite the stored PDF without them once they're imported"],
-            ]}
-          />
+          <MenuSelect label="Imported annotations" value={value.embAnnots} onChange={value.setEmbAnnots}
+            options={[["hide", "Keep PDF unchanged"], ["strip", "Remove originals after import"]]} />
         </Row>
       </Section>
       <Section title="Translation">
         <Toggle
           icon={LanguagesIcon}
-          label="Translation button"
-          hint="The 文A button in the viewer's zoom column"
+          label="Show translation shortcut"
+          hint="Show the viewer button; translation only runs when you ask"
           title="Show the translate button in the PDF viewer. Click translates the current page (or shows/hides an existing translation); right-click or long-press opens the options, including translating the whole document. Nothing translates until you ask."
           checked={value.translateEnabled}
           onChange={value.setTranslateEnabled}
@@ -230,14 +174,23 @@ function ViewerSettings({ value }) {
             options={TRANSLATE_LANGS}
           />
         </Row>
-        <Row
+        <p className="setNotice">Translation models and performance options are in AI settings.</p>
+      </Section>
+    </>
+  );
+}
+
+function TranslationModels({ value, advanced = false }) {
+  return <>
+        {!advanced ? <Row
           icon={SparklesIcon}
           label="Translation model"
           hint="Used when translating pages"
           title="Model used to translate page text. Translation is a bulk job — a fast, cheap model usually reads fine and costs much less than the chat model."
         >
           <TranslateModelSelect value={value} />
-        </Row>
+        </Row> : null}
+        {advanced ? <>
         <Row
           icon={ActivityIcon}
           label="Translation effort"
@@ -263,9 +216,8 @@ function ViewerSettings({ value }) {
               if (Number.isFinite(n)) value.setTranslateParallel(Math.max(1, Math.min(32, n)));
             }} />
         </Row>
-      </Section>
-    </>
-  );
+        </> : null}
+  </>;
 }
 
 // Same shape as MetaModelSelect below: "" = follow the chat model, stale
@@ -278,7 +230,7 @@ function TranslateModelSelect({ value }) {
     <MenuSelect
       label="Translation model" value={current} onChange={value.setTranslateModel}
       options={[
-        ["", "Same as chat"],
+        ["", `Same as chat: ${value.chatModelName || "provider default"}`],
         ...models.map((m) => [m.id, multiProvider ? `${m.model} · ${m.provider_name || m.provider}` : m.model]),
       ]}
     />
@@ -288,10 +240,8 @@ function TranslateModelSelect({ value }) {
 function SearchSettings({ value }) {
   return (
     <>
-      <PaneHead icon={SearchIcon} title="Search">
-        Your notes and every PDF in the library. PDFs are indexed in the background.
-      </PaneHead>
-      <Section title="Auto-expand results">
+
+      <Section title="Search - expand results automatically">
         <Toggle
           icon={HomeIcon}
           label="On the home page"
@@ -316,18 +266,14 @@ function SearchSettings({ value }) {
 function NotesSettings({ value }) {
   return (
     <>
-      <PaneHead icon={FileTextIcon} title="Notes">
-        How the outliner behaves while you write.
-      </PaneHead>
-      <Section title="Editing">
-        <Toggle
-          icon={CornerDownLeftIcon}
-          label="Enter starts a new note"
-          hint="Off: Enter breaks the line, Shift+Enter starts a note"
-          title="Logseq-style: Enter creates the next note, Shift+Enter types a line break inside the current one. Turn off to swap them (the + button under the notes always creates one)."
-          checked={value.enterNewNote}
-          onChange={value.setEnterNewNote}
-        />
+
+      <Section title="Notes">
+        <Row icon={CornerDownLeftIcon} label="Enter key"
+          hint={value.enterNewNote ? "Shift+Enter inserts a new line" : "Shift+Enter creates a new note"}>
+          <Segmented value={value.enterNewNote ? "note" : "line"}
+            onChange={(choice) => value.setEnterNewNote(choice === "note")}
+            options={[["note", "New note"], ["line", "New line"]]} />
+        </Row>
         <Toggle
           icon={MessageSquareIcon}
           label="Note badges on highlights"
@@ -386,11 +332,11 @@ function StorageCard() {
 // Collections become folders, tags labels, notes child blocks; annotations ride
 // inside the exported PDFs and reuse the embedded-annotations importer (the
 // strip-vs-hide choice follows the standing Settings → PDF viewer preference).
-function LibrarySettings({ value }) {
+function LibrarySettings({ value, onManage }) {
   return (
     <>
       <PaneHead icon={ListIcon} title="Library">
-        How the home library presents itself, storage, and per-paper health of metadata, extracted text and the search index.
+        Library display and automatic downloads. Changes apply immediately in this browser.
       </PaneHead>
       <Section title="Display">
         <Toggle
@@ -421,6 +367,46 @@ function LibrarySettings({ value }) {
           />
         </Row>
       </Section>
+      <Section title="PDFs">
+        <Toggle
+          icon={CloudDownloadIcon}
+          label="Open-access fallback"
+          hint="Fetch a free copy when a publisher blocks the PDF"
+          title="When a publisher PDF is paywalled or refuses to download, load a legal open-access copy instead — usually the arXiv version. A note tells you when the substitute isn't the published version."
+          checked={value.oaFallback}
+          onChange={value.setOaFallback}
+        />
+        <Toggle
+          icon={SparklesIcon}
+          label="Auto-fetch metadata"
+          hint="Title, authors and BibTeX on first open"
+          title="Look up title, authors, venue and BibTeX the first time a paper opens (arXiv → DOI → AI). Turn this off to fetch only via the refresh button in the metadata popover."
+          checked={value.metaAutoFetch}
+          onChange={value.setMetaAutoFetch}
+        />
+        <Toggle
+          icon={HardDriveIcon}
+          label="Save external PDFs"
+          hint="Keep a server copy of PDFs opened from a URL"
+          title="Keep a server copy of PDFs opened from a URL, so they load instantly next time and survive dead links."
+          checked={value.pdfSaveLocal}
+          onChange={value.setPdfSaveLocal}
+        />
+      </Section>
+      <Row icon={DatabaseIcon} label="Library maintenance" hint="Check metadata, extract text, or rebuild the search index">
+        <button className="uiBtn sm" onClick={onManage}>Open maintenance</button>
+      </Row>
+    </>
+  );
+}
+
+// Library-wide health: per paper, whether metadata resolved, whether the PDF
+// yielded extractable text, and whether the search index covers it — with
+// batch retry for the metadata lookups. Text and index state come from the FTS
+// index, so "unknown" means not visited yet, not broken; Reindex fills it in.
+function MaintenanceSettings({ value }) {
+  return <>
+    <PaneHead icon={DatabaseIcon} title="Library maintenance">Health and storage for the current workspace. Repairs run in the background.</PaneHead>
       <Section title="Storage">
         <StorageCard />
       </Section>
@@ -437,14 +423,9 @@ function LibrarySettings({ value }) {
         </Row>
       </Section>
       <MetaStatusSection value={value} />
-    </>
-  );
+  </>;
 }
 
-// Library-wide health: per paper, whether metadata resolved, whether the PDF
-// yielded extractable text, and whether the search index covers it — with
-// batch retry for the metadata lookups. Text and index state come from the FTS
-// index, so "unknown" means not visited yet, not broken; Reindex fills it in.
 function MetaStatusSection({ value }) {
   const [papers, setPapers] = React.useState(null); // null = loading
   const [error, setError] = React.useState("");
@@ -795,17 +776,21 @@ function PromptsSettings({ value }) {
   // A stored "" means "use the default", so the effective saved text is the
   // custom one or the default — that is what a draft is dirty against.
   const dirty = prompts.some((p) => (p.draft || "").trim() !== (p.saved || p.defaultValue || "").trim());
+  const discard = () => prompts.forEach((p) => p.setDraft(p.saved || p.defaultValue || ""));
+  useSettingsDraft("prompts", dirty, discard);
   return (
     <>
-      <PaneHead icon={MessageSquareIcon} title="Prompts">
-        What each AI job is told. Empty or unchanged means the built-in default.
-      </PaneHead>
+      <PaneHead icon={TypeIcon} title="Custom prompts">Instructions for chat, metadata, citations, and the library agent.</PaneHead>
+      <p className="setNotice">Prompts are saved in this browser. Save to apply your edits, or Cancel to discard them.</p>
       <Section
         title="Prompts"
         action={
-          <button className={`uiBtn sm ${dirty ? "primary" : ""}`} disabled={!dirty} onClick={value.savePrompts}>
-            {dirty ? "Save prompts" : "Saved"}
-          </button>
+          <span className="setControlGroup">
+            <button className="uiBtn sm" disabled={!dirty} onClick={discard}>Cancel</button>
+            <button className={`uiBtn sm ${dirty ? "primary" : ""}`} disabled={!dirty} onClick={value.savePrompts}>
+              {dirty ? "Save prompts" : "Saved"}
+            </button>
+          </span>
         }
       >
         <PromptAccordion items={prompts} />
@@ -859,7 +844,68 @@ export function AgentToolPicker({ kind, perms, setPerms, disabled }) {
   );
 }
 
-function AssistantSettings({ value }) {
+function PermissionSetting({ kind, icon, label, hint, perms, setPerms, disabled }) {
+  const [custom, setCustom] = React.useState(false);
+  const preset = permissionPreset(kind, perms?.[kind]);
+  return <div className="setPermission">
+    <Row icon={icon} label={label} hint={hint}>
+      <fieldset disabled={disabled} className="setControlGroup">
+        <MenuSelect label={`${label} permissions`} value={custom ? "custom" : preset}
+          onChange={(next) => {
+            setCustom(next === "custom");
+            if (next !== "custom") setPerms((previous) => ({ ...previous, [kind]: presetPermissions(kind, next) }));
+          }} options={[["read", "Read & search"], ["edit", "Read, search & edit"], ["custom", "Custom"]]} />
+      </fieldset>
+    </Row>
+    {custom || preset === "custom" ? <div className="setPermissionCustom">
+      <AgentToolPicker kind={kind} perms={perms} setPerms={setPerms} disabled={disabled} />
+    </div> : null}
+  </div>;
+}
+
+function AssistantSettings({ value, onAdvanced }) {
+  const budgets = [value.chatContextChars, value.metaContextChars, value.multiContextChars];
+  const contextPreset = budgets.every((n, i) => n === [60000, 6000, 120000][i]) ? "standard"
+    : budgets.every((n, i) => n === [120000, 12000, 240000][i]) ? "larger" : "custom";
+  return (
+    <>
+      <Section title="Assistant permissions">
+        <Toggle icon={SparklesIcon} label="Allow assistant tools"
+          hint="Global switch for reading, searching, and editing in all chats"
+          checked={value.agentEnabled} onChange={value.setAgentEnabled} />
+        {!value.agentEnabled ? <p className="setNotice">Tools are off in all chats. Your permission choices are kept for when you turn them on again.</p> : null}
+        {CHAT_KIND_ROWS.map(([kind, icon, label, hint]) => (
+          <PermissionSetting key={kind} kind={kind} icon={icon} label={label} hint={hint}
+            perms={value.agentPerms} setPerms={value.setAgentPerms} disabled={!value.agentEnabled} />
+        ))}
+
+      </Section>
+      <Section title="Chat">
+        <Toggle
+          icon={RectSelectIcon}
+          label="Clear snapshots on click"
+          hint="A plain click in the PDF also drops pending snapshots"
+          title="A plain click in the PDF clears the quoted text selections under the chat. Turn this on to also drop pending rectangle snapshots with that click — images pasted into the chat are never touched."
+          checked={value.chatImgAutoClear}
+          onChange={value.setChatImgAutoClear}
+        />
+      </Section>
+      <Row icon={BookIcon} label="Context budget"
+        hint="Larger budgets include more document text and use more tokens">
+        <MenuSelect label="Context budget" value={contextPreset}
+          onChange={(preset) => {
+            if (preset === "custom") { onAdvanced(); return; }
+            const factor = preset === "larger" ? 2 : 1;
+            value.setChatContextChars(60000 * factor);
+            value.setMetaContextChars(6000 * factor);
+            value.setMultiContextChars(120000 * factor);
+          }} options={[["standard", "Standard"], ["larger", "Larger"], ["custom", "Custom"]]} />
+      </Row>
+    </>
+  );
+}
+
+function AdvancedAiSettings({ value, ai, papers }) {
   const shared = "Extracted PDF text is measured in characters. Larger budgets can improve answers but cost more tokens.";
   const limits = [
     [FileTextIcon, "Single paper", "Read from the open paper for one chat message",
@@ -871,28 +917,13 @@ function AssistantSettings({ value }) {
       value.multiContextChars, value.setMultiContextChars, shared],
   ];
 
-  return (
-    <>
-      <PaneHead icon={SparklesIcon} title="Assistant">
-        Configure chat behavior, context limits, and what the folder agent may do.
-      </PaneHead>
-      <Section title="Tools">
-        <Toggle
-          icon={SparklesIcon}
-          label="Enable tools"
-          hint="Allow chat to use reading, search and organization tools"
-          title="Master switch for AI tool use in every chat. Off makes every chat plain chat regardless of its per-chat selection; your tool configuration is preserved."
-          checked={value.agentEnabled}
-          onChange={value.setAgentEnabled}
-        />
-      </Section>
-      <Section title="Tool configuration">
-        {CHAT_KIND_ROWS.map(([kind, icon, label, hint]) => (
-          <Row key={kind} icon={icon} label={label} hint={hint}
-            title={`The tools a ${label.toLowerCase()} may use whenever its Tools switch is on — click a chip to allow or forbid it. Whatever tools return is sent to your configured AI provider; every tool call is shown in the reply.`}>
-            <AgentToolPicker kind={kind} perms={value.agentPerms} setPerms={value.setAgentPerms} />
-          </Row>
-        ))}
+  return <>
+
+        <Row icon={ActivityIcon} label="Default reasoning effort" hint="Used by all chats in this browser; leave Default unless your model supports it">
+          <MenuSelect label="Default reasoning effort" value={ai.chatEffort} onChange={ai.setChatEffort}
+            options={[["", "Default"], ...(ai.aiInfo?.efforts || ["low", "medium", "high"]).map((v) => [v, v])]} />
+        </Row>
+        <Section title="Tool limits">
         <Row icon={RefreshIcon} label="Tool rounds"
           hint="AI ↔ tool round-trips per message"
           title="Each round-trip lets the model issue more tool calls. This is a runaway guard — actual work is separately capped at 200 changes per message.">
@@ -907,17 +938,7 @@ function AssistantSettings({ value }) {
           title="The most extracted PDF text one read_page tool call may return. The agent reads a long paper in windows of this size, continuing where the last call stopped — a larger window means fewer calls but more tokens per message.">
           <CharSlider value={value.agentReadChars} onChange={value.setAgentReadChars} />
         </Row>
-      </Section>
-      <Section title="Chat">
-        <Toggle
-          icon={RectSelectIcon}
-          label="Clear snapshots on click"
-          hint="A plain click in the PDF also drops pending snapshots"
-          title="A plain click in the PDF clears the quoted text selections under the chat. Turn this on to also drop pending rectangle snapshots with that click — images pasted into the chat are never touched."
-          checked={value.chatImgAutoClear}
-          onChange={value.setChatImgAutoClear}
-        />
-      </Section>
+        </Section>
       <Section
         title="Context size"
         action={<button className="uiBtn sm" onClick={value.reset} title="Back to 60000 / 6000 / 120000 characters">Reset</button>}
@@ -929,28 +950,19 @@ function AssistantSettings({ value }) {
           </Row>
         ))}
       </Section>
-    </>
-  );
+        <Section title="Translation performance"><TranslationModels value={papers} advanced /></Section>
+  </>;
 }
+
 
 // --- Advanced: logs ---------------------------------------------------------
 
 function AdvancedSettings({ value }) {
   return (
     <>
-      <PaneHead icon={ActivityIcon} title="Advanced">
-        Status surface, tracing and this browser's log — the things worth attaching to a bug report.
+      <PaneHead icon={ActivityIcon} title="Diagnostics">
+        Debug logging and events from this browser session.
       </PaneHead>
-      <Section title="Interface">
-        <Toggle
-          icon={LayoutIcon}
-          label="Status bar"
-          hint="Pin the latest status message below the tabs"
-          title="Status messages appear briefly as a floating pill. Turn this on to keep the latest one visible in a permanent bar below the tabs."
-          checked={value.statusBarVisible}
-          onChange={value.setStatusBarVisible}
-        />
-      </Section>
       <Section title="Tracing">
         <Toggle
           icon={BugIcon}
@@ -979,76 +991,171 @@ function AdvancedSettings({ value }) {
 // --- the dialog -------------------------------------------------------------
 
 export default function SettingsDialog({
-  activePane,
-  onPaneChange,
-  onClose,
-  papers,
-  notes,
-  library,
-  ai,
-  prompts,
-  context,
-  search,
-  users,
-  workspace,
-  backups,
-  server,
-  diagnostics,
+  activePane, onPaneChange, onClose, papers, notes, library, ai, prompts,
+  context, search, users, workspace, backups, server, diagnostics,
 }) {
+  const [query, setQuery] = React.useState("");
+  const [mobileIndex, setMobileIndex] = React.useState(false);
+  const [jump, setJump] = React.useState(null);
+  const [pending, setPending] = React.useState(null);
+  const paneRef = React.useRef(null);
+  const modalRef = React.useRef(null);
+  const drafts = React.useRef(new Map());
+  const available = (id) => {
+    if (["account", "users"].includes(id)) return !!users && (id !== "users" || users.isAdmin);
+    if (["workspaces", "backups"].includes(id)) return !!workspace;
+    if (id === "server") return !!server;
+    return true;
+  };
+  const allNav = [...PREFERENCE_NAV, ...MANAGEMENT_NAV, ...AI_NAV.filter(([id]) => id !== "ai"), ["backups", "Backups", DatabaseIcon], ["users", "Users", UsersIcon]];
+  const allowed = allNav.filter(([id]) => available(id));
+  const requested = resolveSettingsPane(activePane);
+  const pane = allowed.some(([id]) => id === requested) ? requested : "appearance";
+  const aiArea = AI_NAV.some(([id]) => id === pane);
+  const management = aiArea || ["workspaces", "backups", "server", "users"].includes(pane);
+  const manageTitle = aiArea ? "AI settings" : ["workspaces", "backups"].includes(pane) ? "Workspace manager"
+    : ["server", "users"].includes(pane) ? "Administration" : allNav.find(([id]) => id === pane)?.[1];
+  const managementItems = aiArea ? AI_NAV : ["workspaces", "backups"].includes(pane)
+    ? [["workspaces", "Workspaces", UsersIcon], ["backups", "Backups", DatabaseIcon]]
+    : ["server", "users"].includes(pane)
+      ? [["users", "Users", UsersIcon], ["server", "Server", ServerIcon]]
+      : MANAGEMENT_NAV.filter(([id]) => id === pane);
+  const guard = (action) => {
+    if (drafts.current.size) setPending(() => action);
+    else action();
+  };
+  const navigate = (id, label) => guard(() => {
+    setQuery(""); setMobileIndex(false); onPaneChange(id);
+    setJump(label ? { label } : null);
+    paneRef.current?.scrollTo(0, 0);
+  });
+  React.useEffect(() => {
+    if (!activePane) { setQuery(""); setPending(null); setMobileIndex(false); return; }
+    const legacyTarget = { notes: "Enter key", search: "On the home page", viewer: "Imported annotations",
+      context: "Single paper" }[activePane];
+    if (legacyTarget) setJump({ label: legacyTarget });
+  }, [activePane]);
+  React.useEffect(() => {
+    if (!jump || query || !activePane) return;
+    const target = [...(paneRef.current?.querySelectorAll("[data-setting]") || [])]
+      .find((element) => element.dataset.setting === jump.label);
+    if (!target) return;
+    target.tabIndex = -1;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView({ block: "center", behavior: "instant" });
+  }, [jump, pane, query, activePane]);
+  // Keep keyboard navigation inside the settings surface; Escape uses the same
+  // draft guard as Close and clicking the backdrop.
+  React.useEffect(() => {
+    if (!activePane) return;
+    const previous = document.activeElement;
+    modalRef.current?.focus();
+    return () => previous?.focus?.();
+  }, [!!activePane]);
   if (!activePane) return null;
-  const pane = PANE_ALIASES[activePane] || activePane;
-  // The users pane doubles as every non-admin's own account pane — same
-  // component, but it only ever shows their row (see UsersSettings).
-  const groups = NAV_GROUPS
-    .map(([group, items]) => [
-      group,
-      items
-        .map(([id, label, Icon]) => (id === "users" && !users?.isAdmin ? [id, "You", UserIcon] : [id, label, Icon]))
-        .filter(([id]) => id !== "users" || users)
-        .filter(([id]) => (id !== "workspaces" && id !== "backups") || workspace)
-        .filter(([id]) => id !== "server" || server),
-    ])
-    .filter(([, items]) => items.length);
-
+  const results = searchSettings(query, allowed.map(([id]) => id));
+  const aiValue = { ...ai, aiInfo: prompts.aiInfo };
+  const paperValue = { ...papers, chatModelName: (ai.aiModels || []).find((m) => m.id === ai.chatModel)?.model };
+  const navButton = ([id, label, Icon]) => <button key={id} type="button"
+    className={`settingsNavBtn ${pane === id && !query ? "active" : ""}`}
+    aria-current={pane === id && !query ? "page" : undefined} onClick={() => navigate(id)}>
+    <Icon size={17} /><span>{label}</span>
+  </button>;
   return (
-    <div className="reportOverlay" onClick={onClose}>
-      <div className="settingsModal" onClick={(event) => event.stopPropagation()}>
-        <div className="settingsSidebar">
-          <div className="settingsSideTitle"><SettingsIcon size={15} />Settings</div>
-          {groups.map(([group, items]) => (
-            <React.Fragment key={group}>
-              <div className="settingsNavGroup">{group}</div>
-              {items.map(([id, label, Icon]) => (
-                <button key={id} title={label} onClick={() => onPaneChange(id)}
-                  className={`settingsNavBtn ${pane === id ? "active" : ""}`}>
-                  <Icon size={15} /><span>{label}</span>
-                </button>
-              ))}
-            </React.Fragment>
-          ))}
-        </div>
-        <div className="settingsPane">
-          <button className="uiClose uiCloseLg settingsClose" onClick={onClose} title="Close settings" aria-label="Close settings">×</button>
-          {pane === "general" ? <GeneralSettings value={papers} /> : null}
-          {pane === "viewer" ? <ViewerSettings value={papers} /> : null}
-          {pane === "search" ? <SearchSettings value={search} /> : null}
-          {pane === "notes" ? <NotesSettings value={notes} /> : null}
-          {pane === "library" ? <LibrarySettings value={library} /> : null}
-          {pane === "ai" ? <AiSettings value={ai} /> : null}
-          {pane === "assistant" ? (
-            <AssistantSettings value={{
-              ...prompts,
-              ...context,
-            }} />
-          ) : null}
-          {pane === "prompts" ? <PromptsSettings value={prompts} /> : null}
-          {pane === "users" && users ? <UsersSettings value={users} /> : null}
-          {pane === "workspaces" && workspace ? <WorkspacesSettings value={workspace} /> : null}
-          {pane === "backups" && backups ? <WorkspaceBackups value={backups} /> : null}
-          {pane === "server" && server ? <ServerSettings value={server} /> : null}
-          {pane === "advanced" ? <AdvancedSettings value={diagnostics} /> : null}
+    <SettingsDraftContext.Provider value={drafts}>
+      <div className="reportOverlay" onClick={() => guard(onClose)}>
+        <div className={`settingsModal ${mobileIndex ? "settingsIndexOpen" : ""}`}
+          role="dialog" aria-modal="true" aria-label={management ? manageTitle : "Settings"}
+          tabIndex={-1} ref={modalRef} onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.stopPropagation(); event.preventDefault();
+              if (pending) setPending(null);
+              else if (query) setQuery("");
+              else guard(onClose);
+            }
+            if (event.key === "Tab") {
+              const targets = [...modalRef.current.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]')]
+                .filter((el) => el.getClientRects().length && !el.closest("[inert]"));
+              const first = targets[0], last = targets.at(-1);
+              if (event.shiftKey && (document.activeElement === first || document.activeElement === modalRef.current)) { event.preventDefault(); last?.focus(); }
+              else if (!event.shiftKey && (document.activeElement === last || document.activeElement === modalRef.current)) { event.preventDefault(); first?.focus(); }
+            }
+          }}>
+          <div className="settingsTopbar">
+            <button className="uiBtn sm settingsMobileBack" onClick={() => guard(() => { setMobileIndex(true); setQuery(""); })}>Back</button>
+            <span className="settingsTopTitle">{management ? manageTitle : "Settings"}</span>
+            <div className="settingsSearch">
+              <SearchIcon size={16} />
+              <input className="aiKeyInput" type="search" aria-label="Search settings" placeholder="Search settings..." value={query}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  guard(() => { setQuery(next); setMobileIndex(false); });
+                }} />
+              {query ? <button className="uiClose uiCloseSm" aria-label="Clear search" onClick={() => setQuery("")}>×</button> : null}
+            </div>
+            <button className="uiClose uiCloseLg" onClick={() => guard(onClose)} aria-label="Close settings">×</button>
+          </div>
+          <div className="settingsBody" inert={pending ? "" : undefined}>
+            <nav className="settingsSidebar" aria-label="Settings categories">
+              {management ? <>
+                <button className="settingsNavBtn" onClick={() => navigate("appearance")}>Back to settings</button>
+                <div className="settingsNavGroup">{manageTitle}</div>
+                {managementItems.filter(([id]) => available(id)).map(navButton)}
+              </> : <>
+                {PREFERENCE_NAV.filter(([id]) => available(id)).map(navButton)}
+                <div className="settingsNavGroup">Manage</div>
+                {MANAGEMENT_NAV.filter(([id]) => available(id)).map(navButton)}
+              </>}
+            </nav>
+            <main className="settingsPane" ref={paneRef} key={pane}>
+              {query.trim() ? <>
+                <PaneHead icon={SearchIcon} title="Search settings">{results.length} matching settings</PaneHead>
+                {results.length ? results.map(({ pane: id, label }) => <button key={`${id}:${label}`} className="uiBtn settingsSearchResult"
+                  onClick={() => navigate(id, label)}><span>{label}</span><small>{allNav.find(([key]) => key === id)?.[1]}</small></button>)
+                  : <Empty icon={SearchIcon}>No settings found. Try "model", "PDF", or "storage".</Empty>}
+              </> : <>
+                {pane === "appearance" ? <GeneralSettings value={papers} diagnostics={diagnostics} /> : null}
+                {pane === "reading" ? <>
+                  <PaneHead icon={BookIcon} title="Reading & editing">PDF viewing, notes, and search. Changes apply immediately in this browser.</PaneHead>
+                  <ViewerSettings value={papers} /><NotesSettings value={notes} /><SearchSettings value={search} />
+                  <button className="uiBtn sm settingsInlineLink" onClick={() => navigate("ai", "Translation model")}>Translation models and performance</button>
+                </> : null}
+                {pane === "library" ? <LibrarySettings value={{ ...papers, ...library }} onManage={() => navigate("maintenance")} /> : null}
+                {pane === "maintenance" ? <MaintenanceSettings value={library} /> : null}
+                {pane === "ai" ? <>
+                  <PaneHead icon={SparklesIcon} title="Connections & models">Connections follow your account. Model choices apply to all chats in this browser.</PaneHead>
+                  <AiSettings value={aiValue} taskModels={<TranslationModels value={paperValue} />} />
+                </> : null}
+                {pane === "assistant" ? <>
+                  <PaneHead icon={MessageSquareIcon} title="Assistant">Shared settings for all chats in this browser, including changes from the chat settings shortcut.</PaneHead>
+                  <AssistantSettings value={context} onAdvanced={() => navigate("ai-advanced", "Single paper")} />
+                </> : null}
+                {pane === "ai-advanced" ? <>
+                  <PaneHead icon={ActivityIcon} title="Advanced AI settings">Context budgets, tool limits, and translation performance. Saved in this browser.</PaneHead>
+                  <AdvancedAiSettings value={context} ai={aiValue} papers={paperValue} />
+                </> : null}
+                {pane === "prompts" ? <PromptsSettings value={prompts} /> : null}
+                {pane === "account" ? <UsersSettings value={users} selfOnly /> : null}
+                {pane === "users" ? <UsersSettings value={users} /> : null}
+                {pane === "workspaces" ? <WorkspacesSettings value={workspace} /> : null}
+                {pane === "backups" && backups ? <WorkspaceBackups value={backups} /> : null}
+                {pane === "server" ? <ServerSettings value={server} /> : null}
+                {pane === "diagnostics" ? <AdvancedSettings value={diagnostics} /> : null}
+              </>}
+            </main>
+          </div>
+          {pending ? <div className="settingsUnsaved" role="alertdialog" aria-label="Unsaved changes">
+            <span>You have unsaved edits. Keep editing or discard them to continue.</span>
+            <button className="uiBtn" autoFocus onClick={() => setPending(null)}>Keep editing</button>
+            <button className="uiBtn danger" onClick={() => {
+              const action = pending;
+              drafts.current.forEach((discard) => discard()); drafts.current.clear();
+              setPending(null); action();
+            }}>Discard changes</button>
+          </div> : null}
         </div>
       </div>
-    </div>
+    </SettingsDraftContext.Provider>
   );
 }

@@ -40,7 +40,8 @@ test("content and property patches", () => {
     [N("a", "x", [], { color: "red", quote: "q" })],
     [N("a", "x2", [], { color: "red", n: 1 })],
   );
-  assert.deepEqual(ops, [{ op: "set", id: "a", content: "x2", props: { n: 1, quote: null } }]);
+  // `base`: the text the change was made from (the server's three-way merge).
+  assert.deepEqual(ops, [{ op: "set", id: "a", content: "x2", base: "x", props: { n: 1, quote: null } }]);
   assert.deepEqual(propsPatch({ a: 1, b: { x: 1 } }, { a: 1, b: { x: 1 } }), {});
 });
 
@@ -140,13 +141,16 @@ test("applyOps: untouched subtrees keep their identity", () => {
 
 test("pushOp coalesces consecutive sets of one block", () => {
   const q = [];
-  pushOp(q, { op: "set", id: "a", content: "1" });
-  pushOp(q, { op: "set", id: "a", content: "12", props: { x: 1 } });
-  pushOp(q, { op: "set", id: "b", content: "b" });
+  pushOp(q, { op: "set", id: "a", props: { z: 0 } });
+  pushOp(q, { op: "set", id: "a", content: "1", base: "" });
+  pushOp(q, { op: "set", id: "a", content: "12", base: "1", props: { x: 1 } });
+  pushOp(q, { op: "set", id: "b", content: "b", base: "" });
   pushOp(q, { op: "set", id: "a", props: { y: 2 } });
+  // The run of keystrokes keeps the base it started from (a props-only op
+  // adopts the first content's base), and the latest content.
   assert.deepEqual(q, [
-    { op: "set", id: "a", content: "12", props: { x: 1, y: 2 } },
-    { op: "set", id: "b", content: "b" },
+    { op: "set", id: "a", content: "12", base: "", props: { z: 0, x: 1, y: 2 } },
+    { op: "set", id: "b", content: "b", base: "" },
   ]);
   pushOp(q, { op: "move", id: "a", parent: PAGE, position: "a5" });
   pushOp(q, { op: "set", id: "a", content: "after move" });

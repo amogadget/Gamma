@@ -38,19 +38,56 @@ docker run -p 9001:9001 -v gamma-data:/data ghcr.io/tim4431/gamma
 
 ```bash
 cd backend
-pip install -r requirements-dev.txt   # pytest + httpx
-python -m pytest tests -q
+pip install -r requirements-dev.txt   # pytest, pytest-xdist, httpx
+python -m pytest tests -q -n auto --dist loadfile   # parallel, ~15 s
+python -m pytest tests -q                           # serial, ~50 s (simpler tracebacks)
 ```
 
 In-process API tests (FastAPI TestClient) against a throwaway data
-directory — no server, no network. Run them with the project venv's
+directory — no server, no network: an autouse fixture in `conftest.py`
+refuses every non-loopback socket connect and DNS lookup, so a test that
+forgets to stub a metadata / PDF / AI fetch fails at once instead of
+passing slowly on the network. `pytest.ini` names `tests/`, so a bare
+`pytest` from `backend/` works too. The suite runs in parallel with
+pytest-xdist: every worker process imports `conftest.py` and so gets its own
+throwaway data directory, and `--dist loadfile` keeps each file's tests on
+one worker in file order (tests inside a file may build on each other;
+files never may). The shared `client` fixture carries the cookie of the last
+login on that worker, so a "not signed in" check uses the `anon` fixture (a
+fresh client), never `client`. Run them with the project venv's
 interpreter (`venv/Scripts/python.exe` on Windows): the two vector-math
 tests need `ziamath` from `requirements.txt`, and a system/conda `python`
 without it fails them with "ziamath is not importable" rather than a
-puzzling path count. The frontend has **no linter**. `npm test` from
-`frontend/` runs the block-operation tests, session-storage isolation tests,
-and collaboration transport tests with a stubbed React layer. Actual React
-rendering and interactions are exercised by the browser suite below.
+puzzling path count.
+
+The AI agent's tests are split by area — `test_ai_tools_registry.py`
+(scopes, permissions, the system prompt), `test_ai_tools_pages.py`,
+`test_ai_tools_blocks.py`, `test_ai_tools_search.py` (the executors),
+`test_ai_wire.py` (provider wire formats, SSE parsing, history replay; pure)
+and `test_ai_agent_loop.py` (`/api/ai/chat` with a faked provider) — over the
+fixtures in `tests/ai_fixtures.py`. Its `org` fixture creates one account
+per test module (the module's name is in the username), so the files never
+see each other's pages or provider entries.
+
+Rules the frontend mirrors — search normalization (`gamma/textnorm.py` ↔
+`frontend/src/textnorm.js`) and folder-label paths (`gamma/foldertags.py` ↔
+`frontend/src/libraryUtils.js`) — are pinned by ONE set of cases both sides
+read: `tests/shared/*.json` at the repository root, run by
+`backend/tests/test_shared_fixtures.py` and the matching node tests. Add a
+case there when a rule changes; whichever side drifts fails.
+
+The frontend has **no linter** and no component tests. Its pure modules have
+`node --test` tests (`npm test` from `frontend/`, the files in
+`frontend/tests/*.test.mjs`): `blockOps` (diff/apply), `collabSession` (the
+page session's transport logic over fakes — ordering, reconciliation,
+retries, presence, the caret throttle), `sessionState`, `settings`
+(navigation, presets), `textnorm` and `libraryUtils` (the shared cases
+above), `mdMarks` (the formatting hotkeys' toggle), `logseqPdfModel` (tree
+ops), `blockHistory` (the undo classifier) and `menuAim` (the safe-triangle
+geometry). A module is testable there when its relative imports carry the
+`.js` extension (node resolves nothing else); modules that import React can
+still be imported for their pure exports. Actual React rendering and
+interactions are exercised by the browser suite below.
 
 ### Browser end-to-end suite
 
@@ -65,10 +102,15 @@ npm run e2e -- --keep           # keep the temp data dir + server.log
 ```
 
 `frontend/tests/e2e/run.mjs` starts an ISOLATED backend (the project venv's
-python, a fresh `GAMMA_DATA_DIR` under the OS temp dir, a free port, serving
+python — or the interpreter `GAMMA_E2E_PYTHON` names — over a fresh
+`GAMMA_DATA_DIR` under the OS temp dir, on a free port, serving
 `frontend/dist`), creates the accounts `alice` / `bob`, and drives Playwright's
 Chromium (`playwright` is a devDependency; the browser is downloaded once on
-first launch). `harness.mjs` holds the server lifecycle, `Account` (session
+first launch). A failed step saves a screenshot of every open page plus the
+pages' recorded problems and the server log's tail under the temp dir's
+`failures/`, and the temp dir is kept (the summary prints its path). The
+`check` workflow runs the suite on every PR and uploads those folders as the
+`e2e-failures` artifact. `harness.mjs` holds the server lifecycle, `Account` (session
 cookie + `X-Gamma-Workspace` for API seeding, browser contexts logged in as
 that account), `makePdf` (a small real PDF with a text layer), and `step()`.
 The scenarios live in `tests/e2e/scenarios/`:
@@ -93,7 +135,10 @@ The scenarios live in `tests/e2e/scenarios/`:
 Every step also asserts that no API call failed (4xx/5xx), no console error
 and no page error happened meanwhile (`openPage` records them;
 `EXPECTED_FAILURES` in the harness lists designed refusals such as the
-metadata fetch's 404 for a PDF without identifiers). New UI work touching the
+metadata fetch's 404 for a PDF without identifiers). Wait for the state a
+step needs with `until()` / `waitForFunction` / `waitForEvent`, never a fixed
+`sleep` — the one left (the view-only share's "no editor opens") is a
+negative check with nothing to wait for. New UI work touching the
 save path, workspaces, auth or rendering of URLs should add a step here; the
 `/verify` skill runs this suite.
 

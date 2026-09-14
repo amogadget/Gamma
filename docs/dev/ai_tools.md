@@ -50,7 +50,7 @@ Returns a `page_report_section`: the page's title, a properties line
 attachment's extracted text when the page carries a PDF, then the page's
 highlights and nested notes. A page without an attachment returns its notes —
 they are its content. `pdf_chars` sizes the excerpt per call, capped by the
-Settings → Assistant "Read window" preference (`gamma-ai-read-chars` →
+Settings / AI / Advanced / "Read window" preference (`gamma-ai-read-chars` →
 request `read_char_limit`, riding in the scope dict as `read_chars`; default
 cap 20 000 — `agent_tools` formats the effective cap into the armed spec so
 the model knows what it may ask for). `pdf_page` starts the excerpt at a

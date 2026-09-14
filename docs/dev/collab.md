@@ -17,7 +17,9 @@ wins; the other version can be lost. Structural changes can also conflict,
 such as editing a block someone else deletes. Presence helps people coordinate
 but does not prevent conflicts.
 
-SQLite is the source of truth; there is no character-level merge or CRDT.
+SQLite is the source of truth; there is no OT or CRDT. Concurrent edits of
+one block's text are reconciled by a stateless three-way merge at apply
+time (`gamma/textmerge.py`, below).
 Presence is temporary: standalone cursor messages and optional cursors on
 operation batches are broadcast but never written to the operation log.
 
@@ -99,9 +101,15 @@ A peer is `{client, user, name, color, can_edit, block, anchor, head}`; colour
 is an index into an 8-slot palette handed out per room (CSS `--peer-N`);
 anonymous share viewers are `Anonymous`.
 
-## The client (`src/collab.js`, `src/blockOps.js`)
+## The client (`src/collabSession.js`, `src/collab.js`, `src/blockOps.js`)
 
-`usePageCollab` — one per open page (App.jsx) — owns:
+`createCollabSession` (`collabSession.js`) is the session as a plain state
+machine over injected dependencies — the JSON call, the socket factory, the
+keepalive POST, timers, and callbacks for peers/me — so the node tests drive
+it with fakes. `usePageCollab` (`collab.js`, one per open page in App.jsx)
+only wires it to the browser: `utils.apiJson`, `new WebSocket(...)` on the
+share- or workspace-qualified URL, the pagehide keepalive, and `peers` / `me`
+as React state. The session owns:
 
 - **the base tree**: what the server is known to hold from this tab's point of
   view. The block tree's transition effect calls
@@ -124,6 +132,24 @@ anonymous share viewers are `Anonymous`.
   and reload the page. Network failures, 408 and 429 retry up to eight times;
   pending content stays protected during retries. After retry exhaustion,
   unsaved operations remain in memory for a later flush, with an error status.
+- **same-block merge**: a content `set` carries `base`, the text the change
+  was made from (`diffTrees` reads it off the base tree; `pushOp` keeps the
+  first base of a run of keystrokes). When the server finds the block
+  changed since, it applies the edit as a patch onto the current text
+  (diff-match-patch with fuzzy context matching): edits to different spans
+  both survive, a hunk that no longer fits is dropped and the stored text
+  stands for that span. The echoed op carries the merged text and the
+  batch's `cursor` is remapped into it. On the ack, a set whose stored
+  text differs from what we sent lands on screen like a remote op — but
+  only when no newer set of ours for that block is queued or in flight:
+  that newer set's base is the text we sent, so the server patches those
+  keystrokes onto its merge and the later ack brings the whole result;
+  touching the base early would make the next diff repeat the change.
+  The editor re-reports our caret after any external change of its text
+  (a merge, a remote edit before the caret), so the others see it where it
+  moved to. Writers without a `base` (imports, `PUT /blocks/{id}`) replace
+  the text as before; the AI agent's `edit_block` sends the text it read
+  as `base`, so a person typing in that block keeps their keystrokes.
 - **reconciliation**: `inflight` counts queued-or-sent content sets per
   block. The content of a remote `set` for a block with one in flight is *deferred* and, on
   the ack, applied only if its seq is higher than the ack's (theirs is the
@@ -191,18 +217,23 @@ state in App instead of the tree.
 
 - `backend/tests/test_collab.py`: op semantics, scoping, the log and
   catch-up, the socket (TestClient `websocket_connect`; sockets need a
-  context-managed client), AI-tool and cross-page fan-out.
+  context-managed client), AI-tool and cross-page fan-out. Every socket
+  test opens its own page, and sequence numbers are asserted relative to
+  the hello's (or the previous ack's) — never as absolute counts — so a
+  step added to one test never renumbers the others.
 - `frontend/tests/blockOps.test.mjs`: `node --test tests/blockOps.test.mjs`
   from `frontend/` (pure diff/apply round-trips).
-- `frontend/tests/collabSession.test.mjs`: deterministic HTTP/socket ordering,
-  content versus property reconciliation, retries and navigation during a
-  save. Runs the hook with controlled transports and a stubbed React layer;
-  browser behavior is covered separately below.
+- `frontend/tests/collabSession.test.mjs`: `createCollabSession` over fake
+  HTTP, socket and timers — ack/socket ordering and catch-up, content versus
+  property reconciliation, retries and their limit, rejection, navigation
+  during a save, presence messages, the caret throttle, reconnect backoff,
+  read-only sessions; browser behavior is covered separately below.
 - End to end: `npm run e2e -- --only collab` from `frontend/`
   (`tests/e2e/scenarios/collab.mjs`, [debugging.md](debugging.md)): two
   browser contexts on one page of a shared workspace — presence stack and row
   chips, typing in one tab appears in the other, edits to different blocks
-  converge, same-block typing settles on one value, a caret after a
+  converge, same-block typing keeps both people's text (and edits at both
+  ends of one long block both survive with the carets in place), a caret after a
   mid-block edit sits where the person typed (and the other caret shifts
   along), undo after a remote edit
   keeps the remote edit, a rename reaches the other tab, an edit made offline
@@ -214,9 +245,11 @@ state in App instead of the tree.
 - Queued edits live in memory, not in durable offline storage. Keepalive
   saves on tab close are best effort and subject to browser limits; a network
   outage followed by closing the tab can lose unsaved work.
-- Same-block simultaneous typing is last-writer-wins per block. The upgrade
-  path, if it ever matters, is CodeMirror's collab rebase on just the open
-  block; not a CRDT.
+- Same-block simultaneous typing merges by span (three-way merge above);
+  two people changing the *same* characters within one save window still
+  resolve by server order for that span. If character-exact convergence
+  ever matters, the upgrade path is CodeMirror's collab rebase on just the
+  open block; not a CRDT.
 - The socket needs a proxy that forwards websocket upgrades (Vite's dev proxy
   has `ws: true`; a reverse proxy in front of the NAS must pass `Upgrade`).
   uvicorn needs the `websockets` package (`requirements.txt`; the desktop

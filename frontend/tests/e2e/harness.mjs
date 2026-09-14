@@ -12,10 +12,14 @@ import { chromium } from "playwright";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const BACKEND = path.join(ROOT, "backend");
-const DIST = path.join(ROOT, "frontend", "dist");
-const PYTHON = process.platform === "win32"
+// A private build keeps concurrent development builds from replacing assets
+// while a browser scenario is reloading the application.
+const DIST = process.env.GAMMA_E2E_DIST || path.join(ROOT, "frontend", "dist");
+// The backend interpreter: the project venv, or whatever GAMMA_E2E_PYTHON
+// names (CI installs the requirements into the runner's python).
+const PYTHON = process.env.GAMMA_E2E_PYTHON || (process.platform === "win32"
   ? path.join(BACKEND, "venv", "Scripts", "python.exe")
-  : path.join(BACKEND, "venv", "bin", "python");
+  : path.join(BACKEND, "venv", "bin", "python"));
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -29,8 +33,11 @@ export const flags = {
 // ---------------------------------------------------------------------------
 // Server
 
+let current = null; // the running server, for failure artifacts
+
 export class Server {
   constructor() {
+    current = this;
     this.dir = fs.mkdtempSync(path.join(os.tmpdir(), "gamma-e2e-"));
     this.dataDir = path.join(this.dir, "data");
     this.logPath = path.join(this.dir, "server.log");
@@ -45,7 +52,7 @@ export class Server {
   }
   async start() {
     if (!fs.existsSync(path.join(DIST, "index.html"))) throw new Error("frontend/dist is missing: run `npm run build` first");
-    if (!fs.existsSync(PYTHON)) throw new Error(`backend venv python not found at ${PYTHON}`);
+    if (path.isAbsolute(PYTHON) && !fs.existsSync(PYTHON)) throw new Error(`backend venv python not found at ${PYTHON}`);
     fs.mkdirSync(this.dataDir, { recursive: true });
     this.manage("setup");
     this.port = await freePort();
@@ -69,7 +76,10 @@ export class Server {
       else this.proc.kill("SIGTERM");
       await sleep(300);
     }
-    if (!flags.keep) { try { fs.rmSync(this.dir, { recursive: true, force: true }); } catch {} }
+    // The temp dir survives on --keep and after any failure (its
+    // failures/ folder holds the screenshots and log tails).
+    if (flags.keep || results.some((r) => !r.ok)) console.log(`kept: ${this.dir}`);
+    else { try { fs.rmSync(this.dir, { recursive: true, force: true }); } catch {} }
   }
 }
 
@@ -155,9 +165,13 @@ const EXPECTED_FAILURES = [
 // step can assert "nothing went wrong" instead of only "the thing appeared".
 // (The browser's own "Failed to load resource" console line is skipped: the
 // response listener already records the same failure with its URL.)
+const openPages = new Set();
+
 export async function openPage(ctx, url) {
   const page = await ctx.newPage();
   page.problems = [];
+  openPages.add(page);
+  page.on("close", () => openPages.delete(page));
   page.on("response", (r) => {
     const u = r.url();
     if (!u.includes("/api/") || r.status() < 400) return;
@@ -221,8 +235,29 @@ export async function step(name, fn) {
   } catch (e) {
     results.push({ name, ok: false, note: String((e && e.message) || e), ms: Date.now() - t0 });
     console.log(`  FAIL  ${name}\n        ${String((e && e.stack) || e).split("\n").join("\n        ")}`);
+    await saveFailureArtifacts(name, e).catch(() => {});
     if (!flags.continueOnFail) throw e;
   }
+}
+
+// On a failed step: a screenshot of every open page, the pages' recorded
+// problems and the tail of the server log, under <temp dir>/failures/ (the
+// temp dir is then kept) — what a CI log alone can't tell you.
+async function saveFailureArtifacts(name, err) {
+  if (!current) return;
+  const dir = path.join(current.dir, "failures");
+  fs.mkdirSync(dir, { recursive: true });
+  const slug = `${String(results.length).padStart(2, "0")}-${name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").slice(0, 60)}`;
+  const pages = [...openPages].filter((p) => !p.isClosed());
+  for (const [i, page] of pages.entries()) {
+    try { await page.screenshot({ path: path.join(dir, `${slug}${pages.length > 1 ? `-${i + 1}` : ""}.png`) }); } catch {}
+  }
+  const problems = pages.flatMap((p) => p.problems || []);
+  fs.writeFileSync(path.join(dir, `${slug}.log`), [
+    `# ${name}`, "", String((err && err.stack) || err), "", "## page problems", ...(problems.length ? problems : ["(none)"]),
+    "", "## server log (tail)", current.log().slice(-8000),
+  ].join("\n"));
+  console.log(`        artifacts: ${dir}`);
 }
 
 export function assert(cond, msg) { if (!cond) throw new Error(msg || "assertion failed"); }

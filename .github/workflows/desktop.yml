@@ -340,12 +340,20 @@ jobs:
           msix="Gamma-$VERSION.msix"
           cp dist-store/Gamma-*.appx "$msix"
           msstore reconfigure --tenantId "$PARTNER_CENTER_TENANT_ID" --sellerId "$PARTNER_CENTER_SELLER_ID" --clientId "$PARTNER_CENTER_CLIENT_ID" --clientSecret "$PARTNER_CENTER_CLIENT_SECRET"
-          if msstore publish "$msix" --appId "$STORE_PRODUCT_ID"; then
-            echo "::notice::Microsoft Store: $VERSION submitted for certification"
-          else
-            echo "::warning::Microsoft Store: submission of $VERSION failed (a previous submission still in certification?) — upload dist-store/*.appx by hand or wait for the next release"
-            exit 1
-          fi
+          # The CLI's exit code is not the verdict: after the commit succeeds
+          # it re-reads the submission once more, and a transient API error
+          # there exits 1 although the package is already in certification
+          # (seen on the first run). Ask the Store for the state instead.
+          msstore publish "$msix" --appId "$STORE_PRODUCT_ID" || true
+          state=$(msstore submission status "$STORE_PRODUCT_ID" 2>&1 | tr -d '\r' | grep -oE 'Submission Status = [A-Za-z]+' | tail -1 | sed 's/.*= //')
+          echo "Store submission state: ${state:-unknown}"
+          case "$state" in
+            PreProcessing|Certification|Release|Publishing|Published)
+              echo "::notice::Microsoft Store: $VERSION submitted (state: $state; certification takes 1–3 days)" ;;
+            *)
+              echo "::warning::Microsoft Store: submission of $VERSION did not go through (state: ${state:-unknown}; a previous submission still in certification?) — upload dist-store/*.appx by hand or wait for the next release"
+              exit 1 ;;
+          esac
       - name: Microsoft Store (skipped)
         if: runner.os == 'Windows' && (env.STORE_SUBMIT != 'true' || needs.meta.outputs.publish != 'true')
         shell: bash

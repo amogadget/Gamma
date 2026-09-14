@@ -219,7 +219,7 @@ export function InviteDialog({ name, accounts, exclude, busy, error, onSubmit, o
   const [username, setUsername] = React.useState("");
   const [role, setRole] = React.useState("editor");
   return (
-    <SubDialog title={`Invite to ${name}`} onClose={onClose}>
+    <SubDialog title={`Invite to ${name}`} onClose={onClose} draft={{ username, role }}>
       <div className="settingsForm">
         <Field label="Account" hint="anyone with an account on this server">
           <AccountPicker accounts={accounts} exclude={exclude} value={username} onChange={setUsername} autoFocus />
@@ -241,7 +241,7 @@ export function InviteDialog({ name, accounts, exclude, busy, error, onSubmit, o
 export function NameDialog({ title, label, hint, initial, submitLabel, busy, error, onSubmit, onClose }) {
   const [name, setName] = React.useState(initial || "");
   return (
-    <SubDialog title={title} onClose={onClose}>
+    <SubDialog title={title} onClose={onClose} draft={name}>
       <div className="settingsForm">
         <Field label={label} hint={hint}>
           <input
@@ -267,7 +267,15 @@ export function NameDialog({ title, label, hint, initial, submitLabel, busy, err
 // `canOpen` / `onOpen` wire the Open button; `onLeft` fires after the
 // caller leaves or deletes it (the pane switches away if it was the open
 // one). `personalCount` hides Delete on an account's last personal workspace.
-export function ManageWorkspaceDialog({ wsId, me, admin, accounts, confirm, setStatus, canOpen, onOpen, onClose, onLeft, personalCount }) {
+function WorkspacePage({ title, onClose, children }) {
+  return <>
+    <button className="uiBtn sm settingsInlineLink" onClick={onClose}>Back to workspaces</button>
+    <PaneHead icon={UsersIcon} title={title}>Workspace settings</PaneHead>
+    {children}
+  </>;
+}
+
+export function ManageWorkspaceDialog({ wsId, me, admin, accounts, confirm, setStatus, canOpen, onOpen, onClose, onLeft, personalCount, inline = false }) {
   const ws = useWorkspace(wsId);
   const [renaming, setRenaming] = React.useState(false);
   const [inviting, setInviting] = React.useState(false);
@@ -341,8 +349,9 @@ export function ManageWorkspaceDialog({ wsId, me, admin, accounts, confirm, setS
     : `${info.access === "public" ? "Public" : "Shared"} workspace · ${info.role ? `you ${ROLE_TEXT[info.role]}` : "you manage it as an admin"}`;
   const canDelete = manages && (!isPersonal || personalCount == null || personalCount > 1);
 
+  const Surface = inline ? WorkspacePage : SubDialog;
   return (
-    <SubDialog title={title} onClose={onClose}>
+    <Surface title={title} onClose={onClose}>
       <div className="settingsForm">
         {subtitle ? <div className="settingsPaneHint">{subtitle}</div> : null}
         {!info && !ws.error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
@@ -442,7 +451,7 @@ export function ManageWorkspaceDialog({ wsId, me, admin, accounts, confirm, setS
           busy={ws.busy} error={ws.error} onSubmit={invite} onClose={() => { setInviting(false); ws.setError(""); }}
         />
       ) : null}
-    </SubDialog>
+    </Surface>
   );
 }
 
@@ -558,6 +567,16 @@ export function WorkspacesSettings({ value }) {
     );
   }
 
+  if (manage) return (
+    <ManageWorkspaceDialog inline
+      wsId={manage} me={me} admin={isAdmin} accounts={accounts} confirm={confirm} setStatus={setStatus}
+      canOpen={manage !== currentId} personalCount={personal.length}
+      onOpen={() => { closeSettings?.(); switchWorkspace(manage); }}
+      onClose={() => { setManage(null); refresh(); refreshSession?.(); }}
+      onLeft={left}
+    />
+  );
+
   return (
     <>
       <PaneHead icon={UsersIcon} title="Workspaces">
@@ -604,15 +623,6 @@ export function WorkspacesSettings({ value }) {
         </>
       ) : null}
 
-      {manage ? (
-        <ManageWorkspaceDialog
-          wsId={manage} me={me} admin={isAdmin} accounts={accounts} confirm={confirm} setStatus={setStatus}
-          canOpen={manage !== currentId} personalCount={personal.length}
-          onOpen={() => { closeSettings?.(); switchWorkspace(manage); }}
-          onClose={() => { setManage(null); refresh(); refreshSession?.(); }}
-          onLeft={left}
-        />
-      ) : null}
       {creating ? (
         <NameDialog title="New personal workspace" label="Name"
           hint={`a separate library of your own — work, life, play${isAdmin ? "; shared workspaces are made in Settings → Server" : "; ask an admin for a shared one"}`}

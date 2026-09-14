@@ -15,8 +15,13 @@ settingsBackups.jsx    Settings → Advanced → Server backups (admins): snapsh
 blockTree.jsx       the Logseq outliner — block rows, [[refs]], drag, markdown
 logseqPdfModel.js   pure tree ops (insert/indent/outdent/flatten/cycle-check)
 pdfViewer.jsx       custom pdf.js viewer — pages, highlights, links, text search; exports COLORS
-search.jsx          workspace search (Ctrl+F): SearchPanel popover, fuzzy
-                    buildSearchRegex (mirror of backend gamma/textnorm.py)
+search.jsx          workspace search (Ctrl+F): SearchPanel popover, result groups
+textnorm.js         search normalization + fuzzy regex (mirror of backend
+                    gamma/textnorm.py; tests/shared/textnorm.json pins both)
+collabSession.js    the page's live session as a plain state machine: op batches,
+                    remote ops, reconciliation, catch-up, presence (node-tested)
+collab.js           usePageCollab: collabSession wired to fetch/WebSocket/React
+blockOps.js         diffTrees / applyOps / positions for the op batches
 chatDock.jsx        the AI chat window (self-contained per-page conversation)
 widgets.jsx         shared chrome: dock windows, tabs, popovers, markdown, inputs
 sessionState.js     localStorage: restore the last open page on bare `/` (per workspace)

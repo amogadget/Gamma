@@ -18,6 +18,7 @@ import { noteScenarios } from "./scenarios/notes.mjs";
 import { pdfScenarios } from "./scenarios/pdf.mjs";
 import { collabScenarios } from "./scenarios/collab.mjs";
 import { shareScenarios } from "./scenarios/share.mjs";
+import { settingsScenarios } from "./scenarios/settings.mjs";
 
 const server = new Server();
 let browser;
@@ -71,6 +72,7 @@ try {
     await ctx.close();
   });
 
+  await settingsScenarios(env);
   const notes = await noteScenarios(env);
   const pdf = await pdfScenarios(env, notes);
   await collabScenarios(env);
@@ -84,5 +86,4 @@ try {
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} steps passed${failed.length ? `; failed: ${failed.map((f) => f.name).join(", ")}` : ""}`);
-if (flags.keep) console.log(`kept: ${server.dir}`);
 process.exit(failed.length || !results.length ? 1 : 0);

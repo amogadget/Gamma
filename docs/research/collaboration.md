@@ -86,10 +86,15 @@ fractional-index positions) therefore needs no new model: the server applies
 a batch in one transaction, assigns a per-page sequence number, logs it and
 fans it out. Independent block changes can coexist, but edits to a deleted
 block and incompatible moves still need rejection or reconciliation. Two
-people typing in the same block can overwrite each other's text. Presence
-helps coordination; last-writer-wins is a tradeoff, not protection against
-data loss. Character-level OT on an open block is one possible future
-approach if preserving simultaneous typing becomes a requirement.
+people typing in the same block could overwrite each other's text, which
+is why a content `set` now carries the text it was edited from and the
+server applies it as a patch when the block moved on (a stateless
+three-way merge with diff-match-patch — Google Docs' pre-OT "diff, then
+patch" shape, and what wikis do on a save conflict). It keeps every writer
+on plain SQL and costs a single-user save one string comparison; it does
+not make two edits of the same characters converge exactly, which is the
+one thing OT or a CRDT would add. Character-level OT on an open block
+remains the possible next step if that ever matters.
 
 A CRDT was ruled out precisely because of the second-source-of-truth cost:
 every backend writer (importers, the AI agent's tools, the clip endpoint,

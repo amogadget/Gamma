@@ -60,7 +60,7 @@ function ContextCoverage({ items }) {
         : `Model saw ${span}`;
     const long = (refused ? "This provider does not accept PDF files, so the document went as extracted text. " : "")
       + (c.partial
-        ? `Only ${span} of ${what} fit the context budget — the rest was not visible to the model. Raise the budget in Settings → Assistant → Context, or turn on Tools so it can read and search the whole paper.`
+        ? `Only ${span} of ${what} fit the context budget — the rest was not visible to the model. Raise the budget in Settings / AI / Advanced AI settings / Context size, or turn on Tools so it can read and search the whole paper.`
         : `${what} was sent as extracted text.`);
     return { short, long, refused };
   }).filter(Boolean);
@@ -122,7 +122,7 @@ export default function ChatDock({
   // it from the ⚙ popover) and toolRounds the round budget. When the AI applied changes, onLibraryChange
   // refreshes the home feed and onNotesChange reloads touched pages' notes.
   organizeFolder = null, toolRounds, agentReadChars, agentPerms, setAgentPerms, agentSystem,
-  agentEnabled, onLibraryChange, onNotesChange, onAgentEvent,
+  agentEnabled, setAgentEnabled, onLibraryChange, onNotesChange, onAgentEvent,
   // Opens a page the reply links to (/?page=<id>) in place.
   onOpenPage,
   onGrip, onGripDoubleClick, collapsed, onClose,
@@ -145,26 +145,12 @@ export default function ChatDock({
   // page with a PDF, a page of notes.
   const chatKind = folderChat ? "folder" : pageAttach ? "pdf" : "notes";
   const chatKindLabel = CHAT_KIND_ROWS.find((r) => r[0] === chatKind)?.[2] || "Chat";
-  // Every chat starts with tools on (the Settings "Enable tools" switch is the
-  // only global knob). Conversation-local overrides: switching pages/folders
-  // retains each conversation's choice for this session; New chat drops it
-  // back to on.
-  const [chatToolConfigs, setChatToolConfigs] = useState({});
-  const chatToolConfig = chatToolConfigs[chatKey];
+  // The chat settings shortcut edits the same global preferences as Settings.
   const chatToolPerms = agentPerms?.[chatKind] || {};
-  const toolsRequested = chatToolConfig?.enabled ?? true;
-  const toolsEnabled = !!agentEnabled && !!toolsRequested;
+  const toolsEnabled = !!agentEnabled;
   const perm = (key) => chatToolPerms?.[key] !== false;
-  const toggleToolsForChat = () => setChatToolConfigs((prev) => ({
-    ...prev,
-    [chatKey]: { enabled: !(prev[chatKey]?.enabled ?? true) },
-  }));
-  const resetToolConfig = () => setChatToolConfigs((prev) => {
-    const next = { ...prev };
-    delete next[chatKey];
-    return next;
-  });
-  // What the agent may do here after applying the chat-local switches.
+  const toggleTools = () => setAgentEnabled(!agentEnabled);
+  // What the agent may do here after applying the shared permissions.
   const agentReads = perm("list") || perm("read") || perm("block_read") || perm("search");
   const agentWrites = perm("rename") || perm("move") || perm("block_edit");
   // Agent fields riding on /api/ai/chat ({} = plain chat): folder chats reach
@@ -227,7 +213,7 @@ export default function ChatDock({
   const activeModel = (aiInfo?.models || []).find((m) => m.id === chatModel) || null;
   const nativePdf = activeModel ? activeModel.native_pdf !== false : true;
   const nativePdfNote = nativePdf ? "" :
-    `${activeModel?.provider_name || "This provider"} does not accept PDF files — the PDF is sent as extracted text instead (first ${(chatContextChars || 0).toLocaleString()} characters; Settings → Assistant → Context).`;
+    `${activeModel?.provider_name || "This provider"} does not accept PDF files — the PDF is sent as extracted text instead (first ${(chatContextChars || 0).toLocaleString()} characters; Settings / AI / Advanced AI settings / Context size).`;
   const attachPdfManualRef = useRef(false); // the user toggled the PDF button themselves
   useEffect(() => {
     // A provider without native PDF input: drop the automatic "send the file
@@ -337,7 +323,6 @@ export default function ChatDock({
     setChatTitle("");
     attachPdfManualRef.current = false;
     setAttachPdf(nativePdf); // new chat: first question carries the full PDF again (where the provider takes it)
-    resetToolConfig();
     setHistory(null);
     apiJson(`${API}/chat-history/archive`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(payload) })
       .catch((err) => setStatus(`Couldn't keep the conversation in history: ${err.message}`));
@@ -349,7 +334,6 @@ export default function ChatDock({
       const data = await apiJson(`${API}/chat-history/${id}/open`,
         { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(currentPayload()) });
       showLoaded(data.messages || [], data.title);
-      resetToolConfig();
       setHistory(null);
       setOpenPopover(null);
       chatStickRef.current = true;
@@ -818,7 +802,7 @@ export default function ChatDock({
 
   // Header: one icon strip (the PDF zoom column's buttons, laid flat) —
   // ⚙ chat settings (model, reasoning effort, context size — the same prefs
-  // Settings → Assistant edits, in a popover), Tools, Find, New chat.
+  // Settings / AI edits, in a popover), Tools, Find, New chat.
   const settingsOpen = openPopover === "chatsettings";
   const headerContent = (
     <>
@@ -848,6 +832,7 @@ export default function ChatDock({
               </button>
               {settingsOpen ? (
                 <div className="popover chatSettingsPop">
+                  <div className="popoverHint">Global settings for all chats in this browser. Changes also appear in Settings.</div>
                   <div className="popoverSection">Model</div>
                   <MenuSelect
                     block
@@ -873,22 +858,19 @@ export default function ChatDock({
                   <div className="popoverSection">Context per page · {approxPages(chatContextChars)}</div>
                   <CharSlider value={chatContextChars} onChange={setChatContextChars} />
                   <div className="popoverHint">
-                    Extracted PDF text sent with each message. The multi-page total and the agent's read window are in Settings → Assistant.
+                    Extracted PDF text sent with each message. The multi-page total and the agent's read window are in Settings / AI / Advanced AI settings.
                   </div>
                   <div className="popoverSection">Tools</div>
-                  <label className="chatToolPermRow" title={agentEnabled
-                    ? "Same as the Tools button — on for this conversation only"
-                    : "Agent tools are disabled in Settings → Assistant"}>
-                    <input type="checkbox" checked={toolsEnabled} disabled={!agentEnabled}
-                      onChange={toggleToolsForChat} />
+                  <label className="chatToolPermRow" title="Allow assistant tools in all chats">
+                    <input type="checkbox" checked={toolsEnabled} onChange={toggleTools} />
                     <SlidersIcon size={13} />
-                    <span>Enable tools for this chat</span>
+                    <span>Allow tools in all chats</span>
                   </label>
                   <div className="chatToolPicker">
                     <AgentToolPicker kind={chatKind} perms={agentPerms} setPerms={setAgentPerms} disabled={!toolsEnabled} />
                   </div>
                   <div className="popoverHint">
-                    {chatKindLabel} tools — the same chips as Settings → Assistant, one set per chat kind.
+                    Applies to all {chatKindLabel.toLowerCase()} conversations in this browser.
                   </div>
                 </div>
               ) : null}
@@ -898,13 +880,10 @@ export default function ChatDock({
         <button
           type="button"
           className={`ctlBtn ${toolsEnabled ? "modeActive" : ""}`}
-          disabled={!agentEnabled}
           aria-pressed={toolsEnabled}
           aria-label={`Tools ${toolsEnabled ? "on" : "off"}`}
-          onClick={() => { setOpenPopover(null); toggleToolsForChat(); }}
-          title={agentEnabled
-            ? `Tools ${toolsEnabled ? "on" : "off"} — click to turn ${toolsEnabled ? "off" : "on"} for this chat only`
-            : "Agent tools are disabled in Settings → Assistant"}
+          onClick={() => { setOpenPopover(null); toggleTools(); }}
+          title={`Tools ${toolsEnabled ? "on" : "off"} for all chats - click to change the global setting`}
         >
           <SlidersIcon size={15} />
         </button>

@@ -1,5 +1,5 @@
-def test_session_requires_login(client):
-    r = client.get("/api/blocks/root/children")
+def test_session_requires_login(anon):
+    r = anon.get("/api/blocks/root/children")
     assert r.status_code == 401
 
 

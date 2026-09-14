@@ -89,7 +89,12 @@ export async function noteScenarios({ server, browser, alice, step, until, sleep
     await page.keyboard.press("Shift+Tab");
     await reopenFocused(page);
     await page.keyboard.press("Shift+Enter");
-    await sleep(150);
+    // The new (empty) block's editor has the focus before Backspace removes it
+    // (an empty CodeMirror doc shows its placeholder widget, so test for that).
+    await page.waitForFunction(() => {
+      const ed = document.activeElement?.closest(".cm-content");
+      return !!ed && (ed.querySelector(".cm-placeholder") != null || ed.textContent === "");
+    }, null, { timeout: 5000 });
     await page.keyboard.press("Backspace");
     await closeEditor(page);
     await saved([{ content: "first", children: [{ content: "second", children: [] }] }, { content: "third", children: [] }]);

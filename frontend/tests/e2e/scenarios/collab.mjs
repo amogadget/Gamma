@@ -1,6 +1,6 @@
 // Two people on one page of a shared workspace: presence (header stack, row
 // chips), each other's ops arriving live, concurrent edits to different
-// blocks converging, same-block typing settling on one server value, one
+// blocks converging, same-block typing merging both people's text, one
 // person's undo leaving the other's edit alone, a rename reaching the other
 // tab, edits made offline landing once the network is back, and a highlight
 // one person makes on the PDF showing up for the other.
@@ -59,7 +59,7 @@ export async function collabScenarios({ server, browser, alice, bob, makePdf, st
     assertNoProblems(A); assertNoProblems(B);
   });
 
-  await step("collab: same-block typing settles on one value everywhere (last writer wins)", async () => {
+  await step("collab: same-block typing keeps both people's text (three-way merge)", async () => {
     await editRow(A, "alpha (alice)");
     await editRow(B, "alpha (alice)");
     const saved = (page, content) => page.waitForResponse((response) =>
@@ -70,23 +70,43 @@ export async function collabScenarios({ server, browser, alice, bob, makePdf, st
     await B.keyboard.type(" B1");
     await closeEditor(A);
     await closeEditor(B);
-    // A blur queues a save; it does not await its response. Selecting the
-    // winner after only the first commit can mistake a transient value for
-    // the final one and fail even when both clients converge correctly.
     for (const response of await Promise.all(saves)) assert(response.ok(), "both concurrent edits saved");
+    // Both edits were made from the same base: the second is merged in, not
+    // dropped — whichever order the server took them.
     const final = await until(async () => {
       const t = await tree(aliceT, pageId);
       const c = t[0]?.content || "";
-      if (!/^alpha \(alice\)( A1| B1)$/.test(c)) return null;
+      if (!/^alpha \(alice\)( A1 B1| B1 A1)$/.test(c)) return null;
       const bodies = await Promise.all([A.textContent("body"), B.textContent("body")]);
-      const losing = c.endsWith("A1") ? "B1" : "A1";
-      return bodies.every((body) => body.includes(c) && !body.includes(losing)) ? c : null;
-    }, { what: "both screens and the server agree after both saves" });
-    const bodies = [await A.textContent("body"), await B.textContent("body")];
-    const other = final.endsWith("A1") ? "B1" : "A1";
-    assert(!bodies[0].includes(other) && !bodies[1].includes(other), `the losing version "${other}" still shows`);
+      return bodies.every((body) => body.includes(c)) ? c : null;
+    }, { what: "both screens and the server hold both edits" });
     assertNoProblems(A); assertNoProblems(B);
     return final;
+  });
+
+  await step("collab: simultaneous edits at both ends of one long block both survive", async () => {
+    const blk = await aliceT.api("/api/blocks", { method: "POST", body: { parent_id: pageId, content: ["head line", "middle line", "tail line"].join("\n") } });
+    await bodyHas(A, "tail line"); await bodyHas(B, "tail line");
+    await editRow(A, "tail line");
+    await A.keyboard.press("Control+Home");
+    await editRow(B, "tail line");
+    await B.keyboard.press("Control+End");
+    await A.keyboard.type("AA ", { delay: 30 });
+    await B.keyboard.type(" BB", { delay: 30 });
+    const want = ["AA head line", "middle line", "tail line BB"].join("\n");
+    await until(async () => (await tree(aliceT, pageId)).some((b) => b.content === want), { what: "server holds both edits" });
+    await bodyHas(A, "tail line BB"); await bodyHas(A, "AA head line");
+    await bodyHas(B, "AA head line"); await bodyHas(B, "tail line BB");
+    // Each editor still holds the merged text with the caret where its owner typed.
+    await A.keyboard.type("!");
+    await B.keyboard.type("?");
+    const want2 = ["AA !head line", "middle line", "tail line BB?"].join("\n");
+    await until(async () => (await tree(aliceT, pageId)).some((b) => b.content === want2), { what: "carets stayed put through the merge" });
+    await closeEditor(A);
+    await closeEditor(B);
+    await aliceT.api(`/api/blocks/${blk.id}`, { method: "DELETE" });
+    await until(async () => !(await B.textContent("body")).includes("tail line"), { what: "the scratch block gone" });
+    assertNoProblems(A); assertNoProblems(B);
   });
 
   await step("collab: a peer's caret lands where they typed, mid-block, and the other caret shifts along", async () => {
@@ -111,11 +131,13 @@ export async function collabScenarios({ server, browser, alice, bob, makePdf, st
     await until(async () => JSON.stringify(await remoteCaret(A)) === JSON.stringify({ line: 1, col: 15 }), { what: "bob's caret at the end of line 1 on alice's side" });
     await B.keyboard.type("xyz", { delay: 40 });
     await bodyHas(A, "first line herexyz");
-    await sleep(600);
+    const caretAt = (p, want) => async () => JSON.stringify(await remoteCaret(p)) === JSON.stringify(want);
     // Offsets past the typed text used to land it on line 2 and stay there.
-    assertEq(JSON.stringify(await remoteCaret(A)), JSON.stringify({ line: 1, col: 18 }), "bob's caret after typing");
+    // (The caret rides on the batch that carried the text, so once the text
+    // is there the placement is final — nothing later moves it.)
+    await until(caretAt(A, { line: 1, col: 18 }), { what: "bob's caret after typing, on alice's side" });
     // Alice's caret, after the insertion, moved along with the text on bob's side.
-    assertEq(JSON.stringify(await remoteCaret(B)), JSON.stringify({ line: 4, col: 9 }), "alice's caret on bob's side");
+    await until(caretAt(B, { line: 4, col: 9 }), { what: "alice's caret on bob's side" });
     await closeEditor(A);
     await closeEditor(B);
     await aliceT.api(`/api/blocks/${multi.id}`, { method: "DELETE" });
@@ -155,8 +177,10 @@ export async function collabScenarios({ server, browser, alice, bob, makePdf, st
     await ctxA.setOffline(true);
     await editRow(A, "(bob) later");
     await A.keyboard.type(" offline");
+    // Closing the editor flushes at once; offline, that POST fails in the browser.
+    const attempted = A.waitForEvent("requestfailed", { predicate: (r) => r.url().includes("/ops"), timeout: 8000 });
     await closeEditor(A);
-    await sleep(1500);
+    await attempted;
     assert(!JSON.stringify(await tree(aliceT, pageId)).includes("offline"), "nothing reached the server while offline");
     await ctxA.setOffline(false);
     await serverHas("(bob) later offline");
