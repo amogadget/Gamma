@@ -34,12 +34,13 @@ def boss():
 
 
 @pytest.fixture(scope="module")
-def lab(ann, ben, cid):
-    """A shared workspace: ann owns it, ben edits, cid views."""
-    r = ann.post("/api/workspaces", json={"name": "Rydberg lab"})
+def lab(boss, ann, ben, cid):
+    """A shared workspace (admin-made): ann owns it, ben edits, cid views."""
+    r = boss.post("/api/workspaces", json={"name": "Rydberg lab", "kind": "shared", "owner": "ws_ann"})
     assert r.status_code == 200, r.text
     ws = r.json()
-    assert ws["role"] == "owner" and ws["personal"] is False
+    assert ws["kind"] == "shared" and ws["personal_of"] == "" and ws["role"] is None
+    assert ann.get(f"/api/workspaces/{ws['id']}").json()["role"] == "owner"
     assert ann.put(f"/api/workspaces/{ws['id']}/members/ws_ben", json={"role": "editor"}).status_code == 200
     assert ann.put(f"/api/workspaces/{ws['id']}/members/ws_cid", json={"role": "viewer"}).status_code == 200
     return ws["id"]
@@ -54,8 +55,9 @@ def test_session_lists_workspaces(ann, lab):
     assert s["default_workspace"] == workspace_of("ws_ann")
     mine = {w["id"]: w for w in s["workspaces"]}
     assert mine[s["default_workspace"]]["personal"] is True and mine[s["default_workspace"]]["role"] == "owner"
-    assert mine[lab]["name"] == "Rydberg lab" and mine[lab]["members"] == 3
-    assert s["workspaces"][0]["personal"] is True  # personal first
+    assert mine[s["default_workspace"]]["default"] is True and mine[s["default_workspace"]]["kind"] == "personal"
+    assert mine[lab]["name"] == "Rydberg lab" and mine[lab]["members"] == 3 and mine[lab]["kind"] == "shared"
+    assert s["workspaces"][0]["default"] is True  # the default first
 
 
 def test_requests_land_in_the_personal_workspace_by_default(ann, lab):
@@ -120,10 +122,76 @@ def test_owner_only_management_and_rails(ann, ben, cid, lab):
     assert ann.put(f"/api/workspaces/{lab}/members/ws_cid", json={"role": "viewer"}).status_code == 200
     mine = workspace_of("ws_ann")
     assert ann.delete(f"/api/workspaces/{mine}/members/ws_ann").status_code == 400
-    assert ann.delete(f"/api/workspaces/{mine}").status_code == 400
+    assert ann.delete(f"/api/workspaces/{mine}").status_code == 400  # the last personal one
+    assert ann.put(f"/api/workspaces/{mine}/members/ws_ben", json={"role": "viewer"}).status_code == 400
     # the member list is what the owner set
     members = {m["username"]: m["role"] for m in ann.get(f"/api/workspaces/{lab}").json()["members"]}
     assert members == {"ws_ann": "owner", "ws_ben": "editor", "ws_cid": "viewer"}
+
+
+def test_several_personal_workspaces(ann, ben, boss):
+    """work / life / play: all personal, all metered against the account;
+    the first is the default until another is made default; the last one
+    cannot be deleted."""
+    home = workspace_of("ws_ann")
+    r = ann.post("/api/workspaces", json={"name": "Play"})
+    assert r.status_code == 200, r.text
+    play = r.json()
+    assert play["kind"] == "personal" and play["personal_of"] == "ws_ann" and play["role"] == "owner"
+    assert play["default"] is False and play["access"] == "private"
+    # non-admins create personal ones only
+    assert ann.post("/api/workspaces", json={"name": "x", "kind": "shared"}).status_code == 403
+    # separate libraries, both under ann's quota
+    page = ann.post("/api/blocks", json={"parent_id": "root", "content": "toy"}, headers=_in(play["id"])).json()
+    assert ann.get(f"/api/blocks/{page['id']}", headers=_in(home)).status_code == 404
+    before = ann.get("/api/quota").json()["used_bytes"]
+    assert ann.post("/api/uploads", files={"file": ("p.pdf", b"%PDF-1.4 play bytes", "application/pdf")},
+                    headers=_in(play["id"])).status_code == 200
+    q = ann.get("/api/quota").json()
+    assert q["account"] == "ws_ann" and q["used_bytes"] > before
+    assert ann.get("/api/quota", headers=_in(play["id"])).json()["used_bytes"] == q["used_bytes"]
+    # nobody joins a personal workspace, not even through an admin
+    assert ann.put(f"/api/workspaces/{play['id']}/members/ws_ben", json={"role": "viewer"}).status_code == 400
+    assert boss.put(f"/api/workspaces/{play['id']}/members/ws_ben", json={"role": "viewer"}).status_code == 400
+    assert boss.put(f"/api/workspaces/{play['id']}", json={"access": "public"}).status_code == 400
+    assert boss.put(f"/api/workspaces/{play['id']}", json={"quota_mb": 5}).status_code == 400
+    assert ben.get(f"/api/workspaces/{play['id']}").status_code == 404
+    # make it the default: requests without a workspace land there now
+    assert ben.put(f"/api/workspaces/{play['id']}", json={"default": True}).status_code == 404
+    r = ann.put(f"/api/workspaces/{play['id']}", json={"default": True})
+    assert r.status_code == 200 and r.json()["default"] is True
+    assert ann.get("/api/session").json()["default_workspace"] == play["id"]
+    assert ann.get(f"/api/blocks/{page['id']}").status_code == 200
+    assert ann.get("/api/session").json()["workspaces"][0]["id"] == play["id"]
+    # delete the default: the default moves back to the other personal one
+    assert ann.delete(f"/api/workspaces/{play['id']}").status_code == 200
+    assert ann.get("/api/session").json()["default_workspace"] == home
+    assert ann.delete(f"/api/workspaces/{home}").status_code == 400
+    # a shared workspace cannot be made someone's default
+    lab_ws = next(w for w in ann.get("/api/session").json()["workspaces"] if w["kind"] == "shared")
+    assert ann.put(f"/api/workspaces/{lab_ws['id']}", json={"default": True}).status_code == 400
+
+
+def test_admin_converts_between_kinds(boss, ann, ben):
+    home = workspace_of("ws_ann")
+    work = ann.post("/api/workspaces", json={"name": "Work"}).json()["id"]
+    # only admins change the kind; the only personal workspace stays personal
+    assert ann.put(f"/api/workspaces/{work}", json={"kind": "shared"}).status_code == 403
+    assert ann.put(f"/api/workspaces/{home}", json={"default": True}).status_code == 200
+    assert boss.put(f"/api/workspaces/{home}", json={"kind": "shared"}).status_code == 200  # ann still has Work
+    assert boss.put(f"/api/workspaces/{work}", json={"kind": "shared"}).status_code == 400  # her last one
+    assert ann.get("/api/session").json()["default_workspace"] == work  # the default moved
+    r = ann.get(f"/api/workspaces/{home}").json()
+    assert r["kind"] == "shared" and r["role"] == "owner" and r["personal_of"] == "" and r["quota"]["account"] == ""
+    assert ann.get("/api/quota").json()["account"] == "ws_ann"
+    # a shared workspace with one member can become personal again
+    assert boss.put(f"/api/workspaces/{home}/members/ws_ben", json={"role": "viewer"}).status_code == 200
+    assert boss.put(f"/api/workspaces/{home}", json={"kind": "personal"}).status_code == 400
+    assert boss.delete(f"/api/workspaces/{home}/members/ws_ben").status_code == 200
+    r = boss.put(f"/api/workspaces/{home}", json={"kind": "personal"})
+    assert r.status_code == 200 and r.json()["personal_of"] == "ws_ann"
+    assert ann.put(f"/api/workspaces/{home}", json={"default": True}).status_code == 200
+    assert ann.delete(f"/api/workspaces/{work}").status_code == 200
 
 
 def test_guest_cannot_create_or_join(guest):
@@ -211,6 +279,7 @@ def test_only_personal_workspaces_count_as_usage(boss, ann, ben, lab):
     assert ann.put(f"/api/workspaces/{lab}", json={"quota_mb": 1}).status_code == 403
     r = boss.put(f"/api/workspaces/{lab}", json={"quota_mb": 1})
     assert r.status_code == 200 and r.json()["quota_mb"] == 1 and r.json()["quota"]["quota_mb"] == 1
+    assert ann.get(f"/api/workspaces/{lab}").json()["kind"] == "shared"
     big = b"%PDF-1.4 " + b"x" * (2 * 1024 * 1024)
     assert ben.post("/api/uploads", files={"file": ("big.pdf", big, "application/pdf")},
                     headers=_in(lab)).status_code == 507
@@ -250,12 +319,12 @@ def test_admin_creates_a_workspace_for_someone_and_hands_out_ownership(boss, ann
     # only admins name an owner or an access setting
     assert ann.post("/api/workspaces", json={"name": "x", "owner": "ws_ben"}).status_code == 403
     assert ann.post("/api/workspaces", json={"name": "x", "access": "public"}).status_code == 403
-    assert boss.post("/api/workspaces", json={"name": "x", "owner": "nobody"}).status_code == 400
-    assert boss.post("/api/workspaces", json={"name": "x", "owner": "guest"}).status_code == 400
-    r = boss.post("/api/workspaces", json={"name": "Ann's course", "owner": "ws_ann"})
+    assert boss.post("/api/workspaces", json={"name": "x", "kind": "shared", "owner": "nobody"}).status_code == 400
+    assert boss.post("/api/workspaces", json={"name": "x", "kind": "shared", "owner": "guest"}).status_code == 400
+    r = boss.post("/api/workspaces", json={"name": "Ann's course", "kind": "shared", "owner": "ws_ann"})
     assert r.status_code == 200, r.text
     ws = r.json()
-    assert ws["created_by"] == "ws_boss" and ws["role"] is None and ws["access"] == "private"
+    assert ws["kind"] == "shared" and ws["created_by"] == "ws_boss" and ws["role"] is None and ws["access"] == "private"
     assert [m["username"] for m in ws["members"]] == ["ws_ann"] and ws["members"][0]["added_by"] == "ws_boss"
     assert ann.get(f"/api/workspaces/{ws['id']}").json()["role"] == "owner"
     # ownership is handed on through the owner role, by the admin
@@ -269,7 +338,7 @@ def test_admin_creates_a_workspace_for_someone_and_hands_out_ownership(boss, ann
 def test_public_workspaces(boss, ann, ben, guest):
     """A public workspace is open to every signed-in account at its public
     role, with no join step; explicit members keep their own role."""
-    r = boss.post("/api/workspaces", json={"name": "Reading room", "access": "public", "public_role": "viewer"})
+    r = boss.post("/api/workspaces", json={"name": "Reading room", "kind": "shared", "access": "public", "public_role": "viewer"})
     assert r.status_code == 200, r.text
     room = r.json()["id"]
     assert r.json()["access"] == "public" and r.json()["role"] == "owner"
@@ -327,8 +396,8 @@ def test_deleting_an_account_keeps_workspaces_with_other_owners(boss):
     make_user("ws_eve", "evepw12345")
     make_user("ws_fay", "faypw12345")
     eve, fay = login("ws_eve", "evepw12345"), login("ws_fay", "faypw12345")
-    solo = eve.post("/api/workspaces", json={"name": "Eve solo"}).json()["id"]
-    duo = eve.post("/api/workspaces", json={"name": "Eve+Fay"}).json()["id"]
+    solo = eve.post("/api/workspaces", json={"name": "Eve solo"}).json()["id"]  # a second personal one
+    duo = boss.post("/api/workspaces", json={"name": "Eve+Fay", "kind": "shared", "owner": "ws_eve"}).json()["id"]
     assert eve.put(f"/api/workspaces/{duo}/members/ws_fay", json={"role": "owner"}).status_code == 200
     personal = workspace_of("ws_eve")
     r = boss.delete("/api/admin/users/ws_eve")

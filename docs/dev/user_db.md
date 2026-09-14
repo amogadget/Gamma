@@ -18,9 +18,10 @@ All state is SQLite + files on disk under a data directory (env
   - `users` — accounts (bcrypt), the guest/admin flags, nullable per-user
     storage-limit overrides, `default_workspace` (the personal workspace);
   - `sessions` — session tokens;
-  - `workspaces` (`id`, `name`, `created_by`, `access` private/public,
-    `public_role`, `quota_mb`) and `workspace_members` (`workspace_id`,
-    `username`, `role` owner/editor/viewer);
+  - `workspaces` (`id`, `name`, `created_by`, `kind` personal/shared,
+    `access` private/public, `public_role`, `quota_mb`) and
+    `workspace_members` (`workspace_id`, `username`, `role`
+    owner/editor/viewer — a personal workspace has exactly its account);
   - `shares` — page share links, one per `(workspace_id, page_id)`, with
     `created_by`, `audience` anyone/users/list, `role` view/edit and the
     comma-separated `allowed_users`;
@@ -113,7 +114,7 @@ User CRUD: `create-user`, `set-password`, `set-admin`, `rename-user`,
 `delete-user` (also the workspaces only that account owned), `list-users`,
 `reset-guest`, `setup` (idempotent: guest account + a personal workspace for
 every account + missing files). Workspaces: `list-workspaces`,
-`create-workspace <name> <owner> [public [viewer|editor]]`, `set-member
+`create-workspace <name> <owner> [shared [public [viewer|editor]]]`, `set-member
 <ws> <user> <owner|editor|viewer|none>`, `set-access <ws> <private|public>
 [viewer|editor]`. Data directory: `migrate`
 (`--status`, `--dry-run`), `backups` (list; `--create [--uploads]`,
@@ -136,9 +137,9 @@ personal workspace (`/api/export?user=`, admins only for other accounts);
 the current workspace's backups live in Settings → Members & sharing
 ([workspaces.md](workspaces.md)). The guest workspace can be exported but
 never restored into. Rails: guest untouchable, no self-delete, the last
-admin can't be demoted or deleted. Deleting an account deletes the
-workspaces it alone owned (the response lists them); shared workspaces with
-another owner survive.
+admin can't be demoted or deleted. Deleting an account deletes its
+personal workspaces and the shared ones it alone owned (the response lists
+them); shared workspaces with another owner survive.
 
 ## Storage limits
 
@@ -146,8 +147,8 @@ another owner survive.
 total quota (`quota_mb`, 0 = unlimited); server-wide defaults in the users.db
 `settings` KV, per-user overrides as nullable `users` columns (NULL = inherit,
 explicit JSON null clears). An account's limits apply to uploads into its
-PERSONAL workspace, and its usage is exactly that workspace's `uploads/` —
-nothing anyone uploads into a shared workspace counts against a person. A
+PERSONAL workspaces, and its usage is their `uploads/` directories together
+— nothing anyone uploads into a shared workspace counts against a person. A
 shared workspace is checked against the server-wide per-file cap and its
 own `workspaces.quota_mb` (NULL = unlimited; admins set it in Settings →
 Workspaces or Members & sharing). `workspace_quota(ws)` resolves the pair
@@ -155,10 +156,11 @@ that applies. `check_upload_allowed(ws, n)` hard-gates `/api/uploads`, `/api/upl
 `/api/upload-file` and the imports (413 over per-file, 507 over quota;
 already-stored hashes always pass — dedup adds no bytes); `can_store`
 soft-gates best-effort caches (proxy `save=1`, ai_context re-download).
-`GET /api/quota` = the request's workspace: the limits that apply, its
-`used_bytes` / `workspace_bytes` (the same number now), and `account` — the
-person whose limits these are, "" for a shared workspace; deliberately NOT
-part of `/api/session` (identity only). Backup-restore imports are unmetered.
+`GET /api/quota` = the request's workspace: the limits that apply,
+`used_bytes` (the account's total for a personal workspace, the workspace's
+own for a shared one), `workspace_bytes` (this workspace's), and `account`
+— the person whose limits these are, "" for a shared workspace;
+deliberately NOT part of `/api/session` (identity only). Backup-restore imports are unmetered.
 Details + UI in [settings.md](settings.md).
 
 ## Server log

@@ -28,7 +28,7 @@ from .config import USERS_DB, WORKSPACES_DIR
 # The data-directory schema version this code expects (users.db
 # ``PRAGMA user_version``). Bump it together with a new step in
 # gamma/migrations.py — never without one, never without bumping.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class SchemaOutdated(RuntimeError):
@@ -85,17 +85,20 @@ USERS_SCHEMA = [
     )""",
     # A workspace is a library: its own pages.db / data.db / uploads under
     # workspaces/<id>/. `id` is a random token (never a name, so renaming a
-    # workspace or an account moves no files). Roles (gamma/workspaces.py):
-    # owner (manage members, rename, delete), editor (read + write), viewer
-    # (read). access: "private" = members only; "public" = every signed-in
-    # account on the server is in at public_role, explicit members keep
-    # their own role. quota_mb: a shared workspace's own storage cap (NULL =
-    # unlimited); a personal workspace uses its account's quota instead.
+    # workspace or an account moves no files). kind (gamma/workspaces.py):
+    # "personal" = one account's own library (its single member; counts
+    # against that account's quota; one of them is users.default_workspace);
+    # "shared" = admin-created, members with roles — owner (manage members,
+    # rename, delete), editor (read + write), viewer (read). access:
+    # "private" = members only; "public" = every signed-in account on the
+    # server is in at public_role, explicit members keep their own role.
+    # quota_mb: a shared workspace's own storage cap (NULL = unlimited).
     """CREATE TABLE IF NOT EXISTS workspaces (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         created_by TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'personal',
         access TEXT NOT NULL DEFAULT 'private',
         public_role TEXT NOT NULL DEFAULT 'viewer',
         quota_mb INTEGER

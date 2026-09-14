@@ -304,8 +304,41 @@ def _v3_workspace_access(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _v4_workspace_kinds(conn: sqlite3.Connection) -> None:
+    """Workspaces gain a ``kind``. An account's default workspace and any
+    workspace with a single member are personal (the account's own library,
+    metered against it); everything with more members is shared (from now
+    on admin-managed). A default workspace that had other members stays
+    personal — personal workspaces have no other members — and those
+    memberships are dropped, named in the log so an admin can put the
+    people into a shared workspace instead."""
+    if "kind" not in _columns(conn, "workspaces"):
+        conn.execute("ALTER TABLE workspaces ADD COLUMN kind TEXT NOT NULL DEFAULT 'personal'")
+    conn.commit()
+    defaults = {r[0]: r[1] for r in conn.execute(
+        "SELECT default_workspace, username FROM users WHERE default_workspace != ''")}
+    for ws, in conn.execute("SELECT id FROM workspaces").fetchall():
+        people = [r[0] for r in conn.execute(
+            "SELECT username FROM workspace_members WHERE workspace_id = ? ORDER BY added_at", (ws,))]
+        if ws in defaults:
+            extra = [u for u in people if u != defaults[ws]]
+            if extra:
+                log.warning(f"[migrate] personal workspace {ws} of {defaults[ws]} had other members "
+                            f"({', '.join(extra)}); they were removed — give them a shared workspace")
+                conn.execute("DELETE FROM workspace_members WHERE workspace_id = ? AND username != ?",
+                             (ws, defaults[ws]))
+            kind = "personal"
+        else:
+            kind = "personal" if len(people) == 1 else "shared"
+        conn.execute("UPDATE workspaces SET kind = ?, access = CASE WHEN ? = 'personal' THEN 'private' ELSE access END, "
+                     "quota_mb = CASE WHEN ? = 'personal' THEN NULL ELSE quota_mb END WHERE id = ?",
+                     (kind, kind, kind, ws))
+    conn.commit()
+
+
 STEPS = [
     (1, "baseline", _v1_baseline),
     (2, "workspaces", _v2_workspaces),
     (3, "workspace_access", _v3_workspace_access),
+    (4, "workspace_kinds", _v4_workspace_kinds),
 ]

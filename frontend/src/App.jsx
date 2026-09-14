@@ -56,7 +56,7 @@ import {
   findBlock,
 } from "./logseqPdfModel";
 import { loadSession, saveSession, clearSession, setSessionScope } from "./sessionState";
-import { ROLE_LABEL, useAccounts } from "./settingsWorkspace";
+import { ROLE_LABEL, useAccounts, workspaceMeta } from "./settingsWorkspace";
 import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage } from "./LoginPage";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
@@ -7610,7 +7610,7 @@ export default function App() {
                   <span className="userCardName">{authUser.is_guest ? "Guest" : authUser.user}</span>
                   <span className="userCardRole">
                     {authUser.is_guest ? "Temporary workspace"
-                      : workspace ? `${workspace.name} · ${workspace.personal ? "personal" : ROLE_LABEL[workspace.role] || workspace.role}`
+                      : workspace ? `${workspace.name} · ${workspaceMeta(workspace)}`
                       : "Signed in"}
                   </span>
                 </span>
@@ -7638,11 +7638,11 @@ export default function App() {
                   key={w.id}
                   className={`popoverItem wsItem ${w.id === wsId ? "active" : ""}`}
                   onClick={() => { setOpenPopover(null); switchWorkspace(w.id); }}
-                  title={w.personal ? "Your personal workspace" : `${w.access === "public" ? "Public" : "Shared"} workspace · ${w.members} member${w.members === 1 ? "" : "s"} · you ${ROLE_LABEL[w.role] || w.role}`}
+                  title={w.personal ? `Your personal workspace${w.default ? " (default)" : ""}` : `${w.access === "public" ? "Public" : "Shared"} workspace · ${w.members} member${w.members === 1 ? "" : "s"} · you ${ROLE_LABEL[w.role] || w.role}`}
                 >
                   <span className="wsItemBadge" aria-hidden="true">{(w.name || "?").charAt(0).toUpperCase()}</span>
                   <span className="wsItemName">{w.name}</span>
-                  <span className="wsItemMeta">{w.personal ? "personal" : `${w.access === "public" ? "public · " : ""}${ROLE_LABEL[w.role] || w.role}`}</span>
+                  <span className="wsItemMeta">{workspaceMeta(w)}</span>
                   {w.id === wsId ? <CheckIcon size={14} className="wsItemCheck" /> : null}
                 </button>
               ))}

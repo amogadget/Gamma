@@ -124,7 +124,8 @@ def export_data(request: Request, uploads: int = 1, ws: str | None = None, user:
                 "format": "gamma-backup-1",
                 "workspace": target,
                 "workspace_name": info.get("name", ""),
-                "user": workspaces.personal_owner(target) or info.get("created_by", ""),  # whose it is
+                "user": workspaces.personal_owner(target) or next(  # whose it is
+                    (m["username"] for m in workspaces.members(target) if m["role"] == "owner"), ""),
                 "exported_by": request.state.user,
                 "exported_at": page_now(),
                 "uploads": bool(uploads),

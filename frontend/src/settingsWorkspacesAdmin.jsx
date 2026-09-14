@@ -1,9 +1,10 @@
 // Settings → Workspaces (admins): every workspace on the server — shared
 // ones with their access, owners, members and size; personal ones per
 // account — with a Manage dialog per workspace (rename, access, quota,
-// members and ownership, delete, join) and New workspace (for any owner,
-// private or public). GUI for GET /api/admin/workspaces + /api/workspaces*
-// (docs/dev/workspaces.md); the building blocks are settingsWorkspace.jsx's.
+// members and ownership, kind conversion, delete, join) and New workspace
+// (a shared one, for any owner, private or public). GUI for GET
+// /api/admin/workspaces + /api/workspaces* (docs/dev/workspaces.md); the
+// building blocks are settingsWorkspace.jsx's.
 import React from "react";
 import { API, apiJson, fmtBytes } from "./utils";
 import { MenuSelect } from "./menus";
@@ -43,12 +44,13 @@ export function WorkspacesAdmin({ value }) {
         <span className="aiProvMeta">
           <span className="aiProvName">
             {w.name}
-            {w.personal ? <span className="uiTag">{w.personal === me ? "you" : "personal"}</span> : null}
+            {w.personal ? <span className="uiTag">{w.personal === me ? "you" : w.personal}</span> : null}
+            {w.personal && w.default ? <span className="uiTag">default</span> : null}
             {isPublic ? <span className="uiTag">public · everyone {w.public_role === "editor" ? "edits" : "views"}</span> : null}
           </span>
           <span className="aiProvDesc">
             {w.personal
-              ? `${w.personal}'s library`
+              ? `${w.personal}'s personal library`
               : `${owners.length ? `owner ${owners.join(", ")}` : "no owner"} · ${w.members.length} member${w.members.length === 1 ? "" : "s"}`}
             {` · ${fmtBytes(w.used_bytes)}`}
             {!w.personal && w.quota_mb ? ` of ${w.quota_mb} MB` : ""}
@@ -69,7 +71,7 @@ export function WorkspacesAdmin({ value }) {
   return (
     <>
       <PaneHead icon={GlobeIcon} title="Workspaces">
-        Every library on this server. Admins manage any of them without being members; opening one still takes membership or public access.
+        Every library on this server: shared workspaces (admin-made, members and roles) and each account's personal ones. Admins manage any of them without being members; opening one still takes membership or public access.
       </PaneHead>
       {!listing && !error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
       {error ? <Empty icon={UsersIcon}>Workspaces unavailable — {error}</Empty> : null}
@@ -86,7 +88,7 @@ export function WorkspacesAdmin({ value }) {
             {shared.length ? shared.map(row) : <Empty icon={UsersIcon}>No shared workspaces yet.</Empty>}
           </Section>
           <Section title="Personal workspaces">
-            {personal.map(row)}
+            {[...personal].sort((a, b) => a.personal.localeCompare(b.personal) || (b.default - a.default) || a.name.localeCompare(b.name)).map(row)}
           </Section>
           {listing.orphans?.length ? (
             <div className="settingsPaneHint">
@@ -122,7 +124,23 @@ function ManageDialog({ wsId, me, accounts, confirm, setStatus, canOpen, onOpen,
   const [name, setName] = React.useState(null); // the name being edited, null = not editing
   const [inviting, setInviting] = React.useState(false);
   const info = ws.info;
+  const isPersonal = info?.kind === "personal";
   const isMember = (info?.members || []).some((m) => m.username === me);
+
+  function convert(kind) {
+    const toShared = kind === "shared";
+    confirm({
+      title: toShared ? "Convert to shared workspace" : "Convert to personal workspace",
+      message: toShared
+        ? `Make "${info?.name}" a shared workspace? ${info?.personal_of} stays its owner and can invite people; it stops counting against their storage. If it is their default, another personal workspace becomes the default.`
+        : `Make "${info?.name}" ${info?.members?.[0]?.username}'s personal workspace? It becomes private, its own quota is cleared, and it counts against their storage.`,
+      confirmLabel: "Convert",
+      onConfirm: async () => {
+        const d = await ws.update({ kind });
+        if (d) setStatus(`${d.name} is now a ${d.kind} workspace.`);
+      },
+    });
+  }
 
   async function saveName() {
     const d = await ws.update({ name: name.trim() });
@@ -165,7 +183,7 @@ function ManageDialog({ wsId, me, accounts, confirm, setStatus, canOpen, onOpen,
         {!info && !ws.error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
         {info ? (
           <>
-            <Field label="Name" hint={info.personal_of ? `${info.personal_of}'s personal workspace` : "a shared library"}>
+            <Field label="Name" hint={isPersonal ? `${info.personal_of}'s personal workspace${info.default ? " (their default)" : ""}` : "a shared library"}>
               {name === null ? (
                 <span className="aiProvPwForm">
                   <input className="aiKeyInput" type="text" value={info.name} readOnly />
@@ -185,34 +203,52 @@ function ManageDialog({ wsId, me, accounts, confirm, setStatus, canOpen, onOpen,
                 </span>
               )}
             </Field>
-            <StorageRow quota={info.quota} />
-            {!info.personal_of ? (
-              <AccessRows info={info} canEdit onUpdate={async (patch) => {
-                const d = await ws.update(patch);
-                if (d && patch.access) setStatus(d.access === "public" ? `${d.name} is open to everyone.` : `${d.name} is private.`);
-              }} />
-            ) : null}
-            <div className="setSection">
-              <span className="setSectionLabel">Members</span>
-              <span className="setSectionRule" />
-              <button className="uiBtn sm" disabled={ws.busy} onClick={() => { ws.setError(""); setInviting(true); }}>
-                <PlusIcon size={13} /> Add
-              </button>
-            </div>
-            <MembersList info={info} me={me} canManage busy={ws.busy} onSetRole={ws.setRole} onRemove={remove} />
-            <div className="settingsPaneHint">
-              Naming someone Owner hands the workspace on; the role menu is how ownership moves.
-            </div>
+            <StorageRow quota={info.quota} me={me} />
+            <AccessRows info={info} canEdit onUpdate={async (patch) => {
+              const d = await ws.update(patch);
+              if (d && patch.access) setStatus(d.access === "public" ? `${d.name} is open to everyone.` : `${d.name} is private.`);
+            }} />
+            {!isPersonal ? (
+              <>
+                <div className="setSection">
+                  <span className="setSectionLabel">Members</span>
+                  <span className="setSectionRule" />
+                  <button className="uiBtn sm" disabled={ws.busy} onClick={() => { ws.setError(""); setInviting(true); }}>
+                    <PlusIcon size={13} /> Add
+                  </button>
+                </div>
+                <MembersList info={info} me={me} canManage busy={ws.busy} onSetRole={ws.setRole} onRemove={remove} />
+                <div className="settingsPaneHint">
+                  Naming someone Owner hands the workspace on; the role menu is how ownership moves.
+                  {info.members?.length === 1 ? " With a single member it can also become that person's personal workspace." : ""}
+                </div>
+              </>
+            ) : (
+              <div className="settingsPaneHint">
+                A personal workspace has no other members. Convert it to a shared workspace to let people in.
+              </div>
+            )}
           </>
         ) : null}
         {ws.error && !inviting ? <div className="settingsPaneHint aiKeysError">{ws.error}</div> : null}
         <div className="reportModalBtns">
-          {info && !info.personal_of ? (
-            <button className="uiBtn danger" disabled={ws.busy} onClick={destroy}>
+          {info ? (
+            <button className="uiBtn danger" disabled={ws.busy} onClick={destroy}
+              title={isPersonal ? "Delete this personal workspace (an account's last one cannot go)" : "Delete the workspace for every member"}>
               <Trash2Icon size={13} /> Delete…
             </button>
           ) : null}
-          {info && !isMember && !info.personal_of ? (
+          {info && isPersonal ? (
+            <button className="uiBtn" disabled={ws.busy} onClick={() => convert("shared")} title="Let people in: the owner stays owner, it stops counting against them">
+              <UsersIcon size={13} /> Make shared
+            </button>
+          ) : null}
+          {info && !isPersonal && info.members?.length === 1 ? (
+            <button className="uiBtn" disabled={ws.busy} onClick={() => convert("personal")} title="Hand it to its single member as a personal workspace">
+              <UserIcon size={13} /> Make personal
+            </button>
+          ) : null}
+          {info && !isMember && !isPersonal ? (
             <button
               className="uiBtn" disabled={ws.busy}
               title={info.access === "public" ? "Add yourself as an owner (everyone can already open it)" : "Add yourself as an owner so you can open it"}
@@ -235,7 +271,7 @@ function ManageDialog({ wsId, me, accounts, confirm, setStatus, canOpen, onOpen,
   );
 }
 
-// New workspace: a name, an owner picked from the directory (you, by
+// New shared workspace: a name, an owner picked from the directory (you, by
 // default), private or public with its public role, and an optional quota.
 function NewWorkspaceDialog({ me, accounts, setStatus, onCreated, onClose }) {
   const [form, setForm] = React.useState({ name: "", owner: me, access: "private", public_role: "viewer", quota_mb: "" });
@@ -254,7 +290,7 @@ function NewWorkspaceDialog({ me, accounts, setStatus, onCreated, onClose }) {
     try {
       const d = await apiJson(`${API}/workspaces`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, owner: form.owner, access: form.access, public_role: form.public_role, quota_mb: quota }),
+        body: JSON.stringify({ name, kind: "shared", owner: form.owner, access: form.access, public_role: form.public_role, quota_mb: quota }),
       });
       setStatus(`Created ${d.name} for ${form.owner}${d.access === "public" ? ", open to everyone" : ""}.`);
       onCreated(d);
@@ -266,9 +302,9 @@ function NewWorkspaceDialog({ me, accounts, setStatus, onCreated, onClose }) {
   }
 
   return (
-    <SubDialog title="New workspace" onClose={onClose}>
+    <SubDialog title="New shared workspace" onClose={onClose}>
       <div className="settingsForm">
-        <Field label="Name" hint="a lab, a course, a reading room">
+        <Field label="Name" hint="a lab, a course, a reading room — personal workspaces are made from Members & sharing">
           <input
             className="aiKeyInput" type="text" autoFocus value={form.name}
             onChange={(e) => set({ name: e.target.value })}

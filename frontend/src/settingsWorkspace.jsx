@@ -1,10 +1,11 @@
-// Settings → Members & sharing: the library this tab works in — rename it,
-// invite people (picked from the account directory) and set their roles,
-// leave or delete it, back it up or restore one — plus creating another
-// workspace and switching. GUI for /api/workspaces* (docs/dev/workspaces.md).
-// Owner-only actions are shown to owners (and server admins); admins also
-// get the Access rows (private / public, the public role, the workspace's
-// own quota). Everyone else sees the member list.
+// Settings → Members & sharing: the library this tab works in. A personal
+// workspace (just you; several per account, all under your quota): rename,
+// storage, make it your default, back it up or restore one, delete it. A
+// shared workspace (admin-made): the same plus the member list with role
+// menus, Invite (picked from the account directory), leave, and — for
+// admins — the Access rows (private / public, the public role, the
+// workspace's own quota). Then the list of all your workspaces and New
+// workspace (a personal one). GUI for /api/workspaces* (docs/dev/workspaces.md).
 //
 // The pieces that also build the admin's Workspaces pane
 // (settingsWorkspacesAdmin.jsx) are exported from here: useAccounts,
@@ -23,6 +24,12 @@ import {
 // menu's switcher in App.jsx reads the same table.
 export const ROLE_OPTIONS = [["owner", "Owner"], ["editor", "Can edit"], ["viewer", "View only"]];
 export const ROLE_LABEL = { owner: "owner", editor: "can edit", viewer: "view only" };
+// One line under a switcher entry / workspace row: what kind it is and, for
+// a shared one, your role.
+export function workspaceMeta(w) {
+  if (w.personal) return w.default ? "personal · default" : "personal";
+  return `${w.access === "public" ? "public · " : ""}${ROLE_LABEL[w.role] || w.role}`;
+}
 export const ACCESS_OPTIONS = [["private", "Private", UsersIcon], ["public", "Public", GlobeIcon]];
 export const PUBLIC_ROLE_OPTIONS = [["viewer", "Everyone can view"], ["editor", "Everyone can edit"]];
 
@@ -80,11 +87,11 @@ export function useWorkspace(wsId) {
   };
 }
 
-// The admin-only settings of a workspace: who may open it and, for a
-// shared one, its own upload cap. `canEdit` false renders them read-only
-// (an owner sees what the admin decided).
+// The admin-only settings of a shared workspace: who may open it and its
+// own upload cap. `canEdit` false renders them read-only (an owner sees
+// what the admin decided).
 export function AccessRows({ info, canEdit, onUpdate }) {
-  if (!info) return null;
+  if (!info || info.kind === "personal") return null;
   const isPublic = info.access === "public";
   return (
     <>
@@ -93,7 +100,7 @@ export function AccessRows({ info, canEdit, onUpdate }) {
         hint={isPublic ? "every account on this server can open it" : "members only, by invitation"}
         title="Private: only invited members can open the workspace. Public: every signed-in account on this server can open it with the role below; invited members keep their own role. Set by server admins."
       >
-        {canEdit && !info.personal_of ? (
+        {canEdit ? (
           <MenuSelect
             value={info.access} label="Access" options={ACCESS_OPTIONS}
             onChange={(access) => { if (access !== info.access) onUpdate({ access, public_role: info.public_role }); }}
@@ -111,7 +118,7 @@ export function AccessRows({ info, canEdit, onUpdate }) {
           ) : <span className="settingDesc">{PUBLIC_ROLE_OPTIONS.find(([r]) => r === info.public_role)?.[1]}</span>}
         </Row>
       ) : null}
-      {canEdit && info.quota != null && !info.quota.account ? (
+      {canEdit && info.quota != null ? (
         <Row icon={HardDriveIcon} label="Workspace quota" hint="total uploads · blank or 0 = unlimited"
           title="A shared workspace's own storage cap. It counts against nobody's personal quota; the per-file limit is the server default.">
           <UnitInput
@@ -128,16 +135,20 @@ export function AccessRows({ info, canEdit, onUpdate }) {
   );
 }
 
-// The storage that applies to uploads into the workspace (GET quota).
-export function StorageRow({ quota }) {
+// The storage that applies to uploads into the workspace (GET quota): a
+// personal workspace shows its account's meter (all of that account's
+// personal workspaces together), a shared one its own.
+export function StorageRow({ quota, me }) {
   if (!quota) return null;
   const who = quota.account
-    ? `counts against ${quota.account}'s storage`
+    ? `${fmtBytes(quota.workspace_bytes)} here · counts against ${quota.account === me ? "your" : `${quota.account}'s`} storage`
     : quota.quota_mb ? `this workspace's own quota · ${quota.quota_mb} MB` : "this workspace's own quota · unlimited";
   return (
     <Row icon={DatabaseIcon} label="Storage" hint={who}
-      title="Uploads into a personal workspace count against its account's quota; a shared workspace has its own optional quota set by an admin.">
-      <span className="settingDesc">{fmtBytes(quota.workspace_bytes)}</span>
+      title="Uploads into a personal workspace count against its account's quota, together with the account's other personal workspaces; a shared workspace has its own optional quota set by an admin.">
+      {quota.account
+        ? <QuotaMeter usedBytes={quota.used_bytes} quotaMb={quota.quota_mb} />
+        : <span className="settingDesc">{fmtBytes(quota.workspace_bytes)}</span>}
     </Row>
   );
 }
@@ -150,7 +161,7 @@ export function MembersList({ info, me, canManage, busy, onSetRole, onRemove }) 
   const owners = members.filter((m) => m.role === "owner").length;
   return members.map((m) => {
     const self = m.username === me;
-    const stuck = (m.role === "owner" && owners <= 1) || (self && info?.personal);
+    const stuck = m.role === "owner" && owners <= 1;
     return (
       <div key={m.username} className="aiProvRow">
         <span className={`aiProvAvatar ${m.role === "owner" ? "active" : ""}`}>
@@ -246,9 +257,13 @@ export function WorkspaceSettings({ value }) {
   const [creating, setCreating] = React.useState(false);
 
   const info = ws.info;
+  const isPersonal = (info?.kind || (workspace?.personal ? "personal" : "shared")) === "personal";
+  const isDefault = info ? info.default : !!workspace?.default;
   const role = info?.role || workspace?.role;
   const owner = role === "owner" || isAdmin;
   const explicitMember = (info?.members || []).some((m) => m.username === me);
+  const personalCount = workspaces.filter((w) => w.personal).length;
+  const home = () => workspaces.find((w) => w.default && w.id !== wsId)?.id || workspaces.find((w) => w.personal && w.id !== wsId)?.id;
   const closeDialog = () => { setDialog(null); ws.setError(""); setCreateError(""); };
 
   async function saveRename(name) {
@@ -257,6 +272,13 @@ export function WorkspaceSettings({ value }) {
     closeDialog();
     setStatus(`Renamed to ${d.name}.`);
     refreshSession?.(); // the switcher and the account card show the new name
+  }
+
+  async function makeDefault() {
+    const d = await ws.update({ default: true });
+    if (!d) return;
+    setStatus(`${d.name} is now your default workspace.`);
+    refreshSession?.();
   }
 
   async function submitInvite(username, invitedRole) {
@@ -288,7 +310,7 @@ export function WorkspaceSettings({ value }) {
         if (!d) return;
         if (leaving) {
           closeSettings?.();
-          switchWorkspace(workspaces.find((w) => w.personal)?.id);
+          switchWorkspace(home());
           return;
         }
         ws.setInfo((prev) => ({ ...prev, members: (prev?.members || []).filter((m) => m.username !== username) }));
@@ -300,14 +322,16 @@ export function WorkspaceSettings({ value }) {
   function deleteWorkspace() {
     confirm({
       title: "Delete workspace",
-      message: `Delete "${info?.name}" with ALL its pages, PDFs and chats, for every member? This can't be undone.`,
+      message: isPersonal
+        ? `Delete "${info?.name}" with ALL its pages, PDFs and chats? This can't be undone.`
+        : `Delete "${info?.name}" with ALL its pages, PDFs and chats, for every member? This can't be undone.`,
       confirmLabel: "Delete",
       danger: true,
       onConfirm: async () => {
         const d = await ws.destroy();
         if (!d) return;
         closeSettings?.();
-        switchWorkspace(workspaces.find((w) => w.personal)?.id);
+        switchWorkspace(home());
       },
     });
   }
@@ -335,9 +359,9 @@ export function WorkspaceSettings({ value }) {
 
   return (
     <>
-      <PaneHead icon={isPublic ? GlobeIcon : UsersIcon} title={name}>
-        {info?.personal
-          ? "Your personal workspace. Invite people to share it, or create a separate one for a group."
+      <PaneHead icon={isPersonal ? UserIcon : isPublic ? GlobeIcon : UsersIcon} title={name}>
+        {isPersonal
+          ? `${isDefault ? "Your default workspace" : "One of your personal workspaces"} — just you. Share a page with a link, or ask an admin for a shared workspace to work with others.`
           : `${isPublic ? "A public workspace — open to everyone on this server" : "A shared workspace"} · you ${role === "owner" ? "own it" : role === "editor" ? "can edit" : "can view"}.`}
       </PaneHead>
 
@@ -349,8 +373,8 @@ export function WorkspaceSettings({ value }) {
           </button>
         ) : null}
       >
-        <StorageRow quota={info?.quota} />
-        {!info?.personal ? <AccessRows info={info} canEdit={isAdmin} onUpdate={updateAccess} /> : null}
+        <StorageRow quota={info?.quota} me={me} />
+        <AccessRows info={info} canEdit={isAdmin} onUpdate={updateAccess} />
         <div className="reportModalBtns settingsAlignStart">
           <ActionMenu
             label="Export" icon={ExportIcon}
@@ -372,7 +396,13 @@ export function WorkspaceSettings({ value }) {
               ]}
             />
           ) : null}
-          {owner && !info?.personal ? (
+          {isPersonal && !isDefault && role === "owner" ? (
+            <button className="uiBtn" disabled={ws.busy} onClick={makeDefault}
+              title="Requests that name no workspace (the browser extension, plain links) land in your default workspace">
+              <CheckIcon size={13} /> Make default
+            </button>
+          ) : null}
+          {owner && (!isPersonal || personalCount > 1) ? (
             <button className="uiBtn danger" disabled={ws.busy} onClick={deleteWorkspace}>
               <Trash2Icon size={13} /> Delete workspace…
             </button>
@@ -380,20 +410,22 @@ export function WorkspaceSettings({ value }) {
         </div>
       </Section>
 
-      <Section
-        title="Members"
-        action={owner ? (
-          <button className="uiBtn sm" disabled={ws.busy} onClick={() => { ws.setError(""); setDialog("invite"); }}>
-            <PlusIcon size={13} /> Invite
-          </button>
-        ) : null}
-      >
-        {!info && !ws.error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
-        <MembersList info={info} me={me} canManage={owner} busy={ws.busy} onSetRole={ws.setRole} onRemove={removeMember} />
-        {info && isPublic && !explicitMember ? (
-          <div className="settingsPaneHint">You are here because the workspace is public — everyone on this server is.</div>
-        ) : null}
-      </Section>
+      {!isPersonal ? (
+        <Section
+          title="Members"
+          action={owner ? (
+            <button className="uiBtn sm" disabled={ws.busy} onClick={() => { ws.setError(""); setDialog("invite"); }}>
+              <PlusIcon size={13} /> Invite
+            </button>
+          ) : null}
+        >
+          {!info && !ws.error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
+          <MembersList info={info} me={me} canManage={owner} busy={ws.busy} onSetRole={ws.setRole} onRemove={removeMember} />
+          {info && isPublic && !explicitMember ? (
+            <div className="settingsPaneHint">You are here because the workspace is public — everyone on this server is.</div>
+          ) : null}
+        </Section>
+      ) : null}
 
       <Section
         title="Your workspaces"
@@ -406,16 +438,16 @@ export function WorkspaceSettings({ value }) {
         {workspaces.map((w) => (
           <div key={w.id} className="aiProvRow">
             <span className={`aiProvAvatar ${w.id === wsId ? "active" : ""}`}>
-              {w.id === wsId ? <CheckIcon size={15} /> : w.access === "public" ? <GlobeIcon size={15} /> : <UsersIcon size={15} />}
+              {w.id === wsId ? <CheckIcon size={15} /> : w.personal ? <UserIcon size={15} /> : w.access === "public" ? <GlobeIcon size={15} /> : <UsersIcon size={15} />}
             </span>
             <span className="aiProvMeta">
               <span className="aiProvName">
                 {w.name}
-                {w.personal ? <span className="uiTag">personal</span> : null}
-                {w.access === "public" ? <span className="uiTag">public</span> : null}
+                {w.personal ? <span className="uiTag">personal</span> : <span className="uiTag">{w.access === "public" ? "public" : "shared"}</span>}
+                {w.default ? <span className="uiTag">default</span> : null}
               </span>
               <span className="aiProvDesc">
-                {w.personal ? "" : `${ROLE_LABEL[w.role] || w.role} · `}{w.members} member{w.members === 1 ? "" : "s"}
+                {w.personal ? "just you" : `${ROLE_LABEL[w.role] || w.role} · ${w.members} member${w.members === 1 ? "" : "s"}`}
               </span>
             </span>
             <span className="aiProvActions">
@@ -440,7 +472,8 @@ export function WorkspaceSettings({ value }) {
         />
       ) : null}
       {dialog === "create" ? (
-        <NameDialog title="New workspace" label="Name" hint="a separate library — e.g. a lab, a course, a reading pile"
+        <NameDialog title="New personal workspace" label="Name"
+          hint={`a separate library of your own — work, life, play${isAdmin ? "; shared workspaces are made in Settings → Workspaces" : "; ask an admin for a shared one"}`}
           submitLabel="Create and open" busy={creating} error={createError} onSubmit={submitCreate} onClose={closeDialog} />
       ) : null}
     </>

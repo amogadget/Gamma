@@ -12,7 +12,8 @@ default. Quota 0 means unlimited.
 
 What a workspace's uploads are checked against (`workspace_quota`):
   - a PERSONAL workspace: its account's limits, and the account's usage is
-    exactly that workspace's uploads/ — nothing else counts against a person;
+    the uploads/ of all its personal workspaces together — nothing anyone
+    puts into a shared workspace counts against a person;
   - a SHARED workspace: the server-wide per-file cap and the workspace's own
     `workspaces.quota_mb` (NULL = unlimited), which admins set.
 The databases are not metered.
@@ -116,10 +117,10 @@ def workspace_bytes(ws: str) -> int:
 
 
 def usage_bytes(username: str) -> int:
-    """Upload bytes that count against an account: its personal workspace."""
+    """Upload bytes that count against an account: its personal workspaces."""
     from . import workspaces  # local: workspaces imports seed → db
 
-    return workspace_bytes(workspaces.default_workspace(username))
+    return sum(workspace_bytes(ws) for ws in workspaces.personal_workspaces(username))
 
 
 def workspace_quota(ws: str) -> dict:
@@ -132,7 +133,7 @@ def workspace_quota(ws: str) -> dict:
     used = workspace_bytes(ws)
     owner = workspaces.personal_owner(ws)
     if owner:
-        return {**user_limits(owner), "used_bytes": used, "workspace_bytes": used, "account": owner}
+        return {**user_limits(owner), "used_bytes": usage_bytes(owner), "workspace_bytes": used, "account": owner}
     info = workspaces.get(ws) or {}
     with connect_users_db() as conn:
         default_upload, _default_quota = _defaults(conn)

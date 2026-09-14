@@ -11,7 +11,7 @@ Usage:
   python manage.py delete-user <username>          # + the workspaces only they owned
   python manage.py list-users
   python manage.py list-workspaces                 # every workspace, access, members, size
-  python manage.py create-workspace <name> <owner> [public [viewer|editor]]
+  python manage.py create-workspace <name> <owner> [shared [public [viewer|editor]]]
   python manage.py set-member <workspace-id> <username> <owner|editor|viewer|none>
   python manage.py set-access <workspace-id> <private|public> [viewer|editor]
   python manage.py reset-guest                     # wipe guest data (auto-runs daily)
@@ -75,8 +75,8 @@ def list_workspaces():
     if not rows:
         print("No workspaces.")
     for w in rows:
-        kind = f"personal:{w['personal']}" if w["personal"] else (
-            f"public:{w['public_role']}" if w["access"] == "public" else "private")
+        kind = f"personal:{w['personal']}{' (default)' if w['default'] else ''}" if w["personal"] else (
+            f"shared public:{w['public_role']}" if w["access"] == "public" else "shared private")
         quota = f"/{w['quota_mb']} MB" if w.get("quota_mb") else ""
         members = ", ".join(f"{m['username']}:{m['role']}" for m in w["members"])
         print(f"  {w['id']}  {w['name']!r}  [{kind}]  {w['used_bytes'] // (1024 * 1024)} MB{quota}  members: {members}")
@@ -100,13 +100,13 @@ def set_member(ws, username, role):
         print(f"Refused: {e}")
 
 
-def create_workspace(name, owner, access="private", public_role="viewer"):
+def create_workspace(name, owner, kind="personal", access="private", public_role="viewer"):
     try:
-        info = workspaces.create(name, owner, by="manage.py", access=access, public_role=public_role)
+        info = workspaces.create(name, owner, kind=kind, by="manage.py", access=access, public_role=public_role)
     except ValueError as e:
         print(f"Refused: {e}")
         return
-    print(f"Created workspace {info['id']} {info['name']!r} ({info['access']}), owner {owner}.")
+    print(f"Created {info['kind']} workspace {info['id']} {info['name']!r} ({info['access']}), owner {owner}.")
 
 
 def set_access(ws, access, public_role=None):
@@ -336,8 +336,10 @@ def main():
         if len(args) < 2:
             print("Usage: python manage.py create-workspace <name> <owner> [public [viewer|editor]]")
             sys.exit(1)
-        create_workspace(args[0], args[1], "public" if len(args) > 2 and args[2] == "public" else "private",
-                         args[3] if len(args) > 3 else "viewer")
+        shared = len(args) > 2 and args[2] == "shared"
+        create_workspace(args[0], args[1], "shared" if shared else "personal",
+                         "public" if shared and len(args) > 3 and args[3] == "public" else "private",
+                         args[4] if len(args) > 4 else "viewer")
     elif cmd == "set-access":
         if len(args) < 2:
             print("Usage: python manage.py set-access <workspace-id> <private|public> [viewer|editor]")

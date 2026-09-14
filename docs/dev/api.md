@@ -81,7 +81,7 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/login`, `/login-guest`, `/logout` | session management |
-| GET | `/session` | who am I, plus `workspaces: [{id, name, role, access, public_role, personal, members}]` (memberships + every public workspace) and `default_workspace` (quota lives in `/quota`) |
+| GET | `/session` | who am I, plus `workspaces: [{id, name, kind, role, access, public_role, personal, default, members}]` (memberships + every public workspace) and `default_workspace` (quota lives in `/quota`) |
 | GET | `/accounts` | the account directory for the invite / owner pickers: `{accounts: [{username, is_admin}]}`, non-guest accounts only (signed-in non-guest callers) |
 | GET | `/export` (+ `/export-progress`) | backup zip of a workspace (everything or DB-only): the request's, `?ws=` (any member), or — admins — `?user=` for an account's personal workspace |
 | POST | `/import-data` | restore (`mode=replace`, owners) / merge (`mode=merge`, editors) a backup zip into a workspace (same targeting); never into the guest workspace |
@@ -89,9 +89,9 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 ### Workspaces (`workspaces.py`) — see [workspaces.md](workspaces.md)
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/workspaces` | create one (`{name}`; guests 403); admins may add `owner`, `access`, `public_role`, `quota_mb` |
-| GET/PUT/DELETE | `/workspaces/{id}` | members + quota + `personal_of` (any member; admins) / rename `{name}` (owner), access + public role, workspace quota (admin) / delete (owner; not a personal one) |
-| PUT/DELETE | `/workspaces/{id}/members/{user}` | invite or set a role `{role}`, incl. owner (owner) / remove (owner) or leave (yourself) |
+| POST | `/workspaces` | create a personal one (`{name}`; guests 403); admins may add `kind: "shared"`, `owner`, `access`, `public_role`, `quota_mb` |
+| GET/PUT/DELETE | `/workspaces/{id}` | kind + members + quota + `personal_of` + `default` (any member; admins) / rename `{name}` (owner), `default: true` (a personal workspace's owner), kind, access + public role, workspace quota (admin) / delete (owner; not an account's last personal one) |
+| PUT/DELETE | `/workspaces/{id}/members/{user}` | shared workspaces: invite or set a role `{role}`, incl. owner (owner) / remove (owner) or leave (yourself) |
 | GET | `/workspaces/find-page/{page_id}` | which of my workspaces holds the page (deep links without `ws`) |
 
 ### Blocks (`blocks.py`) — the core data model
@@ -136,7 +136,7 @@ in `export.py`.
 | POST | `/uploads`, `/upload-image` | store a PDF / an image (content-hash names, dedup'd; quota-gated) |
 | POST | `/upload-file` | store any allowed file for a block to reference as `[name](/api/uploads/<hash>.<ext>)`: md, txt, csv, json, tex, bib, py, ipynb, html, docx, xlsx, pptx, zip, plus images (routed like `/upload-image`) and PDFs; extension from the uploaded name; same hashing + limits → `{url, name, size, already_existed}`; 400 for anything else |
 | GET | `/uploads/{filename}` | serve stored files with their media type; pdf / images / txt / md render inline, everything else is `Content-Disposition: attachment` (html additionally sandboxed like svg) |
-| GET | `/quota` | the limits that apply to uploads into the request's workspace — the account's for a personal one, the workspace's own for a shared one — with `used_bytes` / `workspace_bytes` and `account` (the person, or "") |
+| GET | `/quota` | the limits that apply to uploads into the request's workspace — the account's for a personal one (`used_bytes` = all its personal workspaces), the workspace's own for a shared one — with `workspace_bytes` and `account` (the person, or "") |
 | POST | `/share/{page_id}` | create the page's share link (defaults `anyone`/`view`; optional body `{audience, role, users}` applies to a NEW link) or return the existing one unchanged — root blocks only (400 otherwise); workspace editors and owners |
 | GET/PUT/DELETE | `/share-settings/{page_id}` | read settings (`{token: null}` when unshared; any member) / change `audience`, `role`, `users` (`["carol"]` or `[{name, role}]`; validated: `edit`+`anyone` → 400, unknown usernames or roles → 400; the token stays) / stop sharing (the token dies) — editors and owners |
 | GET | `/share/{token}` | resolve a link for this viewer → `{page_id, doc_id, username (who shared it), workspace_id, audience, role, can_edit, viewer, viewer_is_guest}` (`doc_id` = the page's PDF attachment id via `page_attachment`, `""` without one; `viewer`/`viewer_is_guest` let the share view offer "Open in my library" or "Add to my library"); 404 unknown, 401 sign in first, 403 signed in but not allowed |
@@ -240,7 +240,7 @@ the request's workspace — the extension names none, so its personal one.
 | GET/POST | `/admin/users` | list (with usage and `default_workspace`) / create accounts (+ personal workspace) |
 | PUT/DELETE | `/admin/users/{name}` | password, admin flag, storage overrides / delete (+ the workspaces only they owned, listed as `deleted_workspaces`) |
 | POST | `/admin/users/{name}/rename` | rename (rows only — no files move; sessions survive) |
-| GET | `/admin/workspaces` | every workspace (access, public role, quota, `personal` = its account or "", members, upload size), plus orphan directories — Settings → Workspaces |
+| GET | `/admin/workspaces` | every workspace (kind, access, public role, quota, `personal` = its account or "", `default`, members, upload size), plus orphan directories — Settings → Workspaces |
 | GET/POST | `/admin/backups` | list the snapshots under `backups/` / take one now (`{label?, uploads?}` — databases, plus every upload with `uploads: true`) |
 | GET | `/admin/backups/{name}/download` | the snapshot as a zip |
 | DELETE | `/admin/backups/{name}` | delete a snapshot (restoring is `manage.py backups --restore`, server stopped — [migrations.md](migrations.md)) |

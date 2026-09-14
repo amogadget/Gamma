@@ -58,6 +58,16 @@ their personal workspace, and a shared workspace carries its own optional
 cap that an admin sets. Two independent numbers, each about the thing it
 limits.
 
+**Personal and shared are different things, and users only make the
+first.** The second cut let anyone create a shared workspace and invite
+people, with an admin-set quota per workspace. That reopened the quota
+question from the other side: a user could park uploads in a solo "shared"
+workspace with no cap. Making the kind explicit closes it — a personal
+workspace (any number per account: work, life, play) is always just its
+owner and always metered against them; a shared workspace is made by an
+admin, who is the one who can decide a group deserves storage of its own.
+The default workspace survives only as a pointer among the personal ones.
+
 **Public is a server-level decision.** Workspaces started with nothing
 public, page share links covering outsiders. A lab wants a reading room
 every member of the server sees without an invitation each; that is a
