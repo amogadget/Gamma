@@ -128,6 +128,11 @@ The scenarios live in `tests/e2e/scenarios/`:
   (by its key), stroke undo/redo, the partial eraser cutting a stroke, a
   lasso move + delete, the notes card's jump + outline, `/Ink` in the
   exported PDF.
+- `pdfload.mjs`: the PDF load timing probe — a 300-page, 20 MB document
+  opened cold at an emulated 20 Mbps, the IndexedDB backfill, then a warm
+  reopen; reports the per-phase `performance.mark("pdf-<phase>")` stamps and
+  the bytes on the wire as each step's note, asserts only that it paints
+  ([pdf_loading.md](pdf_loading.md)). `npm run e2e -- --only "pdf load"`.
 - `files.mjs`: files dropped on a block row / the page body become file
   chips (a `dropFiles` helper builds a real DataTransfer; the paste step
   builds a `ClipboardEvent` in the page, since Playwright's `dispatchEvent`
@@ -162,7 +167,10 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
   insert time. Gone on restart.
 - **Session log + debug tracing** — Settings → Advanced: browser-side event
   log; the "Debug logging" toggle traces reading-position/restore/sync
-  events into it and the console.
+  events into it and the console. Every PDF load phase lands here as
+  `pdf <phase> +<ms>` (ms since the viewer started opening that url) and as
+  a `performance.mark("pdf-<phase>")` for devtools' Performance panel — the
+  phases and what a healthy open looks like: [pdf_loading.md](pdf_loading.md).
 - **Background tasks** — the tasks popover (`GET /api/tasks`) shows indexing
   and download progress. The client polls it every 2 s only while the popover
   is open or indexing is known to run; otherwise a 60 s heartbeat, and

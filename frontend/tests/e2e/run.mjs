@@ -21,6 +21,7 @@ import { collabScenarios } from "./scenarios/collab.mjs";
 import { shareScenarios } from "./scenarios/share.mjs";
 import { settingsScenarios } from "./scenarios/settings.mjs";
 import { inkScenarios } from "./scenarios/ink.mjs";
+import { pdfLoadScenarios } from "./scenarios/pdfload.mjs";
 
 const server = new Server();
 let browser;
@@ -78,6 +79,7 @@ try {
   const notes = await noteScenarios(env);
   const pdf = await pdfScenarios(env, notes);
   await inkScenarios(env);
+  await pdfLoadScenarios(env);
   await fileScenarios(env);
   await collabScenarios(env);
   await shareScenarios(env, { ...notes, ...pdf });

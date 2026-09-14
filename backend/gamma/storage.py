@@ -7,6 +7,7 @@ import hashlib
 import urllib.parse
 from pathlib import Path
 
+from . import pdf_meta
 from .db import ws_uploads_dir
 from .server_settings import check_upload_allowed
 
@@ -149,6 +150,7 @@ def store_pdf(ws: str, data: bytes) -> tuple[str, str, bool]:
     if not already_existed:
         check_upload_allowed(ws, len(data))
         target.write_bytes(data)
+    pdf_meta.schedule(ws, doc_id)  # the viewer's manifest, ready before the first open
     return doc_id, f"/api/uploads/{doc_id}.pdf", already_existed
 
 

@@ -3,8 +3,8 @@
 import sys
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, Response
 
 from . import config, migrations
 from .auth import session_middleware
@@ -132,20 +132,32 @@ def create_app() -> FastAPI:
     if static_dir and static_dir.is_dir():
         index_html = static_dir / "index.html"
 
+        def revalidating(file: Path, request: Request):
+            """An unhashed file (index.html, favicons) changes in place on
+            upgrade, so it is sent ``no-cache``: the browser asks every time,
+            and gets a 304 when it already holds this version. Starlette's
+            FileResponse sets an ETag but never compares one, so without this
+            every revalidation carried the whole body."""
+            st = file.stat()
+            etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+            headers = {"Cache-Control": "no-cache", "ETag": etag}
+            if request.headers.get("if-none-match") == etag:
+                return Response(status_code=304, headers=headers)
+            return FileResponse(file, headers=headers)
+
         @app.get("/{path:path}", include_in_schema=False)
-        async def spa(path: str):
+        async def spa(path: str, request: Request):
             candidate = (static_dir / path).resolve()
             # Path-traversal guard: only serve files inside the static dir
             if path and candidate.is_file() and candidate.is_relative_to(static_dir.resolve()):
                 if path.startswith("assets/"):
-                    # Vite content-hashes these filenames — safe to cache forever.
+                    # Vite content-hashes these filenames (the pdf.js worker
+                    # among them) — safe to cache forever.
                     return FileResponse(candidate, headers={"Cache-Control": "public, max-age=31536000, immutable"})
-                # Unhashed files (pdf.worker.min.mjs, favicons…) change in place on
-                # upgrade — always revalidate (cheap 304 via the ETag).
-                return FileResponse(candidate, headers={"Cache-Control": "no-cache"})
+                return revalidating(candidate, request)
             # index.html must revalidate every load, or clients keep referencing
             # deleted hashed assets after a deploy.
-            return FileResponse(index_html, headers={"Cache-Control": "no-cache"})
+            return revalidating(index_html, request)
 
     _startup_maintenance()
     return app

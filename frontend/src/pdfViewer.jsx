@@ -6,21 +6,34 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 // modern build assumes (Promise.withResolvers is Safari 17.4+, and pdf.js
 // calls it the moment a loading task is created). Without it every iPad below
 // iOS 17.4 threw here at module scope and the whole app rendered blank.
-// public/vendor/pdfjs/pdf.worker.min.mjs is the matching legacy worker — keep both legacy.
+// The worker is the matching legacy build, bundled by Vite as a content-hashed
+// asset (?url): always the installed pdfjs-dist version, and served immutable
+// for a year like every other asset — a copy under public/ was revalidated on
+// every page load, 1.3 MB each time, and that was most of a warm reopen.
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
+import pdfWorkerUrl from "pdfjs-dist/legacy/build/pdf.worker.min.mjs?url";
 import "pdfjs-dist/web/pdf_viewer.css";
 import { createPortal } from "react-dom";
 import { ChevronRightIcon, LinkIcon, MessageSquareIcon, OutlineIcon } from "./icons";
 import { InkLayer } from "./inkLayer";
 import { segmentPage } from "./pdfTranslate";
+import { BACKFILL_DELAY_MS, chooseTransport, docIdOf, layoutFromManifest, rangeOpenOptions } from "./pdfSource";
 import { normalizeChars } from "./textnorm";
+import { apiJson, withShare, withWorkspace } from "./utils";
 import { ChatMarkdown } from "./widgets";
-pdfjsLib.GlobalWorkerOptions.workerSrc = "/vendor/pdfjs/pdf.worker.min.mjs";
-// Pre-warm the pdfjs worker so it downloads in parallel with later PDF fetches.
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+// One worker for every document. pdf.js otherwise starts a fresh worker per
+// getDocument — the 1.3 MB script fetched and compiled again per open — and
+// a document's destroy() only tears down a worker pdf.js created itself, so
+// a shared one outlives every DOC_CACHE eviction. Created at module scope,
+// which is also what starts its script downloading alongside the app.
 // Guarded: a throw at module scope takes down every route, PDF or not.
+let PDF_WORKER = null;
 try {
-  pdfjsLib.getDocument({ data: new Uint8Array() }).promise.catch(() => {});
+  PDF_WORKER = new pdfjsLib.PDFWorker({ name: "gamma-pdf" });
 } catch {}
+// getDocument parameters every open shares.
+const openParams = (params) => (PDF_WORKER ? { ...params, worker: PDF_WORKER } : params);
 
 // Highlight palette (shared with the highlight context menu in App)
 const COLORS = [
@@ -57,15 +70,39 @@ function pageTopAt(heights, idx, scale) {
   return y;
 }
 
-// Recently downloaded PDFs, so reopening a paper (tab switch, back button)
-// doesn't re-download a multi-MB file. pdf.js detaches the buffer it's
-// handed, so entries are cloned on use.
+// The bytes of the document most recently downloaded, so a reopen while the
+// IndexedDB copy below is still being written never re-downloads. One entry
+// only: raw bytes are the cheap half of a reopen (re-reading them from
+// IndexedDB takes tens of ms) and the memory belongs to DOC_CACHE, which
+// holds the expensive half. pdf.js detaches the buffer it's handed, so
+// entries are cloned on use.
 const PDF_CACHE = new Map(); // url -> ArrayBuffer, insertion order = LRU
-const PDF_CACHE_MAX = 4;
+const PDF_CACHE_MAX = 1;
 function cachePdf(url, buf) {
   PDF_CACHE.delete(url);
   PDF_CACHE.set(url, buf);
   while (PDF_CACHE.size > PDF_CACHE_MAX) PDF_CACHE.delete(PDF_CACHE.keys().next().value);
+}
+
+// Parsed documents, kept across tab switches and viewer unmounts. Rebuilding
+// a PDFDocumentProxy from cached bytes — xref, page tree, fonts — is most of
+// what a reopen costs, and a document handed over ready to render also holds
+// the reading position still: its geometry is final in the first frame, so
+// nothing settles under the scroll restore. Eviction destroys the oldest,
+// never the one being committed (it is set last).
+const DOC_CACHE = new Map(); // url -> {doc, heights, widths}, insertion order = LRU
+const DOC_CACHE_MAX = 2;
+function rememberDoc(url, entry) {
+  DOC_CACHE.delete(url);
+  DOC_CACHE.set(url, entry);
+  while (DOC_CACHE.size > DOC_CACHE_MAX) {
+    const victim = DOC_CACHE.keys().next().value;
+    const { doc } = DOC_CACHE.get(victim);
+    DOC_CACHE.delete(victim);
+    // Its pages may still be mounted mid-swap — destroying now would spam
+    // transport-destroyed rejections; after the commit has settled is fine.
+    setTimeout(() => doc.destroy().catch(() => {}), 1000);
+  }
 }
 
 // Persistent second-level cache: survives refreshes, closed tabs, and browser
@@ -140,6 +177,56 @@ async function diskCachePut(url, buf) {
   }
 }
 
+async function diskCacheHas(url) {
+  let db;
+  try {
+    db = await idbOpen();
+    return (await idbReq(db.transaction("pdfs").objectStore("pdfs").getKey(url))) !== undefined;
+  } catch {
+    return false;
+  } finally {
+    db?.close();
+  }
+}
+
+// A range open leaves nothing on disk. BACKFILL_DELAY_MS after the reader has
+// their page, the whole file is fetched once into IndexedDB so the next open
+// is warm — otherwise every later open would pay the round trips again.
+const backfilling = new Set();
+function backfillLocalCopy(url) {
+  if (backfilling.has(url)) return;
+  backfilling.add(url);
+  setTimeout(async () => {
+    try {
+      if (await diskCacheHas(url)) return;
+      const resp = await fetch(url, { credentials: "include" });
+      if (resp.ok) diskCachePut(url, await resp.arrayBuffer());
+    } catch {} finally {
+      backfilling.delete(url);
+    }
+  }, BACKFILL_DELAY_MS);
+}
+
+// The document manifest (GET /api/pdf-info, docs/dev/pdf_loading.md): byte
+// size, page count and every page's size, derived server-side once per
+// stored PDF. Only uploads have one — the /api/pdf proxy has no local file to
+// measure — and a missing or failed manifest just means the older path.
+// ?ws= keeps the browser's HTTP cache per workspace.
+async function fetchManifest(url) {
+  const id = docIdOf(url);
+  if (!id) return null;
+  try {
+    return await apiJson(withWorkspace(`/api/pdf-info/${id}`));
+  } catch {
+    return null;
+  }
+}
+
+// A promise's value, or null once `ms` have passed without it.
+function withTimeout(promise, ms) {
+  return Promise.race([promise, new Promise((resolve) => setTimeout(() => resolve(null), ms))]);
+}
+
 // Abort a download when no bytes arrive for this long — a hung server
 // otherwise leaves the fetch (and the UI) waiting forever.
 const STALL_MS = 45000;
@@ -204,12 +291,11 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
     }
   };
   try {
-    // One plain GET, nothing else. Upload URLs are content-addressed and served
-    // with an immutable Cache-Control, so a normal request lets the browser
-    // HTTP cache make repeat downloads free — even on plain http where Cache
-    // Storage is unavailable. Range requests would defeat that (browsers don't
-    // store 206 responses), and against a slow server a probe + parallel
-    // chunks costs 7 round trips where one stream costs one.
+    // One plain GET. Upload URLs are content-addressed and served with an
+    // immutable Cache-Control, so a normal request lets the browser HTTP cache
+    // make repeat downloads free — even on plain http where Cache Storage is
+    // unavailable. Files too large for this path open by range requests
+    // instead (pdfSource.chooseTransport), through pdf.js's own transport.
     const resp = await fetch(url, { credentials: "include", signal: ctrl.signal });
     if (isCancelled()) return null;
     if (!resp.ok) {
@@ -251,6 +337,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   const [numPages, setNumPages] = useState(0);
   const [docSeq, setDocSeq] = useState(0); // bumped per document — keys the page tree so swaps are atomic
   const [displayedUrl, setDisplayedUrl] = useState(""); // url of the document on screen (lags `url` during a load)
+  const [skeletonUrl, setSkeletonUrl] = useState(""); // url whose manifest skeleton is on screen (page boxes, no document yet)
   const [retryNonce, setRetryNonce] = useState(0); // bumped by the host's Retry button to re-run a failed load
   // Load progress/errors render no UI here: every phase goes to the host via
   // onLoadState, and the app's single shared status pill displays them.
@@ -693,7 +780,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     const ro = new ResizeObserver(compute);
     ro.observe(viewerRef.current);
     return () => ro.disconnect();
-  }, [isFitWidth, pdfDoc]);
+  }, [isFitWidth, pdfDoc, skeletonUrl]);
 
   // Tell the host which document's pages are in the DOM. Layout effect on
   // purpose: it fires after the swap commit but BEFORE paint, so the host can
@@ -707,54 +794,130 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   }, [pdfDoc]);
 
   // The document currently on screen. Kept visible while the next one loads —
-  // swapping only when the new doc is fully measured is what prevents the
-  // blank flash and the scrollbar resizing repeatedly during a tab switch.
+  // swapping only when the new doc is fully laid out is what prevents the
+  // blank flash and the scrollbar resizing repeatedly during a tab switch. No
+  // teardown on unmount: documents belong to DOC_CACHE, which is what makes
+  // coming back to a paper instant.
   const displayedDocRef = useRef(null);
-  useEffect(() => () => { displayedDocRef.current?.destroy().catch(() => {}); }, []);
+
+  // The three ways a document reaches the screen (docs/dev/pdf_loading.md).
+  // Every commit lands heights, page tree and document in ONE render, so the
+  // scrollbar changes exactly once. A skeleton is page boxes laid out from
+  // the manifest before pdf.js has a document: the reader's restored position
+  // lands on it (the host's "layout" phase), and when the real document
+  // arrives it fills the same boxes — same keys, nothing remounts.
+  const skeletonRef = useRef(null); // url whose skeleton is on screen, else null
+  const commitLayout = (heights, widths, exact) => {
+    heightsExactRef.current = exact;
+    pageHeightsRef.current = heights;
+    pageWidthsRef.current = widths;
+    setPageHeights(heights);
+    setPageWidths(widths);
+    setNumPages(heights.length);
+  };
+  const commitSkeleton = (url, { heights, widths }) => {
+    skeletonRef.current = url;
+    commitLayout(heights, widths, true);
+    setDocSeq((s) => s + 1);
+    setDisplayedUrl(url);
+    setSkeletonUrl(url);
+  };
+  const commitDoc = (url, doc, heights, widths, exact) => {
+    displayedDocRef.current = doc;
+    commitLayout(heights, widths, exact);
+    if (skeletonRef.current !== url) setDocSeq((s) => s + 1);
+    skeletonRef.current = null;
+    setDisplayedUrl(url);
+    setPdfDoc(doc);
+    rememberDoc(url, { doc, heights, widths });
+  };
+  // Skeleton boxes are in the DOM, pre-paint: the host applies its pending
+  // scroll restore now, before a byte of the PDF has been parsed.
+  useLayoutEffect(() => {
+    if (skeletonUrl) onLoadState?.(skeletonUrl, { phase: "layout" });
+  }, [skeletonUrl]);
 
   useEffect(() => {
     if (!url) return;
     let cancelled = false;
+    const report = (st) => { if (!cancelled) onLoadState?.(url, st); };
     (async () => {
       try {
-        const data = await fetchPdfData(url, onLoadState, () => cancelled);
-        if (!data || cancelled) return;
-        cachePdf(url, data); // insert or bump LRU position
-        onLoadState?.(url, { phase: "parsing" });
-        const doc = await pdfjsLib.getDocument({ data: data.slice(0), disableAutoFetch: true, disableRange: true }).promise;
-        if (cancelled) { doc.destroy().catch(() => {}); return; }
-        // Measure pages BEFORE showing the document: exact viewports for the
-        // first pages, page-1-sized estimates beyond (refined below). The
-        // swap then lands in ONE commit — heights, page tree, and document
-        // together — so the scrollbar changes exactly once. Kept small: each
-        // getPage is a worker round trip and this loop blocks first paint.
-        const n = doc.numPages;
-        const EXACT = 8;
-        const measured = Math.min(n, EXACT);
-        const heights = [], widths = [];
-        for (let i = 1; i <= measured; i++) {
-          onLoadState?.(url, { phase: "measuring", done: i - 1, total: measured });
-          try {
-            const vp1 = (await doc.getPage(i)).getViewport({ scale: 1 });
-            heights.push(vp1.height); widths.push(vp1.width);
-          } catch { heights.push(heights[0] || FALLBACK_H); widths.push(widths[0] || FALLBACK_W); }
-          if (cancelled) { doc.destroy().catch(() => {}); return; }
+        report({ phase: "open" });
+        // A document parsed on an earlier visit is handed over as it is.
+        const live = DOC_CACHE.get(url);
+        if (live) {
+          report({ phase: "cached" });
+          commitDoc(url, live.doc, live.heights, live.widths, true);
+          return;
         }
-        for (let i = heights.length; i < n; i++) { heights.push(heights[0] || FALLBACK_H); widths.push(widths[0] || FALLBACK_W); }
-        const prev = displayedDocRef.current;
-        displayedDocRef.current = doc;
-        heightsExactRef.current = n <= EXACT;
-        pageHeightsRef.current = heights;
-        pageWidthsRef.current = widths;
-        setPageHeights(heights);
-        setNumPages(n);
-        setDocSeq((s) => s + 1);
-        setDisplayedUrl(url);
-        setPdfDoc(doc);
-        // Old doc torn down after the swap commit — destroying it while its
-        // pages are still mounted spams transport-destroyed rejections.
-        if (prev && prev !== doc) setTimeout(() => prev.destroy().catch(() => {}), 1000);
-        // Refine the estimated heights in the background (long docs only).
+        // The manifest and the bytes travel in parallel. On a cold open the
+        // manifest alone lays the document out, while pdf.js is still
+        // fetching; for an uncached upload it also decides the transport.
+        const manifestP = fetchManifest(url);
+        manifestP.then((m) => {
+          if (cancelled || displayedDocRef.current || skeletonRef.current) return;
+          const lay = layoutFromManifest(m, { width: FALLBACK_W, height: FALLBACK_H });
+          if (lay) commitSkeleton(url, lay);
+        });
+        let data = PDF_CACHE.get(url) || (await diskCacheGet(url));
+        if (cancelled) return;
+        let openedByRange = false;
+        if (data) {
+          report({ phase: "cached" });
+        } else if (chooseTransport({ url, bytes: (await manifestP)?.bytes }) === "range") {
+          if (cancelled) return;
+          openedByRange = true;
+        } else {
+          data = await fetchPdfData(url, onLoadState, () => cancelled);
+          if (!data || cancelled) return;
+        }
+        report({ phase: "parsing" });
+        let doc;
+        if (openedByRange) {
+          doc = await pdfjsLib.getDocument(openParams(rangeOpenOptions(withShare(url)))).promise;
+        } else {
+          cachePdf(url, data); // insert or bump LRU position
+          doc = await pdfjsLib.getDocument(openParams({ data: data.slice(0), disableAutoFetch: true, disableRange: true })).promise;
+        }
+        if (cancelled) { doc.destroy().catch(() => {}); return; }
+        report({ phase: "opened" }); // pdf.js has the document: xref and page tree parsed
+        const n = doc.numPages;
+        // Exact page sizes from the manifest when it describes this file.
+        // Bytes from the cache do not wait long for it: a manifest computed
+        // for the first time (a long file nobody has opened) may take a
+        // second, and measuring is the older, still-correct path.
+        const manifest = await (data ? withTimeout(manifestP, 250) : manifestP);
+        if (cancelled) { doc.destroy().catch(() => {}); return; }
+        const fromManifest = manifest && manifest.pages === n
+          ? layoutFromManifest(manifest, { width: FALLBACK_W, height: FALLBACK_H }) : null;
+        const EXACT = 8;
+        let heights, widths;
+        if (fromManifest) {
+          ({ heights, widths } = fromManifest);
+        } else {
+          // Measure the first pages (a worker round trip each) and estimate
+          // the rest from page 1, refined below. Kept small: this loop
+          // blocks first paint.
+          const measured = Math.min(n, EXACT);
+          heights = []; widths = [];
+          for (let i = 1; i <= measured; i++) {
+            report({ phase: "measuring", done: i - 1, total: measured });
+            try {
+              const vp1 = (await doc.getPage(i)).getViewport({ scale: 1 });
+              heights.push(vp1.height); widths.push(vp1.width);
+            } catch { heights.push(heights[0] || FALLBACK_H); widths.push(widths[0] || FALLBACK_W); }
+            if (cancelled) { doc.destroy().catch(() => {}); return; }
+          }
+          for (let i = heights.length; i < n; i++) { heights.push(heights[0] || FALLBACK_H); widths.push(widths[0] || FALLBACK_W); }
+        }
+        const exact = !!fromManifest || n <= EXACT;
+        commitDoc(url, doc, heights, widths, exact);
+        if (openedByRange) backfillLocalCopy(url);
+        if (exact) return;
+        // Refine the estimated heights in the background (long docs without
+        // a manifest only). The arrays are shared with the DOC_CACHE entry,
+        // so a later reopen gets the refined layout.
         for (let i = EXACT; i < n; i++) {
           if (cancelled) return;
           try {
@@ -765,6 +928,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
             pageHeightsRef.current = [...heights];
             pageWidthsRef.current = [...widths];
             setPageHeights([...heights]);
+            setPageWidths([...widths]);
           }
         }
         heightsExactRef.current = true; // layout is final — the zoom settle loop can stand down
@@ -898,6 +1062,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // smaller scrollable range. Computing metadata-only viewports is cheap.
   // Populated by the load flow above, before the document is shown.
   const [pageHeights, setPageHeights] = useState([]);
+  const [pageWidths, setPageWidths] = useState([]);
 
   // Scroll to exact highlight position. Long jumps snap instantly — smooth
   // scrolling across many pages is what made find-next feel sluggish.
@@ -1478,6 +1643,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           onAreaSelected={canAnnotate ? onAreaSelected : undefined}
           pendingArea={selPopup?.kind === "area" && selPopup.pageNumber === i + 1 ? selPopup : null}
           reservedHeight={pageHeights[i] ? pageHeights[i] * scale : null}
+          reservedWidth={pageWidths[i] ? pageWidths[i] * scale : null}
           findMarks={marksByPage.get(i + 1) || EMPTY_MARKS}
           trans={transMap.get(i + 1) || null}
           transKey={translateKey}
@@ -1683,7 +1849,7 @@ function TransPending({ lines, busy }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1793,7 +1959,14 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
     return () => { cancelled = true; };
   }, [pdfDoc, pageNumber, scale, visible, hideEmbeddedAnnots]);
 
-  const curW = pageSize ? pageSize.width * scale : 1, curH = pageSize ? pageSize.height * scale : 1;
+  // The box the page occupies: pdf.js's measure once it has rendered, else
+  // the reserved size from the manifest skeleton (exact too), else nothing
+  // yet. Overlays scale into it, so highlights and ink are placed right on a
+  // skeleton page as well.
+  const curW = pageSize ? pageSize.width * scale : (reservedWidth || 1);
+  const curH = pageSize ? pageSize.height * scale : (reservedHeight || 1);
+  const baseW = pageSize ? pageSize.width : (reservedWidth ? reservedWidth / scale : undefined);
+  const baseH = pageSize ? pageSize.height : (reservedHeight ? reservedHeight / scale : undefined);
 
   // Rectangle drag (screenshot-style area note): Ctrl+drag with a mouse, or
   // any drag while the phone's rectangle mode (areaMode) is on. Pointer
@@ -1897,8 +2070,8 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       onPointerDown={beginAreaDrag}
       style={{
         margin: `0 auto ${PAGE_GAP}px`, position: "relative", background: "#fff",
-        width: pageSize ? curW : undefined,
-        height: pageSize ? curH : (reservedHeight || undefined),
+        width: pageSize || reservedWidth ? curW : undefined,
+        height: pageSize || reservedHeight ? curH : undefined,
         minHeight: pageSize || reservedHeight ? undefined : 200,
       }}>
       {/* 100% of the wrapper: on a zoom change the old bitmap stretches to the
@@ -1962,7 +2135,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       }} />
       {inkBlocks.length || onInkStroke ? (
         <InkLayer pageNumber={pageNumber} wrapRef={wrapRef}
-          width={pageSize?.width} height={pageSize?.height}
+          width={baseW} height={baseH}
           blocks={inkBlocks} tool={onInkStroke ? inkTool : null} penTool={onInkStroke ? inkPenTool : null}
           penOnly={inkPenOnly} pressure={inkPressure} eraserMode={inkEraserMode} selection={inkSelection} flash={inkFlash}
           onStroke={onInkStroke} onErase={onInkErase} onErasePartial={onInkErasePartial}

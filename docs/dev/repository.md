@@ -31,7 +31,6 @@ folders; those folders have not been created yet.
 | `docs/assets/demos/` | README demo GIFs |
 | `docs/assets/screenshots/` | Documentation stills; guest welcome blocks reference their GitHub raw URLs |
 | `frontend/public/media/icons/` | Favicon, served at `/media/icons/favicon.svg` |
-| `frontend/public/vendor/pdfjs/` | Vendored legacy PDF worker, served at `/vendor/pdfjs/pdf.worker.min.mjs` |
 | `desktop/assets/icon.png` | Electron window and installer icon |
 | `desktop/assets/entitlements.mac.plist` | macOS signing entitlements |
 | `desktop/assets/appx/` | Microsoft Store package tiles, splash screens, and scale variants |
@@ -45,12 +44,13 @@ to move into a media directory.
 
 The frontend's `/assets/` URL namespace belongs to Vite's generated,
 content-hashed bundles. The backend sends those files with an immutable,
-one-year cache policy. Unversioned public files belong under `/media/` or
-`/vendor/`, where the backend revalidates them on upgrade.
+one-year cache policy. Unversioned public files belong under `/media/`, sent
+`no-cache` with a real `304` on revalidation (`gamma/app.py`).
 
-The PDF worker must match the legacy `pdfjs-dist` build imported by
-`frontend/src/pdfViewer.jsx`. When updating it, also check the worker URL in
-that file and the preload in `frontend/index.html`.
+The pdf.js worker is one of those hashed assets: `frontend/src/pdfViewer.jsx`
+imports `pdfjs-dist/legacy/build/pdf.worker.min.mjs?url`, so it is always the
+installed package's legacy build and is cached like the bundle. Nothing to
+copy or check when `pdfjs-dist` is upgraded.
 
 ## Desktop inputs and outputs
 

@@ -10,7 +10,6 @@ npm run build    # → dist/  (FastAPI serves this in prod)
 
 - `src/` — app code, see src/README.md
 - `public/media/icons/` — app icons served as-is (`/media/icons/favicon.svg`)
-- `public/vendor/pdfjs/` — the legacy PDF worker, matching the installed `pdfjs-dist` version
 - `dist/assets/` — Vite-generated, content-hashed bundles; do not put unversioned public files here
 - `vite.config.js` — dev proxy + build config
 

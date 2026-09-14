@@ -75,24 +75,32 @@ in pypdfium2 once for that index. So:
   4× disk, and moving `source_url` under highlights and ink that anchor to it.
   The preview covers the same scans without touching their bytes.
 
-## The path proposed on 2026-09-14
+## The path chosen on 2026-09-14 (built the same day)
 
 Organizing idea: **the server already knows the document; the client lays out
 before it parses and chooses transport by size; a parsed document is never
-thrown away.** Stages, each shippable and measured on its own:
+thrown away.** Mechanics and measurements: [dev/pdf_loading.md](../dev/pdf_loading.md).
 
 0. Timing stamps on the existing load-state log (ms since open per phase) and a
-   big-PDF e2e probe, so every later stage shows its number.
-1. `DOC_CACHE` of two parsed documents; byte cache to one entry.
-2. Manifest: `pdf_meta.ensure(ws, doc_id)` at upload, clip, proxy-save and
-   index time; `GET /api/pdf-info/{doc_id}` under the upload's access rule; the
-   viewer lays out a skeleton from it and drops the measure loop and the
-   50-page refinement. Ink and highlight overlays get exact page boxes from the
-   first frame.
+   big-PDF e2e probe, so every stage shows its number.
+1. A cache of two parsed documents; byte cache down to one entry.
+2. The manifest (`gamma/pdf_meta.py`) computed at store time and by the
+   indexer, served by `GET /api/pdf-info/{doc_id}` under the upload's access
+   rule; the viewer lays out a skeleton from it and drops the measure loop and
+   the 50-page refinement.
 3. `src/pdfSource.js`, a pure, unit-tested decision: cached bytes → memory;
-   small file → one GET as today; large file → pdf.js range open with a
-   background backfill into IndexedDB after paint. Only for `/api/uploads`; the
-   `/api/pdf` proxy keeps its streaming path.
-4. Optional preview endpoint, gated by the manifest's heaviness and a 150 ms
-   no-paint timer, cached under a workspace `cache/` directory that backups and
-   the orphan sweep ignore.
+   small file → one GET; large file → pdf.js range open with a background
+   backfill into IndexedDB. Only for `/api/uploads`.
+4. The server preview stays out: not needed for the numbers below.
+
+What the probe taught that the survey had not: the pdf.js worker script, a
+1.3 MB file under `public/vendor/`, was sent `no-cache` and Starlette's
+`FileResponse` never answers 304, so every page load re-downloaded it — 0.6 to
+0.85 s of every open at 20 Mbps, cold or warm, and the whole of the warm
+open's cost once the manifest had removed the measure loop. Bundling the
+worker as a hashed Vite asset (one shared `PDFWorker`) fixed it. Lesson: a
+measurement stage before optimizing is what finds the cost nobody suspected.
+
+Result, 300 pages / 20 MB at an emulated 20 Mbps, first paint from open: cold
+9.73 s → 0.7 to 0.8 s with 0.3 MB on the wire instead of 20 MB; warm reopen in
+a new tab 1.01 s → 0.14 s; back to the paper in the same tab 0.04 s.

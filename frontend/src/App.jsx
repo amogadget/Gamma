@@ -2054,11 +2054,40 @@ export default function App() {
   // Byte-level download state reported by the PDF viewer (skips local uploads).
   // One row per URL: a re-download (LRU eviction, retry) reactivates the
   // existing entry instead of stacking duplicates.
+  // One clock per document load: every phase is stamped with the ms since
+  // the viewer started opening this url (the "open" phase, or the first
+  // phase seen for a new url). The stamps go to the system log and to
+  // performance.mark("pdf-<phase>", {detail: {url, ms}}) — readable from
+  // devtools' Performance panel and from the e2e timing probe
+  // (docs/dev/pdf_loading.md).
+  const pdfLoadClockRef = useRef({ url: "", t0: 0 });
+  // Called from the viewer's layout effects — before paint — when the
+  // document's page boxes are in the DOM: on "layout" (a skeleton from the
+  // manifest, no document yet) and on "rendered". Applying the pending
+  // restore HERE means the document appears already scrolled to its
+  // position: no flash of the top, no visible jump.
+  function applyPendingRestore(url) {
+    const p = pendingRestoreRef.current;
+    if (!p || p.url !== url || restoreTokenRef.current !== p.token) return;
+    const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+    const targetTop = p.entry.top * ((pdfEffScaleRef.current || p.entry.scale || 1) / (p.entry.scale || 1));
+    if (scroller && scroller.scrollHeight > targetTop) {
+      scroller.scrollTo({ top: targetTop, behavior: "instant" });
+      pendingRestoreRef.current = null;
+      restoreTokenRef.current++; // the fallback loop is no longer needed
+      if (restoringForRef.current === p.blockId) restoringForRef.current = null;
+      dbg("exact restore: applied pre-paint, top", Math.round(targetTop));
+    }
+  }
   function handlePdfLoadState(url, st) {
+    const clock = pdfLoadClockRef.current;
+    if (st.phase === "open" || clock.url !== url) { clock.url = url; clock.t0 = performance.now(); }
+    const ms = Math.round(performance.now() - clock.t0);
     // System log: lifecycle transitions only — byte/page progress would spam it.
     if (st.phase !== "progress" && st.phase !== "measuring") {
+      try { performance.mark(`pdf-${st.phase}`, { detail: { url, ms } }); } catch {}
       const shortUrl = url.length > 100 ? url.slice(0, 100) + "…" : url;
-      logSys(`pdf ${st.phase}${st.bytes ? ` (${fmtBytes(st.bytes)})` : ""}${st.detail ? ` — ${st.detail}` : ""}: ${shortUrl}`);
+      logSys(`pdf ${st.phase} +${ms} ms${st.bytes ? ` (${fmtBytes(st.bytes)})` : ""}${st.detail ? ` — ${st.detail}` : ""}: ${shortUrl}`);
     }
     // Feed the shared status pill — one channel for the whole load lifecycle,
     // so load progress and status messages can never stack.
@@ -2084,6 +2113,13 @@ export default function App() {
     } else if (st.phase === "cancelled" || st.phase === "painted") {
       postPill("pdf-load", null);
     }
+    if (st.phase === "layout") {
+      // Page boxes from the manifest are in the DOM, the document itself is
+      // still loading: the reader lands on their page now.
+      postPill("pdf-load", { msg: "Preparing document…", spinner: true });
+      applyPendingRestore(url);
+      return;
+    }
     if (st.phase === "rendered") {
       // Pages are in the DOM but the first canvas paint is still in flight —
       // keep the pill up until the viewer reports "painted". Safety-capped so
@@ -2091,21 +2127,7 @@ export default function App() {
       postPill("pdf-load", { msg: "Rendering page…", spinner: true }, { after: [20000, null] });
       pdfRenderedUrlRef.current = url; // this document's pages are now in the DOM
       setPdfDocNonce((n) => n + 1);    // lets a pinned search re-find its matches here
-      // Called from the viewer's layout effect — before paint. Applying a
-      // pending restore HERE means the document appears already scrolled to
-      // its position: no flash of the top, no visible jump.
-      const p = pendingRestoreRef.current;
-      if (p && p.url === url && restoreTokenRef.current === p.token) {
-        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
-        const targetTop = p.entry.top * ((pdfEffScaleRef.current || p.entry.scale || 1) / (p.entry.scale || 1));
-        if (scroller && scroller.scrollHeight > targetTop) {
-          scroller.scrollTo({ top: targetTop, behavior: "instant" });
-          pendingRestoreRef.current = null;
-          restoreTokenRef.current++; // the fallback loop is no longer needed
-          if (restoringForRef.current === p.blockId) restoringForRef.current = null;
-          dbg("exact restore: applied pre-paint, top", Math.round(targetTop));
-        }
-      }
+      applyPendingRestore(url);
       return;
     }
     // Only phases that own a transfer row from here on — the catch-all branch

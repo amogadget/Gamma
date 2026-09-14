@@ -24,6 +24,7 @@ No positions are stored: the frontend re-finds the match in the block text.
 import sqlite3
 
 from . import pdf_index
+from . import pdf_meta
 from .blocks_store import fetch_subtree
 from .db import connect_data_db, ws_db_path
 from .logbuf import log
@@ -194,6 +195,7 @@ def purge_page_data(ws: str, pages_conn: sqlite3.Connection, deleted_ids) -> Non
             for d in stale:
                 ddb.execute("DELETE FROM pdf_fts WHERE doc_id = ?", (d,))
                 ddb.execute("DELETE FROM pdf_fts_docs WHERE doc_id = ?", (d,))
+            pdf_meta.purge(ddb, live_docs)
             prune(ddb, live_pages)
             ddb.commit()
     except Exception as e:

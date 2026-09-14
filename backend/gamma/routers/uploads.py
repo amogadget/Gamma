@@ -3,10 +3,11 @@
 import sqlite3
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from ..auth import require_ws, require_ws_writer, resolve_ws, share_scope_page
 from ..blocks_store import fetch_subtree
+from .. import pdf_meta
 from ..db import connect_pages_db, ws_uploads_dir
 from ..server_settings import check_upload_allowed, workspace_quota
 from ..storage import (
@@ -119,6 +120,27 @@ def _share_can_read_upload(ws: str, scope_page_id: str, filename: str) -> bool:
         rows = fetch_subtree(conn, scope_page_id)
     needle = f"/api/uploads/{filename}"
     return any(needle in (r[3] or "") or needle in (r[4] or "") for r in rows)
+
+
+@router.get("/pdf-info/{doc_id}")
+def pdf_info(doc_id: str, request: Request):
+    """The document manifest (``gamma/pdf_meta.py``): ``{doc_id, bytes,
+    pages, dims: [[w, h], …]}`` in PDF points. Same access rule as the file
+    itself. Sync def on purpose: a document nobody has measured yet is walked
+    in pdfium here, in the threadpool. A manifest is immutable per doc id
+    (content-hash names), so it caches for a day; a failed read (pages 0)
+    does not."""
+    if not doc_id or not all(c in "0123456789abcdef" for c in doc_id):
+        raise HTTPException(status_code=400, detail="invalid document id")
+    ws = resolve_ws(request)
+    scope_page_id = share_scope_page(request)
+    if scope_page_id is not None and not _share_can_read_upload(ws, scope_page_id, f"{doc_id}.pdf"):
+        raise HTTPException(status_code=403, detail="not accessible via this share link")
+    info = pdf_meta.ensure(ws, doc_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail="not found")
+    cache = "private, max-age=86400" if info["pages"] else "no-store"
+    return JSONResponse(info, headers={"Cache-Control": cache})
 
 
 @router.get("/uploads/{filename}")
