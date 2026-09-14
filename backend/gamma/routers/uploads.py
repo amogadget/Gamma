@@ -11,7 +11,6 @@ from ..db import connect_pages_db, ws_uploads_dir
 from ..server_settings import check_upload_allowed, workspace_quota
 from ..storage import (
     ALLOWED_IMAGE_TYPES,
-    FILE_MEDIA_TYPES,
     IMAGE_EXTENSIONS,
     INLINE_EXTENSIONS,
     SANDBOXED_EXTENSIONS,
@@ -21,6 +20,7 @@ from ..storage import (
     is_pdf,
     store_file,
     store_pdf,
+    upload_extension,
     upload_media_type,
 )
 
@@ -78,23 +78,23 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
 
 @router.post("/upload-file")
 async def upload_file(request: Request, file: UploadFile = File(...)):
-    """Store any allowed file (md/txt/csv/json/tex/bib/py/ipynb/html/docx/
-    xlsx/pptx/zip, plus images and PDFs) under its content hash for a block
-    to reference as ``[name](/api/uploads/<hash>.<ext>)``. The extension
-    comes from the uploaded name (images: from the declared type, same path
-    as /upload-image). → ``{url, name, size, already_existed}``."""
+    """Store any file except executables (``storage.BLOCKED_EXTENSIONS``)
+    under its content hash for a block to reference as
+    ``[name](/api/uploads/<hash>.<ext>)`` — a file block. The extension comes
+    from the uploaded name (``.bin`` when it has none; images: from the
+    declared type, same path as /upload-image). A PDF stored this way gets
+    the same ``<hash>.pdf`` name the PDF ingest mints, so it can later be
+    opened as a document page without a second upload (``POST
+    /blocks/by-doc/{hash}``). → ``{url, name, size, already_existed}``."""
     ws = require_ws_writer(request)
     name = display_filename(file.filename, "file")
-    ext = ""
     if file.content_type in ALLOWED_IMAGE_TYPES:
         ext = IMAGE_EXTENSIONS[file.content_type]
     else:
-        dot = name.rfind(".")
-        ext = name[dot:].lower() if dot > 0 else ""
-        if ext != ".pdf" and ext not in FILE_MEDIA_TYPES:
-            allowed = ", ".join(sorted(e.lstrip(".") for e in FILE_MEDIA_TYPES))
-            raise HTTPException(status_code=400,
-                                detail=f"unsupported file type {ext or '(none)'} — allowed: pdf, images, {allowed}")
+        try:
+            ext = upload_extension(name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
     contents = await file.read()
     if ext == ".pdf" and not is_pdf(contents):
         raise HTTPException(status_code=400, detail="not a valid PDF (missing %PDF header)")

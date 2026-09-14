@@ -1,6 +1,7 @@
 """Uploaded-file helpers: media types, content-hash storage, lookup, orphan
 cleanup."""
 
+import re
 import time
 import hashlib
 import urllib.parse
@@ -13,25 +14,59 @@ ALLOWED_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp", "im
 IMAGE_EXTENSIONS = {"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp", "image/svg+xml": ".svg"}
 IMAGE_MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml"}
 
-# Generic (non-image, non-PDF) attachments blocks may reference as
-# ``[name](/api/uploads/<hash>.<ext>)`` chips. Extension → media type; the
-# extension allowlist for POST /api/upload-file is this table's keys plus the
-# image types above and ``.pdf``.
+# Generic (non-image, non-PDF) files blocks reference as
+# ``[name](/api/uploads/<hash>.<ext>)`` file blocks. POST /api/upload-file
+# takes ANY extension except BLOCKED_EXTENSIONS (a lab shares notebooks, data
+# files, packages — an allowlist can never be complete); this table only picks
+# a better media type than ``application/octet-stream`` for the common ones.
+# Everything outside INLINE_EXTENSIONS is served as a download anyway.
 FILE_MEDIA_TYPES = {
     ".md": "text/markdown; charset=utf-8",
     ".txt": "text/plain; charset=utf-8",
     ".csv": "text/csv; charset=utf-8",
     ".json": "application/json",
+    ".yaml": "application/yaml",
+    ".yml": "application/yaml",
+    ".toml": "application/toml",
+    ".xml": "application/xml",
     ".tex": "application/x-tex",
     ".bib": "application/x-bibtex",
     ".py": "text/x-python; charset=utf-8",
     ".ipynb": "application/x-ipynb+json",
+    ".nb": "application/mathematica",
+    ".m": "text/plain; charset=utf-8",
     ".html": "text/html; charset=utf-8",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".doc": "application/msword",
+    ".xls": "application/vnd.ms-excel",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".ods": "application/vnd.oasis.opendocument.spreadsheet",
     ".zip": "application/zip",
+    ".gz": "application/gzip",
+    ".tgz": "application/gzip",
+    ".tar": "application/x-tar",
+    ".7z": "application/x-7z-compressed",
+    ".whl": "application/zip",
+    ".h5": "application/x-hdf5",
+    ".hdf5": "application/x-hdf5",
+    ".mp4": "video/mp4",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
 }
+# Files an OS runs as code when opened — the one kind Gamma refuses to host,
+# on upload and (belt and braces) on serving. Archives and package formats
+# (zip, whl, dmg, deb …) are fine: a lab shares software.
+BLOCKED_EXTENSIONS = {
+    ".exe", ".com", ".scr", ".pif", ".bat", ".cmd", ".msi", ".msix", ".appx",
+    ".dll", ".cpl", ".sys", ".vbs", ".vbe", ".jse", ".wsf", ".wsh", ".hta",
+    ".ps1", ".psm1", ".reg", ".lnk", ".jar", ".app",
+}
+# A stored extension is ``.`` + 1-12 lowercase letters/digits; a name with
+# none (or an odd one) is stored as ``.bin``.
+EXTENSION_RE = re.compile(r"^\.[a-z0-9]{1,12}$")
 # Served inline (rendered by the browser on navigation); everything else gets
 # ``Content-Disposition: attachment``. An SVG opened as a top-level document
 # would run its inline <script> in this origin (stored XSS), so it downloads
@@ -44,10 +79,25 @@ SANDBOXED_EXTENSIONS = {".svg", ".html"}
 
 def upload_media_type(ext: str) -> str | None:
     """Media type for a stored upload's extension (lowercase, with the dot),
-    or None when Gamma never stores that kind of file."""
+    or None when Gamma never stores that kind of file (blocked, malformed).
+    Unknown but well-formed extensions are ``application/octet-stream``."""
     if ext == ".pdf":
         return "application/pdf"
-    return IMAGE_MEDIA_TYPES.get(ext) or FILE_MEDIA_TYPES.get(ext)
+    if ext in BLOCKED_EXTENSIONS or not EXTENSION_RE.match(ext):
+        return None
+    return IMAGE_MEDIA_TYPES.get(ext) or FILE_MEDIA_TYPES.get(ext) or "application/octet-stream"
+
+
+def upload_extension(name: str) -> str:
+    """The stored extension for an uploaded file name: its last suffix,
+    lowercased (``Data.CSV`` → ``.csv``; ``pkg.tar.gz`` → ``.gz``, the full
+    name stays in the link text), ``.bin`` when there is none or it is
+    malformed. Raises ValueError for BLOCKED_EXTENSIONS."""
+    dot = name.rfind(".")
+    ext = name[dot:].lower() if dot > 0 else ""
+    if ext in BLOCKED_EXTENSIONS:
+        raise ValueError(f"{ext} files are not accepted (executable)")
+    return ext if EXTENSION_RE.match(ext) else ".bin"
 
 
 # Upload filenames are the content sha256 truncated to this many hex chars

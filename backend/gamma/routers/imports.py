@@ -21,7 +21,7 @@ from ..foldertags import clean_path, parse_tags
 from ..logbuf import log
 from ..ops import note_reload
 from ..markdown_import import MAX_MARKDOWN_BYTES, fm_text, md_to_blocks, parse_frontmatter
-from ..markdown_zip_import import import_markdown_zip, insert_note_page
+from ..markdown_zip_import import import_markdown_zip, insert_note_page, markdown_page
 from ..storage import content_digest, display_filename, is_pdf, store_pdf
 from ..logseq_import import (
     edn_highlight_position,
@@ -158,34 +158,10 @@ async def import_markdown(request: Request, file: UploadFile = File(...),
     """
     ws = require_ws(request, write=True)
     raw = await file.read(MAX_MARKDOWN_BYTES + 1)
-    if len(raw) > MAX_MARKDOWN_BYTES:
-        raise HTTPException(status_code=413, detail="Markdown file exceeds 5 MB")
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="Markdown file must be UTF-8")
-
     original = display_filename(file.filename, "note.md")
-    fields, body = parse_frontmatter(text)
-    fallback = re.sub(r"\.(?:md|markdown)$", "", original, flags=re.I).strip() or "Untitled note"
-    title = (fm_text(fields, "title") or fallback).strip()[:500]
-    tree = md_to_blocks(body)
-    # The upload's folder, then a front-matter `folder:` below it (what
-    # Gamma's own Markdown export writes) — same rule as the zip import.
-    clean_folder = clean_path("/".join(p for p in (folder, fm_text(fields, "folder")) if p))
-    props = {"original_filename": original, "markdown_import": content_digest(raw)}
-    if clean_folder:
-        props["folder"] = clean_folder
-
-    now = page_now()
-    page_id = secrets.token_urlsafe(9)
     with connect_pages_db(ws) as conn:
-        imported = insert_note_page(conn, page_id, title, props, tree, now)
-        conn.commit()
-
-    return {"ok": True, "block_id": page_id, "title": title,
-            "original_filename": original, "imported": imported,
-            "folder": clean_folder}
+        result = markdown_page(conn, raw, original, folder)
+    return {"ok": True, **result}
 
 
 @router.post("/import/markdown-zip")

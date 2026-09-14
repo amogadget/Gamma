@@ -183,7 +183,7 @@ def _upload_file(client, name, data, ctype="application/octet-stream"):
     return client.post("/api/upload-file", files={"file": (name, io.BytesIO(data), ctype)})
 
 
-def test_upload_file_allowlist(guest):
+def test_upload_file_takes_anything_but_executables(guest):
     r = _upload_file(guest, "notes.docx", b"PK\x03\x04docx-ish")
     assert r.status_code == 200, r.text
     body = r.json()
@@ -197,11 +197,53 @@ def test_upload_file_allowlist(guest):
     # images route through the image path (extension from the declared type)
     r = _upload_file(guest, "shot", b"\x89PNG fake", "image/png")
     assert r.status_code == 200 and r.json()["url"].endswith(".png")
-    # denied
-    for name in ("run.exe", "lib.dll", "script.sh", "noext", "page.php"):
+    # lab files: unknown extensions are fine (served as octet-stream downloads),
+    # a compound suffix keeps its last part, no extension becomes .bin
+    for name, ext in (("sim.nb", ".nb"), ("run.sh", ".sh"), ("fit.mat", ".mat"), ("pkg.tar.gz", ".gz"),
+                      ("Makefile", ".bin"), ("weird.a-b", ".bin")):
+        r = _upload_file(guest, name, b"whatever " + name.encode())
+        assert r.status_code == 200 and r.json()["url"].endswith(ext) and r.json()["name"] == name, name
+    r = guest.get(_upload_file(guest, "fit.mat", b"whatever fit.mat").json()["url"])
+    assert r.status_code == 200 and r.headers["content-type"] == "application/octet-stream"
+    assert r.headers["content-disposition"].startswith("attachment;")
+    # executables are the one refusal
+    for name in ("run.exe", "lib.dll", "setup.msi", "go.bat", "x.ps1", "Run.EXE"):
         r = _upload_file(guest, name, b"whatever")
-        assert r.status_code == 400, name
+        assert r.status_code == 400 and "executable" in r.json()["detail"], name
     assert _upload_file(guest, "fake.pdf", b"not a pdf").status_code == 400
+
+
+def test_pdf_file_block_promotes_to_a_document_page(guest):
+    """A PDF dropped into a block (upload-file) is stored under the hash the
+    PDF ingest uses, so by-doc on that hash opens it as a document page
+    without a second upload; by-docs reports which hashes have pages."""
+    data = PDF_BYTES + b"file-block"
+    up = _upload_file(guest, "Supplement.pdf", data, "application/pdf").json()
+    doc_id = up["url"].rsplit("/", 1)[-1][:-4]
+    assert up["url"] == f"/api/uploads/{doc_id}.pdf"
+    assert guest.get(f"/api/blocks/by-doc/{doc_id}").status_code == 404
+    other = _upload_pdf(guest, PDF_BYTES + b"other")
+    r = guest.post("/api/pages/by-docs", json={"doc_ids": [doc_id, other, "", "nope"]})
+    assert r.status_code == 200 and r.json() == {"pages": {}}
+    # promote: same hash, no re-upload, filed in the asking page's folder
+    r = guest.post(f"/api/blocks/by-doc/{doc_id}", json={
+        "default_title": "", "source_url": up["url"], "original_filename": "Supplement.pdf",
+        "folder": "Projects/Rydberg"})
+    assert r.status_code == 200, r.text
+    page = r.json()
+    assert page["parent_id"] == "root" and page["content"] == "Supplement.pdf"
+    assert page["properties"]["doc_id"] == doc_id and page["properties"]["folder"] == "Projects/Rydberg"
+    assert page["properties"]["auto_title"] == "Supplement.pdf"
+    # a second promotion finds the page; the folder of an existing page is left alone
+    again = guest.post(f"/api/blocks/by-doc/{doc_id}", json={"default_title": "", "folder": "Elsewhere"}).json()
+    assert again["id"] == page["id"] and again["properties"]["folder"] == "Projects/Rydberg"
+    r = guest.post("/api/pages/by-docs", json={"doc_ids": [doc_id, other]})
+    assert r.json() == {"pages": {doc_id: {"id": page["id"], "title": "Supplement.pdf"}}}
+    # the same file referenced by a file block AND carried by a page survives either going away
+    ref = guest.post("/api/blocks", json={"parent_id": page["id"], "content": f"[Supplement.pdf]({up['url']})"}).json()
+    removed = guest.delete(f"/api/blocks/{ref['id']}").json()["removed_uploads"]
+    assert f"{doc_id}.pdf" not in removed and f"{other}.pdf" in removed  # the never-attached one was the orphan
+    assert (ws_uploads_dir(workspace_of("guest")) / f"{doc_id}.pdf").exists()
 
 
 def test_uploaded_files_are_served_with_the_right_headers(guest):
@@ -247,6 +289,44 @@ def test_file_chips_keep_files_alive_and_shares_can_read_them(bob_page):
     assert dave.get(other, params={"share": token}).status_code == 403
     assert anon.get(url, params={"share": token}).status_code == 401  # audience: users
     bob.delete(f"/api/blocks/{chip['id']}")
+
+
+def test_markdown_file_block_promotes_to_a_note_page(guest):
+    """A .md dropped into a block is a file; POST /pages/from-file turns the
+    stored upload into a note page (same importer as /import/markdown),
+    once — by-docs then reports the page for the file's hash. Editing the
+    page never touches the file."""
+    md = b"---\ntitle: Squeezing notes\n---\n# Setup\n\n- first point\n  - nested\n- second point\n"
+    up = _upload_file(guest, "Qubit controlled squeezing (2).md", md, "text/markdown").json()
+    filename = up["url"].rsplit("/", 1)[-1]
+    stem = filename[:-3]
+    assert guest.post("/api/pages/by-docs", json={"doc_ids": [stem]}).json() == {"pages": {}}
+    r = guest.post("/api/pages/from-file", json={"filename": filename, "folder": "Projects/Rydberg",
+                                                 "original": "Qubit controlled squeezing (2).md"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    page = body["page"]
+    assert body["created"] is True and body["imported"] == 4
+    assert page["parent_id"] == "root" and page["content"] == "Squeezing notes"
+    assert page["properties"]["folder"] == "Projects/Rydberg"
+    assert page["properties"]["markdown_import"] == stem and "doc_id" not in page["properties"]
+    tree = guest.get(f"/api/blocks/{page['id']}/subtree").json()["block"]["children"]
+    assert [b["content"] for b in tree] == ["# Setup", "- first point", "- second point"] or tree[0]["content"].startswith("#")
+    # the lookup now names the page, and a second promotion returns it unchanged
+    assert guest.post("/api/pages/by-docs", json={"doc_ids": [stem]}).json() == {"pages": {stem: {"id": page["id"], "title": "Squeezing notes"}}}
+    again = guest.post("/api/pages/from-file", json={"filename": filename, "folder": "Elsewhere"}).json()
+    assert again["created"] is False and again["page"]["id"] == page["id"]
+    # editing the page leaves the stored file byte-identical
+    guest.put(f"/api/blocks/{tree[0]['id']}", json={"content": "changed"})
+    assert guest.get(up["url"]).content == md
+    # only stored markdown names qualify
+    assert guest.post("/api/pages/from-file", json={"filename": "notes.md"}).status_code == 400
+    assert guest.post("/api/pages/from-file", json={"filename": f"{stem}.pdf"}).status_code == 400
+    assert guest.post("/api/pages/from-file", json={"filename": "a" * 24 + ".md"}).status_code == 404
+    # a title-less file is named after the chip's display name, minus the extension
+    up2 = _upload_file(guest, "Plain notes.md", b"just text\n", "text/markdown").json()
+    made = guest.post("/api/pages/from-file", json={"filename": up2["url"].rsplit("/", 1)[-1], "original": "Plain notes.md"}).json()
+    assert made["page"]["content"] == "Plain notes"
 
 
 # --- root listing preview ---------------------------------------------------------------

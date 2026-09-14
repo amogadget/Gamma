@@ -14,6 +14,7 @@ import {
   useTextScale,
 } from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
+import { FileChipContext, forgetDocPages, rememberDocPage, uploadFilesAsLines } from "./fileChip";
 import { CardLabels, KindToggle, ListFindBox, PageCard, ViewToggle } from "./fileBrowser";
 import ChatDock from "./chatDock";
 import SearchPanel from "./search";
@@ -4156,6 +4157,19 @@ export default function App() {
   // as opening a new PDF, then bound to THIS page via POST
   // /pages/{id}/attachment — no new page is created.
   const [attachUrl, setAttachUrl] = useState("");
+  // The metadata popover under its header button. Fixed positioning so it
+  // floats above the window stack instead of being clipped by the notes
+  // window / drawn under the chat below it.
+  const metaBtnRef = useRef(null);
+  function openMetaPopover(force = false) {
+    const opening = force || openPopover !== "meta";
+    if (opening) {
+      const r = metaBtnRef.current?.getBoundingClientRect();
+      if (r) setMetaPopPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+      setSourceDraft(inputUrl);
+    }
+    setOpenPopover(opening ? "meta" : null);
+  }
   async function attachPdfToPage({ file, url }) {
     const pageId = focusedBlockId;
     if (!pageId || shareMode || pageAttach || (!file && !url)) return;
@@ -4222,6 +4236,68 @@ export default function App() {
         }
       },
     });
+  }
+
+  // "Open as page" on a file chip, filed in this page's first folder, then
+  // opened. A PDF: the file is already stored under its hash, so this is the
+  // lookup-or-create BY ATTACHMENT — a root page carrying it (the metadata
+  // fetch starts when the page opens). A markdown file: a note page imported
+  // from the stored file (a copy; the file stays). The chip on this page
+  // shows "open page" from now on (rememberDocPage).
+  async function promoteFile(hash, ext, name) {
+    if (readOnly || shareMode || !hash) return;
+    const post = (path, body) => apiJson(`${API}${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    try {
+      let page;
+      if (ext === "pdf") {
+        page = await post(`/blocks/by-doc/${encodeURIComponent(hash)}`, {
+          default_title: "", source_url: `/api/uploads/${hash}.pdf`,
+          original_filename: name || "", folder: pageFolders[0] || "",
+        });
+      } else {
+        page = (await post("/pages/from-file", {
+          filename: `${hash}.${ext}`, original: name || "", folder: pageFolders[0] || "",
+        })).page;
+      }
+      rememberDocPage(hash, { id: page.id, title: page.content });
+      fetchHomeBlocks();
+      await openBlock(page.id, { pushNav: true });
+    } catch (err) {
+      setStatus(`Could not open as page: ${err.message}`);
+    }
+  }
+  // The file chips reach App through a context: navigation and promotion
+  // need openBlock and the page's folder. The value stays identity-stable
+  // (the ref) so the memoized markdown never re-renders for it.
+  const fileChipActionsRef = useRef({});
+  fileChipActionsRef.current = { openBlock, promoteFile };
+  const fileChipCtx = useMemo(() => ({
+    readOnly,
+    canOpen: !shareMode,
+    openPage: (id) => fileChipActionsRef.current.openBlock(id, { pushNav: true }),
+    promoteFile: (hash, ext, name) => fileChipActionsRef.current.promoteFile(hash, ext, name),
+  }), [readOnly, shareMode]);
+
+  // Files dropped on the open page outside any block row: one new block per
+  // file at the end of the page (images inline, the rest as file chips). The
+  // rows take drops on themselves; the page's DOCUMENT comes from the header.
+  async function appendFileBlocks(files) {
+    const pageId = focusedBlockId;
+    const lines = await uploadFilesAsLines(files);
+    if (focusedBlockIdRef.current !== pageId) return; // navigated away meanwhile
+    if (!lines.length) { setStatus("Nothing added — the upload was refused."); return; }
+    setBlocks((prev) => {
+      let out = prev;
+      for (const line of lines) {
+        const { blocks: next, newId } = addRootBlock(out);
+        out = updateBlockTree(next, newId, (b) => ({ ...b, content: line, editMode: false }));
+      }
+      return out;
+    });
+    refreshQuota();
+    setStatus(`Added ${lines.length} file${lines.length === 1 ? "" : "s"}.`);
   }
 
   async function resolveShare(token) {
@@ -4296,6 +4372,7 @@ export default function App() {
     // Plain navigation (library, search, tabs, home) never pushes.
     if (opts?.pushNav && blockId !== focusedBlockId) pushNav();
     leaveCurrentPage();
+    forgetDocPages(); // the file chips' "which page carries this PDF" cache
     setLoading(true);
     setStatus("Opening...");
     try {
@@ -6052,15 +6129,15 @@ export default function App() {
                     <button
                       className={`pageActionBtn ${pageAttach ? "active" : ""}`}
                       title={pageAttach
-                        ? `Attachment: ${pageAttach.name || defaultPageTitle(pageAttach)}`
-                        : "Attach a PDF to this page — by URL, arXiv id or DOI, or upload a file"}
-                      aria-label={pageAttach ? "Attachment" : "Attach PDF"}
+                        ? `Document: ${pageAttach.name || defaultPageTitle(pageAttach)}`
+                        : "Attach a PDF as this page's document (URL, arXiv id, DOI, or upload) — it gets the viewer, highlights and metadata. Other files go into blocks."}
+                      aria-label={pageAttach ? "Document" : "Attach document"}
                       disabled={loading}
                       onClick={() => setOpenPopover((p) => (p === "attach" ? null : "attach"))}
                     ><PaperclipIcon size={15} /></button>
                     {openPopover === "attach" && pageAttach ? (
                       <div className="popover addPopover attachPopover">
-                        <div className="popoverTitle">Attachment</div>
+                        <div className="popoverTitle">Document</div>
                         <div className="popoverHint attachFileName" title={attachmentSource(pageAttach)}>
                           <PaperclipIcon size={13} /> {pageAttach.name || defaultPageTitle(pageAttach)}
                         </div>
@@ -6083,7 +6160,7 @@ export default function App() {
                       </div>
                     ) : openPopover === "attach" ? (
                       <div className="popover addPopover attachPopover">
-                        <div className="popoverTitle">Attach a PDF</div>
+                        <div className="popoverTitle">Attach a document</div>
                         <input
                           autoFocus
                           className="searchInput"
@@ -6112,25 +6189,15 @@ export default function App() {
                 {pageAttach || pageMeta ? (
                   <span data-popover="meta" className="popoverAnchor">
                     <button
+                      ref={metaBtnRef}
                       className="pageActionBtn"
                       title={metaBusy
                         ? "Fetching paper metadata…"
                         : metaSrc?.warn
                           ? metaSrc.hint
-                          : "Paper metadata (authors, venue, DOI, source file…)"}
+                          : "Edit metadata (authors, venue, DOI, source file…)"}
                       aria-label="Paper metadata"
-                      onClick={(e) => {
-                        const opening = openPopover !== "meta";
-                        if (opening) {
-                          // Fixed positioning so the popover floats above the
-                          // window stack instead of being clipped by the
-                          // notes window / drawn under the chat below it.
-                          const r = e.currentTarget.getBoundingClientRect();
-                          setMetaPopPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
-                          setSourceDraft(inputUrl);
-                        }
-                        setOpenPopover(opening ? "meta" : null);
-                      }}
+                      onClick={() => openMetaPopover()}
                     >
                       {/* Same busy affordance as the translate button: the
                           icon becomes a spinner while a fetch is running. */}
@@ -7099,7 +7166,9 @@ export default function App() {
                 };
                 return (
                   <>
-                    <BlockTree blocks={blocks} readOnly={readOnly} rowProps={rowProps} />
+                    <FileChipContext.Provider value={fileChipCtx}>
+                      <BlockTree blocks={blocks} readOnly={readOnly} rowProps={rowProps} />
+                    </FileChipContext.Provider>
                     {notesTail}
                     <BlockDropIndicator target={dropTarget} />
                   </>
@@ -7754,14 +7823,14 @@ export default function App() {
     <div
       ref={appRef}
       className={`app layout-horizontal ${pseudoFullscreen ? "pseudoFullscreen" : ""} ${isPhone ? "phoneUI" : ""}`}
-      data-drop={homeMode ? "upload" : !pageAttach && !readOnly ? "attach" : undefined}
+      data-drop={homeMode ? "upload" : focusedBlockId && !readOnly ? "files" : undefined}
       onDragOver={shareMode ? undefined : (e) => {
         if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes("Files")) return;
         e.preventDefault();
         // The overlay only where a drop does something: the library imports
-        // files, a page without an attachment takes a PDF; block rows take
+        // files, an editable page takes files as blocks; block rows take
         // files themselves.
-        const dropHere = (homeMode || (!pageAttach && !readOnly)) && !e.target.closest(".blockRowWrap");
+        const dropHere = (homeMode || (focusedBlockId && !readOnly)) && !e.target.closest(".blockRowWrap");
         appRef.current?.classList.toggle("dragOver", dropHere);
       }}
       onDragLeave={shareMode ? undefined : (e) => {
@@ -7780,18 +7849,20 @@ export default function App() {
           collectEntryFiles(entries).then((found) => uploadFiles(found));
           return;
         }
-        const files = Array.from(e.dataTransfer.files || [])
-          .filter((file) => isPdfFile(file) || isMarkdownFile(file));
-        if (!files.length) return;
-        // Dropped on the open page: a single PDF becomes ITS attachment when
-        // it has none (the block rows take other files); the library view
-        // still imports drops as new pages.
-        if (focusedBlockId && !pageAttach && !readOnly && files.length === 1 && isPdfFile(files[0])) {
+        const dropped = Array.from(e.dataTransfer.files || []);
+        if (!dropped.length) return;
+        if (!homeMode) {
+          // Dropped on the open page (outside a row): every file becomes a
+          // block at the end of the page, PDFs included — the page's
+          // document is attached from the header, never by a drop.
+          if (!focusedBlockId || readOnly) return;
           e.preventDefault();
-          attachPdfToPage({ file: files[0] });
+          appendFileBlocks(dropped);
           return;
         }
-        if (!homeMode) return;
+        // The library imports PDFs and markdown as new pages.
+        const files = dropped.filter((file) => isPdfFile(file) || isMarkdownFile(file));
+        if (!files.length) return;
         e.preventDefault();
         uploadFiles(files);
       }}

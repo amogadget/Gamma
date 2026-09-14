@@ -1421,8 +1421,8 @@ body {
   }
 }
 
-/* --- drag-and-drop overlay: the library imports files, a page without an
-   attachment takes a PDF (data-drop on .app says which) --- */
+/* --- drag-and-drop overlay: the library imports files, an open page takes
+   files as blocks (data-drop on .app says which) --- */
 .app.dragOver::after {
   content: "Drop files to import";
   position: fixed;
@@ -1439,8 +1439,8 @@ body {
   z-index: 9999;
 }
 
-.app.dragOver[data-drop="attach"]::after {
-  content: "Drop PDF to attach to this page";
+.app.dragOver[data-drop="files"]::after {
+  content: "Drop files into this page";
 }
 
 /* --- inline-editable title --- */
@@ -4429,12 +4429,68 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .uiBtn.dangerBtn:not(.primary) { color: var(--danger); border-color: var(--danger-border); }
 .uiBtn.dangerBtn:not(.primary):hover:not(:disabled) { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
 
-/* Page header "Attach a PDF" popover (docs/dev/block_centric.md, stage 1) and
-   the file chip a dropped non-image file renders as. */
+/* Page header "Attach a document" popover (docs/dev/block_centric.md). */
 .attachPopover { min-width: 280px; }
 .attachPopover .popoverTitle { margin-bottom: 6px; }
-.fileChip svg { color: var(--text-muted); }
 
+/* The file chip (fileChip.jsx): an upload linked from a block, drawn as a
+   small card so it stands off the note text — surface background, a real
+   border, the kind's icon in a tinted square. Inline so it sits in a
+   sentence; the name opens/downloads, the arrow downloads, the rest is in
+   the right-click menu. */
+.fileChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin: 1px 0;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  background: var(--bg-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  vertical-align: -6px;
+  line-height: 1.4;
+  font-size: 0.95em;
+}
+.fileChip:hover { border-color: var(--border-hover); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14); }
+.fileChipMain {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 380px;
+  padding: 4px 8px 4px 5px;
+  color: var(--text-primary);
+  font-weight: 500;
+  text-decoration: none;
+}
+.fileChipMain:hover { background: var(--bg-hover); border-radius: 6px 0 0 6px; }
+.fileChipIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  flex: none;
+  background: var(--accent-bg-light);
+  color: var(--accent);
+}
+.fileChipIcon-pdf { background: rgba(208, 80, 80, 0.12); color: #d05050; }
+.fileChipBtn {
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 7px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: none;
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+.fileChipBtn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.fileChipBtn:last-child { border-radius: 0 6px 6px 0; }
+.fileChipOpen { color: var(--accent); }
 
 /* --- presence (collab.js): who is on the page, and where ------------------ */
 :root {

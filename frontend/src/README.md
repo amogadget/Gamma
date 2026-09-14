@@ -13,6 +13,8 @@ settings.jsx        settings dialog and its papers/AI/search/diagnostic panes
 settingsWorkspace.jsx  Settings → Members & sharing: this workspace, members/roles, all my workspaces
 settingsBackups.jsx    Settings → Advanced → Server backups (admins): snapshot, download, delete
 blockTree.jsx       the Logseq outliner — block rows, [[refs]], drag, markdown
+fileChip.jsx        the file chip a `[name](/api/uploads/…)` link renders as; right-click
+                    menu: download, and for a PDF "Open page" / "Open as page" (FileChipContext)
 logseqPdfModel.js   pure tree ops (insert/indent/outdent/flatten/cycle-check)
 pdfViewer.jsx       custom pdf.js viewer — pages, highlights, links, text search; exports COLORS
 search.jsx          workspace search (Ctrl+F): SearchPanel popover, result groups

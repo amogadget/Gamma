@@ -123,6 +123,13 @@ The scenarios live in `tests/e2e/scenarios/`:
 - `pdf.mjs`: upload + page by attachment, the viewer's text layer, a
   highlight from a text selection (overlay, quote row, persisted position),
   the find bar hitting page 2, the library card.
+- `files.mjs`: files dropped on a block row / the page body become file
+  chips (a `dropFiles` helper builds a real DataTransfer; the paste step
+  builds a `ClipboardEvent` in the page, since Playwright's `dispatchEvent`
+  cannot), a PDF chip's right-click "Open as page" makes the document page
+  in the project's folder and the chip gets an open-page button, a markdown
+  chip's "Open as page" imports a note page and leaves the file untouched,
+  the upload endpoint's lab-file / executable rule.
 - `collab.mjs`: two accounts in a shared workspace: presence, live ops, edits
   to different blocks, same-block last-writer-wins, undo after a remote edit,
   rename propagation, edits made offline replaying, remote delete, a

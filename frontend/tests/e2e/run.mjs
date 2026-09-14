@@ -16,6 +16,7 @@ import {
 } from "./harness.mjs";
 import { noteScenarios } from "./scenarios/notes.mjs";
 import { pdfScenarios } from "./scenarios/pdf.mjs";
+import { fileScenarios } from "./scenarios/files.mjs";
 import { collabScenarios } from "./scenarios/collab.mjs";
 import { shareScenarios } from "./scenarios/share.mjs";
 import { settingsScenarios } from "./scenarios/settings.mjs";
@@ -75,6 +76,7 @@ try {
   await settingsScenarios(env);
   const notes = await noteScenarios(env);
   const pdf = await pdfScenarios(env, notes);
+  await fileScenarios(env);
   await collabScenarios(env);
   await shareScenarios(env, { ...notes, ...pdf });
 } catch (e) {

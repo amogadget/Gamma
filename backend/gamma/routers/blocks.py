@@ -55,6 +55,7 @@ class UBByDocCreate(BaseModel):
     default_title: str
     source_url: str | None = None
     original_filename: str | None = None
+    folder: str | None = None       # files a NEWLY created page (ignored when the page exists)
 
 
 class UBPutChildrenRequest(BaseModel):
@@ -194,11 +195,12 @@ async def ub_get_by_doc(doc_id: str, request: Request):
 @router.post("/blocks/by-doc/{doc_id}")
 async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate, request: Request):
     # The page carrying this PDF, created when absent (PDF ingest from the
-    # app and the extension) — a write, so it requires a real session (never
-    # the ?share= read principal).
+    # app and the extension, and "Open as document" on a PDF file block) — a
+    # write, so it requires a real session (never the ?share= read principal).
     with connect_pages_db(require_ws(request, write=True)) as conn:
         return get_or_create_doc_page(
-            conn, doc_id, payload.default_title, payload.source_url, payload.original_filename)
+            conn, doc_id, payload.default_title, payload.source_url, payload.original_filename,
+            folder=payload.folder or "")
 
 
 @router.get("/blocks/{block_id}/children")

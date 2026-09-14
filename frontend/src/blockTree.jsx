@@ -10,7 +10,8 @@ import rehypeRaw from "rehype-raw";
 import { withLegacyAccessors } from "./logseqPdfModel";
 import { COLORS } from "./pdfViewer";
 import { handleMarkdownCopy } from "./widgets";
-import { LinkIcon, PaperclipIcon } from "./icons";
+import { LinkIcon } from "./icons";
+import { FileChip, parseUploadUrl, postFile, uploadFilesAsLines } from "./fileChip";
 import {
   envCompletions, findMathAtCursor, insertionFor, latexCompletions,
   LatexAcPopup, MathLivePreview, mathTabJump,
@@ -21,7 +22,7 @@ import { filterSlashCommands, SlashMenuPopup } from "./slashMenu";
 import { remarkCallouts } from "./callouts";
 import { PeerChips } from "./presence";
 import { ContextMenu, MenuItem } from "./menus";
-import { API, apiJson, assetUrl, copyText, withShare, withWorkspace } from "./utils";
+import { API, apiJson, assetUrl, copyText, withWorkspace } from "./utils";
 import { CopyIcon, ExportIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "./icons";
 import {
   applyImageEdit, applyTableEdit, formatTables, htmlTableToMarkdown,
@@ -177,45 +178,16 @@ function toggleTaskMarker(content, idx, checked) {
   );
 }
 
-// A same-origin upload linked from a block (`[name](/api/uploads/<hash>.ext)`
-// — what a dropped non-image file becomes) renders as a file chip: no
-// preview fetch, opens/downloads in a new tab.
-function FileChip({ href, text }) {
-  const name = (text || "").trim() || decodeURIComponent((href.split("/").pop() || "file").split("?")[0]);
-  return (
-    <a
-      className="linkChip fileChip"
-      href={assetUrl(href)}
-      target="_blank"
-      rel="noreferrer"
-      title={name}
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <PaperclipIcon size={12} strokeWidth={2.2} />
-      <span className="linkChipText">{name}</span>
-    </a>
-  );
-}
+// The file chip (`[name](/api/uploads/<hash>.ext)`, what a dropped file
+// becomes) and the upload helpers live in fileChip.jsx.
 
-// Multipart POST of one file → the JSON reply, or null on refusal/failure
-// (server-side allowlists; callers treat null as "nothing inserted").
-async function postFile(endpoint, file) {
-  try {
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch(withShare(endpoint), { method: "POST", body: form, credentials: "include" });
-    return res.ok ? await res.json() : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-// POST /api/upload-file → {url, name} | null: any non-image file a block
-// accepts (drop).
-async function uploadOtherFile(file) {
-  const data = file ? await postFile("/api/upload-file", file) : null;
-  return data?.url ? { url: data.url, name: data.name || file.name } : null;
+// The files on a clipboard (a screenshot, files copied in the file manager):
+// what a paste uploads instead of inserting text.
+function clipboardFiles(e) {
+  return Array.from(e.clipboardData?.items || [])
+    .filter((it) => it.kind === "file")
+    .map((it) => it.getAsFile())
+    .filter(Boolean);
 }
 
 // POST /api/upload-image → url | null; shared by the block row (drop, paste,
@@ -315,20 +287,19 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
     });
   }
 
-  // Paste while editing: an image uploads and inserts at the caret, a
-  // clipboard that IS one html table becomes a markdown table; plain text
-  // stays CM's native paste.
+  // Paste while editing: files upload and insert at the caret (images
+  // inline, anything else — a PDF copied from the file manager — as a file
+  // chip), a clipboard that IS one html table becomes a markdown table;
+  // plain text stays CM's native paste.
   async function handlePaste(e) {
     const ta = editorRef.current;
     if (!ta) return;
-    const file = Array.from(e.clipboardData?.items || [])
-      .find((it) => it.type?.startsWith("image/"))?.getAsFile();
-    if (file) {
+    const files = clipboardFiles(e);
+    if (files.length) {
       e.preventDefault();
       const start = ta.selectionStart, end = ta.selectionEnd;
-      const url = await uploadImageFile(file);
-      if (!url) return;
-      const md = `![](${url})`;
+      const md = (await uploadFilesAsLines(files)).join("\n");
+      if (!md) return;
       ta.view?.dispatch({
         changes: { from: start, to: end, insert: md },
         selection: { anchor: start + md.length },
@@ -552,7 +523,7 @@ const BlockMarkdown = React.memo(function BlockMarkdown({ content, blockId, refL
           if (/^https?:\/\//i.test(href || "")) {
             return <LinkChip href={href} text={textOf(children)} />;
           }
-          if (/^\/api\/uploads\//.test(href || "") && !/\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(href)) {
+          if (parseUploadUrl(href) && !/\.(png|jpe?g|gif|webp|svg)(\?|$)/i.test(href)) {
             return <FileChip href={href} text={textOf(children)} />;
           }
           return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
@@ -931,9 +902,10 @@ function BlockRow({
   function handleFileDragOver(e) {
     if (!e.dataTransfer?.types || !Array.from(e.dataTransfer.types).includes("Files")) return;
     if (!e.dataTransfer?.items) return;
-    // Any file lands in the block: images inline, PDFs are the page's business
-    // (App attaches them), everything else becomes a file chip.
-    const hasFile = Array.from(e.dataTransfer.items).some((item) => item.kind === "file" && item.type !== "application/pdf");
+    // Any file lands in the block: images inline, everything else — PDFs too;
+    // a page's DOCUMENT is attached from the header, never by a drop — as a
+    // file chip.
+    const hasFile = Array.from(e.dataTransfer.items).some((item) => item.kind === "file");
     if (!hasFile) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
@@ -952,22 +924,18 @@ function BlockRow({
     } finally { uploadingRef.current = false; }
   }
 
+  // Every dropped file lands in this block, one line each: images inline,
+  // the rest as file chips (uploaded in order; a refused one is skipped).
   async function handleFileDrop(e) {
     e.preventDefault();
     e.stopPropagation();
     setFileDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (!file) return;
-    if (file.type?.startsWith("image/")) {
-      const url = await uploadImage(file);
-      if (url) onChangeText(block.id, (block.content || "") + "\n" + `![](${url})`);
-      return;
-    }
-    if (uploadingRef.current) return;
+    const files = Array.from(e.dataTransfer.files || []);
+    if (!files.length || uploadingRef.current) return;
     uploadingRef.current = true;
     try {
-      const up = await uploadOtherFile(file);
-      if (up) onChangeText(block.id, `${block.content || ""}${block.content ? "\n" : ""}[${up.name.replace(/[\[\]]/g, "")}](${up.url})`);
+      const lines = await uploadFilesAsLines(files);
+      if (lines.length) onChangeText(block.id, [block.content || "", ...lines].join("\n").replace(/^\n/, ""));
     } finally { uploadingRef.current = false; }
   }
 
@@ -1046,13 +1014,14 @@ function BlockRow({
     // "url" / "text": keep the pasted text as-is
   }
 
-  // Paste an image (screenshot) while editing → upload it and insert the
-  // markdown at the cursor. A single-URL text paste inserts the URL and opens
-  // the "Paste as" chooser. Other text falls through to the browser default.
+  // Paste files while editing (a screenshot, a PDF or any file copied from
+  // the file manager) → upload and insert the markdown at the cursor: images
+  // inline, the rest as file chips. A single-URL text paste inserts the URL
+  // and opens the "Paste as" chooser. Other text falls through to the
+  // browser default.
   async function handleEditorPaste(e) {
-    const file = Array.from(e.clipboardData?.items || [])
-      .find((it) => it.type?.startsWith("image/"))?.getAsFile();
-    if (!file) {
+    const files = clipboardFiles(e);
+    if (!files.length) {
       const ta = ref.current;
       // A clipboard that IS one html table (Excel / Sheets / a copied
       // rendered table) pastes as a markdown table.
@@ -1128,9 +1097,11 @@ function BlockRow({
     // Capture the cursor now — the upload takes a beat and focus may move.
     const start = ta ? ta.selectionStart : null;
     const end = ta ? ta.selectionEnd : null;
-    const url = await uploadImage(file);
-    if (!url) return;
-    const md = `![](${url})`;
+    if (uploadingRef.current) return;
+    uploadingRef.current = true;
+    let md;
+    try { md = (await uploadFilesAsLines(files)).join("\n"); } finally { uploadingRef.current = false; }
+    if (!md) return;
     const val = (ta ? ta.value : block.content) || "";
     if (start != null) {
       onChangeText(block.id, val.slice(0, start) + md + val.slice(end));

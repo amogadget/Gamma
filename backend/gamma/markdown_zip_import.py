@@ -56,10 +56,11 @@ from fastapi import HTTPException
 from fractional_indexing import generate_key_between, generate_n_keys_between
 
 from .blocks_store import last_child_position
+from .db import page_now
 from .foldertags import clean_path, clean_segment
 from .logbuf import log
 from .markdown_import import MAX_MARKDOWN_BYTES, fm_list, fm_text, md_to_blocks, parse_frontmatter
-from .storage import FILE_MEDIA_TYPES, IMAGE_MEDIA_TYPES, content_digest, is_pdf, store_file
+from .storage import IMAGE_MEDIA_TYPES, content_digest, is_pdf, store_file, upload_media_type
 
 MAX_PAGES = 2000
 MAX_TOTAL_BYTES = 1 << 30        # uncompressed, across nested zips
@@ -81,7 +82,14 @@ _LINK_RE = re.compile(r"(!?)\[((?:[^\[\]]|\[[^\]]*\])*)\]\(\s*(<[^>]*>|[^)\s]+)(
 # matches Gamma's own [[id]] refs, which simply resolve to nothing here.
 _WIKILINK_RE = re.compile(r"(!?)\[\[([^\[\]|#]*)((?:#[^\[\]|]*)*)(?:\\?\|([^\[\]]*))?\]\]")
 _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
-_ASSET_EXTS = set(IMAGE_MEDIA_TYPES) | set(FILE_MEDIA_TYPES) | {".pdf"}
+# Bundled files that become uploads: anything Gamma would accept from
+# POST /api/upload-file (not executable, well-formed extension) that is not
+# a note or a canvas.
+_NOT_ASSET_EXTS = {".canvas", ""}
+
+
+def _is_asset_ext(ext: str) -> bool:
+    return ext not in _MD_EXTS and ext not in _NOT_ASSET_EXTS and upload_media_type(ext) is not None
 # Obsidian block anchors: `` ^id`` at the end of a line, or ``^id`` alone on
 # a line after a list / quote / table / fence.
 _ANCHOR_END_RE = re.compile(r"[ \t]+\^([A-Za-z0-9-]+)[ \t]*$")
@@ -315,6 +323,37 @@ def _walk(nodes):
 
 # --- storing -----------------------------------------------------------------
 
+def markdown_page(conn, raw: bytes, original: str, folder: str = "") -> dict:
+    """One Markdown file → a note page: title from front matter else the file
+    name, blocks from the body, filed under ``folder`` then a front-matter
+    ``folder:`` below it (what Gamma's own export writes). The page records
+    ``markdown_import`` = the content hash of ``raw`` — the same digest a
+    stored upload of the file is named by, which is how a file chip finds
+    the page made from it. Commits. Raises HTTPException 413/400 for an
+    oversized or non-UTF-8 file. Shared by POST /import/markdown (a fresh
+    upload) and POST /pages/from-file (a stored one)."""
+    if len(raw) > MAX_MARKDOWN_BYTES:
+        raise HTTPException(status_code=413, detail="Markdown file exceeds 5 MB")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="Markdown file must be UTF-8")
+    fields, body = parse_frontmatter(text)
+    fallback = re.sub(r"\.(?:md|markdown)$", "", original, flags=re.I).strip() or "Untitled note"
+    title = (fm_text(fields, "title") or fallback).strip()[:500]
+    tree = md_to_blocks(body)
+    clean_folder = clean_path("/".join(p for p in (folder, fm_text(fields, "folder")) if p))
+    props = {"original_filename": original, "markdown_import": content_digest(raw)}
+    if clean_folder:
+        props["folder"] = clean_folder
+    now = page_now()
+    page_id = secrets.token_urlsafe(9)
+    imported = insert_note_page(conn, page_id, title, props, tree, now)
+    conn.commit()
+    return {"block_id": page_id, "title": title, "original_filename": original,
+            "imported": imported, "folder": clean_folder}
+
+
 def insert_note_page(conn, page_id, title, props, tree, now) -> int:
     """Insert a root page (last on root) plus its ``{content, children}``
     tree (a node's own ``id`` is honoured); returns the number of note blocks
@@ -390,7 +429,7 @@ def import_markdown_zip(ws: str, zf: zipfile.ZipFile, conn, folder: str = "",
     notes = sorted((e for e in entries if _split_ext(e.path)[1] in _MD_EXTS),
                    key=lambda e: (e.path.count("/"), e.path.lower()))
     csvs = [e for e in entries if _split_ext(e.path)[1] == ".csv"]
-    assets = {e.path: e for e in entries if _split_ext(e.path)[1] in _ASSET_EXTS}
+    assets = {e.path: e for e in entries if _is_asset_ext(_split_ext(e.path)[1])}
     if not notes and not csvs:
         raise HTTPException(status_code=400, detail="no .md files in the zip")
 
