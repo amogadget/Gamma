@@ -341,15 +341,15 @@ def share_access(share: dict, carrier):
             best = "view"
         for invited in share["users"]:
             if invited["name"] == viewer:
-                return "edit" if invited["role"] == "edit" or best == "edit" else "view", ""
+                return invited["role"], ""
     audience = share["audience"]
     if audience == "anyone":
-        return best or "view", ""
+        return "view", ""
     if not signed_in:
         return None, "login"
     if audience == "list":
         return (best, "") if best else (None, "forbidden")
-    return "edit" if share["role"] == "edit" else (best or "view"), ""
+    return share["role"], ""
 
 
 def share_grant(request: Request):

@@ -108,13 +108,14 @@ def test_doc_id_path_traversal_rejected(alice):
     assert "invalid document id" in r.json()["detail"]
 
 
-def test_safe_username_rejects_traversal():
-    from gamma.db import safe_username
-    for bad in ("..", ".", "a/b", "a\\b", "", "x" * 65):
+def test_safe_ws_id_rejects_traversal():
+    """Workspace ids name directories: nothing path-like gets through."""
+    from gamma.db import safe_ws_id
+    for bad in ("../x", "..", ".", "a/b", "a\\b", "", "x" * 65, "a.b"):
         with pytest.raises(ValueError):
-            safe_username(bad)
-    assert safe_username("guest") == "guest"
-    assert safe_username("a.b-c_d") == "a.b-c_d"
+            safe_ws_id(bad)
+    assert safe_ws_id("U3wppw_MPv1K") == "U3wppw_MPv1K"
+    assert safe_ws_id("a-b_c") == "a-b_c"
 
 
 def test_safe_doc_id_rejects_traversal():

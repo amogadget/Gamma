@@ -76,7 +76,7 @@ A workspace is a separate library — its own pages, PDFs and chats. Your accoun
 ## Metadata, citations & sharing
 
 - The **(i) button** in the Notes panel's title row opens the metadata popover: title, authors, venue, year, DOI, arXiv — all editable (Enter saves), with **↻ refetch**, an AI title-fill button, and a health check of the extracted PDF text (with a preview of what the AI actually reads).
-- The **chain-link (share) button** in the topbar creates a read-only share link — anyone with the link sees the PDF, highlights and notes, no login. The same popover holds the **BibTeX** entry and a slide-ready **citation** that pastes into PowerPoint with real italics, each with a copy button.
+- The **chain-link (share) button** in the topbar shares the page by link: invite people with view or edit rights, or open it to anyone with the link (or to signed-in users) — viewers see the PDF, highlights and notes, no login needed; editors edit alongside you. The same popover holds the **BibTeX** entry and a slide-ready **citation** that pastes into PowerPoint with real italics, each with a copy button.
 - Settings → Library shows a per-paper metadata and search-index health table with batch retry.
 
 ## Import & export

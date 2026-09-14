@@ -56,6 +56,7 @@ import {
   findBlock,
 } from "./logseqPdfModel";
 import { loadSession, saveSession, clearSession, setSessionScope } from "./sessionState";
+import { ROLE_LABEL } from "./settingsWorkspace";
 import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage } from "./LoginPage";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
@@ -137,9 +138,6 @@ function homeUrlFor(folder, label) {
   if (label) q.push(label === NO_LABEL ? "unlabelled=1" : `category=${encodeURIComponent(label)}`);
   return withWorkspace(q.length ? `/?${q.join("&")}` : "/");
 }
-
-// Workspace roles as the UI words them (docs/dev/workspaces.md).
-const ROLE_LABEL = { owner: "owner", editor: "can edit", viewer: "view only" };
 
 // The listing search box: every whitespace-separated term must appear in the
 // item's text (its title plus, for a page, its folder/label chips), case and
@@ -289,7 +287,6 @@ export default function App() {
   const initialBlockId = params.get("block") || params.get("page") || "";
   const initialCategory = params.get("unlabelled") ? NO_LABEL : (params.get("category") || "");
   const initialFolder = params.get("folder") || "";
-  const initialWs = params.get("ws") || "";
   // shareMode: this tab shows a page through a ?share= link — no account of
   // its own, no library, no chat, no prefs sync. readOnly: the block tree
   // can't be edited; every share view starts read-only and stays so unless
@@ -8452,7 +8449,6 @@ export default function App() {
           workspaces,
           me: authUser.user,
           isAdmin: !!authUser?.is_admin,
-          quotaInfo,
           switchWorkspace,
           refreshSession: checkSession,
           exportUserData,

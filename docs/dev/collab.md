@@ -100,7 +100,7 @@ anonymous share viewers are `Anonymous`.
 `usePageCollab` — one per open page (App.jsx) — owns:
 
 - **the base tree**: what the server is known to hold from this tab's point of
-  view. The block tree's transition effect (the old autosave effect) calls
+  view. The block tree's transition effect calls
   `commit(tree)`: a load transition (the existing suppress flag, also set for
   remote applies) makes the tree the new base; any other transition is
   diffed against the base (`diffTrees`) and the ops queued. Positions live in
@@ -175,3 +175,14 @@ state in App instead of the tree.
   uvicorn needs the `websockets` package (`requirements.txt`; the desktop
   freeze collects it).
 - Rooms are per process: a multi-worker deployment would need a shared bus.
+- Presence carries only the block and caret; it could also carry the PDF
+  viewport (which page someone is reading).
+- The op log has `actor` and `at` per batch but nothing reads them yet: an
+  activity view ("who changed what") and a page version history are both
+  derivable from it.
+- The two-browser end-to-end flow is not checked in (there is no frontend
+  test runner beyond `node --test`); a Playwright smoke would be the place.
+
+The survey behind this design (OT vs record-level LWW vs CRDT, why the old
+snapshot autosave could not be patched) is in
+[research/collaboration.md](../research/collaboration.md).

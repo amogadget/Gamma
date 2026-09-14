@@ -19,7 +19,7 @@ scatter `usePersistedState` calls through App.jsx.
 
 ## The Settings dialog
 
-Ten panes in four rail groups (`NAV_GROUPS` in
+Eleven panes in four rail groups (`NAV_GROUPS` in
 [frontend/src/settings.jsx](../../frontend/src/settings.jsx)):
 
 - **Workspace** — Members & sharing (this workspace: rename, storage,

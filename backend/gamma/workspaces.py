@@ -79,7 +79,7 @@ def list_for_user(username: str) -> list[dict]:
             "SELECT w.id, w.name, m.role, w.created_by, w.created_at, "
             "(SELECT COUNT(*) FROM workspace_members x WHERE x.workspace_id = w.id) "
             "FROM workspace_members m JOIN workspaces w ON w.id = m.workspace_id "
-            "WHERE m.username = ? ORDER BY w.name COLLATE NOCASE", (username,)).fetchall()
+            "WHERE m.username = ?", (username,)).fetchall()
     default = default[0] if default else ""
     out = [{"id": r[0], "name": r[1], "role": r[2], "created_by": r[3], "created_at": r[4],
             "members": r[5], "personal": r[0] == default} for r in rows]

@@ -10,7 +10,7 @@ Gamma is a self-hosted, Logseq-inspired PDF annotation server: highlight PDFs in
 
 ## Docs
 
-Topic docs live in `docs/dev/` — **read the relevant one before working in that area**, and keep them in sync with code changes:
+Topic docs live in `docs/dev/` — **read the relevant one before working in that area**, and keep them in sync with code changes. Design research (how others solve a problem, what was learned before a redesign, why a shape was chosen) lives in [docs/research/](docs/research/README.md) — findings only, never a duplicate of a `docs/dev/` doc; add a note there when a task involved a real survey.
 
 - [docs/dev/repository.md](docs/dev/repository.md) — current source and asset locations, packaging inputs versus build outputs, and static asset cache rules.
 - [docs/dev/frontend-refactor.md](docs/dev/frontend-refactor.md) — proposed App.jsx decomposition, state ownership, logic cleanup, migration order, and validation; not yet implemented.

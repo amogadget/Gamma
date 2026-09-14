@@ -1,7 +1,7 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-logo-dark.svg">
-  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-logo-light.svg">
-  <img alt="Gamma" src="./docs/assets/branding/gamma-logo-light.svg" width="240">
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-hero-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-hero-light.svg">
+  <img alt="Gamma PDF — read papers, keep what you learn: a highlighted paper next to its outliner notes with a live-rendered equation" src="./docs/assets/branding/gamma-hero-light.svg" width="100%">
 </picture>
 
 # Gamma PDF Annotator
@@ -199,8 +199,7 @@ Gamma borrows the ideas from Logseq that fit PDF annotation: everything is a blo
 
 ## Known limitations
 
-- Autosave is debounced at 500 ms; closing the tab within that window can lose the last keystroke.
-- No conflict handling for simultaneous edits across tabs/devices — last write wins.
+- Simultaneous editing merges per block: when two people type in the *same* block at the same moment, the last write to reach the server wins for that block (you can see who is where, so this is rare).
 - Paywalled papers can't be fetched server-side; Gamma substitutes an open-access copy when one exists, otherwise download in your browser and drop the file in.
 - `src/App.jsx` is still one large component; see the [decomposition plan](./docs/dev/frontend-refactor.md).
 

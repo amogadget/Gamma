@@ -2198,7 +2198,6 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 
 /* workspace switcher rows in the account popover */
 .popover .popoverItem.wsItem { gap: 9px; }
-.popover .popoverItem.wsItem.active { color: var(--text-primary); }
 .wsItemBadge {
   width: 20px;
   height: 20px;

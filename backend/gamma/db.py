@@ -41,20 +41,13 @@ def page_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-# Identifiers that become a single path segment. All exclude '/' and '\', so
+# Identifiers that become a single path segment. Both exclude '/' and '\', so
 # a validated value can never introduce a path separator; '.'/'..' are
 # rejected outright so they can't climb out of the data directory either.
 # These guard every filesystem path built from a workspace id or doc id — the
 # last line of defense against traversal even after upstream auth checks.
-_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _WS_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _DOC_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
-
-
-def safe_username(username: str) -> str:
-    if not isinstance(username, str) or username in (".", "..") or not _USERNAME_RE.match(username):
-        raise ValueError(f"unsafe username: {username!r}")
-    return username
 
 
 def safe_ws_id(ws: str) -> str:

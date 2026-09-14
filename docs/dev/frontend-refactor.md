@@ -183,6 +183,6 @@ for this work.
   here so proposed paths are never mistaken for the implemented layout.
 
 Completion means App only composes the session/view and feature boundaries;
-it no longer implements save queues, provider forms, folder mutations, or
+it does not implement save queues, provider forms, folder mutations, or
 pointer geometry. A few hundred lines is a useful direction, not a line-count
 target that justifies hiding complexity in a replacement giant hook.

@@ -70,7 +70,6 @@ def test_requests_land_in_the_personal_workspace_by_default(ann, lab):
 
 
 def test_non_members_and_viewers(ann, ben, cid, lab):
-    stranger = login("ws_boss", "bosspw12345") if False else None  # noqa: F841 (readability)
     other = make_user("ws_dan", "danpw12345")  # not a member
     dan = login("ws_dan", "danpw12345")
     assert dan.get("/api/blocks/root/children", headers=_in(lab)).status_code == 403
@@ -177,7 +176,6 @@ def test_shares_are_keyed_by_workspace(ann, ben, cid, lab):
         assert hello["t"] == "hello"
     with cid.websocket_connect(f"/api/ws/page/{page['id']}?ws={lab}&client=c1") as sock:
         hello = sock.receive_json()
-        me = next(p for p in ben.get(f"/api/blocks/{page['id']}", headers=_in(lab)).json() and [None]) if False else None  # noqa
         assert hello["t"] == "hello"
     # ben, not a member of ann's personal workspace, cannot reach the page there
     assert ben.get(f"/api/blocks/{page['id']}", params={"ws": workspace_of("ws_ann")}).status_code == 403

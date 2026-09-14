@@ -12,11 +12,13 @@ import {
   ShieldIcon, Trash2Icon, UserIcon, UsersIcon,
 } from "./icons";
 
+// Workspace roles as the UI words them (docs/dev/workspaces.md); the account
+// menu's switcher in App.jsx reads the same table.
 const ROLE_OPTIONS = [["owner", "Owner"], ["editor", "Can edit"], ["viewer", "View only"]];
-const ROLE_LABEL = Object.fromEntries(ROLE_OPTIONS);
+export const ROLE_LABEL = { owner: "owner", editor: "can edit", viewer: "view only" };
 
 export function WorkspaceSettings({ value }) {
-  const { workspace, workspaces, me, isAdmin, quotaInfo, switchWorkspace, refreshSession,
+  const { workspace, workspaces, me, isAdmin, switchWorkspace, refreshSession,
           exportUserData, importUserData, setStatus, confirm, closeSettings } = value;
   const [info, setInfo] = React.useState(null); // GET /api/workspaces/{id}: members + quota
   const [error, setError] = React.useState("");
@@ -137,7 +139,7 @@ export function WorkspaceSettings({ value }) {
             {self ? <span className="uiTag">you</span> : null}
           </span>
           <span className="aiProvDesc">
-            {ROLE_LABEL[m.role] || m.role}
+            {ROLE_OPTIONS.find(([r]) => r === m.role)?.[1] || m.role}
             {m.added_by && m.added_by !== m.username ? ` · invited by ${m.added_by}` : ""}
           </span>
         </span>

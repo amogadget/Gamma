@@ -65,7 +65,7 @@ def _startup_maintenance():
     try:
         done = migrations.ensure_current()
     except migrations.MigrationError as e:
-        print(f"[startup] {e}")
+        log.error(f"[startup] {e}")
         raise SystemExit(1)
     if done["applied"]:
         log.info(f"[startup] data directory upgraded from schema version {done['from']} "

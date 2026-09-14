@@ -176,7 +176,7 @@ extend that list, don't add another copy.
 | `App.jsx` | routing, block-tree editor state, docks, the page's live session glue, AI chat glue (decomposition in progress) |
 | `collab.js`, `blockOps.js`, `presence.jsx` | the live session (ops out, ops + presence in), the pure tree diff/apply, the avatar stack / row chips ([collab.md](collab.md)) |
 | `prefs.js` | every localStorage preference (`useAppPrefs`) |
-| `settings.jsx` + `settingsKit/Ai/Users.jsx` | the Settings dialog |
+| `settings.jsx` + `settingsKit/Ai/Users/Workspace/Backups.jsx` | the Settings dialog |
 | `chatDock.jsx` | the AI chat panel (incl. agent wiring); header = a `.ctlBtnRow` of `.ctlBtn` icon buttons (the PDF zoom column's buttons laid flat) with the ⚙ settings popover |
 | `pdfViewer.jsx` | the custom pdf.js viewer |
 | `search.jsx` | workspace search (Ctrl+F) |

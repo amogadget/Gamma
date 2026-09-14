@@ -128,3 +128,24 @@ account's personal workspace ([api.md](api.md)). `manage.py` has
 - Billing follows the workspace's creator so a shared workspace does not
   multiply everyone's quota; an admin who wants a lab workspace on a bigger
   quota raises the creator's limit.
+
+The reasoning behind these (what the old username-keyed layout cost, the
+alternatives that were rejected) is in
+[research/workspaces.md](../research/workspaces.md).
+
+## Limits and next steps
+
+- Viewers still see some write affordances (upload buttons, the share menu);
+  the server refuses the writes. Hiding them behind `readOnly` is UI polish.
+- Chats are workspace data, so members of a shared workspace see each
+  other's AI conversations about its pages. Per-member chats would need a
+  `(bucket, username)` key.
+- No cross-workspace page move (export/merge does it); a "Move page to
+  workspace…" action would be a server-side copy + delete.
+- The extension clips into the personal workspace; a workspace picker in its
+  popup would send `ws`.
+- Activity/audit: `workspace_members.added_by` and the op log's `actor`
+  exist; nothing shows them yet.
+- The desktop shell reads the workspace list only after navigation and when
+  its menu opens, so a workspace created in Gamma appears in the shell bar on
+  the next menu open, not live.
