@@ -86,6 +86,11 @@ module.exports = {
     languages: ['en-US'],
     backgroundColor: '#1e1e1c', // the logo tile's background (scripts/store-art.js BG)
     showNameOnTiles: true,
+    // The Store's submission API rejects MSIX packages whose MinVersion is
+    // <= 10.0.17134.0 (electron-builder's default is 10.0.14316.0; the web
+    // upload form let it through as a legacy .appx, the msstore CLI does
+    // not). Windows 10 1809 is also Electron's own floor.
+    minVersion: '10.0.17763.0',
   },
 
   mac: {
