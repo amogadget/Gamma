@@ -19,20 +19,21 @@ scatter `usePersistedState` calls through App.jsx.
 
 ## The Settings dialog
 
-Twelve panes in four rail groups (`NAV_GROUPS` in
+Thirteen panes in four rail groups (`NAV_GROUPS` in
 [frontend/src/settings.jsx](../../frontend/src/settings.jsx)):
 
-- **Workspace** — Members & sharing (this workspace: rename, storage,
-  Make default and Delete on a personal one; the Access rows for admins,
-  the member list with role menus, Invite through an `AccountPicker` over
-  the account directory, leave, delete on a shared one; all my workspaces
-  with Open; New workspace, a personal one —
-  [settingsWorkspace.jsx](../../frontend/src/settingsWorkspace.jsx), hidden
-  for guests), General (theme incl. the Sepia/Gray eye-comfort modes and
+- **Workspace** — Workspaces (every workspace I can open: my storage
+  meter, the Personal and Shared lists, each row with Open, Export, Import
+  and Manage — rename, members and roles, Make default, Leave, Delete —
+  plus New workspace and Export all —
+  [settingsWorkspace.jsx](../../frontend/src/settingsWorkspace.jsx)), Backups
+  (my workspaces' server-kept snapshots: take, download, restore, delete,
+  Back up all — [settingsBackups.jsx](../../frontend/src/settingsBackups.jsx));
+  both hidden for guests, General (theme incl. the Sepia/Gray eye-comfort modes and
   flip page colors — both synced per account; the control size — a −/+
   `Stepper` (70–160 %) that zooms every button and toggle, see [ui-design.md](ui-design.md); paper-fetching prefs),
   Library (home-card thumbnails and folder/label chips, storage
-  usage/limits, search index, per-paper metadata health table — status
+  usage, search index, per-paper metadata health table — status
   filter incl. "Unverified AI" / "Needs attention", verified/text/index
   coverage tiles, click a title to open the paper, select-all works on the
   filtered view, and the batch fetch targets missing + unverified records)
@@ -54,15 +55,14 @@ Twelve panes in four rail groups (`NAV_GROUPS` in
   prefs),
   Prompts (the four editable prompts, as an accordion)
 - **Account** — Users (admin account management / "You" for non-admins, in
-  [settingsUsers.jsx](../../frontend/src/settingsUsers.jsx)), Workspaces
-  (admins only: every workspace on the server with a Manage dialog — rename,
-  access, quota, members and ownership, kind conversion, delete, join — and
-  New shared workspace for any owner, private or public, in
+  [settingsUsers.jsx](../../frontend/src/settingsUsers.jsx)), Server (admins
+  only, everything about the server rather than one account: the storage
+  defaults, every workspace with a Manage dialog — access, quota, members
+  and ownership, kind conversion, join — and New shared workspace for any
+  owner, *Server backups* of the whole data directory, and the server log,
+  in [settingsServer.jsx](../../frontend/src/settingsServer.jsx) +
   [settingsWorkspacesAdmin.jsx](../../frontend/src/settingsWorkspacesAdmin.jsx)),
-  Advanced (status
-  bar, debug tracing, session + server logs, and — admins — *Server backups*:
-  take a snapshot of the whole data directory, download or delete one, in
-  [settingsBackups.jsx](../../frontend/src/settingsBackups.jsx))
+  Advanced (status bar, debug tracing, this browser's log)
 
 Old pane ids keep resolving through `PANE_ALIASES`. App.jsx owns all the
 state and passes it in as prop groups; the dialog only renders.
@@ -77,7 +77,7 @@ short hint · control; the long explanation goes in the row's `title`
 
 Two limits per account: max upload size per file (`max_upload_mb`, default
 50) and total uploads quota (`quota_mb`, 0 = unlimited). Server-wide defaults
-are admin-editable in Settings → Library; per-account overrides (NULL =
+are admin-editable in Settings → Server; per-account overrides (NULL =
 inherit) in the Users pane. They apply to the account's personal workspaces
 together; a shared workspace has its own optional quota (admins, Settings →
 Workspaces / Members & sharing — [workspaces.md](workspaces.md)). `GET

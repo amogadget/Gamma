@@ -83,14 +83,20 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 | POST | `/login`, `/login-guest`, `/logout` | session management |
 | GET | `/session` | who am I, plus `workspaces: [{id, name, kind, role, access, public_role, personal, default, members}]` (memberships + every public workspace) and `default_workspace` (quota lives in `/quota`) |
 | GET | `/accounts` | the account directory for the invite / owner pickers: `{accounts: [{username, is_admin}]}`, non-guest accounts only (signed-in non-guest callers) |
-| GET | `/export` (+ `/export-progress`) | backup zip of a workspace (everything or DB-only): the request's, `?ws=` (any member), or — admins — `?user=` for an account's personal workspace |
+| GET | `/export` (+ `/export-progress`) | backup zip of a workspace (everything or `uploads=0`; the `gamma-backup-1` zip of `gamma/ws_backup.py`): the request's, `?ws=` (any member), or — admins — `?user=` for an account's default workspace |
+| GET | `/export-all` | every personal workspace of the account in one zip, one `/export` zip per workspace inside (`uploads=0` for databases only; guests 403) |
 | POST | `/import-data` | restore (`mode=replace`, owners) / merge (`mode=merge`, editors) a backup zip into a workspace (same targeting); never into the guest workspace |
 
 ### Workspaces (`workspaces.py`) — see [workspaces.md](workspaces.md)
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/workspaces` | create a personal one (`{name}`; guests 403); admins may add `kind: "shared"`, `owner`, `access`, `public_role`, `quota_mb` |
+| GET | `/workspaces/mine` | Settings → Workspaces: every workspace I can open with its `used_bytes`, plus `account` (my limits and the usage of all my personal workspaces) |
 | GET/PUT/DELETE | `/workspaces/{id}` | kind + members + quota + `personal_of` + `default` (any member; admins) / rename `{name}` (owner), `default: true` (a personal workspace's owner), kind, access + public role, workspace quota (admin) / delete (owner; not an account's last personal one) |
+| GET/POST | `/workspaces/{id}/backups` | the workspace's server-kept snapshots (any member) / take one now `{label?, uploads?}` (owner; at most `ws_backup.MAX_PER_WORKSPACE`) |
+| GET | `/workspaces/{id}/backups/{name}/download` | the snapshot as a zip — the same zip `/export` gives (any member) |
+| POST | `/workspaces/{id}/backups/{name}/restore?mode=` | restore it in place: `replace` (owner) / `merge` (editor), the same rules as `/import-data` |
+| DELETE | `/workspaces/{id}/backups/{name}` | delete a snapshot (owner) |
 | PUT/DELETE | `/workspaces/{id}/members/{user}` | shared workspaces: invite or set a role `{role}`, incl. owner (owner) / remove (owner) or leave (yourself) |
 | GET | `/workspaces/find-page/{page_id}` | which of my workspaces holds the page (deep links without `ws`) |
 
@@ -241,7 +247,7 @@ the request's workspace — the extension names none, so its personal one.
 | PUT/DELETE | `/admin/users/{name}` | password, admin flag, storage overrides / delete (+ the workspaces only they owned, listed as `deleted_workspaces`) |
 | POST | `/admin/users/{name}/rename` | rename (rows only — no files move; sessions survive) |
 | GET | `/admin/workspaces` | every workspace (kind, access, public role, quota, `personal` = its account or "", `default`, members, upload size), plus orphan directories — Settings → Workspaces |
-| GET/POST | `/admin/backups` | list the snapshots under `backups/` / take one now (`{label?, uploads?}` — databases, plus every upload with `uploads: true`) |
+| GET/POST | `/admin/backups` | list the whole-data-directory snapshots under `backups/` / take one now (`{label?, uploads?}` — databases, plus every upload with `uploads: true`); per-workspace snapshots are `/workspaces/{id}/backups` |
 | GET | `/admin/backups/{name}/download` | the snapshot as a zip |
 | DELETE | `/admin/backups/{name}` | delete a snapshot (restoring is `manage.py backups --restore`, server stopped — [migrations.md](migrations.md)) |
 | GET/PUT | `/admin/settings` | server-wide storage defaults |

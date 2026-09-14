@@ -57,10 +57,14 @@ All state is SQLite + files on disk under a data directory (env
   `prefs` table); migration step 2 moved them to `users.db`.
 - `workspaces/<id>/uploads/` — PDFs, images and generic file attachments
   (`/api/upload-file`), filenames are content sha256[:24] + extension (dedup).
-- `backups/<time>-<label>/` — snapshots of the databases (and, on request,
-  the uploads): the migration runner's `v<N>` ones (newest three kept) and
-  the ones admins take from Settings → Advanced or `manage.py backups`
-  ([migrations.md](migrations.md) "Backups").
+- `backups/<time>-<label>/` — snapshots of the whole data directory's
+  databases (and, on request, the uploads): the migration runner's `v<N>`
+  ones (newest three kept) and the ones admins take from Settings → Server
+  or `manage.py backups` ([migrations.md](migrations.md) "Backups").
+- `backups/workspaces/<id>/<time>-<label>.zip` — one workspace's
+  server-kept snapshots (Settings → Backups): `/api/export` zips, full
+  copies, at most 20 per workspace, deleted with the workspace
+  ([workspaces.md](workspaces.md) "Backups").
 
 Workspace ids are random tokens (`workspaces.new_workspace_id`), so renaming
 an account or a workspace never moves files. `db.safe_ws_id` / `safe_doc_id`
@@ -132,11 +136,12 @@ manage accounts from Settings → Users; non-admins get the same pane as "You"
 admin-only). Workspaces are managed from Settings → Workspaces
 ([settingsWorkspacesAdmin.jsx](../../frontend/src/settingsWorkspacesAdmin.jsx),
 on top of `/api/admin/workspaces` + the workspace API, which admins pass
-without membership — [workspaces.md](workspaces.md)). Every row has backup Export/Import menus for the account's
-personal workspace (`/api/export?user=`, admins only for other accounts);
-the current workspace's backups live in Settings → Members & sharing
-([workspaces.md](workspaces.md)). The guest workspace can be exported but
-never restored into. Rails: guest untouchable, no self-delete, the last
+without membership — [workspaces.md](workspaces.md)). Backups are not here: every workspace's
+export/import lives on its row in Settings → Workspaces and its snapshots
+in Settings → Backups ([workspaces.md](workspaces.md)); admins reach any
+workspace from Settings → Server (`/api/export?user=` still serves an
+account's default workspace to scripts). The guest workspace can be
+exported but never restored into. Rails: guest untouchable, no self-delete, the last
 admin can't be demoted or deleted. Deleting an account deletes its
 personal workspaces and the shared ones it alone owned (the response lists
 them); shared workspaces with another owner survive.
@@ -168,7 +173,7 @@ Details + UI in [settings.md](settings.md).
 `gamma/logbuf.py`, `GET /api/admin/logs?after=<seq>`: all backend logging goes
 through `logbuf.log` (a `logging` logger — use it, not `print()`), which tees
 to the console and a scrubbed in-memory ring buffer (2000 entries, gone on
-restart) shown admin-only in Settings → Advanced → "Server log". Secret-shaped
+restart) shown admin-only in Settings → Server → "Log". Secret-shaped
 substrings (Bearer/sk- keys, `password=`/`token=` pairs, 40+-char urlsafe runs
 — session/share tokens) are masked at insert time; the one-time seeded admin
 password in `seed.py` stays a raw `print()` on purpose and must never route

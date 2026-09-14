@@ -114,9 +114,39 @@ is no separate list endpoint.
 | DELETE | `/workspaces/{id}/members/{user}` | remove a member (owner) or leave (yourself; not the last owner, not a personal workspace, and not a public workspace you are no explicit member of) |
 | GET | `/workspaces/find-page/{page_id}` | which of my workspaces holds this page — a deep link without `ws` |
 
+`GET /api/workspaces/mine` is what Settings → Workspaces and Backups read:
+the session list plus each workspace's upload size and the account's
+storage (limits + the usage of all its personal workspaces).
 `GET /api/accounts` (`routers/auth.py`) is the account directory the invite
 and owner pickers show: every non-guest account, `[{username, is_admin}]`;
 any signed-in non-guest account may read it.
+
+## Backups
+
+One zip format, `gamma-backup-1` (`gamma/ws_backup.py`): consistent copies
+of `pages.db` and `data.db`, every file under `uploads/` unless databases-
+only was asked, and a `manifest.json`. Three things produce or consume it:
+
+- **Export / Import** — `GET /api/export` downloads it, `POST
+  /api/import-data` restores (`replace`, owners) or merges (`merge`,
+  editors) one into a workspace; `GET /api/export-all` bundles one per
+  personal workspace. On every workspace row in Settings → Workspaces.
+- **Snapshots** — `backups/workspaces/<ws>/<time>-<label>.zip`, kept on the
+  server: an owner takes one (Settings → Backups; "Back up all" takes one
+  per workspace they own), any member lists and downloads, an owner
+  restores in place or deletes, an editor merges. Each snapshot is a FULL
+  copy, never an incremental chain: any one restores on its own and
+  deleting one never breaks another. The cost is size, bounded by
+  `MAX_PER_WORKSPACE` (20) and the databases-only choice; snapshots count
+  against nobody's quota, are not part of admin server snapshots, and go
+  with the workspace when it is deleted. The guest workspace keeps none.
+- **Page exports** (`/api/pages/{id}/export?mode=gamma`) are the same zip
+  scoped to one page, for `import-data?mode=merge`
+  ([import_export.md](import_export.md)).
+
+Admin snapshots of the whole data directory (`gamma/backups.py`, Settings →
+Server) are a different thing: a copy of every database for rollback with
+the server stopped ([migrations.md](migrations.md)).
 
 Admin: `GET /api/admin/workspaces` lists every workspace (`kind`, `access`,
 `public_role`, `quota_mb`, `personal` = the account a personal one belongs
@@ -139,7 +169,12 @@ workspace ([api.md](api.md)). `manage.py` has `list-workspaces`,
   makes the tree read-only for a viewer. Nothing is fetched before that
   (`wsReady` gates the deep-link boot and the data effects).
 - In-app URLs, copied block links and the page websocket carry `ws`
-  (`utils.withWorkspace`); share URLs never do.
+  (`utils.withWorkspace`); share URLs never do. Upload URLs the BROWSER
+  fetches itself — `<img>` sources and file-chip links rendered from block
+  content, which the fetch wrapper's header never reaches — go through
+  `utils.assetUrl` (the react-markdown `urlTransform` in `blockTree.jsx` and
+  `widgets.jsx`), which appends `ws` or the share token; the bare
+  `/api/uploads/<hash>.ext` stays what block content stores.
 - Per-account browser state that names pages (open tabs, recents, pinned and
   extra folders, reading positions, page layouts, the restored session) is
   keyed `user@workspace` in localStorage and stored per account and
@@ -148,32 +183,37 @@ workspace ([api.md](api.md)). `manage.py` has `list-workspaces`,
 - Switching (account menu → a workspace, or Settings → Members & sharing →
   Open) is a navigation to `/?ws=<id>`: tabs, recents, the open page and the
   live session all belong to the library being left, so the tab reloads.
-- Settings → Members & sharing (`settingsWorkspace.jsx`): the same pane
-  for both kinds, with fewer controls on a personal one. Personal: rename,
-  the account's storage meter, export/import, Make default, Delete (when
-  it is not the last one). Shared: storage, the Access rows (private /
-  public + the public role, and the workspace's own quota — editable by
-  admins, read-only for owners), export/import, the member list with role
-  menus (owners), Invite (an `AccountPicker` over `/api/accounts` — search
-  box + account rows — plus the role), leave, delete. Then the list of all
-  my workspaces (personal / shared / public / default tags) with Open, and
-  New workspace, which creates a personal one and opens it. Hidden for
-  guests. The module also exports the pieces the admin pane is built from:
+- Settings → Workspaces (`settingsWorkspace.jsx`, `WorkspacesSettings`):
+  every workspace I can open, in one place — my storage meter, then the
+  Personal list (with Export all and New workspace, which creates a
+  personal one and opens it) and the Shared list. Every row carries Open,
+  Export ▾ (everything / databases only), Import ▾ (restore for owners,
+  merge for editors) and Manage: `ManageWorkspaceDialog`, in settings-row
+  sections — General (name, storage), Access (shared; admins edit, owners
+  read), Members (the list with role menus and Invite, an `AccountPicker`
+  over `/api/accounts`) and Actions (Make default on a personal one, Leave,
+  Delete, and in admin mode Make shared / Make personal and Join), with
+  only Open and Done in the footer. The dialog re-reads the workspace from
+  the server after every change (`useWorkspace.reload`), so it always shows
+  what is stored. Hidden for guests. The same dialog serves the admin in
+  `admin` mode (below). Also exported:
   `useAccounts`, `useWorkspace(wsId)` (one workspace's state + every call
   on it), `AccessRows`, `StorageRow`, `MembersList`, `InviteDialog`,
-  `NameDialog`, `workspaceMeta` (the switcher's one-line description).
-- Settings → Workspaces (`settingsWorkspacesAdmin.jsx`, admins only): every
-  workspace on the server in two lists (shared: access tag, owners, member
-  count, size and quota; personal: per account, default tagged), each with
-  Open (when the admin can) and Manage — a dialog with rename, storage, the
-  Access rows, the member list with role menus (naming someone Owner hands
-  the workspace on), Add (the same invite picker), Delete, "Join as owner"
-  for a private shared workspace the admin is not in, and the kind
-  conversion (Make shared on a personal workspace; Make personal on a
-  single-member shared one). New workspace makes a shared one: a name, an
-  owner picked from the directory (the admin by default), private / public
-  with the public role, and a quota. The share popover's invite box is the
-  same `AccountPicker` (one account per Invite).
+  `NameDialog`, `WorkspaceDataMenus`, `workspaceMeta` (the switcher's
+  one-line description).
+- Settings → Backups (`settingsBackups.jsx`, `WorkspaceBackups`): my
+  workspaces' server-kept snapshots, one section per workspace — Back up
+  now ▾ (everything / databases only) for owners, "Back up all N
+  workspaces" for every one I own, and per snapshot Download, Restore ▾
+  (Replace for owners, Merge for editors — restoring the open workspace
+  reloads the app) and Delete. Hidden for guests.
+- Settings → Server (`settingsServer.jsx`, admins only): the storage
+  defaults, every workspace on the server (`settingsWorkspacesAdmin.jsx`:
+  shared and personal lists, New shared workspace with an owner picker,
+  Manage in admin mode — access, quota, ownership, Make shared / Make
+  personal, Join as owner), the whole-data-directory Server backups and
+  the server log. The share popover's invite box is the same
+  `AccountPicker` (one account per Invite).
 
 ## Decisions
 

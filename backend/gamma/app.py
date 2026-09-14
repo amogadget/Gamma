@@ -29,6 +29,7 @@ from .routers import (
     shares,
     uploads,
     workspaces,
+    ws_backups,
 )
 from .seed import ensure_admin_seed
 from .storage import cleanup_orphan_uploads
@@ -105,6 +106,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router.router)
     app.include_router(admin.router)
     app.include_router(workspaces.router)
+    app.include_router(ws_backups.router)
     app.include_router(ai.router)
     app.include_router(chats.router)
     app.include_router(chats.history_router)

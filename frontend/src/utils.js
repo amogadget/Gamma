@@ -43,6 +43,17 @@ function withWorkspace(url) {
   return `${url}${url.includes("?") ? "&" : "?"}ws=${encodeURIComponent(currentWorkspace)}`;
 }
 
+// A same-origin upload URL (`/api/uploads/<hash>.ext`) for a browser-issued
+// request — an <img> src, a download link — which bypasses the fetch wrapper
+// and so carries neither the workspace header nor the share token. Block
+// content stores the bare URL; every RENDER site passes it through here so the
+// server looks in the right library (a non-default workspace's image would
+// otherwise 404) and a share viewer is admitted.
+function assetUrl(url) {
+  if (typeof url !== "string" || !url.startsWith(`${API}/uploads/`)) return url;
+  return withShare(withWorkspace(url));
+}
+
 // For the rare non-fetch transport (the backup-import XHR) that must carry
 // the same identity guard the fetch wrapper injects.
 function getExpectedUser() {
@@ -371,4 +382,4 @@ async function readNdjson(res, onBatch) {
   }
 }
 
-export { API, makeId, fmtBytes, sha256, getDocIdForUrl, isPdfFile, isMarkdownFile, isUnverifiedPaperMeta, metaSourceInfo, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson };
+export { API, makeId, fmtBytes, sha256, getDocIdForUrl, isPdfFile, isMarkdownFile, isUnverifiedPaperMeta, metaSourceInfo, apiJson, withShare, withWorkspace, assetUrl, setCurrentWorkspace, getCurrentWorkspace, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson };

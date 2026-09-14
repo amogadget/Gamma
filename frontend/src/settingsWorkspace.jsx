@@ -1,16 +1,17 @@
-// Settings → Members & sharing: the library this tab works in. A personal
-// workspace (just you; several per account, all under your quota): rename,
-// storage, make it your default, back it up or restore one, delete it. A
-// shared workspace (admin-made): the same plus the member list with role
-// menus, Invite (picked from the account directory), leave, and — for
-// admins — the Access rows (private / public, the public role, the
-// workspace's own quota). Then the list of all your workspaces and New
-// workspace (a personal one). GUI for /api/workspaces* (docs/dev/workspaces.md).
+// Settings → Workspaces: every library you can open, in one place. Personal
+// workspaces (just you; several per account, all under your quota) and the
+// shared ones you belong to (admin-made), each row with Open, Export,
+// Import and Manage — a dialog with rename, storage, members and roles
+// (shared), Make default (personal), Leave, Delete. Plus your account's
+// storage meter, New workspace (a personal one) and Export all. GUI for
+// /api/workspaces* (docs/dev/workspaces.md).
 //
-// The pieces that also build the admin's Workspaces pane
-// (settingsWorkspacesAdmin.jsx) are exported from here: useAccounts,
-// useWorkspace (one workspace's state + every call on it), AccessRows,
-// MembersList, InviteDialog, and the role tables.
+// The dialog (ManageWorkspaceDialog) is shared with the admin's Server pane
+// (settingsWorkspacesAdmin.jsx), which adds access, quota, ownership, kind
+// conversion and join-as-owner in `admin` mode. Also exported from here:
+// useAccounts, useWorkspace (one workspace's state + every call on it),
+// AccessRows, StorageRow, MembersList, InviteDialog, NameDialog, the role
+// tables and workspaceMeta (the switcher's one-line description).
 import React from "react";
 import { API, apiJson, fmtBytes } from "./utils";
 import { ActionMenu, MenuSelect } from "./menus";
@@ -24,6 +25,7 @@ import {
 // menu's switcher in App.jsx reads the same table.
 export const ROLE_OPTIONS = [["owner", "Owner"], ["editor", "Can edit"], ["viewer", "View only"]];
 export const ROLE_LABEL = { owner: "owner", editor: "can edit", viewer: "view only" };
+const ROLE_TEXT = { owner: "own it", editor: "can edit", viewer: "can view" };
 // One line under a switcher entry / workspace row: what kind it is and, for
 // a shared one, your role.
 export function workspaceMeta(w) {
@@ -46,21 +48,34 @@ export function useAccounts() {
 }
 
 // One workspace as the Settings dialogs see it: GET /api/workspaces/{id}
-// (members + quota), plus every call on it. Every mutation returns the
-// server's fresh payload (or null after setError) and folds it into `info`.
+// (members + quota), plus every call on it. After a successful mutation the
+// workspace is READ AGAIN from the server (not patched from the response),
+// so the dialog always shows what is stored. Calls return the response, or
+// null after setError.
 export function useWorkspace(wsId) {
   const [info, setInfo] = React.useState(null);
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
 
-  React.useEffect(() => {
-    if (!wsId) return;
-    setInfo(null);
-    setError("");
-    apiJson(`${API}/workspaces/${encodeURIComponent(wsId)}`).then(setInfo).catch((err) => setError(err.message));
+  const reload = React.useCallback(async () => {
+    if (!wsId) return null;
+    try {
+      const d = await apiJson(`${API}/workspaces/${encodeURIComponent(wsId)}`);
+      setInfo(d);
+      return d;
+    } catch (err) {
+      setError(err.message);
+      return null;
+    }
   }, [wsId]);
 
-  async function call(path, method, body) {
+  React.useEffect(() => {
+    setInfo(null);
+    setError("");
+    reload();
+  }, [reload]);
+
+  async function call(path, method, body, { refresh = true } = {}) {
     setBusy(true);
     setError("");
     try {
@@ -68,7 +83,7 @@ export function useWorkspace(wsId) {
         method,
         ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
       });
-      if (d && d.id) setInfo((prev) => ({ ...prev, ...d }));
+      if (refresh) await reload();
       return d;
     } catch (err) {
       setError(err.message);
@@ -79,11 +94,11 @@ export function useWorkspace(wsId) {
   }
 
   return {
-    info, setInfo, error, setError, busy,
-    update: (patch) => call("", "PUT", patch),                // {name} | {access, public_role} | {quota_mb}
+    info, error, setError, busy, reload,
+    update: (patch) => call("", "PUT", patch),                // {name} | {default} | {kind} | {access, public_role} | {quota_mb}
     setRole: (username, role) => call(`/members/${encodeURIComponent(username)}`, "PUT", { role }),
     removeMember: (username) => call(`/members/${encodeURIComponent(username)}`, "DELETE"),
-    destroy: () => call("", "DELETE"),
+    destroy: () => call("", "DELETE", null, { refresh: false }),
   };
 }
 
@@ -153,9 +168,9 @@ export function StorageRow({ quota, me }) {
   );
 }
 
-// The explicit members, each with a role menu (owners) and a remove/leave
-// button. `me` marks "you"; the last owner and a personal workspace's
-// owner cannot go.
+// The explicit members, each with a role menu and a remove button
+// (owners). `me` marks "you"; the last owner cannot go; leaving yourself
+// is an action row of the dialog, not a button on your own row.
 export function MembersList({ info, me, canManage, busy, onSetRole, onRemove }) {
   const members = info?.members || [];
   const owners = members.filter((m) => m.role === "owner").length;
@@ -184,14 +199,13 @@ export function MembersList({ info, me, canManage, busy, onSetRole, onRemove }) 
               onChange={(r) => { if (r !== m.role) onSetRole(m.username, r); }}
             />
           ) : null}
-          {(canManage || self) && !stuck ? (
+          {canManage && !self && !stuck ? (
             <button
               className="uiBtn sm iconSq" disabled={busy}
-              title={self ? "Leave this workspace" : `Remove ${m.username}`}
-              aria-label={self ? "Leave" : "Remove"}
+              title={`Remove ${m.username}`} aria-label="Remove"
               onClick={() => onRemove(m.username)}
             >
-              {self ? <LogOutIcon size={13} /> : <Trash2Icon size={13} />}
+              <Trash2Icon size={13} />
             </button>
           ) : null}
         </span>
@@ -246,235 +260,363 @@ export function NameDialog({ title, label, hint, initial, submitLabel, busy, err
   );
 }
 
-export function WorkspaceSettings({ value }) {
-  const { workspace, workspaces, me, isAdmin, switchWorkspace, refreshSession,
-          exportUserData, importUserData, setStatus, confirm, closeSettings } = value;
-  const wsId = workspace?.id;
+// One workspace, everything its owner (or, with `admin`, a server admin)
+// can do to it, in the settings-row grammar: General (name, storage),
+// Access (shared; admins edit, owners read), Members (shared), Actions
+// (default, kind, join, leave, delete — each a labelled row with a hint).
+// `canOpen` / `onOpen` wire the Open button; `onLeft` fires after the
+// caller leaves or deletes it (the pane switches away if it was the open
+// one). `personalCount` hides Delete on an account's last personal workspace.
+export function ManageWorkspaceDialog({ wsId, me, admin, accounts, confirm, setStatus, canOpen, onOpen, onClose, onLeft, personalCount }) {
   const ws = useWorkspace(wsId);
-  const accounts = useAccounts();
-  const [dialog, setDialog] = React.useState(null); // "rename" | "invite" | "create"
-  const [createError, setCreateError] = React.useState("");
-  const [creating, setCreating] = React.useState(false);
-
+  const [renaming, setRenaming] = React.useState(false);
+  const [inviting, setInviting] = React.useState(false);
   const info = ws.info;
-  const isPersonal = (info?.kind || (workspace?.personal ? "personal" : "shared")) === "personal";
-  const isDefault = info ? info.default : !!workspace?.default;
-  const role = info?.role || workspace?.role;
-  const owner = role === "owner" || isAdmin;
+  const isPersonal = info?.kind === "personal";
+  const mine = isPersonal && info?.personal_of === me;
+  const isOwner = info?.role === "owner";
+  const manages = isOwner || admin;
   const explicitMember = (info?.members || []).some((m) => m.username === me);
-  const personalCount = workspaces.filter((w) => w.personal).length;
-  const home = () => workspaces.find((w) => w.default && w.id !== wsId)?.id || workspaces.find((w) => w.personal && w.id !== wsId)?.id;
-  const closeDialog = () => { setDialog(null); ws.setError(""); setCreateError(""); };
+  const soleOwner = (info?.members || []).filter((m) => m.role === "owner").length <= 1 && isOwner;
 
-  async function saveRename(name) {
+  const done = (msg) => { if (msg) setStatus(msg); };
+
+  async function saveName(name) {
     const d = await ws.update({ name });
-    if (!d) return;
-    closeDialog();
-    setStatus(`Renamed to ${d.name}.`);
-    refreshSession?.(); // the switcher and the account card show the new name
+    if (d) { setRenaming(false); done(`Renamed to ${d.name}.`); }
   }
 
-  async function makeDefault() {
-    const d = await ws.update({ default: true });
-    if (!d) return;
-    setStatus(`${d.name} is now your default workspace.`);
-    refreshSession?.();
+  async function invite(username, role) {
+    const d = await ws.setRole(username, role);
+    if (d) { setInviting(false); done(`${username} can now ${role === "viewer" ? "view" : role === "editor" ? "edit" : "manage"} ${d.name}.`); }
   }
 
-  async function submitInvite(username, invitedRole) {
-    const d = await ws.setRole(username, invitedRole);
-    if (!d) return;
-    closeDialog();
-    setStatus(`${username} can now ${invitedRole === "viewer" ? "view" : invitedRole === "editor" ? "edit" : "manage"} ${d.name}.`);
-  }
-
-  async function updateAccess(patch) {
-    const d = await ws.update(patch);
-    if (!d) return;
-    if (patch.access) setStatus(d.access === "public" ? `${d.name} is now open to everyone on this server.` : `${d.name} is private again.`);
-    else if ("quota_mb" in patch) setStatus(d.quota_mb ? `Workspace quota set to ${d.quota_mb} MB.` : "Workspace quota removed.");
-    refreshSession?.();
-  }
-
-  function removeMember(username) {
+  function remove(username) {
     const leaving = username === me;
     confirm({
       title: leaving ? "Leave workspace" : "Remove member",
       message: leaving
         ? `Leave "${info?.name}"? You will need a new invitation to come back.`
         : `Remove ${username} from "${info?.name}"? They keep nothing from it.`,
-      confirmLabel: leaving ? "Leave" : "Remove",
-      danger: true,
+      confirmLabel: leaving ? "Leave" : "Remove", danger: true,
       onConfirm: async () => {
         const d = await ws.removeMember(username);
         if (!d) return;
-        if (leaving) {
-          closeSettings?.();
-          switchWorkspace(home());
-          return;
-        }
-        ws.setInfo((prev) => ({ ...prev, members: (prev?.members || []).filter((m) => m.username !== username) }));
-        setStatus(`Removed ${username}.`);
+        if (leaving) { onClose(); onLeft?.(wsId); return; }
+        done(`Removed ${username}.`);
       },
     });
   }
 
-  function deleteWorkspace() {
+  function destroy() {
     confirm({
       title: "Delete workspace",
-      message: isPersonal
-        ? `Delete "${info?.name}" with ALL its pages, PDFs and chats? This can't be undone.`
-        : `Delete "${info?.name}" with ALL its pages, PDFs and chats, for every member? This can't be undone.`,
-      confirmLabel: "Delete",
-      danger: true,
+      message: `Delete "${info?.name}" with ALL its pages, PDFs, chats and backups${isPersonal ? "" : ", for every member"}? This can't be undone.`,
+      confirmLabel: "Delete", danger: true,
       onConfirm: async () => {
         const d = await ws.destroy();
-        if (!d) return;
-        closeSettings?.();
-        switchWorkspace(home());
+        if (d) { done(d.warning || `Deleted ${info?.name}.`); onClose(); onLeft?.(wsId); }
       },
     });
   }
 
+  function convert(kind) {
+    const toShared = kind === "shared";
+    confirm({
+      title: toShared ? "Convert to shared workspace" : "Convert to personal workspace",
+      message: toShared
+        ? `Make "${info?.name}" a shared workspace? ${info?.personal_of} stays its owner and can invite people; it stops counting against their storage. If it is their default, another personal workspace becomes the default.`
+        : `Make "${info?.name}" ${info?.members?.[0]?.username}'s personal workspace? It becomes private, its own quota is cleared, and it counts against their storage.`,
+      confirmLabel: "Convert",
+      onConfirm: async () => {
+        const d = await ws.update({ kind });
+        if (d) done(`${d.name} is now a ${d.kind} workspace.`);
+      },
+    });
+  }
+
+  const title = info?.name || "Workspace";
+  const subtitle = !info ? "" : isPersonal
+    ? (mine ? `Your personal workspace${info.default ? " · your default" : ""}` : `${info.personal_of}'s personal workspace${info.default ? " · their default" : ""}`)
+    : `${info.access === "public" ? "Public" : "Shared"} workspace · ${info.role ? `you ${ROLE_TEXT[info.role]}` : "you manage it as an admin"}`;
+  const canDelete = manages && (!isPersonal || personalCount == null || personalCount > 1);
+
+  return (
+    <SubDialog title={title} onClose={onClose}>
+      <div className="settingsForm">
+        {subtitle ? <div className="settingsPaneHint">{subtitle}</div> : null}
+        {!info && !ws.error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
+        {info ? (
+          <>
+            <Section title="General">
+              <Row icon={PenIcon} label="Name" hint={info.name}>
+                {manages ? <button className="uiBtn sm" disabled={ws.busy} onClick={() => setRenaming(true)}>Rename</button> : null}
+              </Row>
+              <StorageRow quota={info.quota} me={me} />
+            </Section>
+            {!isPersonal ? (
+              <Section title="Access">
+                <AccessRows info={info} canEdit={!!admin} onUpdate={async (patch) => {
+                  const d = await ws.update(patch);
+                  if (d && patch.access) done(d.access === "public" ? `${d.name} is open to everyone on this server.` : `${d.name} is private.`);
+                  else if (d && "quota_mb" in patch) done(d.quota_mb ? `Workspace quota set to ${d.quota_mb} MB.` : "Workspace quota removed.");
+                }} />
+                {!admin ? <div className="settingsPaneHint">Access and the workspace's quota are set by a server admin.</div> : null}
+              </Section>
+            ) : null}
+            {!isPersonal ? (
+              <Section
+                title="Members"
+                action={manages ? (
+                  <button className="uiBtn sm" disabled={ws.busy} onClick={() => { ws.setError(""); setInviting(true); }}>
+                    <PlusIcon size={13} /> Invite
+                  </button>
+                ) : null}
+              >
+                <MembersList info={info} me={me} canManage={manages} busy={ws.busy} onSetRole={ws.setRole} onRemove={remove} />
+                {info.access === "public" && !explicitMember ? (
+                  <div className="settingsPaneHint">You are in because the workspace is public — everyone on this server is.</div>
+                ) : manages ? (
+                  <div className="settingsPaneHint">Naming someone Owner hands the workspace on; the role menu is how ownership moves.</div>
+                ) : null}
+              </Section>
+            ) : null}
+            <Section title="Actions">
+              {mine && !info.default ? (
+                <Row icon={CheckIcon} label="Default workspace" hint="where the extension and plain links land"
+                  title="Requests that name no workspace — the browser extension's clips, older clients, a link without a workspace — land in your default workspace.">
+                  <button className="uiBtn sm" disabled={ws.busy} onClick={async () => { const d = await ws.update({ default: true }); if (d) done(`${d.name} is now your default workspace.`); }}>
+                    Make default
+                  </button>
+                </Row>
+              ) : null}
+              {isPersonal && !admin ? (
+                <Row icon={UsersIcon} label="Sharing" hint="a personal workspace is just you"
+                  title="Share a page with a link, or ask a server admin for a shared workspace to work with others.">
+                  <span className="settingDesc">page links only</span>
+                </Row>
+              ) : null}
+              {admin && isPersonal ? (
+                <Row icon={UsersIcon} label="Convert to shared" hint="let people in; the owner stays owner, it stops counting against them">
+                  <button className="uiBtn sm" disabled={ws.busy} onClick={() => convert("shared")}>Make shared</button>
+                </Row>
+              ) : null}
+              {admin && !isPersonal && info.members?.length === 1 ? (
+                <Row icon={UserIcon} label="Convert to personal" hint={`hand it to ${info.members[0].username} as a personal workspace`}>
+                  <button className="uiBtn sm" disabled={ws.busy} onClick={() => convert("personal")}>Make personal</button>
+                </Row>
+              ) : null}
+              {admin && !isPersonal && !explicitMember ? (
+                <Row icon={ShieldIcon} label="Join as owner" hint={info.access === "public" ? "everyone can already open it; this adds you as an owner" : "add yourself so you can open it"}>
+                  <button className="uiBtn sm" disabled={ws.busy} onClick={async () => { const d = await ws.setRole(me, "owner"); if (d) done(`You now own ${d.name}.`); }}>
+                    Join
+                  </button>
+                </Row>
+              ) : null}
+              {!isPersonal && explicitMember && !soleOwner ? (
+                <Row icon={LogOutIcon} label="Leave" hint="you will need a new invitation to come back">
+                  <button className="uiBtn sm" disabled={ws.busy} onClick={() => remove(me)}>Leave</button>
+                </Row>
+              ) : null}
+              {canDelete ? (
+                <Row icon={Trash2Icon} label="Delete workspace" hint={isPersonal ? "everything in it, and its backups" : "everything in it, for every member"}>
+                  <button className="uiBtn sm danger" disabled={ws.busy} onClick={destroy}>Delete…</button>
+                </Row>
+              ) : null}
+            </Section>
+          </>
+        ) : null}
+        {ws.error && !inviting && !renaming ? <div className="settingsPaneHint aiKeysError">{ws.error}</div> : null}
+        <div className="reportModalBtns">
+          {canOpen || explicitMember ? <button className="uiBtn" onClick={onOpen}>Open</button> : null}
+          <button className="uiBtn primary" onClick={onClose}>Done</button>
+        </div>
+      </div>
+      {renaming ? (
+        <NameDialog title="Rename workspace" label="Name" initial={info?.name} submitLabel="Save"
+          busy={ws.busy} error={ws.error} onSubmit={saveName} onClose={() => { setRenaming(false); ws.setError(""); }} />
+      ) : null}
+      {inviting ? (
+        <InviteDialog
+          name={title} accounts={accounts} exclude={(info?.members || []).map((m) => m.username)}
+          busy={ws.busy} error={ws.error} onSubmit={invite} onClose={() => { setInviting(false); ws.setError(""); }}
+        />
+      ) : null}
+    </SubDialog>
+  );
+}
+
+// The Export / Import menus every workspace row carries. Export downloads
+// an /api/export zip of that workspace; Import restores or merges one into
+// it (owners restore, editors merge).
+export function WorkspaceDataMenus({ w, exportWorkspace, importWorkspace, closeSettings }) {
+  const run = (fn) => { closeSettings?.(); fn(); }; // progress shows in the status pill, the confirm wants the screen
+  return (
+    <>
+      <ActionMenu
+        label="Export" icon={ExportIcon}
+        items={[
+          { icon: ExportIcon, label: "Everything (.zip)", title: `A zip of ${w.name}: its databases + every uploaded PDF`,
+            onClick: () => run(() => exportWorkspace(w.id, true)) },
+          { icon: DatabaseIcon, label: "Database only (.zip)", title: "A small zip with just the databases — no uploaded PDFs",
+            onClick: () => run(() => exportWorkspace(w.id, false)) },
+        ]}
+      />
+      {w.role !== "viewer" ? (
+        <ActionMenu
+          label="Import" icon={ImportIcon}
+          items={[
+            ...(w.role === "owner" ? [{ icon: ImportIcon, label: "Restore (replace)…", title: `Replace ${w.name}'s pages and chats with a backup zip`,
+                                        onClick: () => run(() => importWorkspace(w.id, "replace")) }] : []),
+            { icon: PlusIcon, label: "Merge into it…", title: "Add the backup's pages that are not there yet; nothing existing changes",
+              onClick: () => run(() => importWorkspace(w.id, "merge")) },
+          ]}
+        />
+      ) : null}
+    </>
+  );
+}
+
+export function WorkspacesSettings({ value }) {
+  const { workspace, me, isAdmin, switchWorkspace, refreshSession,
+          exportWorkspace, exportAll, importWorkspace, setStatus, confirm, closeSettings } = value;
+  const [data, setData] = React.useState(null);  // GET /api/workspaces/mine: {workspaces, account}
+  const [error, setError] = React.useState("");
+  const [manage, setManage] = React.useState(null); // workspace id
+  const [creating, setCreating] = React.useState(false);
+  const [createError, setCreateError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const accounts = useAccounts();
+  const currentId = workspace?.id;
+
+  const refresh = React.useCallback(() => {
+    apiJson(`${API}/workspaces/mine`).then(setData).catch((err) => setError(err.message));
+  }, []);
+  React.useEffect(() => { refresh(); }, [refresh]);
+
+  const all = data?.workspaces || [];
+  const personal = all.filter((w) => w.personal);
+  const shared = all.filter((w) => !w.personal);
+
   async function submitCreate(name) {
-    setCreating(true);
+    setBusy(true);
     setCreateError("");
     try {
       const d = await apiJson(`${API}/workspaces`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
       });
-      closeDialog();
+      setCreating(false);
       closeSettings?.();
       switchWorkspace(d.id); // open it right away
     } catch (err) {
       setCreateError(err.message);
     } finally {
-      setCreating(false);
+      setBusy(false);
     }
   }
 
-  if (!workspace) return <Empty icon={UsersIcon}>No workspace open.</Empty>;
-  const name = info?.name || workspace.name;
-  const isPublic = (info?.access || workspace.access) === "public";
+  // After leaving or deleting the open workspace there is nothing to stay
+  // in: go to the default one. Otherwise just refresh the lists.
+  function left(id) {
+    if (id === currentId) {
+      closeSettings?.();
+      switchWorkspace(all.find((w) => w.default && w.id !== id)?.id || all.find((w) => w.personal && w.id !== id)?.id);
+      return;
+    }
+    refresh();
+    refreshSession?.();
+  }
+
+  function row(w) {
+    const current = w.id === currentId;
+    const isPublic = w.access === "public";
+    return (
+      <div key={w.id} className="aiProvRow">
+        <span className={`aiProvAvatar ${current ? "active" : ""}`}>
+          {current ? <CheckIcon size={15} /> : w.personal ? <UserIcon size={15} /> : isPublic ? <GlobeIcon size={15} /> : <UsersIcon size={15} />}
+        </span>
+        <span className="aiProvMeta">
+          <span className="aiProvName">
+            {w.name}
+            {w.default ? <span className="uiTag">default</span> : null}
+            {isPublic ? <span className="uiTag">public</span> : null}
+            {current ? <span className="uiTag">open</span> : null}
+          </span>
+          <span className="aiProvDesc">
+            {w.personal ? "just you" : `${ROLE_LABEL[w.role] || w.role} · ${w.members} member${w.members === 1 ? "" : "s"}`}
+            {` · ${fmtBytes(w.used_bytes)}`}
+          </span>
+        </span>
+        <span className="aiProvActions">
+          {!current ? <button className="uiBtn sm" onClick={() => { closeSettings?.(); switchWorkspace(w.id); }}>Open</button> : null}
+          <WorkspaceDataMenus w={w} exportWorkspace={exportWorkspace} importWorkspace={importWorkspace} closeSettings={closeSettings} />
+          <button className="uiBtn sm" onClick={() => setManage(w.id)} title={`Manage ${w.name}`}>
+            <PenIcon size={13} /> Manage
+          </button>
+        </span>
+      </div>
+    );
+  }
 
   return (
     <>
-      <PaneHead icon={isPersonal ? UserIcon : isPublic ? GlobeIcon : UsersIcon} title={name}>
-        {isPersonal
-          ? `${isDefault ? "Your default workspace" : "One of your personal workspaces"} — just you. Share a page with a link, or ask an admin for a shared workspace to work with others.`
-          : `${isPublic ? "A public workspace — open to everyone on this server" : "A shared workspace"} · you ${role === "owner" ? "own it" : role === "editor" ? "can edit" : "can view"}.`}
+      <PaneHead icon={UsersIcon} title="Workspaces">
+        Your libraries. Personal workspaces are just you and share your storage; shared ones are made by an admin and have members.
       </PaneHead>
-
-      <Section
-        title="This workspace"
-        action={owner ? (
-          <button className="uiBtn sm" disabled={ws.busy} onClick={() => { ws.setError(""); setDialog("rename"); }}>
-            <PenIcon size={13} /> Rename
-          </button>
-        ) : null}
-      >
-        <StorageRow quota={info?.quota} me={me} />
-        <AccessRows info={info} canEdit={isAdmin} onUpdate={updateAccess} />
-        <div className="reportModalBtns settingsAlignStart">
-          <ActionMenu
-            label="Export" icon={ExportIcon}
-            items={[
-              { icon: ExportIcon, label: "Everything (.zip)", title: "Download a zip backup: this workspace's databases + every uploaded PDF",
-                onClick: () => { closeSettings?.(); exportUserData(true); } },
-              { icon: DatabaseIcon, label: "Database only (.zip)", title: "A small zip with just the databases — no uploaded PDFs",
-                onClick: () => { closeSettings?.(); exportUserData(false); } },
-            ]}
-          />
-          {role !== "viewer" ? (
-            <ActionMenu
-              label="Import" icon={ImportIcon}
-              items={[
-                ...(owner ? [{ icon: ImportIcon, label: "Restore (replace)…", title: "Replace this workspace's pages and chats with a backup zip",
-                               onClick: () => { closeSettings?.(); importUserData("replace"); } }] : []),
-                { icon: PlusIcon, label: "Merge into this workspace…", title: "Add the backup's pages that are not here yet; nothing existing changes",
-                  onClick: () => { closeSettings?.(); importUserData("merge"); } },
-              ]}
-            />
-          ) : null}
-          {isPersonal && !isDefault && role === "owner" ? (
-            <button className="uiBtn" disabled={ws.busy} onClick={makeDefault}
-              title="Requests that name no workspace (the browser extension, plain links) land in your default workspace">
-              <CheckIcon size={13} /> Make default
-            </button>
-          ) : null}
-          {owner && (!isPersonal || personalCount > 1) ? (
-            <button className="uiBtn danger" disabled={ws.busy} onClick={deleteWorkspace}>
-              <Trash2Icon size={13} /> Delete workspace…
-            </button>
-          ) : null}
-        </div>
-      </Section>
-
-      {!isPersonal ? (
-        <Section
-          title="Members"
-          action={owner ? (
-            <button className="uiBtn sm" disabled={ws.busy} onClick={() => { ws.setError(""); setDialog("invite"); }}>
-              <PlusIcon size={13} /> Invite
-            </button>
-          ) : null}
-        >
-          {!info && !ws.error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
-          <MembersList info={info} me={me} canManage={owner} busy={ws.busy} onSetRole={ws.setRole} onRemove={removeMember} />
-          {info && isPublic && !explicitMember ? (
-            <div className="settingsPaneHint">You are here because the workspace is public — everyone on this server is.</div>
-          ) : null}
-        </Section>
+      {!data && !error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
+      {error ? <Empty icon={UsersIcon}>Workspaces unavailable — {error}</Empty> : null}
+      {data ? (
+        <>
+          <Section title="Storage">
+            <Row icon={DatabaseIcon} label="Your storage" hint={`all your personal workspaces together${data.account.max_upload_mb ? ` · max ${data.account.max_upload_mb} MB per file` : ""}`}
+              title="Uploads into your personal workspaces count against your account's quota. Shared workspaces carry their own.">
+              <QuotaMeter usedBytes={data.account.used_bytes} quotaMb={data.account.quota_mb} />
+            </Row>
+          </Section>
+          <Section
+            title="Personal"
+            action={(
+              <span className="aiProvActions">
+                <ActionMenu
+                  label="Export all" icon={ExportIcon} disabled={!personal.length}
+                  items={[
+                    { icon: ExportIcon, label: "Everything (.zip)", title: "One zip holding an export of each personal workspace, PDFs included",
+                      onClick: () => { closeSettings?.(); exportAll(true); } },
+                    { icon: DatabaseIcon, label: "Databases only (.zip)", title: "One zip holding a database-only export of each personal workspace",
+                      onClick: () => { closeSettings?.(); exportAll(false); } },
+                  ]}
+                />
+                <button className="uiBtn sm" disabled={busy} onClick={() => { setCreateError(""); setCreating(true); }}>
+                  <PlusIcon size={13} /> New workspace
+                </button>
+              </span>
+            )}
+          >
+            {personal.map(row)}
+          </Section>
+          <Section title="Shared">
+            {shared.length ? shared.map(row) : (
+              <Empty icon={UsersIcon}>
+                {isAdmin ? "No shared workspaces yet — make one in Settings → Server." : "No shared workspaces yet — an admin makes them."}
+              </Empty>
+            )}
+          </Section>
+        </>
       ) : null}
 
-      <Section
-        title="Your workspaces"
-        action={(
-          <button className="uiBtn sm" disabled={creating} onClick={() => { setCreateError(""); setDialog("create"); }}>
-            <PlusIcon size={13} /> New workspace
-          </button>
-        )}
-      >
-        {workspaces.map((w) => (
-          <div key={w.id} className="aiProvRow">
-            <span className={`aiProvAvatar ${w.id === wsId ? "active" : ""}`}>
-              {w.id === wsId ? <CheckIcon size={15} /> : w.personal ? <UserIcon size={15} /> : w.access === "public" ? <GlobeIcon size={15} /> : <UsersIcon size={15} />}
-            </span>
-            <span className="aiProvMeta">
-              <span className="aiProvName">
-                {w.name}
-                {w.personal ? <span className="uiTag">personal</span> : <span className="uiTag">{w.access === "public" ? "public" : "shared"}</span>}
-                {w.default ? <span className="uiTag">default</span> : null}
-              </span>
-              <span className="aiProvDesc">
-                {w.personal ? "just you" : `${ROLE_LABEL[w.role] || w.role} · ${w.members} member${w.members === 1 ? "" : "s"}`}
-              </span>
-            </span>
-            <span className="aiProvActions">
-              {w.id !== wsId ? (
-                <button className="uiBtn sm" onClick={() => { closeSettings?.(); switchWorkspace(w.id); }}>Open</button>
-              ) : null}
-            </span>
-          </div>
-        ))}
-      </Section>
-
-      {ws.error && !dialog ? <div className="settingsPaneHint aiKeysError">{ws.error}</div> : null}
-
-      {dialog === "rename" ? (
-        <NameDialog title="Rename workspace" label="Name" initial={name} submitLabel="Save"
-          busy={ws.busy} error={ws.error} onSubmit={saveRename} onClose={closeDialog} />
-      ) : null}
-      {dialog === "invite" ? (
-        <InviteDialog
-          name={name} accounts={accounts} exclude={(info?.members || []).map((m) => m.username)}
-          busy={ws.busy} error={ws.error} onSubmit={submitInvite} onClose={closeDialog}
+      {manage ? (
+        <ManageWorkspaceDialog
+          wsId={manage} me={me} admin={isAdmin} accounts={accounts} confirm={confirm} setStatus={setStatus}
+          canOpen={manage !== currentId} personalCount={personal.length}
+          onOpen={() => { closeSettings?.(); switchWorkspace(manage); }}
+          onClose={() => { setManage(null); refresh(); refreshSession?.(); }}
+          onLeft={left}
         />
       ) : null}
-      {dialog === "create" ? (
+      {creating ? (
         <NameDialog title="New personal workspace" label="Name"
-          hint={`a separate library of your own — work, life, play${isAdmin ? "; shared workspaces are made in Settings → Workspaces" : "; ask an admin for a shared one"}`}
-          submitLabel="Create and open" busy={creating} error={createError} onSubmit={submitCreate} onClose={closeDialog} />
+          hint={`a separate library of your own — work, life, play${isAdmin ? "; shared workspaces are made in Settings → Server" : "; ask an admin for a shared one"}`}
+          submitLabel="Create and open" busy={busy} error={createError} onSubmit={submitCreate} onClose={() => setCreating(false)} />
       ) : null}
     </>
   );

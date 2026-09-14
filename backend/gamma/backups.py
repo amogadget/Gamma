@@ -12,8 +12,9 @@ a ``manifest.json``. Two producers, one shape:
 
 Restoring is a copy-back over the data directory with the server stopped
 (``manage.py backups --restore``): a whole-directory operation, deliberately
-not an HTTP endpoint. Per-workspace backups the app's users take themselves
-are ``/api/export`` zips ([docs/dev/api.md]), a different thing.
+not an HTTP endpoint. Per-workspace backups — the snapshots users take from
+Settings → Backups and the ``/api/export`` zips — are ``gamma/ws_backup.py``,
+a different thing; this module does not copy ``backups/``.
 """
 
 import json

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from .. import workspaces
 from ..auth import require_user
-from ..server_settings import validate_quota_mb, workspace_quota
+from ..server_settings import user_limits, usage_bytes, validate_quota_mb, workspace_bytes, workspace_quota
 
 router = APIRouter(prefix="/api/workspaces", tags=["workspaces"])
 
@@ -113,6 +113,16 @@ async def create_workspace(payload: WorkspaceCreate, request: Request):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return _payload(info["id"], user)
+
+
+@router.get("/mine")
+async def my_workspaces(request: Request):
+    """Settings → Workspaces: every workspace I can open, each with its
+    upload size, plus my account's storage (limits + the usage of all my
+    personal workspaces together)."""
+    user = require_user(request)
+    mine = [{**w, "used_bytes": workspace_bytes(w["id"])} for w in workspaces.list_for_user(user)]
+    return {"workspaces": mine, "account": {**user_limits(user), "used_bytes": usage_bytes(user)}}
 
 
 @router.get("/find-page/{page_id}")

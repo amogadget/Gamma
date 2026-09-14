@@ -21,7 +21,7 @@ import { filterSlashCommands, SlashMenuPopup } from "./slashMenu";
 import { remarkCallouts } from "./callouts";
 import { PeerChips } from "./presence";
 import { ContextMenu, MenuItem } from "./menus";
-import { API, apiJson, copyText, withShare, withWorkspace } from "./utils";
+import { API, apiJson, assetUrl, copyText, withShare, withWorkspace } from "./utils";
 import { CopyIcon, ExportIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "./icons";
 import {
   applyImageEdit, applyTableEdit, formatTables, htmlTableToMarkdown,
@@ -181,11 +181,11 @@ function toggleTaskMarker(content, idx, checked) {
 // — what a dropped non-image file becomes) renders as a file chip: no
 // preview fetch, opens/downloads in a new tab.
 function FileChip({ href, text }) {
-  const name = (text || "").trim() || decodeURIComponent(href.split("/").pop() || "file");
+  const name = (text || "").trim() || decodeURIComponent((href.split("/").pop() || "file").split("?")[0]);
   return (
     <a
       className="linkChip fileChip"
-      href={withShare(href)}
+      href={assetUrl(href)}
       target="_blank"
       rel="noreferrer"
       title={name}
@@ -513,7 +513,9 @@ const BlockMarkdown = React.memo(function BlockMarkdown({ content, blockId, refL
       // remarkCallouts must run before it (it eats the marker line's "\n").
       remarkPlugins={[remarkGfm, remarkMath, remarkCallouts, remarkBreaks]}
       rehypePlugins={[rehypeRaw, rehypeKatex]}
-      urlTransform={(url) => url.startsWith("blockref:") || url.startsWith("blockembed:") ? url : defaultUrlTransform(url)}
+      // Upload URLs get the workspace / share token here (assetUrl): the
+      // browser fetches <img> src and link hrefs without the API header.
+      urlTransform={(url) => url.startsWith("blockref:") || url.startsWith("blockembed:") ? url : assetUrl(defaultUrlTransform(url))}
       components={{
         a: ({ href, children }) => {
           if (href?.startsWith("blockref:")) {

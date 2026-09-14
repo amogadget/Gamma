@@ -1,19 +1,16 @@
-// Settings → Workspaces (admins): every workspace on the server — shared
-// ones with their access, owners, members and size; personal ones per
-// account — with a Manage dialog per workspace (rename, access, quota,
-// members and ownership, kind conversion, delete, join) and New workspace
-// (a shared one, for any owner, private or public). GUI for GET
-// /api/admin/workspaces + /api/workspaces* (docs/dev/workspaces.md); the
-// building blocks are settingsWorkspace.jsx's.
+// Settings → Server → Workspaces (admins): every workspace on the server —
+// shared ones with their access, owners, members and size; personal ones
+// per account — each with Manage (the shared workspace dialog from
+// settingsWorkspace.jsx, in admin mode: access, quota, ownership, kind
+// conversion, join) and New workspace (a shared one, for any owner, private
+// or public). GUI for GET /api/admin/workspaces + /api/workspaces*
+// (docs/dev/workspaces.md).
 import React from "react";
 import { API, apiJson, fmtBytes } from "./utils";
 import { MenuSelect } from "./menus";
-import { PaneHead, Section, SubDialog, Field, Empty, UnitInput, AccountPicker } from "./settingsKit";
-import {
-  AccessRows, InviteDialog, MembersList, StorageRow, useAccounts, useWorkspace,
-  ACCESS_OPTIONS, PUBLIC_ROLE_OPTIONS,
-} from "./settingsWorkspace";
-import { GlobeIcon, PenIcon, PlusIcon, ShieldIcon, Trash2Icon, UserIcon, UsersIcon } from "./icons";
+import { Section, SubDialog, Field, Empty, UnitInput, AccountPicker } from "./settingsKit";
+import { ManageWorkspaceDialog, useAccounts, ACCESS_OPTIONS, PUBLIC_ROLE_OPTIONS } from "./settingsWorkspace";
+import { GlobeIcon, PenIcon, PlusIcon, UserIcon, UsersIcon } from "./icons";
 
 export function WorkspacesAdmin({ value }) {
   const { me, workspaces: mine, switchWorkspace, refreshSession, setStatus, confirm, closeSettings } = value;
@@ -70,9 +67,6 @@ export function WorkspacesAdmin({ value }) {
 
   return (
     <>
-      <PaneHead icon={GlobeIcon} title="Workspaces">
-        Every library on this server: shared workspaces (admin-made, members and roles) and each account's personal ones. Admins manage any of them without being members; opening one still takes membership or public access.
-      </PaneHead>
       {!listing && !error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
       {error ? <Empty icon={UsersIcon}>Workspaces unavailable — {error}</Empty> : null}
       {listing ? (
@@ -99,8 +93,8 @@ export function WorkspacesAdmin({ value }) {
       ) : null}
 
       {manage ? (
-        <ManageDialog
-          wsId={manage} me={me} accounts={accounts} confirm={confirm} setStatus={setStatus}
+        <ManageWorkspaceDialog
+          wsId={manage} me={me} admin accounts={accounts} confirm={confirm} setStatus={setStatus}
           canOpen={openable.has(manage)}
           onOpen={() => { closeSettings?.(); switchWorkspace(manage); }}
           onClose={() => { setManage(null); refresh(); refreshSession?.(); }}
@@ -114,160 +108,6 @@ export function WorkspacesAdmin({ value }) {
         />
       ) : null}
     </>
-  );
-}
-
-// One workspace, everything an admin can do to it. Reuses the Members &
-// sharing pane's pieces on top of useWorkspace(wsId).
-function ManageDialog({ wsId, me, accounts, confirm, setStatus, canOpen, onOpen, onClose }) {
-  const ws = useWorkspace(wsId);
-  const [name, setName] = React.useState(null); // the name being edited, null = not editing
-  const [inviting, setInviting] = React.useState(false);
-  const info = ws.info;
-  const isPersonal = info?.kind === "personal";
-  const isMember = (info?.members || []).some((m) => m.username === me);
-
-  function convert(kind) {
-    const toShared = kind === "shared";
-    confirm({
-      title: toShared ? "Convert to shared workspace" : "Convert to personal workspace",
-      message: toShared
-        ? `Make "${info?.name}" a shared workspace? ${info?.personal_of} stays its owner and can invite people; it stops counting against their storage. If it is their default, another personal workspace becomes the default.`
-        : `Make "${info?.name}" ${info?.members?.[0]?.username}'s personal workspace? It becomes private, its own quota is cleared, and it counts against their storage.`,
-      confirmLabel: "Convert",
-      onConfirm: async () => {
-        const d = await ws.update({ kind });
-        if (d) setStatus(`${d.name} is now a ${d.kind} workspace.`);
-      },
-    });
-  }
-
-  async function saveName() {
-    const d = await ws.update({ name: name.trim() });
-    if (d) { setName(null); setStatus(`Renamed to ${d.name}.`); }
-  }
-
-  async function invite(username, role) {
-    const d = await ws.setRole(username, role);
-    if (d) { setInviting(false); setStatus(`${username} is now ${role} of ${d.name}.`); }
-  }
-
-  function remove(username) {
-    confirm({
-      title: username === me ? "Leave workspace" : "Remove member",
-      message: `Remove ${username} from "${info?.name}"?`,
-      confirmLabel: "Remove", danger: true,
-      onConfirm: async () => {
-        const d = await ws.removeMember(username);
-        if (d) ws.setInfo((prev) => ({ ...prev, members: (prev?.members || []).filter((m) => m.username !== username) }));
-      },
-    });
-  }
-
-  function destroy() {
-    confirm({
-      title: "Delete workspace",
-      message: `Delete "${info?.name}" with ALL its pages, PDFs and chats, for every member? This can't be undone.`,
-      confirmLabel: "Delete", danger: true,
-      onConfirm: async () => {
-        const d = await ws.destroy();
-        if (d) { setStatus(d.warning || `Deleted ${info?.name}.`); onClose(); }
-      },
-    });
-  }
-
-  const title = info?.name || "Workspace";
-  return (
-    <SubDialog title={title} onClose={onClose}>
-      <div className="settingsForm">
-        {!info && !ws.error ? <Empty icon={UsersIcon}>Loading…</Empty> : null}
-        {info ? (
-          <>
-            <Field label="Name" hint={isPersonal ? `${info.personal_of}'s personal workspace${info.default ? " (their default)" : ""}` : "a shared library"}>
-              {name === null ? (
-                <span className="aiProvPwForm">
-                  <input className="aiKeyInput" type="text" value={info.name} readOnly />
-                  <button className="uiBtn sm iconSq" title="Rename" aria-label="Rename" onClick={() => setName(info.name)}>
-                    <PenIcon size={13} />
-                  </button>
-                </span>
-              ) : (
-                <span className="aiProvPwForm">
-                  <input
-                    className="aiKeyInput" type="text" autoFocus value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) saveName(); if (e.key === "Escape") setName(null); }}
-                  />
-                  <button className="uiBtn sm primary" disabled={ws.busy || !name.trim()} onClick={saveName}>Save</button>
-                  <button className="uiBtn sm" onClick={() => setName(null)}>Cancel</button>
-                </span>
-              )}
-            </Field>
-            <StorageRow quota={info.quota} me={me} />
-            <AccessRows info={info} canEdit onUpdate={async (patch) => {
-              const d = await ws.update(patch);
-              if (d && patch.access) setStatus(d.access === "public" ? `${d.name} is open to everyone.` : `${d.name} is private.`);
-            }} />
-            {!isPersonal ? (
-              <>
-                <div className="setSection">
-                  <span className="setSectionLabel">Members</span>
-                  <span className="setSectionRule" />
-                  <button className="uiBtn sm" disabled={ws.busy} onClick={() => { ws.setError(""); setInviting(true); }}>
-                    <PlusIcon size={13} /> Add
-                  </button>
-                </div>
-                <MembersList info={info} me={me} canManage busy={ws.busy} onSetRole={ws.setRole} onRemove={remove} />
-                <div className="settingsPaneHint">
-                  Naming someone Owner hands the workspace on; the role menu is how ownership moves.
-                  {info.members?.length === 1 ? " With a single member it can also become that person's personal workspace." : ""}
-                </div>
-              </>
-            ) : (
-              <div className="settingsPaneHint">
-                A personal workspace has no other members. Convert it to a shared workspace to let people in.
-              </div>
-            )}
-          </>
-        ) : null}
-        {ws.error && !inviting ? <div className="settingsPaneHint aiKeysError">{ws.error}</div> : null}
-        <div className="reportModalBtns">
-          {info ? (
-            <button className="uiBtn danger" disabled={ws.busy} onClick={destroy}
-              title={isPersonal ? "Delete this personal workspace (an account's last one cannot go)" : "Delete the workspace for every member"}>
-              <Trash2Icon size={13} /> Delete…
-            </button>
-          ) : null}
-          {info && isPersonal ? (
-            <button className="uiBtn" disabled={ws.busy} onClick={() => convert("shared")} title="Let people in: the owner stays owner, it stops counting against them">
-              <UsersIcon size={13} /> Make shared
-            </button>
-          ) : null}
-          {info && !isPersonal && info.members?.length === 1 ? (
-            <button className="uiBtn" disabled={ws.busy} onClick={() => convert("personal")} title="Hand it to its single member as a personal workspace">
-              <UserIcon size={13} /> Make personal
-            </button>
-          ) : null}
-          {info && !isMember && !isPersonal ? (
-            <button
-              className="uiBtn" disabled={ws.busy}
-              title={info.access === "public" ? "Add yourself as an owner (everyone can already open it)" : "Add yourself as an owner so you can open it"}
-              onClick={async () => { const d = await ws.setRole(me, "owner"); if (d) setStatus(`You now own ${d.name}.`); }}
-            >
-              <ShieldIcon size={13} /> Join as owner
-            </button>
-          ) : null}
-          {canOpen || isMember ? <button className="uiBtn" onClick={onOpen}>Open</button> : null}
-          <button className="uiBtn primary" onClick={onClose}>Done</button>
-        </div>
-      </div>
-      {inviting ? (
-        <InviteDialog
-          name={title} accounts={accounts} exclude={(info?.members || []).map((m) => m.username)}
-          busy={ws.busy} error={ws.error} onSubmit={invite} onClose={() => { setInviting(false); ws.setError(""); }}
-        />
-      ) : null}
-    </SubDialog>
   );
 }
 

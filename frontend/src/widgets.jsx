@@ -1,7 +1,7 @@
 // Shared presentational widgets: workspace chrome, dockable windows, chat
 // markdown, and the auto-growing textarea.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -16,6 +16,7 @@ import {
   ScissorsIcon,
 } from "./icons";
 import { MenuSelect } from "./menus";
+import { assetUrl } from "./utils";
 import { Step } from "./settingsKit";
 
 // Shared chrome for every dockable window: one grip (drag to move/reorder,
@@ -174,6 +175,7 @@ const ChatMarkdown = React.memo(function ChatMarkdown({ text, onOpenPage }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
+        urlTransform={(url) => assetUrl(defaultUrlTransform(url))}
         components={{
           a: ({ href, children }) => {
             const pageId = onOpenPage ? gammaPageLink(href) : null;

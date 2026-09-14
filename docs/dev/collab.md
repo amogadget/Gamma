@@ -103,7 +103,11 @@ anonymous share viewers are `Anonymous`.
   view. The block tree's transition effect calls
   `commit(tree)`: a load transition (the existing suppress flag, also set for
   remote applies) makes the tree the new base; any other transition is
-  diffed against the base (`diffTrees`) and the ops queued. Positions live in
+  diffed against the base (`diffTrees`) and the ops queued. One exception:
+  an empty page opens with a client-minted placeholder block
+  (`seedBlockIdRef` in App.jsx) that the server has never seen, so the load
+  commit leaves it out of the base — the first edit to it diffs as an
+  `insert`, never as a `set` the server would 404. Positions live in
   one `Map id → key` shared with `blockOps`, so tree objects and history
   snapshots stay untouched.
 - **the queue**: `set` ops on one block coalesce (`pushOp`); typing flushes
@@ -144,7 +148,9 @@ state in App instead of the tree.
 
 - the header avatar stack (initial, peer colour; faded while only viewing;
   click jumps to the person's block);
-- small avatar chips on the row a person is on, and a coloured left edge
+- small avatar chips before the row a person is on (in the ⋮⋮ handle
+  column, fading while the row is hovered — never over the row's content or
+  an embed card's controls), and a coloured left edge
   while someone has that block's editor open;
 - inside an open editor, each peer's caret with a name tag and a tinted
   selection (`remoteCursorField` in `blockCmEditor.jsx`, mapped through local
@@ -159,11 +165,14 @@ state in App instead of the tree.
   context-managed client), AI-tool and cross-page fan-out.
 - `frontend/tests/blockOps.test.mjs`: `node --test tests/blockOps.test.mjs`
   from `frontend/` (pure diff/apply round-trips).
-- End to end: two browser contexts on one page — see the `/verify` skill; the
-  scenarios exercised while building this: typing in one tab appears in the
-  other, chips and carets show, same-block typing converges, new block +
-  indent + delete fan out, undo after a remote edit keeps the remote edit, an
-  invited editor on a share link edits the owner's page under their own name.
+- End to end: `npm run e2e -- --only collab` from `frontend/`
+  (`tests/e2e/scenarios/collab.mjs`, [debugging.md](debugging.md)): two
+  browser contexts on one page of a shared workspace — presence stack and row
+  chips, typing in one tab appears in the other, edits to different blocks
+  converge, same-block typing settles on one value, undo after a remote edit
+  keeps the remote edit, a rename reaches the other tab, an edit made offline
+  lands once the network is back, a remote delete, a highlight made by the
+  other person; `share.mjs` covers the invited editor on a share link.
 
 ## Limits and next steps
 
@@ -180,8 +189,6 @@ state in App instead of the tree.
 - The op log has `actor` and `at` per batch but nothing reads them yet: an
   activity view ("who changed what") and a page version history are both
   derivable from it.
-- The two-browser end-to-end flow is not checked in (there is no frontend
-  test runner beyond `node --test`); a Playwright smoke would be the place.
 
 The survey behind this design (OT vs record-level LWW vs CRDT, why the old
 snapshot autosave could not be patched) is in

@@ -55,7 +55,7 @@ with the SQLite backup API, so consistent while the server runs), the
 `uploads/` directories when asked, and a `manifest.json` (time, label, schema
 version, file list, whether uploads are included).
 
-- **Take one**: Settings → Advanced → *Server backups* (admins; *Databases
+- **Take one**: Settings → Server → *Server backups* (admins; *Databases
   only* or *Everything*), `POST /api/admin/backups`, or `manage.py backups
   --create [--uploads] [--label x]`. The migration runner takes a
   databases-only one labelled `v<N>` and prunes its own to
@@ -72,8 +72,9 @@ version, file list, whether uploads are included).
   the binary. Deliberately not an HTTP endpoint: a whole-directory swap
   under a running server is not safe.
 
-Per-workspace backups the app's users take themselves are `/api/export` zips
-([api.md](api.md)) — a different, smaller thing.
+Per-workspace backups — the snapshots users keep on the server from
+Settings → Backups and the `/api/export` zips — are `gamma/ws_backup.py`
+([workspaces.md](workspaces.md) "Backups"), a different, smaller thing.
 
 ## Running it
 

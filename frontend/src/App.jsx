@@ -25,6 +25,7 @@ import {
   LanguagesIcon, LanguagesOffIcon, LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PenIcon, PinIcon, PlusIcon,
   RectSelectIcon, SearchIcon, SettingsIcon, ShieldIcon, SparklesIcon, TextCursorIcon, TrashIcon, TypeIcon, UploadIcon,
   ScissorsIcon, UserIcon, UsersIcon, XIcon, ZoomInIcon, ZoomOutIcon,
+  ServerIcon,
 } from "./icons";
 
 
@@ -487,17 +488,32 @@ export default function App() {
   // from content-length). Shows in the pill + a background-tasks row.
   // `target` names another account (admins only, from Settings → Users);
   // omitted it means your own data.
-  async function exportUserData(withUploads, target) {
-    const other = target && target !== authUser?.user ? target : null;
-    const qs = (extra) => `${extra}${other ? `${extra ? "&" : "?"}user=${encodeURIComponent(other)}` : ""}`;
-    const label = (withUploads ? "Export data" : "Export database") + (other ? ` — ${other}` : "");
+  // Download a workspace as an /api/export zip (`wsId` — any of mine; the
+  // open one by default), or every personal workspace at once
+  // (/api/export-all, one export zip per workspace inside).
+  function exportWorkspace(wsId, withUploads) {
+    const target = wsId && wsId !== getCurrentWorkspace() ? wsId : null;
+    const name = target ? workspaces.find((w) => w.id === target)?.name : workspace?.name;
+    return downloadWorkspaceExport({
+      url: `${API}/export?uploads=${withUploads ? 1 : 0}${target ? `&ws=${encodeURIComponent(target)}` : ""}`,
+      progressUrl: `${API}/export-progress${target ? `?ws=${encodeURIComponent(target)}` : ""}`,
+      label: `${withUploads ? "Export" : "Export database"}${name ? ` — ${name}` : ""}`,
+    });
+  }
+  function exportAll(withUploads) {
+    return downloadWorkspaceExport({
+      url: `${API}/export-all?uploads=${withUploads ? 1 : 0}`,
+      label: withUploads ? "Export all workspaces" : "Export all databases",
+    });
+  }
+  async function downloadWorkspaceExport({ url, progressUrl, label }) {
     const tid = addTransfer({ name: label, kind: "download", info: "preparing…" });
     postPill("backup", { msg: "Preparing export — the server is zipping your data…", spinner: true });
     // The response only starts once the server finished zipping; until then,
     // poll the zipping percent from the export-progress side-channel.
-    const zipPoll = setInterval(async () => {
+    const zipPoll = progressUrl && setInterval(async () => {
       try {
-        const p = await apiJson(`${API}/export-progress${qs("")}`);
+        const p = await apiJson(progressUrl);
         if (p.active && p.total) {
           const pct = Math.min(99, Math.floor((p.done / p.total) * 100));
           postPill("backup", { msg: `Preparing export — zipping… ${pct}% (${fmtBytes(p.done)} of ${fmtBytes(p.total)})`, spinner: true });
@@ -506,7 +522,7 @@ export default function App() {
       } catch {}
     }, 500);
     try {
-      const res = await fetch(`${API}/export${qs(withUploads ? "" : "?uploads=0")}`, { credentials: "include" });
+      const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
       clearInterval(zipPoll);
       const total = Number(res.headers.get("content-length")) || 0;
@@ -552,14 +568,16 @@ export default function App() {
     }
   }
 
-  // Restore an exported zip into an account. mode "replace": notes + settings
-  // are replaced by the backup, uploaded files are merged in. mode "merge":
-  // only pages/chats missing here are added, existing data wins. `target` is
-  // another account (admins only); restoring into your own account reloads
-  // afterwards — every piece of in-memory state (home feed, tabs, chats) is
-  // stale — while another account's restore leaves this workspace alone.
-  function importUserData(mode = "replace", target) {
-    const who = target || authUser.user;
+  // Restore an exported zip into a workspace (`wsId` — any of mine; the open
+  // one by default). mode "replace": pages + chats are replaced by the
+  // backup, uploaded files are merged in. mode "merge": only pages/chats
+  // missing there are added, existing data wins. Restoring into the OPEN
+  // workspace reloads afterwards — every piece of in-memory state (home
+  // feed, tabs, chats) is stale — while another workspace's restore leaves
+  // this one alone.
+  function importWorkspace(wsId, mode = "replace") {
+    const target = wsId && wsId !== getCurrentWorkspace() ? wsId : null;
+    const who = (target ? workspaces.find((w) => w.id === target)?.name : workspace?.name) || "this workspace";
     const inp = document.createElement("input");
     inp.type = "file";
     inp.accept = ".zip,application/zip";
@@ -569,22 +587,22 @@ export default function App() {
       setConfirmBox(mode === "merge" ? {
         title: "Merge backup",
         message: (
-          <>Merge "{f.name}" ({fmtBytes(f.size)}) into the account "{who}"?
+          <>Merge "{f.name}" ({fmtBytes(f.size)}) into the workspace "{who}"?
           {" "}Pages and chats from the backup that don't exist there yet will be <b>added</b>.
-          {" "}Everything already in that account (including settings) is <b>kept unchanged</b>.</>
+          {" "}Everything already in that workspace is <b>kept unchanged</b>.</>
         ),
         confirmLabel: "Merge",
-        onConfirm: () => runBackupImport(f, mode, who),
+        onConfirm: () => runBackupImport(f, mode, target),
       } : {
         title: "Replace all data",
         message: (
-          <>Restore "{f.name}" ({fmtBytes(f.size)}) into the account "{who}"?
-          {" "}<b>ALL of that account's notes, chats, and settings will be REPLACED</b> by the backup.
+          <>Restore "{f.name}" ({fmtBytes(f.size)}) into the workspace "{who}"?
+          {" "}<b>ALL of that workspace's notes and chats will be REPLACED</b> by the backup.
           {" "}Uploaded PDFs are merged in (nothing is deleted). <b>This cannot be undone.</b></>
         ),
         confirmLabel: "Replace",
         danger: true,
-        onConfirm: () => runBackupImport(f, mode, who),
+        onConfirm: () => runBackupImport(f, mode, target),
       });
     };
     inp.click();
@@ -595,14 +613,15 @@ export default function App() {
   // "restoring/merging" hint while the server unzips and swaps the databases.
   // after.openPage: reload into that page instead of the home library (a
   // shared page imported by link keeps its block id, so it opens directly).
+  // `target`: another workspace of mine (null = the open one).
   function runBackupImport(f, mode, target, after = {}) {
     const merging = mode === "merge";
-    const other = target && target !== authUser?.user ? target : null;
+    const other = target && target !== getCurrentWorkspace() ? target : null;
     const tid = addTransfer({ name: `${merging ? "Merge" : "Restore"} ${f.name}`.slice(0, 60), kind: "upload", info: "uploading…" });
     const fd = new FormData();
     fd.append("file", f);
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API}/import-data?mode=${mode}${other ? `&user=${encodeURIComponent(other)}` : ""}`);
+    xhr.open("POST", `${API}/import-data?mode=${mode}${other ? `&ws=${encodeURIComponent(other)}` : ""}`);
     xhr.withCredentials = true;
     // XHR bypasses the window.fetch wrapper, so the tab-identity guard and
     // the workspace header must be set by hand — this is the most
@@ -628,9 +647,9 @@ export default function App() {
       postPill("backup", null);
       if (xhr.status >= 200 && xhr.status < 300) {
         updateTransfer(tid, { status: "done", info: merging ? `${d.pages_added ?? 0} pages added` : "restored" });
-        // Another account's data changed, not this workspace's — nothing here
+        // Another workspace's data changed, not this one's — nothing here
         // is stale, so stay put instead of throwing the session away.
-        if (other) setStatus(`${merging ? "Merged into" : "Restored"} ${other}.`);
+        if (other) setStatus(`${merging ? "Merged into" : "Restored"} ${workspaces.find((w) => w.id === other)?.name || "the workspace"}.`);
         else if (after.openPage) window.location.href = withWorkspace(`${window.location.pathname}?page=${encodeURIComponent(after.openPage)}`);
         else window.location.href = withWorkspace(window.location.pathname); // fresh state, no stale ?block=
       } else {
@@ -3395,9 +3414,10 @@ export default function App() {
     }
   }, [blocks, readOnly]);
 
-  // Fetch backlinks for the focused block
+  // Fetch backlinks for the focused block. Not in the share view: backlinks
+  // span the library, so the server refuses share tokens (403) by design.
   useEffect(() => {
-    if (!focusedBlockId) { setBacklinks([]); return; }
+    if (!focusedBlockId || shareMode) { setBacklinks([]); return; }
     let cancelled = false;
     (async () => {
       try {
@@ -3414,6 +3434,12 @@ export default function App() {
   // suppress flag) makes the tree the session's base instead of a change.
   const applyRemoteRef = useRef(null);
   const loadedSeqRef = useRef(null); // the op-log seq the last fetched tree reflects
+  // An empty page opens with one client-minted placeholder block (openBlock)
+  // that the server has never seen. It is set under the load suppress flag,
+  // so the collab base must NOT count it as known — the first edit to it is
+  // then diffed as an `insert`, not a `set` on a block the server rejects
+  // (404 "no such block"). Cleared once that insert has been queued.
+  const seedBlockIdRef = useRef(null);
   const collab = usePageCollab({
     pageId: focusedBlockId,
     enabled: !!focusedBlockId,
@@ -3468,13 +3494,17 @@ export default function App() {
     if (!focusedBlockId) return;
     if (suppressAutosaveRef.current) {
       suppressAutosaveRef.current = false;
-      collab.commit(blocks, { isLoad: true, seq: loadedSeqRef.current });
+      const seed = seedBlockIdRef.current;
+      const known = seed ? blocks.filter((b) => b.id !== seed) : blocks;
+      collab.commit(known, { isLoad: true, seq: loadedSeqRef.current });
       loadedSeqRef.current = null;
       return;
     }
     if (readOnly) return;
-    collab.commit(blocks, { now: saveNowRef.current });
+    const ops = collab.commit(blocks, { now: saveNowRef.current });
     saveNowRef.current = false;
+    const seed = seedBlockIdRef.current;
+    if (seed && ops.some((op) => op.op === "insert" && op.id === seed)) seedBlockIdRef.current = null;
   }, [blocks, readOnly]);
   // Our place on the page for the others: the focused row (an open editor
   // reports its exact selection through onCaret).
@@ -4289,6 +4319,7 @@ export default function App() {
         setPdfUrl("");
         if (childBlocks.length === 0 && !readOnly) {
           const seedId = makeId();
+          seedBlockIdRef.current = seedId;
           suppressAutosaveRef.current = true;
           // A page created from "New page" gets the title first (Notion-
           // style); the seed block waits for Enter there.
@@ -4435,6 +4466,7 @@ export default function App() {
   // in-flight scroll restore so it can't touch the next document.
   function leaveCurrentPage() {
     flushPendingSave();
+    seedBlockIdRef.current = null;
     captureScrollPos();
     cancelPdfRestore();
   }
@@ -5826,6 +5858,10 @@ export default function App() {
                 onBlur={() => { renameTitle(titleDraft); setTitleEditing(false); }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
+                    // The first block's editor mounts and takes focus within this same
+                    // key event (discrete-event flush), so the key's default insert would
+                    // land there as a newline.
+                    e.preventDefault();
                     e.currentTarget.blur();
                     // On a fresh page, Enter continues into its empty first block.
                     const first = blocksRef.current?.[0];
@@ -7649,11 +7685,11 @@ export default function App() {
               {!authUser.is_guest ? (
                 <button
                   className="popoverItem"
-                  onClick={() => { setSettingsOpen("workspace"); setOpenPopover(null); }}
-                  title="Rename this workspace, invite people, create another, back it up"
+                  onClick={() => { setSettingsOpen("workspaces"); setOpenPopover(null); }}
+                  title="All your workspaces: rename, members, export and import, create another"
                 >
                   <UsersIcon className="popoverItemIcon" size={15} />
-                  Workspace settings…
+                  Workspaces…
                 </button>
               ) : null}
               <div className="popoverDivider" />
@@ -7661,24 +7697,24 @@ export default function App() {
                 <SettingsIcon className="popoverItemIcon" size={15} />
                 Settings…
               </button>
-              {/* Both land in Settings → Users: your row carries the
-                  Export/Import menus, admins see every account. */}
-              <button
-                className="popoverItem"
-                onClick={() => { setSettingsOpen("users"); setOpenPopover(null); }}
-                title="Download a backup of this account, or restore one"
-              >
-                <DatabaseIcon className="popoverItemIcon" size={15} />
-                Backup &amp; restore…
-              </button>
+              {!authUser.is_guest ? (
+                <button
+                  className="popoverItem"
+                  onClick={() => { setSettingsOpen("backups"); setOpenPopover(null); }}
+                  title="Snapshots of your workspaces: take one, download, restore"
+                >
+                  <DatabaseIcon className="popoverItemIcon" size={15} />
+                  Backups…
+                </button>
+              ) : null}
               {authUser.is_admin ? (
                 <button
                   className="popoverItem"
-                  onClick={() => { setSettingsOpen("users"); setOpenPopover(null); }}
-                  title="Accounts, storage limits, and backup/restore for any of them"
+                  onClick={() => { setSettingsOpen("server"); setOpenPopover(null); }}
+                  title="Accounts, every workspace, storage defaults, server backups and log"
                 >
-                  <UsersIcon className="popoverItemIcon" size={15} />
-                  Manage users…
+                  <ServerIcon className="popoverItemIcon" size={15} />
+                  Server…
                 </button>
               ) : null}
               <div className="popoverDivider" />
@@ -8466,42 +8502,47 @@ export default function App() {
         search={{ searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper, indexTask, setStatus }}
         workspace={authUser?.user && !authUser.is_guest ? {
           workspace,
-          workspaces,
           me: authUser.user,
           isAdmin: !!authUser?.is_admin,
           switchWorkspace,
           refreshSession: checkSession,
-          exportUserData,
-          importUserData,
+          exportWorkspace,
+          exportAll,
+          importWorkspace,
           setStatus,
           confirm: setConfirmBox,
           closeSettings: () => setSettingsOpen(null),
         } : null}
-        workspacesAdmin={authUser?.is_admin ? {
+        backups={authUser?.user && !authUser.is_guest ? {
+          workspace,
+          setStatus,
+          confirm: setConfirmBox,
+          closeSettings: () => setSettingsOpen(null),
+          reloadWorkspace: () => { window.location.href = withWorkspace(window.location.pathname); },
+        } : null}
+        server={authUser?.is_admin ? {
           me: authUser.user,
           workspaces,
           switchWorkspace,
           refreshSession: checkSession,
+          refreshQuota,
           setStatus,
           confirm: setConfirmBox,
           closeSettings: () => setSettingsOpen(null),
         } : null}
         users={authUser?.user ? {
-          // Everyone gets this pane for their own backups; only admins see
-          // the other accounts and the account editor.
+          // Everyone gets this pane; only admins see the other accounts and
+          // the account editor.
           isAdmin: !!authUser?.is_admin,
           me: authUser.user,
           isGuest: !!authUser?.is_guest,
           quotaInfo,
-          exportUserData,
-          importUserData,
           setStatus,
           confirm: setConfirmBox,
-          closeSettings: () => setSettingsOpen(null),
           onSelfRenamed: checkSession, // self-rename re-keys the whole app
           refreshQuota,
         } : null}
-        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, isAdmin: !!authUser?.is_admin, debugLog, setDebugLog, confirm: setConfirmBox }}
+        diagnostics={{ statusBarVisible, setStatusBarVisible, sysLog, setStatus, debugLog, setDebugLog }}
       />
       {tabMenu ? (() => {
         // Two pins: the tab pin (this device's tab strip, synced with the

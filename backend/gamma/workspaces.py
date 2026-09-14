@@ -385,7 +385,11 @@ def _delete_rows(conn, ws: str) -> None:
 
 
 def remove_files(ws: str) -> str:
-    """rmtree the workspace directory; returns "" or a warning."""
+    """rmtree the workspace directory (and its stored backups); returns ""
+    or a warning."""
+    from . import ws_backup  # local: ws_backup imports seed → db
+
+    ws_backup.remove_all(ws)
     try:
         path = ws_dir(ws)
     except ValueError:

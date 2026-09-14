@@ -1,10 +1,10 @@
 // The building blocks every settings pane is composed from — and nothing
 // else: PaneHead › Section › Row/Toggle for the panes themselves, SubDialog ›
 // Step/Field for the editor dialogs they open, plus the small shared controls
-// (Segmented, Stepper, UnitInput, CharSlider, AccountPicker, Stat, Empty, QuotaMeter/PercentMeter). New settings
+// (Segmented, Stepper, UnitInput, CharSlider, AccountPicker, LogBox, Stat, Empty, QuotaMeter/PercentMeter). New settings
 // UI should reuse these; bespoke classes are for layout only.
 import React from "react";
-import { fmtBytes } from "./utils";
+import { copyText, fmtBytes } from "./utils";
 import { CheckIcon, EyeIcon, EyeOffIcon, ShieldIcon, UserIcon } from "./icons";
 
 export function PaneHead({ icon: Icon, title, children }) {
@@ -275,6 +275,33 @@ export function Stat({ icon: Icon, label, value, total, title }) {
       <span className="setStatLabel"><Icon size={12} />{label}</span>
       <span className="setStatBar"><i className={tone} style={{ width: `${Math.max(pct, 2)}%` }} /></span>
     </div>
+  );
+}
+
+// Newest-first log list with a Copy button — one rendering for the session
+// log (Advanced) and the admin server log (Server). Entries are normalized
+// to {key, timeMs, text}.
+export function LogBox({ icon, label, description, entries, emptyText, copyStatus, setStatus }) {
+  function copy() {
+    const text = entries
+      .map((entry) => `${new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })} ${entry.text}`)
+      .join("\n");
+    copyText(text).then((ok) => setStatus(ok ? copyStatus : "Copy failed—copy manually."));
+  }
+  return (
+    <>
+      <Row icon={icon} label={label} hint={description}>
+        <button className="uiBtn sm" disabled={!entries.length} onClick={copy}>Copy</button>
+      </Row>
+      <div className="sysLogBox">
+        {entries.length ? [...entries].reverse().map((entry) => (
+          <div key={entry.key} className="sysLogRow">
+            <span className="sysLogTime">{new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })}</span>
+            <span className="sysLogMsg">{entry.text}</span>
+          </div>
+        )) : <div className="sysLogEmpty">{emptyText}</div>}
+      </div>
+    </>
   );
 }
 

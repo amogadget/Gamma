@@ -47,13 +47,52 @@ directory — no server, no network. Run them with the project venv's
 interpreter (`venv/Scripts/python.exe` on Windows): the two vector-math
 tests need `ziamath` from `requirements.txt`, and a system/conda `python`
 without it fails them with "ziamath is not importable" rather than a
-puzzling path count. The frontend has **no linter** and no component tests:
-verify UI changes by running the app (at minimum, `npm run build` must
-pass). Its pure modules have `node --test` tests — `frontend/tests/`, run
-from `frontend/` with `node --test tests/blockOps.test.mjs` (node is
-fnm-managed; the `/verify` skill shows the PATH). Collaboration is best
-checked end to end with two browser contexts on one page (see
-[collab.md](collab.md) "Testing" and the `/verify` skill).
+puzzling path count. The frontend has **no linter** and no component tests.
+Its pure modules have `node --test` tests (`npm test` from `frontend/`, the
+files in `frontend/tests/*.test.mjs`).
+
+### Browser end-to-end suite
+
+```bash
+cd frontend
+npm run build                   # the suite drives frontend/dist
+npm run e2e                     # ~30 s; exit 1 on any failure
+npm run e2e -- --only collab    # steps whose name contains "collab"
+npm run e2e -- --continue       # keep going after a failure
+npm run e2e -- --headed         # watch the browser
+npm run e2e -- --keep           # keep the temp data dir + server.log
+```
+
+`frontend/tests/e2e/run.mjs` starts an ISOLATED backend (the project venv's
+python, a fresh `GAMMA_DATA_DIR` under the OS temp dir, a free port, serving
+`frontend/dist`), creates the accounts `alice` / `bob`, and drives Playwright's
+Chromium (`playwright` is a devDependency; the browser is downloaded once on
+first launch). `harness.mjs` holds the server lifecycle, `Account` (session
+cookie + `X-Gamma-Workspace` for API seeding, browser contexts logged in as
+that account), `makePdf` (a small real PDF with a text layer), and `step()`.
+The scenarios live in `tests/e2e/scenarios/`:
+
+- `notes.mjs`: New page → title → first block (the seed-block insert),
+  Shift+Enter / Tab / Shift+Tab / Backspace, Enter as a line break vs the
+  Enter-as-new-block preference, Ctrl+Z, the handle menu, todo checkboxes,
+  an uploaded image (its URL must carry the workspace), the workspace
+  switcher. Runs in a NON-default workspace on purpose.
+- `pdf.mjs`: upload + page by attachment, the viewer's text layer, a
+  highlight from a text selection (overlay, quote row, persisted position),
+  the find bar hitting page 2, the library card.
+- `collab.mjs`: two accounts in a shared workspace: presence, live ops, edits
+  to different blocks, same-block last-writer-wins, undo after a remote edit,
+  rename propagation, edits made offline replaying, remote delete, a
+  highlight made by the other person.
+- `share.mjs`: the share dialog, the anonymous share view (PDF, highlight,
+  image through the share token, no editor), an edit share.
+
+Every step also asserts that no API call failed (4xx/5xx), no console error
+and no page error happened meanwhile (`openPage` records them;
+`EXPECTED_FAILURES` in the harness lists designed refusals such as the
+metadata fetch's 404 for a PDF without identifiers). New UI work touching the
+save path, workspaces, auth or rendering of URLs should add a step here; the
+`/verify` skill runs this suite.
 
 ## Debugging surfaces
 
