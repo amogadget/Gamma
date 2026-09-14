@@ -18,8 +18,9 @@ All state is SQLite + files on disk under a data directory (env
   - `users` — accounts (bcrypt), the guest/admin flags, nullable per-user
     storage-limit overrides, `default_workspace` (the personal workspace);
   - `sessions` — session tokens;
-  - `workspaces` (`id`, `name`, `created_by`) and `workspace_members`
-    (`workspace_id`, `username`, `role` owner/editor/viewer);
+  - `workspaces` (`id`, `name`, `created_by`, `access` private/public,
+    `public_role`, `quota_mb`) and `workspace_members` (`workspace_id`,
+    `username`, `role` owner/editor/viewer);
   - `shares` — page share links, one per `(workspace_id, page_id)`, with
     `created_by`, `audience` anyone/users/list, `role` view/edit and the
     comma-separated `allowed_users`;
@@ -111,8 +112,10 @@ writes a workspace's empty files (and the guest welcome page);
 User CRUD: `create-user`, `set-password`, `set-admin`, `rename-user`,
 `delete-user` (also the workspaces only that account owned), `list-users`,
 `reset-guest`, `setup` (idempotent: guest account + a personal workspace for
-every account + missing files). Workspaces: `list-workspaces`, `set-member
-<ws> <user> <owner|editor|viewer|none>`. Data directory: `migrate`
+every account + missing files). Workspaces: `list-workspaces`,
+`create-workspace <name> <owner> [public [viewer|editor]]`, `set-member
+<ws> <user> <owner|editor|viewer|none>`, `set-access <ws> <private|public>
+[viewer|editor]`. Data directory: `migrate`
 (`--status`, `--dry-run`), `backups` (list; `--create [--uploads]`,
 `--delete`, `--restore`, `--prune`). Every command but
 `migrate`/`backups` refuses an outdated data directory. `rename-user`
@@ -125,7 +128,10 @@ memberships, prefs) — no files move.
 frontend [settingsUsers.jsx](../../frontend/src/settingsUsers.jsx): admins
 manage accounts from Settings → Users; non-admins get the same pane as "You"
 (their single row from session + `/api/quota`, since `/api/admin/*` is
-admin-only). Every row has backup Export/Import menus for the account's
+admin-only). Workspaces are managed from Settings → Workspaces
+([settingsWorkspacesAdmin.jsx](../../frontend/src/settingsWorkspacesAdmin.jsx),
+on top of `/api/admin/workspaces` + the workspace API, which admins pass
+without membership — [workspaces.md](workspaces.md)). Every row has backup Export/Import menus for the account's
 personal workspace (`/api/export?user=`, admins only for other accounts);
 the current workspace's backups live in Settings → Members & sharing
 ([workspaces.md](workspaces.md)). The guest workspace can be exported but
@@ -139,16 +145,20 @@ another owner survive.
 `gamma/server_settings.py`: per-account max upload size (`max_upload_mb`) and
 total quota (`quota_mb`, 0 = unlimited); server-wide defaults in the users.db
 `settings` KV, per-user overrides as nullable `users` columns (NULL = inherit,
-explicit JSON null clears). Limits apply to uploads INTO a workspace through
-its billing account (`workspaces.billing_user`: the creator while still an
-owner); usage is the account's total across every workspace billed to it.
-`check_upload_allowed(ws, n)` hard-gates `/api/uploads`, `/api/upload-image`,
+explicit JSON null clears). An account's limits apply to uploads into its
+PERSONAL workspace, and its usage is exactly that workspace's `uploads/` —
+nothing anyone uploads into a shared workspace counts against a person. A
+shared workspace is checked against the server-wide per-file cap and its
+own `workspaces.quota_mb` (NULL = unlimited; admins set it in Settings →
+Workspaces or Members & sharing). `workspace_quota(ws)` resolves the pair
+that applies. `check_upload_allowed(ws, n)` hard-gates `/api/uploads`, `/api/upload-image`,
 `/api/upload-file` and the imports (413 over per-file, 507 over quota;
 already-stored hashes always pass — dedup adds no bytes); `can_store`
 soft-gates best-effort caches (proxy `save=1`, ai_context re-download).
-`GET /api/quota` = the request's workspace: the billed account's effective
-limits + usage, plus `workspace_bytes` and `billed_to`; deliberately NOT part
-of `/api/session` (identity only). Backup-restore imports are unmetered.
+`GET /api/quota` = the request's workspace: the limits that apply, its
+`used_bytes` / `workspace_bytes` (the same number now), and `account` — the
+person whose limits these are, "" for a shared workspace; deliberately NOT
+part of `/api/session` (identity only). Backup-restore imports are unmetered.
 Details + UI in [settings.md](settings.md).
 
 ## Server log

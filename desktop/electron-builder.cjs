@@ -5,7 +5,7 @@
 // package.json "build" so the
 // signing pieces can depend on the environment: everything is UNSIGNED by
 // default (local `npm run dist`, forks, PRs) and switches on only when the
-// release workflow injects the credentials — see .github/workflows/release.yml
+// release workflow injects the credentials — see .github/workflows/desktop.yml
 // and docs/release.md for the secret names.
 //
 // Windows: Azure Trusted Signing (electron-builder's azureSignOptions; the
@@ -17,6 +17,9 @@
 //   an App Store Connect app-specific password. osx-sign walks the whole
 //   .app, so the frozen backend under Contents/Resources/gamma-server is
 //   signed with the same identity — nothing to configure per binary.
+//   Without a certificate the afterPack hook (scripts/adhoc-sign.cjs)
+//   ad-hoc signs the app so Gatekeeper offers "Open Anyway" instead of the
+//   dead-end "damaged" dialog an unsigned app gets.
 // Microsoft Store: `npx electron-builder --win appx` makes an UNSIGNED MSIX
 //   (the `appx` block below carries the Partner Center identity); the Store
 //   signs it with Microsoft's certificate and delivers updates itself, so
@@ -49,6 +52,7 @@ module.exports = {
   directories: { output: 'dist', buildResources: 'assets' },
   files: ['main.js', 'preload.js', 'lib/**', 'ui/**', 'assets/icon.png', 'package.json'],
   extraResources: [{ from: 'dist-backend/gamma-server', to: 'gamma-server' }],
+  afterPack: 'scripts/adhoc-sign.cjs', // macOS only, no-op elsewhere / with a real cert
 
   win: {
     target: ['nsis'],

@@ -124,7 +124,7 @@ def export_data(request: Request, uploads: int = 1, ws: str | None = None, user:
                 "format": "gamma-backup-1",
                 "workspace": target,
                 "workspace_name": info.get("name", ""),
-                "user": workspaces.billing_user(target),  # whose storage it counts against
+                "user": workspaces.personal_owner(target) or info.get("created_by", ""),  # whose it is
                 "exported_by": request.state.user,
                 "exported_at": page_now(),
                 "uploads": bool(uploads),
@@ -385,6 +385,18 @@ async def get_session(request: Request):
     return {"user": user, "is_guest": request.state.is_guest, "is_admin": request.state.is_admin,
             "default_workspace": request.state.default_ws or workspaces.ensure_personal(user),
             "workspaces": workspaces.list_for_user(user)}
+
+
+@router.get("/accounts")
+async def list_accounts(request: Request):
+    """The account directory — ``{accounts: [{username, is_admin}]}``, every
+    non-guest account by name — for the invite and owner pickers. Any
+    signed-in non-guest account may read it (a self-hosted server's
+    members know each other; the guest sees nothing)."""
+    require_user(request)
+    if request.state.is_guest:
+        raise HTTPException(status_code=403, detail="the guest account cannot list accounts")
+    return {"accounts": workspaces.accounts()}
 
 
 @router.post("/login-guest")

@@ -1,103 +1,136 @@
 # GitHub Actions
 
-Three workflows live in `.github/workflows/`. Each owns one deliverable,
-runs on its own trigger, and never depends on the others.
+Four workflows live in `.github/workflows/`. A merge to `main` is a
+release: nothing is bumped, tagged or dispatched by hand.
 
 | Workflow | File | Runs when | Produces |
 |---|---|---|---|
-| `docker` | `docker.yml` | every push to `main`, any `v*` tag pushed by hand, manual | the server image `ghcr.io/tim4431/gamma` (`latest` from main, semver tags from a `v*` tag), linux/amd64 + arm64 |
-| `desktop` | `desktop.yml` | push to `main` touching `desktop/`, `backend/`, `frontend/` or the workflow itself; manual | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files, the unsigned Store MSIX artifact; GitHub Release `v<version>` when the version is new |
-| `extension` | `extension.yml` | push to `main` touching `extension/` or the workflow itself; manual | `gamma-connector-<version>.zip`; GitHub Release `extension-v<version>` when the version is new |
+| `check` | `check.yml` | every pull request to `main` | pass/fail: backend pytest, frontend build, extension zip (~3 min) |
+| `desktop` | `desktop.yml` | push to `main` touching `desktop/`, `backend/`, `frontend/` or the workflow itself; manual | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files → GitHub Release `v<version>`; the MSIX artifact + a Microsoft Store submission when the secrets exist; a Docker tag `<version>` |
+| `extension` | `extension.yml` | push to `main` touching `extension/` or the workflow itself; manual | `gamma-connector-<version>.zip` → GitHub Release `extension-v<version>` |
+| `docker` | `docker.yml` | every push to `main`; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64 |
 
-Merging to `main` therefore builds whatever the merge changed. Nothing is
-published unless a version was bumped, and no tag is ever pushed by hand:
-the workflows create their own tags through the release step.
+```
+PR → main ──▶ check (pytest, frontend build, extension zip)   ← merge skill waits for this
+merge ───┬──▶ desktop.yml  meta: version = max(package.json, newest v* tag + patch)
+         │        build Win/mac/Linux with that version pinned, smoke on all three
+         │        publish: Release v<version> (notes = commits since previous tag)
+         │        └─▶ dispatch docker.yml -f version   ─▶ ghcr :<version> :<major.minor>
+         │        Windows leg: MSIX → msstore publish (if PARTNER_CENTER_* secrets)
+         ├──▶ extension.yml  same rule on extension-v* tags; manifest pinned inside the zip
+         └──▶ docker.yml     ghcr :latest
+```
 
-## Versions, tags, and the "build only" rule
+## Versions and tags
 
-Both release workflows follow the same rule. A `meta` step reads the
-version from the source of truth, computes the tag, and checks with
-`git ls-remote` whether that tag already exists on the remote:
+The **newest tag is the source of truth**; the files hold a floor.
 
-- **Tag missing** → the run builds, tests, and publishes a GitHub Release
-  with that tag (created from the commit that ran).
-- **Tag exists** → the run still builds and tests everything, prints a
-  `::notice::` saying so, and leaves the outputs as workflow artifacts
-  (14 days). This is the normal outcome of a merge that did not bump a
-  version: a CI check that the frozen app or the zip still builds.
-- Manual dispatch with `publish=false` forces the build-only path.
-
-| Deliverable | Version source | Tag | Release name |
+| Deliverable | Floor | Tag series | Release name |
 |---|---|---|---|
-| Desktop app | `desktop/package.json` `"version"` (or the `version` dispatch input) | `v<version>` | `Gamma <version>` |
+| Desktop app | `desktop/package.json` `"version"` | `v<version>` | `Gamma <version>` |
 | Extension | `extension/manifest.json` `"version"` | `extension-v<version>` | `Gamma Connector <version>` |
 
-Never delete or move a pushed tag; fix forward with a new version.
+On every run the `meta` step lists the tags of its series on the remote and
+takes the newest. If the floor is higher than that, the floor is the
+version — **that is how you make a minor or major release: raise the
+floor and merge**. Otherwise the version is the newest tag with the patch
+number plus one. The result is pinned into the build (`npm version` in the
+desktop checkout; `jq` into the manifest inside the extension zip), so the
+app, `latest*.yml`, the MSIX manifest and the zip all carry it, while the
+repository files stay untouched: no bot commits on `main`, nothing for `dev`
+to conflict with. The release step creates the tag from the merged commit.
 
-**The repository's "latest release" must stay the desktop release.**
-Installed desktop apps update through electron-updater, which resolves
-`https://github.com/tim4431/Gamma/releases/latest` and then reads the
-`latest*.yml` assets of that release. The extension workflow therefore
-publishes with `make_latest: false`, and the desktop workflow with
-`make_latest: true` (except for pre-releases, which installed apps ignore
-anyway). If you ever create a release by hand, keep that invariant, or
-every installed app reports *Update check failed* until the next desktop
-release. Details of the feed:
+Consequences:
+
+- A version is never reused. Deleting or moving a tag is never the fix; the
+  next merge is.
+- A merge with no path match releases nothing; a merge whose build fails on
+  any platform releases nothing (the publish job needs all three).
+- A manual run with `publish=false` builds and keeps the outputs as
+  artifacts (14 days). A manual `version` input overrides the computation;
+  it fails early if that tag already exists.
+- `prerelease=true` on a manual run publishes without marking the release
+  *Latest*; installed apps ignore pre-releases.
+
+**The repository's "latest release" must be a desktop release.** Installed
+apps update through electron-updater, which resolves
+`https://github.com/tim4431/Gamma/releases/latest` and reads that release's
+`latest*.yml`. The extension workflow therefore publishes with
+`make_latest: false`. If you ever create a release by hand, keep that
+invariant or every installed app reports *Update check failed* until the
+next desktop release. Emergency lever for a bad desktop release: edit it
+and tick *pre-release* — the previous release becomes *Latest* again and
+clients stop seeing the bad one. Feed details:
 [desktop/docs/release.md](../../desktop/docs/release.md#auto-update-feed).
 
-Each workflow has a `concurrency` group per ref with
-`cancel-in-progress: false`, so two merges in quick succession queue rather
-than race for the same tag.
+Each release workflow has a `concurrency` group per ref with
+`cancel-in-progress: false`, so two merges in quick succession queue and get
+consecutive numbers instead of racing.
 
 ## `desktop.yml`
 
-Matrix over `windows-latest`, `macos-latest`, `ubuntu-latest`; every leg
-does the same thing: build the frontend, freeze the backend with
-PyInstaller, health-check the frozen server, run electron-builder, verify
-the signature when signing secrets exist, and run the packaged app's
-`--smoke` self-test (under Xvfb on Linux). Extras per platform: Windows also
-builds the unsigned Microsoft Store MSIX (`store-windows` artifact, never a
-release asset); Linux additionally `apt install`s the `.deb` on the runner
-and runs the self-test from `/opt/Gamma/gamma` with the sandbox on. The
-`publish` job runs only when `meta` said the tag is new; it merges the
-three artifacts, writes the release notes (download table, signing state,
-install hints, a pointer to the extension releases and the Docker image)
-and creates the release. Signing is secret-gated and documented in the
-workflow header and in
-[desktop/docs/release.md](../../desktop/docs/release.md#code-signing-optional-secret-gated).
+Matrix over `windows-latest`, `macos-latest`, `ubuntu-latest`; every leg:
+pin the version, build the frontend, freeze the backend with PyInstaller,
+health-check the frozen server, electron-builder, verify the signature, run
+the packaged app's `--smoke` self-test (under Xvfb on Linux). Per platform:
+Windows also builds the unsigned Microsoft Store MSIX (`store-windows`
+artifact) and, when the `PARTNER_CENTER_*` secrets exist and the run
+publishes, submits it with the `msstore` CLI (`continue-on-error`: the Store
+allows one submission in certification at a time, so a second release the
+same day is refused and simply waits for the next). macOS is ad-hoc signed
+by `desktop/scripts/adhoc-sign.cjs` when no Developer ID is available (see
+[release.md](../../desktop/docs/release.md#code-signing-optional-secret-gated)).
+Linux additionally `apt install`s the `.deb` on the runner and runs the
+self-test from `/opt/Gamma/gamma` with the sandbox on.
+
+The `publish` job merges the three artifacts, writes the notes — download
+table, per-platform install hints, **Changes: the commit subjects since the
+previous tag, restricted to `desktop/ backend/ frontend/`** (this repo's PR
+titles are all "Merge pull request #N from dev", so GitHub's generator
+would say nothing) — creates the release + tag with `make_latest: true`,
+then runs `gh workflow run docker.yml --ref v<version> -f version=…` so the
+server image gets the same version tag (a tag made with `GITHUB_TOKEN`
+would not trigger `docker.yml` by itself).
 
 Path filter: the app bundles the backend and the frontend, so changes to
-those directories rebuild it too. Narrow the `paths` list in the workflow if
-that turns out to be too eager.
-
-Dispatch inputs: `version` (override the package.json version for that run;
-it is also pinned into the app), `prerelease`, `publish`.
+those directories release it too. Narrow the `paths` list if that becomes
+too eager, or move the trigger to a nightly `schedule` for batched releases
+— the version logic is the same either way.
 
 ## `extension.yml`
 
-One Ubuntu job: read the manifest version, zip `extension/` (minus
-`STORE.md`, `README.md`, `.DS_Store`), upload the zip as an artifact, and,
-when the tag is new, publish the `extension-v<version>` release with
-`make_latest: false`. The Chrome Web Store upload stays manual
+One Ubuntu job: compute the version, copy `extension/` with the version
+written into `manifest.json` (minus `STORE.md`, `README.md`, `.DS_Store`),
+zip it, upload it as an artifact, publish `extension-v<version>` with
+`make_latest: false` and the commit subjects under `extension/` as notes.
+The Chrome Web Store upload stays manual
 ([extension/STORE.md](../../extension/STORE.md)).
+
+## `check.yml`
+
+Three parallel Ubuntu jobs on every PR to `main`: backend pytest (Python
+3.12, `requirements.txt` + `requirements-dev.txt`), the frontend build
+(Node 22), and a manifest parse + `node --check` + zip of the extension. No
+installers. The `merge` skill waits for it before merging; a red check is
+fixed on the branch as normal work.
 
 ## `docker.yml`
 
-Unchanged by the split: buildx for amd64 + arm64, pushes `latest` on every
-push to `main`. Tags that the desktop workflow creates with `GITHUB_TOKEN`
-never trigger other workflows (GitHub's recursion guard), so a
-semver-tagged image only appears when a `v*` tag is pushed by hand. Setup
-notes: [docs/dev/debugging.md](debugging.md) and the memory note on GHCR.
+buildx for amd64 + arm64, `latest` on every push to `main`. When dispatched
+with a `version` input (the desktop publish job does this on the release
+tag) it also pushes `<version>` and `<major.minor>`. Setup notes:
+[docs/dev/debugging.md](debugging.md) and the memory note on GHCR.
 
 ## Running and watching by hand
 
 ```bash
-gh workflow run desktop.yml --ref main                       # release if the version is new
+gh workflow run desktop.yml --ref main                       # release (next version)
 gh workflow run desktop.yml --ref main -f publish=false      # build check only
 gh workflow run desktop.yml --ref main -f prerelease=true -f version=1.2.0-rc1
 gh workflow run extension.yml --ref main
+gh workflow run docker.yml --ref v0.2.3 -f version=0.2.3     # re-tag an image
 
-gh run list --workflow=desktop.yml --limit 3
+gh run list --limit 5
 gh run watch <run-id> --exit-status
 gh run view <run-id> --log-failed
 gh release view v<version> --json url,assets
@@ -105,38 +138,39 @@ gh release view v<version> --json url,assets
 
 A workflow can only be dispatched once its file exists on `main`
 (`workflow_dispatch` is read from the default branch); pass `--ref dev` to
-run the `dev` copy after that. The `release` skill (`.claude/skills/release`)
-wraps the dispatch-and-watch loop for the desktop and extension workflows.
+run the `dev` copy after that.
 
 ## Secrets
 
-All optional; without them every build is unsigned and the workflows say
-so with a `::warning::`.
+All optional; without them builds are unsigned / not submitted, and the
+workflows say so with a `::warning::` or `::notice::`. `gh secret list`
+shows which exist.
 
 | Secret | Used by |
 |---|---|
 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_SIGN_ENDPOINT`, `AZURE_SIGN_ACCOUNT`, `AZURE_SIGN_PROFILE`, optional `AZURE_SIGN_PUBLISHER` | `desktop.yml`, Windows leg: Azure Trusted Signing |
-| `MAC_CERT_P12`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | `desktop.yml`, macOS leg: Developer ID + notarization |
-| `GITHUB_TOKEN` (automatic) | releases and tags in `desktop.yml` / `extension.yml`, GHCR push in `docker.yml` |
+| `MAC_CERT_P12`, `MAC_CERT_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | `desktop.yml`, macOS leg: Developer ID + notarization (replaces the ad-hoc signature) |
+| `PARTNER_CENTER_TENANT_ID`, `PARTNER_CENTER_SELLER_ID`, `PARTNER_CENTER_CLIENT_ID`, `PARTNER_CENTER_CLIENT_SECRET` | `desktop.yml`, Windows leg: Microsoft Store submission via `msstore` ([release.md](../../desktop/docs/release.md#microsoft-store) says where each value comes from) |
+| `GITHUB_TOKEN` (automatic) | releases and tags, the docker dispatch, the GHCR push |
 
-`gh secret list` shows which exist. The Linux `.deb` is never signed.
+Set them from a terminal with `gh secret set NAME` (prompts for the value);
+never paste secret values into chat or files.
 
 ## Adding or changing a workflow
 
-- Keep one deliverable per workflow and a path filter that matches its
-  inputs; a workflow that publishes must use the tag-exists check above so
-  a merge without a bump stays a build.
+- One deliverable per workflow, a path filter that matches its inputs, and
+  the tag-derived version rule above for anything that publishes.
 - The Linux Electron steps need `xvfb-run`; the unpacked `linux-unpacked`
   dir needs `--no-sandbox` (the `.deb` postinst fixes that for installs).
 - Pin every action to a major that runs on the runner's current Node
   (Node 24 as of 2026-09: `actions/checkout@v7`, `setup-node@v7`,
   `setup-python@v7`, `upload-artifact@v7`, `download-artifact@v8`,
-  `softprops/action-gh-release@v3`, `docker/*` v4/v6/v7). A run annotated
-  "Node.js 20 is deprecated … forced to run on Node.js 24" means a pin fell
-  behind; check the action's `action.yml` `runs.using` at its latest tag.
-  The "UNSIGNED build" warnings are expected until the signing secrets
-  exist.
+  `softprops/action-gh-release@v3`, `docker/*` v4/v6/v7,
+  `microsoft/microsoft-store-apppublisher@v1.4`). A run annotated "Node.js
+  20 is deprecated … forced to run on Node.js 24" means a pin fell behind;
+  check the action's `action.yml` `runs.using` at its latest tag. The
+  "UNSIGNED build" warnings are expected until the signing secrets exist.
 - Validate YAML locally with the desktop tree's `js-yaml`
   (`node -e "require('js-yaml').load(require('fs').readFileSync(f,'utf8'))"`
-  from `desktop/`), and keep this document, the `release` skill, and
+  from `desktop/`), and keep this document, the `merge` skill and
   [desktop/docs/release.md](../../desktop/docs/release.md) in sync.

@@ -309,6 +309,37 @@
   pointer-events: none;
 }
 /* In a settings row (admin defaults) the unit input stays compact. */
+/* AccountPicker: search box over a short list of account rows. The list is
+   part of the field (not a floating menu), so a dialog grows with it. */
+.setPick { display: flex; flex-direction: column; gap: 4px; }
+.setPick .aiKeyInput { margin-bottom: 0; }
+.setPickList {
+  display: flex; flex-direction: column; gap: 1px;
+  max-height: 208px; overflow-y: auto;
+  padding: 3px;
+  border: 1px solid var(--border-subtle); border-radius: 9px;
+  background: var(--bg-block);
+}
+.setPickItem {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 7px; border: 0; border-radius: 7px;
+  background: transparent; color: var(--text-primary);
+  font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+.setPickItem.cursor, .setPickItem:hover { background: var(--bg-hover); }
+.setPickItem.picked { background: var(--accent-bg); }
+.setPickAvatar {
+  width: 22px; height: 22px; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+.setPickName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setPickItem .uiTag { margin-left: 0; }
+.setPickCheck { color: var(--accent); flex-shrink: 0; }
+.setPickEmpty { padding: 6px 8px; font-size: 11px; color: var(--text-muted); }
+/* A dialog with a members list inside scrolls its body, not the overlay. */
+.subDialog .settingsForm { overflow-y: auto; min-height: 0; }
 .setSlider .unitInput { width: 116px; }
 .setSlider .unitInput .aiKeyInput { text-align: right; padding-right: 36px; }
 .settingsNoMargin { margin: 0; }

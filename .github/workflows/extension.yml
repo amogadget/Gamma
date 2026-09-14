@@ -1,14 +1,15 @@
-# Browser extension (Gamma Connector): zips extension/ and publishes it as
-# the GitHub Release `extension-v<version>` (version =
-# extension/manifest.json). Overview of every workflow: docs/dev/github_actions.md.
+# Browser extension (Gamma Connector): zips extension/ and releases it as
+# `extension-v<version>`, automatically. Overview: docs/dev/github_actions.md.
 #
-# Runs on every push to main that touches extension/ and by hand. The
-# release is created only when that tag does not exist yet; otherwise the
-# zip is just a workflow artifact and bumping the manifest version is what
-# releases. It is published with make_latest=false so the repository's
-# "latest release" — what the desktop app's updater resolves — stays the
-# desktop release (desktop.yml). The Chrome Web Store upload of the zip is
-# still a manual step (extension/STORE.md).
+# Trigger: every push to main that touches extension/, plus manual dispatch.
+# A merge is a release: the version is extension/manifest.json when it is
+# higher than the newest extension-v* tag (raise it for a minor/major bump),
+# otherwise that tag's patch number + 1; the computed version is written
+# into the manifest inside the zip. The release is published with
+# make_latest=false so the repository's "latest release" — what the desktop
+# app's updater resolves — stays the desktop release (desktop.yml). The
+# Chrome Web Store upload of the zip is still a manual step
+# (extension/STORE.md).
 
 name: extension
 
@@ -21,7 +22,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: "Create the GitHub Release when the tag is new (off = artifact only)"
+        description: "Publish the GitHub Release (off = zip artifact only)"
         type: boolean
         default: true
 
@@ -36,33 +37,47 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # release notes: commits since the previous tag
 
       - id: v
         shell: bash
         env:
           IN_PUBLISH: ${{ inputs.publish }}
         run: |
-          version=$(node -p "require('./extension/manifest.json').version")
+          prev=$(git ls-remote --tags --refs origin 'refs/tags/extension-v*' | awk -F/ '{print $NF}' | grep -E '^extension-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          floor=$(node -p "require('./extension/manifest.json').version")
+          version=$(node -e '
+            const [floor, prev] = process.argv.slice(1);
+            const p = (s) => s.replace(/^extension-v/, "").split(".").map(Number);
+            const gt = (a, b) => { for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; };
+            if (!prev || gt(p(floor), p(prev))) { console.log(floor); process.exit(0); }
+            const v = p(prev); v[2] += 1; console.log(v.join("."));
+          ' "$floor" "$prev")
           tag="extension-v$version"
           publish=true
           if [ "$IN_PUBLISH" = "false" ]; then
             publish=false
             echo "::notice::publish=false — building the zip only"
-          elif git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            publish=false
-            echo "::notice::tag $tag already exists — zip only; bump extension/manifest.json to release"
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "publish=$publish" >> "$GITHUB_OUTPUT"
-          echo "Gamma Connector $version from $GITHUB_SHA (publish=$publish)"
+          {
+            echo "version=$version"; echo "tag=$tag"; echo "prev=$prev"; echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::Gamma Connector $version (previous release ${prev:-none}; publish=$publish)"
 
+      # The zip carries the computed version in its manifest (the checkout's
+      # manifest is only the floor). Listing docs and .DS_Store stay out.
       - name: Zip the extension
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
         run: |
-          cd extension
-          zip -r "../gamma-connector-${{ steps.v.outputs.version }}.zip" . -x "STORE.md" "README.md" "*.DS_Store"
-          cd ..
-          unzip -l "gamma-connector-${{ steps.v.outputs.version }}.zip"
+          rm -rf /tmp/ext && cp -r extension /tmp/ext
+          jq --arg v "$VERSION" '.version = $v' extension/manifest.json > /tmp/ext/manifest.json
+          rm -f /tmp/ext/STORE.md /tmp/ext/README.md
+          find /tmp/ext -name .DS_Store -delete
+          (cd /tmp/ext && zip -r "$GITHUB_WORKSPACE/gamma-connector-$VERSION.zip" .)
+          unzip -l "gamma-connector-$VERSION.zip"
+          unzip -p "gamma-connector-$VERSION.zip" manifest.json | jq -r '"manifest version: " + .version'
 
       - uses: actions/upload-artifact@v7
         with:
@@ -76,15 +91,24 @@ jobs:
         shell: bash
         env:
           VERSION: ${{ steps.v.outputs.version }}
+          PREV: ${{ steps.v.outputs.prev }}
           REPO: ${{ github.repository }}
           TAG: ${{ steps.v.outputs.tag }}
         run: |
           zip="gamma-connector-$VERSION.zip"
+          if [ -n "$PREV" ]; then range="$PREV..HEAD"; else range="HEAD"; fi
+          git log "$range" --no-merges --format='- %s' -- extension > changes.md
           {
             echo "## Gamma Connector $VERSION"
             echo
             echo "[$zip](https://github.com/$REPO/releases/download/$TAG/$zip) — unzip, then \`chrome://extensions\` → *Developer mode* → *Load unpacked*. Works in Chrome, Edge and other Chromium browsers."
             echo
+            if [ -s changes.md ]; then
+              echo "## Changes${PREV:+ since $PREV}"
+              echo
+              cat changes.md
+              echo
+            fi
             echo "The desktop app and server have their own releases: [latest Gamma release](https://github.com/$REPO/releases/latest)."
             echo
           } > notes.md

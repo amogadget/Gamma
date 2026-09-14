@@ -234,9 +234,10 @@ workspace — they land in the account's personal workspace
 ## Not done yet
 
 - Firefox build (`background.scripts` + `webextension-polyfill`), Web Store
-  listing (the release zip is built by `.github/workflows/extension.yml` on
-  every push to main touching `extension/`, published as the
-  `extension-v<manifest version>` release when that version is new —
-  [github_actions.md](github_actions.md)).
+  listing (the release zip is built and published by
+  `.github/workflows/extension.yml` on every push to main touching
+  `extension/`, as `extension-v<version>` with the version computed from
+  the tags; `manifest.json`'s version is only the floor for minor/major
+  bumps — [github_actions.md](github_actions.md)).
 - Detection is client-side only for the badge; `find_page` scans every root
   page per lookup (fine for personal libraries, index it if that changes).

@@ -1,11 +1,11 @@
 // The building blocks every settings pane is composed from — and nothing
 // else: PaneHead › Section › Row/Toggle for the panes themselves, SubDialog ›
 // Step/Field for the editor dialogs they open, plus the small shared controls
-// (Segmented, Stepper, UnitInput, CharSlider, Stat, Empty, QuotaMeter/PercentMeter). New settings
+// (Segmented, Stepper, UnitInput, CharSlider, AccountPicker, Stat, Empty, QuotaMeter/PercentMeter). New settings
 // UI should reuse these; bespoke classes are for layout only.
 import React from "react";
 import { fmtBytes } from "./utils";
-import { EyeIcon, EyeOffIcon } from "./icons";
+import { CheckIcon, EyeIcon, EyeOffIcon, ShieldIcon, UserIcon } from "./icons";
 
 export function PaneHead({ icon: Icon, title, children }) {
   return (
@@ -280,6 +280,82 @@ export function Stat({ icon: Icon, label, value, total, title }) {
 
 export function Empty({ icon: Icon, children }) {
   return <div className="setEmpty"><Icon size={26} />{children}</div>;
+}
+
+// Notion-style people picker: a search box over the account directory with
+// the matches listed beneath as selectable rows (avatar · name · admin tag).
+// `accounts` is the directory (null while loading), `exclude` the usernames
+// already in (members, the owner); `value` is the picked username and
+// `onChange` receives it (or "" again when the text no longer names one).
+// Typing filters; Enter picks the first match; ↑/↓ move the highlight.
+// `compact` keeps the list closed until the box is focused or has text —
+// for a popover, where an always-open list would crowd the rest.
+export function AccountPicker({ accounts, exclude = [], value, onChange, placeholder, autoFocus, compact }) {
+  const [query, setQuery] = React.useState(value || "");
+  const [cursor, setCursor] = React.useState(0);
+  const [focused, setFocused] = React.useState(false);
+  const skip = new Set(exclude);
+  const q = query.trim().toLowerCase();
+  const matches = (accounts || []).filter((a) => !skip.has(a.username) && (!q || a.username.toLowerCase().includes(q)));
+  const shown = matches.slice(0, 8);
+  const open = !compact || focused || !!q;
+
+  function pick(name) {
+    setQuery(name);
+    onChange(name);
+    setCursor(0);
+  }
+  function type(text) {
+    setQuery(text);
+    setCursor(0);
+    // the text may spell an account exactly — that counts as picking it
+    const exact = matches.find((a) => a.username === text.trim());
+    onChange(exact ? exact.username : "");
+  }
+  function onKeyDown(event) {
+    if (event.key === "ArrowDown") { event.preventDefault(); setCursor((c) => Math.min(c + 1, shown.length - 1)); }
+    else if (event.key === "ArrowUp") { event.preventDefault(); setCursor((c) => Math.max(c - 1, 0)); }
+    else if (event.key === "Enter" && shown[cursor] && shown[cursor].username !== value) { event.preventDefault(); pick(shown[cursor].username); }
+  }
+
+  return (
+    <span className="setPick">
+      <input
+        className="aiKeyInput" type="text" spellCheck={false} autoComplete="off" autoFocus={autoFocus}
+        placeholder={placeholder || "Search accounts…"} value={query}
+        onChange={(event) => type(event.target.value)}
+        onKeyDown={onKeyDown}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setTimeout(() => setFocused(false), 120)} // let a click on a row land first
+        aria-label={placeholder || "Search accounts"}
+      />
+      {open ? (
+        <span className="setPickList" role="listbox">
+          {accounts == null ? <span className="setPickEmpty">Loading accounts…</span> : null}
+          {accounts != null && !shown.length ? (
+            <span className="setPickEmpty">{q ? `No account matches "${query.trim()}"` : "No other accounts"}</span>
+          ) : null}
+          {shown.map((a, i) => (
+            <button
+              key={a.username} type="button" role="option" aria-selected={a.username === value}
+              className={`setPickItem ${a.username === value ? "picked" : ""} ${i === cursor ? "cursor" : ""}`}
+              onMouseDown={(event) => event.preventDefault()} // keep the box focused
+              onClick={() => pick(a.username)}
+              onMouseEnter={() => setCursor(i)}
+            >
+              <span className="setPickAvatar">{a.is_admin ? <ShieldIcon size={13} /> : <UserIcon size={13} />}</span>
+              <span className="setPickName">{a.username}</span>
+              {a.is_admin ? <span className="uiTag admin">admin</span> : null}
+              {a.username === value ? <CheckIcon size={13} className="setPickCheck" /> : null}
+            </button>
+          ))}
+          {matches.length > shown.length ? (
+            <span className="setPickEmpty">{matches.length - shown.length} more — keep typing</span>
+          ) : null}
+        </span>
+      ) : null}
+    </span>
+  );
 }
 
 // Cloud-drive-style storage meter: thin bar + "used of total" caption.

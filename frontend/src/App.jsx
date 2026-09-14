@@ -56,7 +56,7 @@ import {
   findBlock,
 } from "./logseqPdfModel";
 import { loadSession, saveSession, clearSession, setSessionScope } from "./sessionState";
-import { ROLE_LABEL } from "./settingsWorkspace";
+import { ROLE_LABEL, useAccounts } from "./settingsWorkspace";
 import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage } from "./LoginPage";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
@@ -64,7 +64,7 @@ import { usePageCollab } from "./collab";
 import { applyOps, applyPatch, keepUiFlags } from "./blockOps";
 import { PresenceBar } from "./presence";
 import SettingsDialog from "./settings";
-import { QuotaMeter } from "./settingsKit";
+import { AccountPicker, QuotaMeter } from "./settingsKit";
 import {
   addFolderTag,
   cleanFolderPath,
@@ -278,6 +278,13 @@ function CardCarousel({ label, children, className }) {
       <div className="carouselTrack" ref={trackRef}>{children}</div>
     </div>
   );
+}
+
+// The share popover's invite box: the account directory as a picker, fetched
+// only while the popover is open (the box mounts with it).
+function ShareInviteBox({ exclude, value, onChange }) {
+  const accounts = useAccounts();
+  return <AccountPicker accounts={accounts} exclude={exclude} value={value} onChange={onChange} placeholder="Invite an account…" compact />;
 }
 
 export default function App() {
@@ -4723,7 +4730,7 @@ export default function App() {
   // each invited account carries its own view/edit.
   async function inviteShareUsers(e) {
     e?.preventDefault();
-    const names = shareInviteDraft.split(/[,\s;]+/).map((u) => u.trim()).filter(Boolean);
+    const names = [shareInviteDraft.trim()].filter(Boolean);
     if (!names.length) return;
     const current = shareSettings?.users || [];
     const users = [...current, ...names.filter((n) => !current.some((u) => u.name === n)).map((name) => ({ name, role: "view" }))];
@@ -7421,13 +7428,10 @@ export default function App() {
               ) : (
                 <>
                   <form className="shareInvite" onSubmit={inviteShareUsers}>
-                    <input
-                      className="aiKeyInput"
+                    <ShareInviteBox
+                      exclude={[authUser?.user, ...(shareSettings.users || []).map((u) => u.name)]}
                       value={shareInviteDraft}
-                      placeholder="Invite by username, comma-separated"
-                      spellCheck={false}
-                      autoComplete="off"
-                      onChange={(e) => { setShareInviteDraft(e.target.value); if (shareError) setShareError(""); }}
+                      onChange={(name) => { setShareInviteDraft(name); if (shareError) setShareError(""); }}
                     />
                     <button type="submit" className="uiBtn sm primary" disabled={!shareInviteDraft.trim()}>Invite</button>
                   </form>
@@ -7634,11 +7638,11 @@ export default function App() {
                   key={w.id}
                   className={`popoverItem wsItem ${w.id === wsId ? "active" : ""}`}
                   onClick={() => { setOpenPopover(null); switchWorkspace(w.id); }}
-                  title={w.personal ? "Your personal workspace" : `Shared workspace · ${w.members} member${w.members === 1 ? "" : "s"} · you ${ROLE_LABEL[w.role] || w.role}`}
+                  title={w.personal ? "Your personal workspace" : `${w.access === "public" ? "Public" : "Shared"} workspace · ${w.members} member${w.members === 1 ? "" : "s"} · you ${ROLE_LABEL[w.role] || w.role}`}
                 >
                   <span className="wsItemBadge" aria-hidden="true">{(w.name || "?").charAt(0).toUpperCase()}</span>
                   <span className="wsItemName">{w.name}</span>
-                  <span className="wsItemMeta">{w.personal ? "personal" : ROLE_LABEL[w.role] || w.role}</span>
+                  <span className="wsItemMeta">{w.personal ? "personal" : `${w.access === "public" ? "public · " : ""}${ROLE_LABEL[w.role] || w.role}`}</span>
                   {w.id === wsId ? <CheckIcon size={14} className="wsItemCheck" /> : null}
                 </button>
               ))}
@@ -8469,6 +8473,15 @@ export default function App() {
           refreshSession: checkSession,
           exportUserData,
           importUserData,
+          setStatus,
+          confirm: setConfirmBox,
+          closeSettings: () => setSettingsOpen(null),
+        } : null}
+        workspacesAdmin={authUser?.is_admin ? {
+          me: authUser.user,
+          workspaces,
+          switchWorkspace,
+          refreshSession: checkSession,
           setStatus,
           confirm: setConfirmBox,
           closeSettings: () => setSettingsOpen(null),

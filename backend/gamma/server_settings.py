@@ -8,11 +8,14 @@ process start):
 
 `user_limits()` resolves the effective pair for an account; a missing or
 corrupt value can never break request handling — it falls back to the
-default. Quota 0 means unlimited. Usage is the byte size of the uploads/
-directories of every workspace billed to the account (its own, plus shared
-ones it created — gamma/workspaces.py billing_user); the databases are not
-metered. Uploads into a workspace are checked against ITS billing account,
-whoever is uploading.
+default. Quota 0 means unlimited.
+
+What a workspace's uploads are checked against (`workspace_quota`):
+  - a PERSONAL workspace: its account's limits, and the account's usage is
+    exactly that workspace's uploads/ — nothing else counts against a person;
+  - a SHARED workspace: the server-wide per-file cap and the workspace's own
+    `workspaces.quota_mb` (NULL = unlimited), which admins set.
+The databases are not metered.
 """
 
 from fastapi import HTTPException
@@ -113,26 +116,34 @@ def workspace_bytes(ws: str) -> int:
 
 
 def usage_bytes(username: str) -> int:
-    """Upload bytes billed to an account: every workspace it is billed for."""
+    """Upload bytes that count against an account: its personal workspace."""
     from . import workspaces  # local: workspaces imports seed → db
 
-    return sum(workspace_bytes(ws) for ws in workspaces.billed_to(username))
+    return workspace_bytes(workspaces.default_workspace(username))
 
 
 def workspace_quota(ws: str) -> dict:
     """The limits and usage that apply to uploads into ``ws``:
-    ``{max_upload_mb, quota_mb, used_bytes (billed account total),
-    workspace_bytes, billed_to}``."""
+    ``{max_upload_mb, quota_mb, used_bytes, workspace_bytes, account}`` —
+    ``account`` is the person whose limits these are (a personal
+    workspace), "" for a shared workspace under its own quota."""
     from . import workspaces
 
-    who = workspaces.billing_user(ws)
-    return {**user_limits(who), "used_bytes": usage_bytes(who) if who else workspace_bytes(ws),
-            "workspace_bytes": workspace_bytes(ws), "billed_to": who}
+    used = workspace_bytes(ws)
+    owner = workspaces.personal_owner(ws)
+    if owner:
+        return {**user_limits(owner), "used_bytes": used, "workspace_bytes": used, "account": owner}
+    info = workspaces.get(ws) or {}
+    with connect_users_db() as conn:
+        default_upload, _default_quota = _defaults(conn)
+    return {"max_upload_mb": default_upload,
+            "quota_mb": _parse(info.get("quota_mb"), 0, QUOTA_MB_MIN, QUOTA_MB_MAX),
+            "used_bytes": used, "workspace_bytes": used, "account": ""}
 
 
 def check_upload_allowed(ws: str, nbytes: int) -> None:
-    """Hard gate for explicit uploads into a workspace: 413 over the billing
-    account's per-file cap, 507 over its quota.
+    """Hard gate for explicit uploads into a workspace: 413 over the
+    per-file cap, 507 over the quota that applies (``workspace_quota``).
 
     Callers should skip this when the content hash already exists on disk —
     re-uploading a stored file costs nothing, so it is always allowed.

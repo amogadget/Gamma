@@ -8,6 +8,7 @@ import {
 import { AiSettings } from "./settingsAi";
 import { UsersSettings } from "./settingsUsers";
 import { WorkspaceSettings } from "./settingsWorkspace";
+import { WorkspacesAdmin } from "./settingsWorkspacesAdmin";
 import { ServerBackups } from "./settingsBackups";
 import { TRANSLATE_LANGS, UI_SCALE } from "./prefs";
 import {
@@ -55,7 +56,7 @@ import {
   UsersIcon,
 } from "./icons";
 
-// Nine panes in four groups. Each pane is a stack of Sections, each Section a
+// Twelve panes in four groups. Each pane is a stack of Sections, each Section a
 // stack of Rows — icon · label · one short hint · control (primitives in
 // settingsKit.jsx; the Providers and Users panes live in settingsAi.jsx /
 // settingsUsers.jsx). The paragraph that used to sit under every label now
@@ -79,6 +80,7 @@ const NAV_GROUPS = [
   ]],
   ["Account", [
     ["users", "Users", UsersIcon], // relabelled "You" for non-admins (see SettingsDialog)
+    ["workspaces", "Workspaces", GlobeIcon], // admins only: every workspace on the server
     ["advanced", "Advanced", ActivityIcon],
   ]],
 ];
@@ -1123,6 +1125,7 @@ export default function SettingsDialog({
   search,
   users,
   workspace,
+  workspacesAdmin,
   diagnostics,
 }) {
   if (!activePane) return null;
@@ -1135,7 +1138,8 @@ export default function SettingsDialog({
       items
         .map(([id, label, Icon]) => (id === "users" && !users?.isAdmin ? [id, "You", UserIcon] : [id, label, Icon]))
         .filter(([id]) => id !== "users" || users)
-        .filter(([id]) => id !== "workspace" || workspace),
+        .filter(([id]) => id !== "workspace" || workspace)
+        .filter(([id]) => id !== "workspaces" || workspacesAdmin),
     ])
     .filter(([, items]) => items.length);
 
@@ -1175,6 +1179,7 @@ export default function SettingsDialog({
           {pane === "prompts" ? <PromptsSettings value={prompts} /> : null}
           {pane === "users" && users ? <UsersSettings value={users} /> : null}
           {pane === "workspace" && workspace ? <WorkspaceSettings value={workspace} /> : null}
+          {pane === "workspaces" && workspacesAdmin ? <WorkspacesAdmin value={workspacesAdmin} /> : null}
           {pane === "advanced" ? <AdvancedSettings value={diagnostics} /> : null}
         </div>
       </div>

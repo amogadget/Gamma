@@ -289,7 +289,23 @@ def _move_prefs(conn: sqlite3.Connection, username: str, ws_id: str, data_db: Pa
         normalize_data_db(ddb)
 
 
+def _v3_workspace_access(conn: sqlite3.Connection) -> None:
+    """Workspaces gain an access setting (private / public + the role every
+    signed-in account gets in a public one) and their own optional storage
+    quota; nothing is moved. Existing rows keep today's behaviour: private,
+    no workspace quota."""
+    cols = _columns(conn, "workspaces")
+    if "access" not in cols:
+        conn.execute("ALTER TABLE workspaces ADD COLUMN access TEXT NOT NULL DEFAULT 'private'")
+    if "public_role" not in cols:
+        conn.execute("ALTER TABLE workspaces ADD COLUMN public_role TEXT NOT NULL DEFAULT 'viewer'")
+    if "quota_mb" not in cols:
+        conn.execute("ALTER TABLE workspaces ADD COLUMN quota_mb INTEGER")
+    conn.commit()
+
+
 STEPS = [
     (1, "baseline", _v1_baseline),
     (2, "workspaces", _v2_workspaces),
+    (3, "workspace_access", _v3_workspace_access),
 ]

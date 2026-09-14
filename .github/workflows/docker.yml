@@ -1,15 +1,19 @@
-# Server image only. Runs on every push to main (`latest`) — independent of
-# desktop.yml / extension.yml, which build the installers and the extension
-# zip into their own GitHub Releases and create their tags with GITHUB_TOKEN
-# (those never re-trigger workflows, so a hand-pushed `v*` tag is the only
-# way to get a semver-tagged image here). Overview: docs/dev/github_actions.md.
+# Server image only. Runs on every push to main (`latest`). The desktop
+# release (desktop.yml) dispatches this workflow on its new `v<version>` tag
+# with the version as input, which adds the `<version>` and `<major.minor>`
+# image tags — a `push: tags` trigger would not do it, since tags created
+# with GITHUB_TOKEN never trigger workflows. Overview: docs/dev/github_actions.md.
 name: Build and publish Docker image
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Also tag the image <version> and <major.minor> (set by the desktop release)"
+        required: false
+        default: ""
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/gamma
@@ -44,8 +48,8 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=v${{ inputs.version }},enable=${{ inputs.version != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ inputs.version }},enable=${{ inputs.version != '' }}
             type=sha
 
       - name: Build and push

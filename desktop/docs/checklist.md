@@ -102,11 +102,12 @@ or says it is a manual look (**manual**).
 
 | # | Check | How |
 |---|---|---|
-| 8.1 | `desktop/package.json` version bumped (the release tag is `v<version>`; with an existing tag the workflow only builds) | manual |
-| 8.2 | `desktop` workflow: frontend build → freeze → frozen health check → electron-builder → signature verify → packaged smoke, all three OSes; Linux also installs the `.deb` and smokes `/opt/Gamma/gamma` | CI |
+| 8.1 | Version: patch releases need nothing (newest `v*` tag + 1); for a minor/major raise `"version"` in `desktop/package.json` above the newest tag before merging | manual |
+| 8.2 | `desktop` workflow on the merge: version pinned → frontend build → freeze → frozen health check → electron-builder → signature verify (ad-hoc on macOS without a cert) → packaged smoke, all three OSes; Linux also installs the `.deb` and smokes `/opt/Gamma/gamma`; publish → release + tag, docker re-tag, Store submission when secrets exist | CI |
 | 8.3 | Release page lists `Gamma-<v>-win-x64.exe` (+ `.blockmap`, `latest.yml`), `Gamma-<v>-mac-arm64.dmg`/`.zip` (+ `latest-mac.yml`), `Gamma-<v>-linux-amd64.deb` (+ `latest-linux.yml`); the release is NOT a draft / pre-release (installed apps skip those) and is marked *Latest* (an `extension-v*` release must never be) | manual on the release page |
 | 8.4 | Fresh machine: installer runs (unsigned: SmartScreen *Run anyway*; signed: no SmartScreen block, *Publisher* shows the cert subject in the UAC prompt; Debian/Ubuntu: `sudo apt install ./Gamma-<v>-linux-amd64.deb` pulls the deps), first launch creates a local server, no Python/Node needed | manual |
-| 8.5 | Signed macOS build: `codesign --verify --deep --strict Gamma.app` and `spctl --assess --type execute Gamma.app` pass; a fresh download opens without the *damaged* dialog (the release job's *Verify signature* step covers this on the runner) | manual |
+| 8.5 | Signed macOS build: `codesign --verify --deep --strict Gamma.app` and `spctl --assess --type execute Gamma.app` pass; a fresh download opens without any dialog (the release job's *Verify signature* step covers this on the runner) | manual |
+| 8.6 | Cert-less macOS build (ad-hoc): a fresh download shows *Apple could not verify…*, and *Privacy & Security → Open Anyway* launches it; no *damaged* dialog | manual (needs a Mac) |
 
 ## Last run
 

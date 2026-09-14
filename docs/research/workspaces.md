@@ -48,10 +48,22 @@ visible to its members; appearance, the AI provider choice and credentials
 follow the account. Per-account browser state that names pages (tabs,
 recents, reading positions) is keyed by account *and* workspace.
 
-**Money follows the creator.** Uploads into a shared workspace count
-against its creator's quota. Otherwise sharing multiplies everyone's
-allowance, and an admin who wants a lab on a bigger quota can raise one
-number.
+**Money follows the creator — revised: only personal libraries are
+billed.** The first cut charged uploads into a shared workspace to its
+creator's quota, so sharing would not multiply allowances. In use it
+punished the one person who set the lab up, moved silently when that
+person stepped down as owner, and made "how much may this workspace hold"
+a question about a person. The rule now: a person's quota covers exactly
+their personal workspace, and a shared workspace carries its own optional
+cap that an admin sets. Two independent numbers, each about the thing it
+limits.
+
+**Public is a server-level decision.** Workspaces started with nothing
+public, page share links covering outsiders. A lab wants a reading room
+every member of the server sees without an invitation each; that is a
+`public` access setting with a default role, granted implicitly (no join
+step, nothing to leave) and set only by admins — an owner cannot expose a
+library to the whole server on their own.
 
 **Switch by full reload.** Every piece of per-library client state (open
 tabs, recents, the live collaboration session) belongs to the library being
