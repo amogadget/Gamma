@@ -9,10 +9,13 @@
 // the selection, the stroke history and the commits.
 import React, { useEffect, useRef, useState } from "react";
 import { getStroke } from "perfect-freehand";
-import { ErasePartialIcon, EraserIcon, EraseStrokeIcon, HighlightIcon, LassoIcon, PenIcon, PlusIcon, XIcon } from "./icons";
 import {
-  HIGHLIGHTER_SIZES, PEN_COLORS, PEN_SIZES, boundsOf, encodeStroke, hitStrokes, inkBounds, outlineOptions,
-  strokePath, strokesInLasso, svgPathFromPoints, unionBox,
+  CopyIcon, ErasePartialIcon, EraserIcon, EraseStrokeIcon, HandIcon, HighlightIcon, LassoIcon, PenIcon, PlusIcon,
+  RectSelectIcon, TrashIcon, XIcon,
+} from "./icons";
+import {
+  HIGHLIGHTER_COLORS, HIGHLIGHTER_OPACITY, MAX_TOOLS, PEN_COLORS, boundsOf, encodeStroke, hitStrokes, inkBounds,
+  outlineOptions, sizesFor, strokePath, strokesInLasso, svgPathFromPoints, toolId, unionBox,
 } from "./ink";
 import * as inkStore from "./inkStore";
 
@@ -23,8 +26,9 @@ export function useInkVersion() {
   return v;
 }
 
-const ERASER_PX = 9;          // eraser radius on screen
-const SIZES = [["S", "Thin"], ["M", "Medium"], ["L", "Thick"]];
+// Eraser radius on screen (css px) per S/M/L index.
+export const ERASER_SIZES = [5, 9, 16];
+const SIZE_LABELS = ["Small", "Medium", "Large"];
 
 function Strokes({ ink, onClick, hide }) {
   return ink.strokes.map((s) => {
@@ -41,11 +45,12 @@ function Strokes({ ink, onClick, hide }) {
 
 // tool: the armed tool {tool: pen|highlighter|eraser|select, color, size}
 // or null; penTool: what a stylus draws with when nothing is armed;
-// eraserMode: "stroke" (whole strokes) | "partial" (cuts through them);
+// eraserMode: "stroke" (whole strokes) | "partial" (cuts through them),
+// eraserSize its S/M/L index; lassoMode: "free" (a drawn loop) | "box";
 // blocks: this page's ink blocks; selection: {page, items: [{id, ids}]};
 // flash: {id, nonce} outlines a group briefly.
 export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, penTool, penOnly, pressure, eraserMode,
-  selection, flash, onStroke, onErase, onErasePartial, onSelect, onMoveSelection, onJump }) {
+  eraserSize = 1, lassoMode = "free", selection, flash, onStroke, onErase, onErasePartial, onSelect, onMoveSelection, onJump }) {
   useInkVersion();
   const canvasRef = useRef(null);
   const [dragOffset, setDragOffset] = useState(null);   // while moving the selection: {dx, dy} in pt
@@ -68,7 +73,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       selBox = unionBox(selBox, boundsOf(g.ink, item.ids));
     }
   }
-  live.current = { tool, penTool, penOnly, pressure, eraserMode, width, height, groups, selBox,
+  live.current = { tool, penTool, penOnly, pressure, eraserMode, eraserSize, lassoMode, width, height, groups, selBox,
     onStroke, onErase, onErasePartial, onSelect, onMoveSelection };
 
   useEffect(() => {
@@ -94,8 +99,8 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
 
     const eraseUnder = (ctx, ev) => {
       const { x, y } = ctx.toPt(ev);
-      const r = ERASER_PX / ctx.k;
       const L = live.current;
+      const r = (ERASER_SIZES[L.eraserSize] ?? ERASER_SIZES[1]) / ctx.k;
       for (const g of L.groups) {
         if (L.eraserMode === "partial") { L.onErasePartial?.(pageNumber, g.id, x, y, r); continue; }
         const ids = hitStrokes(g.ink, x, y, r);
@@ -185,7 +190,8 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
           return;
         }
         showCanvas(ctx);
-        drawing = { ...ctx, id: e.pointerId, mode: "lasso", poly: [[pt.x, pt.y]], raf: 0 };
+        drawing = { ...ctx, id: e.pointerId, mode: "lasso", box: live.current.lassoMode === "box", start: pt,
+          poly: [[pt.x, pt.y]], raf: 0 };
         return;
       }
       showCanvas(ctx);
@@ -207,8 +213,12 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       }
       const events = e.getCoalescedEvents?.() || [];
       for (const ev of events.length ? events : [e]) {
-        if (d.mode === "lasso") { const pt = d.toPt(ev); d.poly.push([pt.x, pt.y]); }
-        else sample(d, ev);
+        if (d.mode === "lasso") {
+          const pt = d.toPt(ev);
+          // A box is the rectangle from the start to the pointer, as a polygon.
+          if (d.box) d.poly = [[d.start.x, d.start.y], [pt.x, d.start.y], [pt.x, pt.y], [d.start.x, pt.y]];
+          else d.poly.push([pt.x, pt.y]);
+        } else sample(d, ev);
       }
       if (!d.raf) d.raf = requestAnimationFrame(paint);
     };
@@ -327,51 +337,108 @@ export function InkCard({ block, onJump }) {
   );
 }
 
-// The tool strip above the page. `state`: {tool, penColor, penSize, hlColor,
-// hlSize, eraserMode} (sizes are S/M/L indexes); `onChange(patch)`.
-export function InkToolbar({ state, onChange, highlightColors, onNewGroup, onClose }) {
-  const { tool } = state;
-  const hl = tool === "highlighter";
-  const colors = hl ? highlightColors : PEN_COLORS;
-  const colorKey = hl ? "hlColor" : "penColor", sizeKey = hl ? "hlSize" : "penSize";
-  const pick = (t) => onChange({ tool: tool === t ? null : t });
+// The tool strip above the page, Notability-style: a row of tool presets
+// (each pen / highlighter with its own colour and width), the eraser, the
+// lasso and a hand. Tapping the armed tool again opens its options row —
+// colours (palette + custom), widths, duplicate, remove for a preset;
+// whole / partial + size for the eraser; freeform / box for the lasso.
+// `tools`: the presets; `active`: a preset id, "eraser", "select" or null
+// (the hand); `options`: whether the row is open.
+export function InkToolbar({ tools, active, options, eraserMode, eraserSize, lassoMode,
+  onPick, onToggleOptions, onChangeTools, onEraser, onLasso, onNewGroup, onClose }) {
+  const preset = tools.find((t) => t.id === active) || null;
+  const tap = (id) => (id === active ? onToggleOptions() : onPick(id));
+  const btn = (id, label, icon, extra) => (
+    <button key={id} type="button" className={"ctlBtn inkToolBtn" + (active === id ? " modeActive" : "")}
+      onClick={() => tap(id)} title={label} aria-label={label} aria-pressed={active === id}>{icon}{extra}</button>
+  );
+  const edit = (patch) => onChangeTools(tools.map((t) => (t.id === active ? { ...t, ...patch } : t)));
+  const duplicate = () => {
+    const i = tools.findIndex((t) => t.id === active);
+    const copy = { ...tools[i], id: toolId() };
+    onChangeTools([...tools.slice(0, i + 1), copy, ...tools.slice(i + 1)]);
+    onPick(copy.id, { keepOptions: true });
+  };
+  const remove = () => {
+    const i = tools.findIndex((t) => t.id === active);
+    const rest = tools.filter((t) => t.id !== active);
+    onChangeTools(rest);
+    onPick(rest[Math.min(i, rest.length - 1)].id);
+  };
+  const seg = (on, label, icon, click, title) => (
+    <button type="button" className={"ctlBtn inkSegBtn" + (on ? " modeActive" : "")} onClick={click}
+      title={title} aria-label={label} aria-pressed={on}>{icon}<span>{label}</span></button>
+  );
+  const palette = preset ? (preset.kind === "highlighter" ? HIGHLIGHTER_COLORS : PEN_COLORS) : null;
   return (
     <div className="pdfInkBar" role="toolbar" aria-label="Handwriting tools">
-      <button type="button" className={"ctlBtn" + (tool === "pen" ? " modeActive" : "")}
-        onClick={() => pick("pen")} title="Pen (P)"><PenIcon size={15} /></button>
-      <button type="button" className={"ctlBtn" + (hl ? " modeActive" : "")}
-        onClick={() => pick("highlighter")} title="Highlighter (H)"><HighlightIcon size={15} /></button>
-      <button type="button" className={"ctlBtn" + (tool === "eraser" ? " modeActive" : "")}
-        onClick={() => pick("eraser")} title="Eraser (E) — the pen's eraser end and barrel button erase too"><EraserIcon size={15} /></button>
-      <button type="button" className={"ctlBtn" + (tool === "select" ? " modeActive" : "")}
-        onClick={() => pick("select")} title="Lasso (L): circle strokes to select them, then drag the box to move or press Delete"><LassoIcon size={15} /></button>
-      <span className="pdfInkSep" />
-      {tool && tool !== "eraser" && tool !== "select" ? (
-        <>
-          {colors.map((c) => (
-            <button key={c} type="button" className={"colorBtn" + (state[colorKey] === c ? " selected" : "")}
-              style={{ background: c }} onClick={() => onChange({ [colorKey]: c })} title={c} aria-label={`Colour ${c}`} />
+      <div className="pdfInkRow">
+        {tools.map((t, i) => {
+          const hl = t.kind === "highlighter";
+          const sizes = sizesFor(t.kind), k = Math.max(0, sizes.indexOf(t.size));
+          const label = `${hl ? "Highlighter" : "Pen"} ${t.color}, ${t.size} pt (${i + 1})` + (active === t.id ? " — tap again for options" : "");
+          return btn(t.id, label, hl ? <HighlightIcon size={15} /> : <PenIcon size={15} />,
+            <span className="inkToolInk" style={{ background: t.color, height: hl ? 3 + Math.round(k / 2) : 2 + Math.round(k / 3),
+              opacity: hl ? 0.85 : 1 }} />);
+        })}
+        {btn("eraser", "Eraser (E) — the pen's eraser end and barrel button erase too", <EraserIcon size={15} />)}
+        {btn("select", "Lasso (L): circle strokes to select them, then drag the box to move or press Delete", <LassoIcon size={15} />)}
+        <span className="pdfInkSep" />
+        <button type="button" className={"ctlBtn inkToolBtn" + (active === null ? " modeActive" : "")}
+          onClick={() => onPick(null)} title="Hand (V): scroll and select text; a stylus still writes" aria-label="Hand"
+          aria-pressed={active === null}><HandIcon size={15} /></button>
+        <span className="pdfInkSep" />
+        <button type="button" className="ctlBtn" onClick={onNewGroup}
+          title="Start a new handwriting note: the next strokes make their own block instead of joining the last one"><PlusIcon size={15} /></button>
+        <button type="button" className="ctlBtn" onClick={onClose} title="Close the handwriting tools (Esc)"><XIcon size={15} /></button>
+      </div>
+      {options && preset ? (
+        <div className="pdfInkSub" data-ink-options="tool">
+          {palette.map((c) => (
+            <button key={c} type="button" className={"colorBtn inkSwatch" + (preset.color === c ? " selected" : "")}
+              style={{ background: c }} onClick={() => edit({ color: c })} title={c} aria-label={`Colour ${c}`} />
+          ))}
+          <label className={"colorBtn inkSwatch inkCustomColor" + (palette.includes(preset.color) ? "" : " selected")}
+            title="Custom colour" style={{ "--ink-custom": preset.color }}>
+            <input type="color" value={preset.color} aria-label="Custom colour"
+              onChange={(e) => edit({ color: e.target.value.toLowerCase() })} />
+          </label>
+          <span className="pdfInkSep" />
+          {sizesFor(preset.kind).map((sz, i) => (
+            <button key={sz} type="button" className={"ctlBtn inkSizeBtn" + (preset.size === sz ? " modeActive" : "")}
+              onClick={() => edit({ size: sz })} title={`${sz} pt`} aria-label={`Width ${sz} pt`}>
+              <span className="inkSizeDot" style={{ width: 4 + i * 2, height: 4 + i * 2, background: preset.color,
+                opacity: preset.kind === "highlighter" ? HIGHLIGHTER_OPACITY + 0.2 : 1 }} />
+            </button>
           ))}
           <span className="pdfInkSep" />
-          {SIZES.map(([label, name], i) => (
-            <button key={label} type="button" className={"ctlBtn inkSizeBtn" + (state[sizeKey] === i ? " modeActive" : "")}
-              onClick={() => onChange({ [sizeKey]: i })} title={`${name} (${(hl ? HIGHLIGHTER_SIZES : PEN_SIZES)[i]} pt)`}>{label}</button>
+          <button type="button" className="ctlBtn" onClick={duplicate} disabled={tools.length >= MAX_TOOLS}
+            title="Duplicate: a second copy of this tool to give its own colour and width" aria-label="Duplicate tool"><CopyIcon size={14} /></button>
+          <button type="button" className="ctlBtn" onClick={remove} disabled={tools.length <= 1}
+            title="Remove this tool from the strip" aria-label="Remove tool"><TrashIcon size={14} /></button>
+        </div>
+      ) : null}
+      {options && active === "eraser" ? (
+        <div className="pdfInkSub" data-ink-options="eraser">
+          {seg(eraserMode !== "partial", "Whole strokes", <EraseStrokeIcon size={14} />, () => onEraser({ mode: "stroke" }),
+            "Whole strokes: anything the eraser touches goes entirely")}
+          {seg(eraserMode === "partial", "Partial", <ErasePartialIcon size={14} />, () => onEraser({ mode: "partial" }),
+            "Partial: erase just what the eraser passes over (strokes are cut)")}
+          <span className="pdfInkSep" />
+          {ERASER_SIZES.map((px, i) => (
+            <button key={px} type="button" className={"ctlBtn inkSizeBtn" + (eraserSize === i ? " modeActive" : "")}
+              onClick={() => onEraser({ size: i })} title={`${SIZE_LABELS[i]} eraser`} aria-label={`${SIZE_LABELS[i]} eraser`}>
+              <span className="inkSizeDot inkEraserDot" style={{ width: 6 + i * 4, height: 6 + i * 4 }} />
+            </button>
           ))}
-          <span className="pdfInkSep" />
-        </>
+        </div>
       ) : null}
-      {tool === "eraser" ? (
-        <>
-          <button type="button" className={"ctlBtn" + (state.eraserMode !== "partial" ? " modeActive" : "")}
-            onClick={() => onChange({ eraserMode: "stroke" })} title="Whole strokes: anything the eraser touches goes entirely" aria-label="Erase whole strokes"><EraseStrokeIcon size={15} /></button>
-          <button type="button" className={"ctlBtn" + (state.eraserMode === "partial" ? " modeActive" : "")}
-            onClick={() => onChange({ eraserMode: "partial" })} title="Partial: erase just what the eraser passes over (strokes are cut)" aria-label="Erase partially"><ErasePartialIcon size={15} /></button>
-          <span className="pdfInkSep" />
-        </>
+      {options && active === "select" ? (
+        <div className="pdfInkSub" data-ink-options="select">
+          {seg(lassoMode !== "box", "Freeform", <LassoIcon size={14} />, () => onLasso("free"), "Freeform: draw a loop around the strokes")}
+          {seg(lassoMode === "box", "Box", <RectSelectIcon size={14} />, () => onLasso("box"), "Box: drag a rectangle over the strokes")}
+        </div>
       ) : null}
-      <button type="button" className="ctlBtn" onClick={onNewGroup}
-        title="Start a new handwriting note: the next strokes make their own block instead of joining the last one"><PlusIcon size={15} /></button>
-      <button type="button" className="ctlBtn" onClick={onClose} title="Close the handwriting tools (Esc)"><XIcon size={15} /></button>
     </div>
   );
 }

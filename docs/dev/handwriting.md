@@ -11,18 +11,32 @@ does the same things, is in
 ## What the user sees
 
 - The pen button in the viewer's zoom column opens the **tool strip** at
-  the top of the page: pen / highlighter / eraser / lasso, colours, S/M/L,
-  *New group* (+), close. Keys while it is open: `P` `H` `E` `L`, `Esc`,
-  `Delete` (the lasso selection), and **`Ctrl+Z` / `Ctrl+Shift+Z` step the
-  strokes** (each stroke, erasure, move or delete is one entry; the history
-  is per visit of the page). Opening the strip arms the pen.
-- The **eraser** has two modes on the strip (two icons next to it): *whole
-  strokes* removes anything it touches, *partial* cuts through them (the pieces on either side become their own
-  strokes; one pass is one undo entry). The **lasso** circles strokes (more
-  than half their samples inside); the dashed box then moves by dragging
-  and deletes with `Delete`. Both work across groups on the page.
+  the top of the page, laid out like Notability's: a row of **tool
+  presets** — each a pen or a highlighter with its own colour and width,
+  shown as the icon over a colour bar (four pens and three highlighters
+  to start) — then the eraser, the lasso, a hand (nothing armed: scroll
+  and select text), *New group* (+) and close. One tap arms a tool;
+  **tapping the armed tool again opens its options row** under the strip.
+  For a preset that row is the palette (14 pen / 8 highlighter colours
+  plus a custom colour through the browser's picker), eight widths as
+  dots, *Duplicate* (a copy right after it, armed and still open for
+  editing) and *Remove*; the change applies to that preset, so the row is
+  the user's own set of pens (up to 12, kept in localStorage,
+  `gamma-ink-tools`). Keys while the strip is open: `1`–`9` arm the preset
+  at that position, `P` / `H` step through the pens / highlighters, `E`
+  `L` `V` the eraser / lasso / hand, `Esc`, `Delete` (the lasso
+  selection), and **`Ctrl+Z` / `Ctrl+Shift+Z` step the strokes** (each
+  stroke, erasure, move or delete is one entry; the history is per visit
+  of the page). Opening the strip arms the last pen used.
+- The **eraser**'s options row: *whole strokes* removes anything it
+  touches, *partial* cuts through them (the pieces on either side become
+  their own strokes; one pass is one undo entry), and three sizes. The
+  **lasso**'s row: *freeform* circles strokes (more than half their
+  samples inside), *box* drags a rectangle; the dashed box then moves by
+  dragging and deletes with `Delete`. Both work across groups on the page.
 - **A stylus draws right away** even with the strip closed (Settings →
-  Editor → PDF viewer → Handwriting; on by default). **Fingers never draw**
+  Editor → PDF viewer → Handwriting; on by default), with the last pen
+  preset armed on the strip. **Fingers never draw**
   when *Fingers never draw* is on (default on touch screens): they keep
   scrolling and pinch-zooming. The pen's eraser end and barrel button erase.
 - Strokes on one page join the **current group** until *New group*, a
@@ -118,8 +132,12 @@ sample bytes.
   moves the selected strokes (previewed as a translated copy, committed on
   pointer-up). `InkCard` is the picture in the notes; `InkToolbar` the
   strip.
-- `App.jsx` owns the tool state (`inkUi`, the S/M/L + colour + eraser-mode
-  prefs), the group the next stroke joins (`inkActiveRef`), the lasso
+- `App.jsx` owns the tool state: `inkUi` (`open`, the armed `tool` — a
+  preset id, `eraser`, `select` or `null` for the hand — its `options` row,
+  and `pen`, the last pen preset, which a stylus writes with when nothing
+  is armed) plus the prefs (`inkTools`, the preset list validated by
+  `ink.js` `normalizeTools`; the eraser's mode and size; the lasso mode),
+  the group the next stroke joins (`inkActiveRef`), the lasso
   selection (`inkSelection`) and the **stroke history** (`inkHistRef`:
   entries of `[{id, page, before, after}]`, one per action; a group whose
   block is gone is re-inserted when an entry brings strokes back). Every
@@ -168,11 +186,13 @@ sample bytes.
 
 ## Not built yet
 
-Shape tools, resizing or rotating a lasso selection, a `canvas` space for
-ink blocks on pages without a PDF, Xournal++ `.xopp` import, *Transcribe
-with AI*, live co-drawing over presence, audio replay (the per-sample `t`
-and stroke ids are stored for it). Obsidian vault export writes an ink
-block's caption only. The Notability comparison in the research note lists
-what a closer pen experience still needs (draw-and-hold straightening,
-more sizes behind three slots, custom colours, an eraser that returns to
-the last tool, the highlighter behind the ink).
+Shape tools, resizing or rotating a lasso selection, reordering presets
+by drag, syncing the preset row across devices (it is per browser),
+ballpoint / fountain / dashed pen styles, a `canvas` space for ink blocks
+on pages without a PDF, Xournal++ `.xopp` import, *Transcribe with AI*,
+live co-drawing over presence, audio replay (the per-sample `t` and stroke
+ids are stored for it). Obsidian vault export writes an ink block's
+caption only. The Notability comparison in the research note lists what a
+closer pen experience still needs (draw-and-hold straightening, an eraser
+that returns to the last tool, the highlighter behind the ink, restyling
+a selection).

@@ -24,7 +24,10 @@ Who writes it: `storage.store_pdf` (uploads, imports, file chips), the
 thread the moment the file lands, so the first open finds it ready; the search
 indexer computes it while it has the file open anyway; and the endpoint
 computes it on demand for anything older, in pdfium, in FastAPI's threadpool
-(the route is a sync `def`). Every pdfium walk goes through
+(the route is a sync `def`). A walk already running for the document is
+joined, not repeated, so opening a book right after uploading it waits for
+the upload's own walk instead of queueing a second one behind the pdfium
+lock. Every pdfium walk goes through
 `pdf_text.page_sizes`, behind the same lock as text extraction. A file pdfium
 cannot read is stored with `pages: 0` so it is not parsed again on every open;
 the endpoint sends that answer `no-store` and a real one with a day of
@@ -52,22 +55,32 @@ document). The viewer's load effect composes them:
 2. **Otherwise the manifest and the bytes are fetched in parallel.** On a
    cold open (nothing on screen yet) the manifest alone commits a
    **skeleton**: page boxes of exact size, no document. The host's `"layout"`
-   phase applies the pending scroll restore on it, so the reader is on their
-   page before a byte of the PDF has been parsed, and `PdfPage` places
+   phase applies the pending exact tab position on it, and the last-read-page
+   restore (the `read-pos` pref, what a reload or a cold reopen uses) accepts
+   the skeleton as "pages in the DOM", so the reader is on their page before
+   a byte of the PDF has been parsed, and `PdfPage` places
    highlights and ink into the reserved box, so the overlays are right from
    the first frame. The skeleton keeps its page keys when the document
    arrives: same components, nothing remounts. It is only laid out on a cold
    open; blanking a document already on screen would undo the atomic swap
    that keeps tab switches flicker-free.
 3. **Transport by size.** Cached bytes (memory, then IndexedDB) are used as
-   they are. An uncached upload at or under `WHOLE_MAX_BYTES` (12 MB) is one
-   plain GET, as before: it stays in the browser's HTTP cache and lands in
-   IndexedDB. Above that, pdf.js opens the URL itself by **range requests**
+   they are. For an uncached upload the size comes from the manifest or from a
+   HEAD of the file, whichever answers first: a manifest computed for the
+   first time (a long book opened the moment it was uploaded) can take
+   seconds, and the open must not wait on it. At or under `WHOLE_MAX_BYTES`
+   (12 MB) the file is one plain GET, as before: it stays in the browser's
+   HTTP cache and lands in IndexedDB. Above that, pdf.js opens the URL itself
+   by **range requests**
    (`disableRange: false`, `disableStream: true`, `disableAutoFetch: true`,
    256 KB chunks): the xref, the page tree and only the pages being drawn.
    `disableStream` is the flag that matters; with autofetch off but streaming
    on, pdf.js's full-file reader keeps running underneath and saturates the
-   link the ranges race. Browsers never store 206 responses, so three seconds
+   link the ranges race. pdf.js resolves the URL to an absolute one before
+   fetching, and the fetch wrapper in `utils.js` tags absolute same-origin
+   URLs with the workspace header too — without that the ranges of a document
+   in a non-default workspace came back 404, which pdf.js reports as
+   "Missing PDF". Browsers never store 206 responses, so three seconds
    after the commit the whole file is fetched once, quietly, into IndexedDB
    (`backfillLocalCopy`), and the second open is warm. The `/api/pdf` proxy
    streams from its upstream and cannot answer ranges: it always downloads
@@ -118,7 +131,13 @@ The e2e timing probe (`frontend/tests/e2e/scenarios/pdfload.mjs`; `npm run
 e2e -- --only "pdf load"`): a 300-page, 20 MB document (tiny pages plus a
 padding stream, so the file weighs what a scanned book weighs), Chromium at an
 emulated 20 Mbps / 40 ms latency, first paint measured from `open`. The
-steps assert only that the document paints; the numbers are their notes.
+timing steps assert only that the document paints; the numbers are their
+notes. The same scenario then pins the behaviours: a landscape page far below
+the fold has its own box shape (only the manifest could have said so), the
+last-read page comes back after a reload, two large documents alternate
+through the parsed-document cache without mixing, and an anonymous share
+visitor opens the large document by ranges with no request rejected (the
+share token rides on the ranges, the manifest and the HEAD).
 
 | Open | Before | After (four runs) | On the wire |
 |---|---|---|---|

@@ -199,7 +199,7 @@ function backfillLocalCopy(url) {
   setTimeout(async () => {
     try {
       if (await diskCacheHas(url)) return;
-      const resp = await fetch(url, { credentials: "include" });
+      const resp = await fetch(withShare(url), { credentials: "include" });
       if (resp.ok) diskCachePut(url, await resp.arrayBuffer());
     } catch {} finally {
       backfilling.delete(url);
@@ -220,6 +220,32 @@ async function fetchManifest(url) {
   } catch {
     return null;
   }
+}
+
+// The file's byte size from a HEAD (the upload route answers one with
+// Content-Length), or null. Raced against the manifest for the transport
+// decision: a manifest being computed for the first time (a long book,
+// opened the moment it was uploaded) can take seconds, and the open must not
+// wait on it — a HEAD is one round trip whatever the file.
+async function fetchSize(url) {
+  try {
+    const r = await fetch(withShare(url), { method: "HEAD", credentials: "include" });
+    const n = parseInt(r.headers.get("content-length") || "", 10);
+    return r.ok && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+// The first non-null value among the promises, or null when none has one.
+function firstValue(promises) {
+  return new Promise((resolve) => {
+    let pending = promises.length;
+    for (const p of promises) {
+      p.then((v) => { if (v != null) resolve(v); else if (--pending === 0) resolve(null); },
+        () => { if (--pending === 0) resolve(null); });
+    }
+  });
 }
 
 // A promise's value, or null once `ms` have passed without it.
@@ -331,7 +357,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
 // inkPenTool what a stylus draws with when nothing is armed, inkFlash
 // {id, nonce} outlines a group after a jump; strokes and erasures report
 // back through onInkStroke / onInkErase, a click on ink through onInkJump.
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkEraserSize = 9, inkLassoMode = "free", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -865,16 +891,22 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         let openedByRange = false;
         if (data) {
           report({ phase: "cached" });
-        } else if (chooseTransport({ url, bytes: (await manifestP)?.bytes }) === "range") {
-          if (cancelled) return;
-          openedByRange = true;
         } else {
-          data = await fetchPdfData(url, onLoadState, () => cancelled);
-          if (!data || cancelled) return;
+          // Size from the manifest or a HEAD, whichever answers first.
+          const bytes = docIdOf(url) ? await firstValue([manifestP.then((m) => m?.bytes), fetchSize(url)]) : null;
+          if (cancelled) return;
+          openedByRange = chooseTransport({ url, bytes }) === "range";
+          if (!openedByRange) {
+            data = await fetchPdfData(url, onLoadState, () => cancelled);
+            if (!data || cancelled) return;
+          }
         }
         report({ phase: "parsing" });
         let doc;
         if (openedByRange) {
+          // pdf.js fetches the url itself (absolute, once resolved); the fetch
+          // wrapper in utils.js tags same-origin absolute urls with the
+          // workspace header too, so the ranges land in the right library.
           doc = await pdfjsLib.getDocument(openParams(rangeOpenOptions(withShare(url)))).promise;
         } else {
           cachePdf(url, data); // insert or bump LRU position
@@ -1658,6 +1690,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           inkPenOnly={inkPenOnly}
           inkPressure={inkPressure}
           inkEraserMode={inkEraserMode}
+          inkEraserSize={inkEraserSize}
+          inkLassoMode={inkLassoMode}
           inkSelection={inkSelection && inkSelection.page === i + 1 ? inkSelection : null}
           inkFlash={inkFlash && inkByPage.get(i + 1)?.some((b) => b.id === inkFlash.id) ? inkFlash : null}
           onInkStroke={onInkStroke ? stableCbs.onInkStroke : undefined}
@@ -1849,7 +1883,7 @@ function TransPending({ lines, busy }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkEraserSize, inkLassoMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -2137,7 +2171,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         <InkLayer pageNumber={pageNumber} wrapRef={wrapRef}
           width={baseW} height={baseH}
           blocks={inkBlocks} tool={onInkStroke ? inkTool : null} penTool={onInkStroke ? inkPenTool : null}
-          penOnly={inkPenOnly} pressure={inkPressure} eraserMode={inkEraserMode} selection={inkSelection} flash={inkFlash}
+          penOnly={inkPenOnly} pressure={inkPressure} eraserMode={inkEraserMode} eraserSize={inkEraserSize} lassoMode={inkLassoMode} selection={inkSelection} flash={inkFlash}
           onStroke={onInkStroke} onErase={onInkErase} onErasePartial={onInkErasePartial}
           onSelect={onInkSelect} onMoveSelection={onInkMoveSelection} onJump={onInkJump} />
       ) : null}

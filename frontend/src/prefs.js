@@ -3,6 +3,7 @@
 // lines. One entry per storage key; a codec clamps stored values back into
 // range so a stale or hand-edited localStorage never breaks the app.
 import { usePersistedState, usePersistedFlag } from "./utils";
+import { DEFAULT_TOOLS, normalizeTools } from "./ink";
 
 // AI context-size preferences (chars of extracted PDF text): clamp stored
 // values to a sane range, fall back to the default otherwise.
@@ -59,7 +60,14 @@ const AGENT_PERMS_CODEC = {
   serialize: JSON.stringify,
 };
 
-// Handwriting size choice: an S/M/L index.
+// Handwriting: the strip's tool presets (docs/dev/handwriting.md) and the
+// eraser's S/M/L size index.
+const INK_TOOLS_CODEC = {
+  parse: (raw) => {
+    try { return normalizeTools(JSON.parse(raw)); } catch { return undefined; }
+  },
+  serialize: JSON.stringify,
+};
 const SIZE_INDEX_CODEC = {
   parse: (raw) => {
     const value = Number.parseInt(raw, 10);
@@ -218,14 +226,18 @@ export function useAppPrefs() {
   const [inkPenOnly, setInkPenOnly] = usePersistedFlag("gamma-ink-pen-only", coarse);
   const [inkAutoPen, setInkAutoPen] = usePersistedFlag("gamma-ink-auto-pen", true);
   const [inkPressure, setInkPressure] = usePersistedFlag("gamma-ink-pressure", true);
-  // The tool strip's last choices (colours are CSS strings, sizes S/M/L = 0..2).
-  const [inkPenColor, setInkPenColor] = usePersistedState("gamma-ink-pen-color", "#1f1f1f");
-  const [inkPenSize, setInkPenSize] = usePersistedState("gamma-ink-pen-size", 1, SIZE_INDEX_CODEC);
-  const [inkHlColor, setInkHlColor] = usePersistedState("gamma-ink-hl-color", "rgba(255, 226, 143, 0.65)");
-  const [inkHlSize, setInkHlSize] = usePersistedState("gamma-ink-hl-size", 1, SIZE_INDEX_CODEC);
-  // "stroke" erases whole strokes, "partial" cuts through them.
+  // The strip's tool presets: [{id, kind: pen|highlighter, color, size}],
+  // the user's own row of pens and highlighters (ink.js DEFAULT_TOOLS).
+  const [inkTools, setInkTools] = usePersistedState("gamma-ink-tools", DEFAULT_TOOLS, INK_TOOLS_CODEC);
+  // "stroke" erases whole strokes, "partial" cuts through them; the size
+  // is an S/M/L index (inkLayer.jsx ERASER_SIZES).
   const [inkEraserMode, setInkEraserMode] = usePersistedState("gamma-ink-eraser", "stroke", {
     parse: (raw) => (["stroke", "partial"].includes(raw) ? raw : undefined),
+  });
+  const [inkEraserSize, setInkEraserSize] = usePersistedState("gamma-ink-eraser-size", 1, SIZE_INDEX_CODEC);
+  // The lasso draws a freeform loop or a box.
+  const [inkLassoMode, setInkLassoMode] = usePersistedState("gamma-ink-lasso", "free", {
+    parse: (raw) => (["free", "box"].includes(raw) ? raw : undefined),
   });
 
   // --- Chat behavior (Settings → Assistant) ---
@@ -255,7 +267,7 @@ export function useAppPrefs() {
     agentEnabled, setAgentEnabled,
     chatImgAutoClear, setChatImgAutoClear,
     inkPenOnly, setInkPenOnly, inkAutoPen, setInkAutoPen, inkPressure, setInkPressure,
-    inkPenColor, setInkPenColor, inkPenSize, setInkPenSize, inkHlColor, setInkHlColor, inkHlSize, setInkHlSize,
-    inkEraserMode, setInkEraserMode,
+    inkTools, setInkTools, inkEraserMode, setInkEraserMode, inkEraserSize, setInkEraserSize,
+    inkLassoMode, setInkLassoMode,
   };
 }

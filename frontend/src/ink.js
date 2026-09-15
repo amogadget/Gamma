@@ -17,11 +17,6 @@ export const PRESSURE_UNIT = 1000;
 export const THINNING = 0.5;      // width = size * (1 + THINNING * (p - 0.5)); mirrors ink.py
 export const MAX_STROKES = 5000;
 
-// Pen sizes (pt at scale 1, S/M/L) and highlighter sizes.
-export const PEN_SIZES = [1.2, 2, 3.2];
-export const HIGHLIGHTER_SIZES = [8, 12, 18];
-export const PEN_COLORS = ["#1f1f1f", "#1d4ed8", "#dc2626", "#15803d", "#7c3aed", "#ea580c"];
-
 export function newInk(page, width, height) {
   return { format: FORMAT, version: VERSION,
     space: { kind: "pdf-page", page, width, height }, strokes: [] };
@@ -33,6 +28,64 @@ export function strokeId() {
   for (let i = 0; i < 8; i++) s += ID_CHARS[Math.floor(Math.random() * ID_CHARS.length)];
   return s;
 }
+
+// --- tool presets ------------------------------------------------------------
+// The strip is a row of presets, Notability-style: each pen or highlighter
+// keeps its own colour and width ({id, kind: pen|highlighter, color, size}),
+// and the user edits, duplicates and removes them. Widths are pt at scale 1
+// (the options row shows them as dots); colours are hex — a highlighter
+// gets HIGHLIGHTER_OPACITY on top and multiplies onto the page.
+export const PEN_SIZES = [0.6, 1, 1.4, 2, 2.8, 4, 5.6, 8];
+export const HIGHLIGHTER_SIZES = [5, 7, 10, 14, 18, 24, 32, 40];
+export const PEN_COLORS = ["#1f1f1f", "#6b7280", "#1d4ed8", "#0284c7", "#0f766e", "#15803d", "#65a30d",
+  "#ca8a04", "#ea580c", "#dc2626", "#db2777", "#7c3aed", "#92400e", "#ffffff"];
+export const HIGHLIGHTER_COLORS = ["#fde047", "#86efac", "#7dd3fc", "#f9a8d4", "#fdba74", "#c4b5fd", "#67e8f9", "#d4d4d8"];
+export const HIGHLIGHTER_OPACITY = 0.6;
+export const DEFAULT_TOOLS = [
+  { id: "pen1", kind: "pen", color: "#1f1f1f", size: 2 },
+  { id: "pen2", kind: "pen", color: "#1d4ed8", size: 2 },
+  { id: "pen3", kind: "pen", color: "#dc2626", size: 2 },
+  { id: "pen4", kind: "pen", color: "#15803d", size: 1.4 },
+  { id: "hl1", kind: "highlighter", color: "#fde047", size: 14 },
+  { id: "hl2", kind: "highlighter", color: "#86efac", size: 14 },
+  { id: "hl3", kind: "highlighter", color: "#f9a8d4", size: 14 },
+];
+export const MAX_TOOLS = 12;
+const HEX_RE = /^#[0-9a-f]{6}$/i;
+
+export function toolId() {
+  return "t" + strokeId();
+}
+export function sizesFor(kind) {
+  return kind === "highlighter" ? HIGHLIGHTER_SIZES : PEN_SIZES;
+}
+// A stored list (localStorage, possibly hand-edited or from an older
+// build) → a valid preset list, or the defaults when nothing survives.
+export function normalizeTools(list) {
+  const out = [];
+  const seen = new Set();
+  for (const t of Array.isArray(list) ? list : []) {
+    if (!t || typeof t !== "object") continue;
+    const kind = t.kind === "highlighter" ? "highlighter" : t.kind === "pen" ? "pen" : null;
+    if (!kind || typeof t.color !== "string" || !HEX_RE.test(t.color)) continue;
+    const sizes = sizesFor(kind);
+    const size = Number(t.size);
+    if (!Number.isFinite(size) || size < sizes[0] || size > sizes[sizes.length - 1]) continue;
+    let id = typeof t.id === "string" && /^[A-Za-z0-9_-]{1,24}$/.test(t.id) ? t.id : toolId();
+    while (seen.has(id)) id = toolId();
+    seen.add(id);
+    out.push({ id, kind, color: t.color.toLowerCase(), size: Math.round(size * 100) / 100 });
+    if (out.length >= MAX_TOOLS) break;
+  }
+  return out.length ? out : DEFAULT_TOOLS.map((t) => ({ ...t }));
+}
+// What the layer draws with for a preset: {tool, color, size, opacity}.
+export function toolStyle(preset) {
+  return preset.kind === "highlighter"
+    ? { tool: "highlighter", color: preset.color, size: preset.size, opacity: HIGHLIGHTER_OPACITY }
+    : { tool: "pen", color: preset.color, size: preset.size, opacity: 1 };
+}
+
 
 // --- codec -----------------------------------------------------------------
 

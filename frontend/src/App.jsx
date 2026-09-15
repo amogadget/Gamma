@@ -63,7 +63,7 @@ import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage, Workspac
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
 import { InkToolbar } from "./inkLayer";
-import { HIGHLIGHTER_SIZES, PEN_SIZES, appendStroke, eraseAt, newInk, removeStrokes, translateStrokes } from "./ink";
+import { appendStroke, eraseAt, newInk, removeStrokes, toolStyle, translateStrokes } from "./ink";
 import * as inkStore from "./inkStore";
 import { usePageCollab } from "./collab";
 import { applyOps, applyPatch, keepUiFlags } from "./blockOps";
@@ -2115,8 +2115,11 @@ export default function App() {
     }
     if (st.phase === "layout") {
       // Page boxes from the manifest are in the DOM, the document itself is
-      // still loading: the reader lands on their page now.
+      // still loading: the reader lands on their page now — the exact tab
+      // position here, the last-read page through the coarse restore below,
+      // which accepts a laid-out skeleton as "pages in the DOM".
       postPill("pdf-load", { msg: "Preparing document…", spinner: true });
+      pdfLaidOutUrlRef.current = url;
       applyPendingRestore(url);
       return;
     }
@@ -2306,8 +2309,8 @@ export default function App() {
     oaFallback, setOaFallback, metaAutoFetch, setMetaAutoFetch, pdfSaveLocal, setPdfSaveLocal,
     snapVertical, setSnapVertical, embAnnots, setEmbAnnots,
     inkPenOnly, setInkPenOnly, inkAutoPen, setInkAutoPen, inkPressure, setInkPressure,
-    inkPenColor, setInkPenColor, inkPenSize, setInkPenSize, inkHlColor, setInkHlColor, inkHlSize, setInkHlSize,
-    inkEraserMode, setInkEraserMode,
+    inkTools, setInkTools, inkEraserMode, setInkEraserMode, inkEraserSize, setInkEraserSize,
+    inkLassoMode, setInkLassoMode,
     translateEnabled, setTranslateEnabled,
     translateLang, setTranslateLang, translateModel, setTranslateModel,
     translateEffort, setTranslateEffort, translateParallel, setTranslateParallel,
@@ -3346,10 +3349,13 @@ export default function App() {
   // Desktop expresses this by holding Ctrl; a phone has no Ctrl, so it gets a
   // sticky toggle button in the viewer's zoom column instead.
   const [areaSelectMode, setAreaSelectMode] = useState(false);
-  // Handwriting (docs/dev/handwriting.md): the tool strip (open, armed tool),
-  // the group the next stroke on a page joins, the pending-upload timer, the
-  // group outlined after a jump, and the viewer's identity-stable ink list.
-  const [inkUi, setInkUi] = useState({ open: false, tool: null });
+  // Handwriting (docs/dev/handwriting.md): the tool strip — open, the armed
+  // tool (a preset id from inkTools, "eraser", "select", or null for the
+  // hand), whether its options row is open, the pen preset a stylus writes
+  // with (the last pen armed) — the group the next stroke on a page joins,
+  // the pending-upload timer, the group outlined after a jump, and the
+  // viewer's identity-stable ink list.
+  const [inkUi, setInkUi] = useState({ open: false, tool: null, options: false, pen: null });
   const [inkFlash, setInkFlash] = useState(null);
   const inkActiveRef = useRef(null);
   const inkTimerRef = useRef(0);
@@ -4575,6 +4581,7 @@ export default function App() {
   const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
   const restoringForRef = useRef(null); // block whose restore hasn't landed yet
   const pdfRenderedUrlRef = useRef(""); // url of the document whose pages are in the DOM
+  const pdfLaidOutUrlRef = useRef("");  // url whose manifest skeleton (exact page boxes, no document yet) is in the DOM
   const pendingRestoreRef = useRef(null); // {url, entry, blockId, token} applied pre-paint on "rendered"
   function captureScrollPos() {
     // The page's window layout travels with it — including panel size ratios.
@@ -5270,16 +5277,35 @@ export default function App() {
   // plus a properties PATCH through the block API (a server-side writer, so
   // the change fans out over the page socket and lands in this tree like a
   // remote op); only the group's block itself is inserted through the tree.
-  const inkPen = useMemo(() => ({ tool: "pen", color: inkPenColor, size: PEN_SIZES[inkPenSize] ?? 2, opacity: 1 }),
-    [inkPenColor, inkPenSize]);
+  // The pen preset a stylus writes with when nothing is armed: the last pen
+  // armed on the strip, else the first pen in the row.
+  const inkPen = useMemo(() => {
+    const p = inkTools.find((t) => t.id === inkUi.pen && t.kind === "pen") || inkTools.find((t) => t.kind === "pen") || inkTools[0];
+    return toolStyle(p);
+  }, [inkTools, inkUi.pen]);
   const inkTool = useMemo(() => {
     const t = inkUi.tool;
     if (!t || readOnly) return null;
     if (t === "eraser" || t === "select") return { tool: t };
-    if (t === "highlighter") return { tool: "highlighter", color: inkHlColor, size: HIGHLIGHTER_SIZES[inkHlSize] ?? 12, opacity: 1 };
-    return inkPen;
-  }, [inkUi.tool, readOnly, inkHlColor, inkHlSize, inkPen]);
+    const p = inkTools.find((x) => x.id === t);
+    return p ? toolStyle(p) : null;
+  }, [inkUi.tool, readOnly, inkTools]);
   const inkPenTool = inkAutoPen && !readOnly ? inkPen : null;
+  // Arm a tool; a pen preset also becomes the stylus pen. The options row
+  // closes unless the caller keeps it (a duplicate stays editable).
+  const pickInkTool = useCallback((id, { keepOptions = false } = {}) => {
+    setInkUi((s) => {
+      const p = id && inkTools.find((t) => t.id === id);
+      return { ...s, open: true, tool: id, options: keepOptions && !!id ? s.options : false, pen: p?.kind === "pen" ? id : s.pen };
+    });
+  }, [inkTools]);
+  const openInkStrip = () => pickInkTool(inkTools.find((t) => t.id === inkUi.pen)?.id || inkTools[0].id);
+  // A removed preset leaves the strip's hand armed.
+  useEffect(() => {
+    if (inkUi.tool && inkUi.tool !== "eraser" && inkUi.tool !== "select" && !inkTools.some((t) => t.id === inkUi.tool)) {
+      setInkUi((s) => ({ ...s, tool: null, options: false }));
+    }
+  }, [inkTools, inkUi.tool]);
   const inkBlocks = useMemo(() => {
     const next = flattenBlocks(blocks).filter((b) => b.properties?.ink_url !== undefined)
       .map((b) => ({ id: b.id, properties: b.properties }));
@@ -5440,13 +5466,15 @@ export default function App() {
     pendingBlockScrollRef.current = id;
     setBlocks((prev) => expandToBlock(prev, id));
   }
-  // The strip's keys while it is open: P / H / E / L pick a tool, Esc
-  // drops the selection then closes, Delete removes the selection, and
-  // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y step the STROKE history — registered in
-  // the capture phase so the page's block undo (a bubble listener on the
-  // window) never sees them. A focused text field keeps its own keys.
+  // The strip's keys while it is open: 1–9 arm the preset at that position,
+  // P / H step through the pens / highlighters, E the eraser, L the lasso,
+  // V the hand, Esc drops the selection then closes, Delete removes the
+  // selection, and Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y step the STROKE history —
+  // registered in the capture phase so the page's block undo (a bubble
+  // listener on the window) never sees them. A focused text field keeps
+  // its own keys.
   const inkKeysRef = useRef(null);
-  inkKeysRef.current = { inkUndo, deleteInkSelection, hasSelection: !!inkSelection };
+  inkKeysRef.current = { inkUndo, deleteInkSelection, hasSelection: !!inkSelection, tools: inkTools, tool: inkUi.tool, pickInkTool };
   useEffect(() => {
     if (!inkUi.open) return;
     const onKey = (e) => {
@@ -5461,7 +5489,7 @@ export default function App() {
       }
       if (e.key === "Escape") {
         if (K.hasSelection) setInkSelection(null);
-        else setInkUi({ open: false, tool: null });
+        else setInkUi((s) => ({ ...s, open: false, tool: null, options: false }));
         return;
       }
       if ((e.key === "Delete" || e.key === "Backspace") && K.hasSelection) {
@@ -5471,8 +5499,20 @@ export default function App() {
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       const k = e.key.toLowerCase();
-      const tool = k === "p" ? "pen" : k === "h" ? "highlighter" : k === "e" ? "eraser" : k === "l" ? "select" : null;
-      if (tool) setInkUi((s) => ({ ...s, tool }));
+      if (k === "e") K.pickInkTool("eraser");
+      else if (k === "l") K.pickInkTool("select");
+      else if (k === "v") K.pickInkTool(null);
+      else if (k === "p" || k === "h") {
+        // The next preset of that kind after the armed one, wrapping.
+        const kind = k === "p" ? "pen" : "highlighter";
+        const list = K.tools.filter((t) => t.kind === kind);
+        if (!list.length) return;
+        const i = list.findIndex((t) => t.id === K.tool);
+        K.pickInkTool(list[(i + 1) % list.length].id);
+      } else if (/^[1-9]$/.test(k)) {
+        const t = K.tools[Number(k) - 1];
+        if (t) K.pickInkTool(t.id);
+      }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -6040,7 +6080,10 @@ export default function App() {
       // navigation cancels the loop (effect cleanup), an old document's
       // pages never match pdfUrl, and the tracker can't record anything
       // while coarseRestorePendingRef holds it paused.
-      if (!scrollToRef.current || pdfRenderedUrlRef.current !== pdfUrl) {
+      // A skeleton laid out from the manifest counts: its boxes are exact,
+      // so the last-read page can be scrolled to before pdf.js has parsed
+      // a byte, and nothing shifts under it when the document arrives.
+      if (!scrollToRef.current || (pdfRenderedUrlRef.current !== pdfUrl && pdfLaidOutUrlRef.current !== pdfUrl)) {
         setTimeout(tryRestore, 100);
         return;
       }
@@ -8359,7 +8402,7 @@ export default function App() {
               {!readOnly ? (
                 <button
                   className={inkUi.open ? "modeActive" : ""}
-                  onClick={() => setInkUi((s) => (s.open ? { open: false, tool: null } : { open: true, tool: "pen" }))}
+                  onClick={() => (inkUi.open ? setInkUi((s) => ({ ...s, open: false, tool: null, options: false })) : openInkStrip())}
                   title={inkUi.open ? "Close the handwriting tools (Esc)" : "Handwriting: draw on the page with a pen, highlighter or eraser"}
                   aria-label="Handwriting tools"
                 >
@@ -8380,18 +8423,18 @@ export default function App() {
           ) : null}
           {pdfUrl && !pdfHidden && inkUi.open && !readOnly ? (
             <InkToolbar
-              state={{ tool: inkUi.tool, penColor: inkPenColor, penSize: inkPenSize, hlColor: inkHlColor, hlSize: inkHlSize, eraserMode: inkEraserMode }}
-              highlightColors={COLORS}
-              onChange={(patch) => {
-                if ("tool" in patch) setInkUi((s) => ({ ...s, tool: patch.tool }));
-                if ("penColor" in patch) setInkPenColor(patch.penColor);
-                if ("penSize" in patch) setInkPenSize(patch.penSize);
-                if ("hlColor" in patch) setInkHlColor(patch.hlColor);
-                if ("hlSize" in patch) setInkHlSize(patch.hlSize);
-                if ("eraserMode" in patch) setInkEraserMode(patch.eraserMode);
+              tools={inkTools} active={inkUi.tool} options={inkUi.options}
+              eraserMode={inkEraserMode} eraserSize={inkEraserSize} lassoMode={inkLassoMode}
+              onPick={pickInkTool}
+              onToggleOptions={() => setInkUi((s) => ({ ...s, options: !s.options }))}
+              onChangeTools={setInkTools}
+              onEraser={(patch) => {
+                if ("mode" in patch) setInkEraserMode(patch.mode);
+                if ("size" in patch) setInkEraserSize(patch.size);
               }}
+              onLasso={setInkLassoMode}
               onNewGroup={() => { inkActiveRef.current = null; setStatus("Next strokes start a new handwriting note."); }}
-              onClose={() => setInkUi({ open: false, tool: null })}
+              onClose={() => setInkUi((s) => ({ ...s, open: false, tool: null, options: false }))}
             />
           ) : null}
           {pdfUrl && !pdfHidden ? (
@@ -8431,6 +8474,8 @@ export default function App() {
               onInkErase={readOnly ? undefined : handleInkErase}
               onInkErasePartial={readOnly ? undefined : handleInkErasePartial}
               inkEraserMode={inkEraserMode}
+              inkEraserSize={inkEraserSize}
+              inkLassoMode={inkLassoMode}
               inkSelection={inkSelection}
               onInkSelect={readOnly ? undefined : handleInkSelect}
               onInkMoveSelection={readOnly ? undefined : handleInkMoveSelection}

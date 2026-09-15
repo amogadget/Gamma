@@ -2,8 +2,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  appendStroke, boundsOf, decodeStroke, encodeStroke, eraseAt, hitStrokes, inkBounds, newInk, pdfPositionOf,
-  removeStrokes, strokePath, strokeWidth, strokesInLasso, translateStrokes,
+  DEFAULT_TOOLS, HIGHLIGHTER_OPACITY, MAX_TOOLS, appendStroke, boundsOf, decodeStroke, encodeStroke, eraseAt, hitStrokes,
+  inkBounds, newInk, normalizeTools, pdfPositionOf, removeStrokes, strokePath, strokeWidth, strokesInLasso, toolStyle,
+  translateStrokes,
 } from "../src/ink.js";
 
 const samples = (n = 5, x0 = 100, y0 = 200) =>
@@ -100,4 +101,25 @@ test("paths: pens are filled outlines, highlighters stroked polylines", () => {
   assert.equal(hl.d, "M100.00,200.00 L110.00,203.00 L120.00,206.00");
   const dot = strokePath(encodeStroke({ samples: samples(1) }));
   assert.ok(dot.d.length > 0, "a single tap still draws a dot");
+});
+
+test("tool presets: a stored list is validated, bad entries dropped, nothing left → the defaults", () => {
+  const stored = [
+    { id: "a", kind: "pen", color: "#DC2626", size: 4 },
+    { id: "a", kind: "highlighter", color: "#fde047", size: 14 },      // duplicate id → fresh id
+    { kind: "pen", color: "red", size: 2 },                             // not hex
+    { kind: "pen", color: "#000000", size: 99 },                        // out of range
+    { kind: "pencil", color: "#000000", size: 2 },                      // unknown kind
+    "junk",
+  ];
+  const tools = normalizeTools(stored);
+  assert.equal(tools.length, 2);
+  assert.deepEqual(tools[0], { id: "a", kind: "pen", color: "#dc2626", size: 4 });
+  assert.equal(tools[1].kind, "highlighter");
+  assert.notEqual(tools[1].id, "a");
+  assert.deepEqual(normalizeTools([]), DEFAULT_TOOLS);
+  assert.deepEqual(normalizeTools("nope"), DEFAULT_TOOLS);
+  assert.equal(normalizeTools(Array(30).fill({ kind: "pen", color: "#000000", size: 2 })).length, MAX_TOOLS);
+  assert.deepEqual(toolStyle(tools[0]), { tool: "pen", color: "#dc2626", size: 4, opacity: 1 });
+  assert.deepEqual(toolStyle(tools[1]), { tool: "highlighter", color: "#fde047", size: 14, opacity: HIGHLIGHTER_OPACITY });
 });

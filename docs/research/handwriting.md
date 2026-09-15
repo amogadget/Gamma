@@ -190,15 +190,21 @@ widths.
 
 | Notability | Gamma today | Gap |
 |---|---|---|
-| ballpoint / fountain, pressure toggle | one pen; pressure is a browser setting, mouse/finger strokes even | none in effect; the toggle could move onto the strip |
-| 12 sizes, 3 slots shown | 3 sizes (S/M/L) | a size list behind the three slots |
-| 32 colours + 8 fast custom | 6 pen colours, the 4 highlight colours | custom colours |
+| ballpoint / fountain, pressure toggle | one pen; pressure is a browser setting, mouse/finger strokes even | dashed / dotted styles; the toggle could move onto the strip |
+| 12 sizes, 3 slots shown | 8 widths per kind, each preset holds one | none in effect |
+| 32 colours + 8 fast custom | 14 pen / 8 highlighter swatches + a custom colour per preset | none in effect |
 | highlighter behind ink | draw order with `multiply` | pen colour over a highlight |
-| eraser: partial / whole, 12 sizes, auto-deselect | partial / whole, one size | size, return to the last tool |
+| eraser: partial / whole, 12 sizes, auto-deselect | partial / whole, 3 sizes | return to the last tool |
 | draw-and-hold: straight line, shapes | none | hold detection on a still pointer |
-| lasso: move / scale / rotate / restyle | move, delete | scale, rotate, restyle |
-| duplicated tool presets | one pen, one highlighter | presets |
+| lasso: freeform / boxed; move / scale / rotate / restyle | freeform / box; move, delete | scale, rotate, restyle |
+| duplicated tool presets, tap the armed tool for its popover | the same: a row of presets, tap again for the options row | reorder by drag, sync across devices |
 | stroke: constant width + per-point fractional widths | size + per-sample pressure | same information |
+
+The strip took Notability's shape after a first version (2026-09-13) that
+had four fixed tools with a shared colour and S/M/L row: picking a pen and
+then a colour is two taps for every switch, and the colour the user set
+on the pen was lost when they went to the highlighter and back. A preset
+row is one tap per switch and each pen keeps its look.
 
 ## Sources
 

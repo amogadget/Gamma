@@ -143,7 +143,10 @@ def pdf_info(doc_id: str, request: Request):
     return JSONResponse(info, headers={"Cache-Control": cache})
 
 
-@router.get("/uploads/{filename}")
+# GET and HEAD: the viewer asks HEAD for a file's size before deciding how to
+# open it (FastAPI does not add HEAD to a GET route by itself; FileResponse
+# answers a HEAD with the headers alone).
+@router.api_route("/uploads/{filename}", methods=["GET", "HEAD"])
 async def serve_upload(filename: str, request: Request):
     # Sanitize: only allow [hex].ext pattern, no path traversal
     dot = filename.rfind(".")

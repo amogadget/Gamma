@@ -123,16 +123,21 @@ The scenarios live in `tests/e2e/scenarios/`:
 - `pdf.mjs`: upload + page by attachment, the viewer's text layer, a
   highlight from a text selection (overlay, quote row, persisted position),
   the find bar hitting page 2, the library card.
-- `ink.mjs`: handwriting — the tool strip, two mouse strokes becoming an
+- `ink.mjs`: handwriting — the tool strip and its presets (options row,
+  duplicate, remove, persistence), two mouse strokes becoming an
   ink block with an `.ink` upload, persistence across a reload, the eraser
   (by its key), stroke undo/redo, the partial eraser cutting a stroke, a
   lasso move + delete, the notes card's jump + outline, `/Ink` in the
   exported PDF.
-- `pdfload.mjs`: the PDF load timing probe — a 300-page, 20 MB document
-  opened cold at an emulated 20 Mbps, the IndexedDB backfill, then a warm
-  reopen; reports the per-phase `performance.mark("pdf-<phase>")` stamps and
-  the bytes on the wire as each step's note, asserts only that it paints
-  ([pdf_loading.md](pdf_loading.md)). `npm run e2e -- --only "pdf load"`.
+- `pdfload.mjs`: PDF loading, in a non-default workspace — the timing probe
+  (a 300-page, 20 MB document opened cold at an emulated 20 Mbps, the
+  IndexedDB backfill, a warm reopen, a same-tab return; reports the per-phase
+  `performance.mark("pdf-<phase>")` stamps and the bytes on the wire as each
+  step's note, asserts only that it paints), then the behaviours: page boxes
+  from the manifest (a landscape page below the fold), the last-read page
+  after a reload, two large documents through the parsed-document cache, the
+  anonymous share view by ranges ([pdf_loading.md](pdf_loading.md)).
+  `npm run e2e -- --only "pdf load"`.
 - `files.mjs`: files dropped on a block row / the page body become file
   chips (a `dropFiles` helper builds a real DataTransfer; the paste step
   builds a `ClipboardEvent` in the page, since Playwright's `dispatchEvent`

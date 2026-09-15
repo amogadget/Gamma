@@ -64,9 +64,22 @@ function getExpectedUser() {
 const AUTH_PATHS = new Set([`${API}/login`, `${API}/login-guest`, `${API}/logout`, `${API}/session`]);
 
 const rawFetch = window.fetch.bind(window);
+// A same-origin API path, whether the caller wrote it relative or absolute —
+// pdf.js resolves the URL it is given against the document before fetching,
+// so "/api/uploads/x.pdf" arrives here as "http://host/api/uploads/x.pdf".
+// Any other origin is left alone: not ours to tag.
+function apiPathOf(url) {
+  try {
+    const u = new URL(url, window.location.href);
+    return u.origin === window.location.origin ? u.pathname : "";
+  } catch {
+    return "";
+  }
+}
+
 window.fetch = function (input, options) {
   const url = typeof input === "string" ? input : (input && input.url) || "";
-  const path = url.startsWith("/") ? url.split("?")[0] : "";
+  const path = apiPathOf(url);
   const isApi = path.startsWith(`${API}/`);
   const method = String(options?.method || input?.method || "GET").toUpperCase();
   const expectedAtStart = expectedUser;

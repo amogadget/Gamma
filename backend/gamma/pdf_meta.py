@@ -52,10 +52,31 @@ def get(ws: str, doc_id: str) -> dict | None:
 def ensure(ws: str, doc_id: str) -> dict | None:
     """The manifest, computed and stored when missing. None when the
     workspace has no such file. Walking a long file takes about a second, so
-    request handlers calling this are sync ``def`` (threadpool)."""
+    request handlers calling this are sync ``def`` (threadpool). A walk
+    already running for the same document (the upload's background thread,
+    another open) is joined, not repeated: the second caller waits for its
+    result instead of queueing a second pass behind the pdfium lock."""
     found = get(ws, doc_id)
     if found:
         return found
+    key = (ws, doc_id)
+    with _inflight_lock:
+        done = _inflight.get(key)
+        owner = done is None
+        if owner:
+            done = _inflight[key] = threading.Event()
+    if not owner:
+        done.wait(WAIT_S)
+        return get(ws, doc_id)
+    try:
+        return _compute(ws, doc_id)
+    finally:
+        with _inflight_lock:
+            _inflight.pop(key, None)
+        done.set()
+
+
+def _compute(ws: str, doc_id: str) -> dict | None:
     try:
         path = pdf_upload_path(ws, doc_id)
     except ValueError:
@@ -74,28 +95,25 @@ def ensure(ws: str, doc_id: str) -> dict | None:
     return _shape(doc_id, size, dims)
 
 
-_inflight: set[tuple[str, str]] = set()
+# Longest a caller waits for someone else's walk of the same document.
+WAIT_S = 60
+_inflight: dict[tuple[str, str], threading.Event] = {}
 _inflight_lock = threading.Lock()
 
 
 def schedule(ws: str, doc_id: str) -> None:
     """Compute the manifest on a background thread — what every writer of a
     PDF file calls, so the walk never sits in the request that stored it and
-    the first open finds the manifest ready."""
-    key = (ws, doc_id)
+    the first open finds the manifest ready. A no-op while one is running."""
     with _inflight_lock:
-        if key in _inflight:
+        if (ws, doc_id) in _inflight:
             return
-        _inflight.add(key)
 
     def run():
         try:
             ensure(ws, doc_id)
         except Exception as e:
             log.warning(f"[pdf-meta] {doc_id}: {e}")
-        finally:
-            with _inflight_lock:
-                _inflight.discard(key)
 
     threading.Thread(target=run, daemon=True).start()
 

@@ -3,6 +3,7 @@ the viewer lays a PDF out from (docs/dev/pdf_loading.md)."""
 
 import io
 import sqlite3
+import threading
 import time
 
 from gamma import pdf_meta, pdf_text
@@ -91,3 +92,41 @@ def test_purge_drops_manifests_of_documents_no_page_carries(guest):
         assert pdf_meta.purge(conn, live_docs=set()) >= 1
         conn.commit()
     assert pdf_meta.get(ws, doc_id) is None
+
+
+def test_concurrent_callers_share_one_walk(guest, monkeypatch):
+    doc_id = _upload(guest, _pdf(pages=1))
+    ws = workspace_of("guest")
+    for _ in range(50):  # let the upload's own background walk finish first
+        if pdf_meta.get(ws, doc_id):
+            break
+        time.sleep(0.05)
+    with sqlite3.connect(ws_db_path(ws, "data.db")) as conn:
+        conn.execute("DELETE FROM pdf_docs WHERE doc_id = ?", (doc_id,))
+        conn.commit()
+    calls = []
+    real = pdf_text.page_sizes
+
+    def slow(src):
+        calls.append(src)
+        time.sleep(0.3)
+        return real(src)
+
+    monkeypatch.setattr(pdf_text, "page_sizes", slow)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(pdf_meta.ensure(ws, doc_id))) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(calls) == 1, "one walk, the other callers waited for it"
+    assert all(r and r["pages"] == 1 for r in results)
+
+
+def test_upload_answers_head_with_its_size(guest):
+    data = _pdf(pages=2)
+    doc_id = _upload(guest, data)
+    r = guest.head(f"/api/uploads/{doc_id}.pdf")
+    assert r.status_code == 200
+    assert int(r.headers["content-length"]) == len(data)
+    assert r.content == b""
