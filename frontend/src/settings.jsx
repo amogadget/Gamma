@@ -2,9 +2,11 @@ import React from "react";
 import { API, apiJson, fmtBytes, isUnverifiedPaperMeta, metaSourceInfo } from "./utils";
 import { MenuSelect } from "./menus";
 import {
-  PaneHead, Section, Row, Toggle, Segmented, Stepper, ToggleGroup, UnitInput, CharSlider, approxPages,
+  PaneHead, Section, Row, Toggle, Segmented, ToggleGroup, UnitInput, CharSlider, approxPages,
   Stat, Empty, QuotaMeter, LogBox, SettingsDraftContext, useSettingsDraft,
 } from "./settingsKit";
+import { LibraryDisplaySettings } from "./settingsLibraryDisplay";
+import { AppearanceSettings } from "./settingsAppearance";
 import { AiSettings } from "./settingsAi";
 import { UsersSettings } from "./settingsUsers";
 import { WorkspacesSettings } from "./settingsWorkspace";
@@ -12,7 +14,7 @@ import { WorkspaceBackups } from "./settingsBackups";
 import { ServerSettings } from "./settingsServer";
 import { permissionPreset, presetPermissions } from "./chatSettings";
 import { resolveSettingsPane, searchSettings } from "./settingsNavigation";
-import { TRANSLATE_LANGS, UI_SCALE } from "./prefs";
+import { TRANSLATE_LANGS } from "./prefs";
 import {
   ActivityIcon,
   BookIcon,
@@ -21,22 +23,15 @@ import {
   ContrastIcon,
   DatabaseIcon,
   CornerDownLeftIcon,
-  EyeIcon,
   FileTextIcon,
   FolderIcon,
   GlobeIcon,
   HardDriveIcon,
   HighlightIcon,
   HomeIcon,
-  LabelIcon,
   LanguagesIcon,
-  MaximizeIcon,
-  LayoutIcon,
   ListIcon,
   MessageSquareIcon,
-  MonitorIcon,
-  MoonIcon,
-  MoveVerticalIcon,
   OutlineIcon,
   PaperIcon,
   PenIcon,
@@ -46,7 +41,6 @@ import {
   SearchIcon,
   ServerIcon,
   SparklesIcon,
-  SunIcon,
   TerminalIcon,
   TypeIcon,
   UserIcon,
@@ -75,58 +69,6 @@ const AI_NAV = [
   ["prompts", "Prompts", TypeIcon],
 ];
 
-// --- General: reading, notes, interface -------------------------------------
-
-const THEME_ICON = { system: MonitorIcon, light: SunIcon, dark: MoonIcon, sepia: EyeIcon, solarized: SunIcon, gray: ContrastIcon };
-
-function GeneralSettings({ value, diagnostics }) {
-  return (
-    <>
-      <PaneHead icon={ContrastIcon} title="Appearance">
-        Make Gamma comfortable to read. Each group shows where its preferences are saved.
-      </PaneHead>
-      <Section title="Theme - your account">
-        <Row
-          icon={THEME_ICON[value.theme] || MonitorIcon}
-          label="Theme"
-          hint="Choose Sepia, Solarized Light, or Gray for softer page colors"
-          title="System follows the operating system. Sepia uses warm paper with darker text; Solarized Light follows VS Code with softer blue-gray text; Gray uses neutral light-gray paper. These three themes also tint PDF pages and soften black ink."
-        >
-          <Segmented value={value.theme} onChange={value.setTheme}
-            options={Object.entries(THEME_ICON).map(([theme, Icon]) => [
-              theme, theme === "solarized" ? "Solarized Light" : theme[0].toUpperCase() + theme.slice(1), Icon,
-            ])} />
-        </Row>
-        <Toggle
-          icon={MoonIcon}
-          label="Dark PDF pages"
-          hint="Light text on a dark page. Photos and figures are inverted too."
-          title="Render PDF pages inverted for reading in the dark. Display-only: highlights, exports and the stored file keep their real colors. Figures and photos come out as negatives, so scanned papers may look better with this off. Takes precedence over theme page tints."
-          checked={value.pdfDarkPage}
-          onChange={value.setPdfDarkPage}
-        />
-      </Section>
-      <Section title="Interface - this browser">
-        <Row
-          icon={MaximizeIcon}
-          label="Control size"
-          hint="Buttons and toggles; Ctrl+scroll resizes notes and chat text"
-          title="Scale of every button, icon button and toggle in the interface — for high-density screens or touch use. Text in the notes and the AI chat is sized separately: hold Ctrl (⌘ on Mac) and scroll over either panel to grow or shrink it for this session; that size isn't saved."
-        >
-          <Stepper
-            value={value.uiScale}
-            onChange={value.setUiScale}
-            min={UI_SCALE.min} max={UI_SCALE.max} step={UI_SCALE.step} reset={UI_SCALE.default}
-            format={(v) => `${Math.round(v * 100)}%`}
-          />
-        </Row>
-      </Section>
-      <Toggle icon={LayoutIcon} label="Status bar" hint="Keep the latest status message visible below the tabs"
-        checked={diagnostics.statusBarVisible} onChange={diagnostics.setStatusBarVisible} />
-    </>
-  );
-}
-
 // --- Editor: notes + search + PDF viewer -----------------------------------
 
 function ViewerSettings({ value }) {
@@ -134,14 +76,6 @@ function ViewerSettings({ value }) {
     <>
 
       <Section title="PDF viewer">
-        <Toggle
-          icon={MoveVerticalIcon}
-          label="Snap vertical scrolling"
-          hint="Gently realign sideways drift after vertical swipes"
-          title="On a zoomed-in PDF, near-vertical one-finger swipes keep native momentum, then gently return to their starting horizontal position. Diagonal swipes, deliberate sideways turns, and pinch zoom stay free."
-          checked={value.snapVertical}
-          onChange={value.setSnapVertical}
-        />
         <Row
           icon={HighlightIcon}
           label="Imported annotations"
@@ -300,14 +234,6 @@ function NotesSettings({ value }) {
             onChange={(choice) => value.setEnterNewNote(choice === "note")}
             options={[["note", "New note"], ["line", "New line"]]} />
         </Row>
-        <Toggle
-          icon={MessageSquareIcon}
-          label="Note badges on highlights"
-          hint="Bubble on a highlight that carries a note"
-          title="Show a small speech-bubble next to a highlight in the PDF when you've typed a note on it. Click the bubble to jump to the note."
-          checked={value.hlNoteBadges}
-          onChange={value.setHlNoteBadges}
-        />
       </Section>
     </>
   );
@@ -365,33 +291,7 @@ function LibrarySettings({ value, onManage }) {
         Library display and automatic downloads. Changes apply immediately in this browser.
       </PaneHead>
       <Section title="Display">
-        <Toggle
-          icon={EyeIcon}
-          label="Recents thumbnails"
-          hint="Page snapshots on the Recently-viewed cards"
-          title="Show each recently-viewed paper as a small snapshot of the page where you left off, captured on this device while you read. Off shows the file icon instead and stops capturing new snapshots. Library cards always use the plain file icon."
-          checked={value.recentThumbs}
-          onChange={value.setRecentThumbs}
-        />
-        <Row
-          icon={LabelIcon}
-          label="File labels"
-          hint="Folder and label chips on library cards and rows"
-          title="Show each page's folders and labels as small chips on the home library — the file list, the grid cards and the Recently-viewed strip. Chips are informational; labels are still edited from the paper view or the right-click menus."
-        >
-          <MenuSelect
-            label="File labels"
-            value={value.fileLabels}
-            onChange={value.setFileLabels}
-            options={[
-              // values = FILE_LABEL_MODES in prefs.js (its codec validates them)
-              ["both", "Folders & labels"],
-              ["folders", "Folders only"],
-              ["labels", "Labels only"],
-              ["off", "Hidden"],
-            ]}
-          />
-        </Row>
+        <LibraryDisplaySettings value={value} />
       </Section>
       <Section title="PDFs">
         <Toggle
@@ -1162,7 +1062,7 @@ export default function SettingsDialog({
                   onClick={() => navigate(id, label)}><span>{label}</span><small>{allNav.find(([key]) => key === id)?.[1]}</small></button>)
                   : <Empty icon={SearchIcon}>No settings found. Try "model", "PDF", or "storage".</Empty>}
               </> : <>
-                {pane === "appearance" ? <GeneralSettings value={papers} diagnostics={diagnostics} /> : null}
+                {pane === "appearance" ? <AppearanceSettings value={papers} diagnostics={diagnostics} /> : null}
                 {pane === "reading" ? <>
                   <PaneHead icon={BookIcon} title="Reading & editing">PDF viewing, notes, and search. Changes apply immediately in this browser.</PaneHead>
                   <ViewerSettings value={papers} /><NotesSettings value={notes} /><SearchSettings value={search} />

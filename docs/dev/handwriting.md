@@ -43,8 +43,9 @@ e2e `tests/e2e/scenarios/ink.mjs` and `inkEditing.mjs`.
   clears a pending touch selection. Finger-drawing mode keeps armed writing
   tools immediate; use Hand to tap-select in that mode.
 - The **selection menu** appears after direct selection or a lasso:
-  Color, Width, Duplicate, Delete, Select note (all strokes in the selected
-  ink blocks), Show note (jump to the notes pane), and Done. Color/width
+  Color, Width, Duplicate, Select note (all strokes in the selected
+  ink blocks), Show note (jump to the notes pane), and Delete at the right.
+  Edits apply immediately; blank taps or Escape dismiss selection. Color/width
   edit existing strokes and preserve pressure/time. Mixed pen/highlighter
   selections have separate width choices. Duplicate offsets fresh-ID copies
   by 12 screen pixels and selects them; a full group rejects duplication
@@ -54,7 +55,19 @@ e2e `tests/e2e/scenarios/ink.mjs` and `inkEditing.mjs`.
 - Drag inside a selection with a **finger**, even in pen-only mode, to move
   it. That bounded hit surface reserves touch gestures for moving; fingers
   outside it navigate. A pen using a writing tool clears the selection and
-  writes immediately. Blank taps and Done dismiss the selection.
+  writes immediately. Selected ink exposes a bottom-right resize handle and
+  a top-right rotation handle for mouse, pen and touch. Resizing preserves
+  proportions and scales stroke width; rotation keeps width unchanged. Both
+  act around the selection center, preview during drag and commit one undo
+  entry on release. Cancellation discards the preview.
+  The resize/rotation handles follow the live selection during moving,
+  resizing and rotation while keeping a constant screen size.
+  Hold Shift to snap rotation to 15 degrees, or focus a handle and use arrow keys (10% size /
+  15 degrees). Pressure, timing, tilt and stroke IDs stay intact.
+- **Hover feedback:** mouse and Pencil hover show a center mark and the
+  active tool's footprint. Pen/highlighter width follows page zoom; eraser
+  radius stays in screen pixels, matching erasure. Hover never creates ink.
+  Tool and selection buttons show descriptions on hover or keyboard focus.
 - **Undo and Redo buttons** on the handwriting strip expose stroke history
   without a keyboard. Their disabled state follows the history and resets
   on leaving the page. Selection alone does not create an undo entry.
@@ -135,6 +148,8 @@ sample bytes.
   rendering. `hitStrokes` is the whole-stroke eraser's test; `eraseAt` the
   partial eraser, which re-encodes the surviving runs as new strokes;
   `translateStrokes` only touches the first sample's two absolute integers;
+  `transformStrokes` scales/rotates selected XY samples around a shared
+  origin without changing the other encoded channels;
   `strokesInLasso` picks strokes with more than half their samples inside
   the polygon. A pen stroke renders as perfect-freehand's outline in one
   filled SVG path (page units; the layer's `viewBox` does the zoom), a
@@ -255,7 +270,7 @@ sample bytes.
 
 ## Not built yet
 
-Shape tools, resizing or rotating a lasso selection, reordering presets
+Shape tools, reordering presets
 by drag, syncing the preset row across devices (it is per browser),
 ballpoint / fountain / dashed pen styles, a `canvas` space for ink blocks
 on pages without a PDF, Xournal++ `.xopp` import, *Transcribe with AI*,

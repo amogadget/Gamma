@@ -7,12 +7,13 @@
 // the notes; InkToolbar the tool strip. Strokes come from inkStore (drafts
 // ahead of uploads, files behind block URLs); App owns the tool state,
 // the selection, the stroke history and the commits.
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ContextMenu } from "./menus";
 import { getStroke } from "perfect-freehand";
 import {
   CopyIcon, ErasePartialIcon, EraserIcon, EraseStrokeIcon, HandIcon, HighlightIcon, LassoIcon, PenIcon, PlusIcon,
-  CheckIcon, FileTextIcon, LineWidthIcon, PaletteIcon, RectSelectIcon, RedoIcon, TrashIcon, UndoIcon, XIcon,
+  FileTextIcon, LineWidthIcon, PaletteIcon, RectSelectIcon, RedoIcon, TrashIcon, UndoIcon, XIcon,
 } from "./icons";
 import {
   HIGHLIGHTER_COLORS, HIGHLIGHTER_OPACITY, MAX_TOOLS, PEN_COLORS, boundsOf, encodeStroke, hitStrokes, inkBounds,
@@ -56,7 +57,11 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
   eraserSize = 1, lassoMode = "free", selection, flash, onStroke, onErase, onErasePartial, onSelect, onAction, onMoveSelection, onJump }) {
   useInkVersion();
   const canvasRef = useRef(null);
+  const cursorRef = useRef(null);
+  const refreshCursorRef = useRef(null);
   const [dragOffset, setDragOffset] = useState(null);   // while moving the selection: {dx, dy} in pt
+  const [transform, setTransform] = useState(null);
+  useLayoutEffect(() => { setTransform(null); }, [selection]);
   const live = useRef({});
 
   const groups = [];
@@ -85,6 +90,31 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
     let drawing = null; // {mode: stroke|erase|lasso|move, …}
     let pending = null; // A possible tap/hold; swipes retain native scrolling.
     const contacts = new Set();
+    let hover = null;
+    const hideCursor = () => {
+      hover = null;
+      if (cursorRef.current) cursorRef.current.style.display = "none";
+      el.classList.remove("inkHovering");
+    };
+    const showCursor = (e) => {
+      if (e.pointerType === "touch" || e.target.closest?.(".inkSelectionHit, .inkTransformHandle, .inkEditMenu")) { hideCursor(); return; }
+      const L = live.current, use = L.tool || (e.pointerType === "pen" ? L.penTool : null);
+      if (!use || !L.width || !cursorRef.current) { hideCursor(); return; }
+      const rect = el.getBoundingClientRect(), k = rect.width / L.width;
+      const x = e.clientX - rect.left, y = e.clientY - rect.top;
+      if (x < 0 || y < 0 || x > rect.width || y > rect.height) { hideCursor(); return; }
+      const eraser = use.tool === "eraser" || !!(e.buttons & 34);
+      const diameter = eraser ? 2 * (ERASER_SIZES[L.eraserSize] ?? ERASER_SIZES[1])
+        : use.tool === "select" ? 12 : use.size * k;
+      const cursor = cursorRef.current;
+      cursor.dataset.tool = eraser ? "eraser" : use.tool;
+      Object.assign(cursor.style, { display: "block", left: `${x}px`, top: `${y}px`,
+        width: `${Math.max(1, diameter)}px`, height: `${Math.max(1, diameter)}px` });
+      el.classList.add("inkHovering");
+      hover = e;
+    };
+    // Tool changes and zooms update a stationary pointer as well.
+    refreshCursorRef.current = () => { if (hover) showCursor(hover); };
     const clearPending = (revert = false) => {
       clearTimeout(pending?.timer);
       if (revert && pending?.shown) live.current.onSelect?.(pageNumber, []);
@@ -187,7 +217,8 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
 
     const onDown = (e) => {
       // Menu controls are portalled; React events must not start page ink.
-      if (e.target.closest?.(".inkEditMenu")) return;
+      if (e.target.closest?.(".inkEditMenu, .inkTransformHandle")) { hideCursor(); return; }
+      showCursor(e);
       const L = live.current;
       const selectionDrag = !!L.onSelect && e.target.closest?.(".inkSelectionHit")
         && (e.pointerType === "touch" || !L.tool || L.tool.tool === "select") && e.pointerType !== "pen";
@@ -252,6 +283,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       paint();
     };
     const onMove = (e) => {
+      showCursor(e);
       if (pending?.id === e.pointerId && Math.hypot(e.clientX - pending.x, e.clientY - pending.y) > 8) clearPending(true);
       const d = drawing;
       if (!d || e.pointerId !== d.id) return;
@@ -347,7 +379,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       L.onStroke?.(pageNumber, stroke, { width: L.width, height: L.height });
     };
     const onUp = (e) => finish(e, false);
-    const onCancel = (e) => { contacts.delete(e.pointerId); finish(e, true); };
+    const onCancel = (e) => { contacts.delete(e.pointerId); finish(e, true); hideCursor(); };
     // iPad Safari can pan with Pencil even after pointerdown.preventDefault().
     // Cancel its matching touch gesture before scrolling cancels the pointer
     // stream. Keep touch-action available for finger scrolling and pinch zoom.
@@ -367,13 +399,17 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
     el.addEventListener("touchmove", onTouch, { capture: true, passive: false });
     el.addEventListener("pointerdown", onDown, true);
     el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerleave", hideCursor);
+    const resizeObserver = new ResizeObserver(() => { if (hover) showCursor(hover); });
+    resizeObserver.observe(el);
+    window.addEventListener("scroll", hideCursor, true);
     el.addEventListener("pointerup", onUp);
     el.addEventListener("pointercancel", onCancel);
     el.addEventListener("lostpointercapture", onCancel);
     const onContext = (e) => {
       if (pending?.hit || e.target.closest?.(".inkSelectionHit")) e.preventDefault();
     };
-    const onBlur = () => { clearPending(true); contacts.clear(); if (drawing) finish({ pointerId: drawing.id }, true); };
+    const onBlur = () => { hideCursor(); clearPending(true); contacts.clear(); if (drawing) finish({ pointerId: drawing.id }, true); };
     el.addEventListener("contextmenu", onContext);
     document.addEventListener("pointerdown", trackDown, true);
     document.addEventListener("pointerup", trackUp, true);
@@ -384,6 +420,10 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       el.removeEventListener("touchmove", onTouch, true);
       el.removeEventListener("pointerdown", onDown, true);
       el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerleave", hideCursor);
+      window.removeEventListener("scroll", hideCursor, true);
+      resizeObserver.disconnect();
+      hideCursor();
       el.removeEventListener("pointerup", onUp);
       el.removeEventListener("pointercancel", onCancel);
       el.removeEventListener("lostpointercapture", onCancel);
@@ -402,11 +442,31 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
     };
   }, [wrapRef, pageNumber]);
 
+  useEffect(() => { refreshCursorRef.current?.(); }, [tool, penTool, eraserSize]);
+
   if (!width || !height) return null;
   const flashGroup = flash && groups.find((g) => g.id === flash.id);
   const fb = flashGroup ? inkBounds(flashGroup.ink) : null;
   const armed = !!tool;
-  const dragging = !!(dragOffset && selectedIds.size);
+  const dragging = !!((dragOffset || transform) && selectedIds.size);
+  const previewTransform = transform
+    ? `translate(${transform.cx} ${transform.cy}) rotate(${transform.angle * 180 / Math.PI}) scale(${transform.scale}) translate(${-transform.cx} ${-transform.cy})`
+    : `translate(${dragOffset?.dx || 0} ${dragOffset?.dy || 0})`;
+  // Controls follow the same preview as the ink, but retain their screen
+  // size. Keep selBox unchanged: gesture math uses the original geometry.
+  const previewPoint = (x, y) => {
+    if (!transform) return [x + (dragOffset?.dx || 0), y + (dragOffset?.dy || 0)];
+    const { cx, cy, scale, angle } = transform, cos = Math.cos(angle), sin = Math.sin(angle);
+    return [cx + scale * ((x - cx) * cos - (y - cy) * sin),
+      cy + scale * ((x - cx) * sin + (y - cy) * cos)];
+  };
+  const handlePositions = selBox ? {
+    resize: previewPoint(selBox[2], selBox[3]), rotate: previewPoint(selBox[2], selBox[1]),
+  } : null;
+  const hitCorners = selBox ? [[selBox[0] - 4, selBox[1] - 4], [selBox[2] + 4, selBox[1] - 4],
+    [selBox[2] + 4, selBox[3] + 4], [selBox[0] - 4, selBox[3] + 4]].map(([x, y]) => previewPoint(x, y)) : null;
+  const hitBox = hitCorners ? [Math.min(...hitCorners.map(([x]) => x)), Math.min(...hitCorners.map(([, y]) => y)),
+    Math.max(...hitCorners.map(([x]) => x)), Math.max(...hitCorners.map(([, y]) => y))] : null;
   return (
     <>
       <svg className="inkLayer" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
@@ -418,7 +478,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
           </g>
         ))}
         {dragging ? (
-          <g transform={`translate(${dragOffset.dx} ${dragOffset.dy})`}>
+          <g transform={previewTransform}>
             {groups.map((g) => (
               <Strokes key={g.id} ink={{ strokes: g.ink.strokes.filter((s) => selectedIds.has(s.id)) }} />
             ))}
@@ -426,7 +486,8 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
         ) : null}
         {selBox ? (
           <rect className="inkSelRect" data-ink-selection="true"
-            x={selBox[0] - 4 + (dragOffset?.dx || 0)} y={selBox[1] - 4 + (dragOffset?.dy || 0)}
+            transform={previewTransform}
+            x={selBox[0] - 4} y={selBox[1] - 4}
             width={selBox[2] - selBox[0] + 8} height={selBox[3] - selBox[1] + 8} rx={3} />
         ) : null}
         {fb ? (
@@ -435,14 +496,106 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
         ) : null}
       </svg>
       {selBox && onSelect ? <div className="inkSelectionHit" aria-label="Move selected handwriting"
-        style={{ left: `${(selBox[0] - 4) / width * 100}%`, top: `${(selBox[1] - 4) / height * 100}%`,
-          width: `${(selBox[2] - selBox[0] + 8) / width * 100}%`, height: `${(selBox[3] - selBox[1] + 8) / height * 100}%` }} /> : null}
+        style={{ left: `${hitBox[0] / width * 100}%`, top: `${hitBox[1] / height * 100}%`,
+          width: `${(hitBox[2] - hitBox[0]) / width * 100}%`, height: `${(hitBox[3] - hitBox[1]) / height * 100}%` }} /> : null}
       {selBox && onAction && !dragging ? <InkSelectionMenu wrapRef={wrapRef} box={selBox} width={width}
         strokes={groups.flatMap((g) => g.ink.strokes.filter((s) => selectedIds.has(s.id)))}
         onAction={onAction} onClose={() => onSelect(pageNumber, [])} /> : null}
+      {selBox && onAction ? <InkTransformHandles wrapRef={wrapRef} box={selBox} width={width} height={height}
+        positions={handlePositions}
+        maxScale={Math.min(10, 100 / Math.max(...groups.flatMap((g) => g.ink.strokes.filter((s) => selectedIds.has(s.id)).map((s) => s.size))))}
+        onPreview={setTransform} onCommit={(value) => onAction("transform", value)} /> : null}
       <canvas ref={canvasRef} className="inkCanvas" />
+      <div ref={cursorRef} className="inkCursor" aria-hidden="true"><span /></div>
     </>
   );
+}
+
+function InkTransformHandles({ wrapRef, box, width, height, positions, maxScale, onPreview, onCommit }) {
+  const drag = useRef(null);
+  const cancel = () => { drag.current = null; onPreview(null); };
+  useEffect(() => {
+    const escape = (e) => { if (e.key === "Escape") cancel(); };
+    window.addEventListener("blur", cancel);
+    window.addEventListener("keydown", escape);
+    return () => { drag.current = null; window.removeEventListener("blur", cancel); window.removeEventListener("keydown", escape); };
+  }, []);
+  const valueAt = (e) => {
+    const d = drag.current;
+    const x = (e.clientX - d.rect.left) / d.k - d.cx, y = (e.clientY - d.rect.top) / d.k - d.cy;
+    let angle = Math.atan2(y, x) - d.startAngle;
+    angle = Math.atan2(Math.sin(angle), Math.cos(angle));
+    if (e.shiftKey) angle = Math.round(angle / (Math.PI / 12)) * Math.PI / 12;
+    return { cx: d.cx, cy: d.cy, angle: d.mode === "rotate" ? angle : 0,
+      scale: d.mode === "resize" ? Math.max(0.1, Math.min(d.maxScale, Math.hypot(x, y) / d.radius)) : 1 };
+  };
+  const begin = (e, mode) => {
+    if (e.button !== 0 || drag.current) return;
+    e.preventDefault(); e.stopPropagation();
+    const rect = wrapRef.current.getBoundingClientRect(), k = rect.width / width;
+    const cx = (box[0] + box[2]) / 2, cy = (box[1] + box[3]) / 2;
+    const x = (e.clientX - rect.left) / k - cx, y = (e.clientY - rect.top) / k - cy;
+    drag.current = { id: e.pointerId, mode, rect, k, cx, cy, radius: Math.max(0.01, Math.hypot(x, y)), startAngle: Math.atan2(y, x), maxScale };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const move = (e) => {
+    if (drag.current?.id !== e.pointerId) return;
+    e.preventDefault(); e.stopPropagation(); onPreview(valueAt(e));
+  };
+  const finish = (e) => {
+    if (drag.current?.id !== e.pointerId) return;
+    e.preventDefault(); e.stopPropagation();
+    const value = valueAt(e);
+    cancel();
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    if (Math.abs(value.scale - 1) > 0.001 || Math.abs(value.angle) > 0.001) onCommit(value);
+  };
+  return <>
+    {["resize", "rotate"].map((mode) => <button key={mode} type="button" className={`inkTransformHandle inkTransform-${mode}`}
+      aria-label={mode === "resize" ? "Resize selected handwriting" : "Rotate selected handwriting"}
+      title={mode === "resize" ? "Drag to resize; arrow keys change size" : "Drag to rotate; hold Shift to snap to 15°; arrow keys rotate"}
+      style={{ left: `${positions[mode][0] / width * 100}%`, top: `${positions[mode][1] / height * 100}%` }}
+      onPointerDown={(e) => begin(e, mode)} onPointerMove={move} onPointerUp={finish}
+      onPointerCancel={cancel} onLostPointerCapture={cancel} onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+        e.preventDefault(); e.stopPropagation();
+        const sign = e.key === "ArrowLeft" || e.key === "ArrowDown" ? -1 : 1;
+        onCommit({ cx: (box[0] + box[2]) / 2, cy: (box[1] + box[3]) / 2,
+          scale: mode === "resize" ? Math.min(maxScale, sign > 0 ? 1.1 : 1 / 1.1) : 1,
+          angle: mode === "rotate" ? sign * Math.PI / 12 : 0 });
+      }}>{mode === "resize" ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7M7 11v6h6M11 7h6v6" /></svg> : <RedoIcon />}</button>)}
+  </>;
+}
+
+// Native title tooltips are inconsistent for Pencil hover. Use the same
+// descriptions for mouse, pen and keyboard focus, outside clipped toolbars.
+function InkTooltips({ children, contentRef, ...props }) {
+  const id = useId(), [tip, setTip] = useState(null), active = useRef(null), timer = useRef(null);
+  const clear = () => { clearTimeout(timer.current); active.current?.removeAttribute("aria-describedby"); active.current = null; setTip(null); };
+  useEffect(() => {
+    window.addEventListener("scroll", clear, true);
+    window.addEventListener("blur", clear);
+    return () => { clearTimeout(timer.current); window.removeEventListener("scroll", clear, true); window.removeEventListener("blur", clear); };
+  }, []);
+  const show = (e) => {
+    if (e.pointerType === "touch") return;
+    const target = e.target.closest("button, label[title]");
+    if (!target || target === active.current) return;
+    clear(); active.current = target;
+    const description = target.title || target.getAttribute("aria-label");
+    if (!description) return;
+    timer.current = setTimeout(() => {
+      const r = target.getBoundingClientRect();
+      target.setAttribute("aria-describedby", id);
+      setTip({ text: description, x: Math.max(8, Math.min(r.left, window.innerWidth - 288)),
+        y: r.bottom + 8, above: r.bottom > window.innerHeight - 100, top: r.top - 8 });
+    }, e.type === "focus" ? 0 : 250);
+  };
+  return <><div {...props} ref={contentRef} onPointerOver={show} onPointerLeave={clear} onFocus={show} onBlur={clear}
+    onPointerDownCapture={clear}>{children}</div>
+    {tip ? createPortal(<div id={id} role="tooltip" className="inkTooltip" style={{ left: tip.x, top: tip.above ? tip.top : tip.y,
+      transform: tip.above ? "translateY(-100%)" : undefined }}>{tip.text}</div>, document.body) : null}</>;
 }
 
 function InkSelectionMenu({ wrapRef, box, width, strokes, onAction, onClose }) {
@@ -465,9 +618,9 @@ function InkSelectionMenu({ wrapRef, box, width, strokes, onAction, onClose }) {
       const rect = el.getBoundingClientRect(), viewport = el.closest(".pdfViewer").getBoundingClientRect();
       const k = rect.width / width;
       const left = rect.left + x0 * k, top = rect.top + y0 * k, bottom = rect.top + y1 * k;
-      const y = top - menuHeight - 12 >= viewport.top + 8 ? top - menuHeight - 12
-        : bottom + menuHeight + 12 <= viewport.bottom - 8 ? bottom + 12
-        : Math.max(viewport.top + 8, Math.min(top - menuHeight - 12, viewport.bottom - menuHeight - 8));
+      const y = top - menuHeight - 40 >= viewport.top + 8 ? top - menuHeight - 40
+        : bottom + menuHeight + 40 <= viewport.bottom - 8 ? bottom + 40
+        : Math.max(viewport.top + 8, Math.min(top - menuHeight - 40, viewport.bottom - menuHeight - 8));
       const next = bottom < viewport.top || top > viewport.bottom || rect.left + x1 * k < viewport.left || left > viewport.right
         ? null : { x: Math.max(viewport.left + 8, left), y, k };
       setAnchor((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
@@ -482,15 +635,14 @@ function InkSelectionMenu({ wrapRef, box, width, strokes, onAction, onClose }) {
   if (!anchor) return null;
   const kinds = [...new Set(strokes.map((s) => s.tool))];
   return <ContextMenu x={anchor.x} y={anchor.y} ignoreRef={wrapRef} onClose={onClose} className="inkEditMenu">
-    <div ref={contentRef} role="toolbar" aria-label="Edit handwriting" onPointerDown={(e) => e.stopPropagation()}>
+    <InkTooltips contentRef={contentRef} role="toolbar" aria-label="Edit handwriting" onPointerDown={(e) => e.stopPropagation()}>
       <div className="inkEditRow">
         <button className={"ctlBtn" + (options === "color" ? " modeActive" : "")} aria-label="Color" title="Color" aria-expanded={options === "color"} onClick={() => setOptions(options === "color" ? null : "color")}><PaletteIcon aria-hidden="true" /></button>
         <button className={"ctlBtn" + (options === "width" ? " modeActive" : "")} aria-label="Width" title="Width" aria-expanded={options === "width"} onClick={() => setOptions(options === "width" ? null : "width")}><LineWidthIcon aria-hidden="true" /></button>
         <button className="ctlBtn" aria-label="Duplicate" title="Duplicate" onClick={() => onAction("duplicate", { dx: 12 / anchor.k, dy: 12 / anchor.k })}><CopyIcon aria-hidden="true" /></button>
-        <button className="ctlBtn inkDeleteBtn" aria-label="Delete" title="Delete" onClick={() => onAction("delete")}><TrashIcon aria-hidden="true" /></button>
         <button className="ctlBtn" aria-label="Select note" title="Select all handwriting in this note" onClick={() => onAction("select-note")}><RectSelectIcon aria-hidden="true" /></button>
         <button className="ctlBtn" aria-label="Show note" title="Show note" onClick={() => onAction("show-note")}><FileTextIcon aria-hidden="true" /></button>
-        <button className="ctlBtn" aria-label="Done" title="Done" onClick={onClose}><CheckIcon aria-hidden="true" /></button>
+        <button className="ctlBtn inkDeleteBtn" aria-label="Delete" title="Delete selected handwriting" onClick={() => onAction("delete")}><TrashIcon aria-hidden="true" /></button>
       </div>
       {options === "color" ? <div className="inkEditOptions" aria-label="Selected ink color">
         {(kinds.every((k) => k === "highlighter") ? HIGHLIGHTER_COLORS : PEN_COLORS).map((color) =>
@@ -505,7 +657,7 @@ function InkSelectionMenu({ wrapRef, box, width, strokes, onAction, onClose }) {
           aria-pressed={strokes.filter((s) => s.tool === kind).every((s) => s.size === size)}
           onClick={() => onAction("style", { tool: kind, size })}><span className="inkSizeDot" aria-hidden="true" style={{ width: 4 + i * 2, height: 4 + i * 2, background: "currentColor" }} /></button>)}
       </div>) : null}
-    </div>
+    </InkTooltips>
   </ContextMenu>;
 }
 
@@ -564,7 +716,7 @@ export function InkToolbar({ tools, active, options, eraserMode, eraserSize, las
   );
   const palette = preset ? (preset.kind === "highlighter" ? HIGHLIGHTER_COLORS : PEN_COLORS) : null;
   return (
-    <div className="pdfInkBar" role="toolbar" aria-label="Handwriting tools">
+    <InkTooltips className="pdfInkBar" role="toolbar" aria-label="Handwriting tools">
       <div className="pdfInkRow">
         <button type="button" className="ctlBtn" aria-label="Undo ink" title="Undo handwriting" disabled={!canUndo} onClick={onUndo}><UndoIcon aria-hidden="true" /></button>
         <button type="button" className="ctlBtn" aria-label="Redo ink" title="Redo handwriting" disabled={!canRedo} onClick={onRedo}><RedoIcon aria-hidden="true" /></button>
@@ -634,6 +786,6 @@ export function InkToolbar({ tools, active, options, eraserMode, eraserSize, las
           {seg(lassoMode === "box", "Box", <RectSelectIcon size={14} />, () => onLasso("box"), "Box: drag a rectangle over the strokes")}
         </div>
       ) : null}
-    </div>
+    </InkTooltips>
   );
 }

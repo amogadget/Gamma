@@ -282,6 +282,29 @@ export function translateStrokes(ink, ids, dx, dy) {
   }) };
 }
 
+// Uniform scaling/rotation around a shared page-space origin. Rewrite only
+// XY channels, preserving pressure, timing, tilt, IDs and other metadata.
+export function transformStrokes(ink, ids, { cx, cy, scale = 1, angle = 0 }) {
+  if (![cx, cy, scale, angle].every(Number.isFinite) || scale <= 0 || (scale === 1 && angle === 0)) return ink;
+  const selected = new Set(ids), cos = Math.cos(angle), sin = Math.sin(angle);
+  let changed = false;
+  const strokes = ink.strokes.map((s) => {
+    if (!selected.has(s.id)) return s;
+    changed = true;
+    const pts = s.pts.slice(), n = s.ch.length;
+    let px = 0, py = 0;
+    decodeStroke(s).forEach((p, i) => {
+      const x = p.x - cx, y = p.y - cy;
+      const nx = Math.round((cx + scale * (x * cos - y * sin)) * COORD_UNIT);
+      const ny = Math.round((cy + scale * (x * sin + y * cos)) * COORD_UNIT);
+      pts[i * n] = nx - px; pts[i * n + 1] = ny - py;
+      px = nx; py = ny;
+    });
+    return { ...s, pts, size: Math.max(0.01, Math.min(100, s.size * scale)) };
+  });
+  return changed ? { ...ink, strokes } : ink;
+}
+
 // A stroke's samples → a stroke of the same look (fresh id).
 function restroke(stroke, samples) {
   return encodeStroke({ tool: stroke.tool, color: stroke.color, size: stroke.size, opacity: stroke.opacity,

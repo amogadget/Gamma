@@ -110,6 +110,23 @@ are layout only. The read-only view shows the counterpart `.shareBadge`
 
 ## Settings primitives
 
+### Show the result while editing
+
+For settings that change visible parts of a surface, show one realistic, live
+example of that surface and place its controls alongside it. Each control
+should immediately add, remove or update the corresponding element. Reuse
+the actual product component where possible so the preview stays accurate.
+Keep its shared styling and interaction states, including hover backgrounds,
+shadows and focus indicators; do not override them just because the widget
+appears in settings. Prefer layout-only CSS around existing widgets. Keep the
+preview stable while elements change, with compact controls. On small screens
+place the controls below the preview.
+
+Library Display follows this pattern: one large `PageCard` with independent
+Thumbnails, Folders and Labels switches. Use this approach for future visual
+settings; a set of miniature alternative cards is appropriate for mutually
+exclusive palettes such as themes.
+
 Settings panes are built only from
 [settingsKit.jsx](../../frontend/src/settingsKit.jsx):
 
@@ -120,11 +137,19 @@ Settings panes are built only from
 - Larger areas (AI, workspace management and administration) get second-level
   navigation with Back to settings. Short pages keep the main sidebar. Search
   opens the relevant page and focuses the matching setting.
+- Appearance uses shared `uiBtn`/`on` theme cards with small decorative SVG
+  palette sketches beside the labels (stacked on narrow screens). Appearance
+  buttons are flat, and its noninteractive rows suppress the shared hover fill;
+  grouped rows use straight dividers. A PDF sample reflects the current tint and dark-page
+  switch. Account and browser scopes sit beside section headings; interface
+  controls retain the shared `Row`, `Toggle` and `Stepper` primitives.
 - Editor dialogs: `SubDialog` › `.settingsForm` › `Step` (numbered wizard
   stages) or `Field` (caption + hint + one control), closed by a
   `.reportModalBtns` footer. Pass the draft to `SubDialog` so unsaved edits are
   protected on Cancel, Escape and backdrop clicks.
 - Shared controls: `Segmented` (joined pills for exclusive choices),
+  `PictureChoices` (compact illustrated theme choices for Appearance,
+  with a shared flat selected state and decorative SVG previews),
   `ToggleGroup` (its multi-select counterpart: a wrapping row of small
   icon + short-name chips, each an independent on/off — `uiBtn sm` with the
   shared `on` state; the agent's per-tool permissions in Settings and in the

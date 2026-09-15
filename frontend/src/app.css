@@ -3914,8 +3914,8 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .pdfViewer.pdfDark { background: #181818; color-scheme: dark;
   --scrollbar-thumb: var(--scrollbar-thumb-dark);
   --scrollbar-thumb-hover: var(--scrollbar-thumb-dark-hover); } /* dark surround + scrollbar even in the light theme */
-.pdfViewer.pdfDark .pdfPageWrap { background: #101010 !important; }
-.pdfViewer.pdfDark .pdfPageWrap > canvas { filter: invert(0.94) hue-rotate(180deg); }
+.pdfViewer.pdfDark .pdfPageWrap { background: #0f0f0f !important; }
+.pdfViewer.pdfDark .pdfPageCanvas { filter: invert(0.94) hue-rotate(180deg); }
 .pdfViewer.pdfDark .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }
 
 /* Eye-comfort theme: tint the PDF page to the same warm paper as the
@@ -3938,7 +3938,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
    ground itself (~#2e2c29, about 12.6:1 - the "charcoal not pure black"
    eye-strain guidance) without a contrast() filter, which would darken the
    paper too. Figures fade toward paper by the same 18%, a mild wash. */
-:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap > canvas { mix-blend-mode: multiply; opacity: 0.82; }
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageCanvas { mix-blend-mode: multiply; opacity: 0.82; }
 
 /* --- AI translated view (overlay over the original text runs) ---
    The layer sits between the canvas and the text layer: each block is an
@@ -4612,6 +4612,28 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 }
 .inkLayer { z-index: 2; overflow: visible; }
 .inkCanvas { z-index: 5; display: none; }
+.pdfViewer .pdfPageWrap.inkHovering, .pdfPageWrap.inkHovering .textLayer { cursor: none; }
+.inkCursor {
+  display: none; position: absolute; z-index: 8; pointer-events: none;
+  transform: translate(-50%, -50%); border: 1px solid #fff; border-radius: 50%;
+  box-sizing: border-box; box-shadow: 0 0 0 1px #222;
+}
+.inkCursor span { position: absolute; left: 50%; top: 50%; width: 2px; height: 2px;
+  transform: translate(-50%, -50%); border-radius: 50%; background: #222; box-shadow: 0 0 0 1px #fff; }
+.inkCursor[data-tool="eraser"] { background: #ffffff18; }
+.inkTransformHandle {
+  position: absolute; z-index: 7; width: 28px; height: 28px; padding: 5px;
+  border-radius: 50%; border: 1px solid #508cff; background: var(--bg-elevated); color: var(--text-primary);
+  touch-action: none; display: grid; place-items: center;
+}
+.inkTransformHandle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; }
+.inkTransform-resize { transform: translate(0, 0); cursor: nwse-resize; }
+.inkTransform-rotate { transform: translate(0, -100%); cursor: grab; }
+.inkTransform-rotate:active { cursor: grabbing; }
+.inkTransformHandle:focus-visible { outline: 2px solid #508cff; outline-offset: 2px; }
+.inkTooltip { position: fixed; z-index: 10001; pointer-events: none; width: max-content; max-width: min(280px, calc(100vw - 16px));
+  padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated);
+  color: var(--text-primary); font-size: 12px; line-height: 1.4; box-shadow: 0 2px 8px #0003; }
 .inkSelectionHit { position: absolute; z-index: 4; touch-action: none; cursor: move; }
 .inkEditMenu { width: 310px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; }
 .inkEditRow, .inkEditOptions { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; }

@@ -20,7 +20,8 @@ export async function pdfTouchScenarios({ server, browser, alice, makePdf, step,
     pageId = created.id;
     ctx = await alice.context(browser, { hasTouch: true, isMobile: true, deviceScaleFactor: 2, viewport: { width: 1024, height: 768 } });
     await ctx.addInitScript(() => {
-      localStorage.setItem("gamma-snap-vertical", "1");
+      // Snap is always on, including for browsers with an old disabled value.
+      localStorage.setItem("gamma-snap-vertical", "0");
       localStorage.setItem("gamma-ink-pen-only", "1");
       // Reproduce allocation refusal on constrained WebKit devices. Without
       // the cap, 400% Letter at DPR 2 requests over 30 million pixels.
@@ -148,6 +149,43 @@ export async function pdfTouchScenarios({ server, browser, alice, makePdf, step,
     await page.getByRole("button", { name: "Full screen", exact: true }).tap();
     await page.keyboard.press("Escape");
     await until(async () => await page.locator(".app.pseudoFullscreen").count() === 0);
+    assertNoProblems(page);
+  });
+  await step("pdf touch: paper color survives large zoom cycles and live ink keeps its own theme", async () => {
+    // Decode the screenshot in the browser to check the composited output,
+    // rather than only checking CSS declarations or the raw white bitmap.
+    const paperPixel = async () => {
+      const rect = await page.locator('[data-page="1"]').boundingBox();
+      const x = Math.round(rect.x + 20), y = Math.round(rect.y + 150);
+      const png = await page.screenshot({ clip: { x, y, width: 2, height: 2 } });
+      return page.evaluate(async (data) => {
+        const img = new Image(); img.src = `data:image/png;base64,${data}`; await img.decode();
+        const c = document.createElement("canvas"); c.width = c.height = 1;
+        const ctx = c.getContext("2d"); ctx.drawImage(img, 0, 0, 1, 1);
+        return Array.from(ctx.getImageData(0, 0, 1, 1).data).slice(0, 3);
+      }, png.toString("base64"));
+    };
+    for (const [theme, flip, expected] of [["sepia", false, [253, 246, 227]], ["solarized", false, [253, 246, 227]],
+      ["gray", false, [244, 244, 244]], ["dark", true, [15, 15, 15]]]) {
+      await page.evaluate(([theme, flip]) => {
+        document.documentElement.setAttribute("data-theme", theme);
+        document.querySelector(".pdfViewer").classList.toggle("pdfDark", flip);
+      }, [theme, flip]);
+      for (const direction of ["in", "out"]) {
+        for (let i = 0; i < 12; i++) await page.getByRole("button", { name: `Zoom ${direction}`, exact: true }).click();
+        await page.locator(".pdfViewer").evaluate((el) => el.scrollTo(0, 0));
+        await until(() => painted(1));
+        const rgb = await paperPixel();
+        assert(rgb.every((v, i) => Math.abs(v - expected[i]) <= 2), `${theme}, zoom ${direction}: paper ${rgb} matches ${expected}`);
+      }
+      const style = await page.locator('[data-page="1"] .inkCanvas').evaluate((el) => {
+        const s = getComputedStyle(el); return { opacity: s.opacity, blend: s.mixBlendMode, filter: s.filter };
+      });
+      assertEq(style.opacity, "1", "live ink does not inherit PDF soft-ink opacity");
+      assertEq(style.blend, "normal", "live ink does not inherit PDF paper blending");
+      assertEq(style.filter, flip ? "invert(1) hue-rotate(180deg)" : "none");
+    }
+    if (flags.keep) await page.screenshot({ path: `${server.dir}/pdf-zoom-theme.png` });
     assertNoProblems(page);
   });
   if (ctx) await ctx.close();

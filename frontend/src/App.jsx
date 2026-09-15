@@ -63,7 +63,7 @@ import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage, Workspac
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
 import { InkToolbar } from "./inkLayer";
-import { MAX_STROKES, appendStroke, duplicateStrokes, eraseAt, newInk, removeStrokes, restyleStrokes, toolStyle, translateStrokes } from "./ink";
+import { MAX_STROKES, appendStroke, duplicateStrokes, eraseAt, newInk, removeStrokes, restyleStrokes, toolStyle, transformStrokes, translateStrokes } from "./ink";
 import * as inkStore from "./inkStore";
 import { usePageCollab } from "./collab";
 import { applyOps, applyPatch, keepUiFlags } from "./blockOps";
@@ -2338,7 +2338,7 @@ export default function App() {
     theme, setTheme, pdfDarkPage, setPdfDarkPage, uiScale, setUiScale, recentThumbs, setRecentThumbs,
     fileLabels, setFileLabels,
     oaFallback, setOaFallback, metaAutoFetch, setMetaAutoFetch, pdfSaveLocal, setPdfSaveLocal,
-    snapVertical, setSnapVertical, embAnnots, setEmbAnnots,
+    embAnnots, setEmbAnnots,
     inkPenOnly, setInkPenOnly, inkAutoPen, setInkAutoPen, inkPressure, setInkPressure,
     inkTools, setInkTools, inkEraserMode, setInkEraserMode, inkEraserSize, setInkEraserSize,
     inkLassoMode, setInkLassoMode,
@@ -2346,7 +2346,7 @@ export default function App() {
     translateLang, setTranslateLang, translateModel, setTranslateModel,
     translateEffort, setTranslateEffort, translateParallel, setTranslateParallel,
     searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper,
-    enterNewNote, setEnterNewNote, hlNoteBadges, setHlNoteBadges,
+    enterNewNote, setEnterNewNote,
     statusBarVisible, setStatusBarVisible,
     chatEffort, setChatEffort, aiLoginCheck, setAiLoginCheck, metaModel, setMetaModel,
     dictationModel, setDictationModel, dictationLang, setDictationLang,
@@ -5497,6 +5497,7 @@ export default function App() {
   function handleInkAction(action, value) {
     if (readOnly || !inkSelection) return;
     if (action === "style") editInkSelection((ink, ids) => restyleStrokes(ink, ids, value), value.color ? "ink color change" : "ink width change");
+    else if (action === "transform") editInkSelection((ink, ids) => transformStrokes(ink, ids, value), value.angle ? "ink rotation" : "ink resize");
     else if (action === "delete") deleteInkSelection();
     else if (action === "select-note") {
       handleInkSelect(inkSelection.page, inkSelection.items.map((item) => ({
@@ -8532,9 +8533,7 @@ export default function App() {
           ) : null}
           {pdfUrl ? (
             <PdfViewer url={pdfUrl} highlights={highlights}
-              noteBadges={hlNoteBadges}
               hideEmbeddedAnnots={embAnnots === "hide"}
-              snapVertical={snapVertical}
               darkPage={pdfDarkPage}
               translateKey={`${translateLang}|${translateSendModel}`}
               translateParallel={translateParallel}
@@ -8913,8 +8912,6 @@ export default function App() {
           setPdfSaveLocal,
           embAnnots,
           setEmbAnnots,
-          snapVertical,
-          setSnapVertical,
           inkPenOnly,
           setInkPenOnly,
           inkAutoPen,
@@ -8945,8 +8942,6 @@ export default function App() {
         notes={{
           enterNewNote,
           setEnterNewNote,
-          hlNoteBadges,
-          setHlNoteBadges,
         }}
         library={{
           // batch metadata retry uses the same prompt/model/context prefs as

@@ -39,6 +39,7 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     const created = await account.api(`/api/blocks/by-doc/${docId}`, { method: "POST", body: { default_title: "Rydberg paper", source_url: up.source_url } });
     pageId = created.id;
     ctx = await account.context(browser);
+    await ctx.addInitScript(() => localStorage.setItem("gamma-hl-note-badge", "0"));
     page = await openPage(ctx, `${server.base}/?page=${pageId}&ws=${account.ws}`);
     await waitForPdf(page, 1);
     await until(async () => (await page.$$("[data-page]")).length >= 2, { what: "two page wrappers" });
@@ -71,6 +72,19 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
   await step("pdf: clicking the overlay focuses its note row", async () => {
     await page.click('[data-page="1"] [data-hl-id]');
     await until(async () => (await page.$(".blockRow.focused .blockQuote")) != null, { what: "focused highlight row" });
+    assertNoProblems(page);
+  });
+
+  await step("pdf: note badges stay on even with an old disabled preference", async () => {
+    const data = await account.api(`/api/blocks/${pageId}/subtree`);
+    const highlight = data.block.children.find((block) => block.properties?.highlight_id);
+    await account.api(`/api/blocks/${highlight.id}`, { method: "PUT", body: { content: "A note on this passage" } });
+    await page.reload();
+    await waitForPdf(page);
+    const badge = page.locator(".pdfNoteBadge").first();
+    await badge.waitFor();
+    await badge.click();
+    await until(async () => (await page.$(".blockRow.focused .blockQuote")) != null, { what: "badge focuses its note" });
     assertNoProblems(page);
   });
 

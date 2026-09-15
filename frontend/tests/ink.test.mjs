@@ -4,11 +4,32 @@ import { test } from "node:test";
 import {
   DEFAULT_TOOLS, HIGHLIGHTER_OPACITY, MAX_TOOLS, appendStroke, boundsOf, decodeStroke, encodeStroke, eraseAt, hitStrokes,
   inkBounds, newInk, normalizeTools, pdfPositionOf, removeStrokes, strokePath, strokeWidth, strokesInLasso, toolStyle,
-  translateStrokes, nearestInkStroke, restyleStrokes, duplicateStrokes, MAX_STROKES,
+  translateStrokes, transformStrokes, nearestInkStroke, restyleStrokes, duplicateStrokes, MAX_STROKES,
 } from "../src/ink.js";
 
 const samples = (n = 5, x0 = 100, y0 = 200) =>
   Array.from({ length: n }, (_, i) => ({ x: x0 + 10 * i, y: y0 + 3 * i, p: 0.2 + 0.15 * i, t: 16 * i }));
+
+test("selection transforms share an origin, preserve non-position channels and undo without mutation", () => {
+  const stroke = encodeStroke({ id: "a", size: 2, ch: "xyptaz", t0: 100,
+    samples: [{ x: 20, y: 10, p: 0.3, t: 0, a: 40, z: 70 }, { x: 30, y: 10, p: 0.8, t: 25, a: 45, z: 80 }] });
+  const other = encodeStroke({ id: "b", samples: samples() });
+  const ink = { ...newInk(1, 612, 792), strokes: [stroke, other] };
+  const moved = transformStrokes(ink, ["a"], { cx: 10, cy: 10, scale: 2, angle: Math.PI / 2 });
+  assert.deepEqual(decodeStroke(moved.strokes[0]), [
+    { x: 10, y: 30, p: 0.3, t: 0, a: 40, z: 70 }, { x: 10, y: 50, p: 0.8, t: 25, a: 45, z: 80 },
+  ]);
+  assert.equal(moved.strokes[0].size, 4);
+  assert.equal(moved.strokes[0].id, "a");
+  assert.equal(moved.strokes[0].t0, 100);
+  assert.equal(moved.strokes[1], other);
+  assert.equal(decodeStroke(stroke)[0].x, 20);
+  const restored = transformStrokes(moved, ["a"], { cx: 10, cy: 10, scale: 0.5, angle: -Math.PI / 2 });
+  assert.deepEqual(restored, ink);
+  assert.equal(transformStrokes(ink, ["a"], { cx: 10, cy: 10 }), ink);
+  assert.equal(transformStrokes(ink, ["a"], { cx: 10, cy: 10, scale: NaN }), ink);
+  assert.equal(transformStrokes(ink, [], { cx: 10, cy: 10, scale: 2 }), ink);
+});
 
 test("touch selection finds a thin stroke between samples and prefers topmost ties", () => {
   const ink = { ...newInk(1, 612, 792), strokes: [

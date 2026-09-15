@@ -19,11 +19,26 @@ export async function inkEditingScenarios({ server, browser, alice, bob, makePdf
     await page.touchscreen.tap(p.x, p.y);
     await menu().waitFor();
   };
-  const dragTouch = async (from, to) => {
+  const assertHandlesFollowSelection = async () => {
+    await until(async () => page.locator('[data-page="1"]').evaluate((el) => {
+      const selection = el.querySelector(".inkSelRect"), matrix = selection?.getScreenCTM();
+      if (!matrix) return false;
+      return ["resize", "rotate"].every((mode) => {
+        const widget = el.querySelector(`.inkTransform-${mode}`).getBoundingClientRect();
+        const x = selection.x.baseVal.value + selection.width.baseVal.value - 4;
+        const y = mode === "resize" ? selection.y.baseVal.value + selection.height.baseVal.value - 4 : selection.y.baseVal.value + 4;
+        const corner = new DOMPoint(x, y).matrixTransform(matrix);
+        return Math.abs(widget.x - corner.x) < 2 && Math.abs((mode === "resize" ? widget.y : widget.y + widget.height) - corner.y) < 2
+          && Math.abs(widget.width - 28) < 1 && Math.abs(widget.height - 28) < 1;
+      });
+    }), { what: "widgets follow preview corners at a constant screen size" });
+  };
+  const dragTouch = async (from, to, beforeLift) => {
     await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [from] });
     for (let i = 1; i <= 12; i++) await cdp.send("Input.dispatchTouchEvent", {
       type: "touchMove", touchPoints: [{ x: from.x + (to.x - from.x) * i / 12, y: from.y + (to.y - from.y) * i / 12 }],
     });
+    await beforeLift?.();
     await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   };
 
@@ -55,13 +70,17 @@ export async function inkEditingScenarios({ server, browser, alice, bob, makePdf
     await page.keyboard.press("Control+z");
     await page.getByText("Nothing to undo in handwriting.", { exact: true }).waitFor();
     assertEq(await page.locator(paths).count(), 2, "empty ink history does not fall through to note undo");
-    for (const name of ["Color", "Width", "Duplicate", "Delete", "Select note", "Show note", "Done"]) {
+    for (const name of ["Color", "Width", "Duplicate", "Select note", "Show note", "Delete"]) {
       const button = menu().getByRole("button", { name, exact: true });
       assertEq(await button.locator("svg").count(), 1, `${name} has an icon`);
       assert(await button.getAttribute("title"), `${name} has a tooltip`);
       const box = await button.boundingBox();
       assert(box.width >= 36 && box.height >= 36, `${name} retains a touch target`);
     }
+    assertEq(await menu().getByRole("button", { name: "Done", exact: true }).count(), 0);
+    assertEq(await menu().locator(".inkEditRow button").last().getAttribute("aria-label"), "Delete");
+    await menu().getByRole("button", { name: "Duplicate", exact: true }).hover();
+    await page.getByRole("tooltip").filter({ hasText: "Duplicate" }).waitFor();
     assertNoProblems(page);
   });
 
@@ -119,12 +138,76 @@ export async function inkEditingScenarios({ server, browser, alice, bob, makePdf
     await menu().waitFor();
     const beforeA = decodeStroke((await stored()).strokes[0])[0];
     const beforeB = decodeStroke((await stored(secondId)).strokes[0])[0];
-    await dragTouch(await point(140, 245), await point(170, 280));
+    await dragTouch(await point(140, 245), await point(170, 280), assertHandlesFollowSelection);
     await until(async () => decodeStroke((await stored()).strokes[0])[0].y > beforeA.y + 30);
     assert(decodeStroke((await stored(secondId)).strokes[0])[0].y > beforeB.y + 30, "both groups moved");
     await page.getByRole("button", { name: "Undo ink", exact: true }).tap();
     await until(async () => decodeStroke((await stored()).strokes[0])[0].y === beforeA.y
       && decodeStroke((await stored(secondId)).strokes[0])[0].y === beforeB.y);
+    assertNoProblems(page);
+  });
+
+  await step("ink edit: selection handles resize and rotate across notes, preview, cancel and undo", async () => {
+    const selectBoth = async () => {
+      const start = await point(65, 205);
+      await page.mouse.move(start.x, start.y); await page.mouse.down();
+      for (const [x, y] of [[215, 205], [215, 285], [65, 285], [65, 205]]) {
+        const p = await point(x, y); await page.mouse.move(p.x, p.y, { steps: 3 });
+      }
+      await page.mouse.up(); await menu().waitFor();
+    };
+    await selectBoth();
+    const beforeA = await stored(), beforeB = await stored(secondId);
+    const resize = page.getByRole("button", { name: "Resize selected handwriting", exact: true });
+    const rotate = page.getByRole("button", { name: "Rotate selected handwriting", exact: true });
+    await resize.waitFor();
+    const b = await resize.boundingBox();
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2); await page.mouse.down();
+    await page.mouse.move(b.x + b.width / 2 + 45, b.y + b.height / 2 + 25, { steps: 6 });
+    assertEq(await menu().count(), 0, "menu hides during transform preview");
+    await assertHandlesFollowSelection();
+    await page.mouse.up();
+    await until(async () => (await stored()).strokes[0].size > beforeA.strokes[0].size);
+    assert((await stored(secondId)).strokes[0].size > beforeB.strokes[0].size, "both notes resized");
+    assertEq(decodeStroke((await stored()).strokes[0])[4].p, decodeStroke(beforeA.strokes[0])[4].p);
+    await page.getByRole("button", { name: "Undo ink", exact: true }).tap();
+    await until(async () => JSON.stringify((await stored()).strokes) === JSON.stringify(beforeA.strokes));
+    assertEq(JSON.stringify((await stored(secondId)).strokes), JSON.stringify(beforeB.strokes));
+    // Toolbar undo dismisses selection; select both notes again.
+    await selectBoth();
+    await rotate.focus(); await page.keyboard.press("ArrowRight");
+    await until(async () => decodeStroke((await stored()).strokes[0])[0].y !== decodeStroke(beforeA.strokes[0])[0].y);
+    const rotated = await stored();
+    assertEq(rotated.strokes[0].size, beforeA.strokes[0].size, "rotation preserves width");
+    const r = await rotate.boundingBox();
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: r.x + 14, y: r.y + 14, pointerType: "pen", button: "left", buttons: 1, force: 0.5 });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: r.x + 40, y: r.y + 55, pointerType: "pen", button: "left", buttons: 1, force: 0.5 });
+    await assertHandlesFollowSelection();
+    await page.keyboard.press("Escape");
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: r.x + 40, y: r.y + 55, pointerType: "pen", button: "left", buttons: 0 });
+    assertEq(JSON.stringify((await stored()).strokes), JSON.stringify(rotated.strokes), "cancel discards preview");
+    assertEq(await page.locator('[data-page="1"] .inkLayer > g[transform]').count(), 0, "Escape clears the transform preview");
+    await page.getByRole("button", { name: "Undo ink", exact: true }).tap();
+    await until(async () => JSON.stringify((await stored()).strokes) === JSON.stringify(beforeA.strokes));
+    assertNoProblems(page);
+  });
+
+  await step("ink edit: mouse and pen hover show tool footprint without drawing", async () => {
+    await page.getByRole("button", { name: /^Pen .*\(1\)/ }).tap();
+    const p = await point(300, 330), cursor = page.locator('[data-page="1"] .inkCursor');
+    await page.mouse.move(p.x, p.y); await cursor.waitFor({ state: "visible" });
+    const penSize = await cursor.evaluate((el) => el.getBoundingClientRect().width);
+    assert(penSize > 0, "pen footprint visible");
+    await page.getByRole("button", { name: /^Eraser \(E\)/ }).tap();
+    await page.mouse.move(p.x, p.y);
+    assertEq(await cursor.getAttribute("data-tool"), "eraser");
+    assertEq(Math.round((await cursor.boundingBox()).width), 18, "medium eraser diameter in CSS pixels");
+    await page.getByRole("button", { name: "Hand", exact: true }).tap();
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", ...p, pointerType: "pen", buttons: 0 });
+    await cursor.waitFor({ state: "visible" });
+    assertEq(await cursor.getAttribute("data-tool"), "pen", "stylus still previews in hand mode");
+    assertEq(await page.locator(paths).count(), 2, "hover adds no ink");
+    await page.mouse.move(5, 5); await cursor.waitFor({ state: "hidden" });
     assertNoProblems(page);
   });
 

@@ -1,7 +1,7 @@
 // The building blocks every settings pane is composed from — and nothing
 // else: PaneHead › Section › Row/Toggle for the panes themselves, SubDialog ›
 // Step/Field for the editor dialogs they open, plus the small shared controls
-// (Segmented, Stepper, UnitInput, CharSlider, AccountPicker, LogBox, Stat, Empty, QuotaMeter/PercentMeter). New settings
+// (Segmented, PictureChoices, Stepper, UnitInput, CharSlider, AccountPicker, LogBox, Stat, Empty, QuotaMeter/PercentMeter). New settings
 // UI should reuse these; bespoke classes are for layout only.
 import React from "react";
 import { copyText, fmtBytes } from "./utils";
@@ -89,6 +89,24 @@ export function Segmented({ value, onChange, options }) {
       ))}
     </span>
   );
+}
+
+// Compact visual alternatives for a single preference. Previews are decorative;
+// labels, descriptions and the pressed state identify each choice accessibly.
+export function PictureChoices({ label, value, onChange, options, columns = 3 }) {
+  return <div className="setPictureChoices" role="group" aria-label={label} style={{ "--picture-columns": columns }}>
+    {options.map(({ value: id, label: name, hint, preview }) => (
+      <button key={String(id)} type="button" className={`uiBtn setPictureChoice${value === id ? " on" : ""}`}
+        aria-label={name} aria-description={hint} title={hint} aria-pressed={value === id} onClick={() => onChange(id)}>
+        {preview}
+        <span className="setPictureCaption">
+          <span className="setPictureName">{name}</span>
+          {hint ? <span className="setPictureHint">{hint}</span> : null}
+          <span className="setPictureCheck" aria-hidden="true">{value === id ? <CheckIcon size={12} /> : null}</span>
+        </span>
+      </button>
+    ))}
+  </div>;
 }
 
 // A row of small icon + short-name chips, each an independent on/off switch

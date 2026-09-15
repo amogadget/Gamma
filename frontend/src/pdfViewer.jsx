@@ -352,7 +352,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
 // inkPenTool what a stylus draws with when nothing is armed, inkFlash
 // {id, nonce} outlines a group after a jump; strokes and erasures report
 // back through onInkStroke / onInkErase, a click on ink through onInkJump.
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkEraserSize = 1, inkLassoMode = "free", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
+function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, hideEmbeddedAnnots, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkEraserSize = 1, inkLassoMode = "free", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -552,8 +552,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // writes scroll offsets while a finger or native momentum is moving.
   useEffect(() => {
     const el = viewerRef.current;
-    if (el && snapVertical) return installVerticalScrollSnap(el);
-  }, [snapVertical, pdfScaleValue, pdfDoc]);
+    if (el) return installVerticalScrollSnap(el);
+  }, [pdfScaleValue, pdfDoc]);
 
   // Group find marks per page once, sharing one frozen empty array so pages
   // without marks keep referentially-equal props (memo stays effective).
@@ -1593,7 +1593,6 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
           onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
           readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
-          noteBadges={!!noteBadges}
           hideEmbeddedAnnots={!!hideEmbeddedAnnots}
           areaMode={canAnnotate ? !!areaMode : false}
           onAreaSelected={canAnnotate ? onAreaSelected : undefined}
@@ -1808,7 +1807,7 @@ function TransPending({ lines, busy }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkEraserSize, inkLassoMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
+const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkEraserSize, inkLassoMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -1847,6 +1846,9 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
     }
     let cancelled = false;
     let task = null;
+    // Render privately: resizing the visible canvas clears its paper and
+    // exposes incomplete paints during rapid zoom changes.
+    const nextCanvas = document.createElement("canvas");
     (async () => {
       try {
         const page = await pdfDoc.getPage(pageNumber);
@@ -1862,8 +1864,8 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         // Supersample normal zooms, but cap area AND dimensions on all devices
         // (including iPads that identify as Macs). CSS geometry stays exact.
         const size = canvasSize(vp.width, vp.height, Math.min(3, Math.max(2, window.devicePixelRatio || 1)));
-        canvas.width = 0; canvas.height = size.height; canvas.width = size.width;
-        const ctx = canvas.getContext("2d");
+        nextCanvas.width = size.width; nextCanvas.height = size.height;
+        const ctx = nextCanvas.getContext("2d");
         if (!ctx) throw new Error("PDF canvas allocation failed");
         ctx.setTransform(size.width / vp.width, 0, 0, size.height / vp.height, 0, 0);
         // DISABLE keeps embedded markup annotations (e.g. highlights burned in
@@ -1882,6 +1884,9 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
           throw err;
         }
         if (cancelled) return;
+        canvas.width = 0; canvas.height = size.height; canvas.width = size.width;
+        canvas.getContext("2d").drawImage(nextCanvas, 0, 0);
+        nextCanvas.width = 0; nextCanvas.height = 0;
         onPainted?.();
 
         const textL = textRef.current;
@@ -1915,6 +1920,8 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         // A cancelled run rejects mid-await (doc swapped, transport
         // destroyed) — that's teardown, not an error worth logging.
         if (!cancelled) console.error("PdfPage render error:", e);
+      } finally {
+        nextCanvas.width = 0; nextCanvas.height = 0;
       }
     })();
     return () => { cancelled = true; task?.cancel(); };
@@ -2038,7 +2045,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       {/* 100% of the wrapper: on a zoom change the old bitmap stretches to the
           new size immediately (blurry for a moment) instead of sitting at its
           old size in a resized box until the sharp re-render lands. */}
-      <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
+      <canvas ref={canvasRef} className="pdfPageCanvas" style={{ display: "block", width: "100%", height: "100%" }} />
       {/* Translated view: masks + refills sit between the canvas and the text
           layer, so selecting the (invisible) original text still paints its
           selection highlight on top of the overlay. pointer-events: none —
@@ -2180,7 +2187,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         }
         // Speech-bubble badge at the end of the passage when the user typed a
         // note on the highlight — click behaves like clicking the highlight.
-        if (noteBadges && h.hasNote && rects.length) {
+        if (h.hasNote && rects.length) {
           const r = rects[rects.length - 1];
           elements.push(
             <NoteBadge key={h.id + "-note"} hlId={h.id}

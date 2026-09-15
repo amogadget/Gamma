@@ -123,7 +123,8 @@ retaining geometry, text and annotations; returning pages repaint. Forced
 rendering for jumps still works. Effect cleanup cancels pending PDF renders,
 and unmount explicitly releases the canvas rather than waiting for GC.
 
-`verticalScrollSnap.js` implements **Snap vertical scrolling**. It judges
+`verticalScrollSnap.js` implements always-on vertical scroll alignment (the
+old `gamma-snap-vertical` preference is ignored). It judges
 one-finger direction after 8 CSS pixels, with a 30-degree vertical cone.
 It never sets scroll offsets during touch or native momentum: after
 `scrollend`, it gently corrects horizontal drift once. Older browsers use
