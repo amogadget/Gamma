@@ -357,7 +357,7 @@ export function InkToolbar({ tools, active, options, eraserMode, eraserSize, las
     const i = tools.findIndex((t) => t.id === active);
     const copy = { ...tools[i], id: toolId() };
     onChangeTools([...tools.slice(0, i + 1), copy, ...tools.slice(i + 1)]);
-    onPick(copy.id, { keepOptions: true });
+    onPick(copy.id, { keepOptions: true, kind: copy.kind });   // not in the list the picker closed over yet
   };
   const remove = () => {
     const i = tools.findIndex((t) => t.id === active);

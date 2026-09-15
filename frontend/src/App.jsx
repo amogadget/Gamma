@@ -5293,10 +5293,10 @@ export default function App() {
   const inkPenTool = inkAutoPen && !readOnly ? inkPen : null;
   // Arm a tool; a pen preset also becomes the stylus pen. The options row
   // closes unless the caller keeps it (a duplicate stays editable).
-  const pickInkTool = useCallback((id, { keepOptions = false } = {}) => {
+  const pickInkTool = useCallback((id, { keepOptions = false, kind } = {}) => {
     setInkUi((s) => {
-      const p = id && inkTools.find((t) => t.id === id);
-      return { ...s, open: true, tool: id, options: keepOptions && !!id ? s.options : false, pen: p?.kind === "pen" ? id : s.pen };
+      const k = kind || (id && inkTools.find((t) => t.id === id)?.kind);
+      return { ...s, open: true, tool: id, options: keepOptions && !!id ? s.options : false, pen: k === "pen" ? id : s.pen };
     });
   }, [inkTools]);
   const openInkStrip = () => pickInkTool(inkTools.find((t) => t.id === inkUi.pen)?.id || inkTools[0].id);

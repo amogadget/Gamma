@@ -227,8 +227,12 @@ request's `permissions`.
 
 One permission per capability: List pages, Read pages, Read note blocks,
 Search library (`search_library` — notes and PDF text; the stored key is
-still `search`), Rename pages, Move pages, and Edit note blocks (one chip
-arming `edit_block`/`create_block`/`move_block` together). Plus:
+still `search`), Search papers online (`web_search` → `search_papers`), Fetch
+documents (`web_read` → `fetch_paper`; both web tools are read-only and
+described in [ai_tools.md](ai_tools.md)), Rename pages, Move pages, and Edit
+note blocks (one chip arming `edit_block`/`create_block`/`move_block`
+together). The "Read & search" preset (`chatSettings.js` `READ_TOOLS`)
+includes the two web tools. Plus:
 
 - **Tool rounds** (`gamma-ai-tool-rounds` → request `tool_rounds`, default 32,
   user-tunable 1–100) — provider round-trips one message may use.

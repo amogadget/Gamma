@@ -1,9 +1,9 @@
 // Shared permission presets used by Settings and the chat settings shortcut.
-export const READ_TOOLS = ["list", "read", "block_read", "search"];
+export const READ_TOOLS = ["list", "read", "block_read", "search", "web_search", "web_read"];
 export const WRITE_TOOLS = ["rename", "move", "block_edit"];
 export const toolsForKind = (kind) => kind === "folder"
   ? [...READ_TOOLS, ...WRITE_TOOLS]
-  : ["read", "block_read", "search", "block_edit"];
+  : ["read", "block_read", "search", "web_search", "web_read", "block_edit"];
 
 export function permissionPreset(kind, permissions = {}) {
   const keys = toolsForKind(kind);

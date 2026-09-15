@@ -43,6 +43,7 @@ export const TRANSLATE_LANGS = [
 export const CHAT_KINDS = ["folder", "pdf", "notes"];
 const TOOL_PERMS_DEFAULT = {
   list: true, read: true, block_read: true, search: true,
+  web_search: true, web_read: true,
   rename: true, move: true, block_edit: true,
 };
 const AGENT_PERMS_DEFAULT = Object.fromEntries(CHAT_KINDS.map((k) => [k, { ...TOOL_PERMS_DEFAULT }]));
