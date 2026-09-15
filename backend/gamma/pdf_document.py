@@ -317,6 +317,7 @@ class _Canvas:
 
     def __init__(self, writer: PdfWriter, uploads_dir=None, resolve_ref=None):
         self.writer = writer
+        self.uploads_dir = uploads_dir
         self.images = XObjectStore(writer, uploads_dir)
         self.glyphs = GlyphFonts(writer)
         self.resolve_ref = resolve_ref   # [[id]] → {content, page_title} | None
@@ -435,6 +436,28 @@ class _Canvas:
             num(w), num(-h), num(x), num(self.y + h), name.encode()))
         self.page["xobjects"][name] = self.images.refs[name]
         self.y += h + IMAGE_GAP
+
+    def ink(self, ink_url: str, x: float, width: float) -> bool:
+        """A handwriting group drawn as vector strokes, fitted to the column
+        (never enlarged). False when the ink file is missing or unreadable —
+        the caller falls back to text."""
+        from . import ink as inkmod
+        ink_file = inkmod.read_upload(self.uploads_dir, ink_url)
+        box = inkmod.bounding_box(ink_file) if ink_file else None
+        if not box:
+            return False
+        bw, bh = box[2] - box[0], box[3] - box[1]
+        scale = min(1.0, width / bw) if bw else 1.0
+        cap = PAGE_H - MARGIN_TOP - MARGIN_BOTTOM
+        if bh * scale > cap:
+            scale = cap / bh
+        h = bh * scale
+        self.need(h)
+        top = self.y
+        self.page["ops"].append(inkmod.pdf_path_ops(
+            ink_file, lambda px, py: (x + (px - box[0]) * scale, top + (py - box[1]) * scale), scale))
+        self.y += h + IMAGE_GAP
+        return True
 
     def display_math(self, tex: str, x: float, width: float, size: float = BODY_SIZE):
         drawn = vector_text.math(tex, size * DISPLAY_MATH_SCALE)
@@ -743,9 +766,10 @@ def _emit_block(cv: _Canvas, node: dict, depth: int, highlights: bool, notes: bo
     content = (node.get("content") or "").strip()
     is_highlight = bool(props.get("highlight_id"))
     is_link = bool(props.get("link_url"))
-    if is_highlight or is_link:
+    is_ink = bool(props.get("ink_url"))
+    if is_highlight or is_link or is_ink:
         if not highlights:
-            props, is_highlight, is_link = {}, False, False
+            props, is_highlight, is_link, is_ink = {}, False, False, False
         if not notes:
             content = ""
     elif not notes:
@@ -763,6 +787,19 @@ def _emit_block(cv: _Canvas, node: dict, depth: int, highlights: bool, notes: bo
         cv.paragraph(inline(label, Style(LINK, props["link_url"])), x, width,
                      bullet="" if depth else None)
         emitted = True
+    elif is_ink:
+        cv.gap(BLOCK_GAP)
+        drawn = cv.ink(props["ink_url"], x + QUOTE_PAD, width - QUOTE_PAD)
+        page_no = props.get("pdf_page")
+        if drawn and page_no is not None:
+            cv.paragraph([(TEXT, f"handwriting, p. {page_no}", 0, PLAIN)],
+                         x + QUOTE_PAD, width - QUOTE_PAD, SMALL_SIZE, color=MUTED)
+        emitted = drawn
+        if content:
+            cv.gap(BLOCK_GAP)
+            inset = QUOTE_PAD if emitted else 0
+            _emit_chunks(cv, content, x + inset, width - inset, bullet=bool(depth or inset))
+            emitted = True
     elif is_highlight:
         quote = (props.get("quote") or "").strip()
         bar = tuple(max(0.0, c * 0.7) for c in parse_css_color(props.get("color"))[:3])

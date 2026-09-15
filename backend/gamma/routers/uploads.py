@@ -1,17 +1,15 @@
 """PDF / image / generic file uploads (content-hash deduped) and upload serving."""
 
-import sqlite3
-
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from ..auth import require_ws, require_ws_writer, resolve_ws, share_scope_page
 from ..blocks_store import fetch_subtree
+from .. import pdf_meta
 from ..db import connect_pages_db, ws_uploads_dir
 from ..server_settings import check_upload_allowed, workspace_quota
 from ..storage import (
     ALLOWED_IMAGE_TYPES,
-    FILE_MEDIA_TYPES,
     IMAGE_EXTENSIONS,
     INLINE_EXTENSIONS,
     SANDBOXED_EXTENSIONS,
@@ -21,6 +19,7 @@ from ..storage import (
     is_pdf,
     store_file,
     store_pdf,
+    upload_extension,
     upload_media_type,
 )
 
@@ -78,23 +77,23 @@ async def upload_image(request: Request, file: UploadFile = File(...)):
 
 @router.post("/upload-file")
 async def upload_file(request: Request, file: UploadFile = File(...)):
-    """Store any allowed file (md/txt/csv/json/tex/bib/py/ipynb/html/docx/
-    xlsx/pptx/zip, plus images and PDFs) under its content hash for a block
-    to reference as ``[name](/api/uploads/<hash>.<ext>)``. The extension
-    comes from the uploaded name (images: from the declared type, same path
-    as /upload-image). → ``{url, name, size, already_existed}``."""
+    """Store any file except executables (``storage.BLOCKED_EXTENSIONS``)
+    under its content hash for a block to reference as
+    ``[name](/api/uploads/<hash>.<ext>)`` — a file block. The extension comes
+    from the uploaded name (``.bin`` when it has none; images: from the
+    declared type, same path as /upload-image). A PDF stored this way gets
+    the same ``<hash>.pdf`` name the PDF ingest mints, so it can later be
+    opened as a document page without a second upload (``POST
+    /blocks/by-doc/{hash}``). → ``{url, name, size, already_existed}``."""
     ws = require_ws_writer(request)
     name = display_filename(file.filename, "file")
-    ext = ""
     if file.content_type in ALLOWED_IMAGE_TYPES:
         ext = IMAGE_EXTENSIONS[file.content_type]
     else:
-        dot = name.rfind(".")
-        ext = name[dot:].lower() if dot > 0 else ""
-        if ext != ".pdf" and ext not in FILE_MEDIA_TYPES:
-            allowed = ", ".join(sorted(e.lstrip(".") for e in FILE_MEDIA_TYPES))
-            raise HTTPException(status_code=400,
-                                detail=f"unsupported file type {ext or '(none)'} — allowed: pdf, images, {allowed}")
+        try:
+            ext = upload_extension(name)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
     contents = await file.read()
     if ext == ".pdf" and not is_pdf(contents):
         raise HTTPException(status_code=400, detail="not a valid PDF (missing %PDF header)")
@@ -121,7 +120,31 @@ def _share_can_read_upload(ws: str, scope_page_id: str, filename: str) -> bool:
     return any(needle in (r[3] or "") or needle in (r[4] or "") for r in rows)
 
 
-@router.get("/uploads/{filename}")
+@router.get("/pdf-info/{doc_id}")
+def pdf_info(doc_id: str, request: Request):
+    """The document manifest (``gamma/pdf_meta.py``): ``{doc_id, bytes,
+    pages, dims: [[w, h], …]}`` in PDF points. Same access rule as the file
+    itself. Sync def on purpose: a document nobody has measured yet is walked
+    in pdfium here, in the threadpool. A manifest is immutable per doc id
+    (content-hash names), so it caches for a day; a failed read (pages 0)
+    does not."""
+    if not doc_id or not all(c in "0123456789abcdef" for c in doc_id):
+        raise HTTPException(status_code=400, detail="invalid document id")
+    ws = resolve_ws(request)
+    scope_page_id = share_scope_page(request)
+    if scope_page_id is not None and not _share_can_read_upload(ws, scope_page_id, f"{doc_id}.pdf"):
+        raise HTTPException(status_code=403, detail="not accessible via this share link")
+    info = pdf_meta.ensure(ws, doc_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail="not found")
+    cache = "private, max-age=86400" if info["pages"] else "no-store"
+    return JSONResponse(info, headers={"Cache-Control": cache})
+
+
+# GET and HEAD: the viewer asks HEAD for a file's size before deciding how to
+# open it (FastAPI does not add HEAD to a GET route by itself; FileResponse
+# answers a HEAD with the headers alone).
+@router.api_route("/uploads/{filename}", methods=["GET", "HEAD"])
 async def serve_upload(filename: str, request: Request):
     # Sanitize: only allow [hex].ext pattern, no path traversal
     dot = filename.rfind(".")

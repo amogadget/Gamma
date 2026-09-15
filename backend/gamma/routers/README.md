@@ -8,7 +8,8 @@ One module per API area. Mounted under `/api` in `gamma/app.py`.
 | `workspaces.py` | `/api/workspaces/*`               | workspaces: list/create/rename/delete, members and roles |
 | `admin.py`    | `/api/admin/*`                      | accounts, server settings, every workspace, the server log |
 | `blocks.py`   | `/api/blocks/*`                     | the block tree (CRUD, children, subtree, by-doc) |
-| `uploads.py`  | `/api/uploads/*`                    | PDF/image upload + serving (content-addressed) |
+| `pages.py`    | `/api/pages`, `/pages/by-docs`, `/pages/{id}/attachment` | page-first endpoints: create a page, attach/detach its document, which pages carry which PDFs |
+| `uploads.py`  | `/api/uploads/*`, `/upload-file`    | PDF / image / any-file upload + serving (content-addressed; executables refused) |
 | `pdf.py`      | `/api/resolve-pdf`                  | find a real PDF url (arXiv → meta tag → Unpaywall OA) |
 | `metadata.py` | `/api/metadata/fetch`, `/cite`      | paper metadata + BibTeX + PPT citation (cached on the page) |
 | `ai.py`       | `/api/ai/chat`, `/models`, providers | chat orchestration, AI settings, OAuth |

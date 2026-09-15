@@ -1,9 +1,9 @@
 // Settings → Server (admins only): everything that is about the server
 // rather than one account — the storage defaults every account inherits,
-// every workspace on the server (settingsWorkspacesAdmin.jsx), whole-data-
+// the shared workspaces (settingsWorkspacesAdmin.jsx), whole-data-
 // directory snapshots (settingsBackups.jsx ServerBackups) and the scrubbed
-// server log. Per-account things stay in Users; per-workspace backups in
-// Backups.
+// server log. Per-account things — including each account's personal
+// workspaces — stay in Users; per-workspace backups in Backups.
 import React from "react";
 import { API, apiJson } from "./utils";
 import { PaneHead, Section, Row, UnitInput, LogBox, useSettingsDraft } from "./settingsKit";
@@ -15,7 +15,7 @@ export function ServerSettings({ value }) {
   return (
     <>
       <PaneHead icon={ServerIcon} title="Server">
-        Storage defaults, every workspace on the server, snapshots of the whole data directory, and the server log.
+        Storage defaults, the shared workspaces, snapshots of the whole data directory, and the server log.
       </PaneHead>
       <Section title="Storage defaults">
         <ServerLimitRows setStatus={value.setStatus} refreshQuota={value.refreshQuota} />

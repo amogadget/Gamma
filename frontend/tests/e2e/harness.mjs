@@ -196,7 +196,11 @@ export function assertNoProblems(page, allow = []) {
 // PDFs: a small but real PDF (Helvetica text, one content stream per page)
 // that pdf.js renders with a selectable text layer.
 
-export function makePdf(pages) {
+// `padBytes` appends one unreferenced stream of that many bytes, so a small
+// text document can weigh as much as a scanned book (the timing probe's
+// transport case) while every page stays tiny to parse and render. A page is
+// its lines, or `{lines, box: [w, h]}` for a MediaBox other than US Letter.
+export function makePdf(pages, { padBytes = 0 } = {}) {
   const esc = (s) => s.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
   const objs = [];
   const add = (s) => { objs.push(s); return objs.length; };
@@ -204,11 +208,17 @@ export function makePdf(pages) {
   const pagesObj = add("");
   const font = add("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
   const kids = [];
-  for (const lines of pages) {
-    const content = ["BT", "/F1 20 Tf", "72 720 Td", "26 TL", ...lines.map((l) => `(${esc(l)}) Tj T*`), "ET"].join("\n");
+  for (const pg of pages) {
+    const lines = Array.isArray(pg) ? pg : pg.lines;
+    const [w, h] = (Array.isArray(pg) ? null : pg.box) || [612, 792];
+    const content = ["BT", "/F1 20 Tf", `72 ${h - 72} Td`, "26 TL", ...lines.map((l) => `(${esc(l)}) Tj T*`), "ET"].join("\n");
     const stream = add(`<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`);
-    kids.push(add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${stream} 0 R >>`));
+    kids.push(add(`<< /Type /Page /Parent ${pagesObj} 0 R /MediaBox [0 0 ${w} ${h}] /Resources << /Font << /F1 ${font} 0 R >> >> /Contents ${stream} 0 R >>`));
   }
+  if (padBytes > 0) add(`<< /Length ${padBytes} >>
+stream
+${"x".repeat(padBytes)}
+endstream`);
   objs[catalog - 1] = `<< /Type /Catalog /Pages ${pagesObj} 0 R >>`;
   objs[pagesObj - 1] = `<< /Type /Pages /Kids [${kids.map((k) => `${k} 0 R`).join(" ")}] /Count ${kids.length} >>`;
   let out = "%PDF-1.4\n";

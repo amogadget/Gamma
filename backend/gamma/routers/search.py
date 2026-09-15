@@ -30,6 +30,7 @@ from pydantic import BaseModel
 
 from .. import block_index, pdf_index
 from ..ai_context import pdf_path as _pdf_path
+from .. import pdf_meta
 from ..auth import require_ws
 from ..block_index import fts_query
 from ..blocks_store import root_pages
@@ -59,6 +60,7 @@ def _index_doc(ws: str, doc_id: str):
     try:
         path = _pdf_path(ws, doc_id)
         if path:
+            pdf_meta.ensure(ws, doc_id)  # the viewer's manifest, while the file is at hand anyway
             for i, raw in enumerate(_extract_pages(path), start=1):
                 text = normalize_text(raw)
                 if text:

@@ -16,14 +16,26 @@ Update it as stages land.
 tabs, recents, snapshots, chats) keys on the page id and works on a page with
 nothing but text.
 
-**Attachment.** A file the page carries. Today there is exactly one slot,
-`properties.doc_id` (content hash → `uploads/<doc_id>.pdf`) plus
-`source_url` / `original_filename` / `web_url` describing where it came from.
-This stays the storage shape for now, but code reads it through ONE helper on
-each side — `page_attachment(props)` (backend) / `pageAttachment(block)`
-(frontend) returning `{kind: "pdf", id, url, name} | null` — so that a later
-`properties.attachments: [...]` list is a drop-in. Nothing else may read
-`doc_id`/`source_url` off a page directly to decide *what the page is*.
+**Files and documents.** "Attachment" means two different things, and the
+code keeps them apart (decided 2026-09-13, see *Files and documents* below):
+
+- A **file** is content. A content-hashed blob in `uploads/`, referenced
+  from a block as `[name](/api/uploads/<hash>.<ext>)` and rendered as a file
+  chip (`frontend/src/fileChip.jsx`). Any type except executables, any number
+  per page, download or open in a tab, no semantics. Orphan cleanup follows
+  the textual reference.
+- A **document** is the ONE PDF a page *carries*: `properties.doc_id`
+  (content hash → `uploads/<doc_id>.pdf`) plus `source_url` /
+  `original_filename` / `web_url` describing where it came from. The viewer,
+  highlights, metadata, the PDF search index, AI context and `by-doc` dedup
+  all key on it. Code reads it through ONE helper on each side —
+  `page_attachment(props)` (backend) / `pageAttachment(block)` (frontend)
+  returning `{kind: "pdf", id, url, name} | null`. Nothing else may read
+  `doc_id`/`source_url` off a page directly to decide *what the page is*.
+
+A page is the only container: at most one document, any number of files in
+its body, and optionally a bibliographic record (`meta`). There are no page
+types.
 
 **Reading window.** Opening a page whose attachment is a PDF shows the viewer
 beside the notes; a page without one centers the notes. Same page component,
@@ -35,12 +47,43 @@ collapsible (`pdfHidden`) rather than a mode. Layout derives from
 describe a page by what it carries ("has PDF", "has web source", labels),
 not by a PDF/Note dichotomy.
 
+**Handwriting** groups are child blocks too (`ink_url` + `pdf_page` +
+`pdf_position`, [handwriting.md](handwriting.md)); the stroke file's `space`
+already names a `canvas` kind for ink on a page without a PDF.
+
 **Highlights** stay child blocks with `highlight_id` / `pdf_position`; they
-anchor to the page's PDF attachment. When multi-attachment arrives they gain
-an `attachment_id` (= doc_id) — until then it is implicit.
+anchor to the page's document, implicitly — a page has one.
+
+**Metadata** (`properties.meta`, the bibliographic record) is a page
+property, and that is the right place: the page is the Zotero *item*, the
+document its attached file. A page can hold a paper's record without owning
+the PDF (a paper you only cite) and still cite it; a project page never has
+one. `meta.kind` (paper / book / thesis / …) generalizes the record without a
+schema change. The metadata popover (the ⓘ header button) is its one
+surface — the header itself stays title + labels, nothing repeated.
+
+**Promotion.** A PDF dropped into a page is a file. "Add to library" in its
+chip's right-click menu makes the page that carries it: `POST /blocks/by-doc/<hash>` — the
+generic upload already stored the bytes under the same hash the PDF ingest
+mints, so nothing is uploaded twice, and the 409 rule keeps one page per
+PDF. The new page is a ROOT page filed in the asking page's first folder,
+not a nested sub-page: the same paper appears under several projects, so it
+needs one identity with one set of highlights, and every subsystem (shares,
+ops log, search scopes, snapshots, chats) already assumes pages are root
+blocks. The project page keeps its chip, which now shows an "open page"
+button; highlights come back into it through `![[embed]]`.
+
+A **markdown file** promotes too, differently: `POST /pages/from-file`
+imports the stored upload as a note page (the `/import/markdown` parser),
+filed with the project. The page is a copy — editing it never touches the
+file, and the file never updates the page. The page records the file's hash
+as `markdown_import` (the importer always did), which is how the chip
+finds it afterwards (`pages_for_docs` matches `doc_id` and
+`markdown_import`). Same rule as the PDF: one page per file, the second
+"Add to library" opens the existing one.
 
 **Sub-pages.** Not a new structure: the tree already nests arbitrarily and
-`?block=<id>` opens any block on its page. "Open as page" = Logseq-style
+`?block=<id>` opens any block on its page. A sub-page is a Logseq-style
 zoom-in on a subtree (focus mode), not a second page table. The flat library
 with folder labels stays the navigation model.
 
@@ -188,10 +231,10 @@ attachment, `pageTitle` state, "Untitled" fallback, copy sweep, Settings group
 ### Stage 1 — page-first creation, PDF as an action on a page
 *(frontend done 2026-09-02: New page tile/row + `createPage()`, the page
 header paperclip → `attachPdfToPage()` (URL/arXiv/DOI or upload; a PDF
-dropped on an attachment-less open page attaches too; a PDF another page
-already carries → the 409 opens THAT page instead of duplicating), non-image files
-dropped on a block upload via `/api/upload-file` and render as a `FileChip`,
-text-preview covers, text-only pages remember their top block in the synced
+another page already carries → the 409 opens THAT page instead of
+duplicating; a dropped PDF no longer attaches since stage 4 — it is a file),
+files dropped on a block upload via `/api/upload-file` and render as a file
+chip, text-preview covers, text-only pages remember their top block in the synced
 read-position map as `{page: 0, block}`.)*
 - `POST /api/pages {title?, folder?}` (thin wrapper, returns the page);
   `by-doc` stays as *lookup-by-attachment* for clip/dedup and PDF ingest,
@@ -306,13 +349,47 @@ paperclip popover is the attachments row — file name, show/hide the viewer,
 detach (`DELETE /pages/{id}/attachment`). The extension still does not send
 `selection` on a page save.)*
 
-### Stage 4 — beyond one PDF per page (optional, later)
-- `properties.attachments: [{id, kind, name, source_url}]` with the primary
-  PDF mirrored into `doc_id` for compatibility; highlights gain
-  `attachment_id`; viewer gets an attachment switcher; search index keys on
-  `(page_id, attachment_id, page)`.
-- "Open as page" zoom-in on any block (breadcrumb back to the page), tabs
-  and `?block=` already carry the id.
+### Stage 4 — files and documents *(done 2026-09-13)*
+
+Replaces the earlier plan for a `properties.attachments` list with an
+attachment switcher in the viewer. Files in blocks plus promotion cover
+"several PDFs on one page": a supplement gets its own document page and the
+project page links both; side-by-side reading is a second tab or dock window.
+A multi-PDF viewer with `attachment_id` on highlights is not planned.
+
+- **Backend.** `POST /upload-file` takes any extension except
+  `storage.BLOCKED_EXTENSIONS` (executables); unknown ones are served as
+  `application/octet-stream` downloads, a name without one is stored as
+  `.bin` (`storage.upload_extension`). `POST /pages/by-docs` answers "which
+  page carries each of these hashes" in one query (`blocks_store.pages_for_docs`)
+  so the chips label PDFs once per page render. `POST /blocks/by-doc/{id}`
+  takes `folder` for a page it creates. The Obsidian/markdown zip import
+  stores bundled files under the same rule (`markdown_zip_import._is_asset_ext`).
+- **Frontend.** `fileChip.jsx`: the chip — every file looks the same (a
+  small card: kind icon, name, download arrow). A PDF or markdown chip
+  whose page exists shows an "open page" button before the arrow; its
+  right-click menu says "Open page", or "Add to library" when there is none
+  (via `FileChipContext`, which App provides around the tree with
+  `openBlock` and `promoteFile`; the hash → page lookup is one batched
+  `POST /pages/by-docs` per page render, forgotten on every page open).
+  Every such upload goes through `fileChip.postFile` — an XMLHttpRequest
+  (fetch cannot report upload progress) that reports to the hook App
+  installs with `setUploadReporter`: a row in the background-tasks list
+  (bytes and a percentage while the file goes up), and the status pill once
+  an upload has run for a moment or is large, so a screenshot flashes by
+  and a big dataset shows its progress. Drop and paste semantics: a file dropped on a block row lands
+  in that block (all files, one line each, PDFs included), and so does any
+  file on the clipboard pasted into the editor (`clipboardFiles`: images
+  inline, the rest as chips — a PDF copied in the file manager pastes like a
+  screenshot does); dropped on the page body
+  it becomes new blocks at the end of the page (`appendFileBlocks`); dropped
+  on the home library, PDFs/markdown import as pages. The page's document is
+  attached ONLY from the header paperclip ("Attach a document") — a drop
+  never attaches. A property strip under the title was tried and removed
+  the same day: it repeated what the metadata popover shows.
+
+Still open from the old stage 4: zoom-in on any block as a focused sub-page
+(breadcrumb back to the page); tabs and `?block=` already carry the id.
 
 ## Non-goals (for now)
 - No `kind` column or page-type enum — describe pages by what they carry.

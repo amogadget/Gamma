@@ -22,6 +22,10 @@ the slide citation on the page block (`properties.meta` / `properties.bibtex`
    text head. Deterministic; keeps most publisher PDFs off the AI fallback.
 5. **AI extraction** — last resort, and its output is verified (below).
 
+The registry helpers (`_fetch_arxiv` / `_arxiv_search` — both parse Atom
+entries through `_arxiv_entry_meta` — `_fetch_doi`, `_crossref_search`) also
+back the chat agent's `search_papers` tool ([ai_tools.md](ai_tools.md)).
+
 **What the steps read.** Identifier scans and title matching use a
 `SCAN_CHARS` (20k) head window, deliberately decoupled from the AI-context
 pref, **plus the last page** — an issue-clipped Science PDF opens with the

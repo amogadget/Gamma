@@ -205,6 +205,16 @@ export async function settingsScenarios(env) {
       await until(() => user.api("/api/admin/settings").then((v) => v.max_upload_mb === 77 && v.quota_mb === 1200));
       await nav(page, "Users").click();
       await until(() => page.locator(".settingsPane .aiProvRow").count().then((n) => n > 1));
+      // Each account row nests its personal workspaces; Manage opens the
+      // workspace dialog in admin mode. The Server pane lists shared ones only.
+      await until(() => page.locator(".settingsPane .aiProvSubRow").count().then((n) => n > 1));
+      await page.locator(".settingsPane .aiProvSubRow").first().getByRole("button", { name: "Manage" }).click();
+      await page.locator(".subDialog").getByRole("button", { name: "Rename", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
+      await page.locator(".subDialog").waitFor({ state: "detached" });
+      await nav(page, "Server").click();
+      await page.getByText("Shared workspaces", { exact: true }).waitFor();
+      assertEq(await page.getByText("Personal workspaces", { exact: true }).count(), 0);
       assertNoProblems(page);
     } finally { await ctx.close(); }
   });

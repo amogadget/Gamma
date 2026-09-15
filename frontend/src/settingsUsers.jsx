@@ -1,5 +1,9 @@
 // Settings → Users: the GUI for /api/admin/users*. Two separate editors per
-// account — credentials (rename/password/privilege) and storage limits.
+// account — credentials (rename/password/privilege) and storage limits —
+// and, nested under each account row, its personal workspaces (from
+// /api/admin/workspaces) with Open / Manage (the workspace dialog from
+// settingsWorkspace.jsx in admin mode). Shared workspaces are not per
+// account, so they stay in Settings → Server.
 //
 // Non-admins get this pane too, as "You": a single read-only row for
 // themselves. /api/admin/* is admin-only, so their row is built from the
@@ -7,17 +11,22 @@
 // editor. Backups of anyone's workspaces live in Settings → Backups (and,
 // for admins, Settings → Server), not here.
 import React from "react";
-import { API, apiJson } from "./utils";
+import { API, apiJson, fmtBytes } from "./utils";
 import { PaneHead, SubDialog, Field, UnitInput, Empty, QuotaMeter, PasswordInput } from "./settingsKit";
-import { HardDriveIcon, PenIcon, PlusIcon, ShieldIcon, Trash2Icon, UserIcon, UsersIcon } from "./icons";
+import { ManageWorkspaceDialog, useAccounts } from "./settingsWorkspace";
+import { BookIcon, HardDriveIcon, PenIcon, PlusIcon, ShieldIcon, Trash2Icon, UserIcon, UsersIcon } from "./icons";
 
 export function UsersSettings({ value, selfOnly = false }) {
-  const { setStatus, confirm, onSelfRenamed, refreshQuota, isAdmin, me, isGuest, quotaInfo } = value;
+  const { setStatus, confirm, onSelfRenamed, refreshQuota, isAdmin, me, isGuest, quotaInfo,
+    workspaces: mine, switchWorkspace, refreshSession, closeSettings } = value;
   const [info, setInfo] = React.useState(null); // {users, me}
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [edit, setEdit] = React.useState(null); // {original, username, password, is_admin, max_upload_mb, quota_mb}
   const [addForm, setAddForm] = React.useState(null); // {username, password, is_admin}
+  const [wsRows, setWsRows] = React.useState(null); // /api/admin/workspaces, personal ones only
+  const [manage, setManage] = React.useState(null); // workspace id being managed
+  const listWorkspaces = isAdmin && !selfOnly;
 
   const [defaults, setDefaults] = React.useState(null); // {max_upload_mb, quota_mb} server-wide
   React.useEffect(() => {
@@ -28,6 +37,19 @@ export function UsersSettings({ value, selfOnly = false }) {
     apiJson(`${API}/admin/users`).then((d) => setInfo(d)).catch((err) => setError(err.message));
     apiJson(`${API}/admin/settings`).then(setDefaults).catch(() => {});
   }, [isAdmin]);
+  const refreshWorkspaces = React.useCallback(() => {
+    if (!listWorkspaces) return;
+    apiJson(`${API}/admin/workspaces`)
+      .then((d) => setWsRows((d.workspaces || []).filter((w) => w.personal)))
+      .catch(() => setWsRows([]));
+  }, [listWorkspaces]);
+  React.useEffect(() => { refreshWorkspaces(); }, [refreshWorkspaces]);
+  const openable = new Set((mine || []).map((w) => w.id));
+  // An account's personal workspaces, its default first. The admin listing
+  // keys them by username, so account changes re-fetch (usersCall below).
+  const personalOf = (username) => (wsRows || [])
+    .filter((w) => w.personal === username)
+    .sort((a, b) => (b.default - a.default) || a.name.localeCompare(b.name));
 
   const myName = isAdmin ? info?.me : me;
   // /api/quota reports effective limits (overrides already resolved), which is
@@ -63,6 +85,7 @@ export function UsersSettings({ value, selfOnly = false }) {
           me: d.renamed?.from === prev?.me ? d.renamed.to : prev?.me,
         };
       });
+      refreshWorkspaces(); // created / renamed / deleted accounts change the nested rows
       return d;
     } catch (err) {
       setError(err.message);
@@ -244,6 +267,7 @@ export function UsersSettings({ value, selfOnly = false }) {
   }
 
   function userRow(u) {
+    const wsList = listWorkspaces ? personalOf(u.username) : [];
     return (
       <div key={u.username} className="aiProvRow">
         <span className={`aiProvAvatar ${u.is_admin ? "active" : ""}`}>
@@ -291,6 +315,30 @@ export function UsersSettings({ value, selfOnly = false }) {
             </>
           ) : null}
         </span>
+        {wsList.length ? (
+          <div className="aiProvSub">
+            {wsList.map((w) => (
+              <div key={w.id} className="aiProvSubRow">
+                <span className="aiProvSubIcon"><BookIcon size={13} /></span>
+                <span className="aiProvSubMeta">
+                  <span className="aiProvSubName">
+                    {w.name}
+                    {w.default ? <span className="uiTag">default</span> : null}
+                  </span>
+                  <span className="aiProvDesc">personal workspace · {fmtBytes(w.used_bytes)}</span>
+                </span>
+                <span className="aiProvActions">
+                  {openable.has(w.id) ? (
+                    <button className="uiBtn sm" onClick={() => { closeSettings?.(); switchWorkspace?.(w.id); }}>Open</button>
+                  ) : null}
+                  <button className="uiBtn sm" onClick={() => setManage(w.id)} title={`Manage ${w.name}`}>
+                    <PenIcon size={13} /> Manage
+                  </button>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -299,7 +347,7 @@ export function UsersSettings({ value, selfOnly = false }) {
     <>
       {isAdmin && !selfOnly ? (
         <PaneHead icon={UsersIcon} title="Users">
-          Accounts on this server. The last admin can never be demoted or deleted.
+          Accounts on this server, each with its personal workspaces. The last admin can never be demoted or deleted.
         </PaneHead>
       ) : (
         <PaneHead icon={UserIcon} title="Account">
@@ -310,6 +358,14 @@ export function UsersSettings({ value, selfOnly = false }) {
       {(selfOnly ? rows.filter((row) => row.username === me) : rows).map(userRow)}
       {edit?.kind === "account" ? accountDialog() : null}
       {edit?.kind === "storage" ? storageDialog() : null}
+      {manage ? (
+        <PersonalWorkspaceDialog
+          wsId={manage} me={myName} admin confirm={confirm} setStatus={setStatus}
+          canOpen={openable.has(manage)}
+          onOpen={() => { closeSettings?.(); switchWorkspace?.(manage); }}
+          onClose={() => { setManage(null); refreshWorkspaces(); refreshSession?.(); }}
+        />
+      ) : null}
       {!isAdmin || selfOnly ? null : addForm ? (
         <SubDialog title="Add user" draft={addForm} onClose={() => { setAddForm(null); setError(""); }}>
           <div className="settingsForm">
@@ -354,4 +410,12 @@ export function UsersSettings({ value, selfOnly = false }) {
       {error && !edit && !addForm ? <div className="settingsPaneHint aiKeysError">{error}</div> : null}
     </>
   );
+}
+
+// The workspace dialog with the account directory it needs for ownership
+// changes — fetched only while a dialog is open (the directory is admin
+// territory; the self-only Account pane never asks for it).
+function PersonalWorkspaceDialog(props) {
+  const accounts = useAccounts();
+  return <ManageWorkspaceDialog {...props} accounts={accounts} />;
 }

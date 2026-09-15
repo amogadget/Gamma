@@ -123,6 +123,89 @@ Not adopting, and why:
 - Audio recording/replay: a separate feature; the format leaves the door
   open.
 
+## How Notability sets up writing (survey 2026-09-14)
+
+Notability (Ginger Labs, iPad) is the pen experience Gamma's handwriting
+is measured against. Facts below are from Ginger Labs' support articles
+unless marked *community* (reviews, reverse-engineering write-ups); exact
+point sizes and the default palette's hex values are not published
+anywhere found.
+
+**Pen.** Two ink styles: *ballpoint* (constant width) and *fountain*
+(width follows pressure), each also as dashed or dotted; pressure is a
+toggle in the pen popover ("~"). Widths are 12 fixed sizes per tool, of
+which the toolbar shows three slots at a time (keys Ctrl+Cmd+1..3). Colours:
+32 defaults plus custom colours (wheel, hex, dropper) in 64 slots, with 8
+"fast" custom colours in the toolbar row (Cmd+Shift+1..8). The separate
+*Pencil* tool shades: tilt widens, pressure darkens (opacity), still
+vector. A *Calligraphy* pen has a flat nib with an angle slider and a
+"Stabilization" toggle that smooths jitter. Ink is vector; hit-testing is
+distance-to-path (their engineering blog).
+
+**Highlighter.** Translucent, same popover as the pen (colours, 12 sizes,
+pressure/dashed/dotted). It renders *behind* the ink (*community*), so pen
+strokes keep their colour on top of it. Draw over text and hold to get a
+straight line; a long-press on PDF or typed text snaps the highlight to
+words (Smart Highlighter), handwriting is never snapped.
+
+**Eraser.** Two modes, *Partial* (the cut segments become independent
+strokes with their own width and colour) and *Whole*, plus 12 sizes, all in
+the eraser popover. Partial + hold snaps the erased path to a shape. A
+setting "Auto-Deselect Eraser" returns to the previous tool after an erase.
+Apple Pencil double-tap (gen 2) is configurable: current ↔ eraser, current
+↔ last tool, colour palette, ink attributes, or off; Pencil Pro squeeze
+adds hold-to-erase. There is no "back of the pencil" eraser.
+
+**Input.** Palm Detection is a setting; with a Pencil active, one finger
+scrolls and a toolbar button "disconnects" the Pencil so fingers draw
+until the next Pencil touch. Nothing is published on velocity-based width,
+min/max ratio or predicted touches.
+
+**Lasso and shapes.** The Select tool is *freeform* or *boxed*; the
+selection moves by drag, scales by pinch or handles, rotates by twist; a
+tap inside opens Style (change pen type / width / colour / dash of existing
+ink), Convert (to text or math), Copy, Cut, Duplicate, Group, Save as
+sticker, Delete. Shapes: draw and hold about a second → circle, ellipse,
+triangle, square, rectangle, pentagon, hexagon, arrow, with snapping
+guides, editable vertices and stroke + fill styling; "Straight Lines" and
+"Shapes Detection" are settings. A Ruler stamps lines and snaps nearby
+strokes.
+
+**Toolbar.** One movable strip, default order Pen, Pencil, Highlighter,
+Eraser, Text, Select, Media, Audio, Hand, Zoom, Tape, Ruler, Laser; tools
+can be hidden, reordered and *duplicated* as preset copies (a second pen
+with its own colour and size, Cmd+1..9 by position). Each tool's popover
+is one colour row (8 fast + palette), one size row (3 of 12) and the style
+row.
+
+**File format** (*community*: `.note` is a zip with an NSKeyedArchiver
+`Session.plist`). Strokes are flat float32 point arrays with per-stroke
+point counts, one width and one RGBA colour per stroke (alpha carries the
+highlighter's translucency), and optional per-point *fractional widths*
+(the pressure record). Polylines, no Bézier control points. The open
+converters draw them as round-capped `M/L` paths and ignore the fractional
+widths.
+
+### Against Gamma's ink
+
+| Notability | Gamma today | Gap |
+|---|---|---|
+| ballpoint / fountain, pressure toggle | one pen; pressure is a browser setting, mouse/finger strokes even | dashed / dotted styles; the toggle could move onto the strip |
+| 12 sizes, 3 slots shown | 8 widths per kind, each preset holds one | none in effect |
+| 32 colours + 8 fast custom | 14 pen / 8 highlighter swatches + a custom colour per preset | none in effect |
+| highlighter behind ink | draw order with `multiply` | pen colour over a highlight |
+| eraser: partial / whole, 12 sizes, auto-deselect | partial / whole, 3 sizes | return to the last tool |
+| draw-and-hold: straight line, shapes | none | hold detection on a still pointer |
+| lasso: freeform / boxed; move / scale / rotate / restyle | freeform / box; move, delete | scale, rotate, restyle |
+| duplicated tool presets, tap the armed tool for its popover | the same: a row of presets, tap again for the options row | reorder by drag, sync across devices |
+| stroke: constant width + per-point fractional widths | size + per-sample pressure | same information |
+
+The strip took Notability's shape after a first version (2026-09-13) that
+had four fixed tools with a shared colour and S/M/L row: picking a pen and
+then a colour is two taps for every switch, and the colour the user set
+on the pen was lost when they went to the highlighter and back. A preset
+row is one tap per switch and each pen keeps its look.
+
 ## Sources
 
 - InkML: https://www.w3.org/TR/InkML/
@@ -135,3 +218,7 @@ Not adopting, and why:
 - PencilKit `PKDrawing`: https://developer.apple.com/documentation/pencilkit/pkdrawing-swift.struct ; decode failures across OS versions: https://developer.apple.com/forums/thread/734632
 - Pointer Events spec: https://w3c.github.io/pointerevents/ ; Apple Pencil in Safari (pressure, no coalesced events, 240 Hz moves): https://dev.to/sendotltd/reading-apple-pencil-pressure-in-the-browser-pointerevent-getcoalescedevents-and-the-2e23 and https://developer.apple.com/forums/thread/689375
 - Upstream fork design doc: https://github.com/amogadget/Gamma/blob/v0.4.0/docs/design/handwriting-recording-ipad.md
+- Notability support: Writing with Apple Pencil https://support.gingerlabs.com/hc/en-us/articles/218333197 ; Highlighter https://support.gingerlabs.com/hc/en-us/articles/4968218861978 ; Eraser https://support.gingerlabs.com/hc/en-us/articles/360029432891 ; Select Tool https://support.gingerlabs.com/hc/en-us/articles/360018646412 ; Perfect Shapes https://support.gingerlabs.com/hc/en-us/articles/226905028 ; Custom Colors https://support.gingerlabs.com/hc/en-us/articles/360019098351 ; Customize your Toolbox https://support.gingerlabs.com/hc/en-us/articles/6272405402650 ; Settings https://support.gingerlabs.com/hc/en-us/articles/5955260981786 ; Keyboard shortcuts https://support.gingerlabs.com/hc/en-us/articles/360021489291 ; Calligraphy Pen https://support.gingerlabs.com/hc/en-us/articles/11113646664218 ; Pencil https://support.gingerlabs.com/hc/en-us/articles/5363620836634 ; Squeeze gestures https://support.gingerlabs.com/hc/en-us/articles/7316896037786
+- Notability engineering blog, object selection: https://blog.notability.com/post/notability-object-selection-adventures-in-vector-graphics
+- Notability `.note` format (community): https://jvns.ca/blog/2018/03/31/reverse-engineering-notability-format/ , https://alicja.dev/blog/2019/02/27/retrieving-drawings-from-Notability.html , https://github.com/mrandri19/notability2svg-python
+- Notability tool counts and highlighter order (community): https://tech.mountdesales.net/?p=1540 , https://beingpaperless.com/notability-2/

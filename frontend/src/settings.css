@@ -393,6 +393,18 @@
   align-self: center;
 }
 .aiProvAvatar.active { background: var(--accent-bg); border-color: transparent; color: var(--accent); }
+/* Nested rows under a list row (an account's personal workspaces in Users):
+   a full-width block below the avatar · meta · actions line, indented past
+   the avatar so it reads as belonging to the row above. */
+.aiProvSub { flex-basis: 100%; display: flex; flex-direction: column; padding-left: 40px; }
+.aiProvSubRow {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+.aiProvSubIcon { display: inline-flex; color: var(--text-dim); flex-shrink: 0; }
+.aiProvSubMeta { display: flex; flex-direction: column; flex: 1; min-width: 150px; }
+.aiProvSubName { font-size: 12px; font-weight: 500; color: var(--text-primary); }
 .aiProvActiveBadge {
   font-size: 10px;
   font-weight: 600;

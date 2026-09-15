@@ -18,7 +18,12 @@ typeset as their own PDF, and the annotated-PDF writer. Code: `gamma/routers/imp
 highlights) into highlight blocks — idempotent via `properties.imported_annot`
 keys; opacity honors the annotation's `/CA` so a Gamma export → re-import
 round-trips exact colors; PyPDF2 dict access returns `IndirectObject`s, always
-`.get_object()` them.
+`.get_object()` them. `/Ink` (freehand drawings from any PDF app, or a Gamma
+export) becomes a handwriting block: the strokes are stored as an `.ink`
+upload (`gamma/ink.py`), the block gets `ink_url` / `pdf_page` /
+`pdf_position`; a Gamma export's private `/GammaInk` key restores pressure
+and time, foreign ink is polylines at the annotation's width
+([handwriting.md](handwriting.md)).
 
 Because imported annotations would otherwise render twice (pdf.js paints them
 into the canvas AND the blocks draw as overlays), the Settings → Reading → PDF
@@ -391,6 +396,13 @@ upload → image-XObject registry.
 id): Zotero's pdf-worker maps `/Square`→image annotation but silently DROPS
 one without an id, while `/Highlight` imports id-less — without `/NM`, area
 notes vanish in Zotero.
+
+Handwriting blocks (`ink_url`) become `/Ink` annotations: one per look
+bucket (colour × tool × size × opacity) of the group, `/InkList` polylines
+mapped through the same rect → user-space conversion, `/BS /W` the mean
+drawn width, the caption on the first, an `/NM`, and a private `/GammaInk`
+string holding the bucket's `gamma-ink` strokes for a lossless re-import.
+Same skip rule as highlights for ink still embedded in the file.
 
 ### Notes drawn on the page
 

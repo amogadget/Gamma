@@ -152,6 +152,32 @@ function ViewerSettings({ value }) {
             options={[["hide", "Keep PDF unchanged"], ["strip", "Remove originals after import"]]} />
         </Row>
       </Section>
+      <Section title="Handwriting">
+        <Toggle
+          icon={PenIcon}
+          label="Stylus draws right away"
+          hint="A pen writes without opening the tools first"
+          title="With a stylus (Apple Pencil, Surface Pen, Wacom…), touching the page draws with the pen tool even when the handwriting tools are closed. Fingers and the mouse still select text. Turn off if your stylus keeps leaving marks while you navigate."
+          checked={value.inkAutoPen}
+          onChange={value.setInkAutoPen}
+        />
+        <Toggle
+          icon={HighlightIcon}
+          label="Fingers never draw"
+          hint="Touch scrolls and zooms; only a stylus or mouse draws"
+          title="With the handwriting tools open, a finger on the page keeps scrolling and pinch-zooming instead of drawing. Turn off on a device without a stylus to draw with a finger. Defaults on for touch screens."
+          checked={value.inkPenOnly}
+          onChange={value.setInkPenOnly}
+        />
+        <Toggle
+          icon={ActivityIcon}
+          label="Pressure-sensitive strokes"
+          hint="Pen strokes thicken with pressure"
+          title="Use the stylus pressure for stroke width, like ink on paper. Off gives even strokes. Mouse and finger strokes are always even."
+          checked={value.inkPressure}
+          onChange={value.setInkPressure}
+        />
+      </Section>
       <Section title="Translation">
         <Toggle
           icon={LanguagesIcon}
@@ -486,9 +512,14 @@ function MetaStatusSection({ value }) {
   const unverifiedPaper = (p) => p.has_meta && isUnverifiedPaperMeta(p.meta_source, p.meta_kind, p.meta_unverified);
   const fetchable = (p) => !p.has_meta || unverifiedPaper(p);
   const noText = (p) => p.text_chars !== null && !textOk(p);
+  // Index work: papers with a file the search index doesn't cover yet, holds
+  // at an older extractor version, or hasn't visited (text unknown) — the same
+  // rule as the per-row index button.
+  const needsIndex = (p) => p.doc_id && p.has_file && (!p.indexed || p.index_stale || p.text_chars === null);
   const missing = list.filter((p) => !p.has_meta);
   const unverified = list.filter(unverifiedPaper);
   const needsWork = list.filter(fetchable);
+  const toIndex = list.filter(needsIndex);
   const counts = {
     verified: list.filter((p) => p.has_meta && !unverifiedPaper(p)).length,
     text: list.filter(textOk).length,
@@ -556,6 +587,10 @@ function MetaStatusSection({ value }) {
   // selection wins, otherwise it offers exactly the papers a fetch can fix
   // (missing metadata + unverified AI records).
   const targets = selected.size ? list.filter((p) => selected.has(p.id)) : needsWork;
+  // Same rule for the index button: the selection's indexable papers, else
+  // everything the index is missing or holds stale.
+  const indexTargets = selected.size ? list.filter((p) => selected.has(p.id) && p.doc_id && p.has_file) : toIndex;
+  const indexing = !!value.indexTask?.active;
 
   const cell = (tone, text, title) => (
     <span className={`metaCell ${tone}`} title={title}><i className="setDot" />{text}</span>
@@ -670,7 +705,7 @@ function MetaStatusSection({ value }) {
                 {metaCell(p)}
                 {textCell(p)}
                 {indexCell(p)}
-                {p.doc_id && p.has_file && (!p.indexed || p.index_stale || p.text_chars === null) ? (
+                {needsIndex(p) ? (
                   <button
                     className="searchToggle" aria-label={`Index ${p.title}`}
                     title="Extract this paper's text into the search index now"
@@ -692,11 +727,12 @@ function MetaStatusSection({ value }) {
               <span className="metaStatProgress">
                 {selected.size
                   ? `${selected.size} selected`
-                  : needsWork.length
+                  : needsWork.length || toIndex.length
                     ? [missing.length && `${missing.length} missing metadata`,
-                       unverified.length && `${unverified.length} unverified (AI)`]
+                       unverified.length && `${unverified.length} unverified (AI)`,
+                       toIndex.length && `${toIndex.length} to index`]
                         .filter(Boolean).join(" · ")
-                    : "Everything is verified"}
+                    : "Everything is verified and indexed"}
               </span>
               <button className="uiBtn sm primary" disabled={!targets.length} onClick={() => retry(targets)}
                 title={selected.size ? "Fetch metadata for the selected papers"
@@ -708,6 +744,13 @@ function MetaStatusSection({ value }) {
                   ? "Re-fetch metadata for every paper, including ones that already have it"
                   : "Re-fetch metadata for every paper the current filter shows"}>
                 {filterMode === "all" ? "Refetch all" : "Refetch shown"}
+              </button>
+              <button className="uiBtn sm" disabled={!indexTargets.length || indexing}
+                onClick={() => indexDocs(indexTargets.map((p) => p.doc_id))}
+                title={indexing ? "Indexing is already running — progress in the tasks popover"
+                  : selected.size ? "Extract the selected papers' text into the search index"
+                    : "Extract only the papers the search index is missing or holds at an older extractor version"}>
+                <RefreshIcon size={13} />{indexing ? "Indexing…" : selected.size ? "Reindex selected" : "Reindex needed"}
               </button>
             </div>
           )}
@@ -812,6 +855,10 @@ const AGENT_PERM_ROWS = [
    "Read a page's note outline with block ids", ["folder", "page"], "Blocks"],
   ["search", SearchIcon, "Search",
    "Full-text search across the folder's notes and PDFs", ["folder", "page"], "Search"],
+  ["web_search", GlobeIcon, "Search papers online",
+   "Look papers up on Crossref and arXiv (e.g. a reference a paper cites)", ["folder", "page"], "Papers"],
+  ["web_read", CloudDownloadIcon, "Fetch documents",
+   "Read a paper or web page by DOI, arXiv id or URL without adding it to the library", ["folder", "page"], "Fetch"],
   ["rename", PenIcon, "Rename pages", "Change page titles on request", ["folder"], "Rename"],
   ["move", FolderIcon, "Move pages",
    "File pages into folders (a new path creates the folder)", ["folder"], "Move"],

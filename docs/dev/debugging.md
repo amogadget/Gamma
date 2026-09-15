@@ -123,6 +123,28 @@ The scenarios live in `tests/e2e/scenarios/`:
 - `pdf.mjs`: upload + page by attachment, the viewer's text layer, a
   highlight from a text selection (overlay, quote row, persisted position),
   the find bar hitting page 2, the library card.
+- `ink.mjs`: handwriting — the tool strip and its presets (options row,
+  duplicate, remove, persistence), two mouse strokes becoming an
+  ink block with an `.ink` upload, persistence across a reload, the eraser
+  (by its key), stroke undo/redo, the partial eraser cutting a stroke, a
+  lasso move + delete, the notes card's jump + outline, `/Ink` in the
+  exported PDF.
+- `pdfload.mjs`: PDF loading, in a non-default workspace — the timing probe
+  (a 300-page, 20 MB document opened cold at an emulated 20 Mbps, the
+  IndexedDB backfill, a warm reopen, a same-tab return; reports the per-phase
+  `performance.mark("pdf-<phase>")` stamps and the bytes on the wire as each
+  step's note, asserts only that it paints), then the behaviours: page boxes
+  from the manifest (a landscape page below the fold), the last-read page
+  after a reload, two large documents through the parsed-document cache, the
+  anonymous share view by ranges ([pdf_loading.md](pdf_loading.md)).
+  `npm run e2e -- --only "pdf load"`.
+- `files.mjs`: files dropped on a block row / the page body become file
+  chips (a `dropFiles` helper builds a real DataTransfer; the paste step
+  builds a `ClipboardEvent` in the page, since Playwright's `dispatchEvent`
+  cannot), a PDF chip's right-click "Add to library" makes the document page
+  in the project's folder and the chip gets an open-page button, a markdown
+  chip's "Add to library" imports a note page and leaves the file untouched,
+  the upload endpoint's lab-file / executable rule.
 - `collab.mjs`: two accounts in a shared workspace: presence, live ops, edits
   to different blocks, same-block last-writer-wins, undo after a remote edit,
   rename propagation, edits made offline replaying, remote delete, a
@@ -150,7 +172,10 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
   insert time. Gone on restart.
 - **Session log + debug tracing** — Settings → Advanced: browser-side event
   log; the "Debug logging" toggle traces reading-position/restore/sync
-  events into it and the console.
+  events into it and the console. Every PDF load phase lands here as
+  `pdf <phase> +<ms>` (ms since the viewer started opening that url) and as
+  a `performance.mark("pdf-<phase>")` for devtools' Performance panel — the
+  phases and what a healthy open looks like: [pdf_loading.md](pdf_loading.md).
 - **Background tasks** — the tasks popover (`GET /api/tasks`) shows indexing
   and download progress. The client polls it every 2 s only while the popover
   is open or indexing is known to run; otherwise a 60 s heartbeat, and
@@ -161,9 +186,12 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
   own extraction, another tab) shows up within the heartbeat.
 - **Status bar** — Settings → Advanced turns the floating status pill into a
   persistent bar under the tabs.
-- **Library health** — Settings → Library lists, per paper: metadata state,
-  extracted-text chars, and search-index coverage, with retry/reindex
-  buttons.
+- **Library health** — Settings → Library maintenance lists, per paper:
+  metadata state, extracted-text chars, and search-index coverage, with
+  per-row retry/reindex buttons plus batch actions: Fetch needed / Refetch
+  all for metadata, and Reindex needed (only papers the index is missing,
+  holds stale, or hasn't visited — a targeted `/api/search-reindex` with
+  `doc_ids`, unlike the Index section's full Rebuild).
 
 ## Gotchas worth knowing
 

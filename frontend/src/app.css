@@ -1421,8 +1421,8 @@ body {
   }
 }
 
-/* --- drag-and-drop overlay: the library imports files, a page without an
-   attachment takes a PDF (data-drop on .app says which) --- */
+/* --- drag-and-drop overlay: the library imports files, an open page takes
+   files as blocks (data-drop on .app says which) --- */
 .app.dragOver::after {
   content: "Drop files to import";
   position: fixed;
@@ -1439,8 +1439,8 @@ body {
   z-index: 9999;
 }
 
-.app.dragOver[data-drop="attach"]::after {
-  content: "Drop PDF to attach to this page";
+.app.dragOver[data-drop="files"]::after {
+  content: "Drop files into this page";
 }
 
 /* --- inline-editable title --- */
@@ -4429,12 +4429,68 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .uiBtn.dangerBtn:not(.primary) { color: var(--danger); border-color: var(--danger-border); }
 .uiBtn.dangerBtn:not(.primary):hover:not(:disabled) { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
 
-/* Page header "Attach a PDF" popover (docs/dev/block_centric.md, stage 1) and
-   the file chip a dropped non-image file renders as. */
+/* Page header "Attach a document" popover (docs/dev/block_centric.md). */
 .attachPopover { min-width: 280px; }
 .attachPopover .popoverTitle { margin-bottom: 6px; }
-.fileChip svg { color: var(--text-muted); }
 
+/* The file chip (fileChip.jsx): an upload linked from a block, drawn as a
+   small card so it stands off the note text — surface background, a real
+   border, the kind's icon in a tinted square. Inline so it sits in a
+   sentence; the name opens/downloads, the arrow downloads, the rest is in
+   the right-click menu. */
+.fileChip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  margin: 1px 0;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  background: var(--bg-surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  vertical-align: -6px;
+  line-height: 1.4;
+  font-size: 0.95em;
+}
+.fileChip:hover { border-color: var(--border-hover); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14); }
+.fileChipMain {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 380px;
+  padding: 4px 8px 4px 5px;
+  color: var(--text-primary);
+  font-weight: 500;
+  text-decoration: none;
+}
+.fileChipMain:hover { background: var(--bg-hover); border-radius: 6px 0 0 6px; }
+.fileChipIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  flex: none;
+  background: var(--accent-bg-light);
+  color: var(--accent);
+}
+.fileChipIcon-pdf { background: var(--danger-bg); color: var(--danger); }
+.fileChipBtn {
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 7px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: none;
+  color: var(--text-muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+.fileChipBtn:hover { background: var(--bg-hover); color: var(--text-primary); }
+.fileChipBtn:last-child { border-radius: 0 6px 6px 0; }
+.fileChipOpen { color: var(--accent); }
 
 /* --- presence (collab.js): who is on the page, and where ------------------ */
 :root {
@@ -4483,3 +4539,126 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   padding: 1px 4px; border-radius: 3px; white-space: nowrap; pointer-events: none;
   opacity: 0.95;
 }
+
+/* --- Handwriting (inkLayer.jsx, docs/dev/handwriting.md) ------------------ */
+/* While a tool is armed the page is a drawing surface (PdfPage turns the
+   text layer's user-select off): a crosshair; touch-action stays until
+   fingers are meant to draw too. The retained strokes sit with the
+   highlight overlays (z 2), the in-progress canvas above everything. */
+.pdfViewer.inkArmed .pdfPageWrap { cursor: crosshair; }
+.pdfViewer.inkTouchDraw .pdfPageWrap { touch-action: none; }
+.inkLayer, .inkCanvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.inkLayer { z-index: 2; overflow: visible; }
+.inkCanvas { z-index: 5; display: none; }
+.pdfViewer.pdfDark .inkLayer { filter: invert(1) hue-rotate(180deg); }
+/* The brief outline after a jump from the notes. */
+.inkFlash {
+  fill: none;
+  stroke: rgba(80, 140, 255, 0.95);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 3;
+  vector-effect: non-scaling-stroke;
+  animation: inkFlashFade 1.8s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes inkFlashFade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+
+/* The tool strip: top-centre of the viewer, the control-box surface laid
+   flat. Row one is the tools (presets, eraser, lasso, hand, new group,
+   close); the options row of the armed tool opens under it. */
+.pdfInkBar {
+  position: absolute;
+  z-index: 21;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: max-content;              /* not shrink-to-fit: left: 50% would clamp it to half the viewer */
+  max-width: calc(100% - 120px);
+}
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfInkBar {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+.pdfInkRow, .pdfInkSub {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px 5px;
+}
+.pdfInkSub { border-top: 1px solid var(--border); padding: 4px 6px; }
+.pdfInkSep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
+/* A preset: the icon with its colour bar underneath (the bar's height follows the width). */
+.pdfInkBar .inkToolBtn { position: relative; width: 26px; height: 28px; padding-bottom: 6px; }
+.inkToolInk {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 2px;
+  border-radius: 2px;
+  outline: 1px solid rgba(127, 127, 127, 0.25);
+}
+.pdfInkSub .colorBtn.inkSwatch { width: 18px; height: 18px; }
+/* The custom colour: a wheel swatch over a native picker; once picked it shows the colour. */
+.inkCustomColor {
+  position: relative;
+  overflow: hidden;
+  background: conic-gradient(#f43f5e, #f59e0b, #84cc16, #06b6d4, #6366f1, #d946ef, #f43f5e);
+}
+.inkCustomColor.selected { background: var(--ink-custom); }
+.inkCustomColor input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+/* A width choice: a dot of the tool's colour; an eraser size: a hollow ring. */
+.pdfInkBar .inkSizeBtn { width: 24px; }
+.inkSizeDot { display: block; border-radius: 999px; margin: 0 auto; }
+.inkEraserDot { border: 1.5px solid currentColor; box-sizing: border-box; }
+/* Eraser / lasso mode choices: icon + word, a pill when active. */
+.pdfInkBar .inkSegBtn { width: auto; padding: 0 8px; gap: 5px; font-size: 12px; border-radius: 999px; }
+
+/* The notes: a rounded-square pen marker in the dot slot, the strokes as a
+   picture above the caption (on white: the card is a piece of the page,
+   the same rule as .pdfAreaMarquee). */
+.inkMarker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  color: var(--text-tertiary);
+}
+.blockInkCard {
+  display: block;
+  max-width: 100%;
+  max-height: 240px;
+  height: auto;
+  margin: 4px 0 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.blockInkPending { min-height: 28px; width: 100%; opacity: 0.5; }
+/* The lasso selection: a dashed box the pointer drags to move. */
+.inkSelRect {
+  fill: rgba(80, 140, 255, 0.06);
+  stroke: rgba(80, 140, 255, 0.95);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.pdfViewer.inkSelect .pdfPageWrap { cursor: default; }

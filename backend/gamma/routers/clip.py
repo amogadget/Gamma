@@ -38,6 +38,7 @@ from ..foldertags import add_tag, clean_path, clean_segment, parse_tags
 from ..logbuf import log
 from ..ops import after_commit, apply_ops, props_patch
 from ..server_settings import can_store
+from .. import pdf_meta
 from ..storage import DIGEST_CHARS, url_filename
 from .metadata import fetch_page_metadata, registry_record
 from .pdf import download_pdf, resolve_source
@@ -302,6 +303,7 @@ def clip(payload: ClipRequest, request: Request):
                     if can_store(ws, len(data)):
                         local.parent.mkdir(parents=True, exist_ok=True)
                         local.write_bytes(data)
+                        pdf_meta.schedule(ws, doc_id)
                     else:
                         log.info(f"[clip] not caching {doc_id} ({len(data)} bytes): over storage limits")
                         note = (note + " " if note else "") + \

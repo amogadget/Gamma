@@ -3,6 +3,7 @@
 // lines. One entry per storage key; a codec clamps stored values back into
 // range so a stale or hand-edited localStorage never breaks the app.
 import { usePersistedState, usePersistedFlag } from "./utils";
+import { DEFAULT_TOOLS, normalizeTools } from "./ink";
 
 // AI context-size preferences (chars of extracted PDF text): clamp stored
 // values to a sane range, fall back to the default otherwise.
@@ -42,6 +43,7 @@ export const TRANSLATE_LANGS = [
 export const CHAT_KINDS = ["folder", "pdf", "notes"];
 const TOOL_PERMS_DEFAULT = {
   list: true, read: true, block_read: true, search: true,
+  web_search: true, web_read: true,
   rename: true, move: true, block_edit: true,
 };
 const AGENT_PERMS_DEFAULT = Object.fromEntries(CHAT_KINDS.map((k) => [k, { ...TOOL_PERMS_DEFAULT }]));
@@ -57,6 +59,22 @@ const AGENT_PERMS_CODEC = {
     } catch { return undefined; }
   },
   serialize: JSON.stringify,
+};
+
+// Handwriting: the strip's tool presets (docs/dev/handwriting.md) and the
+// eraser's S/M/L size index.
+const INK_TOOLS_CODEC = {
+  parse: (raw) => {
+    try { return normalizeTools(JSON.parse(raw)); } catch { return undefined; }
+  },
+  serialize: JSON.stringify,
+};
+const SIZE_INDEX_CODEC = {
+  parse: (raw) => {
+    const value = Number.parseInt(raw, 10);
+    return value >= 0 && value <= 2 ? value : undefined;
+  },
+  serialize: String,
 };
 
 export const THEMES = ["system", "light", "dark", "sepia", "gray"];
@@ -200,6 +218,29 @@ export function useAppPrefs() {
   // A chat can still turn tools off for itself from its header.
   const [agentEnabled, setAgentEnabled] = usePersistedFlag("gamma-ai-agent-enabled", true);
 
+  // --- Handwriting (Settings → Editor → PDF viewer; docs/dev/handwriting.md) ---
+  // Device-specific, so none of these sync. inkPenOnly: fingers never draw
+  // (they scroll and pinch) — default on where the primary pointer is coarse
+  // (tablets). inkAutoPen: a stylus draws with the pen even when no tool is
+  // armed. inkPressure: use the stylus pressure for stroke width.
+  const coarse = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+  const [inkPenOnly, setInkPenOnly] = usePersistedFlag("gamma-ink-pen-only", coarse);
+  const [inkAutoPen, setInkAutoPen] = usePersistedFlag("gamma-ink-auto-pen", true);
+  const [inkPressure, setInkPressure] = usePersistedFlag("gamma-ink-pressure", true);
+  // The strip's tool presets: [{id, kind: pen|highlighter, color, size}],
+  // the user's own row of pens and highlighters (ink.js DEFAULT_TOOLS).
+  const [inkTools, setInkTools] = usePersistedState("gamma-ink-tools", DEFAULT_TOOLS, INK_TOOLS_CODEC);
+  // "stroke" erases whole strokes, "partial" cuts through them; the size
+  // is an S/M/L index (inkLayer.jsx ERASER_SIZES).
+  const [inkEraserMode, setInkEraserMode] = usePersistedState("gamma-ink-eraser", "stroke", {
+    parse: (raw) => (["stroke", "partial"].includes(raw) ? raw : undefined),
+  });
+  const [inkEraserSize, setInkEraserSize] = usePersistedState("gamma-ink-eraser-size", 1, SIZE_INDEX_CODEC);
+  // The lasso draws a freeform loop or a box.
+  const [inkLassoMode, setInkLassoMode] = usePersistedState("gamma-ink-lasso", "free", {
+    parse: (raw) => (["free", "box"].includes(raw) ? raw : undefined),
+  });
+
   // --- Chat behavior (Settings → Assistant) ---
   // Off by default: rectangle snapshots stay attached until removed or sent.
   // On, a plain click elsewhere in the PDF drops them — the same gesture that
@@ -226,5 +267,8 @@ export function useAppPrefs() {
     toolRounds, setToolRounds, agentReadChars, setAgentReadChars, agentPerms, setAgentPerms,
     agentEnabled, setAgentEnabled,
     chatImgAutoClear, setChatImgAutoClear,
+    inkPenOnly, setInkPenOnly, inkAutoPen, setInkAutoPen, inkPressure, setInkPressure,
+    inkTools, setInkTools, inkEraserMode, setInkEraserMode, inkEraserSize, setInkEraserSize,
+    inkLassoMode, setInkLassoMode,
   };
 }

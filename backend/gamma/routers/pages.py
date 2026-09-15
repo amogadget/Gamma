@@ -10,6 +10,8 @@ rule as PUT /blocks/{id} under a share).
 """
 
 
+import re
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -23,9 +25,12 @@ from ..blocks_store import (
     create_page,
     page_attachment,
     page_for_doc,
+    pages_for_docs,
 )
 from ..db import connect_pages_db, safe_doc_id
 from ..foldertags import clean_path
+from ..markdown_zip_import import markdown_page
+from ..storage import find_upload_file
 from ..ops import after_commit, apply_ops, props_patch
 
 router = APIRouter(prefix="/api", tags=["pages"])
@@ -66,6 +71,61 @@ async def create_page_endpoint(payload: PageCreate, request: Request):
         props["folder"] = folder
     with connect_pages_db(ws) as conn:
         return create_page(conn, payload.title, props)
+
+
+class DocsLookup(BaseModel):
+    doc_ids: list[str] = []
+
+
+@router.post("/pages/by-docs")
+async def pages_by_docs(payload: DocsLookup, request: Request):
+    """Which pages these stored files became: ``{doc_ids: [<hash>, ...]}`` →
+    ``{"pages": {hash: {id, title}}}`` — a hash matches the page carrying it
+    as its PDF (``doc_id``) or the note page made from it (a markdown file's
+    ``markdown_import``); hashes with no page are absent. The file chips ask
+    this once per page render to show the "open page" button and label the
+    menu "Open page" / "Open as page". Any member."""
+    ws = require_ws(request)
+    ids = [d for d in dict.fromkeys(payload.doc_ids[:500]) if d]
+    with connect_pages_db(ws) as conn:
+        return {"pages": pages_for_docs(conn, ids)}
+
+
+class FromFile(BaseModel):
+    filename: str          # a stored upload, ``<hash>.md`` / ``.markdown``
+    original: str = ""     # the chip's display name (the page title when there is no front-matter title)
+    folder: str = ""       # files the new page (a path); ignored when the page exists
+
+
+@router.post("/pages/from-file")
+async def page_from_file(payload: FromFile, request: Request):
+    """"Open as page" on a markdown file chip: the stored upload becomes a
+    note page through the same importer as POST /import/markdown (title from
+    front matter else the file name, blocks from the body), filed in
+    ``folder``. Idempotent: a page already made from this file (its
+    ``markdown_import`` is the file's hash) is returned instead of a second
+    copy. The file stays what it was — the page is a copy, edits to it never
+    touch the file. → ``{page, created}``. 400 for anything but a stored
+    markdown name, 404 when the file is not in this workspace."""
+    ws = require_ws(request, write=True)
+    name = (payload.filename or "").strip().lower()
+    m = re.fullmatch(r"([0-9a-f]{8,64})\.(md|markdown)", name)
+    if not m:
+        raise HTTPException(status_code=400, detail="filename must be a stored <hash>.md upload")
+    path = find_upload_file(name, ws)
+    if not path:
+        raise HTTPException(status_code=404, detail="file not found")
+    with connect_pages_db(ws) as conn:
+        hit = pages_for_docs(conn, [m.group(1)]).get(m.group(1))
+        if hit:
+            row = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE id = ?", (hit["id"],)).fetchone()
+            return {"page": block_to_dict(row), "created": False}
+        original = m.group(0)
+        # the chip's text is the display name; the stored name is a hash, so
+        # take the title from the request's ``original`` when given
+        result = markdown_page(conn, path.read_bytes(), payload.original or original, payload.folder)
+        row = conn.execute(f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE id = ?", (result["block_id"],)).fetchone()
+    return {"page": block_to_dict(row), "created": True, "imported": result["imported"]}
 
 
 @router.post("/pages/{page_id}/attachment")

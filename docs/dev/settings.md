@@ -6,7 +6,7 @@ Where every setting lives, and how the Settings dialog is built.
 
 | Layer | Storage | Examples |
 |---|---|---|
-| Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/prefs.js](../../frontend/src/prefs.js)) | PDF viewer behavior, context budgets, agent permissions, prompts, the control size (`gamma-ui-scale`, applied pre-paint by `index.html` like the theme). Theme + flip-page-colors live here too but additionally sync per account (next row, `appearance` key) — localStorage is their instant-paint cache |
+| Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/prefs.js](../../frontend/src/prefs.js)) | PDF viewer behavior (incl. the handwriting input rules and the tool strip's presets, eraser and lasso choices, `gamma-ink-*`), context budgets, agent permissions, prompts, the control size (`gamma-ui-scale`, applied pre-paint by `index.html` like the theme). Theme + flip-page-colors live here too but additionally sync per account (next row, `appearance` key) — localStorage is their instant-paint cache |
 | Session only | React state, nothing stored | the Ctrl+scroll text size of the notes list and the chat transcript (`useTextScale` in [widgets.jsx](../../frontend/src/widgets.jsx)) — resets on reload |
 | Per account, synced | `/api/prefs/{key}` (small JSON KV, `user_prefs` in `users.db`) | per account AND workspace: open tabs (`open-tabs`), the recently-viewed queue (`recent-views`), pinned folders (`pinned-folders`; pinned pages are a page property), reading positions (`read-pos`) — they name one workspace's pages; account-wide: active AI key (`ai-provider`), appearance (`appearance`: theme + flip page colors). Server wins on load, localStorage (keyed `user@workspace`) is the instant-paint cache. The recents-card cover thumbnails are workspace data, through their own `/api/page-snaps` store (`page_snaps` in the workspace's `data.db` — over the prefs size cap) |
 | Per account, server-only | AI provider entries (keys/OAuth tokens) under the reserved `ai-settings` prefs key (account-wide), managed via `/api/ai/providers*`; the browser only ever sees a masked hint | API keys, ChatGPT OAuth |
@@ -29,8 +29,10 @@ Five everyday destinations are defined by `PREFERENCE_NAV` in
 
 - **Appearance**: theme choices and dark PDF pages (account-synced), control
   size and status bar (this browser).
-- **Reading & editing**: PDF scrolling, imported annotations, translation
-  shortcut and language, Enter behavior, highlight badges, search expansion.
+- **Reading & editing**: PDF scrolling, imported annotations, the
+  handwriting input rules (stylus draws right away, fingers never draw,
+  pressure), translation shortcut and language, Enter behavior, highlight
+  badges, search expansion.
 - **Library**: thumbnails, folder/label display, metadata lookup, open-access
   fallback and saving external PDFs. These are browser preferences.
 - **AI**: opens a second-level sidebar with Connections & models, Assistant,
@@ -51,8 +53,9 @@ Shorter pages keep the main sidebar:
 - **Library maintenance** (main sidebar): workspace storage, search-index rebuilding and the
   per-paper metadata/text/index health table. Also linked from the Library
   preferences page and the library operations menu.
-- **Administration** (admins only): Users and Server, including workspace
-  administration, server-wide storage defaults, server backups and logs.
+- **Administration** (admins only): Users (accounts, each with its personal
+  workspaces) and Server (shared workspaces, server-wide storage defaults,
+  server backups and logs).
 - **Diagnostics** (main sidebar): browser tracing and the browser session log.
 
 Search is backed by [settingsNavigation.js](../../frontend/src/settingsNavigation.js).

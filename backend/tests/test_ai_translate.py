@@ -9,21 +9,25 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(scope="module")
 def carol(client):
-    """A non-guest user with an Anthropic provider entry (translate needs one)."""
+    """A non-guest user with an Anthropic provider entry (translate needs one).
+
+    The account name is file-unique: other test modules make their own 'carol'
+    and the worker's data dir is shared across the files it runs.
+    """
     from gamma.app import app
     from gamma.db import connect_users_db, page_now
     from gamma import workspaces
 
     with connect_users_db() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE username = 'carol'").fetchone():
+        if not conn.execute("SELECT 1 FROM users WHERE username = 'translate_carol'").fetchone():
             conn.execute(
                 "INSERT INTO users (username, password_hash, is_guest, created_at) VALUES (?, ?, 0, ?)",
-                ("carol", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode(), page_now()),
+                ("translate_carol", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode(), page_now()),
             )
             conn.commit()
-    workspaces.ensure_personal("carol")
+    workspaces.ensure_personal("translate_carol")
     c = TestClient(app)
-    r = c.post("/api/login", json={"username": "carol", "password": "pw"})
+    r = c.post("/api/login", json={"username": "translate_carol", "password": "pw"})
     assert r.status_code == 200, r.text
     r = c.post("/api/ai/providers", json={"protocol": "anthropic", "api_key": "sk-ant-key-1234"})
     assert r.status_code == 200, r.text

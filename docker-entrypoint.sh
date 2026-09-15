@@ -19,6 +19,13 @@ if [ -n "${PUID}${PGID}" ]; then
     AS_USER="setpriv --reuid=${PUID} --regid=${PGID} --clear-groups"
 fi
 
+# Bring the data directory to this Gamma's schema version first (a
+# snapshot of the databases is taken before any step; nothing to do on a
+# fresh volume or an up-to-date one). Every other manage.py command, `setup`
+# below included, refuses an outdated data directory, and the server's own
+# startup migration would never be reached.
+$AS_USER python manage.py migrate
+
 # Idempotent: creates the guest account and repairs missing per-user DBs.
 # First-run accounts are the app's own job: an empty instance seeds an
 # "admin" account with a random password printed once to the container log

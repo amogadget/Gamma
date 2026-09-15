@@ -347,34 +347,61 @@ def registry_record(doi: str, arxiv_id: str) -> dict | None:
     return meta
 
 
+def _arxiv_entry_meta(entry, arxiv_id: str = "") -> dict | None:
+    """One Atom entry of the arXiv API as a meta dict (None for the API's
+    "Error" entry). arxiv_id defaults to the entry's own id, version
+    stripped."""
+    title = re.sub(r"\s+", " ", entry.findtext(f"{_ATOM}title") or "").strip()
+    if not title or title.lower() == "error":
+        return None
+    if not arxiv_id:
+        m = re.search(r"arxiv\.org/abs/(.+?)(?:v\d+)?$", (entry.findtext(f"{_ATOM}id") or "").strip())
+        arxiv_id = m.group(1) if m else ""
+    authors = [
+        (a.findtext(f"{_ATOM}name") or "").strip()
+        for a in entry.findall(f"{_ATOM}author")
+    ]
+    journal_ref = (entry.findtext(f"{_ARXIV_NS}journal_ref") or "").strip()
+    return {
+        "title": title,
+        "authors": [a for a in authors if a],
+        "year": (entry.findtext(f"{_ATOM}published") or "")[:4],
+        "venue": journal_ref or f"arXiv:{arxiv_id}",
+        "volume": "",
+        "pages": "",
+        "doi": (entry.findtext(f"{_ARXIV_NS}doi") or "").strip(),
+        "arxiv_id": arxiv_id,
+        "source": "arxiv",
+    }
+
+
 def _fetch_arxiv(arxiv_id: str) -> dict | None:
     try:
         raw = _http_get(f"https://export.arxiv.org/api/query?id_list={urllib.parse.quote(arxiv_id)}")
         entry = ET.fromstring(raw).find(f"{_ATOM}entry")
         if entry is None:
             return None
-        title = re.sub(r"\s+", " ", entry.findtext(f"{_ATOM}title") or "").strip()
-        if not title or title.lower() == "error":
-            return None
-        authors = [
-            (a.findtext(f"{_ATOM}name") or "").strip()
-            for a in entry.findall(f"{_ATOM}author")
-        ]
-        journal_ref = (entry.findtext(f"{_ARXIV_NS}journal_ref") or "").strip()
-        return {
-            "title": title,
-            "authors": [a for a in authors if a],
-            "year": (entry.findtext(f"{_ATOM}published") or "")[:4],
-            "venue": journal_ref or f"arXiv:{arxiv_id}",
-            "volume": "",
-            "pages": "",
-            "doi": (entry.findtext(f"{_ARXIV_NS}doi") or "").strip(),
-            "arxiv_id": arxiv_id,
-            "source": "arxiv",
-        }
+        return _arxiv_entry_meta(entry, arxiv_id)
     except Exception as e:
         log.warning(f"[metadata] arxiv lookup failed: {e}")
         return None
+
+
+def _arxiv_search(query: str, rows: int = 5) -> list[dict]:
+    """Full-record search of the arXiv API (title, authors, abstract — every
+    word ANDed), candidates in arXiv's relevance order. Keyless, like the
+    Crossref search; the agent's search_papers queries both."""
+    words = [w for w in re.findall(r"[\w-]+", query or "") if len(w) > 1][:12]
+    if not words:
+        return []
+    url = ("https://export.arxiv.org/api/query?max_results=%d&search_query=" % rows
+           + urllib.parse.quote(" AND ".join(f"all:{w}" for w in words)))
+    try:
+        entries = ET.fromstring(_http_get(url)).findall(f"{_ATOM}entry")
+    except Exception as e:
+        log.warning(f"[metadata] arxiv search failed: {e}")
+        return []
+    return [meta for meta in (_arxiv_entry_meta(e) for e in entries) if meta]
 
 
 def _fetch_doi(doi: str, with_bibtex: bool = True) -> tuple[dict | None, str]:

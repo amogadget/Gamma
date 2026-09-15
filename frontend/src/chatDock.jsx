@@ -9,7 +9,7 @@ import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } f
 import { MenuSelect } from "./menus";
 import { CharSlider, approxPages } from "./settingsKit";
 import { AgentToolPicker, CHAT_KIND_ROWS } from "./settings";
-import { AlertCircleIcon, ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CopyIcon, FileIcon, FolderIcon, HistoryIcon, InfoIcon, ListIcon, MicIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersIcon, StopIcon, TrashIcon, XIcon } from "./icons";
+import { AlertCircleIcon, ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloudDownloadIcon, CopyIcon, FileIcon, FolderIcon, GlobeIcon, HistoryIcon, InfoIcon, ListIcon, MicIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersIcon, StopIcon, TrashIcon, XIcon } from "./icons";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -39,7 +39,7 @@ function relAge(iso) {
 // that changed the library (they trigger the home-feed refresh). Every chip
 // carries the raw call the server ran (tool/args/result, both truncated), so
 // clicking one expands the arguments and the output the model saw.
-const ACTION_ICONS = { rename: PencilIcon, move: FolderIcon, search: SearchIcon, read: BookIcon, list: ListIcon, edit: PencilIcon, create: PlusIcon, error: XIcon };
+const ACTION_ICONS = { rename: PencilIcon, move: FolderIcon, search: SearchIcon, read: BookIcon, list: ListIcon, edit: PencilIcon, create: PlusIcon, websearch: GlobeIcon, fetch: CloudDownloadIcon, error: XIcon };
 // What the model was given for a reply, per document — streamed by
 // /api/ai/chat as its first line and saved on the message. Shown only when
 // it matters: the paper was truncated, or the PDF file was requested but the
@@ -151,7 +151,8 @@ export default function ChatDock({
   const perm = (key) => chatToolPerms?.[key] !== false;
   const toggleTools = () => setAgentEnabled(!agentEnabled);
   // What the agent may do here after applying the shared permissions.
-  const agentReads = perm("list") || perm("read") || perm("block_read") || perm("search");
+  const agentReads = perm("list") || perm("read") || perm("block_read") || perm("search")
+    || perm("web_search") || perm("web_read");
   const agentWrites = perm("rename") || perm("move") || perm("block_edit");
   // Agent fields riding on /api/ai/chat ({} = plain chat): folder chats reach
   // the folder's pages, page chats get the read + note-block tools for their
@@ -160,7 +161,8 @@ export default function ChatDock({
     if (!toolsEnabled) return {};
     const scope = organizeFolder != null && (agentReads || agentWrites)
       ? { agent_scope: "folder", folder: organizeFolder }
-      : focusedBlockId && (perm("read") || perm("block_read") || perm("search") || perm("block_edit"))
+      : focusedBlockId && (perm("read") || perm("block_read") || perm("search")
+                           || perm("web_search") || perm("web_read") || perm("block_edit"))
         ? { agent_scope: "page", page_id: focusedBlockId }
         : null;
     return scope

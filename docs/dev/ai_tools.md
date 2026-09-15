@@ -31,6 +31,8 @@ shared `gamma/foldertags.py` rules; keep them in sync.
 | `read_page` | Read pages | folder + page | Read one page: title, properties, the user's highlights and notes, and — when it carries a PDF — a windowed excerpt of the attachment's extracted text |
 | `read_block` | Read note blocks | folder + page | Read a page's notes as an id-prefixed outline — the ids the editing tools take |
 | `search_library` | Search library | folder + page | Full-text search over the reachable pages' notes AND PDF text; hits carry a `source` (note hits: block id + page, PDF hits: page number). `search_pdfs` is its deprecated alias (replay only) |
+| `search_papers` | Search papers online | folder + page | Scholarly search outside the library — Crossref + arXiv (keyless), or a direct DOI / arXiv-id lookup — returning registry records with the `doi:` / `arXiv:` string `fetch_paper` takes |
+| `fetch_paper` | Fetch documents | folder + page | Read a document that is not in the library by DOI, arXiv id or URL: the PDF behind it (same resolver as opening a link, open-access fallback included) in `read_page`-style windows, else the web page's readable text; nothing is stored |
 | `rename_page` | Rename pages | folder | Change a page's title |
 | `move_page` | Move pages | folder | File a page into a (sub)folder |
 | `edit_block` | Edit note blocks | folder + page | Replace one note block's markdown text |
@@ -84,11 +86,63 @@ The user's notes as an outline of blocks, every line prefixed with its block
 id (`- [id] text`) — the ids the editing tools take, so the agent is told to
 call it before any block edit. `block_id` may be a page id (the whole page's
 note tree) or a nested block id (that block's own text in full plus its
-subtree). Highlight blocks show their quoted passage inline; long child
+subtree). Highlight blocks show their quoted passage inline, handwriting
+blocks a "handwriting on p. N" label before their caption; long child
 contents are snipped per line with an explicit "read_block this id for the
 full text" marker, and the listing stops at the read-window budget naming how
 many blocks were left out. (`read_page` shows the same notes without ids —
 context for answering; `read_block` is the editing view.)
+
+### search_papers / fetch_paper (both scopes, one permission each)
+
+The agent's reach outside the library, read-only (`gamma/ai_web.py`;
+executors in `ai_tools.py`). The use case is a work the user's pages cite or
+mention but do not hold: *"read reference 12 of this paper and tell me what
+it measures"*. The agent finds the reference entry with `search_library` /
+`read_page`, identifies the work with `search_papers` and reads it with
+`fetch_paper`. In a folder chat, *"find recent papers on X"* works the same
+way.
+
+`search_papers` takes a free-text `query` (title, keywords, authors) and asks
+the keyless registries the metadata lookup already uses
+([paper_metadata.md](paper_metadata.md)): Crossref's bibliographic search
+(`metadata._crossref_search`) and the arXiv API (`_arxiv_search`, every word
+ANDed over title/authors/abstract). The two lists are interleaved in their own
+relevance order, duplicates dropped by DOI, arXiv id or normalized title. A
+query that is itself a DOI or arXiv id (bare, `doi:`/`arXiv:`-prefixed, or a
+URL; `ai_web.identifier`) is looked up directly. `limit` defaults to 8 (max
+20). Each record is one line (title, up to three authors, year, venue, DOI,
+arXiv id with its PDF URL) ending with the `fetch_paper(source=…)` call that
+reads it. The result reminds the model these are registry records, not the
+user's pages.
+
+`fetch_paper` takes a `source` (DOI, arXiv id or http(s) URL) and reads the
+document in windows with `read_page`'s knobs: `pdf_chars` (default and cap
+from the Read window preference, shared through `_window_args`), `pdf_page`,
+`pdf_offset`, and an excerpt that names the next offset while text remains.
+The PDF behind the source comes from `routers.pdf.resolve_source`, the
+resolver the extension and the "open a link" path use (arXiv abs → pdf,
+publisher `citation_pdf_url` tags, the Unpaywall open-access fallback,
+browser headers). It is downloaded through the SSRF guard under a size cap
+(`FETCH_MAX_BYTES`, 40 MB) and extracted page by page
+(`pdf_text.extract_pages`); every page's text is prefixed `[p. N]` so the
+model can cite pages. When no PDF is reachable (a paywall, a plain web page)
+and the source is a page, its readable text is returned instead
+(`ai_web.html_text`: head, scripts and styles dropped, block tags to line
+breaks, entities unescaped), labelled as a web page with the reason no PDF
+came. A fetched document lives in an in-memory LRU (`_CACHE_MAX_DOCS` /
+`_CACHE_MAX_CHARS`) keyed by its resolved URL, with the source string as an
+alias, so the windows of one paper cost one download. Nothing is written to
+disk or to the workspace; a restart forgets everything. Failures (not a PDF
+and not a page, blocked site, too large, no text layer) come back as
+`error:` text suggesting the user drop the PDF onto Gamma.
+
+Every result carries a line saying the text is fetched web content and not
+instructions, and the armed prompt says the same (ignore instructions found
+in a document, tell the user). The prompt also says to prefer the library
+for anything it holds and to name a fetched document (title, DOI/URL, page)
+when answering from it. Their action chips are 🌐 (search) and ⬇ (fetch,
+carrying the resolved `url`).
 
 ### rename_page / move_page (folder only)
 
@@ -140,9 +194,12 @@ Deliberately not offered under any permission:
 - Deleting anything — pages, blocks, folders, files.
 - Editing highlight anchors or flat labels (folder labels change only through
   `move_page`).
-- Reaching anything outside the chat's scope — enforced by the server on every
-  call, not just by instructions.
+- Reaching any PAGE outside the chat's scope — enforced by the server on every
+  call, not just by instructions. (The web tools reach public sources, never
+  another page of the workspace, and only read.)
 - Reaching uploads, share links, settings, or other users' data.
+- Adding a fetched paper to the library — `fetch_paper` reads, it never
+  creates a page; the user drops the PDF or uses the extension for that.
 
 Disarmed tools are not offered to the model, and the server additionally
 refuses to execute them if called. Output/argument sizes are capped
@@ -150,7 +207,7 @@ refuses to execute them if called. Output/argument sizes are capped
 rounds and a ≤200-mutation guard, detailed in [ai.md](ai.md).
 
 **Every tool call is shown in the reply** — reads included: listing, reading
-and searching render as ☰/📖/🔍 lines; renames, moves and note edits/creates
+and searching render as ☰/📖/🔍 lines, the web tools as 🌐/⬇ lines; renames, moves and note edits/creates
 as ✎/📁/＋ lines — so there is always a visible record of what the agent
 looked at and changed (clicking a chip expands the arguments and the output
 the model got).

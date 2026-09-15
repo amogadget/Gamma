@@ -118,6 +118,32 @@ def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
     return "\n\n".join(parts), pages
 
 
+def page_sizes(src) -> list[tuple[float, float]]:
+    """``(width, height)`` in PDF points of every page, rotation applied — the
+    same box pdf.js measures its scale-1 viewport from, so a layout built
+    from these is exact. Empty when the file is unreadable. No text
+    extraction; holds the pdfium lock like every other walk."""
+    with _lock:
+        try:
+            kind, pdf = _open(src)
+            if kind == "pypdf2":
+                out = []
+                for pg in pdf.pages:
+                    box = pg.mediabox
+                    w, h = float(box.width), float(box.height)
+                    if (int(pg.get("/Rotate") or 0) // 90) % 2:
+                        w, h = h, w
+                    out.append((w, h))
+                return out
+            try:
+                return [tuple(pdf[i].get_size()) for i in range(len(pdf))]
+            finally:
+                pdf.close()
+        except Exception as e:
+            log.warning(f"[pdf-text] page sizes failed: {e}")
+            return []
+
+
 def page_count(src) -> int:
     """How many pages a PDF has (0 = unreadable). No text extraction."""
     with _lock:

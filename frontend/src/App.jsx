@@ -14,6 +14,7 @@ import {
   useTextScale,
 } from "./widgets";
 import { BlockTree, _dragState } from "./blockTree";
+import { FileChipContext, forgetDocPages, rememberDocPage, setUploadReporter, uploadFilesAsLines } from "./fileChip";
 import { CardLabels, KindToggle, ListFindBox, PageCard, ViewToggle } from "./fileBrowser";
 import ChatDock from "./chatDock";
 import SearchPanel from "./search";
@@ -61,6 +62,9 @@ import { ROLE_LABEL, useAccounts, workspaceMeta } from "./settingsWorkspace";
 import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage, WorkspaceUnavailablePage } from "./LoginPage";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
+import { InkToolbar } from "./inkLayer";
+import { appendStroke, eraseAt, newInk, removeStrokes, toolStyle, translateStrokes } from "./ink";
+import * as inkStore from "./inkStore";
 import { usePageCollab } from "./collab";
 import { applyOps, applyPatch, keepUiFlags } from "./blockOps";
 import { PresenceBar } from "./presence";
@@ -2050,11 +2054,40 @@ export default function App() {
   // Byte-level download state reported by the PDF viewer (skips local uploads).
   // One row per URL: a re-download (LRU eviction, retry) reactivates the
   // existing entry instead of stacking duplicates.
+  // One clock per document load: every phase is stamped with the ms since
+  // the viewer started opening this url (the "open" phase, or the first
+  // phase seen for a new url). The stamps go to the system log and to
+  // performance.mark("pdf-<phase>", {detail: {url, ms}}) — readable from
+  // devtools' Performance panel and from the e2e timing probe
+  // (docs/dev/pdf_loading.md).
+  const pdfLoadClockRef = useRef({ url: "", t0: 0 });
+  // Called from the viewer's layout effects — before paint — when the
+  // document's page boxes are in the DOM: on "layout" (a skeleton from the
+  // manifest, no document yet) and on "rendered". Applying the pending
+  // restore HERE means the document appears already scrolled to its
+  // position: no flash of the top, no visible jump.
+  function applyPendingRestore(url) {
+    const p = pendingRestoreRef.current;
+    if (!p || p.url !== url || restoreTokenRef.current !== p.token) return;
+    const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
+    const targetTop = p.entry.top * ((pdfEffScaleRef.current || p.entry.scale || 1) / (p.entry.scale || 1));
+    if (scroller && scroller.scrollHeight > targetTop) {
+      scroller.scrollTo({ top: targetTop, behavior: "instant" });
+      pendingRestoreRef.current = null;
+      restoreTokenRef.current++; // the fallback loop is no longer needed
+      if (restoringForRef.current === p.blockId) restoringForRef.current = null;
+      dbg("exact restore: applied pre-paint, top", Math.round(targetTop));
+    }
+  }
   function handlePdfLoadState(url, st) {
+    const clock = pdfLoadClockRef.current;
+    if (st.phase === "open" || clock.url !== url) { clock.url = url; clock.t0 = performance.now(); }
+    const ms = Math.round(performance.now() - clock.t0);
     // System log: lifecycle transitions only — byte/page progress would spam it.
     if (st.phase !== "progress" && st.phase !== "measuring") {
+      try { performance.mark(`pdf-${st.phase}`, { detail: { url, ms } }); } catch {}
       const shortUrl = url.length > 100 ? url.slice(0, 100) + "…" : url;
-      logSys(`pdf ${st.phase}${st.bytes ? ` (${fmtBytes(st.bytes)})` : ""}${st.detail ? ` — ${st.detail}` : ""}: ${shortUrl}`);
+      logSys(`pdf ${st.phase} +${ms} ms${st.bytes ? ` (${fmtBytes(st.bytes)})` : ""}${st.detail ? ` — ${st.detail}` : ""}: ${shortUrl}`);
     }
     // Feed the shared status pill — one channel for the whole load lifecycle,
     // so load progress and status messages can never stack.
@@ -2080,6 +2113,16 @@ export default function App() {
     } else if (st.phase === "cancelled" || st.phase === "painted") {
       postPill("pdf-load", null);
     }
+    if (st.phase === "layout") {
+      // Page boxes from the manifest are in the DOM, the document itself is
+      // still loading: the reader lands on their page now — the exact tab
+      // position here, the last-read page through the coarse restore below,
+      // which accepts a laid-out skeleton as "pages in the DOM".
+      postPill("pdf-load", { msg: "Preparing document…", spinner: true });
+      pdfLaidOutUrlRef.current = url;
+      applyPendingRestore(url);
+      return;
+    }
     if (st.phase === "rendered") {
       // Pages are in the DOM but the first canvas paint is still in flight —
       // keep the pill up until the viewer reports "painted". Safety-capped so
@@ -2087,21 +2130,7 @@ export default function App() {
       postPill("pdf-load", { msg: "Rendering page…", spinner: true }, { after: [20000, null] });
       pdfRenderedUrlRef.current = url; // this document's pages are now in the DOM
       setPdfDocNonce((n) => n + 1);    // lets a pinned search re-find its matches here
-      // Called from the viewer's layout effect — before paint. Applying a
-      // pending restore HERE means the document appears already scrolled to
-      // its position: no flash of the top, no visible jump.
-      const p = pendingRestoreRef.current;
-      if (p && p.url === url && restoreTokenRef.current === p.token) {
-        const scroller = viewerWrapRef.current?.querySelector(".pdfViewer");
-        const targetTop = p.entry.top * ((pdfEffScaleRef.current || p.entry.scale || 1) / (p.entry.scale || 1));
-        if (scroller && scroller.scrollHeight > targetTop) {
-          scroller.scrollTo({ top: targetTop, behavior: "instant" });
-          pendingRestoreRef.current = null;
-          restoreTokenRef.current++; // the fallback loop is no longer needed
-          if (restoringForRef.current === p.blockId) restoringForRef.current = null;
-          dbg("exact restore: applied pre-paint, top", Math.round(targetTop));
-        }
-      }
+      applyPendingRestore(url);
       return;
     }
     // Only phases that own a transfer row from here on — the catch-all branch
@@ -2279,6 +2308,9 @@ export default function App() {
     fileLabels, setFileLabels,
     oaFallback, setOaFallback, metaAutoFetch, setMetaAutoFetch, pdfSaveLocal, setPdfSaveLocal,
     snapVertical, setSnapVertical, embAnnots, setEmbAnnots,
+    inkPenOnly, setInkPenOnly, inkAutoPen, setInkAutoPen, inkPressure, setInkPressure,
+    inkTools, setInkTools, inkEraserMode, setInkEraserMode, inkEraserSize, setInkEraserSize,
+    inkLassoMode, setInkLassoMode,
     translateEnabled, setTranslateEnabled,
     translateLang, setTranslateLang, translateModel, setTranslateModel,
     translateEffort, setTranslateEffort, translateParallel, setTranslateParallel,
@@ -3317,6 +3349,21 @@ export default function App() {
   // Desktop expresses this by holding Ctrl; a phone has no Ctrl, so it gets a
   // sticky toggle button in the viewer's zoom column instead.
   const [areaSelectMode, setAreaSelectMode] = useState(false);
+  // Handwriting (docs/dev/handwriting.md): the tool strip — open, the armed
+  // tool (a preset id from inkTools, "eraser", "select", or null for the
+  // hand), whether its options row is open, the pen preset a stylus writes
+  // with (the last pen armed) — the group the next stroke on a page joins,
+  // the pending-upload timer, the group outlined after a jump, and the
+  // viewer's identity-stable ink list.
+  const [inkUi, setInkUi] = useState({ open: false, tool: null, options: false, pen: null });
+  const [inkFlash, setInkFlash] = useState(null);
+  const inkActiveRef = useRef(null);
+  const inkTimerRef = useRef(0);
+  const prevInkRef = useRef({ json: "", value: [] });
+  // Stroke-level history for the strip's Ctrl+Z (entries: [{id, page,
+  // before, after}] per action) and the lasso selection {page, items}.
+  const inkHistRef = useRef({ undo: [], redo: [] });
+  const [inkSelection, setInkSelection] = useState(null);
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
   const [focusedId, setFocusedId] = useState(null);
@@ -4156,6 +4203,19 @@ export default function App() {
   // as opening a new PDF, then bound to THIS page via POST
   // /pages/{id}/attachment — no new page is created.
   const [attachUrl, setAttachUrl] = useState("");
+  // The metadata popover under its header button. Fixed positioning so it
+  // floats above the window stack instead of being clipped by the notes
+  // window / drawn under the chat below it.
+  const metaBtnRef = useRef(null);
+  function openMetaPopover() {
+    const opening = openPopover !== "meta";
+    if (opening) {
+      const r = metaBtnRef.current?.getBoundingClientRect();
+      if (r) setMetaPopPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
+      setSourceDraft(inputUrl);
+    }
+    setOpenPopover(opening ? "meta" : null);
+  }
   async function attachPdfToPage({ file, url }) {
     const pageId = focusedBlockId;
     if (!pageId || shareMode || pageAttach || (!file && !url)) return;
@@ -4222,6 +4282,101 @@ export default function App() {
         }
       },
     });
+  }
+
+  // "Add to library" on a file chip, filed in this page's first folder, then
+  // opened. A PDF: the file is already stored under its hash, so this is the
+  // lookup-or-create BY ATTACHMENT — a root page carrying it (the metadata
+  // fetch starts when the page opens). A markdown file: a note page imported
+  // from the stored file (a copy; the file stays). The chip on this page
+  // shows "open page" from now on (rememberDocPage).
+  async function promoteFile(hash, ext, name) {
+    if (readOnly || shareMode || !hash) return;
+    const post = (path, body) => apiJson(`${API}${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    try {
+      let page;
+      if (ext === "pdf") {
+        page = await post(`/blocks/by-doc/${encodeURIComponent(hash)}`, {
+          default_title: "", source_url: `/api/uploads/${hash}.pdf`,
+          original_filename: name || "", folder: pageFolders[0] || "",
+        });
+      } else {
+        page = (await post("/pages/from-file", {
+          filename: `${hash}.${ext}`, original: name || "", folder: pageFolders[0] || "",
+        })).page;
+      }
+      rememberDocPage(hash, { id: page.id, title: page.content });
+      fetchHomeBlocks();
+      await openBlock(page.id, { pushNav: true });
+    } catch (err) {
+      setStatus(`Could not add to library: ${err.message}`);
+    }
+  }
+  // The file chips reach App through a context: navigation and promotion
+  // need openBlock and the page's folder. The value stays identity-stable
+  // (the ref) so the memoized markdown never re-renders for it.
+  const fileChipActionsRef = useRef({});
+  fileChipActionsRef.current = { openBlock, promoteFile };
+  const fileChipCtx = useMemo(() => ({
+    readOnly,
+    canOpen: !shareMode,
+    openPage: (id) => fileChipActionsRef.current.openBlock(id, { pushNav: true }),
+    promoteFile: (hash, ext, name) => fileChipActionsRef.current.promoteFile(hash, ext, name),
+  }), [readOnly, shareMode]);
+
+  // Every upload a drop or paste makes (fileChip.postFile) lands in the
+  // background-tasks list, and in the status pill with a percentage once it
+  // has run for a moment — a screenshot flashes by, a 200 MB dataset shows
+  // its progress.
+  const uploadPillRef = useRef({ shown: 0 });
+  useEffect(() => {
+    const pill = uploadPillRef.current;
+    const showPill = (msg) => { pill.shown++; postPill("upload", { msg, spinner: true }); };
+    const dropPill = () => { if (pill.shown) { pill.shown = 0; postPill("upload", null); } };
+    setUploadReporter({
+      start: (file) => ({
+        tid: addTransfer({ name: uploadLeafName(file, "file"), kind: "upload", info: fmtBytes(file.size) }),
+        name: uploadLeafName(file, "file"), size: file.size, at: Date.now(), lastPct: -1,
+      }),
+      progress: (u, loaded, total) => {
+        if (!u) return;
+        const pct = total ? Math.min(99, Math.floor((loaded / total) * 100)) : 0;
+        if (pct === u.lastPct) return;
+        u.lastPct = pct;
+        updateTransfer(u.tid, { info: `${fmtBytes(loaded)} / ${fmtBytes(total)} — ${pct}%` });
+        if (Date.now() - u.at > 400 || total > 2 * 1024 * 1024) showPill(`Uploading ${u.name}… ${pct}%`);
+      },
+      done: (u, ok, detail) => {
+        if (!u) return;
+        updateTransfer(u.tid, ok ? { status: "done", info: fmtBytes(u.size) } : { status: "error", info: detail || "failed" });
+        dropPill();
+        if (!ok) setStatus(`Upload of ${u.name} failed: ${detail || "refused"}`);
+        else if (Date.now() - u.at > 400) setStatus(`Uploaded ${u.name}.`);
+      },
+    });
+    return () => setUploadReporter(null);
+  }, []);
+
+  // Files dropped on the open page outside any block row: one new block per
+  // file at the end of the page (images inline, the rest as file chips). The
+  // rows take drops on themselves; the page's DOCUMENT comes from the header.
+  async function appendFileBlocks(files) {
+    const pageId = focusedBlockId;
+    const lines = await uploadFilesAsLines(files);
+    if (focusedBlockIdRef.current !== pageId) return; // navigated away meanwhile
+    if (!lines.length) { setStatus("Nothing added — the upload was refused."); return; }
+    setBlocks((prev) => {
+      let out = prev;
+      for (const line of lines) {
+        const { blocks: next, newId } = addRootBlock(out);
+        out = updateBlockTree(next, newId, (b) => ({ ...b, content: line, editMode: false }));
+      }
+      return out;
+    });
+    refreshQuota();
+    setStatus(`Added ${lines.length} file${lines.length === 1 ? "" : "s"}.`);
   }
 
   async function resolveShare(token) {
@@ -4296,6 +4451,7 @@ export default function App() {
     // Plain navigation (library, search, tabs, home) never pushes.
     if (opts?.pushNav && blockId !== focusedBlockId) pushNav();
     leaveCurrentPage();
+    forgetDocPages(); // the file chips' "which page carries this PDF" cache
     setLoading(true);
     setStatus("Opening...");
     try {
@@ -4425,6 +4581,7 @@ export default function App() {
   const restoreTokenRef = useRef(0);   // bumped on navigation — kills in-flight restore loops
   const restoringForRef = useRef(null); // block whose restore hasn't landed yet
   const pdfRenderedUrlRef = useRef(""); // url of the document whose pages are in the DOM
+  const pdfLaidOutUrlRef = useRef("");  // url whose manifest skeleton (exact page boxes, no document yet) is in the DOM
   const pendingRestoreRef = useRef(null); // {url, entry, blockId, token} applied pre-paint on "rendered"
   function captureScrollPos() {
     // The page's window layout travels with it — including panel size ratios.
@@ -5115,6 +5272,254 @@ export default function App() {
     setStatus("Highlight saved.");
   }
 
+  // --- Handwriting ----------------------------------------------------------
+  // Strokes live in inkStore drafts and reach the server as an .ink upload
+  // plus a properties PATCH through the block API (a server-side writer, so
+  // the change fans out over the page socket and lands in this tree like a
+  // remote op); only the group's block itself is inserted through the tree.
+  // The pen preset a stylus writes with when nothing is armed: the last pen
+  // armed on the strip, else the first pen in the row.
+  const inkPen = useMemo(() => {
+    const p = inkTools.find((t) => t.id === inkUi.pen && t.kind === "pen") || inkTools.find((t) => t.kind === "pen") || inkTools[0];
+    return toolStyle(p);
+  }, [inkTools, inkUi.pen]);
+  const inkTool = useMemo(() => {
+    const t = inkUi.tool;
+    if (!t || readOnly) return null;
+    if (t === "eraser" || t === "select") return { tool: t };
+    const p = inkTools.find((x) => x.id === t);
+    return p ? toolStyle(p) : null;
+  }, [inkUi.tool, readOnly, inkTools]);
+  const inkPenTool = inkAutoPen && !readOnly ? inkPen : null;
+  // Arm a tool; a pen preset also becomes the stylus pen. The options row
+  // closes unless the caller keeps it (a duplicate stays editable).
+  const pickInkTool = useCallback((id, { keepOptions = false, kind } = {}) => {
+    setInkUi((s) => {
+      const k = kind || (id && inkTools.find((t) => t.id === id)?.kind);
+      return { ...s, open: true, tool: id, options: keepOptions && !!id ? s.options : false, pen: k === "pen" ? id : s.pen };
+    });
+  }, [inkTools]);
+  const openInkStrip = () => pickInkTool(inkTools.find((t) => t.id === inkUi.pen)?.id || inkTools[0].id);
+  // A removed preset leaves the strip's hand armed.
+  useEffect(() => {
+    if (inkUi.tool && inkUi.tool !== "eraser" && inkUi.tool !== "select" && !inkTools.some((t) => t.id === inkUi.tool)) {
+      setInkUi((s) => ({ ...s, tool: null, options: false }));
+    }
+  }, [inkTools, inkUi.tool]);
+  const inkBlocks = useMemo(() => {
+    const next = flattenBlocks(blocks).filter((b) => b.properties?.ink_url !== undefined)
+      .map((b) => ({ id: b.id, properties: b.properties }));
+    const json = JSON.stringify(next);
+    if (json === prevInkRef.current.json) return prevInkRef.current.value;
+    prevInkRef.current = { json, value: next };
+    return next;
+  }, [blocks]);
+
+  const flushInk = useCallback(async () => {
+    clearTimeout(inkTimerRef.current);
+    inkTimerRef.current = 0;
+    const json = { "Content-Type": "application/json" };
+    for (const { id, ink } of inkStore.dirtyDrafts()) {
+      try {
+        if (!ink.strokes.length) {
+          inkStore.clearDraft(id);
+          await apiJson(`${API}/blocks/${id}`, { method: "DELETE" });
+          continue;
+        }
+        const r = await apiJson(`${API}/upload-ink`, { method: "POST", headers: json, body: JSON.stringify(ink) });
+        const properties = { ink_url: r.url, pdf_position: r.pdf_position, ink_strokes: r.strokes, pdf_page: ink.space.page };
+        await apiJson(`${API}/blocks/${id}`, { method: "PUT", headers: json, body: JSON.stringify({ properties }) });
+        inkStore.markSaved(id, ink, r.url);
+      } catch (err) {
+        // The block's insert may still be queued (404): try again shortly.
+        setStatus(`Handwriting not saved yet: ${err.message || err}`);
+        if (!inkTimerRef.current) inkTimerRef.current = setTimeout(flushInk, 2000);
+      }
+    }
+  }, []);
+  function scheduleInk() {
+    clearTimeout(inkTimerRef.current);
+    inkTimerRef.current = setTimeout(flushInk, 700);
+  }
+  useEffect(() => {
+    const flush = () => { if (inkTimerRef.current) flushInk(); };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flush);
+    return () => { window.removeEventListener("pagehide", flush); document.removeEventListener("visibilitychange", flush); };
+  }, [flushInk]);
+  useEffect(() => () => {
+    // Leaving a page: pending strokes still save (through the block API,
+    // which needs no open tree); the tool disarms, the next stroke starts
+    // a fresh group.
+    if (inkTimerRef.current) flushInk();
+    inkActiveRef.current = null;
+    inkHistRef.current = { undo: [], redo: [] };
+    setInkSelection(null);
+    setInkUi((s) => (s.tool ? { ...s, tool: null } : s));
+  }, [focusedBlockId, flushInk]);
+
+  // The strokes a group has right now: its draft, else its loaded file.
+  function inkOf(blockId) {
+    const block = flattenBlocks(blocksRef.current).find((b) => b.id === blockId);
+    return inkStore.draft(blockId)?.ink || (block ? inkStore.inkFor(block) : null);
+  }
+  // Every ink edit goes through here: the drafts change, the action lands
+  // on the stroke history, the upload is scheduled. A group whose block is
+  // not in the tree (undone away, or erased empty and deleted) gets its
+  // block back first.
+  function applyInk(changes, { record = true } = {}) {
+    if (!changes.length) return;
+    const present = new Set(flattenBlocks(blocksRef.current).map((b) => b.id));
+    const missing = changes.filter((c) => c.after.strokes.length && !present.has(c.id));
+    if (missing.length) {
+      setBlocks((prev) => [...prev, ...missing.map((c) => ({
+        id: c.id, parentId: null, children: [], collapsed: false, editMode: false, content: "",
+        properties: { ink_url: "", pdf_page: c.page, ink_strokes: 0 },
+      }))]);
+    }
+    for (const c of changes) inkStore.setDraft(c.id, c.after);
+    if (record) {
+      const h = inkHistRef.current;
+      h.undo.push(changes);
+      if (h.undo.length > 200) h.undo.shift();
+      h.redo = [];
+    }
+    scheduleInk();
+  }
+  function inkUndo(redo) {
+    const h = inkHistRef.current;
+    const entry = (redo ? h.redo : h.undo).pop();
+    if (!entry) return false;
+    // Entries are stored forward (before → after); undo applies them backward.
+    applyInk(redo ? entry : entry.map((c) => ({ ...c, before: c.after, after: c.before })), { record: false });
+    (redo ? h.undo : h.redo).push(entry);
+    setInkSelection(null);
+    return true;
+  }
+
+  async function handleInkStroke(page, stroke, size) {
+    if (readOnly || !focusedBlockId) return;
+    let id = inkActiveRef.current?.page === page ? inkActiveRef.current.id : null;
+    const existing = id ? flattenBlocks(blocksRef.current).find((b) => b.id === id && b.properties?.ink_url !== undefined) : null;
+    if (!existing) id = makeId();
+    inkActiveRef.current = { page, id };
+    // The group's strokes so far: the draft, else its file (loaded first —
+    // a stroke must never replace strokes that just have not arrived yet).
+    const loaded = !inkStore.draft(id) && existing?.properties.ink_url
+      ? await inkStore.loadInk(existing.properties.ink_url) : null;
+    const before = inkStore.draft(id)?.ink || loaded || newInk(page, size.width, size.height);
+    applyInk([{ id, page, before, after: appendStroke(before, stroke) }]);
+  }
+  function handleInkErase(page, blockId, ids) {
+    if (readOnly) return;
+    const before = inkOf(blockId);
+    if (!before) return;
+    applyInk([{ id: blockId, page, before, after: removeStrokes(before, ids) }]);
+  }
+  // The partial eraser fires per pointer move: successive cuts through one
+  // group fold into the same history entry, so Ctrl+Z undoes the pass.
+  function handleInkErasePartial(page, blockId, x, y, r) {
+    if (readOnly) return;
+    const before = inkOf(blockId);
+    if (!before) return;
+    const { ink: after, changed } = eraseAt(before, x, y, r);
+    if (!changed) return;
+    const h = inkHistRef.current;
+    const last = h.undo[h.undo.length - 1];
+    const fold = last && last.length === 1 && last[0].id === blockId && last[0].after === before && last[0].pass;
+    applyInk([{ id: blockId, page, before: fold ? last[0].before : before, after, pass: true }], { record: !fold });
+    if (fold) last[0].after = after;
+  }
+  function handleInkSelect(page, items) {
+    setInkSelection(items.length ? { page, items } : null);
+  }
+  // The lasso selection, edited group by group: edit(ink, ids) -> ink.
+  function editInkSelection(edit) {
+    if (readOnly || !inkSelection) return;
+    const changes = [];
+    for (const item of inkSelection.items) {
+      const before = inkOf(item.id);
+      if (!before) continue;
+      changes.push({ id: item.id, page: inkSelection.page, before, after: edit(before, item.ids) });
+    }
+    applyInk(changes);
+  }
+  function handleInkMoveSelection(page, dx, dy) {
+    editInkSelection((ink, ids) => translateStrokes(ink, ids, dx, dy));
+  }
+  function deleteInkSelection() {
+    editInkSelection(removeStrokes);
+    setInkSelection(null);
+  }
+  // From the notes (marker / card): show the group on the page. From the
+  // page (a click on ink): show its block in the notes.
+  function showInkOnPage(id) {
+    const b = flattenBlocks(blocksRef.current).find((x) => x.id === id);
+    if (!b) return;
+    const position = b.properties.pdf_position || { pageNumber: b.properties.pdf_page };
+    const wasHidden = pdfHidden;
+    if (wasHidden) setPdfHidden(false);
+    setTimeout(() => scrollToRef.current?.({ position, offset: 120 }), wasHidden ? 300 : 0);
+    setInkFlash({ id, nonce: Date.now() });
+  }
+  function showInkInNotes(id) {
+    pendingBlockScrollRef.current = id;
+    setBlocks((prev) => expandToBlock(prev, id));
+  }
+  // The strip's keys while it is open: 1–9 arm the preset at that position,
+  // P / H step through the pens / highlighters, E the eraser, L the lasso,
+  // V the hand, Esc drops the selection then closes, Delete removes the
+  // selection, and Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y step the STROKE history —
+  // registered in the capture phase so the page's block undo (a bubble
+  // listener on the window) never sees them. A focused text field keeps
+  // its own keys.
+  const inkKeysRef = useRef(null);
+  inkKeysRef.current = { inkUndo, deleteInkSelection, hasSelection: !!inkSelection, tools: inkTools, tool: inkUi.tool, pickInkTool };
+  useEffect(() => {
+    if (!inkUi.open) return;
+    const onKey = (e) => {
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const K = inkKeysRef.current;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && ["z", "y"].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+        e.stopPropagation();
+        K.inkUndo(e.key.toLowerCase() === "y" || e.shiftKey);
+        return;
+      }
+      if (e.key === "Escape") {
+        if (K.hasSelection) setInkSelection(null);
+        else setInkUi((s) => ({ ...s, open: false, tool: null, options: false }));
+        return;
+      }
+      if ((e.key === "Delete" || e.key === "Backspace") && K.hasSelection) {
+        e.preventDefault();
+        K.deleteInkSelection();
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === "e") K.pickInkTool("eraser");
+      else if (k === "l") K.pickInkTool("select");
+      else if (k === "v") K.pickInkTool(null);
+      else if (k === "p" || k === "h") {
+        // The next preset of that kind after the armed one, wrapping.
+        const kind = k === "p" ? "pen" : "highlighter";
+        const list = K.tools.filter((t) => t.kind === kind);
+        if (!list.length) return;
+        const i = list.findIndex((t) => t.id === K.tool);
+        K.pickInkTool(list[(i + 1) % list.length].id);
+      } else if (/^[1-9]$/.test(k)) {
+        const t = K.tools[Number(k) - 1];
+        if (t) K.pickInkTool(t.id);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [inkUi.open]);
+  // A selection belongs to the lasso tool: switching away drops it.
+  useEffect(() => { if (inkUi.tool !== "select") setInkSelection(null); }, [inkUi.tool]);
+
   useEffect(() => { attachModeBlockIdRef.current = attachModeBlockId; }, [attachModeBlockId]);
 
   // Escape cancels attach mode
@@ -5675,7 +6080,10 @@ export default function App() {
       // navigation cancels the loop (effect cleanup), an old document's
       // pages never match pdfUrl, and the tracker can't record anything
       // while coarseRestorePendingRef holds it paused.
-      if (!scrollToRef.current || pdfRenderedUrlRef.current !== pdfUrl) {
+      // A skeleton laid out from the manifest counts: its boxes are exact,
+      // so the last-read page can be scrolled to before pdf.js has parsed
+      // a byte, and nothing shifts under it when the document arrives.
+      if (!scrollToRef.current || (pdfRenderedUrlRef.current !== pdfUrl && pdfLaidOutUrlRef.current !== pdfUrl)) {
         setTimeout(tryRestore, 100);
         return;
       }
@@ -6052,15 +6460,15 @@ export default function App() {
                     <button
                       className={`pageActionBtn ${pageAttach ? "active" : ""}`}
                       title={pageAttach
-                        ? `Attachment: ${pageAttach.name || defaultPageTitle(pageAttach)}`
-                        : "Attach a PDF to this page — by URL, arXiv id or DOI, or upload a file"}
-                      aria-label={pageAttach ? "Attachment" : "Attach PDF"}
+                        ? `Document: ${pageAttach.name || defaultPageTitle(pageAttach)}`
+                        : "Attach a PDF as this page's document (URL, arXiv id, DOI, or upload) — it gets the viewer, highlights and metadata. Other files go into blocks."}
+                      aria-label={pageAttach ? "Document" : "Attach document"}
                       disabled={loading}
                       onClick={() => setOpenPopover((p) => (p === "attach" ? null : "attach"))}
                     ><PaperclipIcon size={15} /></button>
                     {openPopover === "attach" && pageAttach ? (
                       <div className="popover addPopover attachPopover">
-                        <div className="popoverTitle">Attachment</div>
+                        <div className="popoverTitle">Document</div>
                         <div className="popoverHint attachFileName" title={attachmentSource(pageAttach)}>
                           <PaperclipIcon size={13} /> {pageAttach.name || defaultPageTitle(pageAttach)}
                         </div>
@@ -6083,7 +6491,7 @@ export default function App() {
                       </div>
                     ) : openPopover === "attach" ? (
                       <div className="popover addPopover attachPopover">
-                        <div className="popoverTitle">Attach a PDF</div>
+                        <div className="popoverTitle">Attach a document</div>
                         <input
                           autoFocus
                           className="searchInput"
@@ -6112,25 +6520,15 @@ export default function App() {
                 {pageAttach || pageMeta ? (
                   <span data-popover="meta" className="popoverAnchor">
                     <button
+                      ref={metaBtnRef}
                       className="pageActionBtn"
                       title={metaBusy
                         ? "Fetching paper metadata…"
                         : metaSrc?.warn
                           ? metaSrc.hint
-                          : "Paper metadata (authors, venue, DOI, source file…)"}
+                          : "Edit metadata (authors, venue, DOI, source file…)"}
                       aria-label="Paper metadata"
-                      onClick={(e) => {
-                        const opening = openPopover !== "meta";
-                        if (opening) {
-                          // Fixed positioning so the popover floats above the
-                          // window stack instead of being clipped by the
-                          // notes window / drawn under the chat below it.
-                          const r = e.currentTarget.getBoundingClientRect();
-                          setMetaPopPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
-                          setSourceDraft(inputUrl);
-                        }
-                        setOpenPopover(opening ? "meta" : null);
-                      }}
+                      onClick={() => openMetaPopover()}
                     >
                       {/* Same busy affordance as the translate button: the
                           icon becomes a spinner while a fetch is running. */}
@@ -6892,6 +7290,7 @@ export default function App() {
                   aiScan,
                   rootId: focusedBlockId,
                   onJump: jumpToHighlightId,
+                  onInkJump: showInkOnPage,
                   onEnterAttachMode: readOnly ? null : setAttachModeBlockId,
                   onUnlinkHighlight: readOnly ? null : unlinkHighlightFromBlock,
                   onOpenLinkTarget: (b) => {
@@ -7099,7 +7498,9 @@ export default function App() {
                 };
                 return (
                   <>
-                    <BlockTree blocks={blocks} readOnly={readOnly} rowProps={rowProps} />
+                    <FileChipContext.Provider value={fileChipCtx}>
+                      <BlockTree blocks={blocks} readOnly={readOnly} rowProps={rowProps} />
+                    </FileChipContext.Provider>
                     {notesTail}
                     <BlockDropIndicator target={dropTarget} />
                   </>
@@ -7754,14 +8155,14 @@ export default function App() {
     <div
       ref={appRef}
       className={`app layout-horizontal ${pseudoFullscreen ? "pseudoFullscreen" : ""} ${isPhone ? "phoneUI" : ""}`}
-      data-drop={homeMode ? "upload" : !pageAttach && !readOnly ? "attach" : undefined}
+      data-drop={homeMode ? "upload" : focusedBlockId && !readOnly ? "files" : undefined}
       onDragOver={shareMode ? undefined : (e) => {
         if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes("Files")) return;
         e.preventDefault();
         // The overlay only where a drop does something: the library imports
-        // files, a page without an attachment takes a PDF; block rows take
+        // files, an editable page takes files as blocks; block rows take
         // files themselves.
-        const dropHere = (homeMode || (!pageAttach && !readOnly)) && !e.target.closest(".blockRowWrap");
+        const dropHere = (homeMode || (focusedBlockId && !readOnly)) && !e.target.closest(".blockRowWrap");
         appRef.current?.classList.toggle("dragOver", dropHere);
       }}
       onDragLeave={shareMode ? undefined : (e) => {
@@ -7780,18 +8181,20 @@ export default function App() {
           collectEntryFiles(entries).then((found) => uploadFiles(found));
           return;
         }
-        const files = Array.from(e.dataTransfer.files || [])
-          .filter((file) => isPdfFile(file) || isMarkdownFile(file));
-        if (!files.length) return;
-        // Dropped on the open page: a single PDF becomes ITS attachment when
-        // it has none (the block rows take other files); the library view
-        // still imports drops as new pages.
-        if (focusedBlockId && !pageAttach && !readOnly && files.length === 1 && isPdfFile(files[0])) {
+        const dropped = Array.from(e.dataTransfer.files || []);
+        if (!dropped.length) return;
+        if (!homeMode) {
+          // Dropped on the open page (outside a row): every file becomes a
+          // block at the end of the page, PDFs included — the page's
+          // document is attached from the header, never by a drop.
+          if (!focusedBlockId || readOnly) return;
           e.preventDefault();
-          attachPdfToPage({ file: files[0] });
+          appendFileBlocks(dropped);
           return;
         }
-        if (!homeMode) return;
+        // The library imports PDFs and markdown as new pages.
+        const files = dropped.filter((file) => isPdfFile(file) || isMarkdownFile(file));
+        if (!files.length) return;
         e.preventDefault();
         uploadFiles(files);
       }}
@@ -7996,6 +8399,16 @@ export default function App() {
               {translateEnabled && !shareMode && pdfTransState.running ? (
                 <div className="pdfTransPct">{Math.round(pdfTransState.progress * 100)}%</div>
               ) : null}
+              {!readOnly ? (
+                <button
+                  className={inkUi.open ? "modeActive" : ""}
+                  onClick={() => (inkUi.open ? setInkUi((s) => ({ ...s, open: false, tool: null, options: false })) : openInkStrip())}
+                  title={inkUi.open ? "Close the handwriting tools (Esc)" : "Handwriting: draw on the page with a pen, highlighter or eraser"}
+                  aria-label="Handwriting tools"
+                >
+                  <PenIcon size={15} />
+                </button>
+              ) : null}
               {isPhone && !shareMode ? (
                 <button
                   className={areaSelectMode ? "modeActive" : ""}
@@ -8007,6 +8420,22 @@ export default function App() {
                 </button>
               ) : null}
             </div>
+          ) : null}
+          {pdfUrl && !pdfHidden && inkUi.open && !readOnly ? (
+            <InkToolbar
+              tools={inkTools} active={inkUi.tool} options={inkUi.options}
+              eraserMode={inkEraserMode} eraserSize={inkEraserSize} lassoMode={inkLassoMode}
+              onPick={pickInkTool}
+              onToggleOptions={() => setInkUi((s) => ({ ...s, options: !s.options }))}
+              onChangeTools={setInkTools}
+              onEraser={(patch) => {
+                if ("mode" in patch) setInkEraserMode(patch.mode);
+                if ("size" in patch) setInkEraserSize(patch.size);
+              }}
+              onLasso={setInkLassoMode}
+              onNewGroup={() => { inkActiveRef.current = null; setStatus("Next strokes start a new handwriting note."); }}
+              onClose={() => setInkUi((s) => ({ ...s, open: false, tool: null, options: false }))}
+            />
           ) : null}
           {pdfUrl && !pdfHidden ? (
             <div className="pdfCtlBox pdfFullscreenBox">
@@ -8035,6 +8464,22 @@ export default function App() {
               translateCtlRef={pdfTranslateCtl}
               onTranslateState={handleTranslateState}
               areaMode={areaSelectMode && isPhone && !shareMode}
+              inkBlocks={inkBlocks}
+              inkTool={inkTool}
+              inkPenTool={inkPenTool}
+              inkPenOnly={inkPenOnly}
+              inkPressure={inkPressure}
+              inkFlash={inkFlash}
+              onInkStroke={readOnly ? undefined : handleInkStroke}
+              onInkErase={readOnly ? undefined : handleInkErase}
+              onInkErasePartial={readOnly ? undefined : handleInkErasePartial}
+              inkEraserMode={inkEraserMode}
+              inkEraserSize={inkEraserSize}
+              inkLassoMode={inkLassoMode}
+              inkSelection={inkSelection}
+              onInkSelect={readOnly ? undefined : handleInkSelect}
+              onInkMoveSelection={readOnly ? undefined : handleInkMoveSelection}
+              onInkJump={showInkInNotes}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
               searchRef={pdfSearchRef}
               captureRef={pdfCaptureRef}
@@ -8391,6 +8836,12 @@ export default function App() {
           setEmbAnnots,
           snapVertical,
           setSnapVertical,
+          inkPenOnly,
+          setInkPenOnly,
+          inkAutoPen,
+          setInkAutoPen,
+          inkPressure,
+          setInkPressure,
           translateEnabled,
           setTranslateEnabled,
           translateLang,
@@ -8555,14 +9006,18 @@ export default function App() {
           closeSettings: () => setSettingsOpen(null),
         } : null}
         users={authUser?.user ? {
-          // Everyone gets this pane; only admins see the other accounts and
-          // the account editor.
+          // Everyone gets this pane; only admins see the other accounts, the
+          // account editor and each account's personal workspaces.
           isAdmin: !!authUser?.is_admin,
           me: authUser.user,
           isGuest: !!authUser?.is_guest,
           quotaInfo,
+          workspaces,
+          switchWorkspace,
+          refreshSession: checkSession,
           setStatus,
           confirm: setConfirmBox,
+          closeSettings: () => setSettingsOpen(null),
           onSelfRenamed: checkSession, // self-rename re-keys the whole app
           refreshQuota,
         } : null}

@@ -10,7 +10,8 @@ from conftest import login, make_user, workspace_of
 from gamma.ai_tools import agent_tools
 
 ALL_TOOLS = agent_tools("folder")  # the full registry, for the wire tests
-ALL_PERMS = ("list", "read", "block_read", "search", "rename", "move", "block_edit")
+ALL_PERMS = ("list", "read", "block_read", "search", "web_search", "web_read",
+             "rename", "move", "block_edit")
 
 CONF = {"base_url": "https://example.test", "api_key": "k", "account_id": ""}
 TURNS = [

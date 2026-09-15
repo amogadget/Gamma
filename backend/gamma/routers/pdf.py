@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from ..auth import require_user, resolve_ws, share_scope_page
 from ..db import connect_pages_db, ws_uploads_dir
+from .. import pdf_meta
 from ..logbuf import log
 from ..net_guard import guarded_urlopen
 from ..server_settings import can_store
@@ -334,6 +335,7 @@ def proxy_pdf(source_url: str, request: Request):
                 if can_store(ws, len(data)):
                     uploads.mkdir(parents=True, exist_ok=True)
                     local_path.write_bytes(data)
+                    pdf_meta.schedule(ws, pdf_doc_id)
                 else:
                     log.info(f"[pdf] not caching {pdf_doc_id} ({len(data)} bytes): over storage limits")
 

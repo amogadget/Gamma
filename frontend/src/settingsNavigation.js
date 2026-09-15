@@ -50,8 +50,8 @@ const entries = [
   ["workspaces", "Workspaces", "members sharing import export storage quota default"],
   ["backups", "Backups", "snapshot restore merge download"],
   ["maintenance", "Library maintenance", "metadata health text index rebuild papers"],
-  ["users", "Users", "administration accounts password limits"],
-  ["server", "Server", "administration storage defaults backups log"],
+  ["users", "Users", "administration accounts password limits personal workspaces"],
+  ["server", "Server", "administration storage defaults shared workspaces backups log"],
   ["diagnostics", "Debug logging", "diagnostics tracing browser system log"],
 ];
 export const SETTINGS_SEARCH = entries.map(([pane, label, keywords]) => ({ pane, label, keywords }));

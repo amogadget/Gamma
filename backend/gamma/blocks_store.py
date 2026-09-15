@@ -263,15 +263,18 @@ def create_page(conn, title: str, props: dict | None = None) -> dict:
 
 def get_or_create_doc_page(conn, doc_id: str, default_title: str = "",
                            source_url: str | None = None,
-                           original_filename: str | None = None) -> dict:
+                           original_filename: str | None = None,
+                           folder: str = "") -> dict:
     """Lookup-or-create BY ATTACHMENT: the root page whose PDF attachment is
     `doc_id`, created under root when absent. Shared by POST /api/blocks/by-doc
-    (PDF ingest from the app) and the extension's /api/clip (dedup). Pages
-    without a PDF are created by POST /api/pages (create_page).
+    (PDF ingest from the app, "Open as document" on a PDF file block) and
+    the extension's /api/clip (dedup). Pages without a PDF are created by
+    POST /api/pages (create_page).
 
     The automatic title is the upload's file name, else ``default_title``
     (the caller's — a clip's tab title), else what ``attachment_props``
-    derives (URL file name, doc id). On an existing page this
+    derives (URL file name, doc id). ``folder`` (a path) files a NEW page;
+    an existing page keeps its own. On an existing page this
     opportunistically backfills the source/filename markers; auto_title is
     only set when the page still carries the exact title this call considers
     automatic, so a re-upload can never mark a user's custom title as
@@ -299,4 +302,31 @@ def get_or_create_doc_page(conn, doc_id: str, default_title: str = "",
             conn.commit()
             row = (*row[:4], json.dumps(props), *row[5:])
         return block_to_dict(row)
-    return create_page(conn, title, {**attachment, "auto_title": title})
+    props = {**attachment, "auto_title": title}
+    folder = clean_path(folder or "")
+    if folder:
+        props["folder"] = folder
+    return create_page(conn, title, props)
+
+
+def pages_for_docs(conn, hashes) -> dict:
+    """Which root page a stored file became, batched: ``{hash: {"id",
+    "title"}}`` for every hash that is some page's PDF attachment
+    (``doc_id``) or the markdown file a note page was made from
+    (``markdown_import`` — the upload's content digest, so a ``<hash>.md``
+    chip finds its page). Hashes with no page are absent. Feeds the file
+    chip's "Open page" / "Open as page" — one query per page render, never
+    one per chip."""
+    wanted = {str(d) for d in hashes if d}
+    if not wanted:
+        return {}
+    found = {}
+    for page_id, title, doc_id, md in conn.execute(
+            "SELECT id, content, json_extract(properties, '$.doc_id'), "
+            "json_extract(properties, '$.markdown_import') FROM unified_blocks "
+            "WHERE parent_id = 'root' AND (json_extract(properties, '$.doc_id') IS NOT NULL "
+            "OR json_extract(properties, '$.markdown_import') IS NOT NULL)"):
+        for key in (doc_id, md):
+            if key in wanted and key not in found:
+                found[key] = {"id": page_id, "title": title}
+    return found

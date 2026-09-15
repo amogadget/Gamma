@@ -6,7 +6,8 @@ files, chats and search indexes. Each browser tab opens one workspace.
 Use the account menu to switch libraries. **Settings → Workspaces** lists the
 libraries you can open and provides their export, import and management
 actions. **Settings → Backups** manages saved workspace snapshots.
-Administrators manage all libraries under **Settings → Server**.
+Administrators manage shared workspaces under **Settings → Server** and
+each account's personal workspaces on its row under **Settings → Users**.
 
 ## Personal and shared libraries
 
