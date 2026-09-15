@@ -8,6 +8,7 @@ duplicate.
 
 | Note | Question it answers |
 |---|---|
+| [handwriting-interactions.md](handwriting-interactions.md) | How Goodnotes and Notability select, edit, transform and reuse ink; finger taps versus holds; contextual menus; the broader writing/study feature inventory; Gamma gaps and acceptance criteria. |
 | [collaboration.md](collaboration.md) | How real-time collaborative editing is built elsewhere (OT, record-level last-writer-wins, CRDTs), why a snapshot autosave cannot collaborate, and why Gamma took the Notion / Linear / Figma shape. |
 | [workspaces.md](workspaces.md) | What happens when identity and data location are one string, what a workspace model needs, and how to version a data directory so upgrades stay safe and steps do not pile up. |
 | [handwriting.md](handwriting.md) | Which ink formats exist (InkML, Xournal++, PDF `/Ink`, tldraw, Excalidraw, reMarkable, PencilKit) and which are worth speaking, what stylus input the browser gives on each platform, what the upstream fork's native-iPad handwriting taught, and how Notability's pen, highlighter, eraser and lasso are set up. |

@@ -107,6 +107,7 @@ export async function noteScenarios({ server, browser, alice, step, until, sleep
     await page.keyboard.type("line two");
     await until(async () => JSON.stringify(await tree(alice2, pageId)).includes("third\\nline two"), { what: "line break saved" });
     await page.keyboard.press("Control+z");
+    await page.getByText(/^Undone: note text edit:/).waitFor();
     await closeEditor(page);
     await saved([{ content: "first", children: [{ content: "second", children: [] }] }, { content: "third", children: [] }], "undo saved");
     assertNoProblems(page);

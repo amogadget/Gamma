@@ -73,6 +73,39 @@ function editingId(list) {
   return null;
 }
 
+// Describe the forward action, even when the caller is restoring it backward.
+// Compare rebased trees so a collaborator's edits are not named as our undo.
+export function describeTransition(before, after) {
+  const index = (tree, parent = null, out = new Map()) => {
+    tree.forEach((b, order) => { out.set(b.id, { ...b, parent, order }); index(b.children || [], b.id, out); });
+    return out;
+  };
+  const a = index(before), b = index(after);
+  const added = [...b.values()].filter((n) => !a.has(n.id));
+  const removed = [...a.values()].filter((n) => !b.has(n.id));
+  const preview = (n) => {
+    const text = (n?.content || "").replace(/\s+/g, " ").trim();
+    return text ? `: “${text.length > 48 ? text.slice(0, 47) + "…" : text}”` : "";
+  };
+  if (added.length && removed.length) return `note replacement (${removed.length} removed, ${added.length} added)`;
+  if (added.length) return added.length === 1 ? `note creation${preview(added[0])}` : `creation of ${added.length} notes`;
+  if (removed.length) return removed.length === 1 ? `note deletion${preview(removed[0])}` : `deletion of ${removed.length} notes`;
+  const moved = [...b.values()].filter((n) => a.get(n.id)?.parent !== n.parent || a.get(n.id)?.order !== n.order);
+  if (moved.length) return "note move";
+  const text = [...b.values()].filter((n) => a.get(n.id)?.content !== n.content);
+  const props = [...b.values()].filter((n) => !propsEqual(a.get(n.id)?.properties, n.properties));
+  if (text.length && props.length) return "note text and properties edit";
+  if (text.length) return text.length === 1 ? `note text edit${preview(text[0])}` : `text edits in ${text.length} notes`;
+  if (props.length) {
+    if (props.every((n) => n.properties?.ink_url !== undefined)) return "handwriting note update";
+    if (props.every((n) => n.properties?.highlight_id)) {
+      return props.every((n) => a.get(n.id)?.properties?.color !== n.properties.color) ? "highlight color change" : "highlight edit";
+    }
+    return "note properties change";
+  }
+  return "note edit";
+}
+
 function hasBlock(list, id) {
   for (const b of list || []) {
     if (b.id === id || hasBlock(b.children, id)) return true;
@@ -161,8 +194,8 @@ export function useBlockHistory(blocks, setBlocks, opts) {
     }
   }, [blocks, loadRef]);
 
-  // Stable, so a once-mounted key listener can call it. Returns whether an
-  // entry was applied. `inEditor`: the keypress came from an open editor —
+  // Stable, so a once-mounted key listener can call it. Returns the action
+  // description, or false when empty. `inEditor`: from an open editor —
   // the restored block stays in edit mode with the cursor where the change
   // was; otherwise nothing opens.
   const undo = useCallback((redo = false, inEditor = false) => {
@@ -171,6 +204,7 @@ export function useBlockHistory(blocks, setBlocks, opts) {
     const s = st.current;
     const entry = (redo ? s.redo : s.undo).pop();
     if (!entry) return false;
+    const description = redo ? describeTransition(s.prev, entry.tree) : describeTransition(entry.tree, s.prev);
     s.intent = redo ? "redo" : "undo";
     s.lastEdit = null;
     // The state being displaced keeps the cursor it has right now (read
@@ -179,7 +213,7 @@ export function useBlockHistory(blocks, setBlocks, opts) {
     const caret = inEditor && entry.caret && hasBlock(entry.tree, entry.caret.id) ? entry.caret : null;
     o.setBlocks(withEditMode(entry.tree, caret?.id || null));
     if (caret) o.onCaret?.(caret);
-    return true;
+    return description;
   }, []);
 
   // Another client's change landed: fold it into every snapshot, so undoing

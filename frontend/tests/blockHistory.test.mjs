@@ -4,10 +4,21 @@
 // candidate for merging with the previous keystroke).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyTransition } from "../src/blockHistory.js";
+import { classifyTransition, describeTransition } from "../src/blockHistory.js";
 
 const N = (id, content = id, children = [], extra = {}) => ({ id, content, properties: {}, collapsed: false, editMode: false, children, ...extra });
 const tree = () => [N("a", "a", [N("a1")]), N("b")];
+
+test("undo descriptions name creations, deletions, text, moves, and properties", () => {
+  assert.equal(describeTransition([], [N("a", "New note")]), "note creation: “New note”");
+  assert.equal(describeTransition([N("a", "Old note")], []), "note deletion: “Old note”");
+  assert.equal(describeTransition([N("a", "before")], [N("a", "after")]), "note text edit: “after”");
+  assert.equal(describeTransition(tree(), tree().reverse()), "note move");
+  assert.equal(describeTransition([N("a")], [N("a", "a", [], { properties: { color: "red" } })]), "note properties change");
+  const h = N("h", "quote", [], { properties: { highlight_id: "h", color: "red" } });
+  assert.equal(describeTransition([h], [{ ...h, properties: { ...h.properties, color: "blue" } }]), "highlight color change");
+  assert.equal(describeTransition([N("a"), N("b")], []), "deletion of 2 notes");
+});
 
 test("identity, editor toggles and folding are not edits", () => {
   const t = tree();

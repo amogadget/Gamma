@@ -47,6 +47,20 @@ Two separate size levers, deliberately not one "zoom":
   height) reads out the percentage. Nothing is stored: reload resets it. On
   the home library the gesture is left to the browser.
 
+### Fullscreen on touch devices
+
+The fullscreen button uses the app's CSS fullscreen layout when the primary
+pointer is coarse (phones/tablets), and native Fullscreen API on desktop.
+This avoids Safari's browser-owned downward-swipe dismissal
+([WebKit issue](https://bugs.webkit.org/show_bug.cgi?id=227387)). App fullscreen
+hides app bars, confines overscroll, and exits through the same button or
+Escape. Browser bars may remain visible; it does not claim native fullscreen.
+Browsers without the API, or rejected native requests, use the same layout.
+The fullscreen control handles stationary touch release directly, since a
+browser may omit its compatibility click after scrolling; a following click
+is consumed so a tap cannot toggle twice. Mouse and keyboard activation keep
+the regular click path.
+
 ### Menus and submenus
 
 Every cursor-anchored menu is a `ContextMenu`; every row inside one is a

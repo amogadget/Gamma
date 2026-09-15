@@ -7,17 +7,20 @@
 // the notes; InkToolbar the tool strip. Strokes come from inkStore (drafts
 // ahead of uploads, files behind block URLs); App owns the tool state,
 // the selection, the stroke history and the commits.
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ContextMenu } from "./menus";
 import { getStroke } from "perfect-freehand";
 import {
   CopyIcon, ErasePartialIcon, EraserIcon, EraseStrokeIcon, HandIcon, HighlightIcon, LassoIcon, PenIcon, PlusIcon,
-  RectSelectIcon, TrashIcon, XIcon,
+  CheckIcon, FileTextIcon, LineWidthIcon, PaletteIcon, RectSelectIcon, RedoIcon, TrashIcon, UndoIcon, XIcon,
 } from "./icons";
 import {
   HIGHLIGHTER_COLORS, HIGHLIGHTER_OPACITY, MAX_TOOLS, PEN_COLORS, boundsOf, encodeStroke, hitStrokes, inkBounds,
-  outlineOptions, sizesFor, strokePath, strokesInLasso, svgPathFromPoints, toolId, unionBox,
+  nearestInkStroke, outlineOptions, sizesFor, strokePath, strokesInLasso, svgPathFromPoints, toolId, unionBox,
 } from "./ink";
 import * as inkStore from "./inkStore";
+import { appendInkSample, predictedInkSamples } from "./inkInput.js";
+import { canvasSize } from "./canvasSize.js";
 
 // Re-render when any draft or file changes.
 function useInkVersion() {
@@ -50,7 +53,7 @@ function Strokes({ ink, onClick, hide }) {
 // blocks: this page's ink blocks; selection: {page, items: [{id, ids}]};
 // flash: {id, nonce} outlines a group briefly.
 export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, penTool, penOnly, pressure, eraserMode,
-  eraserSize = 1, lassoMode = "free", selection, flash, onStroke, onErase, onErasePartial, onSelect, onMoveSelection, onJump }) {
+  eraserSize = 1, lassoMode = "free", selection, flash, onStroke, onErase, onErasePartial, onSelect, onAction, onMoveSelection, onJump }) {
   useInkVersion();
   const canvasRef = useRef(null);
   const [dragOffset, setDragOffset] = useState(null);   // while moving the selection: {dx, dy} in pt
@@ -80,17 +83,29 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
     const el = wrapRef.current;
     if (!el) return;
     let drawing = null; // {mode: stroke|erase|lasso|move, …}
+    let pending = null; // A possible tap/hold; swipes retain native scrolling.
+    const contacts = new Set();
+    const clearPending = (revert = false) => {
+      clearTimeout(pending?.timer);
+      if (revert && pending?.shown) live.current.onSelect?.(pageNumber, []);
+      pending = null;
+    };
+    const trackDown = (e) => {
+      contacts.add(e.pointerId);
+      if (pending && pending.id !== e.pointerId) clearPending(true);
+    };
+    const trackUp = (e) => contacts.delete(e.pointerId);
 
-    const setup = (e) => {
+    const setup = (e, forcedTool) => {
       const L = live.current;
       if (!L.width) return null;
-      let use = L.tool;
+      let use = forcedTool || L.tool;
       if (!use) {
         if (!(L.penTool && e.pointerType === "pen")) return null;
         use = L.penTool;
       }
-      if (L.penOnly && e.pointerType === "touch") return null;   // fingers scroll
-      if (e.button !== 0 && !(e.buttons & 32)) return null;        // right/middle buttons stay the browser's
+      if (!forcedTool && L.penOnly && e.pointerType === "touch") return null;
+      if (e.button !== 0 && !(e.pointerType === "pen" && (e.buttons & 34))) return null;
       const rect = el.getBoundingClientRect();
       const k = rect.width / L.width;                             // css px per pt
       const eraser = use.tool === "eraser" || !!(e.buttons & 32) || !!(e.buttons & 2);
@@ -113,10 +128,13 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       const canvas = canvasRef.current;
       if (!canvas) return null;
       const ctx = canvas.getContext("2d", { desynchronized: true });
-      const dpr = window.devicePixelRatio || 1;
+      if (!ctx) return null;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.setTransform(dpr * d.k, 0, 0, dpr * d.k, 0, 0);
+      ctx.setTransform(canvas.width / d.rect.width * d.k, 0, 0, canvas.height / d.rect.height * d.k, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.setLineDash([]);
       return ctx;
     };
     const paint = () => {
@@ -148,35 +166,65 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
         ctx.stroke();
       } else {
         ctx.fillStyle = use.color;
-        const pts = getStroke(d.samples.map((s) => [s.x, s.y, s.p]),
-          { ...outlineOptions({ size: use.size, pen: d.pen }), last: false });
+        const pts = getStroke([...d.samples, ...(d.predicted || [])].map((s) => [s.x, s.y, s.p]),
+          outlineOptions({ size: use.size, pen: d.pen }));
         ctx.fill(new Path2D(svgPathFromPoints(pts)));
       }
     };
     const showCanvas = (ctx) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = Math.round(ctx.rect.width * dpr);
-      canvas.height = Math.round(ctx.rect.height * dpr);
+      const size = canvasSize(ctx.rect.width, ctx.rect.height, window.devicePixelRatio || 1);
+      canvas.width = 0; canvas.height = size.height; canvas.width = size.width;
       canvas.style.display = "block";
     };
     const hideCanvas = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+      canvas.width = 0; canvas.height = 0;
       canvas.style.display = "none";
     };
 
-    const sample = (d, ev) => {
-      const p = d.pen && live.current.pressure && ev.pressure > 0 ? ev.pressure : 0.5;
-      d.samples.push({ ...d.toPt(ev), p, t: Date.now() - d.t0 });
-    };
-
     const onDown = (e) => {
-      if (drawing) return; // A second contact must not replace the active pen.
-      const ctx = setup(e);
+      // Menu controls are portalled; React events must not start page ink.
+      if (e.target.closest?.(".inkEditMenu")) return;
+      const L = live.current;
+      const selectionDrag = !!L.onSelect && e.target.closest?.(".inkSelectionHit")
+        && (e.pointerType === "touch" || !L.tool || L.tool.tool === "select") && e.pointerType !== "pen";
+      const ctx = setup(e, selectionDrag ? { tool: "select" } : null);
+      // A pen takes priority even if the palm landed first in finger-draw mode.
+      if (drawing?.pointerType === "touch" && e.pointerType === "pen" && ctx) {
+        finish({ pointerId: drawing.id }, true);
+      }
+      if (drawing) {
+        if (drawing.pointerType === "pen" && e.pointerType === "touch") {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      if (contacts.size > 1 && e.pointerType === "touch") return;
+      const navigation = e.pointerType === "touch" ? (L.penOnly || !L.tool) : e.pointerType === "mouse" && !L.tool;
+      if (!selectionDrag && navigation && L.onSelect && L.width && e.button === 0) {
+        clearPending();
+        const probe = setup(e, { tool: "select" });
+        if (!probe) return;
+        const pt = probe.toPt(e);
+        const hit = nearestInkStroke(L.groups, pt.x, pt.y, (e.pointerType === "touch" ? 10 : 5) / probe.k);
+        pending = { id: e.pointerId, x: e.clientX, y: e.clientY, hit, shown: false };
+        if (hit && e.pointerType === "touch") {
+          pending.timer = setTimeout(() => {
+            if (!pending || drawing) return;
+            pending.shown = true;
+            live.current.onSelect?.(pageNumber, [pending.hit]);
+          }, 450);
+        }
+        // Leave default touch behavior intact so scrolling can cancel the tap.
+        if (hit || L.selBox) e.stopPropagation();
+        return;
+      }
       if (!ctx) return;
+      clearPending();
       e.preventDefault();
       e.stopPropagation();
       try { el.setPointerCapture(e.pointerId); } catch { /* capture is a nicety */ }
@@ -196,12 +244,15 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
           poly: [[pt.x, pt.y]], raf: 0 };
         return;
       }
+      L.onSelect?.(pageNumber, []);
       showCanvas(ctx);
-      drawing = { ...ctx, id: e.pointerId, mode: "stroke", samples: [], t0: Date.now(), pen: e.pointerType === "pen", raf: 0 };
-      sample(drawing, e);
+      drawing = { ...ctx, id: e.pointerId, mode: "stroke", samples: [], t0: Date.now(),
+        startTime: e.timeStamp, pressure: live.current.pressure, pen: e.pointerType === "pen", raf: 0 };
+      appendInkSample(drawing, e);
       paint();
     };
     const onMove = (e) => {
+      if (pending?.id === e.pointerId && Math.hypot(e.clientX - pending.x, e.clientY - pending.y) > 8) clearPending(true);
       const d = drawing;
       if (!d || e.pointerId !== d.id) return;
       e.preventDefault();
@@ -220,7 +271,16 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
           // A box is the rectangle from the start to the pointer, as a polygon.
           if (d.box) d.poly = [[d.start.x, d.start.y], [pt.x, d.start.y], [pt.x, pt.y], [d.start.x, pt.y]];
           else d.poly.push([pt.x, pt.y]);
-        } else sample(d, ev);
+        } else appendInkSample(d, ev);
+      }
+      if (d.mode === "stroke") {
+        d.predicted = predictedInkSamples(d, e);
+        clearTimeout(d.predictionTimer);
+        if (d.predicted.length) d.predictionTimer = setTimeout(() => {
+          if (drawing !== d) return;
+          d.predicted = [];
+          if (!d.raf) d.raf = requestAnimationFrame(paint);
+        }, 32);
       }
       if (!d.raf) d.raf = requestAnimationFrame(paint);
     };
@@ -232,15 +292,30 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       setTimeout(() => document.removeEventListener("click", swallow, { capture: true }), 0);
     };
     const finish = (e, cancelled) => {
+      if (pending?.id === e.pointerId) {
+        const p = pending;
+        const isTap = !cancelled && Math.hypot(e.clientX - p.x, e.clientY - p.y) <= 8;
+        clearPending(cancelled);
+        if (isTap) {
+          live.current.onSelect?.(pageNumber, p.hit ? [p.hit] : []);
+          if (p.hit || live.current.selBox) { e.preventDefault(); e.stopPropagation(); swallowClick(); }
+        }
+        return;
+      }
       const d = drawing;
       if (!d || e.pointerId !== d.id) return;
       drawing = null;
       try { el.releasePointerCapture(e.pointerId); } catch { /* already released */ }
       if (d.raf) cancelAnimationFrame(d.raf);
+      clearTimeout(d.predictionTimer);
       const L = live.current;
-      if (d.mode === "erase") return;
+      if (d.mode === "erase") { if (!cancelled) swallowClick(); return; }
       if (d.mode === "move") {
         setDragOffset(null);
+        if (!cancelled) {
+          const pt = d.toPt(e);
+          d.dx = pt.x - d.start.x; d.dy = pt.y - d.start.y;
+        }
         if (!cancelled && (Math.abs(d.dx) > 0.5 || Math.abs(d.dy) > 0.5)) L.onMoveSelection?.(pageNumber, d.dx, d.dy);
         swallowClick();
         return;
@@ -250,7 +325,10 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       swallowClick();
       if (d.mode === "lasso") {
         const items = [];
-        if (d.poly.length >= 3) {
+        if (d.poly.every(([x, y]) => Math.hypot(x - d.start.x, y - d.start.y) * d.k <= 8)) {
+          const hit = nearestInkStroke(L.groups, d.start.x, d.start.y, 10 / d.k);
+          if (hit) items.push(hit);
+        } else if (d.poly.length >= 3) {
           for (const g of L.groups) {
             const ids = strokesInLasso(g.ink, d.poly);
             if (ids.length) items.push({ id: g.id, ids });
@@ -260,6 +338,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
         return;
       }
       if (!d.samples.length) return;
+      appendInkSample(d, e, true);
       const { use } = d;
       const stroke = encodeStroke({
         tool: use.tool, color: use.color, size: use.size, opacity: use.opacity ?? 1, pen: d.pen,
@@ -268,7 +347,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       L.onStroke?.(pageNumber, stroke, { width: L.width, height: L.height });
     };
     const onUp = (e) => finish(e, false);
-    const onCancel = (e) => finish(e, true);
+    const onCancel = (e) => { contacts.delete(e.pointerId); finish(e, true); };
     // iPad Safari can pan with Pencil even after pointerdown.preventDefault().
     // Cancel its matching touch gesture before scrolling cancels the pointer
     // stream. Keep touch-action available for finger scrolling and pinch zoom.
@@ -277,7 +356,10 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       if (!L.width || !(L.tool || L.penTool)) return;
       const pencil = Array.from(e.changedTouches).some((t) =>
         t.touchType === "stylus" || (!t.touchType && drawing?.pointerType === "pen"));
-      if (!pencil) return;
+      // While the pen is down, direct contacts are palms, not pan/pinch.
+      // As soon as it lifts, fingers can navigate again.
+      if (e.touches.length > 1) clearPending(true);
+      if (!pencil && drawing?.pointerType !== "pen" && drawing?.mode !== "move") return;
       if (e.cancelable) e.preventDefault();
       e.stopPropagation(); // Do not feed Pencil into the viewer's pan/pinch handlers.
     };
@@ -287,6 +369,16 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
     el.addEventListener("pointercancel", onCancel);
+    el.addEventListener("lostpointercapture", onCancel);
+    const onContext = (e) => {
+      if (pending?.hit || e.target.closest?.(".inkSelectionHit")) e.preventDefault();
+    };
+    const onBlur = () => { clearPending(true); contacts.clear(); if (drawing) finish({ pointerId: drawing.id }, true); };
+    el.addEventListener("contextmenu", onContext);
+    document.addEventListener("pointerdown", trackDown, true);
+    document.addEventListener("pointerup", trackUp, true);
+    document.addEventListener("pointercancel", trackUp, true);
+    window.addEventListener("blur", onBlur);
     return () => {
       el.removeEventListener("touchstart", onTouch, true);
       el.removeEventListener("touchmove", onTouch, true);
@@ -294,6 +386,19 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);
       el.removeEventListener("pointercancel", onCancel);
+      el.removeEventListener("lostpointercapture", onCancel);
+      window.removeEventListener("blur", onBlur);
+      el.removeEventListener("contextmenu", onContext);
+      document.removeEventListener("pointerdown", trackDown, true);
+      document.removeEventListener("pointerup", trackUp, true);
+      document.removeEventListener("pointercancel", trackUp, true);
+      clearPending();
+      if (drawing?.raf) cancelAnimationFrame(drawing.raf);
+      clearTimeout(drawing?.predictionTimer);
+      if (drawing) {
+        try { el.releasePointerCapture(drawing.id); } catch { /* already released */ }
+      }
+      hideCanvas();
     };
   }, [wrapRef, pageNumber]);
 
@@ -309,7 +414,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
           <g key={g.id} data-ink-id={g.id}
             style={{ pointerEvents: armed || !onJump ? "none" : "visiblePainted", cursor: "pointer" }}>
             <Strokes ink={g.ink} hide={dragging ? selectedIds : null}
-              onClick={onJump ? (e) => { e.stopPropagation(); onJump(g.id); } : undefined} />
+              onClick={!onSelect && onJump ? (e) => { e.stopPropagation(); onJump(g.id); } : undefined} />
           </g>
         ))}
         {dragging ? (
@@ -329,9 +434,79 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
             width={fb[2] - fb[0] + 12} height={fb[3] - fb[1] + 12} rx={4} />
         ) : null}
       </svg>
+      {selBox && onSelect ? <div className="inkSelectionHit" aria-label="Move selected handwriting"
+        style={{ left: `${(selBox[0] - 4) / width * 100}%`, top: `${(selBox[1] - 4) / height * 100}%`,
+          width: `${(selBox[2] - selBox[0] + 8) / width * 100}%`, height: `${(selBox[3] - selBox[1] + 8) / height * 100}%` }} /> : null}
+      {selBox && onAction && !dragging ? <InkSelectionMenu wrapRef={wrapRef} box={selBox} width={width}
+        strokes={groups.flatMap((g) => g.ink.strokes.filter((s) => selectedIds.has(s.id)))}
+        onAction={onAction} onClose={() => onSelect(pageNumber, [])} /> : null}
       <canvas ref={canvasRef} className="inkCanvas" />
     </>
   );
+}
+
+function InkSelectionMenu({ wrapRef, box, width, strokes, onAction, onClose }) {
+  const [anchor, setAnchor] = useState(null);
+  const [options, setOptions] = useState(null);
+  const contentRef = useRef(null);
+  const [menuHeight, setMenuHeight] = useState(96);
+  useLayoutEffect(() => {
+    const el = contentRef.current?.closest(".ctxMenu");
+    if (!el) return;
+    const observer = new ResizeObserver(() => setMenuHeight(el.getBoundingClientRect().height));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [!!anchor]);
+  const [x0, y0, x1, y1] = box;
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const update = () => {
+      const rect = el.getBoundingClientRect(), viewport = el.closest(".pdfViewer").getBoundingClientRect();
+      const k = rect.width / width;
+      const left = rect.left + x0 * k, top = rect.top + y0 * k, bottom = rect.top + y1 * k;
+      const y = top - menuHeight - 12 >= viewport.top + 8 ? top - menuHeight - 12
+        : bottom + menuHeight + 12 <= viewport.bottom - 8 ? bottom + 12
+        : Math.max(viewport.top + 8, Math.min(top - menuHeight - 12, viewport.bottom - menuHeight - 8));
+      const next = bottom < viewport.top || top > viewport.bottom || rect.left + x1 * k < viewport.left || left > viewport.right
+        ? null : { x: Math.max(viewport.left + 8, left), y, k };
+      setAnchor((prev) => JSON.stringify(prev) === JSON.stringify(next) ? prev : next);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => { observer.disconnect(); window.removeEventListener("scroll", update, true); window.removeEventListener("resize", update); };
+  }, [wrapRef, width, x0, y0, x1, y1, menuHeight]);
+  if (!anchor) return null;
+  const kinds = [...new Set(strokes.map((s) => s.tool))];
+  return <ContextMenu x={anchor.x} y={anchor.y} ignoreRef={wrapRef} onClose={onClose} className="inkEditMenu">
+    <div ref={contentRef} role="toolbar" aria-label="Edit handwriting" onPointerDown={(e) => e.stopPropagation()}>
+      <div className="inkEditRow">
+        <button className={"ctlBtn" + (options === "color" ? " modeActive" : "")} aria-label="Color" title="Color" aria-expanded={options === "color"} onClick={() => setOptions(options === "color" ? null : "color")}><PaletteIcon aria-hidden="true" /></button>
+        <button className={"ctlBtn" + (options === "width" ? " modeActive" : "")} aria-label="Width" title="Width" aria-expanded={options === "width"} onClick={() => setOptions(options === "width" ? null : "width")}><LineWidthIcon aria-hidden="true" /></button>
+        <button className="ctlBtn" aria-label="Duplicate" title="Duplicate" onClick={() => onAction("duplicate", { dx: 12 / anchor.k, dy: 12 / anchor.k })}><CopyIcon aria-hidden="true" /></button>
+        <button className="ctlBtn inkDeleteBtn" aria-label="Delete" title="Delete" onClick={() => onAction("delete")}><TrashIcon aria-hidden="true" /></button>
+        <button className="ctlBtn" aria-label="Select note" title="Select all handwriting in this note" onClick={() => onAction("select-note")}><RectSelectIcon aria-hidden="true" /></button>
+        <button className="ctlBtn" aria-label="Show note" title="Show note" onClick={() => onAction("show-note")}><FileTextIcon aria-hidden="true" /></button>
+        <button className="ctlBtn" aria-label="Done" title="Done" onClick={onClose}><CheckIcon aria-hidden="true" /></button>
+      </div>
+      {options === "color" ? <div className="inkEditOptions" aria-label="Selected ink color">
+        {(kinds.every((k) => k === "highlighter") ? HIGHLIGHTER_COLORS : PEN_COLORS).map((color) =>
+          <button key={color} className="colorBtn inkSwatch" style={{ background: color }} aria-label={`Ink color ${color}`}
+            aria-pressed={strokes.every((s) => s.color === color)} onClick={() => onAction("style", { color })} />)}
+        <label className="colorBtn inkSwatch inkCustomColor" title="Custom color"><input type="color" aria-label="Selected ink custom color" value={strokes[0]?.color || "#1f1f1f"}
+          onChange={(e) => onAction("style", { color: e.target.value })} /></label>
+      </div> : null}
+      {options === "width" ? kinds.map((kind) => <div className="inkEditOptions" key={kind} aria-label={`${kind} width`}>
+        {kinds.length > 1 ? (kind === "highlighter" ? <HighlightIcon aria-label="Highlighter" /> : <PenIcon aria-label="Pen" />) : null}
+        {sizesFor(kind).map((size, i) => <button key={size} className={"ctlBtn inkSizeBtn" + (strokes.filter((s) => s.tool === kind).every((s) => s.size === size) ? " modeActive" : "")} aria-label={`${kind} width ${size} pt`} title={`${kind} width ${size} pt`}
+          aria-pressed={strokes.filter((s) => s.tool === kind).every((s) => s.size === size)}
+          onClick={() => onAction("style", { tool: kind, size })}><span className="inkSizeDot" aria-hidden="true" style={{ width: 4 + i * 2, height: 4 + i * 2, background: "currentColor" }} /></button>)}
+      </div>) : null}
+    </div>
+  </ContextMenu>;
 }
 
 // The group as a picture in the notes tree (same strokes, cropped to its
@@ -363,7 +538,7 @@ export function InkCard({ block, onJump }) {
 // `tools`: the presets; `active`: a preset id, "eraser", "select" or null
 // (the hand); `options`: whether the row is open.
 export function InkToolbar({ tools, active, options, eraserMode, eraserSize, lassoMode,
-  onPick, onToggleOptions, onChangeTools, onEraser, onLasso, onNewGroup, onClose }) {
+  onPick, onToggleOptions, onChangeTools, onEraser, onLasso, onNewGroup, onClose, onUndo, onRedo, canUndo, canRedo }) {
   const preset = tools.find((t) => t.id === active) || null;
   const tap = (id) => (id === active ? onToggleOptions() : onPick(id));
   const btn = (id, label, icon, extra) => (
@@ -391,6 +566,8 @@ export function InkToolbar({ tools, active, options, eraserMode, eraserSize, las
   return (
     <div className="pdfInkBar" role="toolbar" aria-label="Handwriting tools">
       <div className="pdfInkRow">
+        <button type="button" className="ctlBtn" aria-label="Undo ink" title="Undo handwriting" disabled={!canUndo} onClick={onUndo}><UndoIcon aria-hidden="true" /></button>
+        <button type="button" className="ctlBtn" aria-label="Redo ink" title="Redo handwriting" disabled={!canRedo} onClick={onRedo}><RedoIcon aria-hidden="true" /></button>
         {tools.map((t, i) => {
           const hl = t.kind === "highlighter";
           const sizes = sizesFor(t.kind), k = Math.max(0, sizes.indexOf(t.size));

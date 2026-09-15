@@ -1,5 +1,11 @@
 # Handwriting (ink) annotation: formats, input, and what the fork did
 
+For the broader interaction survey—finger selection, contextual edit menus,
+transforms, correction gestures and study tools—see
+[handwriting-interactions.md](handwriting-interactions.md). That follow-up
+distinguishes current documented behavior and platform limits from the
+historical format/input findings below.
+
 Survey from 2026-09-13, before the handwriting feature described in
 [dev/handwriting.md](../dev/handwriting.md) was designed. Three questions:
 which ink formats exist and which are worth speaking, what stylus input the

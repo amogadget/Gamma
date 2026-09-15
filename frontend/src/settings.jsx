@@ -137,8 +137,8 @@ function ViewerSettings({ value }) {
         <Toggle
           icon={MoveVerticalIcon}
           label="Snap vertical scrolling"
-          hint="Straight one-finger swipes don't drift sideways"
-          title="On a touch screen, a one-finger swipe that's roughly straight up or down scrolls a zoomed-in PDF vertically only, so the page doesn't drift sideways while you read. Diagonal and sideways swipes still pan freely."
+          hint="Gently realign sideways drift after vertical swipes"
+          title="On a zoomed-in PDF, near-vertical one-finger swipes keep native momentum, then gently return to their starting horizontal position. Diagonal swipes, deliberate sideways turns, and pinch zoom stay free."
           checked={value.snapVertical}
           onChange={value.setSnapVertical}
         />

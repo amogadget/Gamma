@@ -370,6 +370,10 @@ html, body, #root {
   background: var(--bg-page);
 }
 
+/* Suppress browser double-tap zoom on every layout, including portaled menus.
+   Keep native panning and pinch zoom; drawing surfaces override this with none. */
+html { touch-action: manipulation; }
+
 body {
   font-family: Arial, sans-serif;
   color: var(--text-primary);
@@ -382,12 +386,6 @@ body {
   height: 100vh;
   /* mobile browsers: exclude the collapsing URL bar so nothing hides behind it */
   height: 100dvh;
-}
-/* Phone: no browser zoom of the app chrome (a zoomed page hides the toolbars
-   and there is no way back to them). `manipulation` also drops the 300 ms
-   double-tap-zoom delay; panning and the PDF's own pinch handlers still work. */
-.app.phoneUI {
-  touch-action: manipulation;
 }
 
 .topbar {
@@ -2699,8 +2697,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   overflow-y: auto;
 }
 
-/* pseudo-fullscreen (iOS has no Fullscreen API): hide the app chrome and let
-   the work area take the whole screen; the viewer's own ⛶ button exits */
+/* App fullscreen avoids mobile browsers' native swipe-to-dismiss gesture.
+   Confine overscroll to the app; the viewer's fullscreen button or Esc exits. */
+html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; overscroll-behavior: none; }
+.app.pseudoFullscreen { position: fixed; inset: 0; height: 100dvh; overscroll-behavior: none; }
+.app.pseudoFullscreen .pdfViewer { overscroll-behavior: none; }
 .app.pseudoFullscreen .topbar,
 .app.pseudoFullscreen .phoneBottomBar,
 .app.pseudoFullscreen .status { display: none !important; }
@@ -4611,7 +4612,15 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .inkLayer { z-index: 2; overflow: visible; }
 .inkCanvas { z-index: 5; display: none; }
-.pdfViewer.pdfDark .inkLayer { filter: invert(1) hue-rotate(180deg); }
+.inkSelectionHit { position: absolute; z-index: 4; touch-action: none; cursor: move; }
+.inkEditMenu { width: 310px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; }
+.inkEditRow, .inkEditOptions { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; }
+.inkEditRow .ctlBtn { flex: 1; min-width: 36px; min-height: 36px; }
+.inkEditRow .inkDeleteBtn { color: var(--danger); }
+.inkEditOptions { border-top: 1px solid var(--border); margin-top: 4px; }
+.inkEditOptions { align-items: center; }
+.inkEditOptions .ctlBtn, .inkEditOptions .colorBtn { min-width: 32px; min-height: 32px; }
+.pdfViewer.pdfDark .inkLayer, .pdfViewer.pdfDark .inkCanvas { filter: invert(1) hue-rotate(180deg); }
 /* The brief outline after a jump from the notes. */
 .inkFlash {
   fill: none;

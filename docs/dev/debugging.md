@@ -101,6 +101,14 @@ npm run e2e -- --headed         # watch the browser
 npm run e2e -- --keep           # keep the temp data dir + server.log
 ```
 
+High-zoom tablet regressions: `npm run e2e -- --only "pdf touch" --keep`.
+Install WebKit with `npx playwright install webkit`, then set
+`GAMMA_E2E_BROWSER=webkit` to run the same rendering cases in that engine
+(PowerShell: `$env:GAMMA_E2E_BROWSER = "webkit"`). Chromium additionally runs
+native touch gestures through CDP; the WebKit run checks 400% PDF/ink paint
+and bitmap release using tablet dimensions and DPR 2. This is browser
+emulation, not a physical iPad performance measurement.
+
 `frontend/tests/e2e/run.mjs` starts an ISOLATED backend (the project venv's
 python — or the interpreter `GAMMA_E2E_PYTHON` names — over a fresh
 `GAMMA_DATA_DIR` under the OS temp dir, on a free port, serving
@@ -128,7 +136,21 @@ The scenarios live in `tests/e2e/scenarios/`:
   ink block with an `.ink` upload, persistence across a reload, the eraser
   (by its key), stroke undo/redo, the partial eraser cutting a stroke, a
   lasso move + delete, the notes card's jump + outline, `/Ink` in the
-  exported PDF.
+  exported PDF. Pen-input regressions cover coalesced sample timing,
+  pressure and lift endpoints in the uploaded file, transient prediction,
+  palm suppression during writing, palm-first pen takeover, and cleanup
+  after pointer cancellation / lost capture. Chromium's native touch/pen
+  input also verifies finger drawing without panning, pen pressure in Hand
+  mode, and finger scrolling without ink in pen-only mode. Synthetic Pencil events test
+  Safari handler ordering; physical-device latency and OS palm rejection
+  still need a real stylus and tablet.
+- `inkEditing.mjs`: direct finger selection and contextual ink editing:
+  color/width preservation of pressure/time, duplicate IDs, selective delete,
+  visible undo/redo, cross-group lasso movement with a finger in pen-only
+  mode, swipe/hold arbitration, pen resuming through a selection, small-screen
+  menu placement, and view/edit share access. Uses native Chromium touch/pen
+  input and checks the persisted stroke files. Run with `--only "ink edit:"`;
+  `--only ink` runs both handwriting scenario files.
 - `pdfload.mjs`: PDF loading, in a non-default workspace — the timing probe
   (a 300-page, 20 MB document opened cold at an emulated 20 Mbps, the
   IndexedDB backfill, a warm reopen, a same-tab return; reports the per-phase

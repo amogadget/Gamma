@@ -7,6 +7,12 @@ browsers signed into the same account also work. Backend: `gamma/ops.py`, `gamma
 `src/presence.jsx`, plus small hooks in `App.jsx`, `blockTree.jsx`,
 `blockCmEditor.jsx` and `blockHistory.js`.
 
+Block undo/redo returns a description derived from the before/after trees,
+including rebased remote changes. The shared status pill names the action
+(note creation/deletion/move, text edit with a short preview, properties or
+highlight edits). It remains separate from the handwriting stroke history;
+see [handwriting.md](handwriting.md) for shortcut routing and ink messages.
+
 ## The model in one paragraph
 
 A page's editor sends small **operations** on blocks. The server applies each batch in one transaction, orders
