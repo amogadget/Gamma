@@ -126,8 +126,8 @@ Settings panes are built only from
 
 ## Theme
 
-Five states: System (default, tracks `prefers-color-scheme` live) or pinned
-Light/Dark/Sepia/Gray — `gamma-theme` in localStorage (valid values are `THEMES`
+Six states: System (default, tracks `prefers-color-scheme` live) or pinned
+Light/Dark/Sepia/Solarized Light/Gray — `gamma-theme` in localStorage (valid values are `THEMES`
 in `prefs.js`), applied as `data-theme` on the root element. The choice (plus
 "Flip page colors") also follows the account through `/api/prefs/appearance` —
 server wins on login and on window focus, changes push back; localStorage
@@ -140,10 +140,14 @@ themed rather than left to the OS: a global `scrollbar-width: thin` +
 inverts the PDF canvas (`.pdfDark`), swaps highlight blending from multiply
 to screen, and darkens the scroller surround.
 
-**Sepia** and **Gray** are the eye-comfort modes and the themes that reach
-the PDF page as well as the chrome. Sepia: its tokens are Solarized Light (warm cream ground
-`#fdf6e3`, charcoal-teal text, Solarized accents darkened where a token is
-used as text — the stock accents sit near 3:1 on cream), and
+**Sepia**, **Solarized Light**, and **Gray** are the eye-comfort modes and the themes that reach
+the PDF page as well as the chrome. Sepia retains its original warm beige
+surfaces and darker teal text (`#073642`). Solarized Light (`solarized`) follows
+[VS Code's Solarized Light](https://github.com/microsoft/vscode/blob/main/extensions/theme-solarized-light/themes/solarized-light-color-theme.json):
+cream content surfaces (`#fdf6e3`), surrounding chrome (`#eee8d5`), muted
+blue-gray text (`#657b83`), and the original Solarized accents. The desktop
+shell and first-paint background use the same palette. Code highlighting
+uses Solarized token colors. PDF ink retains its separate softening:
 `[data-theme="sepia"] .pdfViewer:not(.pdfDark)` tints the page by giving the
 page wrapper the `--pdf-paper` ground and letting the canvas `multiply` onto
 it. Multiply, not a `sepia()`/`hue-rotate` filter: white paper lands exactly
@@ -154,11 +158,11 @@ charcoal the eye-strain guidance recommends over pure black. **Gray** is the
 neutral counterpart — the same machinery driven by different tokens
 (`--pdf-paper: #f4f4f4`, `#2d2d2d` text ladder, Light's role colors) for
 users who want the glare cut without a color cast; the PDF rules select
-`:is([data-theme="sepia"], [data-theme="gray"])`, so a new tinted theme only
+`:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`, so a new tinted theme only
 needs a token block plus membership in those lists. The tint needs no prop — `data-theme` is global, so it is pure CSS
 — and "Flip page colors" wins when both are on. Light-ground rules that were
 `[data-theme="light"] …` are now
-`:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"])`;
+`:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`;
 extend that list, don't add another copy.
 
 ## Layout

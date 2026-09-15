@@ -77,7 +77,7 @@ const SIZE_INDEX_CODEC = {
   serialize: String,
 };
 
-export const THEMES = ["system", "light", "dark", "sepia", "gray"];
+export const THEMES = ["system", "light", "dark", "sepia", "solarized", "gray"];
 
 // Control size (Settings → General): a CSS `zoom` on every button and toggle
 // (app.css, `--ui-scale`) — the interface chrome, not the notes/chat text,
@@ -87,9 +87,8 @@ export const UI_SCALE = { min: 0.7, max: 1.6, step: 0.1, default: 1 };
 
 export function useAppPrefs() {
   // --- Appearance (Settings → General) ---
-  // Theme: "system" follows the OS; "light"/"dark"/"sepia" pin it. "sepia" is
-  // the warm eye-comfort mode (Solarized Light) and "gray" its neutral
-  // counterpart; both also tint the PDF page (app.css), no separate toggle.
+  // System follows the OS; the other themes pin the appearance.
+  // Sepia, Solarized Light, and Gray also tint PDF pages (app.css).
   // Theme and pdfDarkPage additionally follow the account through
   // /api/prefs/appearance (App.jsx): server wins on login, changes push back,
   // this localStorage copy stays the instant-paint cache.

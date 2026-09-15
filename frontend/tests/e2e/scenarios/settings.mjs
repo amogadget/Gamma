@@ -37,6 +37,15 @@ export async function settingsScenarios(env) {
       assertEq(await nav(page, "Appearance").getAttribute("aria-current"), "page");
       await page.getByRole("button", { name: "Sepia", exact: true }).click();
       await until(() => page.locator("html").getAttribute("data-theme").then((v) => v === "sepia"));
+      assertEq(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--text-primary").trim()), "#073642");
+      await page.getByRole("button", { name: "Solarized Light", exact: true }).click();
+      await until(() => page.locator("html").getAttribute("data-theme").then((v) => v === "solarized"));
+      assertEq(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--text-primary").trim()), "#657b83");
+      await until(async () => (await user.api("/api/prefs/appearance")).value?.theme === "solarized");
+      await page.reload();
+      await page.waitForSelector(".folderNewBtn");
+      await until(() => page.locator("html").getAttribute("data-theme").then((v) => v === "solarized"));
+      await openSettings(page);
       assertEq(await page.locator(".setHelp, .setDetails, .themeChoices").count(), 0);
       assert(await row(page, "Theme").locator(".setIcon svg").isVisible());
       assert((await row(page, "Theme").getAttribute("title")).includes("System"));
@@ -75,7 +84,7 @@ export async function settingsScenarios(env) {
       await page.reload();
       await page.getByRole("button", { name: "Account & settings", exact: true }).waitFor();
       await openSettings(page);
-      assertEq(await page.getByRole("button", { name: "Sepia", exact: true }).getAttribute("aria-pressed"), "true");
+      assertEq(await page.getByRole("button", { name: "Solarized Light", exact: true }).getAttribute("aria-pressed"), "true");
       await nav(page, "Library").click();
       assert((await row(page, "File labels").innerText()).includes("Folders only"));
       assertNoProblems(page);

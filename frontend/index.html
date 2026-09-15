@@ -14,7 +14,7 @@
     <script>
       try {
         var t = localStorage.getItem("gamma-theme");
-        if (t === "light" || t === "dark" || t === "sepia" || t === "gray") document.documentElement.setAttribute("data-theme", t);
+        if (t === "light" || t === "dark" || t === "sepia" || t === "solarized" || t === "gray") document.documentElement.setAttribute("data-theme", t);
         var s = parseFloat(localStorage.getItem("gamma-ui-scale"));
         if (s >= 0.7 && s <= 1.6) document.documentElement.style.setProperty("--ui-scale", s); // UI_SCALE in prefs.js
       } catch (e) {}
@@ -32,6 +32,8 @@
       html[data-theme="dark"] { color-scheme: dark; }
       html[data-theme="sepia"], html[data-theme="sepia"] body, html[data-theme="sepia"] #root { background: #f0e9d6; }
       html[data-theme="sepia"] { color-scheme: light; }
+      html[data-theme="solarized"], html[data-theme="solarized"] body, html[data-theme="solarized"] #root { background: #eee8d5; }
+      html[data-theme="solarized"] { color-scheme: light; }
       html[data-theme="gray"], html[data-theme="gray"] body, html[data-theme="gray"] #root { background: #e9e9e9; }
       html[data-theme="gray"] { color-scheme: light; }
       /* First-load splash: index.html is tiny and paints immediately, while

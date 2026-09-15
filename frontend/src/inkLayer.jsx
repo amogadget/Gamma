@@ -94,7 +94,8 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       const rect = el.getBoundingClientRect();
       const k = rect.width / L.width;                             // css px per pt
       const eraser = use.tool === "eraser" || !!(e.buttons & 32) || !!(e.buttons & 2);
-      return { use, eraser, rect, k, toPt: (ev) => ({ x: (ev.clientX - rect.left) / k, y: (ev.clientY - rect.top) / k }) };
+      return { use, eraser, rect, k, pointerType: e.pointerType,
+        toPt: (ev) => ({ x: (ev.clientX - rect.left) / k, y: (ev.clientY - rect.top) / k }) };
     };
 
     const eraseUnder = (ctx, ev) => {
@@ -173,6 +174,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
     };
 
     const onDown = (e) => {
+      if (drawing) return; // A second contact must not replace the active pen.
       const ctx = setup(e);
       if (!ctx) return;
       e.preventDefault();
@@ -267,11 +269,27 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
     };
     const onUp = (e) => finish(e, false);
     const onCancel = (e) => finish(e, true);
+    // iPad Safari can pan with Pencil even after pointerdown.preventDefault().
+    // Cancel its matching touch gesture before scrolling cancels the pointer
+    // stream. Keep touch-action available for finger scrolling and pinch zoom.
+    const onTouch = (e) => {
+      const L = live.current;
+      if (!L.width || !(L.tool || L.penTool)) return;
+      const pencil = Array.from(e.changedTouches).some((t) =>
+        t.touchType === "stylus" || (!t.touchType && drawing?.pointerType === "pen"));
+      if (!pencil) return;
+      if (e.cancelable) e.preventDefault();
+      e.stopPropagation(); // Do not feed Pencil into the viewer's pan/pinch handlers.
+    };
+    el.addEventListener("touchstart", onTouch, { capture: true, passive: false });
+    el.addEventListener("touchmove", onTouch, { capture: true, passive: false });
     el.addEventListener("pointerdown", onDown, true);
     el.addEventListener("pointermove", onMove);
     el.addEventListener("pointerup", onUp);
     el.addEventListener("pointercancel", onCancel);
     return () => {
+      el.removeEventListener("touchstart", onTouch, true);
+      el.removeEventListener("touchmove", onTouch, true);
       el.removeEventListener("pointerdown", onDown, true);
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerup", onUp);

@@ -107,15 +107,6 @@
   color-scheme: light;
 }
 
-/* Eye-comfort ("Sepia") theme — Solarized Light (Ethan Schoonover). The
-   palette exists for exactly this job: a warm cream ground (base3 #fdf6e3,
-   the color of shaded paper) instead of glaring white, and charcoal-teal text
-   instead of pure black, so the page carries less blue light and far less
-   luminance contrast than Light without going dim. Role colors are the
-   Solarized accents, darkened where a token is used as text (the stock
-   accents sit near 3:1 on cream, below the 4.5:1 body-text bar).
-   --pdf-paper is the same ground applied to the PDF canvas — see .pdfSepia
-   rules further down. */
 [data-theme="sepia"] {
   --bg-page: #f0e9d6;
   --bg-surface: #fdf6e3;
@@ -159,6 +150,56 @@
   --drag-accent: #1b6fa3;
   --scrollbar-thumb: #d3c9ad;
   --scrollbar-thumb-hover: #b9ad91;
+  /* The PDF page ground (Solarized base3). Not a --bg-* token: it is the
+     paper, not a surface, and .pdfSepia multiplies the canvas onto it. */
+  --pdf-paper: #fdf6e3;
+  color-scheme: light;
+}
+
+/* Solarized Light follows VS Code's Solarized Light: cream editor surfaces, base2
+   chrome, muted blue-gray text, and the original Solarized accents.
+   Reference: microsoft/vscode, extensions/theme-solarized-light/themes/
+   solarized-light-color-theme.json. --pdf-paper also tints PDF canvases. */
+[data-theme="solarized"] {
+  --bg-page: #eee8d5;
+  --bg-surface: #fdf6e3;
+  --bg-elevated: #eee8d5;
+  --bg-block: #f7f0e0;
+  --bg-card: #fdf6e3;
+  --bg-deeper: #eee8d5;
+  --bg-input: #ddd6c1;
+  --bg-raised: #eee8d5;
+  --bg-hover: #dfca8844;
+  --bg-subtle: #ddd6c1;
+  --bg-active: #dfca88;
+  --text-primary: #657b83;
+  --text-secondary: #586e75;
+  --text-tertiary: #657b83;
+  --text-muted: #839496;
+  --text-dim: #93a1a1;
+  --text-bright: #586e75;
+  --border: #ddd6c1;
+  --border-light: #d3af86;
+  --border-hover: #b49471;
+  --border-subtle: #ddd6c1;
+  --ok: #859900;
+  --danger: #dc322f;
+  --danger-bg: rgba(220, 50, 47, 0.1);
+  --danger-border: rgba(220, 50, 47, 0.38);
+  --accent: #268bd2;
+  --accent-dark: #268bd2;
+  --accent-bright: #268bd2;
+  --accent-bg: rgba(38, 139, 210, 0.14);
+  --accent-bg-light: rgba(38, 139, 210, 0.07);
+  --callout-note: #268bd2;
+  --callout-tip: #859900;
+  --callout-warning: #b58900;
+  --callout-danger: #dc322f;
+  --callout-important: #6c71c4;
+  --callout-quote: #93a1a1;
+  --drag-accent: #268bd2;
+  --scrollbar-thumb: #586e754d;
+  --scrollbar-thumb-hover: #586e7580;
   /* The PDF page ground (Solarized base3). Not a --bg-* token: it is the
      paper, not a surface, and .pdfSepia multiplies the canvas onto it. */
   --pdf-paper: #fdf6e3;
@@ -732,7 +773,7 @@ body {
   --bracket-active-bg: rgba(90, 140, 255, 0.28);
   --bracket-active-ring: rgba(140, 170, 255, 0.65);
 }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) {
   --bracket-1: #0431fa;
   --bracket-2: #319331;
   --bracket-3: #7b3814;
@@ -823,15 +864,28 @@ body {
 .hljs-deletion { color: #f14c4c; }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-comment, .hljs-quote) { color: #6e7781; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag) { color: #cf222e; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_) { color: #0a3069; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-number, .hljs-symbol, .hljs-bullet) { color: #0550ae; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-title, .hljs-section) { color: #8250df; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-title.class_, .hljs-type, .hljs-built_in) { color: #953800; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-params) { color: #0550ae; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-meta, .hljs-selector-id, .hljs-selector-class, .hljs-name) { color: #116329; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .hljs-deletion { color: #e51400; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-comment, .hljs-quote) { color: #6e7781; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag) { color: #cf222e; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_) { color: #0a3069; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-number, .hljs-symbol, .hljs-bullet) { color: #0550ae; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-title, .hljs-section) { color: #8250df; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-title.class_, .hljs-type, .hljs-built_in) { color: #953800; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-params) { color: #0550ae; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-meta, .hljs-selector-id, .hljs-selector-class, .hljs-name) { color: #116329; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .hljs-deletion { color: #e51400; }
+
+/* VS Code Solarized Light token colors, shared by notes and chat code. */
+[data-theme="solarized"] :is(.hljs-comment, .hljs-quote) { color: #93a1a1; }
+[data-theme="solarized"] :is(.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-addition) { color: #859900; }
+[data-theme="solarized"] :is(.hljs-string, .hljs-char.escape_) { color: #2aa198; }
+[data-theme="solarized"] :is(.hljs-number, .hljs-symbol) { color: #d33682; }
+[data-theme="solarized"] :is(.hljs-literal, .hljs-bullet, .hljs-meta) { color: #b58900; }
+[data-theme="solarized"] :is(.hljs-title, .hljs-section, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-selector-id, .hljs-selector-class, .hljs-name) { color: #268bd2; }
+[data-theme="solarized"] :is(.hljs-title.class_, .hljs-type) { color: #cb4b16; }
+[data-theme="solarized"] .hljs-built_in { color: #859900; }
+[data-theme="solarized"] :is(.hljs-attr, .hljs-attribute) { color: #93a1a1; }
+[data-theme="solarized"] .hljs-params { color: #657b83; }
+[data-theme="solarized"] :is(.hljs-regexp, .hljs-deletion) { color: #dc322f; }
 
 .blockRowWrap.fileDragOver > .blockRow {
   outline: 2px dashed var(--drag-accent);
@@ -1639,7 +1693,7 @@ body {
 }
 :is(.pdfCtlBox button, .ctlBtn):disabled { opacity: 0.4; cursor: default; }
 .ctlBtnRow { display: flex; align-items: center; gap: 2px; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfCtlBox {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfCtlBox {
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 .pdfZoomOverlay {
@@ -1679,7 +1733,7 @@ body {
 }
 .pdfPageWidget input:focus { color: var(--accent); }
 .pdfPageTotal { margin-left: 3px; white-space: nowrap; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfPageWidget { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfPageWidget { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 
 /* The floating status pill — the app's single transient-message surface
    (status messages, PDF load progress, load errors), anchored top-center of
@@ -1747,7 +1801,7 @@ body {
   border-radius: 8px;
   padding: 6px 4px;
 }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfOutlinePanel { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfOutlinePanel { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 
 .pdfOutlineRow {
   display: flex;
@@ -3872,8 +3926,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
    find-mark overlays sit above and keep their own multiply.
    :not(.pdfDark) — "Flip page colors" is the stronger, explicit choice and
    wins when both are on. !important beats pdfViewer.jsx's inline background. */
-:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) { background: var(--bg-deeper); }
-:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap {
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) { background: var(--bg-deeper); }
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap {
   background: var(--pdf-paper) !important;
   isolation: isolate;
 }
@@ -3883,7 +3937,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
    ground itself (~#2e2c29, about 12.6:1 - the "charcoal not pure black"
    eye-strain guidance) without a contrast() filter, which would darken the
    paper too. Figures fade toward paper by the same 18%, a mild wash. */
-:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap > canvas { mix-blend-mode: multiply; opacity: 0.82; }
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap > canvas { mix-blend-mode: multiply; opacity: 0.82; }
 
 /* --- AI translated view (overlay over the original text runs) ---
    The layer sits between the canvas and the text layer: each block is an
@@ -3982,8 +4036,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .pdfViewer.pdfDark .pdfTransText { color: #c9c9c9; }
 /* Same for the eye-comfort ground: the masks are opaque divs above the
    canvas, so the page tint's blend never reaches them. */
-:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
-[data-theme="sepia"] .pdfViewer:not(.pdfDark) .pdfTransText { color: #2e2c29; }
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
+:is([data-theme="sepia"], [data-theme="solarized"]) .pdfViewer:not(.pdfDark) .pdfTransText { color: #2e2c29; }
 [data-theme="gray"] .pdfViewer:not(.pdfDark) .pdfTransText { color: #2c2c2c; }
 /* Alt held = peek at the original (class set by the viewer). */
 .pdfViewer.transPeek .pdfTransLayer { visibility: hidden; }
@@ -4140,8 +4194,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   white-space: nowrap;
 }
 .blockLinkChip:hover { background: var(--accent-dark); border-color: #4a8abf; color: #fff; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .blockLinkChip { background: #e3effa; color: #2b6bcb; border-color: #b5d2ee; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .blockLinkChip:hover { background: #cfe3f7; color: #1d5ab3; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .blockLinkChip { background: #e3effa; color: #2b6bcb; border-color: #b5d2ee; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .blockLinkChip:hover { background: #cfe3f7; color: #1d5ab3; }
 
 /* --- cursor-positioned context menu (shared surface recipe) --- */
 .ctxMenu {
@@ -4588,7 +4642,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   width: max-content;              /* not shrink-to-fit: left: 50% would clamp it to half the viewer */
   max-width: calc(100% - 120px);
 }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfInkBar {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfInkBar {
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 .pdfInkRow, .pdfInkSub {

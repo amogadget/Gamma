@@ -45,6 +45,7 @@ const THEMES = {
   dark: { bg: '#1a1a1a', symbol: '#dddddd' },
   light: { bg: '#ffffff', symbol: '#333333' },
   sepia: { bg: '#fdf6e3', symbol: '#073642' },
+  solarized: { bg: '#eee8d5', symbol: '#657b83' },
   gray: { bg: '#f4f4f4', symbol: '#2d2d2d' },
 };
 

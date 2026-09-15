@@ -126,7 +126,12 @@ sample bytes.
   (`pointerType === "pen"` with *Stylus draws right away*), so text
   selection and the area drag never see it; other pointers pass through
   untouched. `getCoalescedEvents()` where available (Safari has none but
-  delivers 120/240 Hz moves). Pointer-up encodes the stroke and swallows
+  delivers 120/240 Hz moves). Non-passive capture listeners cancel Pencil
+  `touchstart`/`touchmove` events on iPad Safari: cancelling pointer events
+  alone does not prevent native panning. They recognize stylus touches
+  (or an active pen pointer when touch type is unavailable), while direct
+  finger touches retain scrolling and pinch zoom. A second pointer cannot
+  replace an active drawing. Pointer-up encodes the stroke and swallows
   the click it would deliver to whatever lies beneath. The lasso tool
   draws its polygon on the same canvas; a drag inside the selection box
   moves the selected strokes (previewed as a translated copy, committed on
@@ -148,7 +153,10 @@ sample bytes.
   block through `PUT /api/blocks/{id}` — a server-side writer, so the
   change fans out over the page socket and reaches this tree like a remote
   op; only the group's block itself (first stroke) is inserted through the
-  tree. An empty group is deleted the same way. A failed flush (the block's
+  tree. An empty group is deleted the same way. Its empty draft keeps masking
+  the saved strokes during deletion, including the gap between the HTTP
+  response and the socket update. Only a successful delete marks that draft
+  clean; failures keep it dirty for retry. A failed flush (the block's
   insert may still be queued) retries after two seconds.
 - With the strip open, Ctrl+Z is the stroke history (a capture-phase key
   handler, so the page's block undo never sees it); with it closed, Ctrl+Z

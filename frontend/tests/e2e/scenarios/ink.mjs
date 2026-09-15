@@ -181,6 +181,100 @@ export async function inkScenarios({ server, browser, alice, makePdf, step, unti
     assertNoProblems(page);
   });
 
+  await step("ink: erasing the last stroke stays erased while block deletion is pending", async () => {
+    await page.click("button[aria-label='Handwriting tools']");
+    await page.keyboard.press("p");
+    await page.click(".pdfInkBar button[title^='Start a new']");
+    const paths = '[data-page="1"] .inkLayer path';
+    const count = await page.locator(paths).count();
+    const before = await account.api(`/api/blocks/${pageId}/subtree`);
+    const ids = new Set(before.block.children.map((b) => b.id));
+    box = await page.locator('[data-page="1"]').boundingBox();
+    await drawLine(page, [box.x + 100, box.y + 320], [box.x + 250, box.y + 320]);
+    const group = await until(async () => {
+      const d = await account.api(`/api/blocks/${pageId}/subtree`);
+      return d.block.children.find((b) => !ids.has(b.id) && b.properties?.ink_url);
+    }, { what: "new group saved before erasure" });
+    await until(async () => await page.locator(paths).count() === count + 1);
+    let release, deleting = false;
+    const held = new Promise((resolve) => { release = resolve; });
+    const url = `**/api/blocks/${group.id}`;
+    await page.route(url, async (route) => {
+      if (route.request().method() === "DELETE") { deleting = true; await held; }
+      await route.continue();
+    });
+    try {
+      await page.keyboard.press("e");
+      await page.click(".pdfInkBar button[title^='Eraser']");
+      await page.click(".pdfInkSub button[aria-label='Whole strokes']");
+      box = await page.locator('[data-page="1"]').boundingBox();
+      await drawLine(page, [box.x + 175, box.y + 310], [box.x + 175, box.y + 330]);
+      await until(async () => await page.locator(paths).count() === count);
+      await until(() => deleting, { what: "delete request held in flight" });
+      const stayedErased = await page.evaluate(async ({ paths, count }) => {
+        const end = performance.now() + 300;
+        do {
+          await new Promise(requestAnimationFrame);
+          if (document.querySelectorAll(paths).length !== count) return false;
+        } while (performance.now() < end);
+        return true;
+      }, { paths, count });
+      assert(stayedErased, "saved strokes must not reappear while deletion is pending");
+    } finally { release(); }
+    await until(async () => {
+      const d = await account.api(`/api/blocks/${pageId}/subtree`);
+      return !d.block.children.some((b) => b.id === group.id);
+    }, { what: "empty group deleted" });
+    await page.unroute(url);
+    assertEq(await page.locator(paths).count(), count);
+    assertNoProblems(page);
+  });
+
+  await step("ink: Pencil touch gestures are claimed and finger gestures remain available", async () => {
+    // Synthetic Safari event ordering exercises the handlers; a physical
+    // iPad is still needed to verify native Pencil/scroll arbitration.
+    await page.keyboard.press("Escape");
+    if (await page.locator(".pdfInkBar").count()) await page.keyboard.press("Escape");
+    const paths = '[data-page="1"] .inkLayer path';
+    const count = await page.locator(paths).count();
+    const result = await page.locator('[data-page="1"]').evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const pointer = (type, pointerType, pointerId, x) => el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerType, pointerId, button: 0,
+        buttons: type === "pointerup" ? 0 : 1, pressure: 0.7,
+        clientX: box.left + x, clientY: box.top + 350,
+      }));
+      const touch = (type, touchType) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        const contact = { identifier: 1, touchType, clientX: box.left + 100, clientY: box.top + 350 };
+        Object.defineProperties(event, {
+          changedTouches: { value: [contact] }, touches: { value: [contact] },
+        });
+        el.dispatchEvent(event);
+        return event.defaultPrevented;
+      };
+      const fingerBefore = touch("touchstart", "direct");
+      const pencilBefore = touch("touchstart", "stylus");
+      pointer("pointerdown", "pen", 71, 100);
+      const pencilStart = touch("touchstart", "stylus");
+      const pencilMove = touch("touchmove", "stylus");
+      const untypedPencil = touch("touchmove", undefined);
+      const fingerDuring = touch("touchstart", "direct");
+      pointer("pointerdown", "touch", 72, 120);
+      pointer("pointerup", "touch", 72, 120);
+      pointer("pointermove", "pen", 71, 220);
+      pointer("pointerup", "pen", 71, 220);
+      const fingerAfter = touch("touchstart", "direct");
+      return { fingerBefore, pencilBefore, pencilStart, pencilMove, untypedPencil, fingerDuring, fingerAfter };
+    });
+    assert(result.pencilBefore && result.pencilStart && result.pencilMove && result.untypedPencil,
+      "Pencil touch events prevent native panning, including before pointerdown");
+    assert(!result.fingerBefore && !result.fingerDuring && !result.fingerAfter,
+      "direct finger gestures are not cancelled by ink");
+    await until(async () => await page.locator(paths).count() === count + 1, { what: "pen stroke survived a second contact" });
+    assertNoProblems(page);
+  });
+
   if (ctx) await ctx.close();
   return { inkPageId: pageId };
 }

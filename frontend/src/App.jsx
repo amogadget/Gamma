@@ -5322,8 +5322,11 @@ export default function App() {
     for (const { id, ink } of inkStore.dirtyDrafts()) {
       try {
         if (!ink.strokes.length) {
-          inkStore.clearDraft(id);
           await apiJson(`${API}/blocks/${id}`, { method: "DELETE" });
+          // Keep the empty draft until the tree observes the deletion; the
+          // HTTP response can arrive before the corresponding socket op.
+          const block = flattenBlocks(blocksRef.current).find((b) => b.id === id);
+          inkStore.markDeleted(id, ink, block?.properties?.ink_url || "");
           continue;
         }
         const r = await apiJson(`${API}/upload-ink`, { method: "POST", headers: json, body: JSON.stringify(ink) });

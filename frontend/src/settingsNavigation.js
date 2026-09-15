@@ -7,7 +7,7 @@ export const resolveSettingsPane = (pane) => PANE_ALIASES[pane] || pane;
 
 // Search names the actual setting, including settings on the second-level AI pages.
 const entries = [
-  ["appearance", "Theme", "dark light sepia gray system colors"],
+  ["appearance", "Theme", "dark light sepia solarized gray system colors"],
   ["appearance", "Dark PDF pages", "flip invert page colors"],
   ["appearance", "Control size", "zoom buttons scale touch"],
   ["appearance", "Status bar", "notifications messages"],
