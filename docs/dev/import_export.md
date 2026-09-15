@@ -9,6 +9,7 @@ typeset as their own PDF, and the annotated-PDF writer. Code: `gamma/routers/imp
 `gamma/pdf_notes.py`, `gamma/pdf_document.py`, `gamma/pdf_typeset.py`,
 `gamma/note_markup.py`, `gamma/vector_text.py`, `gamma/pdf_glyphs.py`,
 `gamma/pdf_image.py`; frontend dialogs in
+[importExport.jsx](../../frontend/src/importExport.jsx), re-exported by
 [widgets.jsx](../../frontend/src/widgets.jsx).
 
 ## Importing annotations embedded in a PDF
@@ -37,12 +38,19 @@ the original is still embedded).
 
 ## The Import dialog
 
-The ⋮ menu's single "Import…" entry → `ImportDialog` in `widgets.jsx`: the
-export dialog's counterpart — pick a source (annotations embedded in this PDF,
+The ⋮ menu's single "Import…" entry → `ImportDialog` in `importExport.jsx`: the
+export dialog's counterpart — first choose a source using large format cards
+(annotations embedded in this PDF,
 a Logseq .pdf + .edn, a Zotero library .zip, Markdown notes — one `.md` or a
-`.zip` such as a Notion export, or a Gamma export .zip), flip the strip switch (applies
-to embedded annotations, including the ones inside Zotero's exported PDFs),
-confirm. Zotero is the default source (a numbered step guide reusing
+`.zip` such as a Notion export, or a Gamma export .zip). Next opens a review
+page only for sources with options. The strip switch
+applies to embedded annotations, including those inside Zotero's exported PDFs.
+It is available only for PDF annotations and Zotero, and changes the stored-PDF
+example while the imported Gamma notes remain. Confirm on the review page.
+Markdown, Logseq and Gamma imports open the appropriate file picker directly;
+their preparation instructions appear below the selected source. Double-click
+and the footer action follow the same source rules in `transferFormats.js`.
+Zotero is the default source (a numbered step guide reusing
 settingsKit's `Step`); with a PDF open, that PDF's own annotations win. Nothing
 is remembered: the switch starts from the Settings preference each time, so the
 setting stays the standing policy.
@@ -213,8 +221,8 @@ imports it through the existing `/api/import-data?mode=merge` — additive,
 deduped by block id / doc id / content hash, so re-importing adds nothing. The
 ⋮ Import dialog's "Gamma export (.zip)" source feeds the zip to that endpoint
 via the same upload/progress path as Settings → Restore backup (guests can't
-import). The dialog's three switches don't apply — a Gamma export is a 1:1
-copy, so they're pinned on.
+import). A Gamma export is a complete copy. It includes everything and exports
+directly from format selection, without a switches page.
 
 ### Importing a shared page by link
 
@@ -247,11 +255,29 @@ status line and the transfer row.
 
 ## The Export dialog
 
-The ⋮ menu's single "Export…" entry → `ExportDialog` in `widgets.jsx`: one
-Notion-style dialog — format (PDF / Notes as PDF / Markdown / Obsidian vault /
-Logseq graph / Zotero RDF / Gamma) plus Highlights, Notes and Bundle-the-files switches (per-format hint
-text lives in the `EXPORT_SWITCH_TEXT` table), remembered in `localStorage`
-(`gamma-export-opts`). The switches are query flags on two endpoints:
+The ⋮ menu's single "Export…" entry → `ExportDialog` in `importExport.jsx`:
+first choose a format (PDF / Notes as PDF / Markdown / Obsidian vault /
+Logseq graph / Zotero RDF / Gamma) using large `PictureChoices` cards grouped
+into PDF, MD and ZIP rows, with monochrome app logos and shared document icons.
+Double-click a card or select it and use the footer action. Editable formats open
+an illustrative page preview with the applicable Highlights, Notes and
+Bundle-the-files switches. Back returns to the choices without losing edits.
+Gamma has fixed contents, so it exports directly with all contents included.
+A remote PDF without a stored copy also exports directly as the original file.
+Logseq offers only file bundling; its highlights and notes are always included.
+Both dialogs reuse `SubDialog` for focus trapping, Escape and dismissal;
+controls keep their shared hover/focus styling. The previews in
+`illustrations/TransferPreview.jsx` are hand-coded HTML/CSS illustrations of the effective
+options, not renders of the user's document. Bundled files appear outside the
+page. `transferFormats.js` holds format labels, categories, hints, editable
+options and fixed values. `resolveExport` derives controls, the need for review,
+and a single effective payload shared by the preview and download action.
+Zotero highlights require bundled PDFs; disabling bundling temporarily disables
+highlights without changing the saved preference. Double-click resolves the
+activated card's ID directly, without waiting for selection state to update.
+Format-specific hint text lives in `EXPORT_SWITCH_TEXT`; the selected
+format and options are remembered in `localStorage` (`gamma-export-opts`).
+The switches are query flags on two endpoints:
 `/pages/{id}/export?mode=readable&highlights=&notes=&pdf=` (Markdown,
 `render_readable` in `markdown_export.py`; dropping highlights keeps a
 highlight block's own text as a plain bullet; the front matter carries the
@@ -267,12 +293,13 @@ materializes the synced block's content with a *(from …)* attribution,
 nested embeds degrading to mentions; ids the resolver doesn't know stay as
 typed) and
 `/pages/{id}/export-pdf?highlights=&notes=`. "PDF" is the paper itself and is
-hidden when there is none (a note page, an unsaved proxy PDF, a folder) —
+hidden when there is none (a note page or a folder). An unsaved proxy PDF can
+export only its original file, so it skips the options page and exports directly.
 "Notes as PDF" (`?mode=notes-pdf`) takes over as the fallback format, and its
 Bundle switch is hidden because a document always embeds its images. Two
 combinations are special: a
-Logseq graph is defined by carrying both layers, so its switches are pinned on
-and disabled; a PDF with both off is the stored file itself, which the frontend
+Logseq graph is defined by carrying both layers, so highlights and notes are
+always included and only file bundling gets a switch; a PDF with both off is the stored file itself, which the frontend
 downloads from the viewer's own URL (so it also works for a PDF that only
 exists behind the proxy).
 

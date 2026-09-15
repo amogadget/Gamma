@@ -93,11 +93,12 @@ export function Segmented({ value, onChange, options }) {
 
 // Compact visual alternatives for a single preference. Previews are decorative;
 // labels, descriptions and the pressed state identify each choice accessibly.
-export function PictureChoices({ label, value, onChange, options, columns = 3 }) {
+export function PictureChoices({ label, value, onChange, onConfirm, options, columns = 3 }) {
   return <div className="setPictureChoices" role="group" aria-label={label} style={{ "--picture-columns": columns }}>
     {options.map(({ value: id, label: name, hint, preview }) => (
       <button key={String(id)} type="button" className={`uiBtn setPictureChoice${value === id ? " on" : ""}`}
-        aria-label={name} aria-description={hint} title={hint} aria-pressed={value === id} onClick={() => onChange(id)}>
+        aria-label={name} aria-description={hint} title={hint} aria-pressed={value === id} onClick={() => onChange(id)}
+        onDoubleClick={onConfirm ? () => onConfirm(id) : undefined}>
         {preview}
         <span className="setPictureCaption">
           <span className="setPictureName">{name}</span>
@@ -138,7 +139,7 @@ export function ToggleGroup({ selected, onToggle, options, disabled }) {
 // Every editor dialog is composed the same way: SubDialog › .settingsForm ›
 // Step (numbered stages, for flows) or Field (label + hint + one control),
 // closed by a .reportModalBtns footer.
-export function SubDialog({ title, onClose, children, draft }) {
+export function SubDialog({ title, onClose, children, draft, className = "" }) {
   const key = React.useId();
   const [initial] = React.useState(() => JSON.stringify(draft));
   const dirty = draft !== undefined && JSON.stringify(draft) !== initial;
@@ -153,7 +154,7 @@ export function SubDialog({ title, onClose, children, draft }) {
   }, []);
   return (
     <div className="reportOverlay subDialog" onClick={(event) => { event.stopPropagation(); close(); }}>
-      <div className="reportModal" role="dialog" aria-modal="true" aria-label={title}
+      <div className={`reportModal ${className}`} role="dialog" aria-modal="true" aria-label={title}
         ref={ref} tabIndex={-1} onClick={(event) => event.stopPropagation()}
         onClickCapture={(event) => {
           if (dirty && event.target.closest("button")?.textContent.trim() === "Cancel") {
@@ -170,7 +171,7 @@ export function SubDialog({ title, onClose, children, draft }) {
             const targets = [...ref.current.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), summary')]
               .filter((el) => el.getClientRects().length && !el.closest("[inert]"));
             const first = targets[0], last = targets.at(-1);
-            if (event.shiftKey && (document.activeElement === first || document.activeElement === ref.current)) { event.preventDefault(); last?.focus(); }
+            if (event.shiftKey && (document.activeElement === first || !targets.includes(document.activeElement))) { event.preventDefault(); last?.focus(); }
             else if (!event.shiftKey && (document.activeElement === last || document.activeElement === ref.current)) { event.preventDefault(); first?.focus(); }
           }
         }}>

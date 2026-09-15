@@ -44,6 +44,9 @@ export const FileIcon = (p) => (
 export const FileTextIcon = (p) => (
   <Icon {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></Icon>
 );
+export const MarkdownIcon = (p) => (
+  <Icon {...p}><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M5 15V9l3 3 3-3v6M17 9v6m-2-2 2 2 2-2" /></Icon>
+);
 export const PaperIcon = (p) => (
   <Icon {...p}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /><path d="M15 2v5h5" /></Icon>
 );

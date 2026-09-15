@@ -127,6 +127,24 @@ Thumbnails, Folders and Labels switches. Use this approach for future visual
 settings; a set of miniature alternative cards is appropriate for mutually
 exclusive palettes such as themes.
 
+Import and Export start with large format/source choices in PDF, MD and ZIP
+rows. Use recognizable app logos for app formats and shared PDF, notes and
+Markdown icons for document formats, with consistent monochrome sizing. A live illustrative
+page follows only when there are editable options. Fixed contents get no switches:
+Gamma exports directly; Logseq export shows only file bundling. Sources with no
+import options open the file picker directly, with instructions on the selection
+page. Double-click uses the same action as the footer button. Capability rules in
+`transferFormats.js` determine the controls, effective values and need for review.
+The dialogs reuse `PictureChoices`,
+`Toggle` and `SubDialog`; their previews are hand-coded React/HTML and CSS in
+`illustrations/TransferPreview.jsx` and `illustrations/illustrations.css`. These are examples of the output
+options, not renders of the current document.
+
+Keep UI illustrations together in [illustrations/](../../frontend/src/illustrations/README.md),
+with one file per subject: React components for interactive drawings, SVG assets
+for fixed drawings, and a shared illustration stylesheet. Reuse existing icons
+and product widgets; keep control logic and surrounding layout in their owners.
+
 Settings panes are built only from
 [settingsKit.jsx](../../frontend/src/settingsKit.jsx):
 
