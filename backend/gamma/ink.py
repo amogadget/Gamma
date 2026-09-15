@@ -37,7 +37,6 @@ MAX_BYTES = 4 * 1024 * 1024
 COORD_UNIT = 100        # stored x/y are hundredths of a point
 PRESSURE_UNIT = 1000    # stored p is 0..1000
 THINNING = 0.5          # width = size * (1 + THINNING * (p - 0.5)); mirrors ink.js
-TOOLS = ("pen", "highlighter")
 _CH_RE = re.compile(r"^xy(?!.*(.).*\1)[ptaz]*$")
 _COLOR_RE = re.compile(r"^(#[0-9a-fA-F]{6}|rgba?\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*(,\s*[0-9.]+\s*)?\))$")
 

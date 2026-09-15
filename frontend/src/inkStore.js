@@ -47,11 +47,9 @@ export function inkFor(block) {
 }
 
 export function draft(id) { return drafts.get(id) || null; }
-// pageId: the Gamma page the block lives on (a flush after a page switch
-// saves through the block API instead of the open tree).
-export function setDraft(id, ink, { pageId } = {}) {
+export function setDraft(id, ink) {
   const prev = drafts.get(id);
-  drafts.set(id, { ink, dirty: true, url: prev?.url ?? "", pageId: pageId ?? prev?.pageId ?? "" });
+  drafts.set(id, { ink, dirty: true, url: prev?.url ?? "" });
   bump();
 }
 // The upload of `ink` landed at `url`. Strokes added meanwhile keep the
@@ -66,5 +64,5 @@ export function markSaved(id, ink, url) {
 export function clearDraft(id) { if (drafts.delete(id)) bump(); }
 export function dirtyDrafts() {
   return [...drafts.entries()].filter(([, d]) => d.dirty)
-    .map(([id, d]) => ({ id, ink: d.ink, pageId: d.pageId }));
+    .map(([id, d]) => ({ id, ink: d.ink }));
 }

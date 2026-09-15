@@ -182,7 +182,8 @@ sample bytes.
   blocks and strips them like the other types; the Markdown export writes
   `![Handwriting (p.N)](assets/<hash>.svg)` with the SVG generated into the
   zip; the notes-as-PDF document draws the strokes as vectors under a
-  "handwriting, p. N" line. `ai_tools.read_page` labels ink blocks.
+  "handwriting, p. N" line. The agent's `read_block` outline labels an ink
+  block "handwriting on p. N, K strokes" before its caption.
 
 ## Not built yet
 

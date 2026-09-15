@@ -17,7 +17,6 @@ everything.
 import html
 import re
 import threading
-import urllib.parse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request as URLRequest
 

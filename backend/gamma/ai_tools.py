@@ -295,11 +295,11 @@ def _read_cap(value) -> int:
     return min(cap, READ_CHARS_MAX) if cap > 0 else READ_CHARS_CAP
 
 
-def _run_read_page(conn, ws: str, scope: dict, args: dict):
-    loaded, error = _load_scoped_page(conn, scope, args)
-    if error:
-        return error, None
-    page_id, title, _, _ = loaded
+def _window_args(scope: dict, args: dict) -> tuple[int, int, int]:
+    """The document-text window a read asks for: ``(budget, offset, page)``
+    from the call's ``pdf_chars`` (default and cap from the read-window
+    preference), ``pdf_offset`` and 1-based ``pdf_page``. Shared by
+    read_page and fetch_paper; a malformed value falls back to its default."""
     cap = _read_cap(scope.get("read_chars"))
     default = min(READ_CHARS_DEFAULT, cap)
     try:
@@ -314,6 +314,15 @@ def _run_read_page(conn, ws: str, scope: dict, args: dict):
         page = max(1, int(args.get("pdf_page", 1)))
     except (TypeError, ValueError):
         page = 1
+    return budget, offset, page
+
+
+def _run_read_page(conn, ws: str, scope: dict, args: dict):
+    loaded, error = _load_scoped_page(conn, scope, args)
+    if error:
+        return error, None
+    page_id, title, _, _ = loaded
+    budget, offset, page = _window_args(scope, args)
     section = page_report_section(conn, ws, page_id, budget, offset, page)
     if not section:
         return f'"{title}" has no readable content', None
@@ -642,20 +651,8 @@ def _run_fetch_paper(conn, ws: str, scope: dict, args: dict):
     source = str(args.get("source") or "").strip()
     if not source:
         return "error: empty source — pass a DOI, an arXiv id or an http(s) URL", None
-    cap = _read_cap(scope.get("read_chars"))
-    default = min(READ_CHARS_DEFAULT, cap)
-    try:
-        budget = max(1, min(int(args.get("pdf_chars", default)), cap))
-    except (TypeError, ValueError):
-        budget = default
-    try:
-        offset = max(0, int(args.get("pdf_offset", 0)))
-    except (TypeError, ValueError):
-        offset = 0
-    try:
-        page = max(1, int(args.get("pdf_page", 1)))
-    except (TypeError, ValueError):
-        page = 1
+    budget, offset, page = _window_args(scope, args)
+    budget = max(1, budget)  # a fetched document has no "notes only" reading
     try:
         doc = fetch_document(source)
     except FetchError as e:

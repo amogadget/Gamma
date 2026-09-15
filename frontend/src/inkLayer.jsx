@@ -20,7 +20,7 @@ import {
 import * as inkStore from "./inkStore";
 
 // Re-render when any draft or file changes.
-export function useInkVersion() {
+function useInkVersion() {
   const [v, setV] = useState(inkStore.currentVersion());
   useEffect(() => inkStore.subscribe(setV), []);
   return v;

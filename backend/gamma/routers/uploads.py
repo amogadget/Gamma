@@ -1,7 +1,5 @@
 """PDF / image / generic file uploads (content-hash deduped) and upload serving."""
 
-import sqlite3
-
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 

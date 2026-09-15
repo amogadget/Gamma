@@ -49,9 +49,9 @@ document). The viewer's load effect composes them:
    `PDFDocumentProxy` objects with their layout) is committed as it is.
    Documents are never destroyed on a tab switch or a viewer unmount, only on
    eviction, a second after the commit so mounted pages are not torn out from
-   under pdf.js. The byte cache (`PDF_CACHE`) shrank to one entry to pay for
-   it: re-reading bytes from IndexedDB costs tens of milliseconds, re-parsing
-   them is the expensive half.
+   under pdf.js. The byte cache (`PDF_CACHE`) holds one entry, which pays
+   for this one: re-reading bytes from IndexedDB costs tens of milliseconds,
+   re-parsing them is the expensive half.
 2. **Otherwise the manifest and the bytes are fetched in parallel.** On a
    cold open (nothing on screen yet) the manifest alone commits a
    **skeleton**: page boxes of exact size, no document. The host's `"layout"`
@@ -99,11 +99,11 @@ installed `pdfjs-dist` legacy build and is served content-hashed and immutable
 like the bundle; one `PDFWorker` is created at module scope and shared by every
 document (pdf.js would otherwise start a fresh worker per `getDocument`, and it
 destroys only workers it created itself, so a shared one survives cache
-evictions). Before this the worker was a copy under `public/vendor/` sent
-`no-cache`, and since Starlette's `FileResponse` never answers 304, every page
-load re-downloaded it: at 20 Mbps that was 0.6 to 0.85 s of every open, cold
-or warm. Unhashed files (`index.html`, favicons) now get a real 304 from the
-static route in `gamma/app.py`.
+evictions). A copy under `public/` sent `no-cache` would be re-downloaded on
+every page load, because Starlette's `FileResponse` sets an ETag but never
+compares one (at 20 Mbps, 0.6 to 0.85 s of every open — the research note has
+the measurement). The static route in `gamma/app.py` compares the ETag
+itself, so the unhashed files (`index.html`, favicons) get a real 304.
 
 ## Load phases
 

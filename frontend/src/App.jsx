@@ -4207,8 +4207,8 @@ export default function App() {
   // floats above the window stack instead of being clipped by the notes
   // window / drawn under the chat below it.
   const metaBtnRef = useRef(null);
-  function openMetaPopover(force = false) {
-    const opening = force || openPopover !== "meta";
+  function openMetaPopover() {
+    const opening = openPopover !== "meta";
     if (opening) {
       const r = metaBtnRef.current?.getBoundingClientRect();
       if (r) setMetaPopPos({ top: r.bottom + 6, right: Math.max(8, window.innerWidth - r.right) });
@@ -5377,7 +5377,7 @@ export default function App() {
         properties: { ink_url: "", pdf_page: c.page, ink_strokes: 0 },
       }))]);
     }
-    for (const c of changes) inkStore.setDraft(c.id, c.after, { pageId: focusedBlockId });
+    for (const c of changes) inkStore.setDraft(c.id, c.after);
     if (record) {
       const h = inkHistRef.current;
       h.undo.push(changes);

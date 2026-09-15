@@ -135,15 +135,21 @@ def _graph_page_parts(page, uploads_dir, include_pdf):
     return entries, files, blobs, assets
 
 
+def _children_by_id(blocks) -> dict:
+    """``{parent_id: [children in sibling order]}`` — what highlight_note_text
+    walks for an annotation's nested notes."""
+    children_by_id: dict = {}
+    for b in sorted(blocks, key=lambda b: b["position"] or ""):
+        children_by_id.setdefault(b["parent_id"], []).append(b)
+    return children_by_id
+
+
 def _collect_marks(blocks) -> list[dict]:
     """Highlight blocks → annotate_pdf marks (position/color/popup note).
     Skips annotations that came from the PDF itself and are STILL embedded in
     it (annot_stripped marks ones the import removed from the file), and link
     regions (Gamma navigation aids, not annotations)."""
-    children_by_id: dict = {}
-    for b in sorted(blocks, key=lambda b: b["position"] or ""):
-        children_by_id.setdefault(b["parent_id"], []).append(b)
-
+    children_by_id = _children_by_id(blocks)
     marks = []
     for b in blocks:
         props = b["properties"]
@@ -168,9 +174,7 @@ def _collect_ink(blocks, uploads_dir) -> list[dict]:
     """Handwriting blocks → ``annotate_pdf``'s ink groups (the parsed file,
     the caption + nested notes, the block id). Same skip rule as marks for
     ink that came from the PDF and is still embedded in it."""
-    children_by_id: dict = {}
-    for b in sorted(blocks, key=lambda b: b["position"] or ""):
-        children_by_id.setdefault(b["parent_id"], []).append(b)
+    children_by_id = _children_by_id(blocks)
     groups = []
     for b in blocks:
         props = b["properties"]

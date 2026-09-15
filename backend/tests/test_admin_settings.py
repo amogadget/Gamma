@@ -1,5 +1,7 @@
 """Storage limits: server-wide defaults, per-user quota overrides, enforcement."""
 
+import time
+
 import pytest
 
 from conftest import login as _login, make_user as _make_user, workspace_of
@@ -53,8 +55,17 @@ def restore_defaults():
             uploads = ws_uploads_dir(workspace_of(username))
             if uploads.exists():
                 for f in uploads.iterdir():
-                    if f.is_file():
-                        f.unlink()
+                    if not f.is_file():
+                        continue
+                    # A stored PDF's manifest walk (pdf_meta.schedule) runs on
+                    # a background thread and may still hold the file open;
+                    # Windows refuses the unlink until it closes.
+                    for _ in range(40):
+                        try:
+                            f.unlink()
+                            break
+                        except PermissionError:
+                            time.sleep(0.05)
 
     reset()
     yield

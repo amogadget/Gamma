@@ -23,6 +23,12 @@ from .logbuf import log
 
 # Bump when the stored shape changes; older rows are recomputed lazily.
 VERSION = 1
+# Walks in progress, so a second caller for the same document joins the
+# first instead of queueing behind the pdfium lock; WAIT_S is the longest
+# such a caller waits.
+WAIT_S = 60
+_inflight: dict[tuple[str, str], threading.Event] = {}
+_inflight_lock = threading.Lock()
 
 SCHEMA = [
     "CREATE TABLE IF NOT EXISTS pdf_docs (doc_id TEXT PRIMARY KEY, bytes INTEGER NOT NULL, "
@@ -93,12 +99,6 @@ def _compute(ws: str, doc_id: str) -> dict | None:
         )
         conn.commit()
     return _shape(doc_id, size, dims)
-
-
-# Longest a caller waits for someone else's walk of the same document.
-WAIT_S = 60
-_inflight: dict[tuple[str, str], threading.Event] = {}
-_inflight_lock = threading.Lock()
 
 
 def schedule(ws: str, doc_id: str) -> None:

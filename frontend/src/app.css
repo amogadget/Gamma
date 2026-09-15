@@ -4475,7 +4475,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   background: var(--accent-bg-light);
   color: var(--accent);
 }
-.fileChipIcon-pdf { background: rgba(208, 80, 80, 0.12); color: #d05050; }
+.fileChipIcon-pdf { background: var(--danger-bg); color: var(--danger); }
 .fileChipBtn {
   display: inline-flex;
   align-items: center;

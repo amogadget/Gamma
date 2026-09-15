@@ -88,7 +88,7 @@ export function parseUploadUrl(href) {
 }
 
 // The chip's markdown for an upload-file reply ({url, name}).
-export function fileBlockMarkdown(up) {
+function fileBlockMarkdown(up) {
   return `[${(up.name || "file").replace(/[\[\]]/g, "")}](${up.url})`;
 }
 
@@ -137,7 +137,7 @@ export function postFile(endpoint, file) {
 
 // POST /api/upload-file → {url, name} | null: any non-image file a block
 // takes (drop on a row, drop on the page).
-export async function uploadOtherFile(file) {
+async function uploadOtherFile(file) {
   const data = file ? await postFile("/api/upload-file", file) : null;
   return data?.url ? { url: data.url, name: data.name || file.name } : null;
 }
@@ -175,7 +175,7 @@ const KINDS = [
   [/^(mp4|mov|mkv|webm)$/, "Video"],
   [/^(mp3|wav|flac|ogg)$/, "Audio"],
 ];
-export function fileKindLabel(ext) {
+function fileKindLabel(ext) {
   const e = (ext || "").toLowerCase();
   const hit = KINDS.find(([re]) => re.test(e));
   return hit ? hit[1] : e ? `${e.toUpperCase()} file` : "File";

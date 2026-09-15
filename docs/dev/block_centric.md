@@ -83,7 +83,7 @@ finds it afterwards (`pages_for_docs` matches `doc_id` and
 "Add to library" opens the existing one.
 
 **Sub-pages.** Not a new structure: the tree already nests arbitrarily and
-`?block=<id>` opens any block on its page. "Add to library" = Logseq-style
+`?block=<id>` opens any block on its page. A sub-page is a Logseq-style
 zoom-in on a subtree (focus mode), not a second page table. The flat library
 with folder labels stays the navigation model.
 
@@ -388,7 +388,7 @@ A multi-PDF viewer with `attachment_id` on highlights is not planned.
   never attaches. A property strip under the title was tried and removed
   the same day: it repeated what the metadata popover shows.
 
-Still open from the old stage 4: "Add to library" zoom-in on any block
+Still open from the old stage 4: zoom-in on any block as a focused sub-page
 (breadcrumb back to the page); tabs and `?block=` already carry the id.
 
 ## Non-goals (for now)

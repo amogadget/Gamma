@@ -47,10 +47,10 @@ All state is SQLite + files on disk under a data directory (env
   API, which is WAL-safe.
 - `workspaces/<id>/data.db` — the workspace's derived data: AI `chats` +
   `chat_history`, `page_snaps` (the recents-card cover thumbnails, synced via
-  `/api/page-snaps` — too big for the prefs KV) and the two lazily built FTS5
-  the viewer's per-document manifests `pdf_docs` (byte size, page count,
-  page sizes — `gamma/pdf_meta.py`, [pdf_loading.md](pdf_loading.md)), the
-  search indexes: `pdf_fts`/`pdf_fts_docs` (extracted PDF text per page —
+  `/api/page-snaps` — too big for the prefs KV), the viewer's per-document
+  manifests `pdf_docs` (byte size, page count, page sizes —
+  `gamma/pdf_meta.py`, [pdf_loading.md](pdf_loading.md)) and the two lazily
+  built FTS5 search indexes: `pdf_fts`/`pdf_fts_docs` (extracted PDF text per page —
   schema + queries `gamma/pdf_index.py`, extraction `routers/search.py`) and
   `block_fts`/`block_fts_meta` (every non-root block's content keyed by its
   page root, rebuilt per page when the page changed — `gamma/block_index.py`).

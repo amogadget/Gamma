@@ -20,8 +20,8 @@ from ..blocks_store import last_child_position
 from ..foldertags import clean_path, parse_tags
 from ..logbuf import log
 from ..ops import note_reload
-from ..markdown_import import MAX_MARKDOWN_BYTES, fm_text, md_to_blocks, parse_frontmatter
-from ..markdown_zip_import import import_markdown_zip, insert_note_page, markdown_page
+from ..markdown_import import MAX_MARKDOWN_BYTES, md_to_blocks
+from ..markdown_zip_import import import_markdown_zip, markdown_page
 from ..ink import InkError, dumps as ink_dumps, from_pdf_ink, parse_ink, pdf_position as ink_position
 from ..storage import content_digest, display_filename, is_pdf, store_file, store_pdf
 from ..logseq_import import (

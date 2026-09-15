@@ -23,7 +23,7 @@ export function newInk(page, width, height) {
 }
 
 const ID_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-export function strokeId() {
+function strokeId() {
   let s = "";
   for (let i = 0; i < 8; i++) s += ID_CHARS[Math.floor(Math.random() * ID_CHARS.length)];
   return s;
