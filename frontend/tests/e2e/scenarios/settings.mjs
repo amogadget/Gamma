@@ -30,6 +30,32 @@ export async function settingsScenarios(env) {
     await row(page, label).waitFor({ state: "visible" });
   }
 
+  await step("settings: external assistant token creation, hiding, and revocation", async () => {
+    const { ctx, page } = await setup();
+    try {
+      await openSettings(page);
+      await nav(page, "AI").click();
+      await nav(page, "External assistants").click();
+      const config = page.getByRole("textbox", { name: "Codex MCP configuration" });
+      await config.waitFor();
+      assert((await config.inputValue()).includes(`${server.base}/mcp`));
+      await page.getByRole("textbox", { name: "Connection name" }).fill("Codex test");
+      await page.getByRole("button", { name: "Create token", exact: true }).click();
+      const secret = page.getByRole("textbox", { name: "New integration token" });
+      await secret.waitFor();
+      assert((await secret.inputValue()).startsWith("gamma_"));
+      const connections = await user.api("/api/integrations/tokens");
+      assertEq(connections.tokens.length, 1);
+      assert(!JSON.stringify(connections).includes(await secret.inputValue()), "token is never returned in listings");
+      await page.getByRole("button", { name: "Done", exact: true }).click();
+      await secret.waitFor({ state: "detached" });
+      await page.getByRole("button", { name: "Revoke", exact: true }).click();
+      await page.getByText("No connections yet.", { exact: true }).waitFor();
+      assertEq((await user.api("/api/integrations/tokens")).tokens.length, 0);
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
+
   await step("settings: navigation, search, scoped management, and preferences survive reload", async () => {
     const { ctx, page } = await setup();
     try {

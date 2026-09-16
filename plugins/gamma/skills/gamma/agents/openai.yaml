@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gamma"
+  short_description: "Search and read Gamma pages, notes, and PDFs"
+  default_prompt: "Use $gamma to find and summarize my notes on this topic."

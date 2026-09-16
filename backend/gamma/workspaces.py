@@ -394,6 +394,7 @@ def delete(ws: str) -> str:
 
 
 def _delete_rows(conn, ws: str) -> None:
+    conn.execute("DELETE FROM integration_tokens WHERE workspace_id = ?", (ws,))
     conn.execute("DELETE FROM workspace_members WHERE workspace_id = ?", (ws,))
     conn.execute("DELETE FROM shares WHERE workspace_id = ?", (ws,))
     conn.execute("DELETE FROM user_prefs WHERE workspace_id = ?", (ws,))
@@ -437,6 +438,7 @@ def delete_account_workspaces(username: str) -> list[str]:
             if (kind and kind[0] == "personal") or owners == [username]:
                 deleted.append(ws)
         conn.execute("DELETE FROM workspace_members WHERE username = ?", (username,))
+        conn.execute("DELETE FROM integration_tokens WHERE username = ?", (username,))
         for ws in deleted:
             _delete_rows(conn, ws)
         conn.execute("DELETE FROM user_prefs WHERE username = ?", (username,))

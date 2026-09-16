@@ -23,6 +23,7 @@ const entries = [
   ["library", "Auto-fetch metadata", "title authors BibTeX DOI"],
   ["library", "Save external PDFs", "download storage offline URL"],
   ["ai", "Connections", "provider credentials API key ChatGPT login service"],
+  ["integrations", "External assistants", "Codex MCP integrations tokens read-only revoke connections"],
   ["ai", "Default chat model", "AI model"],
   ["ai", "Metadata model", "AI extraction identifiers"],
   ["ai", "Translation model", "AI translate"],

@@ -33,6 +33,7 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 - **Chat with your papers** — ask about the open PDF, paste figures, dictate by voice, or attach the whole PDF so the model sees tables and plots. Use Anthropic or OpenAI models, or sign in with your ChatGPT subscription — no API key.
 - **Mention a paper** — type `@` to find and attach a library page. Its details and text stay in context for follow-up questions.
 - **Put the agent to work** — ask it to search your library, read papers, compare findings, rename pages, or organize them into folders. Expand each tool step to inspect its arguments and results.
+- **Connect Codex and other assistants** — create a read-only workspace token in Settings → AI → External assistants. The [MCP integration and Codex plugin](docs/dev/mcp.md) let them search and read your pages, notes, highlights, and PDF text.
 
 ## ✍️ Take notes
 

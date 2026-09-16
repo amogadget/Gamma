@@ -28,7 +28,7 @@ from .config import USERS_DB, WORKSPACES_DIR
 # The data-directory schema version this code expects (users.db
 # ``PRAGMA user_version``). Bump it together with a new step in
 # gamma/migrations.py — never without one, never without bumping.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class SchemaOutdated(RuntimeError):
@@ -64,6 +64,15 @@ def safe_doc_id(doc_id: str) -> str:
 
 
 USERS_SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS integration_tokens (
+        id TEXT PRIMARY KEY,
+        token_hash TEXT NOT NULL UNIQUE,
+        username TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS publisher_sessions (
         username TEXT NOT NULL,
         host TEXT NOT NULL,

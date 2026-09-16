@@ -59,6 +59,8 @@ def main():
         "--collect-data", "ziamath",
         "--collect-data", "ziafont",
         "--collect-data", "latex2mathml",
+        # MCP validates tool schemas against the bundled JSON Schema metaschemas.
+        "--collect-data", "jsonschema_specifications",
         str(DESKTOP / "backend_entry.py"),
     ]
     env = os.environ.copy()

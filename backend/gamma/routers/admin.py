@@ -231,6 +231,7 @@ async def update_user(username: str, payload: UserUpdateRequest, request: Reques
             # Revoke existing sessions so a changed/leaked password can't be
             # ridden by an already-open session (incl. an attacker's).
             conn.execute("DELETE FROM sessions WHERE username = ?", (username,))
+            conn.execute("DELETE FROM integration_tokens WHERE username = ?", (username,))
         if payload.is_admin is not None:
             if not payload.is_admin and row[2] and _admin_count(conn) <= 1:
                 raise HTTPException(status_code=400, detail="cannot demote the last admin")
@@ -259,6 +260,7 @@ def rename_account_rows(conn: sqlite3.Connection, old: str, new: str) -> None:
     the renamed user. Workspace directories are named by id, so no files move."""
     conn.execute("UPDATE users SET username = ? WHERE username = ?", (new, old))
     conn.execute("UPDATE sessions SET username = ? WHERE username = ?", (new, old))
+    conn.execute("UPDATE integration_tokens SET username = ? WHERE username = ?", (new, old))
     conn.execute("UPDATE shares SET created_by = ? WHERE created_by = ?", (new, old))
     conn.execute("UPDATE workspace_members SET username = ? WHERE username = ?", (new, old))
     conn.execute("UPDATE workspace_members SET added_by = ? WHERE added_by = ?", (new, old))

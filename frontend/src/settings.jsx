@@ -1,5 +1,5 @@
 import React from "react";
-import { API, apiJson, fmtBytes, isUnverifiedPaperMeta, metaSourceInfo } from "./utils";
+import { API, apiJson, fmtBytes, isUnverifiedPaperMeta, metaSourceInfo, getCurrentWorkspace } from "./utils";
 import { MenuSelect } from "./menus";
 import {
   PaneHead, Section, Row, Toggle, Segmented, ToggleGroup, UnitInput, CharSlider, approxPages,
@@ -8,6 +8,7 @@ import {
 import { LibraryDisplaySettings } from "./settingsLibraryDisplay";
 import { AppearanceSettings } from "./settingsAppearance";
 import { AiSettings } from "./settingsAi";
+import { IntegrationSettings } from "./settingsIntegrations";
 import { UsersSettings } from "./settingsUsers";
 import { WorkspacesSettings } from "./settingsWorkspace";
 import { WorkspaceBackups } from "./settingsBackups";
@@ -67,6 +68,7 @@ const AI_NAV = [
   ["assistant", "Assistant", MessageSquareIcon],
   ["ai-advanced", "Advanced", ActivityIcon],
   ["prompts", "Prompts", TypeIcon],
+  ["integrations", "External assistants", GlobeIcon],
 ];
 
 // --- Editor: notes + search + PDF viewer -----------------------------------
@@ -949,6 +951,7 @@ export default function SettingsDialog({
   const modalRef = React.useRef(null);
   const drafts = React.useRef(new Map());
   const available = (id) => {
+    if (id === "integrations") return !!users && !users.isGuest;
     if (["account", "users"].includes(id)) return !!users && (id !== "users" || users.isAdmin);
     if (["workspaces", "backups"].includes(id)) return !!workspace;
     if (id === "server") return !!server;
@@ -1083,6 +1086,7 @@ export default function SettingsDialog({
                   <AdvancedAiSettings value={context} ai={aiValue} papers={paperValue} />
                 </> : null}
                 {pane === "prompts" ? <PromptsSettings value={prompts} /> : null}
+                {pane === "integrations" ? <IntegrationSettings key={getCurrentWorkspace()} workspaceId={getCurrentWorkspace()} /> : null}
                 {pane === "account" ? <UsersSettings value={users} selfOnly /> : null}
                 {pane === "users" ? <UsersSettings value={users} /> : null}
                 {pane === "workspaces" ? <WorkspacesSettings value={workspace} /> : null}

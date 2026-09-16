@@ -1302,18 +1302,14 @@ def ai_chat(payload: AIChatRequest, request: Request):
                 # A model copying a renamed tool out of replayed history still
                 # names the current one here (ai_context.DEPRECATED_TOOLS).
                 name = _canonical_tool(call["name"])
-                if name not in armed:
-                    result = ("error: tool not enabled — the user's permission "
-                              "settings do not allow it")
-                    action = tool_action("error", f'{name} — blocked by permissions',
-                                         name, call["arguments"], result, error=True)
-                elif name in MUTATING_TOOLS and actions >= MAX_TOOL_ACTIONS:
+                if name in armed and name in MUTATING_TOOLS and actions >= MAX_TOOL_ACTIONS:
                     result = ("error: change limit for one message reached — "
                               "stop and tell the user")
                     action = tool_action("error", f'{name} — change limit reached',
                                          name, call["arguments"], result, error=True)
                 else:
-                    result, action = run_agent_tool(ws, scope, name, call["arguments"])
+                    result, action = run_agent_tool(ws, scope, name, call["arguments"],
+                                                    permissions=payload.permissions, allowed_tools=armed)
                 # Reads and failures render as chips too, but only applied
                 # mutations count against the change budget.
                 if name in MUTATING_TOOLS and not action.get("error"):

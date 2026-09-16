@@ -994,7 +994,8 @@ for _old, _new in DEPRECATED_TOOLS.items():
 MUTATING_TOOLS = {t["spec"]["name"] for t in TOOLS if t["mutating"]}
 
 
-def agent_tools(scope_type: str, perms: dict | None = None, read_chars: int = 0) -> list:
+def agent_tools(scope_type: str, perms: dict | None = None, read_chars: int = 0,
+                *, allowed_tools=None, can_write: bool = True) -> list:
     """The armed tool specs for a chat scope and the user's per-tool permission
     map (missing key = allowed, so new tools default on). [] = plain chat.
     read_chars is the request's read-window preference — the specs that name
@@ -1005,6 +1006,10 @@ def agent_tools(scope_type: str, perms: dict | None = None, read_chars: int = 0)
     specs = []
     for t in TOOLS:
         if scope_type not in t["scopes"] or not perms.get(t["perm"], True):
+            continue
+        if allowed_tools is not None and t["spec"]["name"] not in allowed_tools:
+            continue
+        if t["mutating"] and not can_write:
             continue
         spec = t["spec"]
         if "{read_cap}" in spec.get("description", ""):
@@ -1117,8 +1122,13 @@ def tool_action(kind: str, summary: str, name: str, args: dict, result: str,
     return {**out, **extra}
 
 
-def run_agent_tool(ws: str, scope: dict, name: str, args: dict) -> tuple[str, dict]:
-    """Execute one agent tool call against the chat's scope.
+def run_agent_tool(ws: str, scope: dict, name: str, args: dict,
+                   *, permissions: dict | None = None, allowed_tools=None) -> tuple[str, dict]:
+    """Execute one tool call against a trusted, caller-resolved workspace/scope.
+
+    Chat and MCP share this dispatcher. Callers supply their permission map
+    and/or explicit tool allowlist; omitted policies preserve legacy internal
+    callers. The caller authenticates the workspace before invoking this layer.
 
     Returns ``(result_text, action)`` — result_text goes back to the model;
     action is the ``{kind, summary, tool, args, result}`` UI event for EVERY
@@ -1136,6 +1146,11 @@ def run_agent_tool(ws: str, scope: dict, name: str, args: dict) -> tuple[str, di
     if tool["mutating"] and not scope.get("can_write", True):
         result = "error: you can only view this workspace — no changes are possible"
         return result, tool_action("error", result[:200], name, args, result, error=True)
+    permitted = {s["name"] for s in agent_tools(scope.get("type") or "", permissions,
+                                               allowed_tools=allowed_tools)}
+    if name not in permitted:
+        result = "error: tool not enabled — the user's permission settings do not allow it"
+        return result, tool_action("error", f"{name} — blocked by permissions", name, args, result, error=True)
     # Attaching a reference expands read access, never the editing scope.
     if tool["mutating"]:
         scope = {**scope, "context_pages": []}

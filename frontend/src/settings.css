@@ -603,3 +603,10 @@
   .metaStatRow { grid-template-columns: 18px minmax(0, 1fr) 58px 58px 58px 24px; padding: 3px 6px; font-size: 11px; }
   .settingsUnsaved { padding: 12px; }
 }
+.integrationDetails { display: grid; gap: 10px; padding: 8px 0; }
+.integrationDetails p { margin: 0; font-size: 13px; line-height: 1.5; }
+.integrationDetails textarea { width: 100%; box-sizing: border-box; resize: vertical; font-family: monospace; }
+.integrationDetails > button { justify-self: start; }
+.integrationActions { display: flex; gap: 8px; }
+.integrationCreateControls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; width: 260px; }
+.integrationCreateControls .aiKeyInput { flex: 1; width: 100px; min-width: 0; margin: 0; }

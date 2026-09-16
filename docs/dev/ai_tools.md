@@ -30,6 +30,12 @@ before dispatching a mutation, so attachments do not grant editing access.
 
 ## The tools
 
+The [MCP adapter](mcp.md) exposes a read-only subset of this same registry to
+external assistants. `agent_tools` filters definitions and `run_agent_tool`
+enforces permissions and an optional explicit allowlist at dispatch. Gamma chat
+passes its armed tool set and permission map; MCP passes its fixed four-tool
+allowlist and a non-writable workspace scope.
+
 | Tool | Permission | Scope | What it does |
 |---|---|---|---|
 | `list_pages` | List pages | folder | List the folder's pages: id, title, attachments (`[pdf]` when the page carries a PDF, `[]` for text-only), folder paths, labels, cached metadata (first author, year, venue), last-update date |

@@ -19,6 +19,18 @@ from gamma.db import SCHEMA_VERSION, SchemaOutdated, connect_users_db
 OLD = "2024-01-01T00:00:00.000000Z"
 
 
+def test_v5_adds_integration_tokens_and_is_repeatable(data_dir):
+    connect_users_db().close()
+    with closing(sqlite3.connect(str(data_dir / "users.db"))) as conn:
+        conn.execute("DROP TABLE integration_tokens")
+        conn.execute("PRAGMA user_version = 5")
+        conn.commit()
+    assert migrations.ensure_current()["applied"] == ["integration_tokens"]
+    with connect_users_db() as conn:
+        assert conn.execute("SELECT * FROM integration_tokens").fetchall() == []
+    assert migrations.ensure_current()["applied"] == []
+
+
 def test_v4_adds_publisher_sessions_and_is_repeatable(data_dir):
     connect_users_db().close()
     with closing(sqlite3.connect(str(data_dir / "users.db"))) as conn:
@@ -26,7 +38,7 @@ def test_v4_adds_publisher_sessions_and_is_repeatable(data_dir):
         conn.execute("PRAGMA user_version = 4")
         conn.commit()
     result = migrations.ensure_current()
-    assert result["applied"] == ["publisher_sessions"]
+    assert result["applied"] == ["publisher_sessions", "integration_tokens"]
     with connect_users_db() as conn:
         assert conn.execute("SELECT * FROM publisher_sessions").fetchall() == []
     assert migrations.ensure_current()["applied"] == []
@@ -116,7 +128,7 @@ def test_status_and_refusal_on_a_v0_directory(data_dir):
     build_v0(data_dir)
     st = migrations.status()
     assert st["version"] == 0 and st["target"] == SCHEMA_VERSION and not st["fresh"]
-    assert [p["name"] for p in st["pending"]] == ["baseline", "workspaces", "workspace_access", "workspace_kinds", "publisher_sessions"]
+    assert [p["name"] for p in st["pending"]] == ["baseline", "workspaces", "workspace_access", "workspace_kinds", "publisher_sessions", "integration_tokens"]
     # Nothing but the runner may open an old users.db.
     with pytest.raises(SchemaOutdated):
         connect_users_db()
@@ -128,7 +140,7 @@ def test_upgrade_v0_to_current(data_dir):
     build_v0(data_dir)
     result = migrations.ensure_current()
     assert result["from"] == 0 and result["to"] == SCHEMA_VERSION
-    assert result["applied"] == ["baseline", "workspaces", "workspace_access", "workspace_kinds", "publisher_sessions"]
+    assert result["applied"] == ["baseline", "workspaces", "workspace_access", "workspace_kinds", "publisher_sessions", "integration_tokens"]
     assert migrations.data_version() == SCHEMA_VERSION
 
     # A snapshot of every database was taken first, with a manifest.
@@ -218,7 +230,7 @@ def test_interrupted_upgrade_resumes(data_dir):
         m._move_prefs = original
     assert migrations.data_version() == 1  # the failed step did not stamp
     result = migrations.ensure_current()   # resumes: the moved account is skipped, the rest done
-    assert result["applied"] == ["workspaces", "workspace_access", "workspace_kinds", "publisher_sessions"] and migrations.data_version() == SCHEMA_VERSION
+    assert result["applied"] == ["workspaces", "workspace_access", "workspace_kinds", "publisher_sessions", "integration_tokens"] and migrations.data_version() == SCHEMA_VERSION
     with connect_users_db() as conn:
         assert conn.execute("SELECT COUNT(*) FROM users WHERE default_workspace = ''").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM workspaces").fetchone()[0] == 3

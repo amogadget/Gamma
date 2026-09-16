@@ -10,6 +10,7 @@ from . import config, migrations
 from .auth import session_middleware
 from .db import connect_data_db, connect_pages_db, connect_users_db
 from .logbuf import log, setup_logging
+from .mcp_server import GammaMCP
 from .routers import (
     admin,
     ai,
@@ -20,6 +21,7 @@ from .routers import (
     collab,
     export,
     imports,
+    integrations,
     ink,
     links,
     metadata,
@@ -97,7 +99,8 @@ def _startup_maintenance():
 def create_app() -> FastAPI:
     setup_logging()
     _silence_windows_connection_reset()
-    app = FastAPI(title="Gamma PDF Annotator")
+    mcp = GammaMCP()
+    app = FastAPI(title="Gamma PDF Annotator", lifespan=mcp.lifespan)
 
     app.middleware("http")(session_middleware)
 
@@ -113,6 +116,8 @@ def create_app() -> FastAPI:
     app.include_router(chats.router)
     app.include_router(chats.history_router)
     app.include_router(prefs.router)
+    app.include_router(integrations.router)
+    app.router.routes.append(mcp.route())
     app.include_router(metadata.router)
     app.include_router(search.router)
     app.include_router(shares.router)
