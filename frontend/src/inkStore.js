@@ -61,7 +61,6 @@ export function markSaved(id, ink, url) {
   drafts.set(id, { ...d, url, dirty: d.ink !== ink });
   bump();
 }
-export function clearDraft(id) { if (drafts.delete(id)) bump(); }
 // An acknowledged deletion still masks the old file while its block is in
 // the tree. Do not cache the empty ink under the old file URL, or discard
 // an edit made while the delete request was pending.

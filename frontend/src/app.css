@@ -4033,6 +4033,14 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   animation: pdfTransShimmer 1.4s linear infinite;
 }
 @keyframes pdfTransShimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+/* AI citation marks (pdfCitationOverlay.jsx) sit under the text layer and
+   let pointer input through; the notice replaces a match that failed. */
+.pdfCitationMark { z-index: 4; pointer-events: none; }
+.pdfCitationNotice {
+  position: absolute; top: 8px; left: 8px; right: 8px; z-index: 5;
+  padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--bg-elevated); color: var(--text-primary);
+}
 .pdfTransPara.streaming .pdfTransText > span::after {
   content: "";
   display: inline-block;
@@ -4703,8 +4711,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .inkEditRow, .inkEditOptions { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; }
 .inkEditRow .ctlBtn { flex: 1; min-width: 36px; min-height: 36px; }
 .inkEditRow .inkDeleteBtn { color: var(--danger); }
-.inkEditOptions { border-top: 1px solid var(--border); margin-top: 4px; }
-.inkEditOptions { align-items: center; }
+.inkEditOptions { align-items: center; border-top: 1px solid var(--border); margin-top: 4px; }
 .inkEditOptions .ctlBtn, .inkEditOptions .colorBtn { min-width: 32px; min-height: 32px; }
 .pdfViewer.pdfDark .inkLayer, .pdfViewer.pdfDark .inkCanvas { filter: invert(1) hue-rotate(180deg); }
 /* The brief outline after a jump from the notes. */

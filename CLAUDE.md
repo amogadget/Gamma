@@ -25,6 +25,7 @@ Topic docs live in `docs/dev/` — **read the relevant one before working in tha
 - [docs/dev/ai.md](docs/dev/ai.md) — the AI stack: provider entries and protocols (incl. ChatGPT OAuth), the `/api/ai/chat` request/stream shape, the library agent (scopes, permissions, tool loop, replay, privacy), chat-history buckets.
 - [docs/dev/ai_tools.md](docs/dev/ai_tools.md) — the agent's tools: what each does, arguments and caps, guardrails.
 - [docs/dev/ai_context.md](docs/dev/ai_context.md) — how the AI chat reads long papers: excerpt labelling, document map, search relaxation, page cap, the grounding prompt, and the eval results behind them.
+- [docs/dev/pdf_citations.md](docs/dev/pdf_citations.md) — clickable AI citations: the `[p. N](/?page=…&pdf_page=N&quote=…)` link shape, the `[PDF page N]` labels in context, and how `src/pdfCitation.js` re-finds the quote in the text layer.
 - [docs/dev/paper_metadata.md](docs/dev/paper_metadata.md) — metadata fetch/edit/cite/status and `/api/resolve-pdf` resolution chain.
 - [docs/dev/import_export.md](docs/dev/import_export.md) — the Import/Export dialogs and pipelines: embedded PDF annotations, Zotero and Logseq imports, Markdown-zip imports (Obsidian vaults, Notion exports), Markdown and Obsidian-vault export, the notes-as-PDF document writer, the annotated-PDF writer, and the typesetting engine they share (fonts, vector math/CJK, images).
 - [docs/dev/home_library.md](docs/dev/home_library.md) — folder labels, the merged listing and sorts, the shared page card, recents strip + cover snapshots, the home context menu.

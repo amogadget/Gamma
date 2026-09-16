@@ -108,7 +108,11 @@ always go — `include_notes` only means "also add my notes/highlights for PDF
 pages". The built-in chat system prompt frames the model as working inside
 that knowledge base and grounds claims about the pages in text actually read
 (look details up or say they're absent, never fill gaps from memory; cite a
-PDF by page number, say when something comes from the user's notes).
+PDF by page number, say when something comes from the user's notes). With a
+document in context, custom prompt or not, the citation instruction is
+appended: link a passage as `[p. N](/?page=<id>&pdf_page=N&quote=…)` using
+the `[PDF page N]` labels and the `Gamma page ID` each context section
+carries ([pdf_citations.md](pdf_citations.md)).
 
 Whatever went to the model is reported back: the stream's first line is
 `{"context": [...]}` (non-stream: a `context` field) with one entry per

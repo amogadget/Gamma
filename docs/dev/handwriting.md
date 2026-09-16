@@ -35,42 +35,39 @@ e2e `tests/e2e/scenarios/ink.mjs` and `inkEditing.mjs`.
   **lasso**'s row: *freeform* circles strokes (more than half their
   samples inside), *box* drags a rectangle; the dashed box then moves by
   dragging and deletes with `Delete`. Both work across groups on the page.
-- **Tap existing ink to edit it.** With *Fingers never draw* enabled, a
-  finger tap (or a 450 ms stationary hold) selects the nearest stroke,
-  including thin ink within a 10 CSS px hit tolerance. Mouse clicks in
-  Hand mode and short taps with Lasso also select. A swipe still scrolls;
-  movement beyond 8 CSS px, a second contact, a pen contact or cancellation
-  clears a pending touch selection. Finger-drawing mode keeps armed writing
-  tools immediate; use Hand to tap-select in that mode.
-- The **selection menu** appears after direct selection or a lasso:
-  Color, Width, Duplicate, Select note (all strokes in the selected
-  ink blocks), Show note (jump to the notes pane), and Delete at the right.
-  Edits apply immediately; blank taps or Escape dismiss selection. Color/width
-  edit existing strokes and preserve pressure/time. Mixed pen/highlighter
-  selections have separate width choices. Duplicate offsets fresh-ID copies
-  by 12 screen pixels and selects them; a full group rejects duplication
-  without dropping original strokes. One action across several blocks is
-  one undo entry. The menu follows scrolling/resizing, flips above/below the
-  selection and hides when that selection leaves the visible PDF area.
-- Drag inside a selection with a **finger**, even in pen-only mode, to move
-  it. That bounded hit surface reserves touch gestures for moving; fingers
-  outside it navigate. A pen using a writing tool clears the selection and
-  writes immediately. Selected ink exposes a bottom-right resize handle and
-  a top-right rotation handle for mouse, pen and touch. Resizing preserves
-  proportions and scales stroke width; rotation keeps width unchanged. Both
-  act around the selection center, preview during drag and commit one undo
-  entry on release. Cancellation discards the preview.
-  The resize/rotation handles follow the live selection during moving,
-  resizing and rotation while keeping a constant screen size.
-  Hold Shift to snap rotation to 15 degrees, or focus a handle and use arrow keys (10% size /
-  15 degrees). Pressure, timing, tilt and stroke IDs stay intact.
-- **Hover feedback:** mouse and Pencil hover show a center mark and the
-  active tool's footprint. Pen/highlighter width follows page zoom; eraser
-  radius stays in screen pixels, matching erasure. Hover never creates ink.
-  Tool and selection buttons show descriptions on hover or keyboard focus.
-- **Undo and Redo buttons** on the handwriting strip expose stroke history
-  without a keyboard. Their disabled state follows the history and resets
-  on leaving the page. Selection alone does not create an undo entry.
+- **Tap existing ink to select it.** With *Fingers never draw* on, a finger
+  tap or a 450 ms stationary hold selects the nearest stroke (10 CSS px hit
+  tolerance, topmost wins). A mouse click in Hand mode and a short tap with
+  the lasso select the same way. A swipe still scrolls: more than 8 CSS px
+  of movement, a second contact, a pen contact or a cancel drops the pending
+  selection. With finger drawing on, armed tools draw at once; use Hand to
+  tap-select.
+- The **selection menu** opens after a tap or a lasso: Color, Width,
+  Duplicate, Select note (every stroke of the selected ink blocks), Show
+  note (jump to the notes pane) and Delete. Edits apply at once and keep
+  pressure and time; a mixed pen/highlighter selection gets a width row per
+  kind. Duplicate offsets fresh-id copies by 12 screen pixels and selects
+  them; a full group refuses. One action across several blocks is one undo
+  entry. The menu follows scrolling and resizing, flips above or below the
+  selection and hides while the selection is off-screen. A blank tap or
+  Escape dismisses it.
+- A **finger drag inside the selection** moves it, even in pen-only mode
+  (the dashed box is a `touch-action: none` hit surface; fingers outside it
+  scroll). A pen with a writing tool clears the selection and writes. The
+  box has a bottom-right **resize** handle and a top-right **rotate**
+  handle for mouse, pen and touch: both act around the selection centre,
+  preview while dragging and commit one undo entry on release; resize keeps
+  proportions and scales the stroke width, rotate does not. Shift snaps
+  rotation to 15°; a focused handle takes arrow keys (10% / 15°). The
+  handles keep their screen size and follow the live preview. Pressure,
+  timing, tilt and stroke ids are untouched.
+- **Hover feedback:** a mouse or hovering pen shows the tool's footprint
+  around a centre mark. Pen and highlighter widths follow the zoom; the
+  eraser radius stays in screen pixels, like the erasure. Tool and menu
+  buttons show their description on hover or keyboard focus.
+- **Undo / Redo buttons** on the strip step the stroke history; their
+  disabled state follows it and resets on leaving the page. Selecting alone
+  is not an entry.
 - **A stylus draws right away** even with the strip closed (Settings →
   Editor → PDF viewer → Handwriting; on by default), with the last pen
   preset armed on the strip. **Fingers never draw**
@@ -80,9 +77,9 @@ e2e `tests/e2e/scenarios/ink.mjs` and `inkEditing.mjs`.
   stroke on another page, or leaving the page. A group is one block in the
   notes: a rounded pen marker, the strokes as a picture, and the block's
   text as its caption (children allowed). The marker or the card scrolls
-  the PDF to the group and outlines it briefly; clicking ink on the page
-  selects it for editing; Show note scrolls the notes to its block. Read-only
-  ink retains direct click-to-note navigation.
+  the PDF to the group and outlines it briefly; a click on ink selects it
+  (Show note scrolls the notes to its block), and in read-only views jumps
+  to the block directly.
 - A group erased empty deletes its block (and comes back on undo).
 - Read-only views (workspace viewers, view shares) show ink without tools;
   edit shares draw.
@@ -170,43 +167,39 @@ sample bytes.
   (`pointerType === "pen"` with *Stylus draws right away*), so text
   selection and the area drag never see it; other pointers pass through
   untouched. `getCoalescedEvents()` where available (Safari has none but
-  delivers 120/240 Hz moves). Non-passive capture listeners cancel Pencil
-  `touchstart`/`touchmove` events on iPad Safari: cancelling pointer events
-  alone does not prevent native panning. They recognize stylus touches
-  (or an active pen pointer when touch type is unavailable), while direct
-  finger touches retain scrolling and pinch zoom between strokes. While a
-  pen is down, direct touches on that page are suppressed as palms, including
-  their propagation to the viewer's pan/pinch handlers. A pen can replace
-  an unfinished finger stroke if the palm landed first; a second contact
-  cannot replace an active pen. Lost capture, pointer cancellation and window
-  blur discard the unfinished stroke and clear its preview.
-  `inkInput.js` keeps the hardware event timestamps (including coalesced
-  samples), snapshots the pressure preference at stroke start, and includes
-  the final pointer-up position using the last contact pressure. Duplicate
-  positions with unchanged pressure are omitted. The live outline uses the
-  same endpoint treatment as saved ink so it reaches the pen tip. Where
-  `getPredictedEvents()` is available, pen previews include at most 16 ms /
-  12 CSS px of prediction; these samples expire after 32 ms and are never
-  encoded or uploaded. Browsers without prediction use measured samples.
-  Both canvas and SVG use the same dark-page colour filter.
-  `canvasSize.js` caps the live bitmap to 8 Mi pixels / 4096 per edge, using
-  the actual backing-to-page ratio for drawing at high zoom. Lift/cancel
-  releases the bitmap; saved SVG stroke geometry remains full precision.
-  Pointer-up encodes the stroke and swallows
-  the click it would deliver to whatever lies beneath. The lasso tool
+  delivers 120/240 Hz moves). Non-passive capture `touchstart`/`touchmove`
+  listeners cancel the Pencil's touch gesture on iPad Safari (cancelling the
+  pointer events alone does not stop native panning); they match stylus
+  touches, or any touch while a pen pointer is down, and leave finger
+  scrolling and pinch zoom alone between strokes. While a pen is down,
+  finger touches on that page are palms: swallowed, and kept from the
+  viewer's pan/pinch handlers. A pen takes over an unfinished finger stroke
+  when the palm landed first; a second contact never takes over a pen. Lost
+  capture, `pointercancel` and window blur discard the unfinished stroke.
+  `inkInput.js` builds the samples: hardware timestamps (coalesced ones
+  included), the pressure preference snapshotted at stroke start, the
+  pointer-up position with the last contact pressure (up reports zero), and
+  repeated points dropped. The live outline gets the same endpoint treatment
+  as saved ink, so it reaches the pen tip. With `getPredictedEvents()` the
+  pen preview adds at most 16 ms / 12 CSS px of prediction, expiring after
+  32 ms and never encoded. `canvasSize.js` caps the live bitmap (8 Mi
+  pixels / 4096 per edge) and the context transform uses the real
+  backing-to-page ratio; lift and cancel release the bitmap. Canvas and SVG
+  share the dark-page colour filter. Pointer-up encodes the stroke and
+  swallows the click it would deliver to whatever lies beneath. The lasso
   draws its polygon on the same canvas; a drag inside the selection box
   moves the selected strokes (previewed as a translated copy, committed on
-  pointer-up). `InkCard` is the picture in the notes; `InkToolbar` the
-  strip. A separate pending tap/hold state lets native touch scrolling
-  cancel selection without drawing ink. A selected region has a transparent
-  `touch-action: none` hit surface for finger movement. `InkSelectionMenu`
-  uses the shared portalled `ContextMenu`, keeps controls outside the native
-  page pointer listeners, and measures its height for placement. Its actions
-  and Undo/Redo use icon buttons with accessible names and tooltips; width
-  choices preview thickness as dots. Global `html { touch-action: manipulation }`
-  suppresses Chrome double-tap zoom on all layouts while preserving panning
-  and pinch zoom ([Chrome guidance](https://developer.chrome.com/blog/300ms-tap-delay-gone-away)). Edit
-  callbacks are absent for read-only pages/shares.
+  pointer-up). A pending tap/hold state, separate from the drawing, lets a
+  native scroll cancel a touch selection without ink. `InkSelectionMenu` is
+  a portalled `ContextMenu` (its controls sit outside the page's pointer
+  listeners) that measures its own height for placement;
+  `InkTransformHandles` are the resize/rotate buttons; `InkTooltips` shows a
+  button's title on hover or focus for the strip and the menu, since native
+  titles are unreliable under Pencil hover. `InkCard` is the picture in the
+  notes; `InkToolbar` the strip. Edit callbacks are absent on read-only
+  pages and shares. The global `html { touch-action: manipulation }`
+  (app.css) removes Chrome's double-tap zoom everywhere while keeping
+  panning and pinch zoom.
 - `App.jsx` owns the tool state: `inkUi` (`open`, the armed `tool` — a
   preset id, `eraser`, `select` or `null` for the hand — its `options` row,
   and `pen`, the last pen preset, which a stylus writes with when nothing
@@ -223,22 +216,23 @@ sample bytes.
   block through `PUT /api/blocks/{id}` — a server-side writer, so the
   change fans out over the page socket and reaches this tree like a remote
   op; only the group's block itself (first stroke) is inserted through the
-  tree. An empty group is deleted the same way. Its empty draft keeps masking
-  the saved strokes during deletion, including the gap between the HTTP
-  response and the socket update. Only a successful delete marks that draft
-  clean; failures keep it dirty for retry. A failed flush (the block's
-  insert may still be queued) retries after two seconds.
+  tree. An empty group is deleted the same way; its empty draft keeps
+  masking the saved strokes until the tree sees the deletion (the HTTP
+  response can land before the socket op), and `inkStore.markDeleted` marks
+  it clean only after a successful delete, so a failure retries. A failed
+  flush (the block's insert may still be queued) retries after two seconds.
 - With the strip open, Ctrl+Z is the stroke history (a capture-phase key
   handler, so the page's block undo never sees it); with it closed, Ctrl+Z
   is the page's block history, which knows the group's block but not its
   strokes. Two clients drawing into one group resolve by
   server order on `ink_url` (property-level last writer wins, as every
   property); each keeps a fresh group after *New group*.
-  Focused note editors still use block history even with the strip open;
-  other text inputs retain their own undo. Empty ink history never falls
-  through to block undo. Keyboard and toolbar undo/redo report the action
-  and PDF page, e.g. “Undone: ink width change (page 1).” Labels distinguish
-  drawing, erasure/partial erasure, move, color/width, duplicate and delete.
+  A focused note editor keeps the block history even with the strip open,
+  and other text inputs keep their own undo; an empty ink history never
+  falls through to block undo. Undo and redo report the action and PDF page
+  in the status pill (“Undone: ink width change (page 1).”); the labels
+  distinguish drawing, erasure, partial erasure, move, colour, width,
+  duplicate and delete.
 
 ## Server
 

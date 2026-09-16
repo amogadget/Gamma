@@ -4,15 +4,19 @@ AI responses can link a passage using ordinary Markdown:
 
 `[p. 3](/?page=GAMMA_PAGE_ID&pdf_page=3&quote=percent-encoded%20verbatim%20passage)`
 
-The physical PDF page is 1-based. Context and `read_page` label physical pages,
-including after empty pages and in continued extraction windows. Each context
-section supplies its Gamma page ID. Citation guidance also applies with tools
-off and custom prompts. Quotes should fit on one page and identify one passage.
+The PDF page is physical and 1-based. Context and `read_page` label pages
+`[PDF page N]` (blank pages counted, a mid-page continuation labelled
+`; continued`) and each context section carries its Gamma page ID
+([ai_context.md](ai_context.md)); `routers/ai.py` appends the citation
+instruction whenever a document is in context, with tools off and under a
+custom prompt too. A quote should fit on one page and identify one passage.
 
-The link persists with the response. Clicking opens the library page, waits for
-the requested PDF and its text layer, then matches the quote locally. Direct
-links work on initial load as well. Only the target PDF page is rendered for
-resolution; no full-document scan or server coordinate mapping is required.
+The link is plain Markdown, so it persists with the reply. Clicking it
+(`ChatMarkdown` → `onOpenPage(id, citation)`) opens the library page, waits for
+that PDF and the cited page's text layer, then matches the quote in the
+browser; a pasted link on a cold load works the same way
+(`parsePdfCitation` on the initial URL). Only the cited page is force-rendered.
+No document scan and no server-side coordinates.
 
 `pdfCitation.js` keeps source offsets through Unicode ligature folding,
 dehyphenation and whitespace normalization. Fallback passes tolerate differing
@@ -25,13 +29,13 @@ Missing or repeated passages show a message on the
 cited page instead of selecting a guessed match. Scans without a text layer
 therefore open the page but cannot highlight text.
 
-`PdfCitationOverlay` uses DOM Range rectangles from the actual PDF.js text
-nodes, including partial runs, rather than estimating glyph widths or trusting
-PDFium offsets. Percentage rectangles track page size, and completed text-layer
-renders trigger recalculation after zoom. Stale document/render work is cancelled.
-The overlay ignores pointer input and never enters the annotation or note store.
-The overlay reuses the in-progress translation shimmer. Clicking outside the highlighted
-passage or pressing Escape removes it; there is no separate close button.
+`PdfCitationOverlay` draws DOM `Range` rectangles from the real pdf.js text
+nodes (partial runs included) instead of estimating glyph widths or trusting
+PDFium offsets. The rectangles are percentages of the page, and a finished
+text-layer render recomputes them after a zoom; stale document/render work is
+cancelled. The marks (`.pdfCitationMark`, the translation shimmer) ignore
+pointer input and never touch the annotation or note store. A click outside
+the passage or Escape removes them; there is no close button.
 
 Coverage: `frontend/tests/pdfCitation.test.mjs`, the citation scenario in
 `frontend/tests/e2e/scenarios/pdf.mjs`, and `backend/tests/test_pdf_citations.py`.

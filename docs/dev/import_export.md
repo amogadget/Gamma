@@ -38,18 +38,15 @@ the original is still embedded).
 
 ## The Import dialog
 
-The ⋮ menu's single "Import…" entry → `ImportDialog` in `importExport.jsx`: the
-export dialog's counterpart — first choose a source using large format cards
-(annotations embedded in this PDF,
-a Logseq .pdf + .edn, a Zotero library .zip, Markdown notes — one `.md` or a
-`.zip` such as a Notion export, or a Gamma export .zip). Next opens a review
-page only for sources with options. The strip switch
-applies to embedded annotations, including those inside Zotero's exported PDFs.
-It is available only for PDF annotations and Zotero, and changes the stored-PDF
-example while the imported Gamma notes remain. Confirm on the review page.
-Markdown, Logseq and Gamma imports open the appropriate file picker directly;
-their preparation instructions appear below the selected source. Double-click
-and the footer action follow the same source rules in `transferFormats.js`.
+The ⋮ menu's single "Import…" entry → `ImportDialog` in `importExport.jsx`, the
+export dialog's counterpart. Step one is a source card (annotations embedded
+in this PDF, a Logseq .pdf + .edn, a Zotero library .zip, Markdown notes — one
+`.md` or a `.zip` such as a Notion export, or a Gamma export .zip); double-click
+or Next confirms. Only sources with an option get a review step: the strip
+switch, which applies to embedded annotations, including those inside Zotero's
+exported PDFs. Markdown, Logseq and Gamma open the file picker directly, with
+their preparation notes under the selected card. `resolveImport` in
+`transferFormats.js` decides both.
 Zotero is the default source (a numbered step guide reusing
 settingsKit's `Step`); with a PDF open, that PDF's own annotations win. Nothing
 is remembered: the switch starts from the Settings preference each time, so the
@@ -221,8 +218,8 @@ imports it through the existing `/api/import-data?mode=merge` — additive,
 deduped by block id / doc id / content hash, so re-importing adds nothing. The
 ⋮ Import dialog's "Gamma export (.zip)" source feeds the zip to that endpoint
 via the same upload/progress path as Settings → Restore backup (guests can't
-import). A Gamma export is a complete copy. It includes everything and exports
-directly from format selection, without a switches page.
+import). A Gamma export is a complete copy, so the Export dialog has no
+switches for it.
 
 ### Importing a shared page by link
 
@@ -255,34 +252,26 @@ status line and the transfer row.
 
 ## The Export dialog
 
-The ⋮ menu's single "Export…" entry → `ExportDialog` in `importExport.jsx`:
-first choose a format (PDF / Notes as PDF / Markdown / Obsidian vault /
-Logseq graph / Zotero RDF / Gamma) using large `PictureChoices` cards grouped
-into PDF, MD and ZIP rows, with monochrome app logos and shared document icons.
-Double-click a card or select it and use the footer action. Editable formats open
-an illustrative page preview with the applicable Highlights, Notes and
-Bundle-the-files switches. The previous-step breadcrumb returns to the
-choices without losing edits. Cards inherit shared `uiBtn` shadows and hover states.
-Gamma has fixed contents, so it exports directly with all contents included.
-A remote PDF without a stored copy also exports directly as the original file.
-Logseq offers only file bundling; its highlights and notes are always included.
-Both dialogs reuse `SubDialog` for focus trapping, Escape and dismissal. Its
-optional close-button header supplies the standard `uiClose` ×; the footer
-contains only Next or the final action. Short card labels avoid repeating the
-file type already shown by each row. Zotero's post-export instructions expand
-under "Open this export in Zotero";
-controls keep their shared hover/focus styling. The previews in
-`illustrations/TransferPreview.jsx` are hand-coded HTML/CSS illustrations of the effective
-options, not renders of the user's document. Bundled files appear outside the
-page. `transferFormats.js` holds format labels, categories, hints, editable
-options and fixed values. `resolveExport` derives controls, the need for review,
-and a single effective payload shared by the preview and download action.
-Zotero highlights require bundled PDFs; disabling bundling temporarily disables
-highlights without changing the saved preference. Double-click resolves the
-activated card's ID directly, without waiting for selection state to update.
-Format-specific hint text lives in `EXPORT_SWITCH_TEXT`; the selected
-format and options are remembered in `localStorage` (`gamma-export-opts`).
-The switches are query flags on two endpoints:
+The ⋮ menu's single "Export…" entry → `ExportDialog` in `importExport.jsx`.
+Step one is a format card (PDF / Notes as PDF / Markdown / Obsidian vault /
+Logseq graph / Zotero RDF / Gamma), `PictureChoices` grouped into PDF, MD and
+ZIP rows; double-click or Next confirms. Formats with editable options get a
+review step: the Highlights, Notes and Bundle-the-files switches beside an
+illustrative page (`illustrations/TransferPreview.jsx`, an example of the
+options, not a render of the document). Gamma has fixed contents and a PDF
+without a stored copy can only be the original file, so both export straight
+from step one; Logseq shows only the bundle switch. The breadcrumb returns to
+the cards without losing edits. Both dialogs are a `SubDialog` (focus trap,
+Escape, backdrop) with its close-button header; the footer holds only Next or
+the final action. Zotero's post-export steps expand under "Open this export in
+Zotero". `transferFormats.js` owns the format table (label, category, hint,
+editable and fixed options, `EXPORT_SWITCH_TEXT`) and `resolveExport`, which
+turns the saved options into the controls, whether a review step is needed
+and the one payload the preview and the download share. Zotero highlights
+live inside bundled PDFs, so turning bundling off disables Highlights without
+changing the saved preference. The chosen format and options are remembered
+in `localStorage` (`gamma-export-opts`). The switches are query flags on two
+endpoints:
 `/pages/{id}/export?mode=readable&highlights=&notes=&pdf=` (Markdown,
 `render_readable` in `markdown_export.py`; dropping highlights keeps a
 highlight block's own text as a plain bullet; the front matter carries the
