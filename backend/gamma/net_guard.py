@@ -17,7 +17,7 @@ import ipaddress
 import socket
 import urllib.parse
 from urllib.error import URLError
-from urllib.request import HTTPRedirectHandler, build_opener
+from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, build_opener
 
 _ALLOWED_SCHEMES = ("http", "https")
 
@@ -78,12 +78,17 @@ class _GuardedRedirectHandler(HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_opener = build_opener(_GuardedRedirectHandler)
-
-
 def guarded_urlopen(req, timeout=30):
     """Drop-in for urllib.request.urlopen that validates the URL (and every
-    redirect) against the SSRF guard first. ``req`` may be a str or a Request."""
+    redirect) against the SSRF guard first. ``req`` may be a str or a Request.
+
+    Keep publisher cookies through this fetch's redirects (e.g. Nature's
+    institutional-access handshake). Each call gets a fresh, in-memory jar:
+    cookies are never shared between users. Authenticated PDF operations can
+    seed the jar from that user's explicitly connected publisher sessions.
+    """
     url = req.full_url if hasattr(req, "full_url") else req
     validate_public_url(url)
-    return _opener.open(req, timeout=timeout)
+    from .publisher_sessions import cookie_jar
+    opener = build_opener(_GuardedRedirectHandler, HTTPCookieProcessor(cookie_jar()))
+    return opener.open(req, timeout=timeout)

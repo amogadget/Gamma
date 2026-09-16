@@ -26,6 +26,7 @@ from .routers import (
     pages,
     pdf,
     prefs,
+    publisher_sessions,
     search,
     shares,
     uploads,
@@ -116,6 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(search.router)
     app.include_router(shares.router)
     app.include_router(pdf.router)
+    app.include_router(publisher_sessions.router)
     app.include_router(uploads.router)
     app.include_router(ink.router)
     app.include_router(blocks.router)

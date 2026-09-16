@@ -2971,12 +2971,13 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   color: var(--danger);
 }
 .chatUserText { white-space: pre-wrap; }
-/* markdown inside AI bubbles */
+/* Markdown inside AI bubbles: explicit text sizes must follow the same
+   transcript scale as body text, including nested headings and code. */
 .chatBubble.ai p { margin: 0 0 6px; }
 .chatBubble.ai p:last-child { margin-bottom: 0; }
 .chatBubble.ai h1, .chatBubble.ai h2, .chatBubble.ai h3, .chatBubble.ai h4 {
   margin: 8px 0 4px;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale, 1));
   color: var(--text-primary);
 }
 .chatBubble.ai ul, .chatBubble.ai ol { margin: 0 0 6px; padding-left: 18px; }
@@ -2986,7 +2987,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border: 1px solid var(--border-subtle);
   border-radius: 3px;
   padding: 0 3px;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale, 1));
 }
 .chatBubble.ai pre {
   background: var(--bg-surface);
@@ -2997,6 +2998,31 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   margin: 4px 0 6px;
 }
 .chatBubble.ai pre code { background: none; border: none; padding: 0; }
+.chatCopyBlock { min-width: 0; margin: 4px 0 6px; }
+.chatCopyCode {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.chatCopyTools { display: flex; justify-content: flex-end; padding: 3px 6px; user-select: none; }
+.chatCopyButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: calc(11px * var(--text-scale, 1));
+  cursor: pointer;
+}
+.chatCopyButton:hover { background: var(--bg-hover); color: var(--text-primary); }
+.chatCopyButton:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chatBubble.ai .chatCopyCode > pre { margin: 0; border: 0; border-radius: 0; }
+.chatBubble.ai .chatCopyQuote > blockquote { margin-top: 0; }
 .chatBubble.ai table { border-collapse: collapse; margin: 4px 0 6px; display: block; overflow-x: auto; }
 .chatBubble.ai th, .chatBubble.ai td { border: 1px solid var(--border); padding: 3px 8px; }
 .chatBubble.ai blockquote {
@@ -3006,11 +3032,26 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   color: var(--text-muted);
 }
 .chatBubble.ai .katex-display { margin: 6px 0; overflow-x: auto; overflow-y: hidden; }
-/* typing indicator */
-.chatTyping { display: inline-flex; gap: 4px; padding: 3px 2px; }
+/* The live status stays inside the reply alongside tool activity and text. */
+.chatThinking {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  width: fit-content;
+  margin-top: 6px;
+  padding: 0.3em 0.7em;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  font-size: calc(11px * var(--text-scale, 1));
+  line-height: 1.5;
+}
+.chatThinking:first-child { margin-top: 0; }
+.chatTyping { display: inline-flex; align-items: center; gap: 0.3em; }
 .chatTyping span {
-  width: 6px;
-  height: 6px;
+  width: 0.4em;
+  height: 0.4em;
   border-radius: 50%;
   background: var(--text-dim);
   animation: chatTypingBlink 1.2s infinite ease-in-out;
@@ -3020,6 +3061,9 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 @keyframes chatTypingBlink {
   0%, 80%, 100% { opacity: 0.25; transform: translateY(0); }
   40% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chatTyping span { animation: none; opacity: 0.6; }
 }
 /* Model + effort switchers use shared MenuSelect/uiBtn sizing; this block is
    layout-only so chat controls cannot drift from buttons elsewhere. */
@@ -3342,6 +3386,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   gap: 8px;
 }
 .chatInputRow {
+  position: relative;
   display: flex;
   gap: 4px;
   padding: 4px 2px;
@@ -3366,6 +3411,34 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   line-height: 1.45;
   font-family: inherit;
 }
+.chatMentionInput { flex: 1; min-width: 0; display: flex; }
+.chatMentionInput textarea { width: 100%; min-width: 0; }
+.chatMentionPicker {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 20;
+  background: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 8px 28px #0003; overflow: hidden;
+}
+.chatMentionHeading, .chatMentionHint { padding: 8px 10px; font-size: 11px; }
+.chatMentionHeading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; border-bottom: 1px solid var(--border); }
+.chatMentionHeading span, .chatMentionHint { color: var(--text-dim); }
+.chatMentionPicker [role="listbox"] { max-height: min(260px, 35vh); overflow-y: auto; }
+.chatMentionOption {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit;
+}
+.chatMentionOption[aria-selected="true"] { background: var(--bg-hover); }
+.chatMentionOption[aria-disabled="true"] { opacity: .5; cursor: default; }
+.chatMentionOption > span { flex: 1; min-width: 0; }
+.chatMentionOption svg { flex-shrink: 0; }
+.chatMentionOption strong { display: block; font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chatMentionOption small { display: block; font-size: 10px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chatMentionHint { border-top: 1px solid var(--border); }
+.chatReferenceStrip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 2px; max-height: 100px; overflow-y: auto; flex-shrink: 0; }
+.chatReferenceLabel { font-size: 10px; color: var(--text-dim); margin-right: 3px; }
+.chatReferenceChip { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-surface); }
+.chatReferenceChip > button:first-child { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 6px; border: 0; background: transparent; color: var(--text-secondary); font: inherit; font-size: 11px; cursor: pointer; }
+.chatReferenceChip svg { flex-shrink: 0; }
+.chatReferenceChip .uiClose { flex-shrink: 0; margin-right: 3px; }
 /* --- Login page --- */
 .loginPage {
   display: flex;
@@ -3527,7 +3600,6 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border: none;
   outline: none;
   font: inherit;
-  font-size: 12px;
   line-height: 1.5;
   padding: 0;
 }
@@ -3617,7 +3689,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
+  font-size: calc(10px * var(--text-scale, 1));
   padding: 1px 8px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.18);
@@ -3635,7 +3707,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale, 1));
   font-family: inherit;
   color: var(--text-muted);
   background: none;
@@ -3686,7 +3758,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   max-height: 220px;
   overflow: auto;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 10.5px;
+  font-size: calc(10.5px * var(--text-scale, 1));
   line-height: 1.45;
   color: var(--text-muted);
   background: var(--bg-raised);
@@ -4363,20 +4435,26 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .mathPreviewTip {
   position: fixed;
   z-index: var(--z-refpopup);
-  max-width: calc(100vw - 16px);
+  box-sizing: border-box;
+  max-width: min(720px, var(--caret-max-width, calc(100vw - 16px)));
+  max-height: min(45vh, var(--caret-max-height, calc(100vh - 16px)));
   padding: 6px 12px;
-  overflow: hidden;
-  pointer-events: none;
+  overflow: auto;
+  overscroll-behavior: contain;
   color: var(--text-primary);
   font-size: 15px;
 }
-.mathPreviewTip .katex-display { margin: 0; }
+.mathPreviewTip .katex-display { margin: 0; text-align: left; }
+.mathPreviewTip .katex-display > .katex { text-align: left; }
+.mathPreviewTip .katex { white-space: nowrap; }
 /* \command completion list: rendered glyph + command name per row. */
 .latexAcPopup {
   position: fixed;
   z-index: var(--z-refpopup);
-  min-width: 190px;
-  max-height: 264px;
+  box-sizing: border-box;
+  min-width: min(190px, var(--caret-max-width, calc(100vw - 16px)));
+  max-width: var(--caret-max-width, calc(100vw - 16px));
+  max-height: min(264px, var(--caret-max-height, calc(100vh - 16px)));
   overflow-y: auto;
   padding: 3px;
 }

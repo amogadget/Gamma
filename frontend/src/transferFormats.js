@@ -40,11 +40,11 @@ const EXPORT_SWITCH_TEXT = {
 };
 
 export const EXPORT_FORMATS = [
-  { id: "pdf", label: "Original PDF", category: "PDF",
+  { id: "pdf", label: "Annotated PDF", category: "PDF",
     hint: "Your original paper, with annotations", editable: ["highlights", "notes"], fixed: { bundle: false } },
-  { id: "notespdf", label: "Notes as PDF", category: "PDF",
+  { id: "notespdf", label: "PDF", category: "Notes",
     hint: "A typeset document of highlights and notes", editable: ["highlights", "notes"], fixed: { bundle: false } },
-  { id: "markdown", label: "Markdown", category: "MD",
+  { id: "markdown", label: "Markdown", category: "Notes",
     hint: "Readable notes for any Markdown editor", editable: ["highlights", "notes", "bundle"] },
   { id: "obsidian", label: "Obsidian", category: "ZIP",
     hint: "A vault with notes, links and attachments", editable: ["highlights", "notes", "bundle"] },

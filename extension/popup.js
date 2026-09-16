@@ -1,4 +1,5 @@
 import { api, getSettings, login, normalizeServer, originPattern, setSettings } from "./api.js";
+import { connectPublisher, publisherHost, secureServer } from "./publisherSessions.js";
 
 const $ = (id) => document.getElementById(id);
 const show = (id, on = true) => $(id).classList.toggle("hidden", !on);
@@ -90,6 +91,64 @@ async function showMain(st) {
   if (st.error) { $("result").className = "msg err"; $("result").textContent = st.error; show("result"); }
 
   await fillPickers(st.settings);
+  await renderPublisherSessions(st);
+}
+
+async function renderPublisherSessions(st) {
+  show("publisher-sessions", false);
+  if (st.user === "guest" || tab?.incognito) return;
+  try {
+    const data = await api("/publisher-sessions", { expectedUser: st.user, expectedOrigin: st.origin });
+    show("publisher-sessions");
+    const host = publisherHost(tab?.url, data.publisher_roots);
+    const root = data.publisher_roots.find((r) => host === r || host.endsWith("." + r));
+    const connected = data.sessions.some((s) => s.host === host);
+    const allowed = secureServer(st.origin);
+    $("publisher-target").textContent = host
+      ? `${host} → ${hostOf(st.origin)} · ${st.user}${allowed ? "" : " — HTTPS or localhost required"}`
+      : "Open a supported publisher page to connect its session.";
+    show("publisher-connect", !!host && allowed);
+    $("publisher-connect").textContent = connected ? "Refresh publisher session" : "Connect publisher session";
+    $("publisher-connect").onclick = async () => {
+      $("publisher-connect").disabled = true;
+      try {
+        // Must be invoked directly from the user's gesture, before other awaits.
+        const granted = await chrome.permissions.request({ permissions: ["cookies"] });
+        if (!granted) throw new Error("Cookie access was declined. PDF saving still works.");
+        await connectPublisher({ tabId: tab.id, host, root, user: st.user, origin: st.origin });
+        await renderPublisherSessions(st);
+        publisherMessage("Session connected. Gamma can use it for future PDF downloads.");
+      } catch (err) { publisherMessage(err.message, true); }
+      finally { $("publisher-connect").disabled = false; }
+    };
+    const list = $("publisher-list");
+    list.replaceChildren();
+    for (const session of data.sessions) {
+      const row = document.createElement("div"); row.className = "row";
+      const label = document.createElement("span"); label.textContent = session.host;
+      label.title = `Expires no later than ${new Date(session.expires_at * 1000).toLocaleString()}`;
+      const button = document.createElement("button"); button.className = "linkBtn"; button.textContent = "Disconnect";
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          await api(`/publisher-sessions/${encodeURIComponent(session.host)}`, {
+            method: "DELETE", expectedUser: st.user, expectedOrigin: st.origin,
+          });
+          await renderPublisherSessions(st);
+          publisherMessage("Session removed from Gamma.");
+        } catch (err) { publisherMessage(err.message, true); button.disabled = false; }
+      };
+      row.append(label, button); list.append(row);
+    }
+  } catch (err) {
+    // Older servers simply do not offer session connections.
+    if (err.status !== 404) { show("publisher-sessions"); publisherMessage(err.message, true); }
+  }
+}
+
+function publisherMessage(text, error = false) {
+  $("publisher-msg").className = "msg " + (error ? "err" : "ok");
+  $("publisher-msg").textContent = text;
 }
 
 // The head names the paper on THIS tab: the page's own title (meta tags),

@@ -12,7 +12,7 @@ const EXPORT_CONTROLS = {
 
 function FormatChoices({ label, value, onChange, onConfirm, options }) {
   return <div className="transferFormats" role="group" aria-label={label}>
-    {["PDF", "MD", "ZIP"].map((type) => {
+    {["PDF", "Notes", "MD", "ZIP"].map((type) => {
       const group = options.filter((option) => option.category === type);
       if (!group.length) return null;
       return <section key={type} className={`transferFormatRow${group.length < 3 ? " transferFormatRowWide" : ""}`} aria-label={type}>

@@ -253,9 +253,9 @@ status line and the transfer row.
 ## The Export dialog
 
 The ⋮ menu's single "Export…" entry → `ExportDialog` in `importExport.jsx`.
-Step one is a format card (PDF / Notes as PDF / Markdown / Obsidian vault /
-Logseq graph / Zotero RDF / Gamma), `PictureChoices` grouped into PDF, MD and
-ZIP rows; double-click or Next confirms. Formats with editable options get a
+Step one is a format card: the PDF row contains Annotated PDF, the Notes row
+contains PDF and Markdown, and the ZIP row contains Obsidian, Logseq, Zotero
+and Gamma. Double-click or Next confirms. Formats with editable options get a
 review step: the Highlights, Notes and Bundle-the-files switches beside an
 illustrative page (`illustrations/TransferPreview.jsx`, an example of the
 options, not a render of the document). Gamma has fixed contents and a PDF
@@ -286,10 +286,10 @@ self-contained — and reads as plain text otherwise; a `![[embed]]`
 materializes the synced block's content with a *(from …)* attribution,
 nested embeds degrading to mentions; ids the resolver doesn't know stay as
 typed) and
-`/pages/{id}/export-pdf?highlights=&notes=`. "PDF" is the paper itself and is
+`/pages/{id}/export-pdf?highlights=&notes=`. "Annotated PDF" is the paper itself and is
 hidden when there is none (a note page or a folder). An unsaved proxy PDF can
 export only its original file, so it skips the options page and exports directly.
-"Notes as PDF" (`?mode=notes-pdf`) takes over as the fallback format, and its
+"PDF" in the Notes row (`?mode=notes-pdf`) takes over as the fallback format, and its
 Bundle switch is hidden because a document always embeds its images. Two
 combinations are special: a
 Logseq graph is defined by carrying both layers, so highlights and notes are

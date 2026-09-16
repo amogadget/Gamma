@@ -109,6 +109,8 @@ def _scope_folder(scope: dict) -> str:
 
 
 def _page_in_scope(scope: dict, page_id: str, tags: list[str]) -> bool:
+    if page_id in (scope.get("context_pages") or []):
+        return True
     if scope.get("type") == "page":
         return page_id == scope.get("page_id")
     path = _scope_folder(scope)
@@ -138,12 +140,20 @@ def _scope_pages(conn, scope: dict) -> dict:
     else the library / folder listing (blocks_store.root_pages)."""
     if scope.get("type") == "page":
         loaded, error = _load_scoped_page(conn, scope, {"page_id": scope.get("page_id")})
-        if error:
-            return {}
-        page_id, title, props, _ = loaded
-        attachment = page_attachment(props)
-        return {page_id: {"title": title, "doc_id": attachment["id"] if attachment else ""}}
-    return root_pages(conn, _scope_folder(scope))
+        pages = {}
+        if not error:
+            page_id, title, props, _ = loaded
+            attachment = page_attachment(props)
+            pages[page_id] = {"title": title, "doc_id": attachment["id"] if attachment else ""}
+    else:
+        pages = root_pages(conn, _scope_folder(scope))
+    for page_id in scope.get("context_pages") or []:
+        loaded, error = _load_scoped_page(conn, scope, {"page_id": page_id})
+        if not error:
+            page_id, title, props, _ = loaded
+            attachment = page_attachment(props)
+            pages[page_id] = {"title": title, "doc_id": attachment["id"] if attachment else ""}
+    return pages
 
 
 def _load_scoped_block(conn, scope: dict, block_id) -> tuple:
@@ -1010,11 +1020,17 @@ def agent_system(scope: dict, perms: dict | None = None, base: str = "") -> str:
     text = (base.strip() or AGENT_PROMPT) + "\n"
     if scope.get("type") == "page":
         text += (f'This chat is about one page (page_id "{scope.get("page_id")}") — '
-                 "the tools reach only it.\n")
+                 "the tools reach it and the explicitly attached context pages below.\n")
     else:
         path = _scope_folder(scope)
         where = f'the folder "{path}"' if path else "the root of their library"
-        text += f"The user is viewing {where}; only pages in it are reachable.\n"
+        text += f"The user is viewing {where}; tools reach its pages and the explicitly attached context pages below.\n"
+    references = scope.get("context_pages") or []
+    if references:
+        text += ("The user attached these library page IDs as context: " + json.dumps(references)
+                 + ". Read and search tools can access them, including their PDF text and notes. "
+                 "Attachments outside the original page/folder scope are read-only. "
+                 "Match @ mentions to their titles and Gamma page IDs in context.\n")
     focus = scope.get("focus_block_id")
     if focus and focus != scope.get("page_id"):
         text += (f'The user\'s cursor is on note block "{focus}" (its text is in the '
@@ -1118,6 +1134,9 @@ def run_agent_tool(ws: str, scope: dict, name: str, args: dict) -> tuple[str, di
     if tool["mutating"] and not scope.get("can_write", True):
         result = "error: you can only view this workspace — no changes are possible"
         return result, tool_action("error", result[:200], name, args, result, error=True)
+    # Attaching a reference expands read access, never the editing scope.
+    if tool["mutating"]:
+        scope = {**scope, "context_pages": []}
     try:
         with connect_pages_db(ws) as conn:
             result, action = tool["run"](conn, ws, scope, args)

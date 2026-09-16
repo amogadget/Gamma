@@ -85,6 +85,15 @@
       <button id="clip" class="uiBtn block">Clip selected text to Gamma</button>
     </div>
 
+    <details id="publisher-sessions" class="form hidden">
+      <summary>Publisher sessions</summary>
+      <p class="s">Connect this publisher's cookies to your Gamma account for future downloads. Only connect to a server you trust. Browser checks may still require the Connector.</p>
+      <div id="publisher-target" class="s"></div>
+      <button id="publisher-connect" class="uiBtn block hidden" type="button">Connect publisher session</button>
+      <div id="publisher-list"></div>
+      <div id="publisher-msg" class="msg hidden" role="status"></div>
+    </details>
+
     <div id="progress" class="progress hidden"><span class="spinner"></span><span id="progress-text"></span></div>
     <div id="result" class="msg hidden"></div>
 

@@ -170,3 +170,33 @@ def test_proxy_rejects_non_pdf(guest, monkeypatch):
     assert r.status_code == 400
     assert "not a PDF" in r.json()["detail"]
     assert made and made[0].closed
+
+
+def test_aps_doi_uses_publisher_pdf_route(guest, monkeypatch):
+    """APS metadata can point back to the abstract instead of the PDF."""
+    doi = "10.1103/PhysRevLett.130.123601"
+    article = f"https://journals.aps.org/prl/abstract/{doi}"
+    pdf = f"https://journals.aps.org/prl/pdf/{doi}"
+    calls = []
+
+    def fetch(req, timeout=30):
+        calls.append(req.full_url)
+        if req.full_url == f"https://doi.org/{doi}":
+            html = f'<meta name="citation_pdf_url" content="http://link.aps.org/pdf/{doi}">'.encode()
+            return FakeUpstream(article, data=html, ctype="text/html")
+        assert req.full_url == pdf
+        return FakeUpstream(pdf)
+
+    monkeypatch.setattr(pdf_mod, "guarded_urlopen", fetch)
+    response = guest.post("/api/resolve-pdf", json={"source_url": doi, "allow_oa": False})
+    assert response.status_code == 200, response.text
+    assert response.json()["source_url"] == pdf
+    assert calls == [f"https://doi.org/{doi}", pdf]
+
+
+def test_publisher_candidates_preserve_generic_metadata():
+    # A lookalike hostname must not synthesize an APS URL.
+    page = "https://journals.aps.org.example/prl/abstract/10.1103/test"
+    html = '<meta name="citation_pdf_url" content="/paper.pdf">'
+    assert pdf_mod._publisher_pdf_candidates(page, html) == [
+        "https://journals.aps.org.example/paper.pdf"]

@@ -3,7 +3,9 @@
 // \command autocompletion (Tab/Enter to accept). Pure helpers + two small
 // presentational components; blockTree.jsx owns the state and key handling.
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import katex from "katex";
+import { leftDelimiterEdit, rightDelimiterAt } from "./latexInput";
 
 // --- command catalog -------------------------------------------------------
 // Order = rank within an equal match tier. Entries: name, args (brace count
@@ -85,8 +87,13 @@ for (const [name, args, sample] of [
   ["mathfrak", 1, "\\mathfrak{g}"], ["boldsymbol", 1, "\\boldsymbol{\\alpha}"],
   ["text", 1, "\\text{a}"], ["operatorname", 1, "\\operatorname{Tr}"],
 ]) CATALOG.push({ name, args, sample });
-for (const name of BIG_OPS) CATALOG.push({ name });
-for (const name of FUNCTIONS) CATALOG.push({ name });
+for (const name of BIG_OPS) CATALOG.push({ name,
+  ...(["sum", "prod", "int", "oint"].includes(name)
+    ? { ins: `\\${name}_{}^{}`, caret: name.length + 3 } : {}),
+});
+for (const name of FUNCTIONS) CATALOG.push({ name,
+  ...(name === "lim" ? { ins: "\\lim_{}", caret: 6 } : {}),
+});
 for (const name of SYMBOLS) CATALOG.push({ name });
 for (const name of OPERATORS) CATALOG.push({ name });
 for (const name of RELATIONS) CATALOG.push({ name });
@@ -106,7 +113,15 @@ for (const [name, ins, sample] of [
   ["left\\{", "\\left\\{  \\right\\}", "\\left\\{\\,\\right\\}"],
   ["left|", "\\left|  \\right|", "\\left|\\,\\right|"],
   ["left\\langle", "\\left\\langle  \\right\\rangle", "\\left\\langle\\,\\right\\rangle"],
+  ["left\\lVert", "\\left\\lVert  \\right\\rVert", "\\left\\lVert x\\right\\rVert"],
+  ["left\\lfloor", "\\left\\lfloor  \\right\\rfloor", "\\left\\lfloor x\\right\\rfloor"],
+  ["left\\lceil", "\\left\\lceil  \\right\\rceil", "\\left\\lceil x\\right\\rceil"],
 ]) CATALOG.push({ name, ins, sample, alias: "left" });
+// Explicit command snippets: no automatic rewriting of ordinary variables.
+CATALOG.push(
+  { name: "abs", ins: "\\left|  \\right|", sample: "\\left|x\\right|" },
+  { name: "norm", ins: "\\left\\lVert  \\right\\rVert", sample: "\\left\\lVert x\\right\\rVert" },
+);
 // Environments: full \begin/\end snippet, caret inside (multi-line when the
 // span is display math — see insertionFor). "begin" also matches, and typing
 // "\begin{" completes on the environment name itself (see useMathUi).
@@ -179,10 +194,23 @@ export function insertionFor(c, display) {
   }
   if (c.ins) {
     const gap = c.ins.indexOf("  ");
-    return { text: c.ins, caret: gap >= 0 ? gap + 1 : c.ins.length };
+    return { text: c.ins, caret: c.caret ?? (gap >= 0 ? gap + 1 : c.ins.length) };
   }
   const text = "\\" + c.name + "{}".repeat(c.args || 0);
   return { text, caret: c.args ? c.name.length + 2 : text.length };
+}
+
+// One atomic editor transaction for autocomplete, including a delimiter
+// completed after a separately typed \left (e.g. \left\lang + Tab).
+export function latexCompletionEdit(value, start, end, entry, display) {
+  if (entry.env && value[end] === "}" && !value.slice(start, end).endsWith("}")) end++;
+  let { text, caret } = insertionFor(entry, display);
+  const candidate = value.slice(0, start) + text + value.slice(end);
+  const pos = start + text.length;
+  const seg = findMathAtCursor(candidate, pos);
+  const pair = seg && leftDelimiterEdit(candidate, pos, pos, "", seg.start, seg.end);
+  if (pair) text += pair.changes.insert;
+  return { changes: { from: start, to: end, insert: text }, selection: { anchor: start + caret } };
 }
 
 // Odd run of backslashes right before pos → the char at pos is escaped
@@ -239,7 +267,7 @@ export function findMathAtCursor(value, cursor) {
 export function mathTabJump(value, cursor, dir) {
   const seg = findMathAtCursor(value, cursor);
   if (!seg) return null;
-  const braceAt = (p, ch) => value[p] === ch && value[p - 1] !== "\\";
+  const braceAt = (p, ch) => value[p] === ch && !escapedAt(value, p);
   // The group's content span: opener position -> [start, end] (end clamped
   // to the math span when the group is still unclosed).
   const groupContent = (p) => {
@@ -256,10 +284,15 @@ export function mathTabJump(value, cursor, dir) {
     /\\(begin|end)$/.test(value.slice(Math.max(seg.start, p - 6), p));
   if (dir > 0) {
     for (let p = cursor; p < seg.end; p++) {
+      const right = rightDelimiterAt(value, p);
+      if (right) return { anchor: p + right.length, head: p + right.length };
       if (braceAt(p, "{")) {
         const [from, to] = groupContent(p);
         if (isEnvName(p)) { p = to; continue; }
         return { anchor: from, head: to };
+      }
+      if ([")", "]"].includes(value[p]) && !escapedAt(value, p)) {
+        return { anchor: p + 1, head: p + 1 };
       }
     }
     for (let p = cursor; p < seg.end; p++) {
@@ -279,6 +312,7 @@ export function mathTabJump(value, cursor, dir) {
   for (let p = cursor - 2; p >= seg.start; p--) {
     if (braceAt(p, "{") && !isEnvName(p)) {
       const [from, to] = groupContent(p);
+      if (from <= cursor && cursor <= to) continue; // move back, not reselect the current argument
       return { anchor: from, head: to };
     }
   }
@@ -352,20 +386,48 @@ export function useCaretAnchored(anchor, preferAbove, deps) {
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const w = el.offsetWidth, h = el.offsetHeight;
-    const left = Math.max(8, Math.min(anchor.left, window.innerWidth - w - 8));
-    const above = anchor.top - h - 6;
-    const top = preferAbove
-      ? (above >= 8 ? above : anchor.bottom + 6)
-      : (anchor.bottom + 6 + h <= window.innerHeight - 8 ? anchor.bottom + 6 : above);
-    setStyle({ left, top });
+    let frame;
+    const viewport = window.visualViewport;
+    const place = () => {
+      const x = viewport?.offsetLeft || 0, y = viewport?.offsetTop || 0;
+      const width = viewport?.width || window.innerWidth;
+      const height = viewport?.height || window.innerHeight;
+      el.style.setProperty("--caret-max-width", `${Math.max(0, width - 16)}px`);
+      el.style.setProperty("--caret-max-height", `${Math.max(0, height - 16)}px`);
+      const rect = anchor.getRect?.() || anchor;
+      const { width: w, height: h } = el.getBoundingClientRect();
+      const left = Math.max(x + 8, Math.min(rect.left, x + width - w - 8));
+      const above = rect.top - h - 6, below = rect.bottom + 6;
+      const desired = preferAbove
+        ? (above >= y + 8 ? above : below)
+        : (below + h <= y + height - 8 ? below : above);
+      const top = Math.max(y + 8, Math.min(desired, y + height - h - 8));
+      setStyle((prev) => prev.left === left && prev.top === top ? prev : { left, top });
+    };
+    const schedule = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(place); };
+    place();
+    const observer = new ResizeObserver(schedule);
+    observer.observe(el);
+    window.addEventListener("resize", schedule);
+    window.addEventListener("scroll", schedule, true);
+    viewport?.addEventListener("resize", schedule);
+    viewport?.addEventListener("scroll", schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("scroll", schedule, true);
+      viewport?.removeEventListener("resize", schedule);
+      viewport?.removeEventListener("scroll", schedule);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anchor.left, anchor.top, anchor.bottom, ...deps]);
+  }, [anchor.left, anchor.top, anchor.bottom, anchor.getRect, preferAbove, ...deps]);
   return [ref, style];
 }
 
 // Overleaf-style floating preview of the math span under the caret. Sits
-// above the caret line (below when there's no room), never intercepts the mouse.
+// above the caret line (below when there's no room). Long math scrolls inside
+// the preview; interacting with it keeps the editor focused.
 export function MathLivePreview({ tex, display, anchor }) {
   // A trailing lone backslash is a \command being typed — render what's
   // before it instead of flashing KaTeX's red error for the half keystroke.
@@ -373,13 +435,17 @@ export function MathLivePreview({ tex, display, anchor }) {
   const html = src.trim() ? renderKatex(src, display) : null;
   const [ref, style] = useCaretAnchored(anchor, true, [tex, display]);
   if (!html) return null;
-  return (
+  return createPortal(
     <div
       ref={ref}
       className="mathPreviewTip"
+      role="region"
+      aria-label="Equation preview"
+      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onClick={(e) => e.stopPropagation()}
       style={style}
       dangerouslySetInnerHTML={{ __html: html }}
-    />
+    />, document.body
   );
 }
 
@@ -390,7 +456,7 @@ export function LatexAcPopup({ items, selected, anchor, onPick }) {
     listRef.current?.querySelector(".latexAcItem.selected")
       ?.scrollIntoView({ block: "nearest" });
   }, [selected, listRef]);
-  return (
+  return createPortal(
     <div
       ref={listRef}
       className="latexAcPopup"
@@ -413,6 +479,6 @@ export function LatexAcPopup({ items, selected, anchor, onPick }) {
           </button>
         );
       })}
-    </div>
+    </div>, document.body
   );
 }

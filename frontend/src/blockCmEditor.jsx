@@ -13,6 +13,7 @@ import {
 } from "@codemirror/view";
 import { defaultKeymap } from "@codemirror/commands";
 import { escapedAt, findMathAtCursor, renderKatex } from "./latexEditor";
+import { emptyLeftPair, leftDelimiterEdit, rightDelimiterAt } from "./latexInput";
 import { calloutType } from "./callouts";
 import { fenceInnerAt, highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
 import { insertLink, isUrl, scanMarks, toggleMark } from "./mdMarks";
@@ -594,13 +595,24 @@ const BRACKET_PAIRS = { "(": ")", "[": "]", "{": "}" };
 const BRACKET_CLOSERS = new Set([")", "]", "}"]);
 
 const mathBracketPairing = EditorView.inputHandler.of((view, from, to, insert) => {
-  const close = BRACKET_PAIRS[insert];
-  if (!close && !BRACKET_CLOSERS.has(insert)) return false;
+  if (view.composing || insert.length !== 1) return false;
   const doc = view.state.doc.toString();
   if (fenceInnerAt(doc, from)) return false;
   const seg = findMathAtCursor(doc, from);
   if (!seg) return false;
   const sel = view.state.selection.main;
+  const scaled = leftDelimiterEdit(doc, from, to, insert, seg.start, seg.end);
+  if (scaled && to <= seg.end) {
+    view.dispatch({ ...scaled, userEvent: "input.type" });
+    return true;
+  }
+  const right = sel.empty && rightDelimiterAt(doc, from);
+  if (right && [")", "]", "}", "|"].includes(insert) && right.endsWith(insert)) {
+    view.dispatch({ selection: { anchor: from + right.length }, userEvent: "select" });
+    return true;
+  }
+  const close = BRACKET_PAIRS[insert];
+  if (!close && !BRACKET_CLOSERS.has(insert)) return false;
   if (!sel.empty) {
     if (!close || sel.to > seg.end) return false;
     view.dispatch({
@@ -639,6 +651,11 @@ const mathBracketBackspace = keymap.of([{
     if (!sel.empty) return false;
     const doc = view.state.doc.toString();
     if (fenceInnerAt(doc, sel.head) || !findMathAtCursor(doc, sel.head)) return false;
+    const scaled = emptyLeftPair(doc, sel.head);
+    if (scaled) {
+      view.dispatch({ changes: scaled, selection: { anchor: scaled.from }, userEvent: "delete.backward" });
+      return true;
+    }
     const esc = doc.slice(sel.head - 2, sel.head + 2) === "\\{\\}";
     if (!esc && BRACKET_PAIRS[doc[sel.head - 1]] !== doc[sel.head]) return false;
     view.dispatch({

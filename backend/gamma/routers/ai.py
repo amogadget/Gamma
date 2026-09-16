@@ -109,7 +109,7 @@ class AIChatRequest(BaseModel):
     attach_pdf: bool = False  # send the PDF itself instead of extracted text
     effort: str = ""      # reasoning effort; empty = provider default (param omitted)
     system: str = ""      # custom system prompt; empty = built-in default
-    pages: list = Field(default_factory=list)  # page ids for multi-page chat / reports
+    pages: list[str] = Field(default_factory=list, max_length=7)  # open page + up to six references
     # Also include the user's highlights + notes for pages that carry a PDF
     # (a page without one is its notes — they always go).
     include_notes: bool = False
@@ -1180,6 +1180,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
     # armed subset — an empty result (or no scope) is a plain chat.
     scope = {"type": payload.agent_scope, "folder": payload.folder,
              "page_id": payload.page_id, "read_chars": payload.read_char_limit,
+             "context_pages": list(dict.fromkeys(payload.pages)),
              # The agent prompt names the cursor block / attached chips so
              # "this block" resolves without a read_block round-trip.
              "focus_block_id": (payload.focus_block_id or "").strip()[:64],

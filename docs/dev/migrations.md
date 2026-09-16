@@ -49,6 +49,7 @@ workspace's files), `db.SCHEMA_VERSION`, `manage.py migrate` / `backups`.
 | 2 | `workspaces` | `users/<username>/` → `workspaces/<id>/` with a `workspaces` row and an owner membership per account (`users.default_workspace`); `data.db` `prefs` → `users.db` `user_prefs` (account-wide keys under workspace `''`, page-naming keys under the new workspace); `shares` rebuilt as `(workspace_id, page_id, created_by, …)`. [workspaces.md](workspaces.md) |
 | 3 | `workspace_access` | `workspaces` gains `access` (private / public), `public_role` and `quota_mb` (a shared workspace's own cap); existing rows stay private with no quota. Nothing moves |
 | 4 | `workspace_kinds` | `workspaces` gains `kind`: every account's default workspace and every single-member workspace become `personal` (private, no workspace quota), the rest `shared`. Other members of a default workspace are dropped (personal workspaces have no other members) and named in the log |
+| 5 | `publisher_sessions` | Adds private, encrypted publisher cookie snapshots in `users.db`, keyed by account and publisher host. Existing content and account settings are unchanged |
 
 ## Backups (`gamma/backups.py`)
 

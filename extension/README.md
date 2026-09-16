@@ -45,6 +45,31 @@ Edge and other Chromium browsers load it the same way. Firefox needs a
   to Gamma* (a quoted block under the matching paper, else a "Web clips" page).
 - <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> saves the current page.
 
+## Connect a publisher session
+
+Reload the extension after upgrading to 0.2.0. Open a publisher article or PDF
+over HTTPS and sign in there if needed. In the Connector, expand **Publisher
+sessions** and click **Connect publisher session**. Chrome asks for the optional
+cookie permission the first time. The displayed publisher host, Gamma server,
+and Gamma account identify exactly where the connection applies.
+
+This explicitly transfers the publisher cookies to Gamma for later backend
+PDF downloads. Normal Save actions still transfer only the PDF. Use **Refresh
+publisher session** after signing in again, or **Disconnect** to delete the
+backend's copy. Connections can be disconnected from the popup on any tab.
+
+Requires a personal Gamma account and an HTTPS server (HTTP localhost is also
+supported). Guest and incognito sessions cannot connect. Only cookies applicable
+to the selected publisher host are sent; university SSO and partitioned cookies
+are excluded. Some browser challenges bind sessions to a browser or IP, so a
+connected session is not a guarantee of access; browser PDF uploads still work.
+
+The server encrypts the snapshot and limits reuse to that account and exact
+HTTPS host. Session cookies last at most 24 hours; persistent cookies last until
+their original expiry or 30 days, whichever comes first. Refresh is manual;
+uninstalling the Connector does not delete sessions already stored on Gamma.
+See [backend storage details](../docs/dev/paper_metadata.md#connected-publisher-sessions).
+
 ## Files
 
 | File | Role |
