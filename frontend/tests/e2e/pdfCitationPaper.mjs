@@ -54,10 +54,11 @@ try {
     }, { number: c.page, expected });
     await until(aligned, { what: `p.${c.page}: every highlight covers its source glyphs` });
     await page.getByRole('button', { name: 'Zoom in', exact: true }).click();
-    await until(aligned, { what: `p.${c.page}: alignment after zoom` });
+    await until(async () => await mark.count() === 0, { what: `p.${c.page}: zoom control dismisses the citation` });
     // A zoomed reader may have panned horizontally. Reopening the citation
     // must reveal the whole column, not just scroll to the correct height.
     await page.getByRole("link", { name: `p. ${c.page}`, exact: true }).click();
+    await mark.first().waitFor();
     await until(aligned, { what: `p.${c.page}: reopening after zoom` });
     await until(() => page.evaluate(number => {
       const viewer = document.querySelector('.pdfViewer').getBoundingClientRect();

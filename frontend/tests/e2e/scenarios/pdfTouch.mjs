@@ -114,41 +114,38 @@ export async function pdfTouchScenarios({ server, browser, alice, makePdf, step,
     assertEq(await page.evaluate(() => scrollCorrections.length), 0, "diagonal pan is not pulled back");
     assertNoProblems(page);
   });
-  await step("pdf touch: app fullscreen survives downward swipes and exits explicitly", async () => {
+  await step("pdf touch: prefers native fullscreen and exits with the toggle or browser", async () => {
     await until(async () => (await alice.api(`/api/blocks/${pageId}/subtree`)).block.children.some((b) => b.properties?.ink_url), { what: "ink saved before navigation" });
     await page.reload(); // Start independently of the previous fling and its instrumentation.
     await waitForPdf(page);
-    await page.getByRole("button", { name: "Full screen", exact: true }).tap();
-    await page.locator(".app.pseudoFullscreen").waitFor();
-    assert(await page.evaluate(() => !document.fullscreenElement && !document.webkitFullscreenElement), "touch fullscreen avoids browser-owned dismissal");
-    if (await page.evaluate(() => CSS.supports("overscroll-behavior-y", "none"))) {
-      assertEq(await page.locator(".pdfViewer").evaluate((el) => getComputedStyle(el).getPropertyValue("overscroll-behavior-y")), "none");
-    }
-    await page.locator(".pdfViewer").evaluate((el) => el.scrollTo({ left: 0, top: 600 }));
-    if (browser.browserType().name() === "chromium") {
-      const session = await ctx.newCDPSession(page);
-      const box = await page.locator(".pdfViewer").boundingBox();
-      const x = Math.round(box.x + box.width * 0.6), y = Math.round(box.y + 150);
-      const swipe = async () => {
-        await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
-        for (let i = 1; i <= 10; i++) await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + i * 20 }] });
-        await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-      };
-      await swipe();
-      await until(async () => await page.locator(".pdfViewer").evaluate((el) => el.scrollTop) < 500, { what: "downward swipe scrolls in fullscreen" });
-      await page.locator(".pdfViewer").evaluate((el) => { el.scrollTop = 0; });
-      await swipe(); // Also test downward overscroll at the start of the document.
-      await sleep(1000); // Let the browser finish the gesture before tapping a control.
-    } else {
-      await page.locator(".pdfViewer").evaluate((el) => el.scrollBy({ top: -200 }));
-    }
-    assertEq(await page.locator(".app.pseudoFullscreen").count(), 1);
+    assert(await page.evaluate(() => matchMedia("(pointer: coarse)").matches), "touch device uses a coarse pointer");
+    const nativeFullscreen = await page.evaluate(() => !!(document.fullscreenEnabled || document.webkitFullscreenEnabled));
+    const enterFullscreen = async () => {
+      await page.getByRole("button", { name: "Full screen", exact: true }).tap();
+      await page.getByRole("button", { name: "Exit full screen", exact: true }).waitFor();
+      if (nativeFullscreen) {
+        assert(await page.evaluate(() => (document.fullscreenElement || document.webkitFullscreenElement) === document.documentElement), "touch enters native fullscreen for the whole app");
+        assertEq(await page.locator(".app.pseudoFullscreen").count(), 0);
+      } else {
+        await page.locator(".app.pseudoFullscreen").waitFor();
+      }
+    };
+    const checkExited = async () => {
+      await page.getByRole("button", { name: "Full screen", exact: true }).waitFor();
+      assert(await page.evaluate(() => !document.fullscreenElement && !document.webkitFullscreenElement), "native fullscreen exited");
+      assertEq(await page.locator(".app.pseudoFullscreen").count(), 0);
+      assertEq(await page.locator("html.appFocusFullscreen").count(), 0);
+    };
+    await enterFullscreen();
     await page.getByRole("button", { name: "Exit full screen", exact: true }).tap();
-    await until(async () => await page.locator(".app.pseudoFullscreen").count() === 0);
-    assertEq(await page.locator("html.appFocusFullscreen").count(), 0);
-    await page.getByRole("button", { name: "Full screen", exact: true }).tap();
-    await page.keyboard.press("Escape");
-    await until(async () => await page.locator(".app.pseudoFullscreen").count() === 0);
+    await checkExited();
+    await enterFullscreen();
+    if (nativeFullscreen) {
+      await page.evaluate(() => (document.exitFullscreen || document.webkitExitFullscreen).call(document));
+    } else {
+      await page.keyboard.press("Escape");
+    }
+    await checkExited();
     assertNoProblems(page);
   });
   await step("pdf touch: paper color survives large zoom cycles and live ink keeps its own theme", async () => {

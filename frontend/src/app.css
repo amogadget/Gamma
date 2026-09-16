@@ -2697,7 +2697,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   overflow-y: auto;
 }
 
-/* App fullscreen avoids mobile browsers' native swipe-to-dismiss gesture.
+/* App fullscreen is the fallback when native fullscreen is unavailable.
    Confine overscroll to the app; the viewer's fullscreen button or Esc exits. */
 html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; overscroll-behavior: none; }
 .app.pseudoFullscreen { position: fixed; inset: 0; height: 100dvh; overscroll-behavior: none; }
@@ -3646,8 +3646,36 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   cursor: pointer;
 }
 .chatToolActionHead.plain { cursor: default; }
-/* A reply's link to one of the user's pages (/?page=<id>) opens in place. */
-.chatPageLink { font-weight: 600; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+/* Compact source cards stay inline with a reply, including short PDF citations. */
+.chatLinkCard {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 3px 7px;
+  margin: 2px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-size: 0.92em;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: none;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+.chatLinkCard:hover {
+  background: var(--accent-bg-light);
+  border-color: var(--accent);
+}
+.chatLinkCard:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.chatLinkCard > svg { flex: none; }
+.chatLinkLabel { min-width: 0; overflow-wrap: anywhere; }
 .chatToolActionHead:hover:not(.plain) { color: var(--text); }
 .chatToolAction.err .chatToolActionHead { color: var(--danger); }
 .chatToolActionHead svg { flex: none; }
@@ -3991,12 +4019,12 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
    caret, and a landed paragraph fades in. Original text stays readable
    under the wash — only real translated text masks it. */
 .pdfTransPending { position: absolute; inset: 0; }
-.pdfTransPendingLine {
+.pdfTransPendingLine, .pdfCitationMark {
   position: absolute;
   border-radius: 2px;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
-.pdfTransPending.busy .pdfTransPendingLine {
+.pdfTransPending.busy .pdfTransPendingLine, .pdfCitationMark {
   background: linear-gradient(90deg,
     color-mix(in srgb, var(--accent) 10%, transparent) 0%,
     color-mix(in srgb, var(--accent) 32%, transparent) 50%,

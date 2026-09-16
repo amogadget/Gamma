@@ -31,9 +31,8 @@ export function PdfCitationOverlay({ citation, textRef, wrapRef, ready }) {
   if (!citation || !result) return null;
   return <>
     {result.rects.map((r, i) => <div key={i} className="pdfCitationMark" aria-hidden="true"
-      style={{ position: "absolute", zIndex: 4, pointerEvents: "none",
-        left: `${r.left}%`, top: `${r.top}%`, width: `${r.width}%`, height: `${r.height}%`,
-        background: "rgba(255, 200, 30, .4)", outline: "1px solid rgba(220, 140, 0, .8)", borderRadius: 2 }} />)}
+      style={{ zIndex: 4, pointerEvents: "none",
+        left: `${r.left}%`, top: `${r.top}%`, width: `${r.width}%`, height: `${r.height}%` }} />)}
     {result.status !== "matched" && <div role="status" className="pdfCitationNotice"
       style={{ position: "absolute", top: 8, left: 8, right: 8, zIndex: 5,
         padding: "8px 12px", background: "var(--bg, white)", color: "var(--text, #333)", borderRadius: 6 }}>

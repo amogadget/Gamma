@@ -6,7 +6,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { PinIcon } from "./icons";
+import { ExternalLinkIcon, FileTextIcon, PinIcon } from "./icons";
 import { assetUrl } from "./utils";
 import { parsePdfCitation } from "./pdfCitation.js";
 import { ExportDialog, ImportDialog } from "./importExport";
@@ -169,20 +169,22 @@ const ChatMarkdown = React.memo(function ChatMarkdown({ text, onOpenPage }) {
         rehypePlugins={[rehypeKatex]}
         urlTransform={(url) => assetUrl(defaultUrlTransform(url))}
         components={{
-          a: ({ href, children }) => {
+          a: ({ href, children, title }) => {
             const pageId = onOpenPage ? gammaPageLink(href) : null;
             if (pageId) {
               return (
-                <a href={href} className="chatPageLink"
+                <a href={href} className="chatLinkCard chatPageLink"
                   title={parsePdfCitation(href, window.location.origin) ? "Show this passage in the PDF" : "Open this page"}
                   onClick={(e) => {
                     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                     e.preventDefault();
                     onOpenPage(pageId, parsePdfCitation(href, window.location.origin));
-                  }}>{children}</a>
+                  }}><FileTextIcon size={14} aria-hidden="true" /><span className="chatLinkLabel">{children}</span></a>
               );
             }
-            return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+            return <a href={href} className="chatLinkCard" target="_blank" rel="noreferrer" title={title || href}>
+              <ExternalLinkIcon size={14} aria-hidden="true" /><span className="chatLinkLabel">{children}</span>
+            </a>;
           },
         }}
       >

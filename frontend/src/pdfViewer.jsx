@@ -1074,10 +1074,27 @@ function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef,
     return () => { cancelled = true; };
   }, [citation, pdfDoc, displayedUrl, url]);
   useEffect(() => {
+    if (!activeCitation) return;
     const dismiss = (e) => { if (e.key === "Escape") setActiveCitation(null); };
+    const clickAway = (e) => {
+      // The marks let pointer input through to the PDF text, so hit-test
+      // their rectangles without interfering with selection or links.
+      if (e.detail > 0 && viewerRef.current?.contains(e.target)) {
+        const marks = viewerRef.current.querySelectorAll(".pdfCitationMark");
+        for (const mark of marks) {
+          const r = mark.getBoundingClientRect();
+          if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) return;
+        }
+      }
+      setActiveCitation(null);
+    };
     document.addEventListener("keydown", dismiss);
-    return () => document.removeEventListener("keydown", dismiss);
-  }, []);
+    document.addEventListener("click", clickAway, true);
+    return () => {
+      document.removeEventListener("keydown", dismiss);
+      document.removeEventListener("click", clickAway, true);
+    };
+  }, [activeCitation]);
 
   // Current-page widget (top-right): tracks scrolling, and typing a number
   // jumps. The "current" page is the one covering a point a third of the way
@@ -1587,8 +1604,6 @@ function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef,
             aria-label="Current page"
           />
           <span className="pdfPageTotal">/ {numPages}</span>
-          {activeCitation && <button type="button" onClick={() => setActiveCitation(null)}
-            title="Clear reference highlight (Esc)" aria-label="Clear reference highlight">×</button>}
         </div>
       ) : null}
       {outline && outlineOpen ? (

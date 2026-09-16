@@ -1434,8 +1434,8 @@ export default function App() {
       document.removeEventListener("webkitfullscreenchange", onFs);
     };
   }, []);
-  // Touch browsers can reserve a downward swipe to dismiss native fullscreen,
-  // even while the PDF is scrolling. Use app fullscreen there instead.
+  // Use native fullscreen on touch devices too; app fullscreen is a fallback
+  // for browsers where the Fullscreen API is unavailable or rejects the request.
   const [pseudoFullscreen, setPseudoFullscreen] = useState(false);
   const fullscreenTapRef = useRef({ start: null, handledUntil: 0 });
   useEffect(() => {
@@ -1453,7 +1453,7 @@ export default function App() {
       (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
     } else if (pseudoFullscreen) {
       setPseudoFullscreen(false);
-    } else if (window.matchMedia("(pointer: coarse)").matches || !(document.fullscreenEnabled || document.webkitFullscreenEnabled)) {
+    } else if (!(document.fullscreenEnabled || document.webkitFullscreenEnabled)) {
       setPseudoFullscreen(true);
     } else {
       const el = document.documentElement;

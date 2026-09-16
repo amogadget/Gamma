@@ -30,7 +30,8 @@ nodes, including partial runs, rather than estimating glyph widths or trusting
 PDFium offsets. Percentage rectangles track page size, and completed text-layer
 renders trigger recalculation after zoom. Stale document/render work is cancelled.
 The overlay ignores pointer input and never enters the annotation or note store.
-Escape or the clear-reference button removes it.
+The overlay reuses the in-progress translation shimmer. Clicking outside the highlighted
+passage or pressing Escape removes it; there is no separate close button.
 
 Coverage: `frontend/tests/pdfCitation.test.mjs`, the citation scenario in
 `frontend/tests/e2e/scenarios/pdf.mjs`, and `backend/tests/test_pdf_citations.py`.

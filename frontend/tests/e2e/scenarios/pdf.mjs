@@ -104,7 +104,7 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     assertNoProblems(page);
   });
 
-  await step("pdf: AI citation jumps to exact text without creating a note, survives zoom and dismisses", async () => {
+  await step("pdf: AI citation aligns with text and dismisses on outside clicks without creating a note", async () => {
     const before = await account.api(`/api/blocks/${pageId}/subtree`);
     const quote = "Page two says hello world";
     const href = `/?page=${pageId}&pdf_page=2&quote=${encodeURIComponent(quote)}`;
@@ -119,6 +119,8 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     await link.click();
     const mark = page.locator('[data-page="2"] .pdfCitationMark').first();
     await mark.waitFor();
+    assertEq(await mark.evaluate(el => getComputedStyle(el).animationName), "pdfTransShimmer", "citation reuses the in-progress translation shimmer");
+    assertEq(await page.getByRole("button", { name: "Clear reference highlight", exact: true }).count(), 0);
     const aligned = () => page.evaluate(() => {
       const mark = document.querySelector('[data-page="2"] .pdfCitationMark').getBoundingClientRect();
       const span = [...document.querySelectorAll('[data-page="2"] .textLayer span')]
@@ -129,8 +131,23 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
         && Math.abs(mark.width - text.width) < 3 && mark.top >= 0 && mark.top < innerHeight;
     });
     await until(aligned, { what: "citation rectangles align with the rendered text" });
+    const box = await mark.boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    assertEq(await mark.count(), 1, "clicking the highlighted passage keeps it visible");
+    const paper = await page.locator('[data-page="2"]').boundingBox();
+    await page.mouse.click(paper.x + 8, box.y + box.height / 2);
+    await until(async () => await mark.count() === 0, { what: "clicking elsewhere on the PDF dismisses the citation" });
+    await link.click();
+    await mark.waitFor();
+    await page.locator(".chatInputArea").click();
+    await until(async () => await mark.count() === 0, { what: "clicking in chat dismisses the citation" });
+    await link.click();
+    await mark.waitFor();
     await page.getByRole("button", { name: "Zoom in", exact: true }).click();
-    await until(aligned, { what: "citation remains aligned after zoom" });
+    await until(async () => await mark.count() === 0, { what: "clicking a viewer control dismisses the citation" });
+    await link.click();
+    await mark.waitFor();
+    await until(aligned, { what: "citation aligns after zoom and reopening" });
     await page.keyboard.press("Escape");
     await until(async () => await page.locator('.pdfCitationMark').count() === 0, { what: "citation dismissed" });
     await link.click();
@@ -160,6 +177,8 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
       await page.goto(`${server.base}/?page=${target.id}&pdf_page=1&quote=${encodeURIComponent(text)}&ws=${account.ws}`);
       await page.locator('.pdfCitationNotice', { hasText: message }).waitFor();
       assertEq(await page.locator('.pdfCitationMark').count(), 0, "unresolved reference does not highlight guessed text");
+      await page.locator(".chatInputArea").click();
+      await until(async () => await page.locator('.pdfCitationNotice').count() === 0, { what: "clicking elsewhere dismisses an unresolved reference" });
     }
     assertNoProblems(page);
     await page.goto(`${server.base}/?page=${pageId}&ws=${account.ws}`);
