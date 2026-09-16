@@ -216,9 +216,14 @@ export async function inkEditingScenarios({ server, browser, alice, bob, makePdf
     const scrollBefore = await page.locator(".pdfViewer").evaluate((el) => el.scrollTop);
     const from = await point(130, 220);
     await dragTouch(from, { x: from.x, y: from.y - 110 });
-    await until(async () => await page.locator(".pdfViewer").evaluate((el) => el.scrollTop) > scrollBefore + 20);
+    const scrollTop = () => page.locator(".pdfViewer").evaluate((el) => el.scrollTop);
+    await until(async () => await scrollTop() > scrollBefore + 20);
     assertEq(await menu().count(), 0, "swipe did not select");
+    // Let the fling's momentum finish before resetting: a still-moving scroller
+    // would carry the ink out of view and the menu hides off-screen selections.
+    await until(async () => { const a = await scrollTop(); await page.waitForTimeout(250); return a === await scrollTop(); }, { what: "swipe momentum settled" });
     await page.locator(".pdfViewer").evaluate((el) => { el.scrollTop = 0; });
+    await until(async () => await scrollTop() === 0, { what: "scrolled back to the top" });
     await tapInk();
     const blank = await point(300, 330);
     await page.touchscreen.tap(blank.x, blank.y);
