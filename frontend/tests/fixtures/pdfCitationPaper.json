@@ -1,0 +1,709 @@
+[
+  {
+    "page": 20,
+    "quote": "Carr-Purcell-Meiboom-Gill (CPMG) pulse sequence applies N equally spaced π pulses within an otherwise free-evolution time τ.",
+    "items": [
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          241.03414784,
+          343.653
+        ],
+        "width": 5.120852159999998
+      },
+      {
+        "str": "Carr-Purcell-",
+        "hasEOL": true,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          246.155,
+          343.653
+        ],
+        "width": 52.926865920000004
+      },
+      {
+        "str": "Meiboom-Gill",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          54,
+          333.192
+        ],
+        "width": 55.614095999999996
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          109.61409599999999,
+          333.192
+        ],
+        "width": 5.550201599999994
+      },
+      {
+        "str": "(CPMG)",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          115.16429759999998,
+          333.192
+        ],
+        "width": 35.77234944
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          150.93664703999997,
+          333.192
+        ],
+        "width": 5.550201600000008
+      },
+      {
+        "str": "pulse",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          156.48684863999998,
+          333.192
+        ],
+        "width": 20.533952640000003
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          177.02080127999997,
+          333.192
+        ],
+        "width": 5.559168
+      },
+      {
+        "str": "sequence",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          182.57996927999997,
+          333.192
+        ],
+        "width": 35.132148480000005
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          217.71211775999996,
+          333.192
+        ],
+        "width": 5.550201600000008
+      },
+      {
+        "str": "applies",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          223.26231935999996,
+          333.192
+        ],
+        "width": 27.701692800000004
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          250.96401215999995,
+          333.192
+        ],
+        "width": 5.553987840000076
+      },
+      {
+        "str": "N",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          256.51800000000003,
+          333.192
+        ],
+        "width": 7.366794240000001
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          263.88479424,
+          333.192
+        ],
+        "width": 6.52220576000002
+      },
+      {
+        "str": "equally",
+        "hasEOL": true,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          270.40700000000004,
+          333.192
+        ],
+        "width": 28.673650560000006
+      },
+      {
+        "str": "spaced",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          54.00000000000003,
+          322.732
+        ],
+        "width": 26.677729920000004
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          80.67772992000002,
+          322.732
+        ],
+        "width": 4.403270080000013
+      },
+      {
+        "str": "π",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          85.08100000000003,
+          322.732
+        ],
+        "width": 5.274036480000001
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          90.35503648000004,
+          322.732
+        ],
+        "width": 4.724963519999989
+      },
+      {
+        "str": "pulses within an otherwise free-evolution time",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          95.08000000000003,
+          322.732
+        ],
+        "width": 191.95717439999999
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          287.03717439999997,
+          322.732
+        ],
+        "width": 4.399825600000042
+      },
+      {
+        "str": "τ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          291.437,
+          322.732
+        ],
+        "width": 4.05639936
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          295.49339936,
+          322.732
+        ],
+        "width": 1.0276006400000028
+      },
+      {
+        "str": ".",
+        "hasEOL": true,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          296.521,
+          322.732
+        ],
+        "width": 2.5599072000000005
+      },
+      {
+        "str": "Pulses in the time domain correspond to bandpass filters in",
+        "hasEOL": true,
+        "transform": [
+          8.9664,
+          0,
+          0,
+          8.9664,
+          54.00000000000003,
+          312.271
+        ],
+        "width": 245.08309439999994
+      }
+    ]
+  },
+  {
+    "page": 21,
+    "quote": "This concept extends to larger numbers N of π pulses, and is called a Carr-Purcell-Meiboom-Gill (CPMG) sequence.",
+    "items": [
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          114.93425038,
+          626.849
+        ],
+        "width": 6.9738200000000035
+      },
+      {
+        "str": "This concept extends to larger numbers",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          121.90807038,
+          626.849
+        ],
+        "width": 177.16989710000001
+      },
+      {
+        "str": "",
+        "hasEOL": true,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          53.99999999999997,
+          615.392
+        ],
+        "width": 0
+      },
+      {
+        "str": "N",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          53.99999999999997,
+          615.392
+        ],
+        "width": 8.004949100000001
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          62.004949099999976,
+          615.392
+        ],
+        "width": 3.956050899999994
+      },
+      {
+        "str": "of",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          65.96099999999997,
+          615.392
+        ],
+        "width": 8.025870560000001
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          73.98687055999997,
+          615.392
+        ],
+        "width": 2.8691294399999947
+      },
+      {
+        "str": "π",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          76.85599999999997,
+          615.392
+        ],
+        "width": 5.678682
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          82.53468199999996,
+          615.392
+        ],
+        "width": 3.2283180000000016
+      },
+      {
+        "str": "pulses, and is called a Carr-Purcell-Meiboom-Gill",
+        "hasEOL": true,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          85.76299999999996,
+          615.392
+        ],
+        "width": 213.31919120000018
+      },
+      {
+        "str": "(CPMG) sequence",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          53.99999999999996,
+          603.9350000000001
+        ],
+        "width": 80.35335030000002
+      },
+      {
+        "str": "158,159",
+        "hasEOL": false,
+        "transform": [
+          6.9738,
+          0,
+          0,
+          6.9738,
+          134.35599999999994,
+          607.551
+        ],
+        "width": 26.080617240000002
+      },
+      {
+        "str": ". In Fig. 7(b), the",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          160.93599999999992,
+          603.9350000000001
+        ],
+        "width": 80.62831806000001
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          241.56431806000006,
+          603.9350000000001
+        ],
+        "width": 3.7096819399998537
+      }
+    ]
+  },
+  {
+    "page": 22,
+    "quote": "The more advanced versions, such as the CPMG-sequence, use multiple π-pulses to interrupt the system more frequently, pushing the filter band to even higher frequencies – a technique known as dynamical decoupling.",
+    "items": [
+      {
+        "str": "the pure dephasing by refocusing the coherent phase dis-",
+        "hasEOL": true,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          54.00000000000001,
+          529.441
+        ],
+        "width": 245.08494130000008
+      },
+      {
+        "str": "persion due to low-frequency noise. The more advanced",
+        "hasEOL": true,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          54.00000000000001,
+          517.984
+        ],
+        "width": 245.07796747999998
+      },
+      {
+        "str": "versions, such as the CPMG-sequence, use multiple",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          54.00000000000001,
+          506.52700000000004
+        ],
+        "width": 231.22796096000005
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          285.2279609600001,
+          506.52700000000004
+        ],
+        "width": 4.496039039999914
+      },
+      {
+        "str": "π",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          289.724,
+          506.52700000000004
+        ],
+        "width": 5.678682
+      },
+      {
+        "str": "-",
+        "hasEOL": true,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          295.76,
+          506.52700000000004
+        ],
+        "width": 3.3205345800000003
+      },
+      {
+        "str": "pulses to interrupt the system more frequently, pushing",
+        "hasEOL": true,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          54,
+          495.07000000000005
+        ],
+        "width": 245.07996000000009
+      },
+      {
+        "str": "the filter band to even higher frequencies – a technique",
+        "hasEOL": true,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          54,
+          483.61300000000006
+        ],
+        "width": 245.08195252000004
+      },
+      {
+        "str": "known as",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          54,
+          472.15600000000006
+        ],
+        "width": 40.45512982
+      },
+      {
+        "str": " ",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          94.45512982000001,
+          472.15600000000006
+        ],
+        "width": 3.3248701799999907
+      },
+      {
+        "str": "dynamical decoupling",
+        "hasEOL": false,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          97.78,
+          472.15600000000006
+        ],
+        "width": 91.65093870000004
+      },
+      {
+        "str": "78",
+        "hasEOL": false,
+        "transform": [
+          6.9738,
+          0,
+          0,
+          6.9738,
+          189.987,
+          475.7710000000001
+        ],
+        "width": 7.941763439999999
+      },
+      {
+        "str": ".",
+        "hasEOL": true,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          198.427,
+          472.15600000000006
+        ],
+        "width": 2.76761028
+      },
+      {
+        "str": "Returning to excess quasiparticles, it has been shown",
+        "hasEOL": true,
+        "transform": [
+          9.9626,
+          0,
+          0,
+          9.9626,
+          63.962999999999994,
+          460.02200000000005
+        ],
+        "width": 235.11437122000012
+      }
+    ]
+  }
+]

@@ -261,11 +261,16 @@ Logseq graph / Zotero RDF / Gamma) using large `PictureChoices` cards grouped
 into PDF, MD and ZIP rows, with monochrome app logos and shared document icons.
 Double-click a card or select it and use the footer action. Editable formats open
 an illustrative page preview with the applicable Highlights, Notes and
-Bundle-the-files switches. Back returns to the choices without losing edits.
+Bundle-the-files switches. The previous-step breadcrumb returns to the
+choices without losing edits. Cards inherit shared `uiBtn` shadows and hover states.
 Gamma has fixed contents, so it exports directly with all contents included.
 A remote PDF without a stored copy also exports directly as the original file.
 Logseq offers only file bundling; its highlights and notes are always included.
-Both dialogs reuse `SubDialog` for focus trapping, Escape and dismissal;
+Both dialogs reuse `SubDialog` for focus trapping, Escape and dismissal. Its
+optional close-button header supplies the standard `uiClose` ×; the footer
+contains only Next or the final action. Short card labels avoid repeating the
+file type already shown by each row. Zotero's post-export instructions expand
+under "Open this export in Zotero";
 controls keep their shared hover/focus styling. The previews in
 `illustrations/TransferPreview.jsx` are hand-coded HTML/CSS illustrations of the effective
 options, not renders of the user's document. Bundled files appear outside the

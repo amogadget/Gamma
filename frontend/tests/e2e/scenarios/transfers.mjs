@@ -21,6 +21,8 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
     try {
       await newPageViaUi(page, "Export preview example");
       const dialog = await openDialog(page, "Export");
+      assert(await choice(dialog, "Close Export").isVisible());
+      assertEq(await choice(dialog, "Cancel").count(), 0);
       await page.keyboard.press("Shift+Tab");
       assert(await dialog.evaluate((el) => el.contains(document.activeElement)), "reverse tab from the heading stays in the dialog");
       assertEq(await dialog.getByRole("group", { name: "Export format" }).getByRole("button").count(), 6);
@@ -28,18 +30,24 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       for (const [type, count] of [["PDF", 1], ["MD", 1], ["ZIP", 4]]) {
         assertEq(await dialog.getByRole("group", { name: `${type} choices`, exact: true }).getByRole("button").count(), count);
       }
+      await choice(dialog, "Markdown").hover();
+      const cardShadow = await choice(dialog, "Markdown").evaluate((el) => getComputedStyle(el).boxShadow);
+      assert(cardShadow !== "none", "picture choices retain the shared button shadow");
+      assertEq(cardShadow, await choice(dialog, "Next").evaluate((el) => getComputedStyle(el).boxShadow));
       if (flags.keep) await page.screenshot({ animations: "disabled", path: `${server.dir}/export-formats.png` });
-      await choice(dialog, "Markdown (.md)").dblclick();
-      assert(await dialog.getByRole("heading", { name: "Markdown (.md)", exact: true }).isVisible());
-      await choice(dialog, "Back").click();
-      assertEq(await choice(dialog, "Markdown (.md)").getAttribute("aria-pressed"), "true");
+      await choice(dialog, "Markdown").dblclick();
+      assert(await dialog.getByRole("heading", { name: "Markdown", exact: true }).isVisible());
+      assertEq(await choice(dialog, "Back").count(), 0);
+      await choice(dialog, "1. Choose a format").click();
+      assertEq(await choice(dialog, "Markdown").getAttribute("aria-pressed"), "true");
       await choice(dialog, "Notes as PDF").click();
       await choice(dialog, "Next").click();
       await toggle(dialog, "Highlights").uncheck();
       assertEq(await dialog.locator('[data-preview="highlights"]').count(), 0);
       await toggle(dialog, "Notes").uncheck();
       assertEq(await dialog.locator('[data-preview="notes"]').count(), 0);
-      await choice(dialog, "Back").click();
+      await choice(dialog, "1. Choose a format").focus();
+      await page.keyboard.press("Enter");
       await choice(dialog, "Next").click();
       assertEq(await toggle(dialog, "Notes").isChecked(), false);
       await toggle(dialog, "Highlights").check();
@@ -62,7 +70,7 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
     try {
       await newPageViaUi(page, "Mobile export example");
       let dialog = await openDialog(page, "Export");
-      await choice(dialog, "Gamma (.zip)").click();
+      await choice(dialog, "Gamma").click();
       assertEq(await choice(dialog, "Next").count(), 0);
       assertEq(await dialog.getByRole("checkbox").count(), 0);
       const gammaDownload = page.waitForEvent("download");
@@ -70,14 +78,14 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       assertEq(fs.readFileSync(await (await gammaDownload).path()).subarray(0, 2).toString(), "PK");
       await dialog.waitFor({ state: "detached" });
       dialog = await openDialog(page, "Export");
-      await choice(dialog, "Logseq graph (.zip)").click();
+      await choice(dialog, "Logseq").click();
       await choice(dialog, "Next").click();
       assertEq(await dialog.getByRole("checkbox").count(), 1);
       assertEq(await dialog.locator('[data-preview="highlights"]').count(), 1);
       assertEq(await dialog.locator('[data-preview="notes"]').count(), 1);
       assert(!(await toggle(dialog, "Bundle the files").isDisabled()));
-      await choice(dialog, "Back").click();
-      await choice(dialog, "Obsidian vault (.zip)").click();
+      await choice(dialog, "1. Choose a format").click();
+      await choice(dialog, "Obsidian").click();
       await choice(dialog, "Next").click();
       await toggle(dialog, "Bundle the files").uncheck();
       assertEq(await dialog.locator('[data-preview="linked-files"]').count(), 1);
@@ -104,12 +112,12 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       await page.goto(`${server.base}/?page=${created.id}&ws=${alice.ws}`);
       await waitForPdf(page);
       let dialog = await openDialog(page, "Export");
-      await choice(dialog, "PDF (the paper, annotated)").click();
+      await choice(dialog, "Original PDF").click();
       await choice(dialog, "Next").click();
       assertEq(await dialog.locator(".transferOriginalPaper").count(), 1);
       await toggle(dialog, "Notes").uncheck();
       assertEq(await dialog.locator('[data-preview="notes"]').count(), 0);
-      await choice(dialog, "Cancel").click();
+      await choice(dialog, "Close Export").click();
       dialog = await openDialog(page, "Import");
       assertEq(await dialog.getByRole("group", { name: "Import from" }).getByRole("button").count(), 5);
       assertEq(await choice(dialog, "Annotations in this PDF").getAttribute("aria-pressed"), "true");
@@ -121,10 +129,14 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       await toggle(dialog, "Strip the originals").check();
       assertEq(await dialog.locator('[data-preview="highlights"]').count(), 0);
       assertEq(await dialog.locator('[data-preview="imported-annotations"]').count(), 1);
+      await choice(dialog, "1. Choose a source").click();
+      assertEq(await choice(dialog, "Annotations in this PDF").getAttribute("aria-pressed"), "true");
+      await choice(dialog, "Next").click();
+      assert(await toggle(dialog, "Strip the originals").isChecked(), "breadcrumb preserves the import options");
       await toggle(dialog, "Strip the originals").uncheck();
       assertEq(await dialog.locator('[data-preview="highlights"]').count(), 1);
       if (flags.keep) await page.screenshot({ animations: "disabled", path: `${server.dir}/import-preview.png` });
-      await choice(dialog, "Back").click();
+      await choice(dialog, "1. Choose a source").click();
       const markdownChooser = page.waitForEvent("filechooser");
       await choice(dialog, "Markdown notes").dblclick();
       assertEq(await (await markdownChooser).element().getAttribute("accept"), ".md,.markdown,.zip,text/markdown,application/zip");
@@ -149,7 +161,7 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       await choice(dialog, "Notes as PDF").click();
       const request = page.waitForRequest((r) => r.url().includes("mode=gamma"));
       const download = page.waitForEvent("download");
-      await choice(dialog, "Gamma (.zip)").dblclick();
+      await choice(dialog, "Gamma").dblclick();
       await request;
       assertEq(fs.readFileSync(await (await download).path()).subarray(0, 2).toString(), "PK");
       await dialog.waitFor({ state: "detached" });

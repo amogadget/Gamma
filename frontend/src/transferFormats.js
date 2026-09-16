@@ -40,19 +40,19 @@ const EXPORT_SWITCH_TEXT = {
 };
 
 export const EXPORT_FORMATS = [
-  { id: "pdf", label: "PDF (the paper, annotated)", category: "PDF",
+  { id: "pdf", label: "Original PDF", category: "PDF",
     hint: "Your original paper, with annotations", editable: ["highlights", "notes"], fixed: { bundle: false } },
   { id: "notespdf", label: "Notes as PDF", category: "PDF",
     hint: "A typeset document of highlights and notes", editable: ["highlights", "notes"], fixed: { bundle: false } },
-  { id: "markdown", label: "Markdown (.md)", category: "MD",
+  { id: "markdown", label: "Markdown", category: "MD",
     hint: "Readable notes for any Markdown editor", editable: ["highlights", "notes", "bundle"] },
-  { id: "obsidian", label: "Obsidian vault (.zip)", category: "ZIP",
+  { id: "obsidian", label: "Obsidian", category: "ZIP",
     hint: "A vault with notes, links and attachments", editable: ["highlights", "notes", "bundle"] },
-  { id: "logseq", label: "Logseq graph (.zip)", category: "ZIP",
+  { id: "logseq", label: "Logseq", category: "ZIP",
     hint: "A graph with native PDF highlights", editable: ["bundle"], fixed: { highlights: true, notes: true } },
-  { id: "zotero", label: "Zotero RDF (.zip)", category: "ZIP",
+  { id: "zotero", label: "Zotero", category: "ZIP",
     hint: "Papers, collections and notes for Zotero", editable: ["highlights", "notes", "bundle"] },
-  { id: "gamma", label: "Gamma (.zip)", category: "ZIP",
+  { id: "gamma", label: "Gamma", category: "ZIP",
     hint: "A complete copy for another Gamma library", editable: [], fixed: { highlights: true, notes: true, bundle: true } },
 ];
 

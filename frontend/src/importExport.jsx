@@ -30,20 +30,18 @@ function FormatChoices({ label, value, onChange, onConfirm, options }) {
 function TransferDialog({ title, step, setStep, firstTitle, secondTitle, onCancel, children, action, actionLabel, busy, needsReview, onContinue }) {
   const head = React.useRef(null);
   React.useEffect(() => { head.current?.focus(); }, [step]);
-  return <SubDialog title={title} onClose={onCancel} className="transferModal">
-    <div className="transferProgress" aria-label={`Step ${step + 1} of ${needsReview ? 2 : 1}`}>
-      <span aria-current={step === 0 ? "step" : undefined}>{needsReview ? "1. " : ""}{firstTitle}</span>
+  return <SubDialog title={title} onClose={onCancel} className="transferModal" closeButton>
+    <nav className="transferProgress" aria-label={`Step ${step + 1} of ${needsReview ? 2 : 1}`}>
+      {step > 0 ? <button type="button" className="crumbBtn" onClick={() => setStep(0)}>1. {firstTitle}</button>
+        : <span aria-current="step">{needsReview ? "1. " : ""}{firstTitle}</span>}
       {needsReview ? <><span aria-hidden="true">/</span>
       <span aria-current={step === 1 ? "step" : undefined}>2. Review</span></> : null}
-    </div>
+    </nav>
     <div className="transferStep" key={step}>
       <h2 ref={head} tabIndex={-1}>{step === 0 ? firstTitle : secondTitle}</h2>
       {children}
     </div>
     <div className="reportModalBtns transferFooter">
-      <button type="button" className="uiBtn" onClick={onCancel}>Cancel</button>
-      <span className="transferFooterSpace" />
-      {step === 1 ? <button type="button" className="uiBtn" onClick={() => setStep(0)}>Back</button> : null}
       <button type="button" className="uiBtn primary" disabled={busy}
         onClick={step === 0 ? onContinue : action}>{step === 0 && needsReview ? "Next" : actionLabel}</button>
     </div>
@@ -70,11 +68,11 @@ export function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, onCance
     firstTitle="Choose a format" secondTitle={definition.label} needsReview={needsReview} onContinue={() => advance()}
     onCancel={onCancel} actionLabel="Export" action={() => onExport(payload)}>
     {step === 0 ? <>
-      <p className="reportModalHint">{needsReview ? "Choose a format, then Next to customize. Double-click to continue." : "Everything is ready. Choose Export or double-click the selected format."}</p>
+      <p className="reportModalHint">{needsReview ? "Select a format. Double-click to continue." : "Ready to export."}</p>
       <FormatChoices label="Export format" value={format} onChange={(format) => set({ format })} onConfirm={advance} options={formats} />
       {!needsReview ? <p className="reportModalHint">{summary}</p> : null}
     </> : <>
-      <p className="reportModalHint">Choose what to include. The example updates as you change the switches.</p>
+      <p className="reportModalHint">Choose what to include.</p>
       <div className="transferReview">
         <ExportPreview {...payload} />
         <div className="transferControls">
@@ -89,14 +87,14 @@ export function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, onCance
         {isZotero ? (
           // Same numbered-step guide as the Zotero import dialog — the .zip
           // trap (Zotero can't read one) is worth spelling out every time.
-          <div className="importSteps">
+          <details className="transferHelp"><summary>Open this export in Zotero</summary><div className="importSteps">
             <Step n={1} title="Download the .zip"
               hint={`Metadata, ${folder ? "subfolders" : "folders"} as collections, tags, notes${bundle ? `; the PDF${folder ? "s" : ""}${highlights ? " with highlights embedded" : ""} and note images` : ""}.`} />
             <Step n={2} title="Unzip it"
               hint="Keep the .rdf and the files/ folder together." />
             <Step n={3} title="Import the .rdf in Zotero"
               hint={'File → Import… → "A file" → pick the .rdf — never the .zip (Zotero calls it an unsupported format). Untick "Place imported collections… into a new collection" to skip the extra wrapper folder.'} />
-          </div>
+          </div></details>
         ) : (
           <div className="reportModalHint">{summary}</div>
         )}

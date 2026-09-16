@@ -139,7 +139,7 @@ export function ToggleGroup({ selected, onToggle, options, disabled }) {
 // Every editor dialog is composed the same way: SubDialog › .settingsForm ›
 // Step (numbered stages, for flows) or Field (label + hint + one control),
 // closed by a .reportModalBtns footer.
-export function SubDialog({ title, onClose, children, draft, className = "" }) {
+export function SubDialog({ title, onClose, children, draft, className = "", closeButton = false }) {
   const key = React.useId();
   const [initial] = React.useState(() => JSON.stringify(draft));
   const dirty = draft !== undefined && JSON.stringify(draft) !== initial;
@@ -175,7 +175,10 @@ export function SubDialog({ title, onClose, children, draft, className = "" }) {
             else if (!event.shiftKey && (document.activeElement === last || document.activeElement === ref.current)) { event.preventDefault(); first?.focus(); }
           }
         }}>
-        <div className="reportModalTitle">{title}</div>
+        {closeButton ? <div className="settingsDialogHeader" inert={confirmClose ? "" : undefined}>
+          <div className="reportModalTitle">{title}</div>
+          <button type="button" className="uiClose uiCloseLg" onClick={close} aria-label={`Close ${title}`} title="Close">×</button>
+        </div> : <div className="reportModalTitle">{title}</div>}
         <div className="settingsDialogContent" inert={confirmClose ? "" : undefined}>{children}</div>
         {confirmClose ? <div className="settingsUnsaved" role="alertdialog" aria-label="Unsaved changes">
           <span>Discard your unsaved edits?</span>

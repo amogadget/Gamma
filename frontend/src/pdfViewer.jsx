@@ -23,6 +23,8 @@ import { BACKFILL_DELAY_MS, chooseTransport, docIdOf, layoutFromManifest, rangeO
 import { normalizeChars } from "./textnorm";
 import { apiJson, withShare, withWorkspace } from "./utils";
 import { ChatMarkdown } from "./widgets";
+import { PdfCitationOverlay } from "./pdfCitationOverlay";
+import { citationRuns } from "./pdfCitation.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 // One worker for every document. pdf.js otherwise starts a fresh worker per
 // getDocument — the 1.3 MB script fetched and compiled again per open — and
@@ -352,7 +354,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
 // inkPenTool what a stylus draws with when nothing is armed, inkFlash
 // {id, nonce} outlines a group after a jump; strokes and erasures report
 // back through onInkStroke / onInkErase, a click on ink through onInkJump.
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, hideEmbeddedAnnots, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkEraserSize = 1, inkLassoMode = "free", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
+function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, hideEmbeddedAnnots, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkEraserSize = 1, inkLassoMode = "free", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -1059,6 +1061,24 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     if (scrollRef) scrollRef.current = scrollToPositionRef.current;
   }, [scrollRef, scale, pdfDoc]);
 
+  // Wait for this document, then mount only the cited page. Matching happens
+  // after its actual text layer has rendered, including on zoom changes.
+  const [activeCitation, setActiveCitation] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setActiveCitation(null);
+    if (citation && pdfDoc && displayedUrl === url && citation.page <= pdfDoc.numPages) {
+      Promise.resolve(scrollToPositionRef.current?.({ position: { pageNumber: citation.page }, behavior: "auto" }))
+        .then(() => { if (!cancelled) setActiveCitation(citation); });
+    }
+    return () => { cancelled = true; };
+  }, [citation, pdfDoc, displayedUrl, url]);
+  useEffect(() => {
+    const dismiss = (e) => { if (e.key === "Escape") setActiveCitation(null); };
+    document.addEventListener("keydown", dismiss);
+    return () => document.removeEventListener("keydown", dismiss);
+  }, []);
+
   // Current-page widget (top-right): tracks scrolling, and typing a number
   // jumps. The "current" page is the one covering a point a third of the way
   // down the viewport — closer to "the page I'm reading" than the strict top
@@ -1567,6 +1587,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
             aria-label="Current page"
           />
           <span className="pdfPageTotal">/ {numPages}</span>
+          {activeCitation && <button type="button" onClick={() => setActiveCitation(null)}
+            title="Clear reference highlight (Esc)" aria-label="Clear reference highlight">×</button>}
         </div>
       ) : null}
       {outline && outlineOpen ? (
@@ -1592,7 +1614,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         <PdfPage key={`${docSeq}-${i + 1}`} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
           onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
-          readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
+          citation={displayedUrl === url && activeCitation?.page === i + 1 ? activeCitation : null}
+          readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1) || activeCitation?.page === i + 1}
           hideEmbeddedAnnots={!!hideEmbeddedAnnots}
           areaMode={canAnnotate ? !!areaMode : false}
           onAreaSelected={canAnnotate ? onAreaSelected : undefined}
@@ -1807,13 +1830,14 @@ function TransPending({ lines, busy }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkEraserSize, inkLassoMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
+const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkEraserSize, inkLassoMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
   const pageRef = useRef(null);
   const linksForRef = useRef(null); // page whose link annotations are already in `links`
   const [pageSize, setPageSize] = useState(null);
+  const [textReady, setTextReady] = useState(null);
   const [visible, setVisible] = useState(false);
   const renderVisible = visible || forceRender;
   const [links, setLinks] = useState([]); // link annotations, rects at scale 1
@@ -1846,6 +1870,8 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
     }
     let cancelled = false;
     let task = null;
+    let textTask = null;
+    setTextReady(null);
     // Render privately: resizing the visible canvas clears its paper and
     // exposes incomplete paints during rapid zoom changes.
     const nextCanvas = document.createElement("canvas");
@@ -1896,7 +1922,10 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         textL.style.transform = `scale(${scale})`;
         const tc = await page.getTextContent();
         if (cancelled) return;
-        pdfjsLib.renderTextLayer({ textContentSource: tc, container: textL, viewport: vp });
+        textTask = new pdfjsLib.TextLayer({ textContentSource: tc, container: textL, viewport: vp });
+        await textTask.render();
+        if (cancelled) return;
+        setTextReady({ scale, pdfDoc, runs: citationRuns(tc.items, textTask.textDivs) });
 
         // Link annotations (in-PDF references + external URLs), stored at
         // scale 1 and multiplied in JSX — so they only need computing once per
@@ -1924,7 +1953,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         nextCanvas.width = 0; nextCanvas.height = 0;
       }
     })();
-    return () => { cancelled = true; task?.cancel(); };
+    return () => { cancelled = true; task?.cancel(); textTask?.cancel(); };
   }, [pdfDoc, pageNumber, scale, renderVisible, hideEmbeddedAnnots]);
 
   // The box the page occupies: pdf.js's measure once it has rendered, else
@@ -2101,6 +2130,8 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       <div ref={textRef} className="textLayer" style={{
         userSelect: readOnly || inkTool ? "none" : "text", WebkitUserSelect: readOnly || inkTool ? "none" : "text",
       }} />
+      <PdfCitationOverlay citation={citation} textRef={textRef} wrapRef={wrapRef}
+        ready={textReady?.scale === scale && textReady?.pdfDoc === pdfDoc ? textReady : null} />
       {inkBlocks.length || onInkStroke ? (
         <InkLayer pageNumber={pageNumber} wrapRef={wrapRef}
           width={baseW} height={baseH}

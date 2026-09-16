@@ -442,14 +442,22 @@ def pdf_excerpt(ws: str, doc_id: str, limit: int, offset: int = 0,
         # extract_text stops after the page that crosses the limit, so a
         # longer-than-requested result means more pages remain.
         if with_pages:
-            full, pages = extract_text_pages(str(path), offset + limit, start_page=start_page)
+            full, pages = extract_text_pages(str(path), offset + limit, start_page=start_page, label_pages=True)
         else:
-            full, pages = extract_text(str(path), offset + limit, start_page=start_page), 0
+            full, pages = extract_text(str(path), offset + limit, start_page=start_page, label_pages=True), 0
     except Exception as error:
         log.warning(f"[ai_chat] extraction error: {error}")
         return (PDF_EXTRACT_FAILED, None, 0, 0) if with_pages else (PDF_EXTRACT_FAILED, None, 0)
     text = full[offset:offset + limit]
     next_offset = offset + limit if len(full) > offset + limit else None
+    # A continuation may start halfway through a physical page. Repeat its
+    # label outside the window; offsets still count only the extracted text.
+    if offset and text:
+        labels = [m for m in re.finditer(r"(?m)^\[PDF page (\d+)\]\n", full)
+                  if m.start() <= offset]
+        if labels:
+            text = text[max(0, labels[-1].end() - offset):]
+            text = f"[PDF page {labels[-1].group(1)}; continued]\n{text}"
     return (text, next_offset, len(full), pages) if with_pages else (text, next_offset, len(full))
 
 
@@ -527,7 +535,8 @@ def _join_upto(pages: list[str], start: int, limit: int) -> str:
     """pages[start:] joined with blank lines, cut at limit chars — without
     materializing the whole rest of the document just to slice it."""
     parts, total = [], 0
-    for page in pages[start:]:
+    for page_no, page in enumerate(pages[start:], start + 1):
+        page = f"[PDF page {page_no}]\n{page}"
         parts.append(page)
         total += len(page) + 2
         if total >= limit:
@@ -655,6 +664,7 @@ def page_report_section(connection, ws: str, page_id: str, pdf_budget: int,
     if include_notes or not doc_id:
         walk(page_id, 0)
     sections = [f"### {root[3] or 'Untitled'}"]
+    sections.append(f"Gamma page ID: {page_id}")
     props_line = page_properties_line(properties)
     if props_line:
         sections.append(props_line)

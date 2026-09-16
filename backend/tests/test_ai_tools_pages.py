@@ -102,7 +102,7 @@ def test_read_page_pdf_offset_pages_through_long_documents(org, monkeypatch):
     c, ids = org
     doc = "".join(f"[{i:04d}]" for i in range(200))  # 1200 chars, self-locating
 
-    def fake_extract(src, char_limit, empty_page_cap=50, start_page=1):
+    def fake_extract(src, char_limit, empty_page_cap=50, start_page=1, label_pages=False):
         # Like the real extractor: stops after the "page" that crosses the
         # limit, so the result can overshoot char_limit a little.
         return doc if len(doc) <= char_limit else doc[:char_limit + 7]
@@ -172,7 +172,7 @@ def test_read_window_cap_is_user_tunable(org, monkeypatch):
     c, ids = org
     doc = "".join(f"[{i:04d}]" for i in range(200))
     monkeypatch.setattr("gamma.ai_context.extract_text",
-                        lambda src, char_limit, empty_page_cap=50, start_page=1: doc[:char_limit + 7])
+                        lambda src, char_limit, empty_page_cap=50, start_page=1, label_pages=False: doc[:char_limit + 7])
     monkeypatch.setattr("gamma.ai_context.pdf_path", lambda u, d: "fake.pdf")
 
     scope = {**folder("readout"), "read_chars": 150}

@@ -133,7 +133,13 @@ Markdown icons for document formats, with consistent monochrome sizing. A live i
 page follows only when there are editable options. Fixed contents get no switches:
 Gamma exports directly; Logseq export shows only file bundling. Sources with no
 import options open the file picker directly, with instructions on the selection
-page. Double-click uses the same action as the footer button. Capability rules in
+page. Double-click uses the same action as the footer button. The previous step
+is a keyboard-accessible `crumbBtn`, matching library breadcrumbs; returning
+preserves the chosen format and options.
+The shared `SubDialog` header provides the standard `uiClose` × control. The
+footer contains only Next or the final action; the breadcrumb handles going back.
+Format names stay short because category rows already show file types. Longer
+Zotero export instructions are expandable. Capability rules in
 `transferFormats.js` determine the controls, effective values and need for review.
 The dialogs reuse `PictureChoices`,
 `Toggle` and `SubDialog`; their previews are hand-coded React/HTML and CSS in
@@ -157,7 +163,7 @@ Settings panes are built only from
   opens the relevant page and focuses the matching setting.
 - Appearance uses shared `uiBtn`/`on` theme cards with small decorative SVG
   palette sketches beside the labels (stacked on narrow screens). Appearance
-  buttons are flat, and its noninteractive rows suppress the shared hover fill;
+  buttons inherit shared shadows and hover states, and its noninteractive rows suppress the shared hover fill;
   grouped rows use straight dividers. A PDF sample reflects the current tint and dark-page
   switch. Account and browser scopes sit beside section headings; interface
   controls retain the shared `Row`, `Toggle` and `Stepper` primitives.

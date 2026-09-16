@@ -104,6 +104,68 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     assertNoProblems(page);
   });
 
+  await step("pdf: AI citation jumps to exact text without creating a note, survives zoom and dismisses", async () => {
+    const before = await account.api(`/api/blocks/${pageId}/subtree`);
+    const quote = "Page two says hello world";
+    const href = `/?page=${pageId}&pdf_page=2&quote=${encodeURIComponent(quote)}`;
+    await account.api(`/api/chats/${pageId}`, { method: "PUT", body: {
+      messages: [{ role: "user", text: "Where is the greeting?" },
+        { role: "ai", text: `The greeting is here [p. 2](${href}).` }],
+    } });
+    await page.reload();
+    const link = page.locator('a.chatPageLink', { hasText: "p. 2" });
+    await link.waitFor();
+    assert((await link.getAttribute("href")).includes("quote="), "saved citation retains its quote");
+    await link.click();
+    const mark = page.locator('[data-page="2"] .pdfCitationMark').first();
+    await mark.waitFor();
+    const aligned = () => page.evaluate(() => {
+      const mark = document.querySelector('[data-page="2"] .pdfCitationMark').getBoundingClientRect();
+      const span = [...document.querySelectorAll('[data-page="2"] .textLayer span')]
+        .find(s => s.textContent.includes("Page two says hello world"));
+      const range = document.createRange(); range.selectNodeContents(span);
+      const text = range.getBoundingClientRect();
+      return Math.abs(mark.left - text.left) < 3 && Math.abs(mark.top - text.top) < 3
+        && Math.abs(mark.width - text.width) < 3 && mark.top >= 0 && mark.top < innerHeight;
+    });
+    await until(aligned, { what: "citation rectangles align with the rendered text" });
+    await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+    await until(aligned, { what: "citation remains aligned after zoom" });
+    await page.keyboard.press("Escape");
+    await until(async () => await page.locator('.pdfCitationMark').count() === 0, { what: "citation dismissed" });
+    await link.click();
+    await mark.waitFor();
+    const after = await account.api(`/api/blocks/${pageId}/subtree`);
+    assertEq(JSON.stringify(after.block.children), JSON.stringify(before.block.children), "citation creates no annotations or notes");
+    // Direct links (including Ctrl/Cmd-click) restore the passage on load.
+    await page.goto(`${server.base}${href}&ws=${account.ws}`);
+    await mark.waitFor();
+    await until(aligned, { what: "direct citation link resolves on initial load" });
+    assertNoProblems(page);
+  });
+
+  await step("pdf: citations open another document and report missing or ambiguous quotes", async () => {
+    const quote = "A distinct source sentence in another document.";
+    const uploaded = await account.upload("/api/uploads", makePdf([["Repeated source passage.", quote, "Repeated source passage."]]), "citation.pdf", "application/pdf");
+    const target = await account.api(`/api/blocks/by-doc/${uploaded.doc_id}`, { method: "POST", body: { default_title: "Citation source", source_url: uploaded.source_url } });
+    const href = `/?page=${target.id}&pdf_page=1&quote=${encodeURIComponent(quote)}`;
+    await account.api(`/api/chats/${pageId}`, { method: "PUT", body: { messages: [
+      { role: "ai", text: `[other source](${href})` },
+    ] } });
+    await page.reload();
+    await page.locator("a.chatPageLink", { hasText: "other source" }).click();
+    await page.waitForSelector('[data-page="1"] .pdfCitationMark');
+    assert((await page.textContent('[data-page="1"] .textLayer')).includes(quote), "citation resolved against the requested document");
+    for (const [text, message] of [["This passage does not exist.", "could not be located"], ["Repeated source passage.", "more than once"]]) {
+      await page.goto(`${server.base}/?page=${target.id}&pdf_page=1&quote=${encodeURIComponent(text)}&ws=${account.ws}`);
+      await page.locator('.pdfCitationNotice', { hasText: message }).waitFor();
+      assertEq(await page.locator('.pdfCitationMark').count(), 0, "unresolved reference does not highlight guessed text");
+    }
+    assertNoProblems(page);
+    await page.goto(`${server.base}/?page=${pageId}&ws=${account.ws}`);
+    await waitForPdf(page);
+  });
+
   await step("pdf: the home library lists the paper and double-click opens it", async () => {
     await page.click("button[aria-label='Home']");
     const card = page.locator(".pageCard", { hasText: "Rydberg paper" }).first();

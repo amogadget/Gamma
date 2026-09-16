@@ -8,7 +8,7 @@ Import them through `index.js`.
 | `AppearanceIllustrations.jsx` | Theme palettes and PDF color sample |
 | `TransferPreview.jsx` | Live import/export examples driven by the selected options |
 | `FormatIllustration.jsx` | App marks for app formats; shared PDF, notes and Markdown icons for document formats |
-| `brands/` | Local app logo SVGs and their source/license notes |
+| `brands/` | Local app icons and their source/license notes |
 | `library-page.svg` | Static sample thumbnail for the real library `PageCard` |
 | `illustrations.css` | Illustration-specific drawing and color rules |
 

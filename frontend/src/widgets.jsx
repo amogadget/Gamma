@@ -8,6 +8,7 @@ import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
 import { PinIcon } from "./icons";
 import { assetUrl } from "./utils";
+import { parsePdfCitation } from "./pdfCitation.js";
 import { ExportDialog, ImportDialog } from "./importExport";
 
 // Shared chrome for every dockable window: one grip (drag to move/reorder,
@@ -172,12 +173,12 @@ const ChatMarkdown = React.memo(function ChatMarkdown({ text, onOpenPage }) {
             const pageId = onOpenPage ? gammaPageLink(href) : null;
             if (pageId) {
               return (
-                <a href={`?page=${encodeURIComponent(pageId)}`} className="chatPageLink"
-                  title="Open this page"
+                <a href={href} className="chatPageLink"
+                  title={parsePdfCitation(href, window.location.origin) ? "Show this passage in the PDF" : "Open this page"}
                   onClick={(e) => {
-                    if (e.metaKey || e.ctrlKey) return;
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
                     e.preventDefault();
-                    onOpenPage(pageId);
+                    onOpenPage(pageId, parsePdfCitation(href, window.location.origin));
                   }}>{children}</a>
               );
             }

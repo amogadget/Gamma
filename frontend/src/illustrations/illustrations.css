@@ -2,6 +2,7 @@
 .formatIllustration { color: var(--text-secondary); }
 .formatIllustration svg { width: 48px; height: 48px; }
 .formatAppIcon { width: 48px; height: 48px; background: currentColor; mask: var(--app-icon) center / contain no-repeat; -webkit-mask: var(--app-icon) center / contain no-repeat; }
+.formatAppImage { width: 48px; height: 48px; object-fit: contain; filter: grayscale(1); }
 .transferPreview { margin: 0; min-width: 0; }
 .transferPreview figcaption { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
 .transferPaper { position: relative; min-height: 310px; padding: 22px 18px 32px; border: 1px solid #ddd; border-radius: 3px; background: #fff; color: #39444b; font-size: 11px; line-height: 1.55; }
