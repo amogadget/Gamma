@@ -1160,10 +1160,10 @@ export default function ChatDock({
             );
           })
         )}
-        {chatLoading && chatLoadingKey === chatKey && !chatMessages[chatMessages.length - 1]?.partial ? (
+        {busyHere ? (
           <div className="chatBubbleRow ai">
             <div className="chatBubble ai">
-              <span className="chatTyping"><span /><span /><span /></span>
+              <span className="chatTyping" role="status" aria-label="AI is responding"><span /><span /><span /></span>
             </div>
           </div>
         ) : null}

@@ -185,7 +185,7 @@ def test_chat_reports_context_coverage(org, monkeypatch):
     doc = "".join(f"[{i:04d}]" for i in range(200))  # 1200 chars
     monkeypatch.setattr("gamma.ai_context.pdf_path", lambda u, d: "fake.pdf")
     monkeypatch.setattr("gamma.ai_context.extract_text_pages",
-                        lambda src, limit, empty_page_cap=50, start_page=1:
+                        lambda src, limit, empty_page_cap=50, start_page=1, label_pages=False:
                         (doc if len(doc) <= limit else doc[:limit + 7], 3))
     monkeypatch.setattr("gamma.ai_context.page_count", lambda src: 22)
     doc_id = "d" * 24  # page a's doc_id

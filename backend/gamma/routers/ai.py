@@ -1200,6 +1200,19 @@ def ai_chat(payload: AIChatRequest, request: Request):
         messages = _build_messages(payload, context, with_tools=bool(tools))
         # A custom prompt always applies; the built-in one only when there's a document
         system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
+        if context or pdf_b64s:
+            system += (
+                "\n\nWhen citing a passage from a library PDF, provide a clickable citation "
+                "as [p. N](/?page=PAGE_ID&pdf_page=N&quote=URL_ENCODED_QUOTE). "
+                "Use the Gamma page ID supplied in context or tool results, the 1-based physical "
+                "PDF page number from [PDF page N] labels (not printed page numbers), and a "
+                "verbatim, distinctive quote of 8-2000 characters contained on that page, preferably one sentence. "
+                "Percent-encode the quote, including spaces, ampersands and parentheses. "
+                "These links only navigate and visually highlight text; they never create notes. "
+                "Never invent quotes, IDs or page numbers. If the location is unknown, read the "
+                "page first when tools are available, otherwise use an ordinary page link. "
+                "Do not use these links for external or uploaded files without a Gamma page ID."
+            )
         if tools:
             system = ((system + "\n\n" if system else "")
                       + agent_system(scope, payload.permissions,

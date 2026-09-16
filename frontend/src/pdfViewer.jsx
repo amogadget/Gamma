@@ -16,11 +16,15 @@ import "pdfjs-dist/web/pdf_viewer.css";
 import { createPortal } from "react-dom";
 import { ChevronRightIcon, LinkIcon, MessageSquareIcon, OutlineIcon } from "./icons";
 import { InkLayer } from "./inkLayer";
+import { canvasSize } from "./canvasSize.js";
+import { installVerticalScrollSnap } from "./verticalScrollSnap.js";
 import { segmentPage } from "./pdfTranslate";
 import { BACKFILL_DELAY_MS, chooseTransport, docIdOf, layoutFromManifest, rangeOpenOptions } from "./pdfSource";
 import { normalizeChars } from "./textnorm";
 import { apiJson, withShare, withWorkspace } from "./utils";
 import { ChatMarkdown } from "./widgets";
+import { PdfCitationOverlay } from "./pdfCitationOverlay";
+import { citationRuns } from "./pdfCitation.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 // One worker for every document. pdf.js otherwise starts a fresh worker per
 // getDocument — the 1.3 MB script fetched and compiled again per open — and
@@ -54,13 +58,6 @@ export const clampZoom = (s) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, s));
 // page boxes stack with a fixed gap, and unmeasured pages assume page 1's
 // size (FALLBACK_* is the last resort before even that is known).
 const PAGE_GAP = 8;
-// One-finger scroll axis lock (Settings → "Snap vertical scrolling"). A
-// gesture whose horizontal travel stays inside this ratio of its vertical
-// travel counts as "meant to be vertical" — tan(30°), i.e. within 30° of
-// straight up/down.
-const SNAP_TAN = Math.tan(Math.PI / 6);
-const SNAP_MIN_PX = 8; // travel before the direction is judged at all
-const SNAP_IDLE_MS = 250; // lock outlives the finger by this much of quiet scrolling (momentum)
 const FALLBACK_H = 800, FALLBACK_W = 600;
 
 // Content-y of page idx's top edge at the given scale.
@@ -357,7 +354,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
 // inkPenTool what a stylus draws with when nothing is armed, inkFlash
 // {id, nonce} outlines a group after a jump; strokes and erasures report
 // back through onInkStroke / onInkErase, a click on ink through onInkJump.
-function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, noteBadges, hideEmbeddedAnnots, snapVertical = true, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkEraserSize = 1, inkLassoMode = "free", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump }) {
+function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, hideEmbeddedAnnots, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkEraserSize = 1, inkLassoMode = "free", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
   const viewerRef = useRef(null);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
@@ -381,7 +378,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
   // parent state change recreates the handler closures. The wrappers always
   // dispatch to the latest handlers via the ref.
   const cbRef = useRef({});
-  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLinkContext, onLoadState, onZoomTo, onAreaSelection, onTranslate, onTranslateState, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump };
+  cbRef.current = { onJump, onHighlightJump, onLinkHighlight, onHighlightContext, onExternalLink, onLinkContext, onLoadState, onZoomTo, onAreaSelection, onTranslate, onTranslateState, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump };
   const stableCbs = useMemo(() => ({
     onJump: (...a) => cbRef.current.onJump?.(...a),
     onHighlightJump: (...a) => cbRef.current.onHighlightJump?.(...a),
@@ -393,6 +390,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     onInkErase: (...a) => cbRef.current.onInkErase?.(...a),
     onInkErasePartial: (...a) => cbRef.current.onInkErasePartial?.(...a),
     onInkSelect: (...a) => cbRef.current.onInkSelect?.(...a),
+    onInkAction: (...a) => cbRef.current.onInkAction?.(...a),
     onInkMoveSelection: (...a) => cbRef.current.onInkMoveSelection?.(...a),
     onInkJump: (...a) => cbRef.current.onInkJump?.(...a),
   }), []);
@@ -552,84 +550,12 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     };
   }, []);
 
-  // One-finger vertical snap. Papers are read top-to-bottom, so once you're
-  // zoomed in past the viewport width a swipe that only *drifts* sideways is
-  // almost never meant to pan — it just makes the column wander. The gesture
-  // stays a NATIVE scroll (momentum, rubber-banding, the whole feel); we only
-  // pin scrollLeft back to where the finger landed while the direction reads
-  // as vertical. Taking the scroll over with preventDefault would have to
-  // start on the very first move event — before any direction is known — and
-  // would mean re-implementing inertia, so it isn't worth it. Corrections are
-  // sub-pixel-ish in practice: a near-vertical swipe barely moves sideways.
-  // The lock outlives the finger by SNAP_IDLE_MS of quiet so the momentum
-  // phase can't reintroduce the drift, then releases so programmatic
-  // horizontal scrolls (zoom anchoring, jump-to-highlight) run untouched.
+  // Reset pending touch alignment on zoom/document changes. The helper never
+  // writes scroll offsets while a finger or native momentum is moving.
   useEffect(() => {
     const el = viewerRef.current;
-    if (!el || !snapVertical) return;
-    let g = null; // live gesture: {x0, y0, left, locked, decided}
-    let idle = 0;
-    let lockedLeft = null; // non-null while scrollLeft is pinned
-    const release = () => { clearTimeout(idle); idle = 0; lockedLeft = null; };
-    const armIdle = () => {
-      clearTimeout(idle);
-      idle = setTimeout(() => { idle = 0; lockedLeft = null; }, SNAP_IDLE_MS);
-    };
-    const pin = () => {
-      if (lockedLeft === null) return;
-      // Deadband: assigning scrollLeft mid-gesture can interrupt iOS momentum,
-      // so tolerate a pixel of wobble instead of correcting every frame. The
-      // pin is absolute, not incremental, so nothing accumulates past it.
-      if (Math.abs(el.scrollLeft - lockedLeft) > 1.5) el.scrollLeft = lockedLeft;
-      lastScrollLeftRef.current = lockedLeft;
-    };
-    const onTouchStart = (e) => {
-      release();
-      // Zoomed out to fit (or narrower) there is nothing to drift into, and a
-      // second finger means the pinch handler owns the gesture.
-      if (e.touches.length !== 1 || el.scrollWidth - el.clientWidth <= 1) { g = null; return; }
-      const t = e.touches[0];
-      g = { x0: t.clientX, y0: t.clientY, left: el.scrollLeft, decided: false };
-    };
-    const onTouchMove = (e) => {
-      if (!g) return;
-      if (e.touches.length !== 1) { g = null; release(); return; } // pinch started
-      const t = e.touches[0];
-      if (!g.decided) {
-        const dx = t.clientX - g.x0, dy = t.clientY - g.y0;
-        if (Math.hypot(dx, dy) < SNAP_MIN_PX) return;
-        g.decided = true;
-        // Near-vertical → pin to the scrollLeft the gesture started from.
-        // Anything else is a real pan and is left alone for its whole life.
-        if (Math.abs(dx) <= Math.abs(dy) * SNAP_TAN) lockedLeft = g.left;
-        else { g = null; return; }
-      }
-      pin();
-    };
-    const onTouchEnd = (e) => {
-      if (e.touches.length) return;
-      g = null;
-      if (lockedLeft !== null) armIdle(); // ride out the momentum, then let go
-    };
-    const onScroll = () => {
-      if (lockedLeft === null) return;
-      pin();
-      if (!g) armIdle();
-    };
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: true });
-    el.addEventListener("touchend", onTouchEnd, { passive: true });
-    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      release();
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", onTouchEnd);
-      el.removeEventListener("touchcancel", onTouchEnd);
-      el.removeEventListener("scroll", onScroll);
-    };
-  }, [snapVertical]);
+    if (el) return installVerticalScrollSnap(el);
+  }, [pdfScaleValue, pdfDoc]);
 
   // Group find marks per page once, sharing one frozen empty array so pages
   // without marks keep referentially-equal props (memo stays effective).
@@ -1134,6 +1060,41 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
     };
     if (scrollRef) scrollRef.current = scrollToPositionRef.current;
   }, [scrollRef, scale, pdfDoc]);
+
+  // Wait for this document, then mount only the cited page. Matching happens
+  // after its actual text layer has rendered, including on zoom changes.
+  const [activeCitation, setActiveCitation] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setActiveCitation(null);
+    if (citation && pdfDoc && displayedUrl === url && citation.page <= pdfDoc.numPages) {
+      Promise.resolve(scrollToPositionRef.current?.({ position: { pageNumber: citation.page }, behavior: "auto" }))
+        .then(() => { if (!cancelled) setActiveCitation(citation); });
+    }
+    return () => { cancelled = true; };
+  }, [citation, pdfDoc, displayedUrl, url]);
+  useEffect(() => {
+    if (!activeCitation) return;
+    const dismiss = (e) => { if (e.key === "Escape") setActiveCitation(null); };
+    const clickAway = (e) => {
+      // The marks let pointer input through to the PDF text, so hit-test
+      // their rectangles without interfering with selection or links.
+      if (e.detail > 0 && viewerRef.current?.contains(e.target)) {
+        const marks = viewerRef.current.querySelectorAll(".pdfCitationMark");
+        for (const mark of marks) {
+          const r = mark.getBoundingClientRect();
+          if (e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom) return;
+        }
+      }
+      setActiveCitation(null);
+    };
+    document.addEventListener("keydown", dismiss);
+    document.addEventListener("click", clickAway, true);
+    return () => {
+      document.removeEventListener("keydown", dismiss);
+      document.removeEventListener("click", clickAway, true);
+    };
+  }, [activeCitation]);
 
   // Current-page widget (top-right): tracks scrolling, and typing a number
   // jumps. The "current" page is the one covering a point a third of the way
@@ -1668,8 +1629,8 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
         <PdfPage key={`${docSeq}-${i + 1}`} pageNumber={i + 1} pdfDoc={pdfDoc} scale={scale}
           highlights={hlsByPage.get(i + 1) || EMPTY_MARKS} onJump={stableCbs.onJump} onHighlightJump={stableCbs.onHighlightJump}
           onLinkHighlight={stableCbs.onLinkHighlight} onHighlightContext={stableCbs.onHighlightContext}
-          readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1)}
-          noteBadges={!!noteBadges}
+          citation={displayedUrl === url && activeCitation?.page === i + 1 ? activeCitation : null}
+          readOnly={!onSelectionFinished} forceRender={forcePages.has(i + 1) || activeCitation?.page === i + 1}
           hideEmbeddedAnnots={!!hideEmbeddedAnnots}
           areaMode={canAnnotate ? !!areaMode : false}
           onAreaSelected={canAnnotate ? onAreaSelected : undefined}
@@ -1698,6 +1659,7 @@ function PdfViewer({ url, highlights, pdfScaleValue, scrollRef, onJump, onHighli
           onInkErase={onInkErase ? stableCbs.onInkErase : undefined}
           onInkErasePartial={onInkErasePartial ? stableCbs.onInkErasePartial : undefined}
           onInkSelect={onInkSelect ? stableCbs.onInkSelect : undefined}
+          onInkAction={onInkAction ? stableCbs.onInkAction : undefined}
           onInkMoveSelection={onInkMoveSelection ? stableCbs.onInkMoveSelection : undefined}
           onInkJump={onInkJump ? stableCbs.onInkJump : undefined}
         />
@@ -1883,34 +1845,51 @@ function TransPending({ lines, busy }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, noteBadges, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkEraserSize, inkLassoMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkMoveSelection, onInkJump }) {
+const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkEraserSize, inkLassoMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
   const pageRef = useRef(null);
-  const renderTaskRef = useRef(null);
   const linksForRef = useRef(null); // page whose link annotations are already in `links`
   const [pageSize, setPageSize] = useState(null);
+  const [textReady, setTextReady] = useState(null);
   const [visible, setVisible] = useState(false);
+  const renderVisible = visible || forceRender;
   const [links, setLinks] = useState([]); // link annotations, rects at scale 1
   // Translation entry for this page (from the viewer's engine) — display
   // only; the queue and all fetching live in PdfViewer.
   const transEntry = trans && trans.key === transKey ? trans : null;
 
   useEffect(() => {
-    if (forceRender) { setVisible(true); return; }
     const el = wrapRef.current;
     if (!el) return;
     const obs = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting) { setVisible(true); obs.disconnect(); }
-    }, { rootMargin: "900px 0px" }); // generous look-ahead so scrolling rarely hits a blank page
+      setVisible(entries[0].isIntersecting);
+    }, { root: el.closest(".pdfViewer"), rootMargin: "900px" });
     obs.observe(el);
     return () => obs.disconnect();
-  }, [pageNumber, forceRender]);
+  }, [pageNumber]);
 
   useEffect(() => {
-    if (!pdfDoc || !visible) return;
+    const canvas = canvasRef.current;
+    return () => { canvas.width = 0; canvas.height = 0; };
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!pdfDoc || !renderVisible) {
+      // Keep page geometry/text/overlays, but release distant raster backing
+      // stores. Otherwise a long reading session retains every visited page.
+      canvas.width = 0; canvas.height = 0;
+      return;
+    }
     let cancelled = false;
+    let task = null;
+    let textTask = null;
+    setTextReady(null);
+    // Render privately: resizing the visible canvas clears its paper and
+    // exposes incomplete paints during rapid zoom changes.
+    const nextCanvas = document.createElement("canvas");
     (async () => {
       try {
         const page = await pdfDoc.getPage(pageNumber);
@@ -1923,31 +1902,21 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         // keeping its old size until this async re-render completes.
         setPageSize({ width: vpBase.width, height: vpBase.height });
 
-        const canvas = canvasRef.current;
-        // Backing resolution: at least 2× the CSS size — canvas antialiasing
-        // at exactly 1× looks visibly soft next to the browser's native PDF
-        // viewer, and supersampling + browser downscale is much crisper on
-        // standard-DPI screens. Follows devicePixelRatio up to 3× for high-DPI
-        // displays. A per-page pixel budget (the old 2×-DPR worst case) keeps
-        // extreme zoom levels from allocating enormous canvases.
-        let pr = Math.min(3, Math.max(2, window.devicePixelRatio || 1));
-        const BUDGET = 32e6; // device pixels per page (~128 MB RGBA)
-        if (vp.width * vp.height * pr * pr > BUDGET) {
-          pr = Math.max(1, Math.sqrt(BUDGET / (vp.width * vp.height)));
-        }
-        canvas.width = Math.floor(vp.width * pr); canvas.height = Math.floor(vp.height * pr);
-        const ctx = canvas.getContext("2d"); ctx.setTransform(pr, 0, 0, pr, 0, 0);
-        // Cancel any in-flight render (rapid zoom changes) instead of stacking them
-        try { renderTaskRef.current?.cancel(); } catch {}
+        // Supersample normal zooms, but cap area AND dimensions on all devices
+        // (including iPads that identify as Macs). CSS geometry stays exact.
+        const size = canvasSize(vp.width, vp.height, Math.min(3, Math.max(2, window.devicePixelRatio || 1)));
+        nextCanvas.width = size.width; nextCanvas.height = size.height;
+        const ctx = nextCanvas.getContext("2d");
+        if (!ctx) throw new Error("PDF canvas allocation failed");
+        ctx.setTransform(size.width / vp.width, 0, 0, size.height / vp.height, 0, 0);
         // DISABLE keeps embedded markup annotations (e.g. highlights burned in
         // by a Gamma export, or SumatraPDF/Acrobat ones) out of the canvas so
         // they don't stack under Gamma's own overlay after an import. Link
         // regions are unaffected — they're DOM overlays from getAnnotations().
-        const task = page.render({
+        task = page.render({
           canvasContext: ctx, viewport: vp,
           annotationMode: hideEmbeddedAnnots ? pdfjsLib.AnnotationMode.DISABLE : pdfjsLib.AnnotationMode.ENABLE,
         });
-        renderTaskRef.current = task;
         try {
           await task.promise;
         } catch (err) {
@@ -1956,6 +1925,9 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
           throw err;
         }
         if (cancelled) return;
+        canvas.width = 0; canvas.height = size.height; canvas.width = size.width;
+        canvas.getContext("2d").drawImage(nextCanvas, 0, 0);
+        nextCanvas.width = 0; nextCanvas.height = 0;
         onPainted?.();
 
         const textL = textRef.current;
@@ -1964,7 +1936,11 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         textL.style.height = vpBase.height + "px";
         textL.style.transform = `scale(${scale})`;
         const tc = await page.getTextContent();
-        pdfjsLib.renderTextLayer({ textContentSource: tc, container: textL, viewport: vp });
+        if (cancelled) return;
+        textTask = new pdfjsLib.TextLayer({ textContentSource: tc, container: textL, viewport: vp });
+        await textTask.render();
+        if (cancelled) return;
+        setTextReady({ scale, pdfDoc, runs: citationRuns(tc.items, textTask.textDivs) });
 
         // Link annotations (in-PDF references + external URLs), stored at
         // scale 1 and multiplied in JSX — so they only need computing once per
@@ -1988,10 +1964,12 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         // A cancelled run rejects mid-await (doc swapped, transport
         // destroyed) — that's teardown, not an error worth logging.
         if (!cancelled) console.error("PdfPage render error:", e);
+      } finally {
+        nextCanvas.width = 0; nextCanvas.height = 0;
       }
     })();
-    return () => { cancelled = true; };
-  }, [pdfDoc, pageNumber, scale, visible, hideEmbeddedAnnots]);
+    return () => { cancelled = true; task?.cancel(); textTask?.cancel(); };
+  }, [pdfDoc, pageNumber, scale, renderVisible, hideEmbeddedAnnots]);
 
   // The box the page occupies: pdf.js's measure once it has rendered, else
   // the reserved size from the manifest skeleton (exact too), else nothing
@@ -2111,7 +2089,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       {/* 100% of the wrapper: on a zoom change the old bitmap stretches to the
           new size immediately (blurry for a moment) instead of sitting at its
           old size in a resized box until the sharp re-render lands. */}
-      <canvas ref={canvasRef} style={{ display: "block", width: "100%", height: "100%" }} />
+      <canvas ref={canvasRef} className="pdfPageCanvas" style={{ display: "block", width: "100%", height: "100%" }} />
       {/* Translated view: masks + refills sit between the canvas and the text
           layer, so selecting the (invisible) original text still paints its
           selection highlight on top of the overlay. pointer-events: none —
@@ -2167,13 +2145,15 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
       <div ref={textRef} className="textLayer" style={{
         userSelect: readOnly || inkTool ? "none" : "text", WebkitUserSelect: readOnly || inkTool ? "none" : "text",
       }} />
+      <PdfCitationOverlay citation={citation} textRef={textRef} wrapRef={wrapRef}
+        ready={textReady?.scale === scale && textReady?.pdfDoc === pdfDoc ? textReady : null} />
       {inkBlocks.length || onInkStroke ? (
         <InkLayer pageNumber={pageNumber} wrapRef={wrapRef}
           width={baseW} height={baseH}
           blocks={inkBlocks} tool={onInkStroke ? inkTool : null} penTool={onInkStroke ? inkPenTool : null}
           penOnly={inkPenOnly} pressure={inkPressure} eraserMode={inkEraserMode} eraserSize={inkEraserSize} lassoMode={inkLassoMode} selection={inkSelection} flash={inkFlash}
           onStroke={onInkStroke} onErase={onInkErase} onErasePartial={onInkErasePartial}
-          onSelect={onInkSelect} onMoveSelection={onInkMoveSelection} onJump={onInkJump} />
+          onSelect={onInkSelect} onAction={onInkAction} onMoveSelection={onInkMoveSelection} onJump={onInkJump} />
       ) : null}
       {links.map((l, i) => (
         <div
@@ -2253,7 +2233,7 @@ const PdfPage = React.memo(function PdfPage({ pageNumber, pdfDoc, scale, highlig
         }
         // Speech-bubble badge at the end of the passage when the user typed a
         // note on the highlight — click behaves like clicking the highlight.
-        if (noteBadges && h.hasNote && rects.length) {
+        if (h.hasNote && rects.length) {
           const r = rects[rects.length - 1];
           elements.push(
             <NoteBadge key={h.id + "-note"} hlId={h.id}

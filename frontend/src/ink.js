@@ -210,6 +210,54 @@ export function hitStrokes(ink, x, y, radius) {
   return out;
 }
 
+// Nearest stroke edge, with the last-painted stroke winning ties. The
+// caller converts a screen-space touch tolerance into page units.
+export function nearestInkStroke(groups, x, y, radius) {
+  let best = null, distance = radius;
+  for (const g of groups) for (const s of g.ink.strokes) {
+    const b = strokeBounds(s);
+    if (!b || x < b[0] - radius || x > b[2] + radius || y < b[1] - radius || y > b[3] + radius) continue;
+    const pts = decodeStroke(s);
+    for (let i = 0; i < pts.length; i++) {
+      const a = pts[i], c = pts[Math.min(i + 1, pts.length - 1)];
+      const edge = Math.max(0, Math.sqrt(segDist2(x, y, a.x, a.y, c.x, c.y))
+        - Math.max(strokeWidth(s, a.p), strokeWidth(s, c.p)) / 2);
+      if (edge <= distance) { distance = edge; best = { id: g.id, ids: [s.id] }; }
+    }
+  }
+  return best;
+}
+
+export function restyleStrokes(ink, ids, patch) {
+  const selected = new Set(ids);
+  let changed = false;
+  const strokes = ink.strokes.map((s) => {
+    if (!selected.has(s.id) || (patch.tool && patch.tool !== s.tool)) return s;
+    const color = HEX_RE.test(patch.color || "") ? patch.color.toLowerCase() : s.color;
+    const sizes = sizesFor(s.tool);
+    const size = Number.isFinite(patch.size)
+      ? Math.round(Math.max(sizes[0], Math.min(sizes.at(-1), patch.size)) * 100) / 100 : s.size;
+    if (color === s.color && size === s.size) return s;
+    changed = true;
+    return { ...s, color, size };
+  });
+  return changed ? { ...ink, strokes } : ink;
+}
+
+export function duplicateStrokes(ink, ids, dx, dy) {
+  const selected = new Set(ids), used = new Set(ink.strokes.map((s) => s.id));
+  const originals = ink.strokes.filter((s) => selected.has(s.id));
+  if (!originals.length || ink.strokes.length + originals.length > MAX_STROKES) return { ink, ids: [] };
+  const copies = originals.map((s) => {
+    let id;
+    do { id = strokeId(); } while (used.has(id));
+    used.add(id);
+    return { ...s, id, pts: [...s.pts] };
+  });
+  const copyIds = copies.map((s) => s.id);
+  return { ink: translateStrokes({ ...ink, strokes: [...ink.strokes, ...copies] }, copyIds, dx, dy), ids: copyIds };
+}
+
 export function appendStroke(ink, stroke) {
   return { ...ink, strokes: [...(ink.strokes || []), stroke].slice(-MAX_STROKES) };
 }
@@ -232,6 +280,29 @@ export function translateStrokes(ink, ids, dx, dy) {
     pts[1] += ey;
     return { ...s, pts };
   }) };
+}
+
+// Uniform scaling/rotation around a shared page-space origin. Rewrite only
+// XY channels, preserving pressure, timing, tilt, IDs and other metadata.
+export function transformStrokes(ink, ids, { cx, cy, scale = 1, angle = 0 }) {
+  if (![cx, cy, scale, angle].every(Number.isFinite) || scale <= 0 || (scale === 1 && angle === 0)) return ink;
+  const selected = new Set(ids), cos = Math.cos(angle), sin = Math.sin(angle);
+  let changed = false;
+  const strokes = ink.strokes.map((s) => {
+    if (!selected.has(s.id)) return s;
+    changed = true;
+    const pts = s.pts.slice(), n = s.ch.length;
+    let px = 0, py = 0;
+    decodeStroke(s).forEach((p, i) => {
+      const x = p.x - cx, y = p.y - cy;
+      const nx = Math.round((cx + scale * (x * cos - y * sin)) * COORD_UNIT);
+      const ny = Math.round((cy + scale * (x * sin + y * cos)) * COORD_UNIT);
+      pts[i * n] = nx - px; pts[i * n + 1] = ny - py;
+      px = nx; py = ny;
+    });
+    return { ...s, pts, size: Math.max(0.01, Math.min(100, s.size * scale)) };
+  });
+  return changed ? { ...ink, strokes } : ink;
 }
 
 // A stroke's samples → a stroke of the same look (fresh id).

@@ -47,6 +47,20 @@ Two separate size levers, deliberately not one "zoom":
   height) reads out the percentage. Nothing is stored: reload resets it. On
   the home library the gesture is left to the browser.
 
+### Fullscreen on touch devices
+
+The fullscreen button uses the app's CSS fullscreen layout when the primary
+pointer is coarse (phones/tablets), and native Fullscreen API on desktop.
+This avoids Safari's browser-owned downward-swipe dismissal
+([WebKit issue](https://bugs.webkit.org/show_bug.cgi?id=227387)). App fullscreen
+hides app bars, confines overscroll, and exits through the same button or
+Escape. Browser bars may remain visible; it does not claim native fullscreen.
+Browsers without the API, or rejected native requests, use the same layout.
+The fullscreen control handles stationary touch release directly, since a
+browser may omit its compatibility click after scrolling; a following click
+is consumed so a tap cannot toggle twice. Mouse and keyboard activation keep
+the regular click path.
+
 ### Menus and submenus
 
 Every cursor-anchored menu is a `ContextMenu`; every row inside one is a
@@ -96,6 +110,47 @@ are layout only. The read-only view shows the counterpart `.shareBadge`
 
 ## Settings primitives
 
+### Show the result while editing
+
+For settings that change visible parts of a surface, show one realistic, live
+example of that surface and place its controls alongside it. Each control
+should immediately add, remove or update the corresponding element. Reuse
+the actual product component where possible so the preview stays accurate.
+Keep its shared styling and interaction states, including hover backgrounds,
+shadows and focus indicators; do not override them just because the widget
+appears in settings. Prefer layout-only CSS around existing widgets. Keep the
+preview stable while elements change, with compact controls. On small screens
+place the controls below the preview.
+
+Library Display follows this pattern: one large `PageCard` with independent
+Thumbnails, Folders and Labels switches. Use this approach for future visual
+settings; a set of miniature alternative cards is appropriate for mutually
+exclusive palettes such as themes.
+
+Import and Export start with large format/source choices in PDF, MD and ZIP
+rows. Use recognizable app logos for app formats and shared PDF, notes and
+Markdown icons for document formats, with consistent monochrome sizing. A live illustrative
+page follows only when there are editable options. Fixed contents get no switches:
+Gamma exports directly; Logseq export shows only file bundling. Sources with no
+import options open the file picker directly, with instructions on the selection
+page. Double-click uses the same action as the footer button. The previous step
+is a keyboard-accessible `crumbBtn`, matching library breadcrumbs; returning
+preserves the chosen format and options.
+The shared `SubDialog` header provides the standard `uiClose` × control. The
+footer contains only Next or the final action; the breadcrumb handles going back.
+Format names stay short because category rows already show file types. Longer
+Zotero export instructions are expandable. Capability rules in
+`transferFormats.js` determine the controls, effective values and need for review.
+The dialogs reuse `PictureChoices`,
+`Toggle` and `SubDialog`; their previews are hand-coded React/HTML and CSS in
+`illustrations/TransferPreview.jsx` and `illustrations/illustrations.css`. These are examples of the output
+options, not renders of the current document.
+
+Keep UI illustrations together in [illustrations/](../../frontend/src/illustrations/README.md),
+with one file per subject: React components for interactive drawings, SVG assets
+for fixed drawings, and a shared illustration stylesheet. Reuse existing icons
+and product widgets; keep control logic and surrounding layout in their owners.
+
 Settings panes are built only from
 [settingsKit.jsx](../../frontend/src/settingsKit.jsx):
 
@@ -106,11 +161,19 @@ Settings panes are built only from
 - Larger areas (AI, workspace management and administration) get second-level
   navigation with Back to settings. Short pages keep the main sidebar. Search
   opens the relevant page and focuses the matching setting.
+- Appearance uses shared `uiBtn`/`on` theme cards with small decorative SVG
+  palette sketches beside the labels (stacked on narrow screens). Appearance
+  buttons inherit shared shadows and hover states, and its noninteractive rows suppress the shared hover fill;
+  grouped rows use straight dividers. A PDF sample reflects the current tint and dark-page
+  switch. Account and browser scopes sit beside section headings; interface
+  controls retain the shared `Row`, `Toggle` and `Stepper` primitives.
 - Editor dialogs: `SubDialog` › `.settingsForm` › `Step` (numbered wizard
   stages) or `Field` (caption + hint + one control), closed by a
   `.reportModalBtns` footer. Pass the draft to `SubDialog` so unsaved edits are
   protected on Cancel, Escape and backdrop clicks.
 - Shared controls: `Segmented` (joined pills for exclusive choices),
+  `PictureChoices` (compact illustrated theme choices for Appearance,
+  with a shared flat selected state and decorative SVG previews),
   `ToggleGroup` (its multi-select counterpart: a wrapping row of small
   icon + short-name chips, each an independent on/off — `uiBtn sm` with the
   shared `on` state; the agent's per-tool permissions in Settings and in the
@@ -126,8 +189,8 @@ Settings panes are built only from
 
 ## Theme
 
-Five states: System (default, tracks `prefers-color-scheme` live) or pinned
-Light/Dark/Sepia/Gray — `gamma-theme` in localStorage (valid values are `THEMES`
+Six states: System (default, tracks `prefers-color-scheme` live) or pinned
+Light/Dark/Sepia/Solarized Light/Gray — `gamma-theme` in localStorage (valid values are `THEMES`
 in `prefs.js`), applied as `data-theme` on the root element. The choice (plus
 "Flip page colors") also follows the account through `/api/prefs/appearance` —
 server wins on login and on window focus, changes push back; localStorage
@@ -140,10 +203,14 @@ themed rather than left to the OS: a global `scrollbar-width: thin` +
 inverts the PDF canvas (`.pdfDark`), swaps highlight blending from multiply
 to screen, and darkens the scroller surround.
 
-**Sepia** and **Gray** are the eye-comfort modes and the themes that reach
-the PDF page as well as the chrome. Sepia: its tokens are Solarized Light (warm cream ground
-`#fdf6e3`, charcoal-teal text, Solarized accents darkened where a token is
-used as text — the stock accents sit near 3:1 on cream), and
+**Sepia**, **Solarized Light**, and **Gray** are the eye-comfort modes and the themes that reach
+the PDF page as well as the chrome. Sepia retains its original warm beige
+surfaces and darker teal text (`#073642`). Solarized Light (`solarized`) follows
+[VS Code's Solarized Light](https://github.com/microsoft/vscode/blob/main/extensions/theme-solarized-light/themes/solarized-light-color-theme.json):
+cream content surfaces (`#fdf6e3`), surrounding chrome (`#eee8d5`), muted
+blue-gray text (`#657b83`), and the original Solarized accents. The desktop
+shell and first-paint background use the same palette. Code highlighting
+uses Solarized token colors. PDF ink retains its separate softening:
 `[data-theme="sepia"] .pdfViewer:not(.pdfDark)` tints the page by giving the
 page wrapper the `--pdf-paper` ground and letting the canvas `multiply` onto
 it. Multiply, not a `sepia()`/`hue-rotate` filter: white paper lands exactly
@@ -154,11 +221,11 @@ charcoal the eye-strain guidance recommends over pure black. **Gray** is the
 neutral counterpart — the same machinery driven by different tokens
 (`--pdf-paper: #f4f4f4`, `#2d2d2d` text ladder, Light's role colors) for
 users who want the glare cut without a color cast; the PDF rules select
-`:is([data-theme="sepia"], [data-theme="gray"])`, so a new tinted theme only
+`:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`, so a new tinted theme only
 needs a token block plus membership in those lists. The tint needs no prop — `data-theme` is global, so it is pure CSS
 — and "Flip page colors" wins when both are on. Light-ground rules that were
 `[data-theme="light"] …` are now
-`:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"])`;
+`:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`;
 extend that list, don't add another copy.
 
 ## Layout

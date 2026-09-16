@@ -8,7 +8,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { chromium } from "playwright";
+import { chromium, webkit } from "playwright";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const BACKEND = path.join(ROOT, "backend");
@@ -145,6 +145,7 @@ export class Account {
 
 export async function launchBrowser() {
   const opts = { headless: !flags.headed };
+  if (process.env.GAMMA_E2E_BROWSER === "webkit") return webkit.launch(opts);
   try {
     return await chromium.launch(opts);
   } catch (e) {

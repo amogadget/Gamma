@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import PdfViewer, { COLORS, clampZoom } from "./pdfViewer";
+import { parsePdfCitation } from "./pdfCitation.js";
 import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "./utils";
 import {
   BlockDropIndicator,
@@ -63,7 +64,7 @@ import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage, Workspac
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
 import { InkToolbar } from "./inkLayer";
-import { appendStroke, eraseAt, newInk, removeStrokes, toolStyle, translateStrokes } from "./ink";
+import { MAX_STROKES, appendStroke, duplicateStrokes, eraseAt, newInk, removeStrokes, restyleStrokes, toolStyle, transformStrokes, translateStrokes } from "./ink";
 import * as inkStore from "./inkStore";
 import { usePageCollab } from "./collab";
 import { applyOps, applyPatch, keepUiFlags } from "./blockOps";
@@ -696,6 +697,7 @@ export default function App() {
   const [inputUrl, setInputUrl] = useState(initialUrl); // current page's source URL (shown in page properties)
   const [addUrl, setAddUrl] = useState(""); // "+" popover: URL to open
   const [pdfUrl, setPdfUrl] = useState("");
+  const [pdfCitation, setPdfCitation] = useState(() => parsePdfCitation(window.location.href, window.location.origin));
   const [docId, setDocId] = useState("");
   const [focusedBlockId, setFocusedBlockId] = useState("");
   const [focusedBlock, setFocusedBlock] = useState(null);
@@ -1432,21 +1434,52 @@ export default function App() {
       document.removeEventListener("webkitfullscreenchange", onFs);
     };
   }, []);
-  // iPhone Safari (and thus every iOS browser) has no element Fullscreen API
-  // at all — fall back to a CSS pseudo-fullscreen that hides the app chrome.
+  // Use native fullscreen on touch devices too; app fullscreen is a fallback
+  // for browsers where the Fullscreen API is unavailable or rejects the request.
   const [pseudoFullscreen, setPseudoFullscreen] = useState(false);
+  const fullscreenTapRef = useRef({ start: null, handledUntil: 0 });
+  useEffect(() => {
+    if (!pseudoFullscreen) return;
+    document.documentElement.classList.add("appFocusFullscreen");
+    const escape = (e) => { if (e.key === "Escape") setPseudoFullscreen(false); };
+    window.addEventListener("keydown", escape);
+    return () => {
+      document.documentElement.classList.remove("appFocusFullscreen");
+      window.removeEventListener("keydown", escape);
+    };
+  }, [pseudoFullscreen]);
   function toggleFullscreen() {
-    if (!(document.fullscreenEnabled || document.webkitFullscreenEnabled)) {
-      setPseudoFullscreen((v) => !v);
-      return;
-    }
     if (document.fullscreenElement || document.webkitFullscreenElement) {
       (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+    } else if (pseudoFullscreen) {
+      setPseudoFullscreen(false);
+    } else if (!(document.fullscreenEnabled || document.webkitFullscreenEnabled)) {
+      setPseudoFullscreen(true);
     } else {
       const el = document.documentElement;
-      (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el)?.catch?.(() => {});
+      (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el)?.catch?.(() => setPseudoFullscreen(true));
     }
   }
+  // Mobile browsers may omit the synthetic click after a scroll. Handle a
+  // stationary touch release directly, then consume its compatibility click.
+  const fullscreenPointerDown = (e) => {
+    fullscreenTapRef.current = { handledUntil: 0, start: e.pointerType === "touch"
+      ? { id: e.pointerId, x: e.clientX, y: e.clientY } : null };
+  };
+  const fullscreenPointerUp = (e) => {
+    const tap = fullscreenTapRef.current, start = tap.start;
+    tap.start = null;
+    if (!start || start.id !== e.pointerId || Math.hypot(e.clientX - start.x, e.clientY - start.y) > 8) return;
+    tap.handledUntil = Date.now() + 750;
+    toggleFullscreen();
+  };
+  const fullscreenClick = (e) => {
+    if (e.detail > 0 && Date.now() < fullscreenTapRef.current.handledUntil) {
+      fullscreenTapRef.current.handledUntil = 0;
+      return;
+    }
+    toggleFullscreen();
+  };
   const restoredPdfUrlRef = useRef(null);
   const coarseRestorePendingRef = useRef(false); // last-read jump not yet applied
   // Something else is taking the viewport to its own target (a pinned search
@@ -2285,7 +2318,7 @@ export default function App() {
         const redo = e.key.toLowerCase() === "y" || e.shiftKey;
         const applied = blockHistory.undo(redo, inEditor);
         if (applied || inEditor || !t || t === document.body) {
-          setStatus(applied ? (redo ? "Redone." : "Undone.") : (redo ? "Nothing to redo." : "Nothing to undo."));
+          setStatus(applied ? `${redo ? "Redone" : "Undone"}: ${applied}.` : (redo ? "Nothing to redo in notes." : "Nothing to undo in notes."));
         }
         // Always swallowed in an editor: the browser's native contenteditable
         // undo would otherwise mutate CodeMirror's DOM behind its back.
@@ -2307,7 +2340,7 @@ export default function App() {
     theme, setTheme, pdfDarkPage, setPdfDarkPage, uiScale, setUiScale, recentThumbs, setRecentThumbs,
     fileLabels, setFileLabels,
     oaFallback, setOaFallback, metaAutoFetch, setMetaAutoFetch, pdfSaveLocal, setPdfSaveLocal,
-    snapVertical, setSnapVertical, embAnnots, setEmbAnnots,
+    embAnnots, setEmbAnnots,
     inkPenOnly, setInkPenOnly, inkAutoPen, setInkAutoPen, inkPressure, setInkPressure,
     inkTools, setInkTools, inkEraserMode, setInkEraserMode, inkEraserSize, setInkEraserSize,
     inkLassoMode, setInkLassoMode,
@@ -2315,7 +2348,7 @@ export default function App() {
     translateLang, setTranslateLang, translateModel, setTranslateModel,
     translateEffort, setTranslateEffort, translateParallel, setTranslateParallel,
     searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper,
-    enterNewNote, setEnterNewNote, hlNoteBadges, setHlNoteBadges,
+    enterNewNote, setEnterNewNote,
     statusBarVisible, setStatusBarVisible,
     chatEffort, setChatEffort, aiLoginCheck, setAiLoginCheck, metaModel, setMetaModel,
     dictationModel, setDictationModel, dictationLang, setDictationLang,
@@ -3329,7 +3362,7 @@ export default function App() {
   const phoneSeen = useRef({});
   if (isPhone && phonePanel) phoneSeen.current[phonePanel] = true;
   // Phone: kill the browser's own zoom. The viewport meta covers Android and
-  // `touch-action: manipulation` (on .app.phoneUI) the double-tap, but iOS
+  // `touch-action: manipulation` (on html, for all layouts) the double-tap, but iOS
   // Safari honours neither — only refusing its gesture events stops a pinch
   // from scaling the whole app until the toolbars sit off-screen. The PDF's
   // own pinch-zoom is unaffected: it runs off touchstart/touchmove.
@@ -3363,6 +3396,7 @@ export default function App() {
   // Stroke-level history for the strip's Ctrl+Z (entries: [{id, page,
   // before, after}] per action) and the lasso selection {page, items}.
   const inkHistRef = useRef({ undo: [], redo: [] });
+  const [inkHistoryState, setInkHistoryState] = useState({ undo: 0, redo: 0 });
   const [inkSelection, setInkSelection] = useState(null);
   const [flashingId, setFlashingId] = useState(null);
   const [highlightMenu, setHighlightMenu] = useState(null); // { id, x, y } or null
@@ -5322,8 +5356,11 @@ export default function App() {
     for (const { id, ink } of inkStore.dirtyDrafts()) {
       try {
         if (!ink.strokes.length) {
-          inkStore.clearDraft(id);
           await apiJson(`${API}/blocks/${id}`, { method: "DELETE" });
+          // Keep the empty draft until the tree observes the deletion; the
+          // HTTP response can arrive before the corresponding socket op.
+          const block = flattenBlocks(blocksRef.current).find((b) => b.id === id);
+          inkStore.markDeleted(id, ink, block?.properties?.ink_url || "");
           continue;
         }
         const r = await apiJson(`${API}/upload-ink`, { method: "POST", headers: json, body: JSON.stringify(ink) });
@@ -5354,6 +5391,7 @@ export default function App() {
     if (inkTimerRef.current) flushInk();
     inkActiveRef.current = null;
     inkHistRef.current = { undo: [], redo: [] };
+    setInkHistoryState({ undo: 0, redo: 0 });
     setInkSelection(null);
     setInkUi((s) => (s.tool ? { ...s, tool: null } : s));
   }, [focusedBlockId, flushInk]);
@@ -5367,7 +5405,7 @@ export default function App() {
   // on the stroke history, the upload is scheduled. A group whose block is
   // not in the tree (undone away, or erased empty and deleted) gets its
   // block back first.
-  function applyInk(changes, { record = true } = {}) {
+  function applyInk(changes, { record = true, label = "ink stroke" } = {}) {
     if (!changes.length) return;
     const present = new Set(flattenBlocks(blocksRef.current).map((b) => b.id));
     const missing = changes.filter((c) => c.after.strokes.length && !present.has(c.id));
@@ -5380,20 +5418,24 @@ export default function App() {
     for (const c of changes) inkStore.setDraft(c.id, c.after);
     if (record) {
       const h = inkHistRef.current;
-      h.undo.push(changes);
+      h.undo.push({ changes, label });
       if (h.undo.length > 200) h.undo.shift();
       h.redo = [];
+      setInkHistoryState({ undo: h.undo.length, redo: h.redo.length });
     }
     scheduleInk();
   }
   function inkUndo(redo) {
+    if (readOnly) return false;
     const h = inkHistRef.current;
     const entry = (redo ? h.redo : h.undo).pop();
-    if (!entry) return false;
+    if (!entry) { setStatus(redo ? "Nothing to redo in handwriting." : "Nothing to undo in handwriting."); return false; }
     // Entries are stored forward (before → after); undo applies them backward.
-    applyInk(redo ? entry : entry.map((c) => ({ ...c, before: c.after, after: c.before })), { record: false });
+    applyInk(redo ? entry.changes : entry.changes.map((c) => ({ ...c, before: c.after, after: c.before })), { record: false });
     (redo ? h.undo : h.redo).push(entry);
+    setInkHistoryState({ undo: h.undo.length, redo: h.redo.length });
     setInkSelection(null);
+    setStatus(`${redo ? "Redone" : "Undone"}: ${entry.label} (page ${entry.changes[0].page}).`);
     return true;
   }
 
@@ -5414,7 +5456,7 @@ export default function App() {
     if (readOnly) return;
     const before = inkOf(blockId);
     if (!before) return;
-    applyInk([{ id: blockId, page, before, after: removeStrokes(before, ids) }]);
+    applyInk([{ id: blockId, page, before, after: removeStrokes(before, ids) }], { label: "ink erasure" });
   }
   // The partial eraser fires per pointer move: successive cuts through one
   // group fold into the same history entry, so Ctrl+Z undoes the pass.
@@ -5425,34 +5467,68 @@ export default function App() {
     const { ink: after, changed } = eraseAt(before, x, y, r);
     if (!changed) return;
     const h = inkHistRef.current;
-    const last = h.undo[h.undo.length - 1];
+    const last = h.undo[h.undo.length - 1]?.changes;
     const fold = last && last.length === 1 && last[0].id === blockId && last[0].after === before && last[0].pass;
-    applyInk([{ id: blockId, page, before: fold ? last[0].before : before, after, pass: true }], { record: !fold });
+    applyInk([{ id: blockId, page, before: fold ? last[0].before : before, after, pass: true }], { record: !fold, label: "partial ink erasure" });
     if (fold) last[0].after = after;
   }
   function handleInkSelect(page, items) {
+    if (readOnly) return;
     setInkSelection(items.length ? { page, items } : null);
+    if (items.length) setInkUi((s) => ({ ...s, open: true, options: false }));
   }
   // The lasso selection, edited group by group: edit(ink, ids) -> ink.
-  function editInkSelection(edit) {
+  function editInkSelection(edit, label) {
     if (readOnly || !inkSelection) return;
     const changes = [];
     for (const item of inkSelection.items) {
       const before = inkOf(item.id);
       if (!before) continue;
-      changes.push({ id: item.id, page: inkSelection.page, before, after: edit(before, item.ids) });
+      const after = edit(before, item.ids);
+      if (after !== before) changes.push({ id: item.id, page: inkSelection.page, before, after });
     }
-    applyInk(changes);
+    applyInk(changes, { label });
   }
   function handleInkMoveSelection(page, dx, dy) {
-    editInkSelection((ink, ids) => translateStrokes(ink, ids, dx, dy));
+    editInkSelection((ink, ids) => translateStrokes(ink, ids, dx, dy), "ink move");
   }
   function deleteInkSelection() {
-    editInkSelection(removeStrokes);
+    editInkSelection(removeStrokes, "ink deletion");
     setInkSelection(null);
   }
+  function handleInkAction(action, value) {
+    if (readOnly || !inkSelection) return;
+    if (action === "style") editInkSelection((ink, ids) => restyleStrokes(ink, ids, value), value.color ? "ink color change" : "ink width change");
+    else if (action === "transform") editInkSelection((ink, ids) => transformStrokes(ink, ids, value), value.angle ? "ink rotation" : "ink resize");
+    else if (action === "delete") deleteInkSelection();
+    else if (action === "select-note") {
+      handleInkSelect(inkSelection.page, inkSelection.items.map((item) => ({
+        id: item.id, ids: (inkOf(item.id)?.strokes || []).map((s) => s.id),
+      })));
+    } else if (action === "show-note") {
+      showInkInNotes(inkSelection.items[0].id);
+      setInkSelection(null);
+    } else if (action === "duplicate") {
+      const changes = [], items = [];
+      for (const item of inkSelection.items) {
+        const before = inkOf(item.id);
+        if (!before) continue;
+        const count = before.strokes.filter((s) => item.ids.includes(s.id)).length;
+        if (before.strokes.length + count > MAX_STROKES) {
+          setStatus("This handwriting note is full. Start a new note before duplicating.");
+          return;
+        }
+        const result = duplicateStrokes(before, item.ids, value.dx, value.dy);
+        if (!result.ids.length) continue;
+        changes.push({ id: item.id, page: inkSelection.page, before, after: result.ink });
+        items.push({ id: item.id, ids: result.ids });
+      }
+      applyInk(changes, { label: "ink duplication" });
+      handleInkSelect(inkSelection.page, items);
+    }
+  }
   // From the notes (marker / card): show the group on the page. From the
-  // page (a click on ink): show its block in the notes.
+  // page (Show note, or a read-only ink click): show its block in the notes.
   function showInkOnPage(id) {
     const b = flattenBlocks(blocksRef.current).find((x) => x.id === id);
     if (!b) return;
@@ -7541,7 +7617,12 @@ export default function App() {
           onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} pageAttach={pageAttach} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pageTitle={pageTitle}
           openTabs={openTabs}
-          onOpenPage={(id) => openBlock(id, { pushNav: true })}
+          onOpenPage={async (id, citation) => {
+            if (citation && id === focusedBlockId) pushNav();
+            setPdfCitation(citation ? { ...citation } : null);
+            if (id !== focusedBlockId) await openBlock(id, { pushNav: true });
+            if (citation) { setPdfHidden(false); setPhonePanel(null); }
+          }}
           pdfSelections={pdfSelections} setPdfSelections={setPdfSelections}
           chatNotes={chatNotes} setChatNotes={setChatNotes} focusedNote={focusedNote}
           chatImages={chatImages} setChatImages={setChatImages}
@@ -8426,6 +8507,8 @@ export default function App() {
               tools={inkTools} active={inkUi.tool} options={inkUi.options}
               eraserMode={inkEraserMode} eraserSize={inkEraserSize} lassoMode={inkLassoMode}
               onPick={pickInkTool}
+              onUndo={() => inkUndo(false)} onRedo={() => inkUndo(true)}
+              canUndo={inkHistoryState.undo > 0} canRedo={inkHistoryState.redo > 0}
               onToggleOptions={() => setInkUi((s) => ({ ...s, options: !s.options }))}
               onChangeTools={setInkTools}
               onEraser={(patch) => {
@@ -8440,7 +8523,10 @@ export default function App() {
           {pdfUrl && !pdfHidden ? (
             <div className="pdfCtlBox pdfFullscreenBox">
               <button
-                onClick={toggleFullscreen}
+                onPointerDown={fullscreenPointerDown}
+                onPointerUp={fullscreenPointerUp}
+                onPointerCancel={() => { fullscreenTapRef.current.start = null; }}
+                onClick={fullscreenClick}
                 title={isFullscreen || pseudoFullscreen ? "Exit full screen" : "Full screen"}
                 aria-label={isFullscreen || pseudoFullscreen ? "Exit full screen" : "Full screen"}
               >
@@ -8454,9 +8540,8 @@ export default function App() {
           ) : null}
           {pdfUrl ? (
             <PdfViewer url={pdfUrl} highlights={highlights}
-              noteBadges={hlNoteBadges}
+              citation={pdfCitation?.pageId === focusedBlockId ? pdfCitation : null}
               hideEmbeddedAnnots={embAnnots === "hide"}
-              snapVertical={snapVertical}
               darkPage={pdfDarkPage}
               translateKey={`${translateLang}|${translateSendModel}`}
               translateParallel={translateParallel}
@@ -8478,6 +8563,7 @@ export default function App() {
               inkLassoMode={inkLassoMode}
               inkSelection={inkSelection}
               onInkSelect={readOnly ? undefined : handleInkSelect}
+              onInkAction={readOnly ? undefined : handleInkAction}
               onInkMoveSelection={readOnly ? undefined : handleInkMoveSelection}
               onInkJump={showInkInNotes}
               pdfScaleValue={pdfScale} scrollRef={scrollToRef}
@@ -8834,8 +8920,6 @@ export default function App() {
           setPdfSaveLocal,
           embAnnots,
           setEmbAnnots,
-          snapVertical,
-          setSnapVertical,
           inkPenOnly,
           setInkPenOnly,
           inkAutoPen,
@@ -8866,8 +8950,6 @@ export default function App() {
         notes={{
           enterNewNote,
           setEnterNewNote,
-          hlNoteBadges,
-          setHlNoteBadges,
         }}
         library={{
           // batch metadata retry uses the same prompt/model/context prefs as

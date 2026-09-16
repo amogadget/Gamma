@@ -77,7 +77,7 @@ const SIZE_INDEX_CODEC = {
   serialize: String,
 };
 
-export const THEMES = ["system", "light", "dark", "sepia", "gray"];
+export const THEMES = ["system", "light", "dark", "sepia", "solarized", "gray"];
 
 // Control size (Settings → General): a CSS `zoom` on every button and toggle
 // (app.css, `--ui-scale`) — the interface chrome, not the notes/chat text,
@@ -87,9 +87,8 @@ export const UI_SCALE = { min: 0.7, max: 1.6, step: 0.1, default: 1 };
 
 export function useAppPrefs() {
   // --- Appearance (Settings → General) ---
-  // Theme: "system" follows the OS; "light"/"dark"/"sepia" pin it. "sepia" is
-  // the warm eye-comfort mode (Solarized Light) and "gray" its neutral
-  // counterpart; both also tint the PDF page (app.css), no separate toggle.
+  // System follows the OS; the other themes pin the appearance.
+  // Sepia, Solarized Light, and Gray also tint PDF pages (app.css).
   // Theme and pdfDarkPage additionally follow the account through
   // /api/prefs/appearance (App.jsx): server wins on login, changes push back,
   // this localStorage copy stays the instant-paint cache.
@@ -121,10 +120,6 @@ export function useAppPrefs() {
   const [pdfSaveLocal, setPdfSaveLocal] = usePersistedFlag("gamma-pdf-save", true);
 
   // --- PDF viewer (Settings → Reading) ---
-  // Touch scrolling in a zoomed-in PDF: a near-vertical one-finger swipe keeps
-  // the horizontal position it started from, so the text column doesn't wander
-  // sideways as you read down the page.
-  const [snapVertical, setSnapVertical] = usePersistedFlag("gamma-snap-vertical", true);
   // Embedded PDF annotations (burned in by a Gamma export or another viewer)
   // would render twice once imported as blocks — canvas + overlay. "hide"
   // keeps them out of the canvas; "strip" removes them from the stored file
@@ -172,8 +167,6 @@ export function useAppPrefs() {
   // Enter key in the note editor: off (default) = Enter types a line break and
   // Shift+Enter starts a new note; on = the Logseq-style swap of the two.
   const [enterNewNote, setEnterNewNote] = usePersistedFlag("gamma-enter-new-note", false);
-  // Speech-bubble badge on PDF highlights that carry a typed note.
-  const [hlNoteBadges, setHlNoteBadges] = usePersistedFlag("gamma-hl-note-badge", true);
 
   // --- Interface (Settings → Advanced) ---
   // The always-on status bar under the tabs — off by default, the floating
@@ -251,12 +244,12 @@ export function useAppPrefs() {
     theme, setTheme, pdfDarkPage, setPdfDarkPage, uiScale, setUiScale,
     recentThumbs, setRecentThumbs, fileLabels, setFileLabels,
     oaFallback, setOaFallback, metaAutoFetch, setMetaAutoFetch, pdfSaveLocal, setPdfSaveLocal,
-    snapVertical, setSnapVertical, embAnnots, setEmbAnnots,
+    embAnnots, setEmbAnnots,
     translateEnabled, setTranslateEnabled,
     translateLang, setTranslateLang, translateModel, setTranslateModel,
     translateEffort, setTranslateEffort, translateParallel, setTranslateParallel,
     searchDetailsHome, setSearchDetailsHome, searchDetailsPaper, setSearchDetailsPaper,
-    enterNewNote, setEnterNewNote, hlNoteBadges, setHlNoteBadges,
+    enterNewNote, setEnterNewNote,
     statusBarVisible, setStatusBarVisible,
     chatEffort, setChatEffort, aiLoginCheck, setAiLoginCheck, metaModel, setMetaModel,
     dictationModel, setDictationModel, dictationLang, setDictationLang,

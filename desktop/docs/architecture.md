@@ -97,7 +97,7 @@ local servers exist under the current root, *Move data*, which relocates
 them too.
 
 **Theme.** The chrome paints in Gamma's own theme: the preload on server
-pages mirrors the page's `data-theme` attribute (`dark`/`light`/`sepia`/
+pages mirrors the page's `data-theme` attribute (`dark`/`light`/`sepia`/`solarized`/
 `gray`; none = dark) to the main process, which restyles the bar, the
 launcher, the window background and the Windows title-bar overlay. The last
 theme is persisted so the chrome is right before any page has loaded. The

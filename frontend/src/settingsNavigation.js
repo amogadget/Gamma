@@ -7,16 +7,14 @@ export const resolveSettingsPane = (pane) => PANE_ALIASES[pane] || pane;
 
 // Search names the actual setting, including settings on the second-level AI pages.
 const entries = [
-  ["appearance", "Theme", "dark light sepia gray system colors"],
+  ["appearance", "Theme", "dark light sepia solarized gray system colors"],
   ["appearance", "Dark PDF pages", "flip invert page colors"],
   ["appearance", "Control size", "zoom buttons scale touch"],
   ["appearance", "Status bar", "notifications messages"],
-  ["reading", "Snap vertical scrolling", "PDF swipe touch"],
   ["reading", "Imported annotations", "hide strip highlights PDF"],
   ["reading", "Show translation shortcut", "translation button"],
   ["reading", "Translate into", "translation language"],
   ["reading", "Enter key", "notes line keyboard shift"],
-  ["reading", "Note badges on highlights", "bubble PDF"],
   ["reading", "On the home page", "search expand results"],
   ["reading", "On a page", "search expand results find"],
   ["library", "Recents thumbnails", "snapshots library home display"],

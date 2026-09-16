@@ -181,6 +181,248 @@ export async function inkScenarios({ server, browser, alice, makePdf, step, unti
     assertNoProblems(page);
   });
 
+  await step("ink: erasing the last stroke stays erased while block deletion is pending", async () => {
+    await page.click("button[aria-label='Handwriting tools']");
+    await page.keyboard.press("p");
+    await page.click(".pdfInkBar button[title^='Start a new']");
+    const paths = '[data-page="1"] .inkLayer path';
+    const count = await page.locator(paths).count();
+    const before = await account.api(`/api/blocks/${pageId}/subtree`);
+    const ids = new Set(before.block.children.map((b) => b.id));
+    box = await page.locator('[data-page="1"]').boundingBox();
+    await drawLine(page, [box.x + 100, box.y + 320], [box.x + 250, box.y + 320]);
+    const group = await until(async () => {
+      const d = await account.api(`/api/blocks/${pageId}/subtree`);
+      return d.block.children.find((b) => !ids.has(b.id) && b.properties?.ink_url);
+    }, { what: "new group saved before erasure" });
+    await until(async () => await page.locator(paths).count() === count + 1);
+    let release, deleting = false;
+    const held = new Promise((resolve) => { release = resolve; });
+    const url = `**/api/blocks/${group.id}`;
+    await page.route(url, async (route) => {
+      if (route.request().method() === "DELETE") { deleting = true; await held; }
+      await route.continue();
+    });
+    try {
+      await page.keyboard.press("e");
+      await page.click(".pdfInkBar button[title^='Eraser']");
+      await page.click(".pdfInkSub button[aria-label='Whole strokes']");
+      box = await page.locator('[data-page="1"]').boundingBox();
+      await drawLine(page, [box.x + 175, box.y + 310], [box.x + 175, box.y + 330]);
+      await until(async () => await page.locator(paths).count() === count);
+      await until(() => deleting, { what: "delete request held in flight" });
+      const stayedErased = await page.evaluate(async ({ paths, count }) => {
+        const end = performance.now() + 300;
+        do {
+          await new Promise(requestAnimationFrame);
+          if (document.querySelectorAll(paths).length !== count) return false;
+        } while (performance.now() < end);
+        return true;
+      }, { paths, count });
+      assert(stayedErased, "saved strokes must not reappear while deletion is pending");
+    } finally { release(); }
+    await until(async () => {
+      const d = await account.api(`/api/blocks/${pageId}/subtree`);
+      return !d.block.children.some((b) => b.id === group.id);
+    }, { what: "empty group deleted" });
+    await page.unroute(url);
+    assertEq(await page.locator(paths).count(), count);
+    assertNoProblems(page);
+  });
+
+  await step("ink: Pencil touch gestures are claimed and finger gestures remain available", async () => {
+    // Synthetic Safari event ordering exercises the handlers; a physical
+    // iPad is still needed to verify native Pencil/scroll arbitration.
+    await page.keyboard.press("Escape");
+    if (await page.locator(".pdfInkBar").count()) await page.keyboard.press("Escape");
+    const paths = '[data-page="1"] .inkLayer path';
+    const count = await page.locator(paths).count();
+    const result = await page.locator('[data-page="1"]').evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const pointer = (type, pointerType, pointerId, x) => el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerType, pointerId, button: 0,
+        buttons: type === "pointerup" ? 0 : 1, pressure: 0.7,
+        clientX: box.left + x, clientY: box.top + 350,
+      }));
+      const touch = (type, touchType) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        const contact = { identifier: 1, touchType, clientX: box.left + 100, clientY: box.top + 350 };
+        Object.defineProperties(event, {
+          changedTouches: { value: [contact] }, touches: { value: [contact] },
+        });
+        el.dispatchEvent(event);
+        return event.defaultPrevented;
+      };
+      const fingerBefore = touch("touchstart", "direct");
+      const pencilBefore = touch("touchstart", "stylus");
+      pointer("pointerdown", "pen", 71, 100);
+      const pencilStart = touch("touchstart", "stylus");
+      const pencilMove = touch("touchmove", "stylus");
+      const untypedPencil = touch("touchmove", undefined);
+      const fingerDuring = touch("touchstart", "direct");
+      pointer("pointerdown", "touch", 72, 120);
+      pointer("pointerup", "touch", 72, 120);
+      pointer("pointermove", "pen", 71, 220);
+      pointer("pointerup", "pen", 71, 220);
+      const fingerAfter = touch("touchstart", "direct");
+      return { fingerBefore, pencilBefore, pencilStart, pencilMove, untypedPencil, fingerDuring, fingerAfter };
+    });
+    assert(result.pencilBefore && result.pencilStart && result.pencilMove && result.untypedPencil,
+      "Pencil touch events prevent native panning, including before pointerdown");
+    assert(!result.fingerBefore && result.fingerDuring && !result.fingerAfter,
+      "palms are blocked during writing; fingers navigate before and after");
+    await until(async () => await page.locator(paths).count() === count + 1, { what: "pen stroke survived a second contact" });
+    assertNoProblems(page);
+  });
+
+  await step("ink: coalesced pen samples, prediction preview, lift endpoint and pressure persist accurately", async () => {
+    const visibleCount = await page.locator('[data-page="1"] .inkLayer path').count();
+    await until(async () => {
+      const d = await account.api(`/api/blocks/${pageId}/subtree`);
+      return d.block.children.reduce((n, b) => n + (b.properties?.ink_strokes || 0), 0) === visibleCount;
+    }, { what: "previous Pencil stroke persisted before starting a separate group" });
+    await page.click("button[aria-label='Handwriting tools']");
+    await page.keyboard.press("p");
+    await page.click(".pdfInkBar button[title^='Start a new']");
+    const before = await account.api(`/api/blocks/${pageId}/subtree`);
+    const ids = new Set(before.block.children.map((b) => b.id));
+    const result = await page.locator('[data-page="1"]').evaluate(async (el) => {
+      const box = el.getBoundingClientRect();
+      const make = (type, x, time, pressure) => {
+        const ev = new PointerEvent(type, { bubbles: true, cancelable: true,
+          pointerType: "pen", pointerId: 81, button: 0, buttons: type === "pointerup" ? 0 : 1,
+          clientX: box.left + x, clientY: box.top + 300, pressure });
+        Object.defineProperty(ev, "timeStamp", { value: 1000 + time });
+        return ev;
+      };
+      el.dispatchEvent(make("pointerdown", 100, 0, 0.2));
+      const move = make("pointermove", 130, 12, 0.8);
+      Object.defineProperties(move, {
+        getCoalescedEvents: { value: () => [make("pointermove", 110, 4, 0.4),
+          make("pointermove", 120, 8, 0.6), make("pointermove", 130, 12, 0.8)] },
+        getPredictedEvents: { value: () => [make("pointermove", 138, 20, 0.8)] },
+      });
+      el.dispatchEvent(move);
+      await new Promise(requestAnimationFrame);
+      const canvas = el.querySelector(".inkCanvas");
+      const painted = canvas.style.display === "block" && canvas.getContext("2d")
+        .getImageData(0, 0, canvas.width, canvas.height).data.some((v, i) => i % 4 === 3 && v > 0);
+      el.dispatchEvent(make("pointerup", 140, 24, 0));
+      return { painted, hidden: canvas.style.display === "none",
+        k: box.width / el.querySelector(".inkLayer").viewBox.baseVal.width };
+    });
+    assert(result.painted && result.hidden, "live canvas paints before lift and hands off to SVG");
+    const block = await until(async () => {
+      const d = await account.api(`/api/blocks/${pageId}/subtree`);
+      return d.block.children.find((b) => !ids.has(b.id) && b.properties?.ink_url);
+    }, { what: "sampled pen stroke saved" });
+    const ink = await account.api(block.properties.ink_url);
+    const st = ink.strokes[0];
+    assertEq(st.ch, "xypt");
+    assertEq(st.pts.length, 20, "five real samples, no prediction saved");
+    assertEq(JSON.stringify(st.pts.filter((_, i) => i % 4 === 2)), "[200,400,600,800,800]", "pressure including lift");
+    assertEq(JSON.stringify(st.pts.filter((_, i) => i % 4 === 3)), "[0,4,4,4,12]", "hardware time deltas");
+    const endpoint = st.pts.filter((_, i) => i % 4 === 0).reduce((a, b) => a + b, 0) / 100;
+    assert(Math.abs(endpoint - 140 / result.k) < 0.02, "the final pointer-up position is saved");
+    await page.reload();
+    await waitForPdf(page, 1);
+    await page.waitForSelector(`[data-page="1"] [data-ink-id="${block.id}"] path`);
+    assertNoProblems(page);
+  });
+
+  await step("ink: interrupted strokes clean up and a pen can take over a palm contact", async () => {
+    // Enable finger writing to exercise the harder palm-first ordering.
+    await page.evaluate(() => localStorage.setItem("gamma-ink-pen-only", "0"));
+    await page.reload();
+    await waitForPdf(page, 1);
+    await page.click("button[aria-label='Handwriting tools']");
+    const paths = '[data-page="1"] .inkLayer path';
+    const count = await page.locator(paths).count();
+    const clean = await page.locator('[data-page="1"]').evaluate((el) => {
+      const box = el.getBoundingClientRect();
+      const send = (type, id, pointerType = "pen", x = 100) => el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerType, pointerId: id, button: 0,
+        buttons: type === "pointerup" ? 0 : 1, pressure: 0.6,
+        clientX: box.left + x, clientY: box.top + 330,
+      }));
+      send("pointerdown", 90);
+      send("pointermove", 90, "pen", 150);
+      send("pointercancel", 90);
+      const cancelled = el.querySelector(".inkCanvas").style.display === "none";
+      send("pointerdown", 91);
+      send("lostpointercapture", 91);
+      const lost = el.querySelector(".inkCanvas").style.display === "none";
+      send("pointerdown", 92, "touch");
+      send("pointermove", 92, "touch", 150);
+      send("pointerdown", 93);
+      send("pointerup", 92, "touch", 160);
+      send("pointermove", 93, "pen", 180);
+      send("pointerup", 93, "pen", 190);
+      return cancelled && lost;
+    });
+    assert(clean, "cancellation and lost capture clear the live preview");
+    await until(async () => await page.locator(paths).count() === count + 1,
+      { what: "only the pen stroke survives palm takeover and interruptions" });
+    if (flags.keep) await page.screenshot({ path: `${server.dir}/ink-touch-writing.png` });
+    assertNoProblems(page);
+  });
+
+  await step("ink: native Chromium touch writes without scrolling and native pen pressure is saved", async () => {
+    const paths = '[data-page="1"] .inkLayer path';
+    const count = await page.locator(paths).count();
+    const cdp = await ctx.newCDPSession(page);
+    await cdp.send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+    box = await page.locator('[data-page="1"]').boundingBox();
+    const x = Math.round(box.x + 100), y = Math.round(box.y + 220);
+    const scrollBefore = await page.locator(".pdfViewer").evaluate((el) => el.scrollTop);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+    for (let i = 1; i <= 12; i++) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: x + i * 8, y: y + i * 3 }] });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await until(async () => await page.locator(paths).count() === count + 1, { what: "native touch stroke" });
+    assertEq(await page.locator(".pdfViewer").evaluate((el) => el.scrollTop), scrollBefore, "finger drawing does not pan");
+    await page.getByRole("button", { name: "Hand", exact: true }).click();
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y: y + 80,
+      pointerType: "pen", button: "left", buttons: 1, clickCount: 1, force: 0.2 });
+    for (let i = 1; i <= 12; i++) {
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x + i * 8, y: y + 80 + Math.sin(i / 2) * 15,
+        pointerType: "pen", button: "left", buttons: 1, force: 0.2 + i * 0.05 });
+    }
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: x + 100, y: y + 76,
+      pointerType: "pen", button: "left", buttons: 0, clickCount: 1 });
+    await until(async () => await page.locator(paths).count() === count + 2, { what: "native pen stroke in Hand mode" });
+    await until(async () => {
+      const d = await account.api(`/api/blocks/${pageId}/subtree`);
+      for (const b of d.block.children) {
+        if (!b.properties?.ink_url) continue;
+        const ink = await account.api(b.properties.ink_url);
+        if (ink.strokes.some((s) => s.pen && s.ch === "xypt" && s.pts.length >= 48 && s.pts[2] === 200
+          && s.pts.filter((_, i) => i % 4 === 2).includes(800))) return true;
+      }
+      return false;
+    }, { what: "native pen pressure uploaded" });
+    if (flags.keep) await page.screenshot({ path: `${server.dir}/ink-native-touch-pen.png` });
+    await page.evaluate(() => localStorage.setItem("gamma-ink-pen-only", "1"));
+    await page.reload();
+    await waitForPdf(page, 1);
+    await until(async () => await page.locator(paths).count() === count + 2, { what: "native strokes restored" });
+    await page.click("button[aria-label='Handwriting tools']");
+    const scrollStart = await page.locator(".pdfViewer").evaluate((el) => el.scrollTop);
+    box = await page.locator('[data-page="1"]').boundingBox();
+    const fingerX = Math.round(box.x + 300);
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: fingerX, y: 500 }] });
+    for (let i = 1; i <= 10; i++) {
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: fingerX, y: 500 - i * 12 }] });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await until(async () => await page.locator(".pdfViewer").evaluate((el) => el.scrollTop) > scrollStart + 20,
+      { what: "fingers scroll with a pen armed in pen-only mode" });
+    assertEq(await page.locator(paths).count(), count + 2, "finger navigation adds no ink");
+    await cdp.detach();
+    assertNoProblems(page);
+  });
+
   if (ctx) await ctx.close();
   return { inkPageId: pageId };
 }

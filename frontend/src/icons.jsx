@@ -44,6 +44,9 @@ export const FileIcon = (p) => (
 export const FileTextIcon = (p) => (
   <Icon {...p}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><polyline points="14 2 14 8 20 8" /><line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /></Icon>
 );
+export const MarkdownIcon = (p) => (
+  <Icon {...p}><rect x="2" y="5" width="20" height="14" rx="2" /><path d="M5 15V9l3 3 3-3v6M17 9v6m-2-2 2 2 2-2" /></Icon>
+);
 export const PaperIcon = (p) => (
   <Icon {...p}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" /><path d="M15 2v5h5" /></Icon>
 );
@@ -313,6 +316,19 @@ export const HandIcon = (p) => (
 );
 export const RectSelectIcon = (p) => (
   <Icon {...p}><path d="M5 3a2 2 0 0 0-2 2" /><path d="M19 3a2 2 0 0 1 2 2" /><path d="M21 19a2 2 0 0 1-2 2" /><path d="M5 21a2 2 0 0 1-2-2" /><path d="M9 3h1" /><path d="M9 21h1" /><path d="M14 3h1" /><path d="M14 21h1" /><path d="M3 9v1" /><path d="M21 9v1" /><path d="M3 14v1" /><path d="M21 14v1" /></Icon>
+);
+
+export const UndoIcon = (p) => (
+  <Icon {...p}><path d="m9 4-5 5 5 5" /><path d="M4 9h10a6 6 0 0 1 0 12" /></Icon>
+);
+export const RedoIcon = (p) => (
+  <Icon {...p}><path d="m15 4 5 5-5 5" /><path d="M20 9H10a6 6 0 0 0 0 12" /></Icon>
+);
+export const PaletteIcon = (p) => (
+  <Icon {...p}><path d="M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3 1.8 1.8 0 0 1 1.4-3H18a3 3 0 0 0 3-3A9 9 0 0 0 12 3Z" /><circle cx="7.5" cy="10" r=".6" /><circle cx="11" cy="6.5" r=".6" /><circle cx="16" cy="8" r=".6" /><circle cx="7.5" cy="15" r=".6" /></Icon>
+);
+export const LineWidthIcon = (p) => (
+  <Icon {...p}><path d="M4 5h16" strokeWidth="1" /><path d="M4 12h16" strokeWidth="3" /><path d="M4 19h16" strokeWidth="5" /></Icon>
 );
 
 // Filled glyphs — bespoke markup, not the stroke wrapper.

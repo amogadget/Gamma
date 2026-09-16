@@ -1,7 +1,7 @@
 // The building blocks every settings pane is composed from — and nothing
 // else: PaneHead › Section › Row/Toggle for the panes themselves, SubDialog ›
 // Step/Field for the editor dialogs they open, plus the small shared controls
-// (Segmented, Stepper, UnitInput, CharSlider, AccountPicker, LogBox, Stat, Empty, QuotaMeter/PercentMeter). New settings
+// (Segmented, PictureChoices, Stepper, UnitInput, CharSlider, AccountPicker, LogBox, Stat, Empty, QuotaMeter/PercentMeter). New settings
 // UI should reuse these; bespoke classes are for layout only.
 import React from "react";
 import { copyText, fmtBytes } from "./utils";
@@ -91,6 +91,25 @@ export function Segmented({ value, onChange, options }) {
   );
 }
 
+// Compact visual alternatives for a single preference. Previews are decorative;
+// labels, descriptions and the pressed state identify each choice accessibly.
+export function PictureChoices({ label, value, onChange, onConfirm, options, columns = 3 }) {
+  return <div className="setPictureChoices" role="group" aria-label={label} style={{ "--picture-columns": columns }}>
+    {options.map(({ value: id, label: name, hint, preview }) => (
+      <button key={String(id)} type="button" className={`uiBtn setPictureChoice${value === id ? " on" : ""}`}
+        aria-label={name} aria-description={hint} title={hint} aria-pressed={value === id} onClick={() => onChange(id)}
+        onDoubleClick={onConfirm ? () => onConfirm(id) : undefined}>
+        {preview}
+        <span className="setPictureCaption">
+          <span className="setPictureName">{name}</span>
+          {hint ? <span className="setPictureHint">{hint}</span> : null}
+          <span className="setPictureCheck" aria-hidden="true">{value === id ? <CheckIcon size={12} /> : null}</span>
+        </span>
+      </button>
+    ))}
+  </div>;
+}
+
 // A row of small icon + short-name chips, each an independent on/off switch
 // (the multi-select counterpart of Segmented): the agent's per-tool
 // permissions, any "which of these" choice. `options` are
@@ -120,7 +139,7 @@ export function ToggleGroup({ selected, onToggle, options, disabled }) {
 // Every editor dialog is composed the same way: SubDialog › .settingsForm ›
 // Step (numbered stages, for flows) or Field (label + hint + one control),
 // closed by a .reportModalBtns footer.
-export function SubDialog({ title, onClose, children, draft }) {
+export function SubDialog({ title, onClose, children, draft, className = "", closeButton = false }) {
   const key = React.useId();
   const [initial] = React.useState(() => JSON.stringify(draft));
   const dirty = draft !== undefined && JSON.stringify(draft) !== initial;
@@ -135,7 +154,7 @@ export function SubDialog({ title, onClose, children, draft }) {
   }, []);
   return (
     <div className="reportOverlay subDialog" onClick={(event) => { event.stopPropagation(); close(); }}>
-      <div className="reportModal" role="dialog" aria-modal="true" aria-label={title}
+      <div className={`reportModal ${className}`} role="dialog" aria-modal="true" aria-label={title}
         ref={ref} tabIndex={-1} onClick={(event) => event.stopPropagation()}
         onClickCapture={(event) => {
           if (dirty && event.target.closest("button")?.textContent.trim() === "Cancel") {
@@ -152,11 +171,14 @@ export function SubDialog({ title, onClose, children, draft }) {
             const targets = [...ref.current.querySelectorAll('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), summary')]
               .filter((el) => el.getClientRects().length && !el.closest("[inert]"));
             const first = targets[0], last = targets.at(-1);
-            if (event.shiftKey && (document.activeElement === first || document.activeElement === ref.current)) { event.preventDefault(); last?.focus(); }
+            if (event.shiftKey && (document.activeElement === first || !targets.includes(document.activeElement))) { event.preventDefault(); last?.focus(); }
             else if (!event.shiftKey && (document.activeElement === last || document.activeElement === ref.current)) { event.preventDefault(); first?.focus(); }
           }
         }}>
-        <div className="reportModalTitle">{title}</div>
+        {closeButton ? <div className="settingsDialogHeader" inert={confirmClose ? "" : undefined}>
+          <div className="reportModalTitle">{title}</div>
+          <button type="button" className="uiClose uiCloseLg" onClick={close} aria-label={`Close ${title}`} title="Close">×</button>
+        </div> : <div className="reportModalTitle">{title}</div>}
         <div className="settingsDialogContent" inert={confirmClose ? "" : undefined}>{children}</div>
         {confirmClose ? <div className="settingsUnsaved" role="alertdialog" aria-label="Unsaved changes">
           <span>Discard your unsaved edits?</span>

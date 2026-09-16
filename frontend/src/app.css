@@ -107,15 +107,6 @@
   color-scheme: light;
 }
 
-/* Eye-comfort ("Sepia") theme — Solarized Light (Ethan Schoonover). The
-   palette exists for exactly this job: a warm cream ground (base3 #fdf6e3,
-   the color of shaded paper) instead of glaring white, and charcoal-teal text
-   instead of pure black, so the page carries less blue light and far less
-   luminance contrast than Light without going dim. Role colors are the
-   Solarized accents, darkened where a token is used as text (the stock
-   accents sit near 3:1 on cream, below the 4.5:1 body-text bar).
-   --pdf-paper is the same ground applied to the PDF canvas — see .pdfSepia
-   rules further down. */
 [data-theme="sepia"] {
   --bg-page: #f0e9d6;
   --bg-surface: #fdf6e3;
@@ -159,6 +150,56 @@
   --drag-accent: #1b6fa3;
   --scrollbar-thumb: #d3c9ad;
   --scrollbar-thumb-hover: #b9ad91;
+  /* The PDF page ground (Solarized base3). Not a --bg-* token: it is the
+     paper, not a surface, and .pdfSepia multiplies the canvas onto it. */
+  --pdf-paper: #fdf6e3;
+  color-scheme: light;
+}
+
+/* Solarized Light follows VS Code's Solarized Light: cream editor surfaces, base2
+   chrome, muted blue-gray text, and the original Solarized accents.
+   Reference: microsoft/vscode, extensions/theme-solarized-light/themes/
+   solarized-light-color-theme.json. --pdf-paper also tints PDF canvases. */
+[data-theme="solarized"] {
+  --bg-page: #eee8d5;
+  --bg-surface: #fdf6e3;
+  --bg-elevated: #eee8d5;
+  --bg-block: #f7f0e0;
+  --bg-card: #fdf6e3;
+  --bg-deeper: #eee8d5;
+  --bg-input: #ddd6c1;
+  --bg-raised: #eee8d5;
+  --bg-hover: #dfca8844;
+  --bg-subtle: #ddd6c1;
+  --bg-active: #dfca88;
+  --text-primary: #657b83;
+  --text-secondary: #586e75;
+  --text-tertiary: #657b83;
+  --text-muted: #839496;
+  --text-dim: #93a1a1;
+  --text-bright: #586e75;
+  --border: #ddd6c1;
+  --border-light: #d3af86;
+  --border-hover: #b49471;
+  --border-subtle: #ddd6c1;
+  --ok: #859900;
+  --danger: #dc322f;
+  --danger-bg: rgba(220, 50, 47, 0.1);
+  --danger-border: rgba(220, 50, 47, 0.38);
+  --accent: #268bd2;
+  --accent-dark: #268bd2;
+  --accent-bright: #268bd2;
+  --accent-bg: rgba(38, 139, 210, 0.14);
+  --accent-bg-light: rgba(38, 139, 210, 0.07);
+  --callout-note: #268bd2;
+  --callout-tip: #859900;
+  --callout-warning: #b58900;
+  --callout-danger: #dc322f;
+  --callout-important: #6c71c4;
+  --callout-quote: #93a1a1;
+  --drag-accent: #268bd2;
+  --scrollbar-thumb: #586e754d;
+  --scrollbar-thumb-hover: #586e7580;
   /* The PDF page ground (Solarized base3). Not a --bg-* token: it is the
      paper, not a surface, and .pdfSepia multiplies the canvas onto it. */
   --pdf-paper: #fdf6e3;
@@ -286,7 +327,7 @@
   color: var(--text-primary);
 }
 
-:is(.uiClose, .uiBtn):focus-visible {
+:is(.uiClose, .uiBtn, .crumbBtn):focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -329,6 +370,10 @@ html, body, #root {
   background: var(--bg-page);
 }
 
+/* Suppress browser double-tap zoom on every layout, including portaled menus.
+   Keep native panning and pinch zoom; drawing surfaces override this with none. */
+html { touch-action: manipulation; }
+
 body {
   font-family: Arial, sans-serif;
   color: var(--text-primary);
@@ -341,12 +386,6 @@ body {
   height: 100vh;
   /* mobile browsers: exclude the collapsing URL bar so nothing hides behind it */
   height: 100dvh;
-}
-/* Phone: no browser zoom of the app chrome (a zoomed page hides the toolbars
-   and there is no way back to them). `manipulation` also drops the 300 ms
-   double-tap-zoom delay; panning and the PDF's own pinch handlers still work. */
-.app.phoneUI {
-  touch-action: manipulation;
 }
 
 .topbar {
@@ -732,7 +771,7 @@ body {
   --bracket-active-bg: rgba(90, 140, 255, 0.28);
   --bracket-active-ring: rgba(140, 170, 255, 0.65);
 }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) {
   --bracket-1: #0431fa;
   --bracket-2: #319331;
   --bracket-3: #7b3814;
@@ -823,15 +862,28 @@ body {
 .hljs-deletion { color: #f14c4c; }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-comment, .hljs-quote) { color: #6e7781; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag) { color: #cf222e; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_) { color: #0a3069; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-number, .hljs-symbol, .hljs-bullet) { color: #0550ae; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-title, .hljs-section) { color: #8250df; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-title.class_, .hljs-type, .hljs-built_in) { color: #953800; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-params) { color: #0550ae; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) :is(.hljs-meta, .hljs-selector-id, .hljs-selector-class, .hljs-name) { color: #116329; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .hljs-deletion { color: #e51400; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-comment, .hljs-quote) { color: #6e7781; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag) { color: #cf222e; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_) { color: #0a3069; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-number, .hljs-symbol, .hljs-bullet) { color: #0550ae; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-title, .hljs-section) { color: #8250df; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-title.class_, .hljs-type, .hljs-built_in) { color: #953800; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-params) { color: #0550ae; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-meta, .hljs-selector-id, .hljs-selector-class, .hljs-name) { color: #116329; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .hljs-deletion { color: #e51400; }
+
+/* VS Code Solarized Light token colors, shared by notes and chat code. */
+[data-theme="solarized"] :is(.hljs-comment, .hljs-quote) { color: #93a1a1; }
+[data-theme="solarized"] :is(.hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-addition) { color: #859900; }
+[data-theme="solarized"] :is(.hljs-string, .hljs-char.escape_) { color: #2aa198; }
+[data-theme="solarized"] :is(.hljs-number, .hljs-symbol) { color: #d33682; }
+[data-theme="solarized"] :is(.hljs-literal, .hljs-bullet, .hljs-meta) { color: #b58900; }
+[data-theme="solarized"] :is(.hljs-title, .hljs-section, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-selector-id, .hljs-selector-class, .hljs-name) { color: #268bd2; }
+[data-theme="solarized"] :is(.hljs-title.class_, .hljs-type) { color: #cb4b16; }
+[data-theme="solarized"] .hljs-built_in { color: #859900; }
+[data-theme="solarized"] :is(.hljs-attr, .hljs-attribute) { color: #93a1a1; }
+[data-theme="solarized"] .hljs-params { color: #657b83; }
+[data-theme="solarized"] :is(.hljs-regexp, .hljs-deletion) { color: #dc322f; }
 
 .blockRowWrap.fileDragOver > .blockRow {
   outline: 2px dashed var(--drag-accent);
@@ -1639,7 +1691,7 @@ body {
 }
 :is(.pdfCtlBox button, .ctlBtn):disabled { opacity: 0.4; cursor: default; }
 .ctlBtnRow { display: flex; align-items: center; gap: 2px; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfCtlBox {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfCtlBox {
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 .pdfZoomOverlay {
@@ -1679,7 +1731,7 @@ body {
 }
 .pdfPageWidget input:focus { color: var(--accent); }
 .pdfPageTotal { margin-left: 3px; white-space: nowrap; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfPageWidget { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfPageWidget { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 
 /* The floating status pill — the app's single transient-message surface
    (status messages, PDF load progress, load errors), anchored top-center of
@@ -1747,7 +1799,7 @@ body {
   border-radius: 8px;
   padding: 6px 4px;
 }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfOutlinePanel { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfOutlinePanel { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 
 .pdfOutlineRow {
   display: flex;
@@ -2645,8 +2697,11 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   overflow-y: auto;
 }
 
-/* pseudo-fullscreen (iOS has no Fullscreen API): hide the app chrome and let
-   the work area take the whole screen; the viewer's own ⛶ button exits */
+/* App fullscreen is the fallback when native fullscreen is unavailable.
+   Confine overscroll to the app; the viewer's fullscreen button or Esc exits. */
+html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; overscroll-behavior: none; }
+.app.pseudoFullscreen { position: fixed; inset: 0; height: 100dvh; overscroll-behavior: none; }
+.app.pseudoFullscreen .pdfViewer { overscroll-behavior: none; }
 .app.pseudoFullscreen .topbar,
 .app.pseudoFullscreen .phoneBottomBar,
 .app.pseudoFullscreen .status { display: none !important; }
@@ -3591,8 +3646,36 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   cursor: pointer;
 }
 .chatToolActionHead.plain { cursor: default; }
-/* A reply's link to one of the user's pages (/?page=<id>) opens in place. */
-.chatPageLink { font-weight: 600; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+/* Compact source cards stay inline with a reply, including short PDF citations. */
+.chatLinkCard {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 3px 7px;
+  margin: 2px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  color: var(--accent);
+  font-size: 0.92em;
+  font-weight: 600;
+  line-height: 1.4;
+  text-decoration: none;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+.chatLinkCard:hover {
+  background: var(--accent-bg-light);
+  border-color: var(--accent);
+}
+.chatLinkCard:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.chatLinkCard > svg { flex: none; }
+.chatLinkLabel { min-width: 0; overflow-wrap: anywhere; }
 .chatToolActionHead:hover:not(.plain) { color: var(--text); }
 .chatToolAction.err .chatToolActionHead { color: var(--danger); }
 .chatToolActionHead svg { flex: none; }
@@ -3859,8 +3942,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .pdfViewer.pdfDark { background: #181818; color-scheme: dark;
   --scrollbar-thumb: var(--scrollbar-thumb-dark);
   --scrollbar-thumb-hover: var(--scrollbar-thumb-dark-hover); } /* dark surround + scrollbar even in the light theme */
-.pdfViewer.pdfDark .pdfPageWrap { background: #101010 !important; }
-.pdfViewer.pdfDark .pdfPageWrap > canvas { filter: invert(0.94) hue-rotate(180deg); }
+.pdfViewer.pdfDark .pdfPageWrap { background: #0f0f0f !important; }
+.pdfViewer.pdfDark .pdfPageCanvas { filter: invert(0.94) hue-rotate(180deg); }
 .pdfViewer.pdfDark .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }
 
 /* Eye-comfort theme: tint the PDF page to the same warm paper as the
@@ -3872,8 +3955,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
    find-mark overlays sit above and keep their own multiply.
    :not(.pdfDark) — "Flip page colors" is the stronger, explicit choice and
    wins when both are on. !important beats pdfViewer.jsx's inline background. */
-:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) { background: var(--bg-deeper); }
-:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap {
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) { background: var(--bg-deeper); }
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap {
   background: var(--pdf-paper) !important;
   isolation: isolate;
 }
@@ -3883,7 +3966,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
    ground itself (~#2e2c29, about 12.6:1 - the "charcoal not pure black"
    eye-strain guidance) without a contrast() filter, which would darken the
    paper too. Figures fade toward paper by the same 18%, a mild wash. */
-:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap > canvas { mix-blend-mode: multiply; opacity: 0.82; }
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageCanvas { mix-blend-mode: multiply; opacity: 0.82; }
 
 /* --- AI translated view (overlay over the original text runs) ---
    The layer sits between the canvas and the text layer: each block is an
@@ -3936,12 +4019,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
    caret, and a landed paragraph fades in. Original text stays readable
    under the wash — only real translated text masks it. */
 .pdfTransPending { position: absolute; inset: 0; }
-.pdfTransPendingLine {
+.pdfTransPendingLine, .pdfCitationMark {
   position: absolute;
   border-radius: 2px;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
-.pdfTransPending.busy .pdfTransPendingLine {
+.pdfTransPending.busy .pdfTransPendingLine, .pdfCitationMark {
   background: linear-gradient(90deg,
     color-mix(in srgb, var(--accent) 10%, transparent) 0%,
     color-mix(in srgb, var(--accent) 32%, transparent) 50%,
@@ -3982,8 +4065,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .pdfViewer.pdfDark .pdfTransText { color: #c9c9c9; }
 /* Same for the eye-comfort ground: the masks are opaque divs above the
    canvas, so the page tint's blend never reaches them. */
-:is([data-theme="sepia"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
-[data-theme="sepia"] .pdfViewer:not(.pdfDark) .pdfTransText { color: #2e2c29; }
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
+:is([data-theme="sepia"], [data-theme="solarized"]) .pdfViewer:not(.pdfDark) .pdfTransText { color: #2e2c29; }
 [data-theme="gray"] .pdfViewer:not(.pdfDark) .pdfTransText { color: #2c2c2c; }
 /* Alt held = peek at the original (class set by the viewer). */
 .pdfViewer.transPeek .pdfTransLayer { visibility: hidden; }
@@ -4140,8 +4223,8 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   white-space: nowrap;
 }
 .blockLinkChip:hover { background: var(--accent-dark); border-color: #4a8abf; color: #fff; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .blockLinkChip { background: #e3effa; color: #2b6bcb; border-color: #b5d2ee; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .blockLinkChip:hover { background: #cfe3f7; color: #1d5ab3; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .blockLinkChip { background: #e3effa; color: #2b6bcb; border-color: #b5d2ee; }
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .blockLinkChip:hover { background: #cfe3f7; color: #1d5ab3; }
 
 /* --- cursor-positioned context menu (shared surface recipe) --- */
 .ctxMenu {
@@ -4390,12 +4473,48 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .confirmHead .settingText { gap: 4px; }
 /* Equal-width actions so Cancel and the confirm button read as a pair. */
 .reportModalBtns .uiBtn { min-width: 84px; }
-/* Export dialog: rows are the shared settingRow, so it only needs a width and
-   a little air between the switches and the buttons. */
-.exportModal { width: min(460px, calc(100vw - 32px)); gap: 4px; }
-.exportModal .reportModalTitle { margin-bottom: 4px; }
-.exportModal .reportModalHint { margin-top: 6px; }
-.exportModal .reportModalBtns { margin-top: 8px; }
+/* Import/export: shared dialog, choices and switches arranged as a two-step
+   flow. The paper illustrations below are decorative output examples. */
+.transferModal { width: min(740px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); padding: 20px; }
+.transferModal .settingsDialogContent { display: flex; flex-direction: column; overflow: hidden; }
+.transferProgress { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding-bottom: 14px; color: var(--text-muted); font-size: 11px; flex-shrink: 0; }
+.transferProgress [aria-current] { color: var(--accent); font-weight: 600; }
+.transferStep { min-height: 0; overflow-y: auto; padding: 3px; }
+.transferStep h2 { font-size: 17px; font-weight: 600; margin: 0 0 8px; color: var(--text-primary); }
+.transferStep h2:focus { outline: none; }
+.transferStep > .reportModalHint { margin: 0 0 14px; }
+.transferFormatRow { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 12px; align-items: start; margin-bottom: 12px; }
+.transferFormatRow h3 { margin: 16px 0 0; font-size: 12px; color: var(--text-secondary); }
+.transferFormats .setPictureChoices { grid-template-columns: repeat(var(--picture-columns), minmax(0, 1fr)); gap: 8px; padding: 2px; }
+.transferFormats .setPictureChoice.uiBtn { flex-direction: column; align-items: stretch; min-height: 172px; padding: 10px; gap: 8px; }
+.transferFormats .setPictureName { font-size: 13px; }
+.transferFormats .setPictureHint { font-size: 10.5px; line-height: 1.4; display: block; }
+.transferFormats .setPictureCaption { gap: 5px; padding-right: 0; }
+.transferFormats .setPictureName { padding-right: 16px; }
+.transferFormats .formatIllustration { display: grid; place-items: center; width: 100%; height: 68px; flex: 0 0 68px; }
+.transferFormatRowWide .setPictureChoice.uiBtn { flex-direction: row; align-items: center; min-height: 106px; gap: 12px; }
+.transferFormatRowWide .formatIllustration { width: 68px; }
+.transferFormatRowWide .setPictureCaption { flex: 1; min-width: 0; padding-right: 16px; }
+.transferReview { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 22px; align-items: center; margin: 14px 0; padding: 16px; border: 1px solid var(--border-subtle); border-radius: var(--radius-surface); }
+.transferControls { min-width: 0; }
+.transferControls .setRow { grid-template-columns: 28px minmax(0, 1fr) auto; margin: 5px 0; }
+.transferControls .setRow > .settingText { grid-column: 2; grid-row: 1; padding-right: 0; }
+.transferControls .setRow > .switch { grid-column: 3; grid-row: 1; }
+.transferFooter { flex-shrink: 0; padding-top: 14px; margin-top: 14px; border-top: 1px solid var(--border-subtle); align-items: center; }
+.transferHelp { font-size: 12px; color: var(--text-secondary); }
+.transferHelp summary { cursor: pointer; padding: 6px 0; }
+.transferModal :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 620px) {
+  .transferModal { padding: 14px; width: calc(100vw - 20px); max-height: calc(100dvh - 20px); }
+  .transferFormatRow { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .transferFormatRow h3 { margin-top: 4px; }
+  .transferFormats .setPictureChoices { grid-template-columns: repeat(min(var(--picture-columns), 2), minmax(0, 1fr)); }
+  .transferFormatRowWide .setPictureChoices { grid-template-columns: minmax(0, 1fr); }
+  .transferReview { grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 12px; }
+  .transferPreview { width: min(260px, 100%); justify-self: center; }
+  .transferControls .setRow:has(> .switch) > .settingText { padding-right: 0; }
+  .transferControls .setRow > .switch { grid-column: 3; }
+}
 /* Import dialog's Zotero walkthrough: reuses the settings wizard's .setStep.
    The left padding tucks the number circles under the rows' icon column so the
    step titles line up with the row labels above (8px pad + 28px icon + 11px
@@ -4557,7 +4676,37 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 }
 .inkLayer { z-index: 2; overflow: visible; }
 .inkCanvas { z-index: 5; display: none; }
-.pdfViewer.pdfDark .inkLayer { filter: invert(1) hue-rotate(180deg); }
+.pdfViewer .pdfPageWrap.inkHovering, .pdfPageWrap.inkHovering .textLayer { cursor: none; }
+.inkCursor {
+  display: none; position: absolute; z-index: 8; pointer-events: none;
+  transform: translate(-50%, -50%); border: 1px solid #fff; border-radius: 50%;
+  box-sizing: border-box; box-shadow: 0 0 0 1px #222;
+}
+.inkCursor span { position: absolute; left: 50%; top: 50%; width: 2px; height: 2px;
+  transform: translate(-50%, -50%); border-radius: 50%; background: #222; box-shadow: 0 0 0 1px #fff; }
+.inkCursor[data-tool="eraser"] { background: #ffffff18; }
+.inkTransformHandle {
+  position: absolute; z-index: 7; width: 28px; height: 28px; padding: 5px;
+  border-radius: 50%; border: 1px solid #508cff; background: var(--bg-elevated); color: var(--text-primary);
+  touch-action: none; display: grid; place-items: center;
+}
+.inkTransformHandle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; }
+.inkTransform-resize { transform: translate(0, 0); cursor: nwse-resize; }
+.inkTransform-rotate { transform: translate(0, -100%); cursor: grab; }
+.inkTransform-rotate:active { cursor: grabbing; }
+.inkTransformHandle:focus-visible { outline: 2px solid #508cff; outline-offset: 2px; }
+.inkTooltip { position: fixed; z-index: 10001; pointer-events: none; width: max-content; max-width: min(280px, calc(100vw - 16px));
+  padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated);
+  color: var(--text-primary); font-size: 12px; line-height: 1.4; box-shadow: 0 2px 8px #0003; }
+.inkSelectionHit { position: absolute; z-index: 4; touch-action: none; cursor: move; }
+.inkEditMenu { width: 310px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; }
+.inkEditRow, .inkEditOptions { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; }
+.inkEditRow .ctlBtn { flex: 1; min-width: 36px; min-height: 36px; }
+.inkEditRow .inkDeleteBtn { color: var(--danger); }
+.inkEditOptions { border-top: 1px solid var(--border); margin-top: 4px; }
+.inkEditOptions { align-items: center; }
+.inkEditOptions .ctlBtn, .inkEditOptions .colorBtn { min-width: 32px; min-height: 32px; }
+.pdfViewer.pdfDark .inkLayer, .pdfViewer.pdfDark .inkCanvas { filter: invert(1) hue-rotate(180deg); }
 /* The brief outline after a jump from the notes. */
 .inkFlash {
   fill: none;
@@ -4588,7 +4737,7 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   width: max-content;              /* not shrink-to-fit: left: 50% would clamp it to half the viewer */
   max-width: calc(100% - 120px);
 }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"]) .pdfInkBar {
+:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfInkBar {
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 .pdfInkRow, .pdfInkSub {

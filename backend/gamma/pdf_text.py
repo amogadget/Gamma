@@ -87,17 +87,17 @@ def extract_pages(src, max_pages: int = MAX_PAGES) -> list[str]:
 
 
 def extract_text(src, char_limit: int, empty_page_cap: int = 50,
-                 start_page: int = 1) -> str:
+                 start_page: int = 1, label_pages: bool = False) -> str:
     """Concatenated text for AI context. Stops early once char_limit is
     gathered, or after empty_page_cap consecutive textless pages — a scanned
     book shouldn't cost a full parse just to learn it has no text.
     start_page (1-based) skips the pages before it, so a read can jump
     straight to where a search hit landed."""
-    return extract_text_pages(src, char_limit, empty_page_cap, start_page)[0]
+    return extract_text_pages(src, char_limit, empty_page_cap, start_page, label_pages)[0]
 
 
 def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
-                       start_page: int = 1) -> tuple[str, int]:
+                       start_page: int = 1, label_pages: bool = False) -> tuple[str, int]:
     """extract_text plus how many PDF pages the text spans (counted from
     start_page, empty pages included) — what the chat's coverage report
     tells the user: "pages 1–9 of 22"."""
@@ -107,6 +107,8 @@ def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
             pages += 1
             if t.strip():
                 empties = 0
+                if label_pages:
+                    t = f"[PDF page {start_page + pages - 1}]\n{t}"
                 parts.append(t)
                 total += len(t)
                 if total >= char_limit:

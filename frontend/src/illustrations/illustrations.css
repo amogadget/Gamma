@@ -1,0 +1,33 @@
+/* Decorative illustration styles. Widget and dialog layouts stay with their owners. */
+.formatIllustration { color: var(--text-secondary); }
+.formatIllustration svg { width: 48px; height: 48px; }
+.formatAppIcon { width: 48px; height: 48px; background: currentColor; mask: var(--app-icon) center / contain no-repeat; -webkit-mask: var(--app-icon) center / contain no-repeat; }
+.formatAppImage { width: 48px; height: 48px; object-fit: contain; filter: grayscale(1); }
+.transferPreview { margin: 0; min-width: 0; }
+.transferPreview figcaption { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+.transferPaper { position: relative; min-height: 310px; padding: 22px 18px 32px; border: 1px solid #ddd; border-radius: 3px; background: #fff; color: #39444b; font-size: 11px; line-height: 1.55; }
+.transferPaperTitle { font-size: 15px; font-weight: 600; line-height: 1.3; }
+.transferPaperByline { margin: 6px 0 22px; color: #77818a; font-size: 9px; }
+.transferPaperLines { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.transferPaperLines i { width: 100%; height: 3px; background: #d9dfe3; border-radius: 2px; }
+.transferPaperLines i:nth-child(2) { width: 86%; }
+.transferPaperLines i:last-child { width: 72%; }
+.transferPaperFigure { position: relative; width: 108px; height: 60px; margin: 12px auto; }
+.transferPaperFigure i { position: absolute; top: 0; width: 54px; height: 54px; border-radius: 50%; background: #bdd3de; }
+.transferPaperFigure i:nth-child(2) { left: 30px; background: #dec9a9; opacity: .8; }
+.transferPaperFigure i:last-child { left: 66px; border-radius: 0; background: #779cb4; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.transferQuote { margin: 14px 0; padding-left: 9px; border-left: 3px solid #e4bd52; }
+.transferQuote small { display: block; font-size: 8px; color: #7a7060; margin-bottom: 4px; }
+.transferQuote mark { color: #39444b; background: #fff0b6; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.transferNote { margin: 12px 0; display: flex; flex-direction: column; gap: 4px; }
+.transferNote strong { font-size: 10px; }
+.transferMarginNote { padding: 8px; border-left: 2px solid #83a6bf; background: #f0f5f8; }
+.transferPageNumber { position: absolute; bottom: 12px; left: 50%; color: #89949c; font-size: 9px; }
+.transferFiles { display: flex; align-items: flex-start; gap: 8px; margin-top: 10px; color: var(--text-muted); font-size: 10px; line-height: 1.4; }
+.transferFiles > svg { flex-shrink: 0; margin-top: 2px; }
+.transferFiles > div { display: flex; flex-direction: column; gap: 3px; }
+.transferFiles strong { font-weight: 500; color: var(--text-secondary); }
+.transferPreviewExtra { font-size: 10px; color: var(--text-muted); margin-top: 8px; }
+.appearancePdfPaper { fill: var(--pdf-paper, #fff); stroke: var(--border); }
+.appearancePdfPreview.isDark { color: #efefef; }
+.appearancePdfPreview.isDark .appearancePdfPaper { fill: #101010; stroke: #383838; }

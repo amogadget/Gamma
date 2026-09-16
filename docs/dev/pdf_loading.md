@@ -105,6 +105,42 @@ compares one (at 20 Mbps, 0.6 to 0.85 s of every open — the research note has
 the measurement). The static route in `gamma/app.py` compares the ETag
 itself, so the unhashed files (`index.html`, favicons) get a real 304.
 
+## High zoom and touch scrolling
+
+`canvasSize.js` bounds PDF and live-ink backing stores to 8 Mi pixels and
+4096 pixels per edge. Normal zoom retains supersampling; at 400% or on
+oversized pages, raster resolution can fall below one device pixel per CSS
+pixel. Page layout, text, links and SVG annotations keep the exact requested
+zoom. This replaces the old 32-million-pixel PDF budget (about 128 MB per
+page) and uncapped ink previews. WebKit has documented both
+[canvas area limits](https://bugs.webkit.org/show_bug.cgi?id=171238) and
+[total canvas allocation failures](https://bugs.webkit.org/show_bug.cgi?id=195325);
+the cap is conservative across devices, including iPads reporting a Mac user agent.
+
+The page observer stays connected to the PDF scroller, with 900 CSS pixels
+of look-ahead. Pages outside it release their canvas backing store while
+retaining geometry, text and annotations; returning pages repaint. Forced
+rendering for jumps still works. Effect cleanup cancels pending PDF renders,
+and unmount explicitly releases the canvas rather than waiting for GC.
+
+`verticalScrollSnap.js` implements always-on vertical scroll alignment (the
+old `gamma-snap-vertical` preference is ignored). It judges
+one-finger direction after 8 CSS pixels, with a 30-degree vertical cone.
+It never sets scroll offsets during touch or native momentum: after
+`scrollend`, it gently corrects horizontal drift once. Older browsers use
+250 ms of quiet scrolling after finger lift. Diagonal starts, deliberate
+sideways turns, second contacts, cancelled gestures, keyboard/wheel input,
+zoom changes and teardown cancel pending alignment. Reduced motion uses an
+instant correction. This avoids fighting WebKit's native scroll animation
+([WebKit issue](https://bugs.webkit.org/show_bug.cgi?id=255193)).
+
+`tests/e2e/scenarios/pdfTouch.mjs` checks 400% rendering under an emulated
+canvas allocation limit, distant-page release/repaint, live ink, and native
+Chromium touch swipes without mid-gesture offset writes. Rendering also runs
+in Playwright WebKit; physical iPad GPU limits and momentum still need a
+device check. Unit tests cover canvas bounds and snap timing/cancellation,
+including the older-Safari fallback.
+
 ## Load phases
 
 The viewer reports each phase to the host (`onLoadState`), which drives the
