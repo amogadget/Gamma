@@ -147,6 +147,20 @@ never creates pages or touches a page's attachment. `GET /pages/{id}/export*` li
 in `export.py`.
 
 ### PDFs & uploads (`pdf.py`, `uploads.py`, `shares.py`)
+
+Publisher connections use `routers/publisher_sessions.py` and require a personal
+account; guest and share-token access is rejected.
+
+| Method | Endpoint | Behavior |
+|---|---|---|
+| GET | `/publisher-sessions` | Connection metadata and supported `publisher_roots`; never cookie values |
+| POST | `/publisher-sessions` | Save `{host, cookies}` for the signed-in account; requires HTTPS or localhost, JSON, and a body of at most 256 KiB |
+| DELETE | `/publisher-sessions/{host}` | Disconnect that account's host; returns `{ok: true}` |
+
+See [publisher sessions](paper_metadata.md#connected-publisher-sessions) for
+encryption, expiry and request scoping. The PDF endpoints below use the same
+guarded fetch path.
+
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/resolve-pdf` | URL/arXiv/DOI → fetchable PDF (citation_pdf_url sniffing, Unpaywall OA fallback) |

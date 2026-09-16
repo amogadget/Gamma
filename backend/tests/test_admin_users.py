@@ -107,9 +107,13 @@ def test_grant_and_revoke_admin(boss):
 
 
 def test_lockout_rails(boss):
-    # the startup-seeded 'admin' also holds the privilege — demote it so boss
-    # is the last admin, then the rails must hold
-    assert boss.put("/api/admin/users/admin", json={"is_admin": False}).status_code == 200
+    # the startup-seeded 'admin' holds the privilege too, and so may admins
+    # made by other test files sharing this worker's data dir — demote every
+    # one of them so boss is the last admin, then the rails must hold
+    users = boss.get("/api/admin/users").json()["users"]
+    for u in users:
+        if u["is_admin"] and u["username"] != "boss":
+            assert boss.put(f"/api/admin/users/{u['username']}", json={"is_admin": False}).status_code == 200
     assert boss.put("/api/admin/users/boss", json={"is_admin": False}).status_code == 400
     assert boss.delete("/api/admin/users/boss").status_code == 400  # also self-delete
     # guest is untouchable

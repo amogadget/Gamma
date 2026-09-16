@@ -28,25 +28,22 @@ Five everyday destinations are defined by `PREFERENCE_NAV` in
 [settings.jsx](../../frontend/src/settings.jsx):
 
 - **Appearance**: theme choices and dark PDF pages (account-synced), control
-  size and status bar (this browser). Implemented in
+  size and status bar (this browser).
   [settingsAppearance.jsx](../../frontend/src/settingsAppearance.jsx): six
-  compact theme cards with abstract palette previews beside short descriptions, a PDF
-  sample that follows the page tint and dark-page switch, and grouped interface
-  controls. Theme cards use shared `uiBtn`/`on` states and wrap into two columns
-  on narrow screens, where descriptions move to tooltips. Appearance rows have
-  no hover fill and its buttons have no shadow. Changes apply immediately.
-- **Reading & editing**: imported annotations, the
-  handwriting input rules (stylus draws right away, fingers never draw,
-  pressure), translation shortcut and language, Enter behavior and search
-  expansion. Vertical scroll alignment and note badges on highlights are
-  always enabled; their old browser preferences are ignored.
+  theme cards (`PictureChoices`) with palette sketches and short
+  descriptions, a PDF sample that follows the page tint and the dark-page
+  switch, and the interface controls. Cards wrap into two columns on narrow
+  screens, where the descriptions move to tooltips. The rows have no hover
+  fill.
+- **Reading & editing**: imported annotations, the handwriting input rules
+  (stylus draws right away, fingers never draw, pressure), translation
+  shortcut and language, Enter behavior and search expansion. Vertical
+  scroll alignment and note badges on highlights are always on; their
+  former keys `gamma-snap-vertical` and `gamma-hl-note-badge` are ignored.
 - **Library**: thumbnails, folder/label display, metadata lookup, open-access
   fallback and saving external PDFs. These are browser preferences. Display
-  uses one large live `PageCard` sample and three switches for thumbnails,
-  folders and labels. Each switch updates the corresponding element in the
-  sample and the actual library immediately. The two chip switches map to the
-  existing four folder/label modes. The card and switches retain their shared
-  widget styling, including hover effects. Implementation:
+  is one live `PageCard` beside three switches (thumbnails, folders, labels);
+  the two chip switches map onto the four `fileLabels` modes.
   [settingsLibraryDisplay.jsx](../../frontend/src/settingsLibraryDisplay.jsx).
 - **AI**: opens a second-level sidebar with Connections & models, Assistant,
   Advanced and Prompts. Assistant contains permissions and context presets;

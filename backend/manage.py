@@ -153,6 +153,7 @@ def delete_user(username):
     deleted = workspaces.delete_account_workspaces(username)
     with connect_users_db() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        conn.execute("DELETE FROM publisher_sessions WHERE username = ?", (username,))
         conn.commit()
     print(f"Deleted user '{username}'" + (f" and workspace(s) {', '.join(deleted)}" if deleted else ""))
 

@@ -6,8 +6,8 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
-import { ExternalLinkIcon, FileTextIcon, PinIcon } from "./icons";
-import { assetUrl } from "./utils";
+import { CheckIcon, CopyIcon, ExternalLinkIcon, FileTextIcon, PinIcon } from "./icons";
+import { assetUrl, copyText } from "./utils";
 import { parsePdfCitation } from "./pdfCitation.js";
 import { ExportDialog, ImportDialog } from "./importExport";
 
@@ -57,6 +57,7 @@ function fragmentToMarkdown(node, ctx = {}) {
   }
   if (node.nodeType !== Node.ELEMENT_NODE) return "";
   const el = node;
+  if (el.hasAttribute("data-markdown-copy-ignore")) return "";
   if (el.classList.contains("katex-display")) {
     const tex = el.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
     return tex != null ? `\n\n$$\n${tex.trim()}\n$$\n\n` : el.textContent;
@@ -127,8 +128,45 @@ function handleMarkdownCopy(e) {
   if (!md) return;
   e.preventDefault();
   e.clipboardData.setData("text/plain", md);
+  holder.querySelectorAll("[data-markdown-copy-ignore]").forEach((el) => el.remove());
   e.clipboardData.setData("text/html", holder.innerHTML);
 }
+
+// Copy the contents of a code/prompt block without its surrounding reply or
+// outer Markdown markers. Read the live DOM so streaming updates are included.
+function ChatCopyBlock({ as: Tag, children }) {
+  const contentRef = useRef(null);
+  const [copied, flashCopied] = useCopied();
+  const [failed, setFailed] = useState(false);
+  const isCode = Tag === "pre";
+  async function copyContent() {
+    const el = contentRef.current;
+    if (!el) return;
+    const text = isCode
+      ? (el.querySelector("code")?.textContent || "").replace(/\n$/, "")
+      : Array.from(el.childNodes).map((n) => fragmentToMarkdown(n)).join("").replace(/\n{3,}/g, "\n\n").trim();
+    const ok = await copyText(text);
+    setFailed(!ok);
+    if (ok) flashCopied();
+  }
+  return (
+    <div className={`chatCopyBlock ${isCode ? "chatCopyCode" : "chatCopyQuote"}`}>
+      <div className="chatCopyTools" data-markdown-copy-ignore="">
+        <button type="button" className="chatCopyButton" onClick={copyContent}
+          aria-label={isCode ? "Copy code" : "Copy quoted text"}
+          title={failed ? "Copy failed — select the text and press Ctrl+C" : "Copy only this block's content"}>
+          {copied ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
+          <span aria-live="polite">{failed ? "Try again" : copied ? "Copied" : "Copy"}</span>
+        </button>
+      </div>
+      <Tag ref={contentRef}>{children}</Tag>
+    </div>
+  );
+}
+const CHAT_COPY_COMPONENTS = {
+  pre: ({ children }) => <ChatCopyBlock as="pre">{children}</ChatCopyBlock>,
+  blockquote: ({ children }) => <ChatCopyBlock as="blockquote">{children}</ChatCopyBlock>,
+};
 
 // A link into this Gamma: "/?page=<id>" or "?block=<id>", relative or on
 // this origin. Returns the block id, else null.
@@ -149,7 +187,7 @@ function gammaPageLink(href) {
 
 // onOpenPage: opens a Gamma page link in place (the library agent links the
 // pages it found as /?page=<id>); Ctrl/Cmd-click still opens a new tab.
-const ChatMarkdown = React.memo(function ChatMarkdown({ text, onOpenPage }) {
+const ChatMarkdown = React.memo(function ChatMarkdown({ text, onOpenPage, copyBlocks = false }) {
   const normalized = useMemo(() => (text || "")
     .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `\n$$\n${m}\n$$\n`)
     .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`)
@@ -169,6 +207,7 @@ const ChatMarkdown = React.memo(function ChatMarkdown({ text, onOpenPage }) {
         rehypePlugins={[rehypeKatex]}
         urlTransform={(url) => assetUrl(defaultUrlTransform(url))}
         components={{
+          ...(copyBlocks ? CHAT_COPY_COMPONENTS : {}),
           a: ({ href, children, title }) => {
             const pageId = onOpenPage ? gammaPageLink(href) : null;
             if (pageId) {
@@ -200,6 +239,9 @@ const AutoGrowTextarea = React.forwardRef(function AutoGrowTextarea(props, forwa
   useEffect(() => {
     const el = innerRef.current;
     if (!el) return;
+    // Empty inputs use their rows height. scrollHeight also counts wrapped
+    // placeholder text, which can leave the chat tall after clearing context.
+    if (!el.value) { el.style.height = ""; return; }
     el.style.height = "0px";
     el.style.height = `${el.scrollHeight}px`;
   }, [props.value]);

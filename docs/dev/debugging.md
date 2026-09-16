@@ -102,12 +102,10 @@ npm run e2e -- --keep           # keep the temp data dir + server.log
 ```
 
 High-zoom tablet regressions: `npm run e2e -- --only "pdf touch" --keep`.
-Install WebKit with `npx playwright install webkit`, then set
-`GAMMA_E2E_BROWSER=webkit` to run the same rendering cases in that engine
-(PowerShell: `$env:GAMMA_E2E_BROWSER = "webkit"`). Chromium additionally runs
-native touch gestures through CDP; the WebKit run checks 400% PDF/ink paint
-and bitmap release using tablet dimensions and DPR 2. This is browser
-emulation, not a physical iPad performance measurement.
+`GAMMA_E2E_BROWSER=webkit` (after `npx playwright install webkit`) runs the
+suite in WebKit. Native touch gestures need Chromium's CDP, so under WebKit
+the touch scenario checks only the 400% PDF/ink paint and bitmap release at
+tablet dimensions and DPR 2. Browser emulation, not an iPad measurement.
 
 `frontend/tests/e2e/run.mjs` starts an ISOLATED backend (the project venv's
 python — or the interpreter `GAMMA_E2E_PYTHON` names — over a fresh
@@ -123,6 +121,9 @@ cookie + `X-Gamma-Workspace` for API seeding, browser contexts logged in as
 that account), `makePdf` (a small real PDF with a text layer), and `step()`.
 The scenarios live in `tests/e2e/scenarios/`:
 
+- `mentions.mjs`: paper search, keyboard and touch selection, reference limits,
+  persistence, PDF receipts and textarea shrink after clearing context. Run with `--only mentions`.
+
 - `notes.mjs`: New page → title → first block (the seed-block insert),
   Shift+Enter / Tab / Shift+Tab / Backspace, Enter as a line break vs the
   Enter-as-new-block preference, Ctrl+Z, the handle menu, todo checkboxes,
@@ -130,27 +131,32 @@ The scenarios live in `tests/e2e/scenarios/`:
   switcher. Runs in a NON-default workspace on purpose.
 - `pdf.mjs`: upload + page by attachment, the viewer's text layer, a
   highlight from a text selection (overlay, quote row, persisted position),
-  the find bar hitting page 2, the library card.
+  the find bar hitting page 2, the library card, an AI citation link
+  highlighting its quote on the cited page ([pdf_citations.md](pdf_citations.md)).
+- `transfers.mjs`: the Import and Export dialogs — format/source cards,
+  the review step and its switches, direct export for fixed formats.
 - `ink.mjs`: handwriting — the tool strip and its presets (options row,
   duplicate, remove, persistence), two mouse strokes becoming an
   ink block with an `.ink` upload, persistence across a reload, the eraser
   (by its key), stroke undo/redo, the partial eraser cutting a stroke, a
   lasso move + delete, the notes card's jump + outline, `/Ink` in the
-  exported PDF. Pen-input regressions cover coalesced sample timing,
-  pressure and lift endpoints in the uploaded file, transient prediction,
-  palm suppression during writing, palm-first pen takeover, and cleanup
-  after pointer cancellation / lost capture. Chromium's native touch/pen
-  input also verifies finger drawing without panning, pen pressure in Hand
-  mode, and finger scrolling without ink in pen-only mode. Synthetic Pencil events test
-  Safari handler ordering; physical-device latency and OS palm rejection
-  still need a real stylus and tablet.
-- `inkEditing.mjs`: direct finger selection and contextual ink editing:
-  color/width preservation of pressure/time, duplicate IDs, selective delete,
-  visible undo/redo, cross-group lasso movement with a finger in pen-only
-  mode, swipe/hold arbitration, pen resuming through a selection, small-screen
-  menu placement, and view/edit share access. Uses native Chromium touch/pen
-  input and checks the persisted stroke files. Run with `--only "ink edit:"`;
-  `--only ink` runs both handwriting scenario files.
+  exported PDF; pen input (coalesced sample timing, pressure and lift
+  endpoints in the uploaded file, transient prediction, palm suppression,
+  palm-first pen takeover, cleanup after `pointercancel` / lost capture);
+  Chromium's native touch and pen (finger drawing without panning, pen
+  pressure in Hand mode, finger scrolling without ink in pen-only mode);
+  synthetic Pencil events for Safari's handler order. Stylus latency and OS
+  palm rejection still need a real tablet.
+- `inkEditing.mjs`: tap-to-select and the selection menu — colour/width
+  edits keeping pressure and time, duplicate ids, selective delete, the
+  Undo/Redo buttons, a finger lasso-move across groups in pen-only mode,
+  swipe/hold arbitration, a pen resuming through a selection, menu placement
+  on a small screen, view/edit shares; native Chromium touch/pen, asserting
+  on the persisted stroke files. `--only "ink edit:"`; `--only ink` runs
+  both files.
+- `pdfTouch.mjs`: 400% rendering under an emulated canvas limit, distant-page
+  release/repaint, live ink, native touch swipes ([pdf_loading.md](pdf_loading.md)).
+  `--only "pdf touch"`.
 - `pdfload.mjs`: PDF loading, in a non-default workspace — the timing probe
   (a 300-page, 20 MB document opened cold at an emulated 20 Mbps, the
   IndexedDB backfill, a warm reopen, a same-tab return; reports the per-phase

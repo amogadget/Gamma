@@ -12,7 +12,7 @@ const EXPORT_CONTROLS = {
 
 function FormatChoices({ label, value, onChange, onConfirm, options }) {
   return <div className="transferFormats" role="group" aria-label={label}>
-    {["PDF", "MD", "ZIP"].map((type) => {
+    {["PDF", "Notes", "MD", "ZIP"].map((type) => {
       const group = options.filter((option) => option.category === type);
       if (!group.length) return null;
       return <section key={type} className={`transferFormatRow${group.length < 3 ? " transferFormatRowWide" : ""}`} aria-label={type}>
@@ -84,20 +84,20 @@ export function ExportDialog({ opts, setOpts, hasPdf, pdfStored, folder, onCance
           {isZotero && !bundle ? <p className="reportModalHint">Highlights travel inside PDF files. Turn on file bundling to include them.</p> : null}
         </div>
       </div>
-        {isZotero ? (
-          // Same numbered-step guide as the Zotero import dialog — the .zip
-          // trap (Zotero can't read one) is worth spelling out every time.
-          <details className="transferHelp"><summary>Open this export in Zotero</summary><div className="importSteps">
-            <Step n={1} title="Download the .zip"
-              hint={`Metadata, ${folder ? "subfolders" : "folders"} as collections, tags, notes${bundle ? `; the PDF${folder ? "s" : ""}${highlights ? " with highlights embedded" : ""} and note images` : ""}.`} />
-            <Step n={2} title="Unzip it"
-              hint="Keep the .rdf and the files/ folder together." />
-            <Step n={3} title="Import the .rdf in Zotero"
-              hint={'File → Import… → "A file" → pick the .rdf — never the .zip (Zotero calls it an unsupported format). Untick "Place imported collections… into a new collection" to skip the extra wrapper folder.'} />
-          </div></details>
-        ) : (
-          <div className="reportModalHint">{summary}</div>
-        )}
+      {isZotero ? (
+        // Same numbered-step guide as the Zotero import dialog — the .zip
+        // trap (Zotero can't read one) is worth spelling out every time.
+        <details className="transferHelp"><summary>Open this export in Zotero</summary><div className="importSteps">
+          <Step n={1} title="Download the .zip"
+            hint={`Metadata, ${folder ? "subfolders" : "folders"} as collections, tags, notes${bundle ? `; the PDF${folder ? "s" : ""}${highlights ? " with highlights embedded" : ""} and note images` : ""}.`} />
+          <Step n={2} title="Unzip it"
+            hint="Keep the .rdf and the files/ folder together." />
+          <Step n={3} title="Import the .rdf in Zotero"
+            hint={'File → Import… → "A file" → pick the .rdf — never the .zip (Zotero calls it an unsupported format). Untick "Place imported collections… into a new collection" to skip the extra wrapper folder.'} />
+        </div></details>
+      ) : (
+        <div className="reportModalHint">{summary}</div>
+      )}
     </>}
   </TransferDialog>;
 }
@@ -132,29 +132,29 @@ export function ImportDialog({ hasPdf, stripDefault, busy, onCancel, onImport })
       <div className="transferReview">
         <ImportPreview annotations strip={payload.strip} />
         <div className="transferControls">
-        <Toggle
-          icon={ScissorsIcon}
-          label="Strip the originals"
-          hint={src === "annots" ? "Rewrite the stored PDF without them" : "Rewrite the imported PDFs without them"}
-          title="Rewrite the stored file without the annotations you're importing, so only Gamma's copies remain. Off: they stay in the file and the viewer hides them."
-          checked={payload.strip}
-          onChange={setStrip}
-        />
+          <Toggle
+            icon={ScissorsIcon}
+            label="Strip the originals"
+            hint={src === "annots" ? "Rewrite the stored PDF without them" : "Rewrite the imported PDFs without them"}
+            title="Rewrite the stored file without the annotations you're importing, so only Gamma's copies remain. Off: they stay in the file and the viewer hides them."
+            checked={payload.strip}
+            onChange={setStrip}
+          />
         </div>
       </div>
-        {src === "zotero" ? (
-          // Same numbered-step guide as the add-API-key wizard.
-          <div className="importSteps">
-            <Step n={1} title="Export from Zotero"
-              hint={'File → Export Library… (or right-click a collection), format "Zotero RDF".'} />
-            <Step n={2} title="Include the files and notes"
-              hint={'Check "Export Files" and "Export Notes" — the files carry your PDFs and the annotations you made in Zotero\'s reader.'} />
-            <Step n={3} title="Zip the exported folder and pick it here"
-              hint="Papers arrive with their metadata; collections become folders, tags labels, notes blocks. Importing again updates instead of duplicating." />
-          </div>
-        ) : (
-          <div className="reportModalHint">{definition.instructions}</div>
-        )}
+      {src === "zotero" ? (
+        // Same numbered-step guide as the add-API-key wizard.
+        <div className="importSteps">
+          <Step n={1} title="Export from Zotero"
+            hint={'File → Export Library… (or right-click a collection), format "Zotero RDF".'} />
+          <Step n={2} title="Include the files and notes"
+            hint={'Check "Export Files" and "Export Notes" — the files carry your PDFs and the annotations you made in Zotero\'s reader.'} />
+          <Step n={3} title="Zip the exported folder and pick it here"
+            hint="Papers arrive with their metadata; collections become folders, tags labels, notes blocks. Importing again updates instead of duplicating." />
+        </div>
+      ) : (
+        <div className="reportModalHint">{definition.instructions}</div>
+      )}
     </>}
   </TransferDialog>;
 }

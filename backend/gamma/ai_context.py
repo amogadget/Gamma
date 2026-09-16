@@ -733,7 +733,7 @@ def gather_inputs(ws: str, payload, allow_native: bool) -> tuple[list[str], str,
         coverage.append({"title": title, "doc_id": doc_id, "native": native,
                          "native_requested": bool(payload.attach_pdf), **(cover or none)})
 
-    page_ids = [str(page) for page in (payload.pages or []) if page][:6]
+    page_ids = list(dict.fromkeys(str(page) for page in (payload.pages or []) if page))[:7]
     single = not page_ids
     with connect_pages_db(ws) as connection:
         if single:
@@ -744,15 +744,18 @@ def gather_inputs(ws: str, payload, allow_native: bool) -> tuple[list[str], str,
                 row = page_for_doc(connection, payload.doc_id)
                 page_id = row[0] if row else ""
             page_ids = [page_id] if page_id else []
-        text_budget = (payload.context_char_limit if single
-                       else max(1, payload.multi_context_char_limit // max(1, len(page_ids))))
-        total_b64 = 0
+        pages = []
         for page_id in page_ids:
             row = connection.execute(
-                "SELECT content, properties FROM unified_blocks WHERE id = ?", (page_id,),
+                "SELECT content, properties FROM unified_blocks WHERE id = ? AND parent_id = 'root'", (page_id,),
             ).fetchone()
-            if not row:
-                continue
+            if row:
+                pages.append((page_id, row))
+        # Missing/deleted references must not consume the other papers' budget.
+        text_budget = (payload.context_char_limit if single
+                       else max(1, payload.multi_context_char_limit // max(1, len(pages))))
+        total_b64 = 0
+        for page_id, row in pages:
             title = row[0] or "Untitled"
             properties = json.loads(row[1] or "{}")
             attachment = page_attachment(properties)
@@ -765,7 +768,7 @@ def gather_inputs(ws: str, payload, allow_native: bool) -> tuple[list[str], str,
                     pdf_b64s.append(data)
                     total_b64 += len(data)
                     attached = True
-            if doc_id and single:
+            if doc_id:
                 # Index the paper (background) so the map and search_library
                 # exist for the next turn — the first chat on a fresh paper
                 # otherwise runs without them for as long as the model never
@@ -775,7 +778,7 @@ def gather_inputs(ws: str, payload, allow_native: bool) -> tuple[list[str], str,
                 report(title, doc_id, True)
             elif doc_id:
                 selection = ((payload.selection or "").strip()[:MAX_SELECTION_CHARS]
-                             if single else "")
+                             if single or page_id == payload.page_id else "")
                 # With a selection, center the budget on the selected
                 # passages (located by page) instead of the start of the
                 # paper; fall back to the plain head excerpt when nothing
@@ -797,12 +800,12 @@ def gather_inputs(ws: str, payload, allow_native: bool) -> tuple[list[str], str,
                 context_sections.append(section)
                 if not doc_id:
                     report(title, "", False, {**none, "chars": len(section)})
-            # Only for a page chat with tools: the map is worth its tokens
+            # Only for a chat with tools: the map is worth its tokens
             # when the model can act on it (read_page), not in plain chat.
-            if doc_id and single and getattr(payload, "agent_scope", "") == "page":
+            if doc_id and getattr(payload, "agent_scope", "") in ("page", "folder"):
                 outline = document_map(ws, doc_id)
                 if outline:
-                    context_sections.append(outline)
+                    context_sections.append(f"Document map for Gamma page ID: {page_id}\n{outline}")
 
     names = [str(f.get("name") or "") for f in (payload.files or []) if isinstance(f, dict)]
     for index, data in enumerate(parse_files(payload.files)):

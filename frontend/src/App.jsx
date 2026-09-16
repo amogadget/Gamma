@@ -3393,8 +3393,10 @@ export default function App() {
   const inkActiveRef = useRef(null);
   const inkTimerRef = useRef(0);
   const prevInkRef = useRef({ json: "", value: [] });
-  // Stroke-level history for the strip's Ctrl+Z (entries: [{id, page,
-  // before, after}] per action) and the lasso selection {page, items}.
+  // Stroke-level history for the strip's Ctrl+Z and Undo/Redo buttons
+  // (entries: {changes: [{id, page, before, after}], label} per action;
+  // inkHistoryState mirrors the lengths for the buttons) and the lasso
+  // selection {page, items}.
   const inkHistRef = useRef({ undo: [], redo: [] });
   const [inkHistoryState, setInkHistoryState] = useState({ undo: 0, redo: 0 });
   const [inkSelection, setInkSelection] = useState(null);

@@ -108,7 +108,11 @@ always go — `include_notes` only means "also add my notes/highlights for PDF
 pages". The built-in chat system prompt frames the model as working inside
 that knowledge base and grounds claims about the pages in text actually read
 (look details up or say they're absent, never fill gaps from memory; cite a
-PDF by page number, say when something comes from the user's notes).
+PDF by page number, say when something comes from the user's notes). With a
+document in context, custom prompt or not, the citation instruction is
+appended: link a passage as `[p. N](/?page=<id>&pdf_page=N&quote=…)` using
+the `[PDF page N]` labels and the `Gamma page ID` each context section
+carries ([pdf_citations.md](pdf_citations.md)).
 
 Whatever went to the model is reported back: the stream's first line is
 `{"context": [...]}` (non-stream: a `context` field) with one entry per
@@ -136,6 +140,38 @@ text context is selection-centered instead of head-of-document:
 normalized-text match (`_locate_passage`, page-seam aware) and spends the
 budget on a small head slice plus windows starting at those pages, labeled with
 their page numbers; unlocatable selections fall back to the plain head excerpt.
+
+### Mentioning library papers
+
+`paperMentionInput.jsx` owns the picker. `paperMentions.js` owns mention text edits
+and `MAX_CHAT_REFERENCES`, shared with `chatDock.jsx`. The six-reference UI limit
+mirrors the API's seven-page limit, leaving one slot for the current page.
+Attached papers and message references use the shared flat `crumbBtn` control,
+`linkChipText` for long titles, and `uiClose` to remove context.
+
+Type `@` in the chat composer to search library titles with the same ranking,
+typo tolerance, and separator matching as library search (`librarySearch.js`).
+Arrow keys choose a result; Enter or Tab attaches it, Escape dismisses the
+query, and clicking or tapping a result also works. Results include author,
+year, venue, and folder details. A completed mention inserts the title and
+adds a removable context chip; the chip controls which page IDs are sent.
+The `+` menu offers the same library search. Up to six references can be
+attached, plus the open page, with duplicates removed.
+
+References persist for follow-up questions and are saved as `contextPages`
+on each user message. Loading a conversation restores its last references;
+editing an earlier message reuses that message's references. Each contributes
+its title, metadata, summary, and PDF excerpt (or native PDF), with optional
+notes/highlights. The multi-paper text budget is shared by valid pages; a
+selection still centers the open paper's excerpt. Tool-enabled chats also
+receive document maps labelled with page IDs.
+
+Explicit references expand `read_page`, `read_block`, and `search_library`
+access within the current workspace, even outside the original page/folder.
+They never expand the editing scope. PDF search hits identify their Gamma
+page IDs so the assistant can read further or cite the matching paper,
+including when titles are identical. References are resolved server-side;
+missing pages and non-page blocks are ignored.
 
 ### Pointing the chat at notes
 

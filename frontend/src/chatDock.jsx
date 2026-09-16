@@ -6,6 +6,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { API, apiJson, copyText, isPdfFile, readNdjson } from "./utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } from "./widgets";
+import PaperMentionInput from "./paperMentionInput";
+import { MAX_CHAT_REFERENCES } from "./paperMentions";
+import { createTitleScorer } from "./librarySearch";
+import { pageAttachment } from "./libraryUtils";
 import { MenuSelect } from "./menus";
 import { CharSlider, approxPages } from "./settingsKit";
 import { AgentToolPicker, CHAT_KIND_ROWS } from "./settings";
@@ -256,9 +260,16 @@ export default function ChatDock({
   // covering the current one.
   function showLoaded(msgs, title) {
     setChatMessages(msgs);
+    const lastUser = [...msgs].reverse().find((m) => m.role === "user");
+    const references = [...new Set((lastUser?.contextPages || []).map((p) => p.id))].slice(0, MAX_CHAT_REFERENCES);
+    setChatDocs(references);
+    setChatIncludeNotes(!!lastUser?.includeNotes);
+    setChatInput("");
     setChatTitle(title || "");
     const sent = msgs.some((m) => m.pdfDocs
-      ? (docId && m.pdfDocs.includes(docId)) || m.pdfDocs.some((d) => chatDocs.includes(d))
+      ? (docId && m.pdfDocs.includes(docId)) || m.pdfDocs.includes(focusedBlockId)
+        || (!docId && references.some((id) => m.pdfDocs.includes(id)
+          || m.pdfDocs.includes(pageAttachment(homeBlocks.find((b) => b.id === id))?.id)))
       : m.pdfs?.length);
     attachPdfManualRef.current = false;
     setAttachPdf(!sent && nativePdf);
@@ -268,6 +279,10 @@ export default function ChatDock({
   useEffect(() => {
     let cancelled = false;
     chatLoadedForRef.current = "";
+    setChatDocs([]);
+    setChatIncludeNotes(false);
+    setChatInput("");
+    setDocPicker(false);
     fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, { credentials: "include" })
       .then(r => r.ok ? r.json() : { messages: [] })
       .then(data => {
@@ -316,12 +331,20 @@ export default function ChatDock({
   }, [historyOpen, history, chatKey]);
   const activeTitle = chatTitle || deriveTitle(chatMessages) || "Untitled";
   const busyHere = chatLoading && chatLoadingKey === chatKey; // a reply is streaming into this conversation
+  // Reserve the reply's bubble before the first stream event. This placeholder
+  // is display-only; tool activity and answer text replace it in the same row.
+  const visibleMessages = busyHere && (!chatMessages.length || chatMessages.at(-1).role === "user")
+    ? [...chatMessages, { role: "ai", text: "", partial: true }]
+    : chatMessages;
   const currentPayload = () => ({ bucket: chatKey, messages: chatMessages, title: chatTitle });
 
   function newChat() {
     if (busyHere) return;
     const payload = currentPayload();
     setChatMessages([]);
+    setChatDocs([]);
+    setChatInput("");
+    setChatIncludeNotes(false);
     setChatTitle("");
     attachPdfManualRef.current = false;
     setAttachPdf(nativePdf); // new chat: first question carries the full PDF again (where the provider takes it)
@@ -481,9 +504,12 @@ export default function ChatDock({
   // Core chat send. baseMessages overrides the history (used when re-sending
   // an edited message: everything after the edited message is discarded,
   // ChatGPT-style).
-  async function sendChat(rawText, { baseMessages } = {}) {
+  async function sendChat(rawText, { baseMessages, referenceMessage } = {}) {
     const text = (rawText || "").trim();
     if (!text || chatLoading) return;
+    const selectedDocs = referenceMessage ? (referenceMessage.contextPages || []).map((p) => p.id) : chatDocs;
+    const includeNotes = referenceMessage ? !!referenceMessage.includeNotes : chatIncludeNotes;
+    if (referenceMessage) { setChatDocs(selectedDocs); setChatIncludeNotes(includeNotes); }
     const selection = pdfSelections.join("\n\n---\n\n");
     setPdfSelections([]);
     // Note chips: attached blocks go as ids (the server serves their current
@@ -501,23 +527,28 @@ export default function ChatDock({
     const quoted = [selection, ...notes.map((n) => n.text)].filter(Boolean).join("\n\n---\n\n");
     const shown = quoted ? `${text}\n\n> ${quoted.slice(0, 280)}${quoted.length > 280 ? "…" : ""}` : text;
     // Names of PDFs that ride along with THIS message (displayed in the bubble)
-    const sendingPdf = attachPdf && (chatDocs.length > 0 || !!pageAttach);
+    const contextIds = [...new Set([focusedBlockId, ...selectedDocs].filter(Boolean))];
+    const pdfPages = contextIds.flatMap((id) => {
+      const page = homeBlocks.find((b) => b.id === id);
+      const attachment = id === focusedBlockId ? pageAttach : pageAttachment(page);
+      return attachment ? [{ id: attachment.id, title: page?.content || (id === focusedBlockId ? pageTitle : "") || "Untitled" }] : [];
+    });
+    const sendingPdf = attachPdf && pdfPages.length > 0;
     const pdfNames = [
       ...files.map((f) => f.name),
-      ...(sendingPdf
-        ? (chatDocs.length
-            ? chatDocs.map((id) => homeBlocks.find((b) => b.id === id)?.content || "PDF")
-            : [pageTitle || "current page"])
-        : []),
+      ...(sendingPdf ? pdfPages.map((p) => p.title) : []),
     ];
+    const contextPages = selectedDocs.map((id) => ({ id, title: homeBlocks.find((b) => b.id === id)?.content || "Untitled" }));
     const userMsg = {
+      contextPages,
+      includeNotes,
       role: "user",
       text: shown,
       ...(images.length ? { images } : {}),
       // pdfDocs records WHICH documents rode along, so reloading the page
       // can tell whether this document was already sent in the conversation
       // (uploaded files aren't library docs — they contribute names only).
-      ...(pdfNames.length ? { pdfs: pdfNames, pdfDocs: sendingPdf ? (chatDocs.length ? [...chatDocs] : [docId]) : [] } : {}),
+      ...(pdfNames.length ? { pdfs: pdfNames, pdfDocs: sendingPdf ? pdfPages.map((p) => p.id) : [] } : {}),
     };
     const sendKey = chatKey; // reply belongs to THIS conversation, even if the user navigates away
     const showReply = (aiMsg, final) => {
@@ -570,8 +601,8 @@ export default function ChatDock({
           attach_pdf: sendingPdf,
           effort: chatEffort || "",
           system: chatSystem || "",
-          pages: chatDocs,
-          include_notes: chatIncludeNotes,
+          pages: selectedDocs.length ? contextIds : [],
+          include_notes: includeNotes,
           images,
           files,
           context_char_limit: chatContextChars,
@@ -1030,7 +1061,7 @@ export default function ChatDock({
         }}
       >
         {chatTextScale.badge}
-        {chatMessages.length === 0 ? (
+        {visibleMessages.length === 0 ? (
           <div className="chatEmpty">
             {aiInfo && !aiInfo.enabled ? (
               openAiKeysEditor ? (
@@ -1044,8 +1075,9 @@ export default function ChatDock({
               : agentIntro || "Ask AI anything, or generate a report from your pages…"}
           </div>
         ) : (
-          chatMessages.map((m, i) => {
+          visibleMessages.map((m, i) => {
             const isUser = m.role === "user";
+            const isResponding = busyHere && !isUser && m.partial && i === visibleMessages.length - 1;
             const isFindHit = chatFindOpen && chatFind.trim() && chatFindMatches[chatFindIdx] === i;
             if (editingMsg?.idx === i) {
               return (
@@ -1063,7 +1095,7 @@ export default function ChatDock({
                             const base = chatMessages.slice(0, i);
                             const text = editingMsg.text;
                             setEditingMsg(null);
-                            sendChat(text, { baseMessages: base });
+                            sendChat(text, { baseMessages: base, referenceMessage: m });
                           } else if (e.key === "Escape") { e.preventDefault(); setEditingMsg(null); }
                         }}
                       />
@@ -1075,7 +1107,7 @@ export default function ChatDock({
                             const base = chatMessages.slice(0, i);
                             const text = editingMsg.text;
                             setEditingMsg(null);
-                            sendChat(text, { baseMessages: base });
+                            sendChat(text, { baseMessages: base, referenceMessage: m });
                           }}
                           title="Re-send — replaces this message and everything after it">Send</button>
                       </div>
@@ -1137,11 +1169,20 @@ export default function ChatDock({
                         })}
                       </div>
                     ) : null}
+                    {isUser && m.contextPages?.length ? <div className="chatMsgPdfs">
+                      {m.contextPages.map((p) => <button type="button" key={p.id} className="crumbBtn" title={p.title} onClick={() => onOpenPage?.(p.id)}><BookIcon size={11} /><span className="linkChipText">{p.title}</span></button>)}
+                    </div> : null}
                     {isUser
                       ? <div className="chatUserText">{m.text}</div>
-                      : <ChatMarkdown text={m.text} onOpenPage={onOpenPage} />}
+                      : m.text ? <ChatMarkdown text={m.text} onOpenPage={onOpenPage} copyBlocks /> : null}
+                    {isResponding ? (
+                      <div className="chatThinking" role="status" aria-label={m.text ? "AI is responding" : "AI is thinking"}>
+                        <span aria-hidden="true">{m.text ? "Responding" : "Thinking"}</span>
+                        <span className="chatTyping" aria-hidden="true"><span /><span /><span /></span>
+                      </div>
+                    ) : null}
                   </div>
-                  <div className="chatMsgActions">
+                  {!isResponding ? <div className="chatMsgActions">
                     <button type="button" className="chatMsgActionBtn" title="Copy message"
                       onClick={() => copyChatMessage(i, m.text)}>
                       {copiedMsgIdx === i
@@ -1154,19 +1195,12 @@ export default function ChatDock({
                         <PencilIcon size={13} />
                       </button>
                     ) : null}
-                  </div>
+                  </div> : null}
                 </div>
               </div>
             );
           })
         )}
-        {busyHere ? (
-          <div className="chatBubbleRow ai">
-            <div className="chatBubble ai">
-              <span className="chatTyping" role="status" aria-label="AI is responding"><span /><span /><span /></span>
-            </div>
-          </div>
-        ) : null}
       </div>
       {pdfSelections.length || chatNotes?.length || cursorChip ? (
         <div className="chatSelChips">
@@ -1190,6 +1224,15 @@ export default function ChatDock({
               onRemove={() => setChatNotes?.((prev) => prev.filter((_, j) => j !== i))}
               removeTitle={n.kind === "block" ? "Detach this block" : "Remove this passage"} />
           ))}
+        </div>
+      ) : null}
+      {chatDocs.length ? (
+        <div className="chatReferenceStrip" aria-label="Attached library pages">
+          <span className="chatReferenceLabel" title="Paper details and text stay in context for follow-up questions. Notes are optional in the library picker.">Context</span>
+          {chatDocs.map((id) => <span className="chatReferenceChip" key={id}>
+            <button type="button" className="crumbBtn" title={homeBlocks.find((b) => b.id === id)?.content || "Unavailable page"} onClick={() => onOpenPage?.(id)}><BookIcon size={12} /><span className="linkChipText">{homeBlocks.find((b) => b.id === id)?.content || "Unavailable page"}</span></button>
+            <button type="button" className="uiClose uiCloseSm" aria-label={`Remove ${homeBlocks.find((b) => b.id === id)?.content || "page"} from context`} onClick={() => setChatDocs((prev) => prev.filter((p) => p !== id))}><XIcon size={11} /></button>
+          </span>)}
         </div>
       ) : null}
       {chatFiles.length ? (
@@ -1298,16 +1341,17 @@ export default function ChatDock({
             <AlertCircleIcon size={12} />
           </button>
         ) : null}
-        <AutoGrowTextarea
+        <PaperMentionInput
+          key={chatKey}
+          pages={homeBlocks} openTabs={openTabs} selected={chatDocs}
+          onAttach={(id) => setChatDocs((prev) => prev.includes(id) ? prev : [...prev, id])}
+          onSend={sendChatMessage}
           className="chatInput chatInputArea"
           rows={1}
           value={chatInput}
-          onChange={(e) => setChatInput(e.target.value)}
+          onChange={setChatInput}
           onPaste={handleChatPaste}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
-          }}
-          placeholder={
+          placeholder={(
             // Names what the message will be about, most specific attachment first.
             chatFiles.length ? `Ask about the attached file${chatFiles.length > 1 ? "s" : ""}…`
             : chatImages.length ? "Ask about the pasted figure…"
@@ -1316,9 +1360,9 @@ export default function ChatDock({
             : chatNotes?.length > 1 ? `Ask about the ${chatNotes.length} attached notes…`
             : chatNotes?.length ? (chatNotes[0].kind === "block" ? "Ask about the attached block…" : "Ask about the selected note…")
             : cursorChip ? "Ask about the block at your cursor…"
-            : chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…`
+            : chatDocs.length ? `Ask about ${chatDocs.length} attached page${chatDocs.length > 1 ? "s" : ""}…`
             : agentAsk || "Ask…"
-          }
+          ) + " (@ to mention a paper)"}
         />
         {chatLoading ? (
           <button className="uiBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">
@@ -1370,6 +1414,7 @@ export default function ChatDock({
                     <input
                       type="checkbox"
                       checked={chatDocs.includes(b.id)}
+                      disabled={!chatDocs.includes(b.id) && chatDocs.length >= MAX_CHAT_REFERENCES}
                       onChange={(e) => setChatDocs((prev) => e.target.checked
                         ? [...prev, b.id]
                         : prev.filter((id) => id !== b.id))}
@@ -1380,10 +1425,10 @@ export default function ChatDock({
                 );
                 const q = docPickerQuery.trim().toLowerCase();
                 if (q) {
-                  const words = q.split(/\s+/);
+                  const score = createTitleScorer(q);
                   const hits = pages
-                    .filter((b) => { const t = title(b).toLowerCase(); return words.every((w) => t.includes(w)); })
-                    .sort(byRecency);
+                    .filter((b) => score && score(b) > 0)
+                    .sort((a, b) => score(b) - score(a) || byRecency(a, b));
                   return hits.length
                     ? hits.map((b) => row(b))
                     : <div className="popoverHint">No pages match “{docPickerQuery.trim()}”.</div>;

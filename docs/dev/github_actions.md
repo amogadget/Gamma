@@ -1,23 +1,26 @@
 # GitHub Actions
 
-Four workflows live in `.github/workflows/`. A merge to `main` is a
-release: nothing is bumped, tagged or dispatched by hand.
+Four workflows live in `.github/workflows/`. A merge to `main` publishes
+only the Docker image. The desktop app and the extension are released by
+dispatching their workflows — the `release` skill does that — and nothing
+is bumped or tagged by hand: versions are computed from the tags.
 
 | Workflow | File | Runs when | Produces |
 |---|---|---|---|
 | `check` | `check.yml` | every pull request to `main` | pass/fail: backend pytest, frontend unit tests + build, the browser suite, extension zip (~4 min) |
-| `desktop` | `desktop.yml` | push to `main` touching `desktop/`, `backend/`, `frontend/` or the workflow itself; manual | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files → GitHub Release `v<version>`; the MSIX artifact + a Microsoft Store submission when the secrets exist; a Docker tag `<version>` |
-| `extension` | `extension.yml` | push to `main` touching `extension/` or the workflow itself; manual | `gamma-connector-<version>.zip` → GitHub Release `extension-v<version>` |
+| `desktop` | `desktop.yml` | manual dispatch only (`release` skill) | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files → GitHub Release `v<version>`; the MSIX artifact + a Microsoft Store submission when the secrets exist; a Docker tag `<version>` |
+| `extension` | `extension.yml` | manual dispatch only (`release` skill) | `gamma-connector-<version>.zip` → GitHub Release `extension-v<version>` |
 | `docker` | `docker.yml` | every push to `main`; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64 |
 
 ```
 PR → main ──▶ check (pytest, npm test + build, e2e, extension zip)   ← merge skill waits for this
-merge ───┬──▶ desktop.yml  meta: version = max(package.json, newest v* tag + patch)
-         │        build Win/mac/Linux with that version pinned, smoke on all three
-         │        publish: Release v<version> (notes = commits since previous tag)
-         │        └─▶ dispatch docker.yml -f version   ─▶ ghcr :<version> :<major.minor>
-         │        Windows leg: MSIX → msstore publish (if PARTNER_CENTER_* secrets)
-         ├──▶ extension.yml  same rule on extension-v* tags; manifest pinned inside the zip
+merge ───────▶ docker.yml  ghcr :latest                              ← the only push trigger
+release skill ─┬──▶ desktop.yml  meta: version = max(package.json, newest v* tag + patch)
+ (gh workflow  │        build Win/mac/Linux with that version pinned, smoke on all three
+  run)         │        publish: Release v<version> (notes = commits since previous tag)
+               │        └─▶ dispatch docker.yml -f version   ─▶ ghcr :<version> :<major.minor>
+               │        Windows leg: MSIX → msstore publish (if PARTNER_CENTER_* secrets)
+               └──▶ extension.yml  same rule on extension-v* tags; manifest pinned inside the zip
          └──▶ docker.yml     ghcr :latest
 ```
 
@@ -44,8 +47,9 @@ Consequences:
 
 - A version is never reused. Deleting or moving a tag is never the fix; the
   next merge is.
-- A merge with no path match releases nothing; a merge whose build fails on
-  any platform releases nothing (the publish job needs all three).
+- A merge releases nothing but the Docker `latest` image; a dispatched run
+  whose build fails on any platform releases nothing (the publish job needs
+  all three).
 - A manual run with `publish=false` builds and keeps the outputs as
   artifacts (14 days). A manual `version` input overrides the computation;
   it fails early if that tag already exists.
@@ -95,10 +99,10 @@ then runs `gh workflow run docker.yml --ref v<version> -f version=…` so the
 server image gets the same version tag (a tag made with `GITHUB_TOKEN`
 would not trigger `docker.yml` by itself).
 
-Path filter: the app bundles the backend and the frontend, so changes to
-those directories release it too. Narrow the `paths` list if that becomes
-too eager, or move the trigger to a nightly `schedule` for batched releases
-— the version logic is the same either way.
+No push trigger: the app bundles the backend and the frontend, so a path
+filter released it on nearly every merge. It now runs only when dispatched
+(`release` skill). Re-adding a `push` trigger changes nothing else — the
+version logic is the same either way.
 
 ## `extension.yml`
 
@@ -132,10 +136,10 @@ tag) it also pushes `<version>` and `<major.minor>`. Setup notes:
 ## Running and watching by hand
 
 ```bash
-gh workflow run desktop.yml --ref main                       # release (next version)
+gh workflow run desktop.yml --ref main                       # release (next version) — the `release` skill
 gh workflow run desktop.yml --ref main -f publish=false      # build check only
 gh workflow run desktop.yml --ref main -f prerelease=true -f version=1.2.0-rc1
-gh workflow run extension.yml --ref main
+gh workflow run extension.yml --ref main                     # extension release — the `release` skill
 gh workflow run docker.yml --ref v0.2.3 -f version=0.2.3     # re-tag an image
 
 gh run list --limit 5
@@ -180,5 +184,5 @@ never paste secret values into chat or files.
   "UNSIGNED build" warnings are expected until the signing secrets exist.
 - Validate YAML locally with the desktop tree's `js-yaml`
   (`node -e "require('js-yaml').load(require('fs').readFileSync(f,'utf8'))"`
-  from `desktop/`), and keep this document, the `merge` skill and
+  from `desktop/`), and keep this document, the `merge` and `release` skills and
   [desktop/docs/release.md](../../desktop/docs/release.md) in sync.

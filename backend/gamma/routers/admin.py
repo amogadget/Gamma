@@ -318,6 +318,7 @@ async def delete_user(username: str, request: Request):
     deleted = workspaces.delete_account_workspaces(username)
     with connect_users_db() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        conn.execute("DELETE FROM publisher_sessions WHERE username = ?", (username,))
         conn.commit()
         users = _user_list(conn)
     return {"users": users, "deleted_workspaces": deleted, "warning": ""}

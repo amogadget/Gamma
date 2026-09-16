@@ -7,6 +7,8 @@ Every chat has a *scope* deciding what its tools can touch:
 - ``{"type": "page", "page_id": id}`` — the per-page chat; tools reach only
   that page.
 
+``context_pages`` extends either scope for reads; mutations keep the base scope.
+
 Each TOOLS entry declares its wire spec, the Settings permission key
 (Settings → Assistant → Folder agent), the scopes it exists in, whether it
 mutates, and its executor — so arming a chat is one filter
@@ -109,6 +111,8 @@ def _scope_folder(scope: dict) -> str:
 
 
 def _page_in_scope(scope: dict, page_id: str, tags: list[str]) -> bool:
+    if page_id in (scope.get("context_pages") or []):
+        return True
     if scope.get("type") == "page":
         return page_id == scope.get("page_id")
     path = _scope_folder(scope)
@@ -133,17 +137,20 @@ def _load_scoped_page(conn, scope: dict, args: dict):
 
 
 def _scope_pages(conn, scope: dict) -> dict:
-    """{page_id: {"title", "doc_id"}} for every page the scope can reach
-    (doc_id "" when the page carries no PDF) — the one page of a page scope,
-    else the library / folder listing (blocks_store.root_pages)."""
+    """Titles and PDF ids for the base scope plus read-only context pages."""
+    page_ids = list(scope.get("context_pages") or [])
     if scope.get("type") == "page":
-        loaded, error = _load_scoped_page(conn, scope, {"page_id": scope.get("page_id")})
-        if error:
-            return {}
-        page_id, title, props, _ = loaded
-        attachment = page_attachment(props)
-        return {page_id: {"title": title, "doc_id": attachment["id"] if attachment else ""}}
-    return root_pages(conn, _scope_folder(scope))
+        pages = {}
+        page_ids.insert(0, scope.get("page_id"))
+    else:
+        pages = root_pages(conn, _scope_folder(scope))
+    for page_id in page_ids:
+        loaded, error = _load_scoped_page(conn, scope, {"page_id": page_id})
+        if not error:
+            page_id, title, props, _ = loaded
+            attachment = page_attachment(props)
+            pages[page_id] = {"title": title, "doc_id": attachment["id"] if attachment else ""}
+    return pages
 
 
 def _load_scoped_block(conn, scope: dict, block_id) -> tuple:
@@ -551,6 +558,10 @@ def _run_search_library(conn, ws: str, scope: dict, args: dict):
         return ("No pages are reachable from this chat.",
                 {"kind": "search", "summary": f"Searched library for “{query[:60]}” — no pages"})
     docs = {info["doc_id"]: info["title"] for info in pages.values() if info["doc_id"]}
+    doc_pages = {}
+    for page_id, info in pages.items():
+        if info["doc_id"]:
+            doc_pages.setdefault(info["doc_id"], []).append(page_id)
     # Local import: keep gamma.* module load free of the routers package.
     from .block_index import fts_query, refresh, search_blocks
     from .routers.search import _index_missing_async
@@ -566,7 +577,8 @@ def _run_search_library(conn, ws: str, scope: dict, args: dict):
             found.append(f'- note [{block_id}] in "{pages[page_id]["title"][:80]}" '
                          f"(page_id {page_id}): {snippet}")
         for doc_id, page, snippet in search_pdf(database, match, limit, docs):
-            found.append(f'- PDF "{docs[doc_id][:80]}" p.{page}: {snippet}')
+            found.append(f'- PDF "{docs[doc_id][:80]}" p.{page} '
+                         f'(page_id {", ".join(doc_pages[doc_id])}): {snippet}')
         return found
 
     relaxed = ""
@@ -1010,11 +1022,17 @@ def agent_system(scope: dict, perms: dict | None = None, base: str = "") -> str:
     text = (base.strip() or AGENT_PROMPT) + "\n"
     if scope.get("type") == "page":
         text += (f'This chat is about one page (page_id "{scope.get("page_id")}") — '
-                 "the tools reach only it.\n")
+                 "the tools reach it and the explicitly attached context pages below.\n")
     else:
         path = _scope_folder(scope)
         where = f'the folder "{path}"' if path else "the root of their library"
-        text += f"The user is viewing {where}; only pages in it are reachable.\n"
+        text += f"The user is viewing {where}; tools reach its pages and the explicitly attached context pages below.\n"
+    references = scope.get("context_pages") or []
+    if references:
+        text += ("The user attached these library page IDs as context: " + json.dumps(references)
+                 + ". Read and search tools can access them, including their PDF text and notes. "
+                 "Attachments outside the original page/folder scope are read-only. "
+                 "Match @ mentions to their titles and Gamma page IDs in context.\n")
     focus = scope.get("focus_block_id")
     if focus and focus != scope.get("page_id"):
         text += (f'The user\'s cursor is on note block "{focus}" (its text is in the '
@@ -1118,6 +1136,9 @@ def run_agent_tool(ws: str, scope: dict, name: str, args: dict) -> tuple[str, di
     if tool["mutating"] and not scope.get("can_write", True):
         result = "error: you can only view this workspace — no changes are possible"
         return result, tool_action("error", result[:200], name, args, result, error=True)
+    # Attaching a reference expands read access, never the editing scope.
+    if tool["mutating"]:
+        scope = {**scope, "context_pages": []}
     try:
         with connect_pages_db(ws) as conn:
             result, action = tool["run"](conn, ws, scope, args)

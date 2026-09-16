@@ -49,17 +49,14 @@ Two separate size levers, deliberately not one "zoom":
 
 ### Fullscreen on touch devices
 
-The fullscreen button uses the app's CSS fullscreen layout when the primary
-pointer is coarse (phones/tablets), and native Fullscreen API on desktop.
-This avoids Safari's browser-owned downward-swipe dismissal
-([WebKit issue](https://bugs.webkit.org/show_bug.cgi?id=227387)). App fullscreen
-hides app bars, confines overscroll, and exits through the same button or
-Escape. Browser bars may remain visible; it does not claim native fullscreen.
-Browsers without the API, or rejected native requests, use the same layout.
-The fullscreen control handles stationary touch release directly, since a
-browser may omit its compatibility click after scrolling; a following click
-is consumed so a tap cannot toggle twice. Mouse and keyboard activation keep
-the regular click path.
+The fullscreen button asks for native fullscreen first. App fullscreen
+(`.app.pseudoFullscreen` + `html.appFocusFullscreen`) is the fallback when
+the Fullscreen API is missing (iOS Safari) or rejects the request: it hides
+the app bars, confines overscroll, and exits through the same button or
+Escape. The browser's own bars may stay visible. The button handles a
+stationary touch release itself, because a mobile browser may omit the
+compatibility click after a scroll; the click that does follow is consumed
+so one tap cannot toggle twice. Mouse and keyboard keep the plain click path.
 
 ### Menus and submenus
 
@@ -112,44 +109,38 @@ are layout only. The read-only view shows the counterpart `.shareBadge`
 
 ### Show the result while editing
 
-For settings that change visible parts of a surface, show one realistic, live
-example of that surface and place its controls alongside it. Each control
-should immediately add, remove or update the corresponding element. Reuse
-the actual product component where possible so the preview stays accurate.
-Keep its shared styling and interaction states, including hover backgrounds,
-shadows and focus indicators; do not override them just because the widget
-appears in settings. Prefer layout-only CSS around existing widgets. Keep the
-preview stable while elements change, with compact controls. On small screens
-place the controls below the preview.
+A setting that changes a visible surface shows one live example of that
+surface with its controls beside it. Each control adds, removes or updates
+the matching element at once. Reuse the real product component so the
+preview stays accurate, and keep its shared styling and states (hover,
+shadow, focus). Bespoke CSS around it is layout only. On small screens the
+controls go below the preview.
 
-Library Display follows this pattern: one large `PageCard` with independent
-Thumbnails, Folders and Labels switches. Use this approach for future visual
-settings; a set of miniature alternative cards is appropriate for mutually
-exclusive palettes such as themes.
+Library Display is the model: one `PageCard` with independent Thumbnails,
+Folders and Labels switches. Mutually exclusive palettes (themes) use a set
+of miniature cards instead.
 
-Import and Export start with large format/source choices in PDF, MD and ZIP
-rows. Use recognizable app logos for app formats and shared PDF, notes and
-Markdown icons for document formats, with consistent monochrome sizing. A live illustrative
-page follows only when there are editable options. Fixed contents get no switches:
-Gamma exports directly; Logseq export shows only file bundling. Sources with no
-import options open the file picker directly, with instructions on the selection
-page. Double-click uses the same action as the footer button. The previous step
-is a keyboard-accessible `crumbBtn`, matching library breadcrumbs; returning
-preserves the chosen format and options.
-The shared `SubDialog` header provides the standard `uiClose` × control. The
-footer contains only Next or the final action; the breadcrumb handles going back.
-Format names stay short because category rows already show file types. Longer
-Zotero export instructions are expandable. Capability rules in
-`transferFormats.js` determine the controls, effective values and need for review.
-The dialogs reuse `PictureChoices`,
-`Toggle` and `SubDialog`; their previews are hand-coded React/HTML and CSS in
-`illustrations/TransferPreview.jsx` and `illustrations/illustrations.css`. These are examples of the output
-options, not renders of the current document.
+Import and Export open on format/source cards grouped by file type.
+Export uses PDF, Notes and ZIP rows; Import uses PDF, MD and ZIP rows.
+Both use app logos for app formats, the shared PDF, notes and Markdown icons
+for document formats, all monochrome at one size. A review step with a live
+illustrative page follows only when the format has editable options. Fixed
+contents get no switches (Gamma exports directly, Logseq offers only file
+bundling), and import sources without options open the file picker
+directly, with their instructions on the selection page. Double-click does
+what the footer button does. The previous step is a `crumbBtn` breadcrumb,
+as in the library, and returning keeps the chosen format and options. The
+`SubDialog` header carries the standard `uiClose` ×; the footer holds only
+Next or the final action. Card names stay short because the row names the
+file type. The rules live in `transferFormats.js`; the previews are
+hand-coded React and CSS in `illustrations/TransferPreview.jsx` and
+`illustrations/illustrations.css`, examples of the output rather than
+renders of the current document.
 
-Keep UI illustrations together in [illustrations/](../../frontend/src/illustrations/README.md),
-with one file per subject: React components for interactive drawings, SVG assets
-for fixed drawings, and a shared illustration stylesheet. Reuse existing icons
-and product widgets; keep control logic and surrounding layout in their owners.
+UI illustrations live in [illustrations/](../../frontend/src/illustrations/README.md),
+one file per subject: React components for drawings that change with
+controls, SVG files for fixed ones, and one shared stylesheet. They reuse
+existing icons and widgets; control logic and layout stay with their owners.
 
 Settings panes are built only from
 [settingsKit.jsx](../../frontend/src/settingsKit.jsx):
@@ -161,19 +152,20 @@ Settings panes are built only from
 - Larger areas (AI, workspace management and administration) get second-level
   navigation with Back to settings. Short pages keep the main sidebar. Search
   opens the relevant page and focuses the matching setting.
-- Appearance uses shared `uiBtn`/`on` theme cards with small decorative SVG
-  palette sketches beside the labels (stacked on narrow screens). Appearance
-  buttons inherit shared shadows and hover states, and its noninteractive rows suppress the shared hover fill;
-  grouped rows use straight dividers. A PDF sample reflects the current tint and dark-page
-  switch. Account and browser scopes sit beside section headings; interface
-  controls retain the shared `Row`, `Toggle` and `Stepper` primitives.
+- Appearance uses `PictureChoices` theme cards (`uiBtn` + `on`) with small
+  decorative SVG palette sketches beside the labels (stacked on narrow
+  screens). Its rows are not interactive surfaces, so they suppress the
+  shared hover fill; grouped rows use straight dividers. A PDF sample
+  reflects the current tint and dark-page switch. Account and browser scopes
+  sit beside section headings; the controls are the shared `Row`, `Toggle`
+  and `Stepper`.
 - Editor dialogs: `SubDialog` › `.settingsForm` › `Step` (numbered wizard
   stages) or `Field` (caption + hint + one control), closed by a
   `.reportModalBtns` footer. Pass the draft to `SubDialog` so unsaved edits are
   protected on Cancel, Escape and backdrop clicks.
 - Shared controls: `Segmented` (joined pills for exclusive choices),
-  `PictureChoices` (compact illustrated theme choices for Appearance,
-  with a shared flat selected state and decorative SVG previews),
+  `PictureChoices` (illustrated cards for one exclusive choice: the theme
+  cards, the import/export format cards; `onConfirm` fires on double-click),
   `ToggleGroup` (its multi-select counterpart: a wrapping row of small
   icon + short-name chips, each an independent on/off — `uiBtn sm` with the
   shared `on` state; the agent's per-tool permissions in Settings and in the
@@ -204,13 +196,14 @@ inverts the PDF canvas (`.pdfDark`), swaps highlight blending from multiply
 to screen, and darkens the scroller surround.
 
 **Sepia**, **Solarized Light**, and **Gray** are the eye-comfort modes and the themes that reach
-the PDF page as well as the chrome. Sepia retains its original warm beige
-surfaces and darker teal text (`#073642`). Solarized Light (`solarized`) follows
+the PDF page as well as the chrome. Sepia: warm beige surfaces and dark teal
+text (`#073642`). Solarized Light (`solarized`) follows
 [VS Code's Solarized Light](https://github.com/microsoft/vscode/blob/main/extensions/theme-solarized-light/themes/solarized-light-color-theme.json):
-cream content surfaces (`#fdf6e3`), surrounding chrome (`#eee8d5`), muted
-blue-gray text (`#657b83`), and the original Solarized accents. The desktop
-shell and first-paint background use the same palette. Code highlighting
-uses Solarized token colors. PDF ink retains its separate softening:
+cream content surfaces (`#fdf6e3`), `#eee8d5` chrome, blue-gray text
+(`#657b83`), the stock Solarized accents and Solarized `.hljs-*` token
+colors; the desktop shell (`desktop/ui/theme.css`, `desktop/main.js`) and the
+`index.html` first-paint background carry the same palette. All three tint
+the PDF page the same way:
 `[data-theme="sepia"] .pdfViewer:not(.pdfDark)` tints the page by giving the
 page wrapper the `--pdf-paper` ground and letting the canvas `multiply` onto
 it. Multiply, not a `sepia()`/`hue-rotate` filter: white paper lands exactly
@@ -223,8 +216,7 @@ neutral counterpart — the same machinery driven by different tokens
 users who want the glare cut without a color cast; the PDF rules select
 `:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`, so a new tinted theme only
 needs a token block plus membership in those lists. The tint needs no prop — `data-theme` is global, so it is pure CSS
-— and "Flip page colors" wins when both are on. Light-ground rules that were
-`[data-theme="light"] …` are now
+— and "Flip page colors" wins when both are on. Light-ground rules select
 `:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`;
 extend that list, don't add another copy.
 
@@ -248,10 +240,15 @@ extend that list, don't add another copy.
 | `collab.js`, `blockOps.js`, `presence.jsx` | the live session (ops out, ops + presence in), the pure tree diff/apply, the avatar stack / row chips ([collab.md](collab.md)) |
 | `prefs.js` | every localStorage preference (`useAppPrefs`) |
 | `settings.jsx` + `settingsKit/Ai/Users/Workspace/WorkspacesAdmin/Backups/Server.jsx` | the Settings dialog (`settingsKit` holds the shared primitives incl. `AccountPicker`, the search-box-over-account-rows people picker, and `LogBox`) |
+| `settingsAppearance.jsx`, `settingsLibraryDisplay.jsx` | the Appearance pane (theme cards + PDF sample) and Library › Display (a live `PageCard` beside its switches) ([settings.md](settings.md)) |
+| `importExport.jsx`, `transferFormats.js`, `illustrations/` | the Import/Export dialogs, their format/source rules (`resolveExport` / `resolveImport`) and the decorative previews ([import_export.md](import_export.md)) |
+| `pdfCitation.js`, `pdfCitationOverlay.jsx` | an AI reply's citation link → the quoted passage highlighted on the cited PDF page ([pdf_citations.md](pdf_citations.md)) |
+| `canvasSize.js`, `verticalScrollSnap.js` | the canvas backing-store cap and the one-finger vertical scroll alignment ([pdf_loading.md](pdf_loading.md)) |
 | `chatDock.jsx` | the AI chat panel (incl. agent wiring); header = a `.ctlBtnRow` of `.ctlBtn` icon buttons (the PDF zoom column's buttons laid flat) with the ⚙ settings popover |
 | `pdfViewer.jsx` | the custom pdf.js viewer |
-| `ink.js`, `inkStore.js`, `inkLayer.jsx` | handwriting ([handwriting.md](handwriting.md)): the stroke codec + geometry (pure), the files/drafts store, and the page layer + notes card + tool strip (`.pdfInkBar`: `ctlBtn`s and `colorBtn` swatches) |
-| `search.jsx` | workspace search (Ctrl+F) |
+| `ink.js`, `inkStore.js`, `inkInput.js`, `inkLayer.jsx` | handwriting ([handwriting.md](handwriting.md)): the stroke codec + geometry (pure), the files/drafts store, pointer sampling, and the page layer + selection menu + notes card + tool strip (`.pdfInkBar`: `ctlBtn`s and `colorBtn` swatches) |
+| `search.jsx`, `librarySearch.js` | workspace search (Ctrl+F) and the title scorer shared with chat |
+| `paperMentionInput.jsx`, `paperMentions.js` | chat mention picker, mention text edits and `MAX_CHAT_REFERENCES` (six attached pages plus the current page) |
 | `blockTree.jsx`, `logseqPdfModel.js` | outliner rendering / pure tree ops |
 | `fileChip.jsx` | the file chip an upload link renders as — a small card (kind icon in a tinted square, name, download arrow), inline so it sits in a sentence, identical for every type; a PDF or markdown chip whose page exists gets an accent "open page" button before the arrow; a `ContextMenu` on right-click with "Open page" / "Add to library" (fed by `FileChipContext` from App and one batched `POST /pages/by-docs` per render) and download; also the shared `postFile` / `uploadFilesAsLines` upload helpers |
 | `mdTools.jsx` | in-place tools on rendered notes: `MdImage` (hover toolbar of `ctlBtn` icons — zoom lightbox, caption via alt text, download, delete — plus a drag grip writing the Obsidian `![alt|300]` size; legacy Logseq `{:width N}` reads and normalizes on edit) and `MdTableWrap` (hover "+" strips, column/row handle menus — insert, align, delete — and click-a-cell in-place editing: an input over the cell, Tab/Shift-Tab hop cells across the commit remount via a module-level session map, Enter commits, Esc cancels; tables are never edited as raw markdown — a cell mousedown stops the block row's edit-on-mousedown), backed by pure source transforms (`scanImages`/`scanTables` locate the nth rendered construct; `applyImageEdit`/`applyTableEdit` rewrite it, tables re-serialized pretty-printed; `formatTables` also runs when a block's raw editor closes) and `htmlTableToMarkdown` for the spreadsheet-paste path |
@@ -260,7 +257,7 @@ extend that list, don't add another copy.
 | `slashMenu.jsx` | the "/" command catalog + popup (link, embed, equations, highlight, headings, to-do, lists, quote, callout, code, divider, table, image, date) and the "Paste as" chooser shown after a URL paste (gamma block link → mention/synced block/URL, other URLs → URL/titled link); blockTree owns trigger detection and key handling |
 | `callouts.js` | remark plugin for `> [!note] Title` callouts (type aliases → note/tip/warning/danger/important/quote; colors in app.css) |
 | `codeHighlight.js` | fenced ``` ``` ``` code helpers shared by editor + renderer: `scanFences` (region scanner, mirrored in mdPreprocess exclusions and blockTree's Enter/Tab-in-fence handling), `fenceInnerAt`, and the highlight.js (`lib/common`) wrapper; token colors are theme-aware `.hljs-*` rules in app.css |
-| `latexEditor.jsx` | LaTeX aids while editing: caret-anchored live preview, `\command` autocomplete, `renderKatex`/`useCaretAnchored` shared helpers |
-| `libraryUtils.js` | folder-tag semantics (mirrored by `backend/gamma/ai_tools.py`) |
+| `latexEditor.jsx` | LaTeX aids while editing: viewport-bounded, scrollable live preview, `\command` snippets, argument/Tab-out navigation, `renderKatex`/`useCaretAnchored` shared helpers; `latexInput.js` supplies scalable delimiter pairing. See [LaTeX editing](latex_editing.md) for shortcuts and browser checks |
+| `libraryUtils.js` | folder-tag semantics (mirrored by `backend/gamma/foldertags.py`) |
 | `widgets.jsx`, `menus.jsx`, `icons.jsx` | shared components |
 | `menuAim.js` | pointer-trajectory ("safe triangle") hover intent for hierarchical menus — UI-agnostic, consumed by `menus.jsx` |

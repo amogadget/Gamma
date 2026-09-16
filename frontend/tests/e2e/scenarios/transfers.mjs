@@ -26,8 +26,8 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       await page.keyboard.press("Shift+Tab");
       assert(await dialog.evaluate((el) => el.contains(document.activeElement)), "reverse tab from the heading stays in the dialog");
       assertEq(await dialog.getByRole("group", { name: "Export format" }).getByRole("button").count(), 6);
-      assertEq(await choice(dialog, "Notes as PDF").getAttribute("aria-pressed"), "true");
-      for (const [type, count] of [["PDF", 1], ["MD", 1], ["ZIP", 4]]) {
+      assertEq(await choice(dialog, "PDF").getAttribute("aria-pressed"), "true");
+      for (const [type, count] of [["Notes", 2], ["ZIP", 4]]) {
         assertEq(await dialog.getByRole("group", { name: `${type} choices`, exact: true }).getByRole("button").count(), count);
       }
       await choice(dialog, "Markdown").hover();
@@ -40,7 +40,7 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       assertEq(await choice(dialog, "Back").count(), 0);
       await choice(dialog, "1. Choose a format").click();
       assertEq(await choice(dialog, "Markdown").getAttribute("aria-pressed"), "true");
-      await choice(dialog, "Notes as PDF").click();
+      await choice(dialog, "PDF").click();
       await choice(dialog, "Next").click();
       await toggle(dialog, "Highlights").uncheck();
       assertEq(await dialog.locator('[data-preview="highlights"]').count(), 0);
@@ -112,7 +112,7 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       await page.goto(`${server.base}/?page=${created.id}&ws=${alice.ws}`);
       await waitForPdf(page);
       let dialog = await openDialog(page, "Export");
-      await choice(dialog, "Original PDF").click();
+      await choice(dialog, "Annotated PDF").click();
       await choice(dialog, "Next").click();
       assertEq(await dialog.locator(".transferOriginalPaper").count(), 1);
       await toggle(dialog, "Notes").uncheck();
@@ -158,7 +158,7 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
     try {
       await newPageViaUi(page, "Direct transfer example");
       let dialog = await openDialog(page, "Export");
-      await choice(dialog, "Notes as PDF").click();
+      await choice(dialog, "PDF").click();
       const request = page.waitForRequest((r) => r.url().includes("mode=gamma"));
       const download = page.waitForEvent("download");
       await choice(dialog, "Gamma").dblclick();

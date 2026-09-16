@@ -71,12 +71,16 @@ async function readError(res) {
 }
 
 // api("/session"), api("/clip", {json: {...}}), api("/uploads", {form})
-export async function api(path, { method, json, form, params } = {}) {
+export async function api(path, { method, json, form, params, expectedUser, expectedOrigin } = {}) {
   const origin = await serverOrigin();
+  if (expectedOrigin && origin !== expectedOrigin) throw new ApiError(409, "Gamma server changed. Reopen the Connector.");
   if (!origin) throw new ApiError(0, "No Gamma server configured — open the extension options.");
   const url = new URL(origin + "/api" + path);
   for (const [k, v] of Object.entries(params || {})) if (v) url.searchParams.set(k, v);
   const init = { method: method || (json || form ? "POST" : "GET"), credentials: "include", headers: {} };
+  if (expectedUser != null) init.headers["X-Gamma-User"] = expectedUser;
+  // A session snapshot must never be forwarded to a redirected server.
+  if (expectedOrigin) init.redirect = "error";
   if (json) {
     init.headers["Content-Type"] = "application/json";
     init.body = JSON.stringify(json);

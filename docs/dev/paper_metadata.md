@@ -133,6 +133,23 @@ Providers; arXiv and DOI resolutions do not call that model.
 
 ## PDF resolution
 
+Institutional subscriptions apply to the **backend's outbound network**, not
+the browser opening Gamma. Run the backend on the subscribing institution's
+network (or its supported full-tunnel VPN) to fetch subscribed PDFs directly.
+There is no publisher allowlist: direct PDF links and article pages advertising
+`citation_pdf_url` use the same resolution path. APS article pages use their
+direct `/pdf/` route before the advertised legacy `link.aps.org` URL, which
+can redirect back to the abstract.
+
+Outbound fetches retain cookies across redirects in a fresh in-memory cookie
+jar per fetch. This supports publisher handshakes such as Nature's without
+sharing sessions between users. Every redirect
+still passes the SSRF guard. This does not execute JavaScript or solve browser
+challenges. If a publisher requires those, open its PDF in your browser and
+use the Gamma Connector, or download the file and drop it into Gamma. The
+Connector tries a browser upload first when saving from a PDF tab; on article
+pages it falls back to the browser if the server's save fails.
+
 `/api/resolve-pdf`: arXiv abs→pdf rewrite → direct fetch → HTML pages inspected
 for the `citation_pdf_url` meta tag → Unpaywall open-access fallback for DOIs
 (prefers published > accepted > submitted version; disabled when the request
@@ -148,3 +165,38 @@ then creates the page. `/api/pdf` is the single arbiter of "is this a PDF" —
 its 400 `detail` becomes the failure status, and no page is left behind. A URL
 whose paper is already in the library skips the preflight, so an existing page
 stays openable even after its source goes away.
+
+### Connected publisher sessions
+
+The Connector's optional **Publisher sessions** action imports a snapshot of
+cookies for the current HTTPS publisher host. `GET /api/publisher-sessions`
+returns supported publisher roots and the caller's connection metadata;
+`POST` replaces one host's snapshot and `DELETE /{host}` disconnects it.
+Cookie values are never returned. Guest accounts and share links cannot use
+these endpoints. Imports require HTTPS (including the existing trusted proxy
+configuration) or localhost and are bounded to 256 KiB / 200 cookies.
+
+`users.db.publisher_sessions` (schema v5) stores authenticated Fernet ciphertext
+per `(username, host)`. The key is generated at `GAMMA_DATA_DIR/publisher-sessions.key`
+with private file permissions where supported, or supplied as a Fernet key in
+`GAMMA_PUBLISHER_SESSION_KEY`. Keep it stable across workers and restarts. Encryption
+protects a database copy without the key; the server operator can access the key
+and credentials. Workspace exports and backups do not include this account table.
+Full server backups contain the encrypted rows but do not copy the key: retain
+the key separately or reconnect after moving/restoring to another machine.
+
+Authenticated `/api/resolve-pdf`, `/api/pdf`, and `/api/clip` requests seed their
+outbound cookie jar from the caller's snapshots via a request-local ContextVar.
+Host, path, HTTPS and expiry checks apply on every redirect. Parent-domain cookies
+are narrowed to the exact connected host. Guest, anonymous and share requests,
+AI tools and background jobs do not use these credentials. Proxy responses are
+private and not cached by shared HTTP caches. Saved PDFs retain the workspace's
+normal access rules; connecting a session does not alter workspace permissions.
+
+Session cookies are capped at 24 hours, others at 30 days or original expiry.
+Upstream cookie changes are transient; use the Connector's Refresh action to
+import a new snapshot. Disconnect removes the live record; existing full server
+backups may retain encrypted older snapshots. Deleting an account deletes its
+connections. Supported roots are explicit in `publisher_sessions.py`; a different
+publisher host (even a sibling) needs its own connection. CAPTCHA clearance tied
+to a browser/IP may still fail, so the browser upload fallback remains available.

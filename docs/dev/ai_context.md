@@ -71,9 +71,17 @@ message, and it doesn't stop fabrication — the tools are the better lever.
   51-page PDF …]` whenever the document didn't fit; `CONTEXT_INTRO` likewise
   says a page's document text "is often an excerpt (see its label)".
   Unlabelled, "here is the text" reads as the whole paper.
-- **Document map** (`document_map`): for page-scope agent chats, a ~2.4k-char
+- **Page labels** (`extract_text(..., label_pages=True)` in `pdf_text.py`):
+  every non-empty physical page is prefixed `[PDF page N]`, counted from
+  `start_page` with blank pages included; a `read_page` continuation that
+  starts mid-page repeats it as `[PDF page N; continued]` outside the offset
+  window (`pdf_excerpt`), and each context section carries
+  `Gamma page ID: <id>`. Both feed the clickable citations
+  ([pdf_citations.md](pdf_citations.md)).
+- **Document map** (`document_map`): for page/folder agent chats, a ~2.4k-char
   outline — one line per PDF page (sampled for big documents), taken from the
-  FTS index so it costs a query, not a re-parse. The model jumps to the right
+  FTS index so it costs a query, not a re-parse. Each attached paper gets its
+  own map labelled with its Gamma page ID. The model jumps to the right
   page instead of guessing; on one question this cut 6 tool calls to 1.
 - **Search relaxation** (`_run_search_library`): the FTS query ANDs every
   term, and agents write 6–9-word natural queries — one word the page doesn't

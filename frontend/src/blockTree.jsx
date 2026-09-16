@@ -14,7 +14,7 @@ import { handleMarkdownCopy } from "./widgets";
 import { LinkIcon, PenIcon } from "./icons";
 import { FileChip, parseUploadUrl, postFile, uploadFilesAsLines } from "./fileChip";
 import {
-  envCompletions, findMathAtCursor, insertionFor, latexCompletions,
+  envCompletions, findMathAtCursor, latexCompletionEdit, latexCompletions,
   LatexAcPopup, MathLivePreview, mathTabJump,
 } from "./latexEditor";
 import { BlockCmEditor, scanMathSpans } from "./blockCmEditor";
@@ -226,7 +226,7 @@ function useMathUi() {
     const next = {
       tex: ta.value.slice(seg.start, seg.end),
       display: seg.display,
-      anchor: ta.caretCoords(cursor),
+      anchor: { ...ta.caretCoords(cursor), getRect: () => ta.caretCoords(cursor) },
       ac: null,
     };
     setMathUi((prev) => {
@@ -275,17 +275,11 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
     const ta = editorRef.current;
     if (!ta || !mathUi?.ac) return;
     const { start } = mathUi.ac;
-    const { text, caret } = insertionFor(c, mathUi.display);
-    let end = ta.selectionStart;
-    // "\begin{" auto-closed to "\begin{|}": the snippet replaces that } too.
-    if (c.env && ta.value[end] === "}" && !ta.value.slice(start, end).endsWith("}")) end++;
-    setDraft(ta.value.slice(0, start) + text + ta.value.slice(end));
+    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
+    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
     setMathUi(null);
-    requestAnimationFrame(() => {
-      try { ta.setSelectionRange(start + caret, start + caret); } catch (_) {}
-      ta.focus();
-      updateMathUi(ta, false);
-    });
+    ta.focus();
+    updateMathUi(ta, false);
   }
 
   // Paste while editing: files upload and insert at the caret (images
@@ -801,18 +795,11 @@ function BlockRow({
     const ta = ref.current;
     if (!ta || !mathUi?.ac) return;
     const { start } = mathUi.ac;
-    const { text, caret } = insertionFor(c, mathUi.display);
-    let end = ta.selectionStart;
-    // "\begin{" auto-closed to "\begin{|}": the snippet replaces that } too.
-    if (c.env && ta.value[end] === "}" && !ta.value.slice(start, end).endsWith("}")) end++;
-    const newVal = ta.value.slice(0, start) + text + ta.value.slice(end);
-    onChangeText(block.id, newVal);
+    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
+    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
     setMathUi(null);
-    requestAnimationFrame(() => {
-      try { ta.setSelectionRange(start + caret, start + caret); } catch (_) {}
-      ta.focus();
-      updateMathUi(ta);
-    });
+    ta.focus();
+    updateMathUi(ta, false);
   }
 
   // "/" trigger: a slash starting a word, with the query typed so far after

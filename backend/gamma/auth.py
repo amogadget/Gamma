@@ -204,7 +204,18 @@ async def session_middleware(request: Request, call_next):
         )
         resp.headers["X-Gamma-Session-User"] = request.state.user or ""
         return _finish_request_log(request, resp, started, expected, "session-mismatch")
-    response = await call_next(request)
+    # Only interactive PDF operations may use the caller's publisher sessions.
+    # Public/share reads and guest accounts must never borrow credentials.
+    from .publisher_sessions import current_user
+    publisher_user = (request.state.user
+                      if request.url.path in ("/api/pdf", "/api/resolve-pdf", "/api/clip")
+                      and not request.state.is_guest and not request.query_params.get("share")
+                      else None)
+    publisher_token = current_user.set(publisher_user)
+    try:
+        response = await call_next(request)
+    finally:
+        current_user.reset(publisher_token)
     if new_session_token:
         set_session_cookie(response, new_session_token, request)
     return _finish_request_log(request, response, started, expected)

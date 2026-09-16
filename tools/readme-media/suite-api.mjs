@@ -1,0 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { ROOT } from './runtime.mjs';
+import { Account } from '../../frontend/tests/e2e/harness.mjs';
+export const suiteDir = path.join(ROOT, 'tmp/readme-media/suite');
+export const state = JSON.parse(fs.readFileSync(path.join(suiteDir, 'workspace.json')));
+if (state.removed) throw new Error('Recording workspace has been removed');
+export const account = new Account({ base: state.base }, state.username, '');
+account.session = fs.readFileSync(path.join(suiteDir, 'session.txt'), 'utf8').trim();
+account.ws = state.workspace;

@@ -1,16 +1,16 @@
 ---
 name: merge
-description: Merge the branch's committed work into main via a PR and report the release runs the merge started. Never commits, never releases by hand — GitHub Actions does that on merge.
+description: Merge the branch's committed work into main via a PR and report the Docker publish the merge started. Never commits, never releases the desktop app or extension — that is the `release` skill.
 ---
 
 # Merge to main
 
-One job: get what is already committed on the branch into `main`. Everything
-after that is automatic (`docs/dev/github_actions.md`): the `check`
-workflow validates the PR; the merge itself triggers `desktop.yml`
-(installers → GitHub Release `v<next>`), `extension.yml` (Connector zip →
-`extension-v<next>`) and `docker.yml` (`ghcr latest`), each only if its
-paths changed. Versions are computed from the tags; nothing to bump.
+One job: get what is already committed on the branch into `main`. The
+`check` workflow validates the PR; the merge itself triggers only
+`docker.yml` (`ghcr.io/tim4431/gamma:latest`). The desktop app and the
+browser extension are NOT released by a merge — run the `release` skill
+for that (it dispatches `desktop.yml` / `extension.yml` on `main`).
+Details: `docs/dev/github_actions.md`.
 
 **Scope: existing commits only.** Uncommitted changes are ongoing work —
 leave them in the tree, never commit them here. If there is nothing
@@ -39,13 +39,9 @@ committed beyond `origin/main`, stop and say so.
 
 6. **Report**: a few seconds after the merge,
    `gh run list --limit 5 --json workflowName,status,event,url,databaseId`
-   shows which workflows the merge started (only the ones whose paths
-   changed). Report each with its link. For the desktop run, the `meta`
-   job's notice names the version it will publish
-   (`gh run view <id> --json jobs --jq '.jobs[] | select(.name=="meta")'`);
-   pass that on. Do not wait for the desktop build (~20 min) unless asked;
-   `gh run watch <id> --exit-status` if so.
+   shows the Docker run the merge started. Report it with its link. Do not
+   wait for it unless asked (`gh run watch <id> --exit-status`).
 
 Follow-ups to offer, not to run: `update-server` once the Docker run has
-published (deploys `latest` to the NAS); the Chrome Web Store upload of a
-new extension zip is still manual (`extension/STORE.md`).
+published (deploys `latest` to the NAS); `release` if the merged work
+should ship as a new desktop app or extension version.

@@ -4,8 +4,8 @@ Resolution handles the common academic-link shapes: bare arXiv ids and DOIs
 pasted without a URL are promoted to one first, arXiv abstract URLs are
 rewritten to their PDF, DOI links that land on paywalled/bot-blocking publisher
 pages fall back to an open-access copy via the Unpaywall API, and failures come
-back as human-readable messages (publishers like APS return 403 to any
-server-side fetch — that's their bot protection, not a bug here).
+back as human-readable messages. Institutional access depends on the backend's
+network; publisher bot challenges may still require a browser.
 """
 
 import hashlib
@@ -75,6 +75,25 @@ def _meta_content(html: str, name: str) -> str:
     if not m:
         m = re.search(rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]*name=["\']{re.escape(name)}["\']', html, re.I)
     return m.group(1).strip() if m else ""
+
+
+def _publisher_pdf_candidates(page_url: str, html: str) -> list[str]:
+    """Prefer APS's PDF route over its legacy link.aps.org metadata URL,
+    which can redirect back to the abstract even with institutional access.
+    Other publishers use their advertised PDF link.
+    """
+    candidates = []
+    page = urllib.parse.urlsplit(page_url)
+    if page.hostname == "journals.aps.org":
+        match = re.fullmatch(r"/([a-z0-9]+)/(?:abstract|article)/(10\.1103/[^?#]+)", page.path, re.I)
+        if match:
+            candidates.append(f"https://journals.aps.org/{match[1]}/pdf/{match[2]}")
+    advertised = _meta_content(html, "citation_pdf_url")
+    if advertised:
+        advertised = urllib.parse.urljoin(page_url, advertised)
+        if advertised not in candidates:
+            candidates.append(advertised)
+    return candidates
 
 
 def _open_access_pdf_for_doi(doi: str) -> tuple[str, str]:
@@ -152,19 +171,16 @@ def resolve_source(source_url: str, allow_oa: bool = True) -> dict:
     # pages, …). Publishers advertise the "Download PDF" target in the
     # citation_pdf_url meta tag — the same tag Google Scholar reads.
     html = body.decode("utf-8", "replace") if body else ""
-    if html:
-        pdf_url = _meta_content(html, "citation_pdf_url")
-        if pdf_url:
-            pdf_url = urllib.parse.urljoin(final_url, pdf_url)
-            try:
-                _, ct2, _ = try_resolve(pdf_url)
-                if "application/pdf" in ct2:
-                    # Return the canonical URL, not the redirect target — hosts
-                    # like nature.com append one-time tokens on redirect, and the
-                    # doc id is a hash of this URL, so it must stay stable.
-                    return {"source_url": pdf_url}
-            except Exception as e:
-                log.warning(f"[resolve-pdf] citation_pdf_url fetch failed: {e}")
+    for pdf_url in _publisher_pdf_candidates(final_url, html):
+        try:
+            _, ct2, _ = try_resolve(pdf_url)
+            if "application/pdf" in ct2:
+                # Return the canonical URL, not the redirect target — hosts
+                # like nature.com append one-time tokens on redirect, and the
+                # doc id is a hash of this URL, so it must stay stable.
+                return {"source_url": pdf_url}
+        except Exception as e:
+            log.warning(f"[resolve-pdf] publisher PDF fetch failed: {e}")
 
     # For DOI links (or pages that state their DOI), the publisher PDF is
     # usually paywalled or bot-blocked — look for a legal open-access copy.
@@ -179,7 +195,7 @@ def resolve_source(source_url: str, allow_oa: bool = True) -> dict:
         if not allow_oa:
             raise HTTPException(
                 status_code=400,
-                detail="The publisher's PDF isn't accessible server-side (usually a paywall). "
+                detail="The publisher's PDF isn't accessible server-side (access restriction or browser check). "
                        "Open-access fallback is disabled in your settings — download the PDF in "
                        "your browser and drop it onto Gamma.",
             )
@@ -189,7 +205,7 @@ def resolve_source(source_url: str, allow_oa: bool = True) -> dict:
             if oa_version and oa_version != "publishedVersion":
                 pretty = {"acceptedVersion": "accepted manuscript",
                           "submittedVersion": "preprint (submitted version)"}.get(oa_version, oa_version)
-                note = (f"The publisher's PDF is paywalled — loaded the open-access {pretty} instead. "
+                note = (f"The publisher's PDF couldn't be fetched — loaded the open-access {pretty} instead. "
                         "For the published version, download it in your browser and replace the "
                         "source file via the page's source button.")
             try:
@@ -202,7 +218,7 @@ def resolve_source(source_url: str, allow_oa: bool = True) -> dict:
         raise HTTPException(
             status_code=400,
             detail="This leads to a publisher page whose PDF isn't accessible server-side "
-                   "(usually a paywall), and no open-access copy was found. Open the link in your "
+                   "(access restriction or browser check), and no open-access copy was found. Open the link in your "
                    "browser instead — if you can download the PDF there, drop the file onto Gamma.",
         )
     if blocked:
@@ -339,7 +355,7 @@ def proxy_pdf(source_url: str, request: Request):
                 else:
                     log.info(f"[pdf] not caching {pdf_doc_id} ({len(data)} bytes): over storage limits")
 
-    headers = {"Cache-Control": "public, max-age=3600", "X-Source-Url": final_url}
+    headers = {"Cache-Control": "private, no-store", "X-Source-Url": final_url}
     if length.isdigit():
         headers["Content-Length"] = length
     return StreamingResponse(stream(), media_type="application/pdf", headers=headers)
