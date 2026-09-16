@@ -1,15 +1,17 @@
+from pathlib import Path
 """Post-process for record-metadata.mjs: trim the download pre-roll, cut the
 dead waits (metadata fetch, citation regeneration), and apply a smooth camera
 zoom onto the right column where the metadata + share popovers live. The app
 itself is never zoomed. Reads meta_zoom.json + video_meta_path.txt from the
-folder this script sits in, so copy it into the recorder's cwd first."""
-import glob, json, os, subprocess, sys
+recorder's working directory; run this script from that directory."""
+import json, os, subprocess, sys
 
-SCRATCH = os.path.dirname(os.path.abspath(__file__))
+SCRATCH = os.getcwd()
 Z = json.load(open(os.path.join(SCRATCH, "meta_zoom.json")))
 webm = open(os.path.join(SCRATCH, "video_meta_path.txt")).read().strip()
-OUT = sys.argv[1] if len(sys.argv) > 1 else r"D:/Codes/Github/gamma/docs/assets/demos/demo-metadata.gif"
-FF = glob.glob(r"D:\Codes\Github\gamma\backend\venv\Lib\site-packages\imageio_ffmpeg\binaries\ffmpeg-win*.exe")[0]
+OUT = sys.argv[1] if len(sys.argv) > 1 else str(Path(SCRATCH) / "legacy-metadata.gif")
+from imageio_ffmpeg import get_ffmpeg_exe
+FF = get_ffmpeg_exe()
 
 vidW, vidH = Z["vidW"], Z["vidH"]
 sx = vidW / Z["cssW"]                       # CSS -> video px (1:1 here)

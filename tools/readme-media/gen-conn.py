@@ -1,11 +1,12 @@
 # Composites the three connector segments (arXiv page, popup overlay, Gamma)
 # and applies a post-process camera zoom (zoompan), then converts to GIF.
-import glob, json, os, subprocess, sys
+import json, os, subprocess, sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+HERE = os.getcwd()
 os.chdir(HERE)
 Z = json.load(open("conn_marks.json"))
-FF = glob.glob(r"D:\Codes\Github\gamma\backend\venv\Lib\site-packages\imageio_ffmpeg\binaries\ffmpeg-win*.exe")[0]
+from imageio_ffmpeg import get_ffmpeg_exe
+FF = get_ffmpeg_exe()
 
 def run(*args):
     r = subprocess.run([FF, "-loglevel", "error", "-y", *args], capture_output=True, text=True)

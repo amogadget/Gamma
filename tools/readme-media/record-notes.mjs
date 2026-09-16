@@ -1,4 +1,4 @@
-// README "Take notes" GIF: a bare note page typed into, Obsidian-style live
+// README "Take notes" demo: a bare note page typed into, Obsidian-style live
 // preview — markdown marks, a [[ref]] chip, then a display equation typed
 // char by char ($ auto-pairing, \command autocomplete, Tab through {} args,
 // live math preview), then a callout. Ends on the rendered page.
@@ -7,19 +7,19 @@
 // an EMPTY page PAGE_ID (reset: PUT /api/blocks/{id}/children {"blocks":[]}).
 // Writes the webm path to video_path.txt and the pre-roll trim mark to
 // notes_marks.json (m0 = video-time of the first click).
-import { chromium } from 'playwright';
+import { chromium, ROOT, configureContext } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();
 const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = 'http://127.0.0.1:9003';
+const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
 const PAGE_ID = process.env.PAGE_ID || 'QDz3vbdoRlFJ';
 const VW = 1440, VH = 900;
-const CHROME = process.env.LOCALAPPDATA + '/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-win64/chrome-headless-shell.exe';
-const beat = (ms) => page.waitForTimeout(ms);
+const CHROME = process.env.CHROME_PATH;
+const beat = (ms) => page.waitForTimeout(ms * 0.7);
 
 // typing: prose ~55 ms/key, math a touch slower so the reader can follow
-const PROSE = 52, MATH = 68;
+const PROSE = 28, MATH = 38;
 const T = (text, delay = PROSE) => page.keyboard.type(text, { delay });
 const K = (key) => page.keyboard.press(key);
 const value = () => page.evaluate(() => document.querySelector('.cm-content')?.textContent ?? null);
@@ -45,13 +45,14 @@ async function glide(x, y, steps = 28) {
   await beat(120);
 }
 
-const browser = await chromium.launch({ headless: true, slowMo: 60, executablePath: CHROME });
+const browser = await chromium.launch({ headless: true, slowMo: 0, executablePath: CHROME });
 const ctx = await browser.newContext({
   colorScheme: 'light',
   viewport: { width: VW, height: VH },
   deviceScaleFactor: 2,
   recordVideo: { dir: SCRATCH + '/video', size: { width: VW, height: VH } },
 });
+await configureContext(ctx);
 await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 
 // UI scale: the note text is the whole story, so render it like a 125%-zoomed

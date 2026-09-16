@@ -17,6 +17,8 @@ launcher, and desktop release workflows use these locations.
 | `docs/research/` | Design research: surveys, findings, and the reasoning behind chosen shapes |
 | `docs/user_guide.md` | User documentation |
 | `docs/assets/` | Documentation images and animations |
+| `tools/readme-media/` | README capture scripts, renderers, and recording recipes |
+| `tmp/readme-media/` | Ignored media workspace exports, private builds, raw captures, and QA frames |
 | `data/` | Ignored runtime databases and uploads, controlled by `GAMMA_DATA_DIR` |
 
 Desktop-specific developer documentation remains in `desktop/docs/`.
@@ -28,7 +30,7 @@ folders; those folders have not been created yet.
 | Location | Contents and consumers |
 |---|---|
 | `docs/assets/branding/` | Light/dark SVG wordmarks, and the light/dark hero image (`gamma-hero-*.svg`, hand-authored vector; the `.png` renders are for the Microsoft Store listing) used by the root README |
-| `docs/assets/demos/` | README demo GIFs |
+| `docs/assets/demos/` | README demos as small animated WebP images |
 | `docs/assets/screenshots/` | Documentation stills; guest welcome blocks reference their GitHub raw URLs |
 | `frontend/public/media/icons/` | Favicon, served at `/media/icons/favicon.svg` |
 | `desktop/assets/icon.png` | Electron window and installer icon |
@@ -71,8 +73,11 @@ servers, installers, and Store packages go into `dist-backend/`, `dist/`, and
 
 ## Updating documentation media
 
-The recording instructions and helpers in `.claude/skills/readme-media/`
-reference `docs/assets/demos/` and `docs/assets/screenshots/`. Keep the README's
+The recording instructions and helpers live in [tools/readme-media/](../../tools/readme-media/README.md).
+`.claude/skills/readme-media/SKILL.md` is a short entry point to that workflow.
+Published assets live in `docs/assets/demos/` and `docs/assets/screenshots/`;
+raw captures, workspace exports and QA frames stay in ignored `tmp/readme-media/`.
+Keep the README's
 relative image links and `backend/gamma/seed.py` screenshot URLs in sync when
 renaming media. New guest pages use the seed URLs; existing guest pages pick
 up changes on their next reset. Existing user-authored links are not rewritten.

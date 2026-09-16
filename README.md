@@ -8,19 +8,34 @@
 
 **Organize papers and knowledge, in one place.** Self-hosted, multi-user, Logseq-inspired: read and annotate PDFs in your browser, keep the notes as a nested outliner, and link everything together.
 
+[![Release](https://img.shields.io/github/v/release/tim4431/Gamma?filter=v%2A&style=flat&label=release&color=2563eb)](https://github.com/tim4431/Gamma/releases/latest)
+[![GitHub stars](https://img.shields.io/github/stars/tim4431/Gamma?style=flat&logo=github&color=eab308)](https://github.com/tim4431/Gamma/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/tim4431/Gamma?style=flat&logo=github&color=8b5cf6)](https://github.com/tim4431/Gamma/forks)
+
+<a href="https://apps.microsoft.com/detail/9N8WGWR2J2MV">
+  <img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Download Gamma from the Microsoft Store" width="240">
+</a>
+
 ## 📄 Annotate & ask
 
-![Open a paper by URL, highlight the abstract, and ask the AI to explain it](./docs/assets/demos/demo-download-and-chat.gif)
+![Highlight a passage, ask the AI to explain it, then let the agent read and organize papers into folders](./docs/assets/demos/demo-annotate-and-ask.webp)
 
 Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma finds the PDF, and falls back to a legal open-access copy via Unpaywall when the DOI is paywalled) or drag the file in. Then:
 
 - **Highlight** — select text or drag a box around a figure, pick a color, add a comment. Each highlight becomes a block. Highlights already saved in the file by SumatraPDF, Acrobat, or Preview are imported as blocks too.
 - **Ask the AI** — chat about the open paper (or pick several at once) with Anthropic or OpenAI models, or just sign in with your ChatGPT subscription — no API key. Paste figures, dictate by voice, or attach the whole PDF so the model sees tables and plots.
+- **Put the agent to work** — ask it to list, read, and search papers, rename them, or organize them into folders. Tool calls show each action as it runs, scoped to the folder you're in.
 - **Dockable panels** — drag any window's grip to the left, right, or bottom; double-click to collapse.
+
+## 🖊️ Draw on your papers
+
+![Circle a claim, draw an arrow, and highlight freely; the ink becomes a linked note](./docs/assets/demos/demo-ink.webp)
+
+Draw with a stylus or mouse, highlight freely, and lasso strokes to move, resize, rotate, or recolor them. Erase whole strokes or just part of one, with undo and redo. Your handwriting becomes a note block linked to its place in the PDF.
 
 ## ✍️ Take notes
 
-![Typing in a note: markdown renders as you go, a LaTeX equation previews live with command autocomplete, then renders in place](./docs/assets/demos/demo-notes.gif)
+![Typing in a note: markdown renders as you go, a LaTeX equation previews live with command autocomplete, then renders in place](./docs/assets/demos/demo-notes.webp)
 
 Highlights and free notes are the same kind of block, so a paper's notes and a plain page are edited the same way:
 
@@ -28,31 +43,25 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 - **Live preview, Obsidian-style** — markdown, `$…$` / `$$…$$` math, code fences, callouts, and tables render in place while the block you're on stays raw. Math gets bracket-pair coloring, `\command` autocomplete, and Tab hops between `{}` arguments.
 - **Link and embed** — `[[page]]` mentions, `![[block]]` embeds that edit the source in place, and a "/" menu for everything else. Click a highlight block to jump the PDF to it (and back).
 
-## 🤖 An agent in your library
-
-![Ask the chat to organize the library, tool calls stream by, and the papers get filed into topic folders](./docs/assets/demos/demo-agent.gif)
-
-Ask the chat to tidy up: it can list, read, and search your papers, rename them, and file them into folders — every step shown as it runs, scoped to the folder you're in.
-
 ## 🔗 Link and organize
 
-![Follow a citation to its reference, then fetch the cited arXiv paper into Gamma with one click](./docs/assets/demos/demo-reference-links.gif)
+![Follow a citation to its reference, then fetch the cited arXiv paper into Gamma with one click](./docs/assets/demos/demo-reference-links.webp)
 
 - **Reference links** — citations in the PDF are clickable: jump to the reference, unwind jumps across documents with a global **← Back**, and fetch a cited arXiv/DOI paper into your library in one click. You can also link a citation to a paper you already have.
 - **Labels** — flat, cross-cutting tags for facets like an author or a keyword; a paper can carry several, and each is one click to filter by.
 - **Folders** — a topic hierarchy that builds itself from the paths you use: drop a paper into `qc/neutral-atom` and you get a **qc** folder with a **neutral-atom** subfolder — add `qc/superconducting` and the sibling appears, no need to hand-create each level as its own tag. Storage stays flat, so one paper can live in several folders.
 
-![From the home page, one search finds titles, notes, highlights, and every PDF's text at once; a folder chip narrows it, and opening a hit lights the matches up on the page](./docs/assets/demos/demo-library.gif)
+![Search titles and PDF text from home, narrow with a folder chip, and open a highlighted match](./docs/assets/demos/demo-library.webp)
 
 - **Search everything** — `Ctrl+F` searches across notes, highlights, and the full text of every PDF at once, with match-case / whole-word / regex toggles. Narrow the scope with chips for **both** labels (exact match, e.g. an author) and folders (prefix match, so `qc` pulls in everything beneath it). Matching is forgiving: "3000" finds "3,000-qubit" across a line break.
 
-![A freshly opened paper resolves its title, authors, and venue; one click copies BibTeX or a slide-ready citation](./docs/assets/demos/demo-metadata.gif)
+![A freshly opened paper resolves its title, authors, and venue; one click copies BibTeX or a slide-ready citation](./docs/assets/demos/demo-metadata.webp)
 
 - **Metadata & citations** — on open, each paper is resolved (arXiv → DOI → AI) so the title, authors, and venue auto-fill; any field can be hand-edited in the popover. One click copies BibTeX or a slide-ready citation that pastes into PowerPoint with real italics.
 
 ## 🌐 Save from your browser
 
-![On an arXiv page, the Gamma Connector popup saves the paper into a folder, then opens it in Gamma](./docs/assets/demos/demo-connector.gif)
+![On an arXiv page, the Gamma Connector popup saves the paper into a folder, then opens it in Gamma](./docs/assets/demos/demo-connector.webp)
 
 The **Gamma Connector** extension ([extension/](./extension/)) saves the paper you're reading in one click — PDF, metadata, folder, and labels — straight from the arXiv / DOI / publisher tab. Right-click clips a link or a text selection into your notes.
 
@@ -72,7 +81,7 @@ The **Gamma Connector** extension ([extension/](./extension/)) saves the paper y
 
 ### Downloads
 
-Everything a user installs is on the [**Releases**](https://github.com/tim4431/Gamma/releases/latest) page:
+Get the Windows app from the [**Microsoft Store**](https://apps.microsoft.com/detail/9N8WGWR2J2MV), or download standalone installers from [**GitHub Releases**](https://github.com/tim4431/Gamma/releases/latest).
 
 - **Desktop app** (Windows installer, macOS dmg, Debian/Ubuntu deb) — a self-contained Gamma with local libraries on your disk, no Docker, Python, or Node. It also opens any Gamma server you host (the NAS, a VPS) as another workspace and switches between them from the toolbar. Details: [desktop/](./desktop/). Builds are not notarized: Windows SmartScreen → *More info → Run anyway*; macOS says *Apple could not verify Gamma* on first launch → *System Settings → Privacy & Security → Open Anyway* (once); Linux: `sudo apt install ./Gamma-<version>-linux-amd64.deb`. Windows and Linux apps update themselves.
 - **Gamma Connector** browser extension (`gamma-connector-<version>.zip`, in its own `extension-v<version>` release) — unzip, then `chrome://extensions` → *Developer mode* → *Load unpacked*.
@@ -182,33 +191,3 @@ ghcr.io/tim4431/gamma
 Multi-stage build: a Node stage compiles the frontend, the final Python image runs FastAPI serving both the API and the SPA on port 9001. See [Dockerfile](./Dockerfile) and [.github/workflows/docker.yml](./.github/workflows/docker.yml).
 
 </details>
-
----
-
-## How it works
-
-A single service: a **FastAPI** backend that also serves the built **React** frontend. In dev the two run separately with a Vite proxy. Per-folder notes live in [`backend/`](./backend/README.md) and [`frontend/`](./frontend/README.md) READMEs.
-
-For source and asset locations, see the [repository map](./docs/dev/repository.md).
-
-- **Everything is a block.** Highlights and free notes are rows in one `unified_blocks` table (self-referential `parent_id`, fractional-index `position`). Root-level blocks are pages; a page with a PDF is a paper.
-- **Workspaces.** `users.db` holds accounts, sessions, memberships and private preferences. Each personal or shared workspace has its own `pages.db`, `data.db` and `uploads/` under `GAMMA_DATA_DIR`. Accounts may have several personal libraries; administrators create shared ones. See the [workspace guide](./docs/dev/workspaces.md).
-- **View modes come from the URL** (no router lib): `/?ws=<id>` a workspace · `/?ws=<id>&page=<id>` a page · `/?ws=<id>&block=<id>` jump to a block · `/?share=<token>` a shared page.
-
-<details>
-<summary><b>Inspired by Logseq</b></summary>
-
-Gamma borrows the ideas from Logseq that fit PDF annotation: everything is a block, pages are the top-level container, outliner editing (Enter/Tab/Shift+Tab), a depth-snapping drop indicator, nested guide lines, and fractional indexing for order. It's narrower — no graph view, journal, or queries — tuned for "annotate PDFs and keep the notes as a tree."
-
-</details>
-
-## Known limitations
-
-- Simultaneous typing in the same block can overwrite another person's text. Presence helps coordinate, but there is no character-level merge.
-- Offline retries are held in memory. Closing the tab before a save succeeds can lose unsaved changes.
-- Paywalled papers can't be fetched server-side; Gamma substitutes an open-access copy when one exists, otherwise download in your browser and drop the file in.
-- `src/App.jsx` is still one large component; see the [decomposition plan](./docs/dev/frontend-refactor.md).
-
-## License
-
-MIT

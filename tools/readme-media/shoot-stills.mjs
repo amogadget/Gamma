@@ -8,18 +8,18 @@
 // first so the recents strip is populated (most recent = the annotated paper).
 // Needs a working AI provider on the instance for the chat answer; without
 // one, 01 is shot with the question sent but unanswered (the script says so).
-import { chromium } from 'playwright';
+import { chromium, ROOT } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();
 const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = 'http://127.0.0.1:9004';
-const OUT = process.env.STILLS_OUT || 'D:/Codes/Github/gamma/docs/assets/screenshots';
+const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
+const OUT = process.env.STILLS_OUT || ROOT + 'docs/assets/screenshots';
 const ATOMS = 'fy0-h_BqOHcH';         // the paper with the real highlight (page 2)
 const OTHERS = ['p8oNV3s3XNhC', 'BHuT16WnxdQb'];
 const QUESTION = 'What is the key idea of this paper in one sentence?';
 const QUERY = 'error correction';
-const EXE = process.env.LOCALAPPDATA + '/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-win64/chrome-headless-shell.exe';
+const EXE = process.env.CHROME_PATH;
 
 fs.mkdirSync(OUT, { recursive: true });
 const browser = await chromium.launch({ headless: true, executablePath: EXE });

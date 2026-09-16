@@ -1,16 +1,16 @@
-import { chromium } from 'playwright';
+import { chromium, ROOT, configureContext } from './runtime.mjs';
 import fs from 'fs';
 
-// README "Metadata & citations" GIF: open a paper by URL, open the metadata
+// README "Metadata & citations" demo: open a paper by URL, open the metadata
 // popover the moment the paper paints — while the arXiv fetch is still
 // running — so the viewer watches Title / Authors / Venue / Year / DOI fill
 // in, then copy BibTeX + the slide citation from the share popover. Recorded
-// at NORMAL scale; gen-meta.py trims the download pre-roll and applies a
-// camera zoom onto the right column (both popovers live there).
+// at NORMAL scale; render-suite.py trims the download pre-roll and applies a
+// fixed detail crop of the right column (both popovers live there).
 
 const SCRATCH = process.cwd();
 const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = 'http://127.0.0.1:9005';
+const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
 // Bluvstein et al., "Logical quantum processor based on reconfigurable atom
 // arrays" (Nature 2024). Must NOT already be in the library, or no fetch runs:
 // DELETE the page + reset /api/prefs/open-tabs before each run.
@@ -29,13 +29,14 @@ async function glideTo(sel, steps = 26, fx = 0.5, fy = 0.5) {
 }
 
 const browser = await chromium.launch({
-  headless: true, slowMo: 60,
-  executablePath: process.env.LOCALAPPDATA + '/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-win64/chrome-headless-shell.exe',
+  headless: true, slowMo: 0,
+  executablePath: process.env.CHROME_PATH,
 });
 const ctx = await browser.newContext({
   colorScheme: 'light', viewport: { width: VW, height: VH }, deviceScaleFactor: 2,
   recordVideo: { dir: SCRATCH + '/video-meta', size: { width: VW, height: VH } }, // CSS = video 1:1
 });
+await configureContext(ctx);
 await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE });
 await ctx.addInitScript(() => {
@@ -77,7 +78,7 @@ await glide(INFO_XY.x, INFO_XY.y, 30);
 // --- the paper renders (real download) -> open the popover at once, fetch still running --
 await page.waitForSelector('[data-page="1"] .textLayer span', { timeout: 60000 });
 const tPaint = mark();
-M.m0 = tPaint + 0.2;                     // GIF start: the canvas paints ~0.4 s after the text layer
+M.m0 = tPaint + 0.2;                     // demo start: the canvas paints ~0.4 s after the text layer
 await beat(350);
 const infoBtn = await glideTo('[aria-label="Paper metadata"]', 6);
 await page.click('[aria-label="Paper metadata"]');

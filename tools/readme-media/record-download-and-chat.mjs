@@ -1,9 +1,9 @@
-import { chromium } from 'playwright';
+import { chromium, ROOT, configureContext } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();
 const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = 'http://127.0.0.1:9001';
+const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
 const PDF_URL = 'https://proceedings.neurips.cc/paper_files/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf';
 const VW = 1440, VH = 900;
 const beat = (ms) => page.waitForTimeout(ms);
@@ -20,13 +20,14 @@ async function typeSlow(sel, text, delay = 55) {
   await page.type(sel, text, { delay });
 }
 
-const browser = await chromium.launch({ headless: true, slowMo: 60 });
+const browser = await chromium.launch({ headless: true, slowMo: 0 });
 const ctx = await browser.newContext({
   colorScheme: 'light',
   viewport: { width: VW, height: VH },
   deviceScaleFactor: 2,
   recordVideo: { dir: SCRATCH + '/video', size: { width: VW, height: VH } },
 });
+await configureContext(ctx);
 await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 
 // inject a visible cursor dot (Playwright videos have none)
@@ -47,6 +48,9 @@ await ctx.addInitScript(() => {
 });
 
 const page = await ctx.newPage();
+const captureStart = Date.now();
+const M = {};
+const mark = () => (Date.now() - captureStart) / 1000;
 page.on('console', m => { const t = m.text(); if (t.startsWith('SCRIPT:')) console.log(t); });
 
 // 1. home ---------------------------------------------------------------------
@@ -55,6 +59,7 @@ await page.mouse.move(cx, cy);
 await beat(900);
 
 // 2. open the paper by URL ----------------------------------------------------
+M.m0 = mark();
 const addBtn = await page.locator('[aria-label="Add"]').boundingBox();
 await glide(addBtn.x + addBtn.width / 2, addBtn.y + addBtn.height / 2);
 await page.click('[aria-label="Add"]');
@@ -66,18 +71,20 @@ await beat(300);
 await page.fill('.addPopover input.searchInput', PDF_URL);   // pasted in one go, like a human
 await beat(650);
 await page.press('.addPopover input.searchInput', 'Enter');
+M.submitted = mark();
 console.log('SCRIPT: submitted URL');
 
 // 3. wait for the PDF to render ----------------------------------------------
 await page.waitForSelector('[data-page="1"] .textLayer span', { timeout: 60000 });
-await beat(3500);
+await beat(1000);
 
+M.loaded = mark();
 // 4. gentle scroll to settle on the abstract ---------------------------------
 await page.evaluate(() => {
   const v = document.querySelector('.pdfViewer');
   if (v) v.scrollTo({ top: 260, behavior: 'smooth' });
 });
-await beat(1400);
+await beat(650);
 
 // 5. locate the target sentence & glide the cursor across it ------------------
 const sel = await page.evaluate(() => {
@@ -136,15 +143,16 @@ await beat(700);
 const swatch = await page.locator('.plainTip .colorBtn').first().boundingBox();
 await glide(swatch.x + swatch.width / 2, swatch.y + swatch.height / 2, 16);
 await page.locator('.plainTip .colorBtn').first().click();
-await beat(1600); // highlight paints + note appears in the tree
+await beat(650); // highlight paints + note appears in the tree
 console.log('SCRIPT: highlight created');
 
 // 8. ask the AI ---------------------------------------------------------------
 const chat = await page.locator('.chatInput').boundingBox();
 await glide(chat.x + 60, chat.y + chat.height / 2, 30);
-await typeSlow('.chatInput', 'explain briefly how attention works', 52);
+await typeSlow('.chatInput', 'Explain attention in two short sentences.', 28);
 await beat(500);
 await page.press('.chatInput', 'Enter');
+M.asked = mark();
 console.log('SCRIPT: question sent');
 
 // 9. wait for the answer to stream in ----------------------------------------
@@ -160,8 +168,12 @@ for (let i = 0; i < 40; i++) {          // up to ~20s
   lastLen = len;
 }
 console.log('SCRIPT: answer length', lastLen);
-await beat(2200); // let the reader see the answer
+await beat(1800); // let the reader see the answer
+if (await page.locator('.chatBubble.ai.error').count()) throw new Error('AI answer failed');
 
+M.end = mark();
+await page.screenshot({ path: SCRATCH + '/hero-final.png' });
+fs.writeFileSync(SCRATCH + '/hero-marks.json', JSON.stringify(M, null, 2));
 const video = page.video();
 await ctx.close();               // finalizes the video file
 const vpath = await video.path();

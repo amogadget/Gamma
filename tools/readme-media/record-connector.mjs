@@ -1,12 +1,12 @@
-// Records docs/assets/demos/demo-connector.gif sources: arXiv abs page (segment A),
+// Records docs/assets/demos/demo-connector.webp sources: arXiv abs page (segment A),
 // the extension popup driven as a page (segment B, composited as an overlay),
 // and the saved paper opening in Gamma (segment C).
-import { chromium } from 'playwright';
+import { chromium, ROOT, configureContext } from './runtime.mjs';
 import fs from 'fs';
 import path from 'path';
 
-const EXT = 'D:/Codes/Github/gamma/extension';
-const SERVER = 'http://127.0.0.1:9002';
+const EXT = ROOT + 'extension';
+const SERVER = process.env.BASE_URL || 'http://127.0.0.1:9002';
 const ARXIV = 'https://arxiv.org/abs/2312.03982';
 const CURSOR = () => addEventListener('DOMContentLoaded', () => {
   const c = document.createElement('div');
@@ -18,30 +18,27 @@ const CURSOR = () => addEventListener('DOMContentLoaded', () => {
     `translate(${e.clientX}px,${e.clientY}px)`, true);
 });
 
-const userDir = path.resolve('chrome-profile');
-fs.rmSync(userDir, { recursive: true, force: true });
+const userDir = fs.mkdtempSync(path.resolve('chrome-profile-'));
 const context = await chromium.launchPersistentContext(userDir, {
   headless: false,
   args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--headless=new'],
   viewport: { width: 1440, height: 900 },
   deviceScaleFactor: 2,
   colorScheme: 'light',
-  slowMo: 60,
+  slowMo: 0,
   recordVideo: { dir: 'video-conn', size: { width: 1440, height: 900 } },
 });
+await configureContext(context);
 await context.addInitScript(CURSOR);
+await context.addCookies([{ name: 'session', value: fs.readFileSync('session.txt', 'utf8').trim(), url: SERVER }]);
 let sw = context.serviceWorkers()[0];
 if (!sw) sw = await context.waitForEvent('serviceworker');
 await sw.evaluate((server) => chrome.storage.sync.set({ server }), SERVER);
 const extId = new URL(sw.url()).host;
 
-// --- pre-step (not part of the GIF): sign in through the popup ---
+// --- pre-step (not part of the demo): sign in through the popup ---
 const p0 = await context.newPage();
 await p0.goto(`chrome-extension://${extId}/popup.html`);
-await p0.waitForSelector('#view-login:not(.hidden)', { timeout: 15000 });
-await p0.fill('#login-user', 'demo');
-await p0.fill('#login-pass', 'demopw');
-await p0.click('#login-btn');
 await p0.waitForSelector('#view-main:not(.hidden)', { timeout: 15000 });
 await p0.close();
 
@@ -81,16 +78,19 @@ marks.title = await pageB.evaluate(() => document.getElementById('title').textCo
 await pageB.waitForTimeout(1400);
 marks.b0 = (Date.now() - marks.tB) / 1000;
 // pick the folder the agent created
-const fol = await pageB.locator('#folder').boundingBox();
+const fol = await pageB.locator('#folder-btn').boundingBox();
 await pageB.mouse.move(fol.x + fol.width / 2, fol.y + fol.height / 2, { steps: 25 });
 await pageB.waitForTimeout(400);
-await pageB.selectOption('#folder', 'quantum computing');
+await pageB.click('#folder-btn');
+await pageB.locator('#folder-menu .ctxMenuItem').filter({ hasText: /^Quantum$/ }).click();
 await pageB.waitForTimeout(900);
 const sv = await pageB.locator('#save').boundingBox();
 await pageB.mouse.move(sv.x + sv.width / 2, sv.y + sv.height / 2, { steps: 25 });
 await pageB.mouse.down(); await pageB.mouse.up();
+marks.bSave = (Date.now() - marks.tB) / 1000;
 await pageB.waitForSelector('#result.ok:not(.hidden), #result.msg.ok:not(.hidden)', { timeout: 120000 });
-await pageB.waitForTimeout(1600);
+marks.bSaved = (Date.now() - marks.tB) / 1000;
+await pageB.waitForTimeout(1000);
 const link = await pageB.locator('#result a').boundingBox();
 const openPromise = context.waitForEvent('page', { timeout: 30000 });
 await pageB.mouse.move(link.x + link.width / 2, link.y + link.height / 2, { steps: 25 });
@@ -104,7 +104,10 @@ const pageC = await openPromise;
 marks.tC = Date.now();
 await pageC.waitForLoadState('domcontentloaded');
 await pageC.waitForSelector('[data-page="1"] .textLayer span', { timeout: 90000 });
-await pageC.waitForTimeout(3500);
+const closeChat = pageC.getByRole('button', { name: 'Close Chat', exact: true });
+if (await closeChat.isVisible()) await closeChat.click();
+marks.cReady = (Date.now() - marks.tC) / 1000;
+await pageC.waitForTimeout(1800);
 await pageC.mouse.move(700, 450, { steps: 30 });
 await pageC.waitForTimeout(1200);
 marks.c1 = (Date.now() - marks.tC) / 1000;

@@ -1,15 +1,15 @@
-import { chromium } from 'playwright';
+import { chromium, ROOT, configureContext } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();
 const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = 'http://127.0.0.1:9001';
+const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
 const BLOCK = 'fy0-h_BqOHcH';        // "A quantum processor based on coherent transport of entangled atom arrays"
 const VW = 1440, VH = 900;
 const beat = (ms) => page.waitForTimeout(ms);
 
-// NOTE: the page is NEVER zoomed in-app. A smooth "camera" zoom is applied to
-// the GIF afterwards (gen-zoom.py) using the marks + ROIs captured below.
+// Keep the app at its normal zoom. render-suite.py crops a fixed detail view
+// using the marks and citation/reference coordinates captured below.
 
 let cx = VW / 2, cy = VH / 2;
 async function glide(x, y, steps = 26) { await page.mouse.move(x, y, { steps }); cx = x; cy = y; await beat(120); }
@@ -100,11 +100,12 @@ async function clickArxiv() {
   });
 }
 
-const browser = await chromium.launch({ headless: true, slowMo: 60 });
+const browser = await chromium.launch({ headless: true, slowMo: 0 });
 const ctx = await browser.newContext({
   colorScheme: 'light', viewport: { width: VW, height: VH }, deviceScaleFactor: 2,
   recordVideo: { dir: SCRATCH + '/video-links', size: { width: VW, height: VH } }, // CSS = video 1:1 (2x size mis-maps the frame)
 });
+await configureContext(ctx);
 await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 await ctx.addInitScript(() => {
   window.addEventListener('DOMContentLoaded', () => {
@@ -127,7 +128,7 @@ page.on('console', m => { const t = m.text(); if (t.startsWith('SCRIPT:')) conso
 
 // --- open the paper & settle on the page-3 citation (NORMAL scale) -----------
 await page.goto(`${BASE}/?block=${BLOCK}`, { waitUntil: 'networkidle' });
-await page.waitForSelector('[data-page="1"] .textLayer span', { timeout: 60000 });
+await page.waitForSelector('.textLayer span', { timeout: 60000 });
 await beat(1000);
 await page.evaluate(() => document.querySelector('[data-page="3"]')?.scrollIntoView());
 await page.waitForSelector('[data-page="3"] .textLayer span', { timeout: 20000 });
@@ -136,7 +137,7 @@ await centerCitation();
 const R1 = await citationAnchor();
 await glide(R1.x, R1.y, 22);
 M.m0 = mark();                    // camera zoom-in begins here (≈ show citation)
-await beat(1400);                 // let the GIF zoom-in animation play over the citation
+await beat(1400);                 // hold on the citation before jumping
 console.log('SCRIPT: citation ready');
 
 // --- click "36" once → jumps to the reference -------------------------------
@@ -158,6 +159,10 @@ await beat(300);
 await selectNumberProg();
 await beat(1600);
 console.log('SCRIPT: "36" selected');
+// Dismiss the selection palette before opening the external-link dialog.
+await glide(1000, 820, 20);
+await page.mouse.click(1000, 820);
+await beat(150);
 
 // --- click the arXiv link → External link modal → Fetch into Gamma ----------
 const ax = await getArxiv();
@@ -177,14 +182,17 @@ console.log('SCRIPT: fetch clicked, resolving…');
 let loaded = false;
 for (let i = 0; i < 30; i++) {
   await beat(400);
-  const b = await page.evaluate(() => new URL(location.href).searchParams.get('block'));
+  const b = await page.evaluate(() => (new URL(location.href).searchParams.get('page') || new URL(location.href).searchParams.get('block')));
   if (b && b !== BLOCK) { loaded = true; break; }
 }
-await page.waitForSelector('[data-page="1"] .textLayer span', { timeout: 20000 }).catch(() => {});
+await beat(350);
+await page.evaluate(() => document.querySelector('.pdfViewer')?.scrollTo({ top: 0, behavior: 'smooth' }));
+await page.waitForSelector('[data-page="1"] .textLayer span', { timeout: 10000 });
 await beat(400);
 M.mFetch = mark();               // camera zoom-out begins here (reveal the fetched paper)
 await beat(1700);
 M.tEnd = mark();
+if (!loaded) throw new Error('Fetched paper did not open');
 console.log('SCRIPT: new paper loaded =', loaded);
 
 // persist marks + ROIs for the post zoom

@@ -24,4 +24,7 @@ HANDOFF.md.bak
 docker-compose.yml
 run-local.bat
 
+# Private workspace exports, media captures, and render intermediates
+/tmp/readme-media/
+
 CLAUDE.md

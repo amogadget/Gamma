@@ -1,8 +1,9 @@
-// Records docs/assets/demos/demo-agent.gif source: home view, ask the chat to organize
+// Records the agent source for demo-annotate-and-ask.webp: ask the chat to organize
 // the library into folders, tool chips stream, folders appear in the list.
-import { chromium } from 'playwright';
+import { chromium, ROOT, configureContext } from './runtime.mjs';
 import fs from 'fs';
 
+const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
 const SESSION = fs.readFileSync('session.txt', 'utf8').trim();
 const CURSOR = () => addEventListener('DOMContentLoaded', () => {
   const c = document.createElement('div');
@@ -14,18 +15,20 @@ const CURSOR = () => addEventListener('DOMContentLoaded', () => {
     `translate(${e.clientX}px,${e.clientY}px)`, true);
 });
 
-const browser = await chromium.launch({ slowMo: 60 });
+const browser = await chromium.launch({ slowMo: 0 });
 const context = await browser.newContext({
   colorScheme: 'light',
   viewport: { width: 1440, height: 900 },
   deviceScaleFactor: 2,
   recordVideo: { dir: 'video-agent', size: { width: 1440, height: 900 } },
 });
-await context.addCookies([{ name: 'session', value: SESSION, url: 'http://127.0.0.1:9002' }]);
+await configureContext(context);
+await context.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 const page = await context.newPage();
 await page.addInitScript(CURSOR);
 const tPage = Date.now();
-await page.goto('http://127.0.0.1:9002/');
+await page.goto(BASE + '/');
+await page.click('[aria-label="Home"]');
 await page.waitForSelector('.chatInput', { timeout: 30000 });
 await page.waitForTimeout(2500);
 
@@ -36,7 +39,7 @@ const box = await input.boundingBox();
 await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 35 });
 await page.mouse.down(); await page.mouse.up();
 await page.waitForTimeout(500);
-await input.fill('Organize my library: read what each paper is about and file it into a topic folder.');
+await input.fill('Organize my papers into Quantum computing and Machine learning folders. Move each paper, then summarize in one sentence.');
 await page.waitForTimeout(900);
 await page.keyboard.press('Enter');
 
@@ -62,6 +65,7 @@ try {
 await page.waitForTimeout(2500);
 const mEnd = (Date.now() - tPage) / 1000;
 
+if (await page.locator('.chatBubble.ai.error').count()) throw new Error('Agent failed');
 await page.screenshot({ path: 'agent-final.png' });
 await context.close();
 const video = page.video();

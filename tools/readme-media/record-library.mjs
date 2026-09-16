@@ -1,4 +1,4 @@
-// Records docs/assets/demos/demo-library.gif source: from the HOME page, open the search
+// Records docs/assets/demos/demo-library.webp source: from the HOME page, open the search
 // panel (the topbar magnifier — plain Ctrl+F on home focuses the listing's own
 // find box; Ctrl+Shift+F would also open this panel), type a query that hits
 // titles, notes, a highlight and PDF text across the library at once, add a
@@ -10,11 +10,7 @@
 // (m0 = first action, for trimming the loading pre-roll; mChip / mOpen / mMark
 // for an optional post-process camera zoom).
 //
-// Conversion (the imageio-ffmpeg static binary; trim the loading pre-roll to
-// m0 - 0.6 s, 1.2x speed-up, 12 fps, 1040 px, 128 colours, < 10 MB):
-//   ffmpeg -y -i <webm> -vf "trim=start=<m0-0.6>:end=<tEnd+0.2>,setpts=(PTS-STARTPTS)/1.2,
-//     fps=12,scale=1040:-1:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];
-//     [s1][p]paletteuse=dither=bayer:bayer_scale=3" -loop 0 docs/assets/demos/demo-library.gif
+// Delivery: render-suite.py library (25 fps animated WebP).
 //
 // Content prerequisites on the target instance (an isolated clone of the demo
 // workspace): the atom-arrays paper carries notes + a highlight mentioning
@@ -26,16 +22,16 @@
 // stored read position can't scroll the match away.)
 // Search details are forced on (`gamma-search-details*` = "1"; the paper
 // view's default is the compact find bar).
-import { chromium } from 'playwright';
+import { chromium, ROOT, configureContext } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();
 const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = 'http://127.0.0.1:9004';
-const QEC = 'BHuT16WnxdQb';           // "An Introduction to Quantum Error Correction and Fault-Tolerant Quantum Computation"
+const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
+const QEC = process.env.QEC_ID || 'BHuT16WnxdQb';
 const QUERY = 'error correction';
 const VW = 1440, VH = 900;
-const EXE = process.env.LOCALAPPDATA + '/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-win64/chrome-headless-shell.exe';
+const EXE = process.env.CHROME_PATH;
 const beat = (ms) => page.waitForTimeout(ms);
 
 let cx = VW / 2, cy = VH / 2;
@@ -60,13 +56,14 @@ async function resultsIn() {
   await settled();
 }
 
-const browser = await chromium.launch({ headless: true, slowMo: 60, executablePath: EXE });
+const browser = await chromium.launch({ headless: true, slowMo: 0, executablePath: EXE });
 const ctx = await browser.newContext({
   colorScheme: 'light',
   viewport: { width: VW, height: VH },
   deviceScaleFactor: 2,
   recordVideo: { dir: SCRATCH + '/video', size: { width: VW, height: VH } },
 });
+await configureContext(ctx);
 await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 await ctx.addInitScript(() => {
   try {
@@ -96,6 +93,16 @@ const page = await ctx.newPage();
 page.on('console', m => { const t = m.text(); if (t.startsWith('SCRIPT:')) console.log(t); });
 const t0 = Date.now();
 const mark = () => (Date.now() - t0) / 1000;
+
+// Populate recents and PDF covers through real navigation, before the first shot.
+for (const id of ['fy0-h_BqOHcH', QEC]) {
+  await page.goto(`${BASE}/?page=${id}`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('.textLayer span', { timeout: 60000 });
+  const closeChat = page.getByRole('button', { name: 'Close Chat', exact: true });
+  if (await closeChat.isVisible()) await closeChat.click();
+  await page.locator('.pdfViewer').evaluate(e => e.scrollTo(0, 0));
+  await beat(1500);
+}
 
 // 1. home (a bare `/` restores the last open paper — click Home) -------------
 await page.goto(BASE + '/', { waitUntil: 'networkidle' });

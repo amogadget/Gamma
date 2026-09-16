@@ -8,6 +8,7 @@ duplicate.
 
 | Note | Question it answers |
 |---|---|
+| [demo-production.md](demo-production.md) | How scripted demos and screen-recording editors achieve smooth motion, readable framing and repeatable exports; animated WebP delivery measured on Gamma's refreshed demos. |
 | [handwriting-interactions.md](handwriting-interactions.md) | How Goodnotes and Notability select, edit, transform and reuse ink; finger taps versus holds; contextual menus; the broader writing/study feature inventory; Gamma gaps and acceptance criteria. |
 | [collaboration.md](collaboration.md) | How real-time collaborative editing is built elsewhere (OT, record-level last-writer-wins, CRDTs), why a snapshot autosave cannot collaborate, and why Gamma took the Notion / Linear / Figma shape. |
 | [workspaces.md](workspaces.md) | What happens when identity and data location are one string, what a workspace model needs, and how to version a data directory so upgrades stay safe and steps do not pile up. |
