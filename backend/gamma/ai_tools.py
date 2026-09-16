@@ -561,6 +561,10 @@ def _run_search_library(conn, ws: str, scope: dict, args: dict):
         return ("No pages are reachable from this chat.",
                 {"kind": "search", "summary": f"Searched library for “{query[:60]}” — no pages"})
     docs = {info["doc_id"]: info["title"] for info in pages.values() if info["doc_id"]}
+    doc_pages = {}
+    for page_id, info in pages.items():
+        if info["doc_id"]:
+            doc_pages.setdefault(info["doc_id"], []).append(page_id)
     # Local import: keep gamma.* module load free of the routers package.
     from .block_index import fts_query, refresh, search_blocks
     from .routers.search import _index_missing_async
@@ -576,7 +580,8 @@ def _run_search_library(conn, ws: str, scope: dict, args: dict):
             found.append(f'- note [{block_id}] in "{pages[page_id]["title"][:80]}" '
                          f"(page_id {page_id}): {snippet}")
         for doc_id, page, snippet in search_pdf(database, match, limit, docs):
-            found.append(f'- PDF "{docs[doc_id][:80]}" p.{page}: {snippet}')
+            found.append(f'- PDF "{docs[doc_id][:80]}" p.{page} '
+                         f'(page_id {", ".join(doc_pages[doc_id])}): {snippet}')
         return found
 
     relaxed = ""

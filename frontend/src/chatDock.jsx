@@ -8,6 +8,7 @@ import { API, apiJson, copyText, isPdfFile, readNdjson } from "./utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } from "./widgets";
 import PaperMentionInput from "./paperMentionInput";
 import { createTitleScorer } from "./librarySearch";
+import { pageAttachment } from "./libraryUtils";
 import { MenuSelect } from "./menus";
 import { CharSlider, approxPages } from "./settingsKit";
 import { AgentToolPicker, CHAT_KIND_ROWS } from "./settings";
@@ -259,12 +260,15 @@ export default function ChatDock({
   function showLoaded(msgs, title) {
     setChatMessages(msgs);
     const lastUser = [...msgs].reverse().find((m) => m.role === "user");
-    setChatDocs((lastUser?.contextPages || []).map((p) => p.id).slice(0, 6));
+    const references = [...new Set((lastUser?.contextPages || []).map((p) => p.id))].slice(0, 6);
+    setChatDocs(references);
     setChatIncludeNotes(!!lastUser?.includeNotes);
     setChatInput("");
     setChatTitle(title || "");
     const sent = msgs.some((m) => m.pdfDocs
-      ? (docId && m.pdfDocs.includes(docId)) || m.pdfDocs.some((d) => chatDocs.includes(d))
+      ? (docId && m.pdfDocs.includes(docId)) || m.pdfDocs.includes(focusedBlockId)
+        || (!docId && references.some((id) => m.pdfDocs.includes(id)
+          || m.pdfDocs.includes(pageAttachment(homeBlocks.find((b) => b.id === id))?.id)))
       : m.pdfs?.length);
     attachPdfManualRef.current = false;
     setAttachPdf(!sent && nativePdf);
@@ -275,6 +279,7 @@ export default function ChatDock({
     let cancelled = false;
     chatLoadedForRef.current = "";
     setChatDocs([]);
+    setChatIncludeNotes(false);
     setChatInput("");
     setDocPicker(false);
     fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, { credentials: "include" })
@@ -521,14 +526,16 @@ export default function ChatDock({
     const quoted = [selection, ...notes.map((n) => n.text)].filter(Boolean).join("\n\n---\n\n");
     const shown = quoted ? `${text}\n\n> ${quoted.slice(0, 280)}${quoted.length > 280 ? "…" : ""}` : text;
     // Names of PDFs that ride along with THIS message (displayed in the bubble)
-    const sendingPdf = attachPdf && (selectedDocs.length > 0 || !!pageAttach);
+    const contextIds = [...new Set([focusedBlockId, ...selectedDocs].filter(Boolean))];
+    const pdfPages = contextIds.flatMap((id) => {
+      const page = homeBlocks.find((b) => b.id === id);
+      const attachment = id === focusedBlockId ? pageAttach : pageAttachment(page);
+      return attachment ? [{ id: attachment.id, title: page?.content || (id === focusedBlockId ? pageTitle : "") || "Untitled" }] : [];
+    });
+    const sendingPdf = attachPdf && pdfPages.length > 0;
     const pdfNames = [
       ...files.map((f) => f.name),
-      ...(sendingPdf
-        ? (selectedDocs.length
-            ? selectedDocs.map((id) => homeBlocks.find((b) => b.id === id)?.content || "PDF")
-            : [pageTitle || "current page"])
-        : []),
+      ...(sendingPdf ? pdfPages.map((p) => p.title) : []),
     ];
     const contextPages = selectedDocs.map((id) => ({ id, title: homeBlocks.find((b) => b.id === id)?.content || "Untitled" }));
     const userMsg = {
@@ -540,7 +547,7 @@ export default function ChatDock({
       // pdfDocs records WHICH documents rode along, so reloading the page
       // can tell whether this document was already sent in the conversation
       // (uploaded files aren't library docs — they contribute names only).
-      ...(pdfNames.length ? { pdfs: pdfNames, pdfDocs: sendingPdf ? (selectedDocs.length ? [...selectedDocs] : [docId]) : [] } : {}),
+      ...(pdfNames.length ? { pdfs: pdfNames, pdfDocs: sendingPdf ? pdfPages.map((p) => p.id) : [] } : {}),
     };
     const sendKey = chatKey; // reply belongs to THIS conversation, even if the user navigates away
     const showReply = (aiMsg, final) => {
@@ -593,7 +600,7 @@ export default function ChatDock({
           attach_pdf: sendingPdf,
           effort: chatEffort || "",
           system: chatSystem || "",
-          pages: selectedDocs.length ? [...new Set([focusedBlockId, ...selectedDocs].filter(Boolean))] : [],
+          pages: selectedDocs.length ? contextIds : [],
           include_notes: includeNotes,
           images,
           files,
@@ -1343,7 +1350,7 @@ export default function ChatDock({
           value={chatInput}
           onChange={setChatInput}
           onPaste={handleChatPaste}
-          placeholder={
+          placeholder={(
             // Names what the message will be about, most specific attachment first.
             chatFiles.length ? `Ask about the attached file${chatFiles.length > 1 ? "s" : ""}…`
             : chatImages.length ? "Ask about the pasted figure…"
@@ -1352,9 +1359,9 @@ export default function ChatDock({
             : chatNotes?.length > 1 ? `Ask about the ${chatNotes.length} attached notes…`
             : chatNotes?.length ? (chatNotes[0].kind === "block" ? "Ask about the attached block…" : "Ask about the selected note…")
             : cursorChip ? "Ask about the block at your cursor…"
-            : chatDocs.length ? `Ask about ${chatDocs.length} selected PDF${chatDocs.length > 1 ? "s" : ""}…`
+            : chatDocs.length ? `Ask about ${chatDocs.length} attached page${chatDocs.length > 1 ? "s" : ""}…`
             : agentAsk || "Ask…"
-          }
+          ) + " (@ to mention a paper)"}
         />
         {chatLoading ? (
           <button className="uiBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">

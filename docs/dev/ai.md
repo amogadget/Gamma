@@ -141,6 +141,32 @@ normalized-text match (`_locate_passage`, page-seam aware) and spends the
 budget on a small head slice plus windows starting at those pages, labeled with
 their page numbers; unlocatable selections fall back to the plain head excerpt.
 
+### Mentioning library papers
+
+Type `@` in the chat composer to search library titles with the same ranking,
+typo tolerance, and separator matching as library search (`librarySearch.js`).
+Arrow keys choose a result; Enter or Tab attaches it, Escape dismisses the
+query, and clicking or tapping a result also works. Results include author,
+year, venue, and folder details. A completed mention inserts the title and
+adds a removable context chip; the chip controls which page IDs are sent.
+The `+` menu offers the same library search. Up to six references can be
+attached, plus the open page, with duplicates removed.
+
+References persist for follow-up questions and are saved as `contextPages`
+on each user message. Loading a conversation restores its last references;
+editing an earlier message reuses that message's references. Each contributes
+its title, metadata, summary, and PDF excerpt (or native PDF), with optional
+notes/highlights. The multi-paper text budget is shared by valid pages; a
+selection still centers the open paper's excerpt. Tool-enabled chats also
+receive document maps labelled with page IDs.
+
+Explicit references expand `read_page`, `read_block`, and `search_library`
+access within the current workspace, even outside the original page/folder.
+They never expand the editing scope. PDF search hits identify their Gamma
+page IDs so the assistant can read further or cite the matching paper,
+including when titles are identical. References are resolved server-side;
+missing pages and non-page blocks are ignored.
+
 ### Pointing the chat at notes
 
 Three optional request fields say what the message is about inside the

@@ -52,6 +52,25 @@ def org(client, request):
 
 
 @pytest.fixture(scope="module")
+def indexed_pdf(org):
+    """Page a's PDF with a searchable hit on physical page 3."""
+    import sqlite3
+    from gamma.db import page_now, ws_db_path
+    from gamma.pdf_index import ensure_schema
+    from gamma.textnorm import INDEX_VERSION
+
+    _, ids = org
+    doc = "d" * 24
+    with sqlite3.connect(ws_db_path(ids["ws"], "data.db")) as db:
+        ensure_schema(db)
+        db.execute("INSERT INTO pdf_fts (doc_id, page, content) VALUES (?, ?, ?)",
+                   (doc, 3, "quantum error correction with cat qubits"))
+        db.execute("INSERT OR REPLACE INTO pdf_fts_docs (doc_id, indexed_at, pages, ver) "
+                   "VALUES (?, ?, 1, ?)", (doc, page_now(), INDEX_VERSION))
+    return doc
+
+
+@pytest.fixture(scope="module")
 def notes(org):
     """A page with a small note tree (plus a highlight) for the block tools."""
     c, ids = org

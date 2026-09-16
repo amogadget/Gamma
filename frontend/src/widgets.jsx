@@ -239,6 +239,9 @@ const AutoGrowTextarea = React.forwardRef(function AutoGrowTextarea(props, forwa
   useEffect(() => {
     const el = innerRef.current;
     if (!el) return;
+    // Empty inputs use their rows height. scrollHeight also counts wrapped
+    // placeholder text, which can leave the chat tall after clearing context.
+    if (!el.value) { el.style.height = ""; return; }
     el.style.height = "0px";
     el.style.height = `${el.scrollHeight}px`;
   }, [props.value]);

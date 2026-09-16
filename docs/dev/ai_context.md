@@ -78,9 +78,10 @@ message, and it doesn't stop fabrication — the tools are the better lever.
   window (`pdf_excerpt`), and each context section carries
   `Gamma page ID: <id>`. Both feed the clickable citations
   ([pdf_citations.md](pdf_citations.md)).
-- **Document map** (`document_map`): for page-scope agent chats, a ~2.4k-char
+- **Document map** (`document_map`): for page/folder agent chats, a ~2.4k-char
   outline — one line per PDF page (sampled for big documents), taken from the
-  FTS index so it costs a query, not a re-parse. The model jumps to the right
+  FTS index so it costs a query, not a re-parse. Each attached paper gets its
+  own map labelled with its Gamma page ID. The model jumps to the right
   page instead of guessing; on one question this cut 6 tool calls to 1.
 - **Search relaxation** (`_run_search_library`): the FTS query ANDs every
   term, and agents write 6–9-word natural queries — one word the page doesn't

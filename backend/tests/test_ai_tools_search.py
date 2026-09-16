@@ -1,32 +1,9 @@
 """search_library: notes hits before PDF hits, scope rules, the legacy
 search_pdfs name, and what a page-scoped chat can reach."""
 
-import pytest
-
 from gamma.ai_tools import agent_tools, run_agent_tool
 
-from ai_fixtures import folder, org, props  # noqa: F401  (org is a fixture)
-
-
-@pytest.fixture(scope="module")
-def indexed_pdf(org):
-    """Page a's PDF as one indexed page of text, stamped current, so
-    search_library has a PDF hit (p.3, "cat qubits") to find."""
-    import sqlite3 as sq
-    from gamma.db import page_now, ws_db_path
-    from gamma.pdf_index import ensure_schema
-    from gamma.textnorm import INDEX_VERSION
-
-    c, ids = org
-    doc = "d" * 24  # page a's doc_id
-    with sq.connect(ws_db_path(ids["ws"], "data.db")) as db:
-        ensure_schema(db)
-        db.execute("INSERT INTO pdf_fts (doc_id, page, content) VALUES (?, ?, ?)",
-                   (doc, 3, "quantum error correction with cat qubits"))
-        db.execute("INSERT OR REPLACE INTO pdf_fts_docs (doc_id, indexed_at, pages, ver) "
-                   "VALUES (?, ?, 1, ?)", (doc, page_now(), INDEX_VERSION))
-        db.commit()
-    return doc
+from ai_fixtures import folder, indexed_pdf, org, props  # noqa: F401 (fixtures)
 
 
 def test_search_library_scoped_snippets(org, indexed_pdf):

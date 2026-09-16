@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from ai_fixtures import FakeResp, ai_provider, org, props  # noqa: F401
+from ai_fixtures import FakeResp, ai_provider, indexed_pdf, org, props  # noqa: F401
 from gamma.ai_tools import run_agent_tool
 
 
@@ -69,3 +69,43 @@ def test_context_deduplicates_and_rejects_non_pages(org):
     assert context.count(f"Gamma page ID: {ids['note']}") == 1
     assert f"Gamma page ID: {child}" not in context
     assert len(coverage) == 1
+
+
+def test_pdf_references_preserve_selection_metadata_and_budget(org, monkeypatch):
+    from gamma import ai_context
+    from gamma.routers.ai import AIChatRequest
+    c, ids = org
+    c.post("/api/blocks", json={"parent_id": ids["a"], "content": "private annotation"})
+    calls = []
+    monkeypatch.setattr(ai_context, "ensure_indexed", lambda *args: None)
+    monkeypatch.setattr(ai_context, "document_map", lambda *args: "p.3: cavity results")
+
+    def selection(ws, doc, quote, budget):
+        calls.append((quote, budget))
+        return "[PDF page 3]\nSelected cavity results"
+
+    monkeypatch.setattr(ai_context, "selection_context", selection)
+    payload = AIChatRequest(prompt="Compare", page_id=ids["a"],
+        pages=[ids["a"], ids["note"], "missing"], selection="cavity results",
+        multi_context_char_limit=6000, agent_scope="page")
+    _, context, coverage = ai_context.gather_inputs(ids["ws"], payload, False)
+    assert calls == [("cavity results", 3000)]
+    assert "Ada One" in context and "2019" in context and "Nature" in context
+    assert "[PDF page 3]" in context and "private annotation" not in context
+    assert f"Document map for Gamma page ID: {ids['a']}" in context
+    assert len(coverage) == 2 and coverage[0]["selection"]
+    payload.include_notes = True
+    assert "private annotation" in ai_context.gather_inputs(ids["ws"], payload, False)[1]
+
+
+def test_reference_pdf_is_readable_and_searchable(org, indexed_pdf, monkeypatch):
+    from gamma import ai_context
+    monkeypatch.setattr(ai_context, "pdf_excerpt", lambda *args: (
+        "[PDF page 3]\nquantum error correction with cat qubits", 0, 50))
+    _, ids = org
+    scope = {"type": "page", "page_id": ids["note"], "context_pages": [ids["a"]]}
+    for name, args in [("read_page", {"page_id": ids["a"], "pdf_page": 3}),
+                       ("search_library", {"query": "cat qubits"})]:
+        text, action = run_agent_tool(ids["ws"], scope, name, args)
+        assert not action.get("error"), text
+        assert "cat qubits" in text and ids["a"] in text
