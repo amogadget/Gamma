@@ -7,6 +7,8 @@ Every chat has a *scope* deciding what its tools can touch:
 - ``{"type": "page", "page_id": id}`` — the per-page chat; tools reach only
   that page.
 
+``context_pages`` extends either scope for reads; mutations keep the base scope.
+
 Each TOOLS entry declares its wire spec, the Settings permission key
 (Settings → Assistant → Folder agent), the scopes it exists in, whether it
 mutates, and its executor — so arming a chat is one filter
@@ -135,19 +137,14 @@ def _load_scoped_page(conn, scope: dict, args: dict):
 
 
 def _scope_pages(conn, scope: dict) -> dict:
-    """{page_id: {"title", "doc_id"}} for every page the scope can reach
-    (doc_id "" when the page carries no PDF) — the one page of a page scope,
-    else the library / folder listing (blocks_store.root_pages)."""
+    """Titles and PDF ids for the base scope plus read-only context pages."""
+    page_ids = list(scope.get("context_pages") or [])
     if scope.get("type") == "page":
-        loaded, error = _load_scoped_page(conn, scope, {"page_id": scope.get("page_id")})
         pages = {}
-        if not error:
-            page_id, title, props, _ = loaded
-            attachment = page_attachment(props)
-            pages[page_id] = {"title": title, "doc_id": attachment["id"] if attachment else ""}
+        page_ids.insert(0, scope.get("page_id"))
     else:
         pages = root_pages(conn, _scope_folder(scope))
-    for page_id in scope.get("context_pages") or []:
+    for page_id in page_ids:
         loaded, error = _load_scoped_page(conn, scope, {"page_id": page_id})
         if not error:
             page_id, title, props, _ = loaded

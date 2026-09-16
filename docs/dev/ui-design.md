@@ -120,8 +120,9 @@ Library Display is the model: one `PageCard` with independent Thumbnails,
 Folders and Labels switches. Mutually exclusive palettes (themes) use a set
 of miniature cards instead.
 
-Import and Export open on large format/source cards in PDF, MD and ZIP
-rows: app logos for app formats, the shared PDF, notes and Markdown icons
+Import and Export open on format/source cards grouped by file type.
+Export uses PDF, Notes and ZIP rows; Import uses PDF, MD and ZIP rows.
+Both use app logos for app formats, the shared PDF, notes and Markdown icons
 for document formats, all monochrome at one size. A review step with a live
 illustrative page follows only when the format has editable options. Fixed
 contents get no switches (Gamma exports directly, Logseq offers only file
@@ -246,7 +247,8 @@ extend that list, don't add another copy.
 | `chatDock.jsx` | the AI chat panel (incl. agent wiring); header = a `.ctlBtnRow` of `.ctlBtn` icon buttons (the PDF zoom column's buttons laid flat) with the ⚙ settings popover |
 | `pdfViewer.jsx` | the custom pdf.js viewer |
 | `ink.js`, `inkStore.js`, `inkInput.js`, `inkLayer.jsx` | handwriting ([handwriting.md](handwriting.md)): the stroke codec + geometry (pure), the files/drafts store, pointer sampling, and the page layer + selection menu + notes card + tool strip (`.pdfInkBar`: `ctlBtn`s and `colorBtn` swatches) |
-| `search.jsx` | workspace search (Ctrl+F) |
+| `search.jsx`, `librarySearch.js` | workspace search (Ctrl+F) and the title scorer shared with chat |
+| `paperMentionInput.jsx`, `paperMentions.js` | chat mention picker, mention text edits and `MAX_CHAT_REFERENCES` (six attached pages plus the current page) |
 | `blockTree.jsx`, `logseqPdfModel.js` | outliner rendering / pure tree ops |
 | `fileChip.jsx` | the file chip an upload link renders as — a small card (kind icon in a tinted square, name, download arrow), inline so it sits in a sentence, identical for every type; a PDF or markdown chip whose page exists gets an accent "open page" button before the arrow; a `ContextMenu` on right-click with "Open page" / "Add to library" (fed by `FileChipContext` from App and one batched `POST /pages/by-docs` per render) and download; also the shared `postFile` / `uploadFilesAsLines` upload helpers |
 | `mdTools.jsx` | in-place tools on rendered notes: `MdImage` (hover toolbar of `ctlBtn` icons — zoom lightbox, caption via alt text, download, delete — plus a drag grip writing the Obsidian `![alt|300]` size; legacy Logseq `{:width N}` reads and normalizes on edit) and `MdTableWrap` (hover "+" strips, column/row handle menus — insert, align, delete — and click-a-cell in-place editing: an input over the cell, Tab/Shift-Tab hop cells across the commit remount via a module-level session map, Enter commits, Esc cancels; tables are never edited as raw markdown — a cell mousedown stops the block row's edit-on-mousedown), backed by pure source transforms (`scanImages`/`scanTables` locate the nth rendered construct; `applyImageEdit`/`applyTableEdit` rewrite it, tables re-serialized pretty-printed; `formatTables` also runs when a block's raw editor closes) and `htmlTableToMarkdown` for the spreadsheet-paste path |
@@ -256,6 +258,6 @@ extend that list, don't add another copy.
 | `callouts.js` | remark plugin for `> [!note] Title` callouts (type aliases → note/tip/warning/danger/important/quote; colors in app.css) |
 | `codeHighlight.js` | fenced ``` ``` ``` code helpers shared by editor + renderer: `scanFences` (region scanner, mirrored in mdPreprocess exclusions and blockTree's Enter/Tab-in-fence handling), `fenceInnerAt`, and the highlight.js (`lib/common`) wrapper; token colors are theme-aware `.hljs-*` rules in app.css |
 | `latexEditor.jsx` | LaTeX aids while editing: viewport-bounded, scrollable live preview, `\command` snippets, argument/Tab-out navigation, `renderKatex`/`useCaretAnchored` shared helpers; `latexInput.js` supplies scalable delimiter pairing. See [LaTeX editing](latex_editing.md) for shortcuts and browser checks |
-| `libraryUtils.js` | folder-tag semantics (mirrored by `backend/gamma/ai_tools.py`) |
+| `libraryUtils.js` | folder-tag semantics (mirrored by `backend/gamma/foldertags.py`) |
 | `widgets.jsx`, `menus.jsx`, `icons.jsx` | shared components |
 | `menuAim.js` | pointer-trajectory ("safe triangle") hover intent for hierarchical menus — UI-agnostic, consumed by `menus.jsx` |

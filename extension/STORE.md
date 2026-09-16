@@ -92,8 +92,8 @@ extension storage. When you click Save or Clip, it sends the current page's
 title, identifiers (DOI / arXiv id), PDF link or PDF file, and any text you
 selected to the Gamma server address you configured, and nowhere else. It
 does not collect analytics, does not use third-party services, and does not
-transmit anything without your action. You can remove all stored data by
-removing the extension. Publisher cookie snapshots explicitly connected to
+transmit anything without your action. Removing the extension deletes its local
+settings. Publisher cookie snapshots explicitly connected to
 Gamma remain on that server until disconnected or expired; uninstalling the
 extension does not revoke them. Session cookies expire within 24 hours and
 persistent cookies within 30 days or their original expiry, whichever is sooner.

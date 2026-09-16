@@ -29,8 +29,9 @@ visible viewport and refreshed after scrolling, resizing, or font/layout changes
 Long and tall equations scroll within the preview; clicking it retains editor
 focus. The preview is capped at 720 px wide and 45% of the window height.
 
-Implementation: `latexInput.js` contains delimiter edits, `blockCmEditor.jsx`
-applies them as atomic CodeMirror transactions, and `latexEditor.jsx` contains
+Implementation: `latexInput.js` contains delimiter edits and the shared
+`escapedAt` check (also exported by `latexEditor.jsx`). `blockCmEditor.jsx` applies
+delimiter edits as atomic CodeMirror transactions. `latexEditor.jsx` contains
 the command catalog, completion edits, Tab navigation and preview positioning.
 
 Validation (from `frontend`):

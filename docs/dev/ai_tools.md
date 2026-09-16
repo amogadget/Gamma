@@ -23,6 +23,11 @@ Folder semantics mirror
 [frontend/src/libraryUtils.js](../../frontend/src/libraryUtils.js) via the
 shared `gamma/foldertags.py` rules; keep them in sync.
 
+Attached library pages (`context_pages` in the tool scope) extend reading access
+beyond the current page or folder. `_scope_pages` combines the base scope and
+these references for reads and search. `run_agent_tool` removes `context_pages`
+before dispatching a mutation, so attachments do not grant editing access.
+
 ## The tools
 
 | Tool | Permission | Scope | What it does |
@@ -71,7 +76,7 @@ edit made a moment ago is found) and the PDF index (`gamma/pdf_index.py`
 `GET /api/search` / Ctrl+F).
 Note hits come first as `- note [block_id] in "title" (page_id …): snippet`
 — ids `read_block` and the editors take — then PDF hits as `- PDF "title"
-p.N: snippet`. Un-indexed PDFs are kicked to the background indexer and
+p.N (page_id …): snippet`. Un-indexed PDFs are kicked to the background indexer and
 reported (as are note pages waiting for a rebuild batch) so the model knows
 results may be incomplete. The MATCH ANDs every term, so a zero-hit query is
 retried with only its longest words and the result labelled approximate —
@@ -194,9 +199,8 @@ Deliberately not offered under any permission:
 - Deleting anything — pages, blocks, folders, files.
 - Editing highlight anchors or flat labels (folder labels change only through
   `move_page`).
-- Reaching any PAGE outside the chat's scope — enforced by the server on every
-  call, not just by instructions. (The web tools reach public sources, never
-  another page of the workspace, and only read.)
+- Reading library pages outside the base scope and attached references, or
+  editing pages outside the base scope. The server checks every call.
 - Reaching uploads, share links, settings, or other users' data.
 - Adding a fetched paper to the library — `fetch_paper` reads, it never
   creates a page; the user drops the PDF or uses the extension for that.

@@ -1,4 +1,4 @@
-import { chromium, ROOT, configureContext } from './runtime.mjs';
+import { chromium, configureContext } from './runtime.mjs';
 import fs from 'fs';
 
 // README "Metadata & citations" demo: open a paper by URL, open the metadata

@@ -1,9 +1,9 @@
-from pathlib import Path
 """Post-process for record-metadata.mjs: trim the download pre-roll, cut the
 dead waits (metadata fetch, citation regeneration), and apply a smooth camera
 zoom onto the right column where the metadata + share popovers live. The app
 itself is never zoomed. Reads meta_zoom.json + video_meta_path.txt from the
 recorder's working directory; run this script from that directory."""
+from pathlib import Path
 import json, os, subprocess, sys
 
 SCRATCH = os.getcwd()

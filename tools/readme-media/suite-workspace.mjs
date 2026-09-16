@@ -4,7 +4,7 @@ import path from 'node:path';
 import { ROOT } from './runtime.mjs';
 import { Account } from '../../frontend/tests/e2e/harness.mjs';
 
-const dir = path.join(ROOT, 'tmp/readme-media/suite');
+const dir = path.resolve(process.env.MEDIA_SCRATCH || path.join(ROOT, 'tmp/readme-media/suite'));
 fs.mkdirSync(dir, { recursive: true });
 const file = path.join(dir, 'workspace.json');
 if (process.argv.includes('--remove')) {

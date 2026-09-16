@@ -3435,9 +3435,9 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .chatMentionHint { border-top: 1px solid var(--border); }
 .chatReferenceStrip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 4px 2px; max-height: 100px; overflow-y: auto; flex-shrink: 0; }
 .chatReferenceLabel { font-size: 10px; color: var(--text-dim); margin-right: 3px; }
-.chatReferenceChip { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-surface); }
-.chatReferenceChip > button:first-child { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px 6px; border: 0; background: transparent; color: var(--text-secondary); font: inherit; font-size: 11px; cursor: pointer; }
-.chatReferenceChip svg { flex-shrink: 0; }
+.chatReferenceChip { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; font-size: 11px; }
+.chatReferenceChip .crumbBtn, .chatMsgPdfs .crumbBtn { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.chatReferenceChip svg, .chatMsgPdfs .crumbBtn svg { flex-shrink: 0; }
 .chatReferenceChip .uiClose { flex-shrink: 0; margin-right: 3px; }
 /* --- Login page --- */
 .loginPage {
@@ -3684,7 +3684,8 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 8px;
   background: var(--bg-surface);
 }
-.chatMsgPdfs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.chatMsgPdfs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; font-size: calc(10px * var(--text-scale, 1)); }
+.chatBubble.user .crumbBtn { color: inherit; }
 .chatPdfChip {
   display: inline-flex;
   align-items: center;

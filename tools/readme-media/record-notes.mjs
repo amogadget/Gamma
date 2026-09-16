@@ -7,7 +7,7 @@
 // an EMPTY page PAGE_ID (reset: PUT /api/blocks/{id}/children {"blocks":[]}).
 // Writes the webm path to video_path.txt and the pre-roll trim mark to
 // notes_marks.json (m0 = video-time of the first click).
-import { chromium, ROOT, configureContext } from './runtime.mjs';
+import { chromium, configureContext } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();

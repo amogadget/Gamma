@@ -2,8 +2,6 @@
 # and applies a post-process camera zoom (zoompan), then converts to GIF.
 import json, os, subprocess, sys
 
-HERE = os.getcwd()
-os.chdir(HERE)
 Z = json.load(open("conn_marks.json"))
 from imageio_ffmpeg import get_ffmpeg_exe
 FF = get_ffmpeg_exe()

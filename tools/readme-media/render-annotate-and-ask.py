@@ -12,7 +12,7 @@ from media_output import encode_webp, publish
 
 ROOT = Path(__file__).resolve().parents[2]
 SUITE = ROOT / 'tmp/readme-media/suite'
-OUT = ROOT / 'docs/assets/demos/demo-annotate-and-ask.webp'
+OUT = SUITE / 'annotate-and-ask/preview.webp'
 directory = SUITE / 'annotate-and-ask'
 directory.mkdir(parents=True, exist_ok=True)
 paper = SUITE / 'download-and-chat'

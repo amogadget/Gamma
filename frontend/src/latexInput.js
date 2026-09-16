@@ -7,20 +7,21 @@ const DELIMITERS = {
 };
 const OPEN = /\\left\s*(\\(?:langle|lvert|lVert|lfloor|lceil|[{|])|[(\[|])$/;
 const CLOSE = /^\\right\s*(\\(?:rangle|rvert|rVert|rfloor|rceil|[}|])|[)\]|.])/;
-const escaped = (text, pos) => {
+// An odd run of backslashes escapes the character at pos.
+export function escapedAt(text, pos) {
   let n = 0;
   while (text[--pos] === "\\") n++;
   return n % 2 === 1;
-};
+}
 
 export function rightDelimiterAt(text, pos) {
-  return text[pos] === "\\" && !escaped(text, pos) ? CLOSE.exec(text.slice(pos))?.[0] || null : null;
+  return text[pos] === "\\" && !escapedAt(text, pos) ? CLOSE.exec(text.slice(pos))?.[0] || null : null;
 }
 
 export function leftDelimiterEdit(value, from, to, insert, start = 0, end = value.length) {
   const before = value.slice(start, from) + insert;
   const match = OPEN.exec(before);
-  if (!match || escaped(before, match.index)) return null;
+  if (!match || escapedAt(before, match.index)) return null;
   const closer = "\\right" + DELIMITERS[match[1]];
   const after = value.slice(to, end);
   const inner = value.slice(from, to);
@@ -29,7 +30,7 @@ export function leftDelimiterEdit(value, from, to, insert, start = 0, end = valu
   let balance = 0;
   const whole = before + inner + after;
   for (const token of whole.matchAll(/\\(left|right)\b/g)) {
-    if (!escaped(whole, token.index)) balance += token[1] === "left" ? 1 : -1;
+    if (!escapedAt(whole, token.index)) balance += token[1] === "left" ? 1 : -1;
   }
   const supplied = balance <= 0 && after.startsWith(closer);
   return {
@@ -40,7 +41,7 @@ export function leftDelimiterEdit(value, from, to, insert, start = 0, end = valu
 
 export function emptyLeftPair(value, cursor) {
   const match = OPEN.exec(value.slice(0, cursor));
-  if (!match || escaped(value, match.index)) return null;
+  if (!match || escapedAt(value, match.index)) return null;
   const closer = "\\right" + DELIMITERS[match[1]];
   if (!value.startsWith(closer, cursor)) return null;
   return { from: match.index, to: cursor + closer.length };

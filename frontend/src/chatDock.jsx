@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { API, apiJson, copyText, isPdfFile, readNdjson } from "./utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } from "./widgets";
 import PaperMentionInput from "./paperMentionInput";
+import { MAX_CHAT_REFERENCES } from "./paperMentions";
 import { createTitleScorer } from "./librarySearch";
 import { pageAttachment } from "./libraryUtils";
 import { MenuSelect } from "./menus";
@@ -260,7 +261,7 @@ export default function ChatDock({
   function showLoaded(msgs, title) {
     setChatMessages(msgs);
     const lastUser = [...msgs].reverse().find((m) => m.role === "user");
-    const references = [...new Set((lastUser?.contextPages || []).map((p) => p.id))].slice(0, 6);
+    const references = [...new Set((lastUser?.contextPages || []).map((p) => p.id))].slice(0, MAX_CHAT_REFERENCES);
     setChatDocs(references);
     setChatIncludeNotes(!!lastUser?.includeNotes);
     setChatInput("");
@@ -1169,7 +1170,7 @@ export default function ChatDock({
                       </div>
                     ) : null}
                     {isUser && m.contextPages?.length ? <div className="chatMsgPdfs">
-                      {m.contextPages.map((p) => <button type="button" key={p.id} className="chatPdfChip" title="Open referenced page" onClick={() => onOpenPage?.(p.id)}><BookIcon size={11} />{p.title}</button>)}
+                      {m.contextPages.map((p) => <button type="button" key={p.id} className="crumbBtn" title={p.title} onClick={() => onOpenPage?.(p.id)}><BookIcon size={11} /><span className="linkChipText">{p.title}</span></button>)}
                     </div> : null}
                     {isUser
                       ? <div className="chatUserText">{m.text}</div>
@@ -1229,7 +1230,7 @@ export default function ChatDock({
         <div className="chatReferenceStrip" aria-label="Attached library pages">
           <span className="chatReferenceLabel" title="Paper details and text stay in context for follow-up questions. Notes are optional in the library picker.">Context</span>
           {chatDocs.map((id) => <span className="chatReferenceChip" key={id}>
-            <button type="button" title="Open attached page" onClick={() => onOpenPage?.(id)}><BookIcon size={12} />{homeBlocks.find((b) => b.id === id)?.content || "Unavailable page"}</button>
+            <button type="button" className="crumbBtn" title={homeBlocks.find((b) => b.id === id)?.content || "Unavailable page"} onClick={() => onOpenPage?.(id)}><BookIcon size={12} /><span className="linkChipText">{homeBlocks.find((b) => b.id === id)?.content || "Unavailable page"}</span></button>
             <button type="button" className="uiClose uiCloseSm" aria-label={`Remove ${homeBlocks.find((b) => b.id === id)?.content || "page"} from context`} onClick={() => setChatDocs((prev) => prev.filter((p) => p !== id))}><XIcon size={11} /></button>
           </span>)}
         </div>
@@ -1342,7 +1343,7 @@ export default function ChatDock({
         ) : null}
         <PaperMentionInput
           key={chatKey}
-          pages={homeBlocks} openTabs={openTabs} selected={chatDocs} maxPages={6}
+          pages={homeBlocks} openTabs={openTabs} selected={chatDocs}
           onAttach={(id) => setChatDocs((prev) => prev.includes(id) ? prev : [...prev, id])}
           onSend={sendChatMessage}
           className="chatInput chatInputArea"
@@ -1413,7 +1414,7 @@ export default function ChatDock({
                     <input
                       type="checkbox"
                       checked={chatDocs.includes(b.id)}
-                      disabled={!chatDocs.includes(b.id) && chatDocs.length >= 6}
+                      disabled={!chatDocs.includes(b.id) && chatDocs.length >= MAX_CHAT_REFERENCES}
                       onChange={(e) => setChatDocs((prev) => e.target.checked
                         ? [...prev, b.id]
                         : prev.filter((id) => id !== b.id))}

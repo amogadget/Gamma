@@ -48,6 +48,44 @@ try {
   const chatClose = page.getByRole('button', { name: 'Close Chat', exact: true });
   if (await chatClose.isVisible()) await chatClose.click();
   await page.waitForTimeout(1500);
+  // Optional first README story: text highlight and a real annotation before ink.
+  if (process.argv.includes('--annotate')) {
+    marks.start = at();
+    const span = page.locator('[data-page="1"] .textLayer span').filter({ hasText: 'used for robust quantum information storage, and excitation into Rydberg states is' }).first();
+    const b = await span.evaluate(el => {
+      const a=document.createRange(), z=document.createRange();
+      a.setStart(el.firstChild,0); a.setEnd(el.firstChild,1);
+      z.setStart(el.firstChild,el.textContent.length-1); z.setEnd(el.firstChild,el.textContent.length);
+      const first=a.getBoundingClientRect(), last=z.getBoundingClientRect();
+      return {x:first.x,y:first.y,width:last.right-first.x,height:first.height};
+    });
+    await page.mouse.move(b.x+8,b.y+b.height/2);
+    await page.waitForTimeout(350);
+    await page.mouse.down({clickCount:2});
+    for(let i=1;i<=40;i++) {
+      await page.mouse.move(b.x+8+(b.width-16)*i/40,b.y+b.height/2);
+      await page.waitForTimeout(20);
+    }
+    await page.mouse.up();
+    const selected = await page.evaluate(() => window.getSelection()?.toString());
+    if (!selected?.includes('quantum information storage')) throw new Error(`Text drag missed the claim: ${selected}`);
+    await page.locator('.plainTip .colorBtn').first().waitFor();
+    await page.waitForTimeout(650);
+    await page.locator('.plainTip .colorBtn').first().click();
+    await page.waitForTimeout(800);
+    marks.textHighlight = at();
+    await page.locator('.blockEditorCm .cm-content').waitFor();
+    await page.locator('.blockEditorCm .cm-content').click();
+    await page.keyboard.type('Long-lived storage supports entanglement.', {delay:42});
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(1100);
+    marks.annotation = at();
+    // Focusing a linked note jumps the reader to that highlight. Return to the
+    // original paper framing before the hand-plotted ink gestures.
+    await page.mouse.move(850,650);
+    await page.mouse.wheel(0,-1200);
+    await page.waitForTimeout(800);
+  }
   await page.getByRole('button', { name: 'Handwriting tools', exact: true }).click();
   await page.waitForTimeout(500);
   await page.screenshot({ path: path.join(scratch, 'ink-setup.png') });
@@ -98,7 +136,7 @@ try {
       }
       return [...out, points.at(-1)];
     }
-    marks.start = at();
+    marks.start ??= at();
     await page.waitForTimeout(300);
     await click(page.locator('.pdfInkBar button[aria-label^="Pen #1d4ed8"]'));
     marks.draw = at();
@@ -135,7 +173,11 @@ try {
     const video = page.video();
     await context.close(); context = null;
     const videoPath = await video.path();
-    fs.writeFileSync(path.join(scratch, 'ink-timeline.json'), JSON.stringify({ video: videoPath, width: W, height: H, marks, verified: { strokes: 4, pen: 3, highlighter: true, reload: true } }, null, 2));
+    if (process.argv.includes('--annotate')) {
+      const tree = await account.api(`/api/blocks/${pageId}/subtree`);
+      if (!JSON.stringify(tree).includes('Long-lived storage supports entanglement.')) throw new Error('Annotation did not persist');
+    }
+    fs.writeFileSync(path.join(scratch, 'ink-timeline.json'), JSON.stringify({ video: videoPath, width: W, height: H, marks, verified: { strokes: 4, pen: 3, highlighter: true, reload: true, annotation: process.argv.includes('--annotate') } }, null, 2));
     console.log('Recorded ink demo; three pen strokes, highlight and reload verified.');
   }
   if (errors.length) throw new Error(errors.join('\n'));

@@ -143,6 +143,12 @@ their page numbers; unlocatable selections fall back to the plain head excerpt.
 
 ### Mentioning library papers
 
+`paperMentionInput.jsx` owns the picker. `paperMentions.js` owns mention text edits
+and `MAX_CHAT_REFERENCES`, shared with `chatDock.jsx`. The six-reference UI limit
+mirrors the API's seven-page limit, leaving one slot for the current page.
+Attached papers and message references use the shared flat `crumbBtn` control,
+`linkChipText` for long titles, and `uiClose` to remove context.
+
 Type `@` in the chat composer to search library titles with the same ranking,
 typo tolerance, and separator matching as library search (`librarySearch.js`).
 Arrow keys choose a result; Enter or Tab attaches it, Escape dismisses the

@@ -7,13 +7,13 @@ library. Use its exported copy for recording, not synthetic replacement papers.
 
 | Demo | Story | Recording details |
 |---|---|---|
-| Annotate & ask | Highlight a passage, show its AI explanation, then let the agent read and file papers | `render-annotate-and-ask.py` combines the original Q&A and agent captures below; one published WebP replaces the two separate clips |
-| Ink | Circle a claim, draw an arrow, highlight freely, show the linked note | `record-ink.mjs`; isolated server, four strokes checked after reload |
+| Highlight, annotate & draw | Select a sentence, save a text annotation, circle a claim, draw an arrow, highlight with ink | `record-ink.mjs --annotate`; isolated server, note and four strokes checked after reload; `render-feature-demos.py annotate-and-ink` |
+| Native agentic | PDF chat, `@` paper selection, library search/read calls, expanded tool output | `record-native-agentic.mjs`; disposable workspace on the demo account; `render-feature-demos.py native-agentic` trims model waits and adds camera close-ups |
 | Notes | Type markdown, a page reference, nested display math with autocomplete, then a callout | `record-notes.mjs`; starts on an empty Rabi oscillations page; fixed crop keeps the editor readable |
 | Library | Home search, title and PDF results, folder filter, open a highlighted match | `record-library.mjs`; prepare Quantum subfolders, populate recents by navigation; QEC paper must exist |
-| Agent source | Ask to organize papers, show real tool calls and the resulting folders | `record-agent.mjs`; clear folders and home chat in the disposable workspace first; requires configured AI |
+| Historical agent source | Ask to organize papers, show real tool calls and the resulting folders | `record-agent.mjs`; clear folders and home chat in the disposable workspace first; requires configured AI; scratch preview |
 | Metadata | Fetch a paper, watch fields fill, copy BibTeX and slide citation | `record-metadata.mjs`; remove arXiv 2312.03982 before recording; never fill metadata by hand |
-| Q&A source | Paste Attention paper URL, select and highlight a sentence, ask for a short explanation | `record-download-and-chat.mjs`; remove the paper before recording; requires configured AI; the combined edit starts on annotation |
+| Historical Q&A source | Paste Attention paper URL, select and highlight a sentence, ask for a short explanation | `record-download-and-chat.mjs`; remove the paper before recording; requires configured AI; scratch preview |
 | Reference links | Click citation 36, jump to its reference, fetch the linked paper | `record-reference-links.mjs`; remove arXiv 0904.2557 so Fetch appears; fixed detail crop includes the citation and modal |
 | Connector | arXiv page, real extension popup, choose folder, save, open in Gamma | `record-connector.mjs`; full Chromium with the unpacked extension; popup opened through its `?tab=` hook and composited over the actual arXiv frame; only the popup is enlarged |
 

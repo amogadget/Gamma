@@ -22,7 +22,7 @@
 // stored read position can't scroll the match away.)
 // Search details are forced on (`gamma-search-details*` = "1"; the paper
 // view's default is the compact find bar).
-import { chromium, ROOT, configureContext } from './runtime.mjs';
+import { chromium, configureContext } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();

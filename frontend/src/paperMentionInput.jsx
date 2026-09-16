@@ -2,9 +2,9 @@ import React, { useEffect, useId, useMemo, useRef, useState } from "react";
 import { AutoGrowTextarea } from "./widgets";
 import { BookIcon, CheckIcon } from "./icons";
 import { createTitleScorer } from "./librarySearch";
-import { insertMention, mentionAt } from "./paperMentions";
+import { insertMention, mentionAt, MAX_CHAT_REFERENCES } from "./paperMentions";
 
-export default function PaperMentionInput({ value, onChange, pages, openTabs, selected, onAttach, maxPages, onSend, ...props }) {
+export default function PaperMentionInput({ value, onChange, pages, openTabs, selected, onAttach, onSend, ...props }) {
   const input = useRef(null);
   const list = useRef(null);
   const listId = useId();
@@ -29,7 +29,7 @@ export default function PaperMentionInput({ value, onChange, pages, openTabs, se
     setMention(next);
   };
   const choose = (page) => {
-    if (!mention || !page || (!selected.includes(page.id) && selected.length >= maxPages)) return;
+    if (!mention || !page || (!selected.includes(page.id) && selected.length >= MAX_CHAT_REFERENCES)) return;
     onAttach(page.id);
     const next = insertMention(value, mention, page.content || "Untitled");
     onChange(next.text);
@@ -44,7 +44,7 @@ export default function PaperMentionInput({ value, onChange, pages, openTabs, se
           const meta = page.properties?.meta || {};
           const authors = (meta.authors || []).slice(0, 2).join(", ");
           const detail = [authors, meta.year, meta.venue, page.properties?.folder].filter(Boolean).join(" · ");
-          const disabled = !selected.includes(page.id) && selected.length >= maxPages;
+          const disabled = !selected.includes(page.id) && selected.length >= MAX_CHAT_REFERENCES;
           return <button type="button" role="option" id={`${listId}-${i}`} key={page.id} tabIndex={-1}
             title={[page.content || "Untitled", detail].filter(Boolean).join("\n")}
             aria-selected={i === active} aria-disabled={disabled} className="chatMentionOption"
@@ -55,7 +55,7 @@ export default function PaperMentionInput({ value, onChange, pages, openTabs, se
         })}
         {!results.length && <div className="popoverHint">No matching pages. Try another title.</div>}
       </div>
-      <div className="chatMentionHint">{selected.length >= maxPages ? `Up to ${maxPages} attached pages. Remove one to add another.` : "Adds paper details and text to chat context. Tools can read more."}</div>
+      <div className="chatMentionHint">{selected.length >= MAX_CHAT_REFERENCES ? `Up to ${MAX_CHAT_REFERENCES} attached pages. Remove one to add another.` : "Adds paper details and text to chat context. Tools can read more."}</div>
     </div>}
     <AutoGrowTextarea {...props} ref={input} value={value} role="combobox" aria-label="Message AI"
       aria-autocomplete="list" aria-expanded={!!mention} aria-controls={mention ? listId : undefined}
@@ -70,7 +70,7 @@ export default function PaperMentionInput({ value, onChange, pages, openTabs, se
             e.preventDefault(); setActive((i) => (i + (e.key === "ArrowDown" ? 1 : -1) + results.length) % (results.length || 1)); return;
           }
           if ((e.key === "Enter" && !e.shiftKey) || (e.key === "Tab" && !e.shiftKey && results.length &&
-              (selected.includes(results[active]?.id) || selected.length < maxPages))) {
+              (selected.includes(results[active]?.id) || selected.length < MAX_CHAT_REFERENCES))) {
             e.preventDefault(); choose(results[active]); return;
           }
         }

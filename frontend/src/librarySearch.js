@@ -38,15 +38,11 @@ function editDistanceWithin(a, b, max) {
 // terms stay exact so "ion" can't blur into "in"). The exact phrase (terms
 // adjacent, in order) dominates, word-boundary hits beat mid-word ones,
 // typo hits score below both, and dense, early matches in short titles win
-// ties. Titles are scanned linearly per keystroke — no index; `prep` caches
-// the per-title lowering/tokenizing across keystrokes, and plain alphabetic
-// terms match via indexOf instead of the regex, which keeps a scan of
-// several thousand titles at a few ms (the heavy corpus, PDF text, is
-// already indexed server-side in FTS5).
-function scoreTitle(prep, phraseRe, terms, caseSensitive) {
-  const title = prep.title;
+// ties. Titles are scanned per query, with scores cached by page id.
+// Plain alphabetic terms use indexOf; words are tokenized only for typo matching.
+function scoreTitle(title, phraseRe, terms, caseSensitive) {
   if (!title) return 0;
-  const hay = caseSensitive ? title : prep.lower;
+  const hay = caseSensitive ? title : title.toLowerCase();
   let score = 0, matched = 0, first = Infinity;
   let words = null; // lazily tokenized, only when some term needs the typo pass
   for (const { re, text, plain } of terms) {
@@ -67,10 +63,7 @@ function scoreTitle(prep, phraseRe, terms, caseSensitive) {
     }
     const budget = text.length >= 9 ? 2 : text.length >= 5 ? 1 : 0;
     if (!budget) return 0;
-    if (!words) {
-      const key = caseSensitive ? "wordsRaw" : "wordsLower";
-      words = prep[key] || (prep[key] = [...hay.matchAll(/[\p{L}\p{N}]+/gu)]);
-    }
+    if (!words) words = [...hay.matchAll(/[\p{L}\p{N}]+/gu)];
     let best = null;
     const t0 = text[0];
     for (const w of words) {
@@ -109,7 +102,7 @@ export function createTitleScorer(query, { caseSensitive = false, wholeWord = fa
   return (page) => {
     if (!cache.has(page.id)) {
       const title = page.content || "";
-      cache.set(page.id, scoreTitle({ title, lower: title.toLowerCase() }, phrase, terms, caseSensitive));
+      cache.set(page.id, scoreTitle(title, phrase, terms, caseSensitive));
     }
     return cache.get(page.id);
   };

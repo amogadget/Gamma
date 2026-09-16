@@ -16,22 +16,23 @@
   <img src="https://get.microsoft.com/images/en-us%20dark.svg" alt="Download Gamma from the Microsoft Store" width="240">
 </a>
 
-## 📄 Annotate & ask
+## 📄 Highlight, annotate & draw
 
-![Highlight a passage, ask the AI to explain it, then let the agent read and organize papers into folders](./docs/assets/demos/demo-annotate-and-ask.webp)
+![Highlight a sentence, add a linked annotation, then circle a claim, draw an arrow, and highlight with ink](./docs/assets/demos/demo-annotate-and-ink.webp)
 
 Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma finds the PDF, and falls back to a legal open-access copy via Unpaywall when the DOI is paywalled) or drag the file in. Then:
 
 - **Highlight** — select text or drag a box around a figure, pick a color, add a comment. Each highlight becomes a block. Highlights already saved in the file by SumatraPDF, Acrobat, or Preview are imported as blocks too.
-- **Ask the AI** — chat about the open paper (or pick several at once) with Anthropic or OpenAI models, or just sign in with your ChatGPT subscription — no API key. Paste figures, dictate by voice, or attach the whole PDF so the model sees tables and plots.
-- **Put the agent to work** — ask it to list, read, and search papers, rename them, or organize them into folders. Tool calls show each action as it runs, scoped to the folder you're in.
+- **Draw** — use a stylus or mouse to circle a claim, sketch an arrow, or highlight freely. Lasso strokes to move, resize, rotate, or recolor them; erase whole strokes or just part of one, with undo and redo. Ink becomes a note block linked to its place in the PDF.
 - **Dockable panels** — drag any window's grip to the left, right, or bottom; double-click to collapse.
 
-## 🖊️ Draw on your papers
+## ✨ Native agentic
 
-![Circle a claim, draw an arrow, and highlight freely; the ink becomes a linked note](./docs/assets/demos/demo-ink.webp)
+![Chat with a PDF, attach a paper with @, then watch the agent search and read the library, with close-ups of its tool calls and results](./docs/assets/demos/demo-native-agentic.webp)
 
-Draw with a stylus or mouse, highlight freely, and lasso strokes to move, resize, rotate, or recolor them. Erase whole strokes or just part of one, with undo and redo. Your handwriting becomes a note block linked to its place in the PDF.
+- **Chat with your papers** — ask about the open PDF, paste figures, dictate by voice, or attach the whole PDF so the model sees tables and plots. Use Anthropic or OpenAI models, or sign in with your ChatGPT subscription — no API key.
+- **Mention a paper** — type `@` to find and attach a library page. Its details and text stay in context for follow-up questions.
+- **Put the agent to work** — ask it to search your library, read papers, compare findings, rename pages, or organize them into folders. Expand each tool step to inspect its arguments and results.
 
 ## ✍️ Take notes
 
@@ -59,9 +60,13 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 
 - **Metadata & citations** — on open, each paper is resolved (arXiv → DOI → AI) so the title, authors, and venue auto-fill; any field can be hand-edited in the popover. One click copies BibTeX or a slide-ready citation that pastes into PowerPoint with real italics.
 
-## 🌐 Save from your browser
+## 🌐 Connect your research
 
-![On an arXiv page, the Gamma Connector popup saves the paper into a folder, then opens it in Gamma](./docs/assets/demos/demo-connector.webp)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-connections-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-connections-light.svg">
+  <img alt="Gamma connects your research: import and export Obsidian vaults and Zotero libraries, import Notion notes, and save papers from your browser with Gamma Connector" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
+</picture>
 
 The **Gamma Connector** extension ([extension/](./extension/)) saves the paper you're reading in one click — PDF, metadata, folder, and labels — straight from the arXiv / DOI / publisher tab. Right-click clips a link or a text selection into your notes.
 

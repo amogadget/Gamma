@@ -121,6 +121,9 @@ cookie + `X-Gamma-Workspace` for API seeding, browser contexts logged in as
 that account), `makePdf` (a small real PDF with a text layer), and `step()`.
 The scenarios live in `tests/e2e/scenarios/`:
 
+- `mentions.mjs`: paper search, keyboard and touch selection, reference limits,
+  persistence, PDF receipts and textarea shrink after clearing context. Run with `--only mentions`.
+
 - `notes.mjs`: New page → title → first block (the seed-block insert),
   Shift+Enter / Tab / Shift+Tab / Backspace, Enter as a line break vs the
   Enter-as-new-block preference, Ctrl+Z, the handle menu, todo checkboxes,

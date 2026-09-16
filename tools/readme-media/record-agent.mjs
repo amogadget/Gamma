@@ -1,6 +1,6 @@
 // Records the agent source for demo-annotate-and-ask.webp: ask the chat to organize
 // the library into folders, tool chips stream, folders appear in the list.
-import { chromium, ROOT, configureContext } from './runtime.mjs';
+import { chromium, configureContext } from './runtime.mjs';
 import fs from 'fs';
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';

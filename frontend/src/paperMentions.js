@@ -1,3 +1,6 @@
+// The API accepts these references plus the current page (seven pages total).
+export const MAX_CHAT_REFERENCES = 6;
+
 // Only trigger at a word boundary, with a collapsed caret. Queries may contain
 // spaces; a completed mention uses curly quotes, which close the query.
 export function mentionAt(text, start, end = start) {

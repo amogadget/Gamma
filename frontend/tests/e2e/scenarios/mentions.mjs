@@ -26,6 +26,41 @@ export async function mentionScenarios(env) {
     return { ctx, page, input, requests };
   };
 
+  await step("mentions: flat references fit long titles and open their paper", async () => {
+    const title = "Real-time quantum error correction beyond break-even";
+    const source = await user.api("/api/pages", { method: "POST", body: { title: "Reference style check" } });
+    const paper = await user.api("/api/blocks", { method: "POST", body: { parent_id: "root", content: title } });
+    const { ctx, page, input, requests } = await setup({}, source.id);
+    try {
+      await input.fill("@Real-time quantum");
+      await page.getByRole("option", { name: new RegExp(title) }).click();
+      await input.press("Enter");
+      await until(() => requests.length === 1);
+      const reference = page.locator(".chatBubble.user .chatMsgPdfs .crumbBtn").last();
+      await reference.waitFor();
+      for (const theme of ["light", "dark"]) {
+        await page.evaluate((theme) => document.documentElement.setAttribute("data-theme", theme), theme);
+        for (const selector of [".chatReferenceChip", ".chatReferenceChip .crumbBtn", ".chatBubble.user .chatMsgPdfs .crumbBtn"]) {
+          const style = await page.locator(selector).last().evaluate((el) => {
+            const css = getComputedStyle(el);
+            return { border: css.borderTopWidth, background: css.backgroundColor,
+              fits: el.scrollWidth <= el.clientWidth + 1 };
+          });
+          assertEq(style.border, "0px", `${selector} has no frame`);
+          assertEq(style.background, "rgba(0, 0, 0, 0)", `${selector} has no filled badge`);
+          assert(style.fits, `${selector} truncates long titles without overflowing`);
+        }
+        if (process.env.GAMMA_MENTIONS_SCREENSHOT) await page.locator(".chatPanel").screenshot({ path: `${process.env.GAMMA_MENTIONS_SCREENSHOT}-${theme}.png` });
+      }
+      await page.getByRole("button", { name: `Remove ${title} from context` }).click();
+      assertEq(await page.locator(".chatReferenceChip").count(), 0);
+      await reference.focus();
+      await page.keyboard.press("Enter");
+      await until(() => new URL(page.url()).searchParams.get("block") === paper.id);
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
+
   await step("mentions: clearing a reference returns the composer to one line", async () => {
     const { ctx, page, input } = await setup();
     try {

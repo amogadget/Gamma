@@ -112,7 +112,6 @@ def render(name):
         if a > cursor and b < end:
             segments.append((cursor, a)); cursor = b
     segments.append((cursor, end))
-    length = sum(b-a for a, b in segments)
     parts = [f'[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[s{i}]' for i, (a, b) in enumerate(segments)]
     graph = ';'.join(parts) + ';' + ''.join(f'[s{i}]' for i in range(len(segments))) + f'concat=n={len(segments)}:v=1:a=0,fps=25'
     if crop:
@@ -128,8 +127,8 @@ def render(name):
               **encode_webp(master, output, f'fps=25,scale={width}:-2:flags=lanczos', quality, effort),
               'segments': segments, 'source': str(source), 'crop': crop}
     (directory / 'render.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-    # These two recordings now feed one combined README story. Individual
-    # renders are scratch previews, so they do not duplicate published media.
+    # Historical AI source captures remain scratch previews. The current
+    # annotation and agentic stories use render-feature-demos.py.
     target = directory / 'preview.webp' if name in ('agent', 'download-and-chat') else OUT / f'demo-{name}.webp'
     publish(output, target)
     print(json.dumps(report), flush=True)
@@ -137,11 +136,11 @@ def render(name):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('cases', nargs='+', choices=NAMES+['annotate-and-ask', 'all'])
+    parser.add_argument('cases', nargs='+', choices=NAMES+['annotate-and-ink', 'native-agentic', 'all'])
     args = parser.parse_args()
-    published = [n for n in NAMES if n not in ('agent', 'download-and-chat')] + ['annotate-and-ask']
+    published = [n for n in NAMES if n not in ('agent', 'download-and-chat')] + ['annotate-and-ink', 'native-agentic']
     for name in published if 'all' in args.cases else args.cases:
-        if name == 'annotate-and-ask':
-            subprocess.run([sys.executable, str(Path(__file__).with_name('render-annotate-and-ask.py'))], check=True)
+        if name in ('annotate-and-ink', 'native-agentic'):
+            subprocess.run([sys.executable, str(Path(__file__).with_name('render-feature-demos.py')), name], check=True)
         else:
             render(name)

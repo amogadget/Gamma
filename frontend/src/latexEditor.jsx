@@ -5,7 +5,8 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import katex from "katex";
-import { leftDelimiterEdit, rightDelimiterAt } from "./latexInput";
+import { escapedAt, leftDelimiterEdit, rightDelimiterAt } from "./latexInput";
+export { escapedAt } from "./latexInput";
 
 // --- command catalog -------------------------------------------------------
 // Order = rank within an equal match tier. Entries: name, args (brace count
@@ -211,14 +212,6 @@ export function latexCompletionEdit(value, start, end, entry, display) {
   const pair = seg && leftDelimiterEdit(candidate, pos, pos, "", seg.start, seg.end);
   if (pair) text += pair.changes.insert;
   return { changes: { from: start, to: end, insert: text }, selection: { anchor: start + caret } };
-}
-
-// Odd run of backslashes right before pos → the char at pos is escaped
-// ("\$" is a literal dollar, "\\$" is a line break followed by a real "$").
-export function escapedAt(text, pos) {
-  let n = 0;
-  while (text[pos - 1 - n] === "\\") n++;
-  return n % 2 === 1;
 }
 
 // The math span (inside $...$ / $$...$$) containing the caret, if any.
