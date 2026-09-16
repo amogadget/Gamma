@@ -1,4 +1,6 @@
-# Server image only. Runs on every push to main (`latest`). The desktop
+# Server image only. Runs on every push to main (`latest`) — the only
+# workflow a merge triggers; desktop.yml and extension.yml are dispatched by
+# the `release` skill. The desktop
 # release (desktop.yml) dispatches this workflow on its new `v<version>` tag
 # with the version as input, which adds the `<version>` and `<major.minor>`
 # image tags — a `push: tags` trigger would not do it, since tags created

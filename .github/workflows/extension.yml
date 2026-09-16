@@ -1,8 +1,9 @@
 # Browser extension (Gamma Connector): zips extension/ and releases it as
 # `extension-v<version>`, automatically. Overview: docs/dev/github_actions.md.
 #
-# Trigger: every push to main that touches extension/, plus manual dispatch.
-# A merge is a release: the version is extension/manifest.json when it is
+# Trigger: manual dispatch only (`gh workflow run extension.yml --ref main`,
+# what the `release` skill does); a merge to main does not release the
+# extension. The version is extension/manifest.json when it is
 # higher than the newest extension-v* tag (raise it for a minor/major bump),
 # otherwise that tag's patch number + 1; the computed version is written
 # into the manifest inside the zip. The release is published with
@@ -14,11 +15,6 @@
 name: extension
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "extension/**"
-      - ".github/workflows/extension.yml"
   workflow_dispatch:
     inputs:
       publish:

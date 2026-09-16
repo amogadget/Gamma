@@ -1,10 +1,11 @@
 # Desktop app: the Windows installer, macOS dmg/zip and Debian/Ubuntu deb,
 # released automatically. Overview of every workflow: docs/dev/github_actions.md.
 #
-# Trigger: every push to main that touches the app or what it bundles
-# (desktop/, backend/, frontend/), plus manual dispatch. Every run builds and
-# smoke-tests all three platforms and, when they all pass, publishes the
-# GitHub Release `v<version>` — a merge IS a release. Nobody bumps or tags:
+# Trigger: manual dispatch only (`gh workflow run desktop.yml --ref main`,
+# what the `release` skill does). A merge to main does NOT build the app;
+# only docker.yml runs on push. Every run builds and smoke-tests all three
+# platforms and, when they all pass, publishes the GitHub Release
+# `v<version>`. Nobody bumps or tags:
 #   version = desktop/package.json if it is higher than the newest v* tag
 #             (that is how a minor/major bump is made — raise the "floor"),
 #             otherwise the newest v* tag with the patch number + 1.
@@ -46,13 +47,6 @@
 name: desktop
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "desktop/**"
-      - "backend/**"
-      - "frontend/**"
-      - ".github/workflows/desktop.yml"
   workflow_dispatch:
     inputs:
       version:
@@ -68,7 +62,7 @@ on:
         type: boolean
         default: true
 
-# Two merges in a row queue instead of racing for the next version number.
+# Two dispatches in a row queue instead of racing for the next version number.
 concurrency:
   group: desktop-${{ github.ref }}
   cancel-in-progress: false
