@@ -44,6 +44,10 @@ class ReleaseTest(unittest.TestCase):
                "GAMMA_TEST_MOVE_FAIL": "1" if fail_move else ""}
         posix_shell = os.environ.get("GAMMA_TEST_POSIX_SHELL")
         if os.name == "nt" and not posix_shell:
+            # CI runs under PowerShell 7. Its module path is incompatible with
+            # the Windows PowerShell 5.1 child used to exercise the installer.
+            # Let that child initialize its own built-in module search paths.
+            env = {key: value for key, value in env.items() if key.upper() != "PSMODULEPATH"}
             env["LOCALAPPDATA"] = str(root / "user data")
             if short_path:
                 import ctypes
