@@ -4,7 +4,7 @@ import path from 'node:path';
 import { ROOT } from './runtime.mjs';
 import { Account } from '../../frontend/tests/e2e/harness.mjs';
 
-const dir = path.resolve(process.env.MEDIA_SCRATCH || path.join(ROOT, 'tmp/readme-media/suite'));
+const dir = path.resolve(process.env.MEDIA_SCRATCH || path.join(ROOT, 'artifacts/readme-media/suite'));
 fs.mkdirSync(dir, { recursive: true });
 const file = path.join(dir, 'workspace.json');
 if (process.argv.includes('--remove')) {
@@ -25,6 +25,6 @@ if (process.argv.includes('--remove')) {
   account.ws = workspace.id;
   fs.writeFileSync(path.join(dir, 'session.txt'), account.session);
   fs.writeFileSync(file, JSON.stringify({ base, username: account.name, workspace: account.ws }, null, 2));
-  await account.upload('/api/import-data', fs.readFileSync(path.join(ROOT, 'tmp/readme-media/demo.zip')), 'demo.zip', 'application/zip');
+  await account.upload('/api/import-data', fs.readFileSync(path.join(ROOT, 'artifacts/readme-media/demo.zip')), 'demo.zip', 'application/zip');
   console.log('Prepared isolated recording workspace:', account.ws);
 }

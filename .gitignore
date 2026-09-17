@@ -1,4 +1,6 @@
 archive/
+!/docs/archive/
+!/docs/archive/**
 example/
 HANDOFF.md
 STATUS.md
@@ -26,5 +28,9 @@ run-local.bat
 
 # Private workspace exports, media captures, and render intermediates
 /tmp
+
+# Local source recordings, workspace exports, debugging inputs and render output.
+/artifacts/*
+!/artifacts/README.md
 
 CLAUDE.md

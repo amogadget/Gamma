@@ -1,6 +1,6 @@
 """Re-render freshly captured README cases at 25 fps, as small animated WebP images.
 
-Raw captures and timing manifests stay in ignored tmp/readme-media/suite.
+Raw captures and timing manifests stay in ignored artifacts/readme-media/suite.
 """
 import argparse
 import json
@@ -14,7 +14,7 @@ from media_output import encode_webp, publish
 
 ROOT = Path(__file__).resolve().parents[2]
 FF = get_ffmpeg_exe()
-SUITE = ROOT / 'tmp/readme-media/suite'
+SUITE = ROOT / 'artifacts/readme-media/suite'
 OUT = ROOT / 'docs/assets/demos'
 NAMES = ['notes', 'library', 'metadata', 'agent', 'download-and-chat', 'reference-links', 'connector']
 

@@ -8,11 +8,12 @@ from imageio_ffmpeg import get_ffmpeg_exe
 from media_output import encode_webp, publish
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRATCH = ROOT / 'tmp/readme-media'
+SCRATCH = ROOT / 'artifacts/readme-media'
 OUT = ROOT / 'docs/assets/demos'
 
 
 def render(name):
+    framing = {}
     if name == 'annotate-and-ink':
         directory = SCRATCH / name
         timeline = json.loads((directory / 'ink-timeline.json').read_text(encoding='utf-8'))
@@ -24,20 +25,37 @@ def render(name):
         directory = SCRATCH / 'revised'
         timeline = json.loads((directory / 'agentic-timeline.json').read_text(encoding='utf-8'))
         m = timeline['marks']
+        framing = timeline.get('framing', {})
+        verified = timeline.get('verified', {})
+        if not verified.get('citationMarks') or not verified.get('singleConversation'):
+            raise ValueError('Capture the single library conversation and verify its PDF citation first')
+        if verified.get('expandedSteps') != 0 or verified.get('citationNotice'):
+            raise ValueError('Keep tool steps collapsed and show an exact PDF citation match')
+        if m['mentionTyping'] - m['mentionZoom'] < .8:
+            raise ValueError('Finish the camera zoom before typing the paper mention')
         # Keep interactions at real speed; cut only the waits between AI actions.
         segments = [
-            (m['pdfStart'], m['pdfSent'] + 1, 'full'),
-            (m['pdfAnswer'] - 2.8, m['pdfEnd'], 'zoom-top'),
-            (m['libraryStart'], m['mention'], 'full'),
-            (m['mention'], m['librarySent'] + .7, 'zoom-bottom'),
+            (m['start'], m['mentionZoom'], 'full'),
+            (m['mentionZoom'], m['librarySent'] + .6, 'zoom-bottom'),
         ]
         actions = [a for a in timeline['actions'] if a['phase'] == 'library']
+        answer_start = max(m['librarySent'] + .6, m['libraryAnswer'] - 3)
+        # Briefly show real search/read progress without replaying overlapping time.
+        windows = []
         for action in actions:
-            segments.append((action['at'] - .3, action['at'] + 1.3, 'detail-top'))
+            start = max(m['librarySent'] + .6, action['at'] - .25)
+            end = min(answer_start, action['at'] + 1.25)
+            if end <= start:
+                continue
+            if windows and start <= windows[-1][1]:
+                windows[-1] = (windows[-1][0], max(windows[-1][1], end))
+            else:
+                windows.append((start, end))
+        segments.extend((start, end, 'detail-top') for start, end in windows)
         segments.extend([
-            (m['libraryAnswer'] - 2, m['stepsStart'], 'detail-top'),
-            (m['stepsStart'], m['readDetail'] + .2, 'detail-top'),
-            (m['readDetail'] + .2, m['end'], 'full'),
+            (answer_start, m['citationClick'] + .45, 'detail-response'),
+            (m['citationReady'] - .4, m['citationReady'] + 1.5, 'full'),
+            (m['citationReady'] + 1.5, m['end'], 'zoom-passage'),
         ])
     if any(end <= start for start, end, _ in segments):
         raise ValueError('Capture timing changed; review the edit points')
@@ -48,7 +66,15 @@ def render(name):
         if camera != 'full':
             zoom = '2' if camera.startswith('detail') else '1+min(on/20,1)*min(on/20,1)*(3-2*min(on/20,1))'
             anchor = '1' if camera.endswith('bottom') else '0.10'
-            filters += f",zoompan=z='{zoom}':x='iw-iw/zoom':y='(ih-ih/zoom)*{anchor}':d=1:s=1440x900:fps=25"
+            x, y = 'iw-iw/zoom', f'(ih-ih/zoom)*{anchor}'
+            if camera == 'detail-response':
+                y = str(max(0, min(450, framing['citation']['y'] - 300)))
+            elif camera == 'zoom-passage':
+                box = framing['passage']
+                # Move from the full workspace toward the highlighted passage.
+                x = f'max(0,min(iw-iw/zoom,{box["x"] + box["width"]/2}-iw/zoom/2))'
+                y = f'max(0,min(ih-ih/zoom,{box["y"] + box["height"]/2}-ih/zoom/2))'
+            filters += f",zoompan=z='{zoom}':x='{x}':y='{y}':d=1:s=1440x900:fps=25"
         parts.append(f'[0:v]{filters},setsar=1[s{i}]')
     graph = ';'.join(parts) + ';' + ''.join(f'[s{i}]' for i in range(len(parts)))
     graph += f'concat=n={len(parts)}:v=1:a=0,pad=1488:948:24:24:color=0xe8edf5[v]'

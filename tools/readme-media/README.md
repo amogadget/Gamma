@@ -8,7 +8,7 @@ The production research is in [demo-production.md](../../docs/research/demo-prod
 | This directory | Recorders, renderers, shared helpers and [shot recipes](WORKFLOW.md) |
 | `docs/assets/demos/` | Published WebP animations, one per README slot |
 | `docs/assets/screenshots/` | Documentation stills |
-| `tmp/readme-media/` | Ignored workspace export, private build, WebM recordings, timing files and QA frames |
+| `artifacts/readme-media/` | Ignored workspace export, private build, WebM recordings, timing files and QA frames |
 | `.claude/skills/readme-media/SKILL.md` | Agent entry point pointing here |
 
 ## Setup
@@ -26,12 +26,12 @@ backend/venv/Scripts/python.exe -m pip install imageio-ffmpeg
 backend/venv/Scripts/python.exe tools/readme-media/export-demo.py
 
 # Avoid replacing a running developer frontend's build.
-npm --prefix frontend run build -- --outDir ../tmp/readme-media/dist
-$env:GAMMA_E2E_DIST = (Resolve-Path tmp/readme-media/dist).Path
+npm --prefix frontend run build -- --outDir ../artifacts/readme-media/dist
+$env:GAMMA_E2E_DIST = (Resolve-Path artifacts/readme-media/dist).Path
 ```
 
 On Unix use `backend/venv/bin/python` and
-`export GAMMA_E2E_DIST="$PWD/tmp/readme-media/dist"`.
+`export GAMMA_E2E_DIST="$PWD/artifacts/readme-media/dist"`.
 Initialize fnm normally if Node is not on PATH. If the browser is installed in a
 custom cache, set `PLAYWRIGHT_BROWSERS_PATH` for both installation and recording.
 The extension recorder needs full Chromium, not just the headless shell.
@@ -39,8 +39,8 @@ The extension recorder needs full Chromium, not just the headless shell.
 ## First demo: highlight, annotate and draw
 
 ```powershell
-$env:DEMO_EXPORT = (Resolve-Path tmp/readme-media/demo.zip).Path
-$env:MEDIA_SCRATCH = Join-Path (Get-Location) 'tmp/readme-media/annotate-and-ink'
+$env:DEMO_EXPORT = (Resolve-Path artifacts/readme-media/demo.zip).Path
+$env:MEDIA_SCRATCH = Join-Path (Get-Location) 'artifacts/readme-media/annotate-and-ink'
 node tools/readme-media/record-ink.mjs --annotate
 backend/venv/Scripts/python.exe tools/readme-media/render-feature-demos.py annotate-and-ink
 node tools/readme-media/check-media.mjs annotate-and-ink
@@ -66,7 +66,7 @@ Use the demo account's configured AI provider and a disposable workspace. Set
 `DEMO_PASSWORD` in the environment without logging it. Then:
 
 ```powershell
-$env:MEDIA_SCRATCH = Join-Path (Get-Location) 'tmp/readme-media/revised'
+$env:MEDIA_SCRATCH = Join-Path (Get-Location) 'artifacts/readme-media/revised'
 node tools/readme-media/suite-workspace.mjs
 node tools/readme-media/record-native-agentic.mjs
 backend/venv/Scripts/python.exe tools/readme-media/render-feature-demos.py native-agentic
@@ -75,16 +75,20 @@ node tools/readme-media/suite-workspace.mjs --remove
 Remove-Item Env:MEDIA_SCRATCH
 ```
 
-The recorder asks about the open PDF, selects a real library paper through `@`,
-asks the agent to search and compare papers, and expands search/read outputs.
-It verifies that search/read actions appeared and were saved to chat history.
+The recorder starts one conversation at Home, zooms in before typing `@`, selects
+a real library paper, and asks the agent to search/read a related paper and
+compare them. Tool steps stay collapsed. It clicks the answer's actual `p. 1`
+link and shows the cited passage highlighted in the PDF, with a final close-up.
+It verifies persisted search/read actions, a single question, no expanded tool
+steps, and an exact citation match on PDF page 1.
 `--inspect` captures the layout without sending AI requests. `GAMMA_MEDIA_DIST`
 can point to a private frontend build; only static files are served from that
 build, while PDFs and APIs still reach the real Gamma server.
 
-The 35.8-second edit cuts model waits, preserves interaction/streaming speed,
-and uses camera zooms for the paper picker and agent steps. Inspect the action
-timestamps and sample frames after each new capture; model timing varies.
+The edit cuts model waits and preserves the recorded interaction speed. The
+picker zoom finishes before `@` is typed; the response close-up includes the
+citation click, then returns to the whole workspace to establish the opened PDF.
+Inspect the timestamps and sample frames after each capture; model timing varies.
 
 ## Record the seven suite cases
 
@@ -140,7 +144,7 @@ animation is retained as an asset; the README currently uses the connections SVG
   lossless intermediate, never from an old GIF. Each image must be below 5 MiB.
 - `media_output.py` checks the animation container, frame timing, loop flag and
   size before publishing. `check-media.mjs` then decodes **every encoded frame**
-  in Chromium and saves contact sheets in `tmp/readme-media/qa/` for inspection.
+  in Chromium and saves contact sheets in `artifacts/readme-media/qa/` for inspection.
 
 Review the contact sheets and loop playback before updating README links. FFmpeg
 builds can encode animated WebP without decoding it, hence the Chromium check.

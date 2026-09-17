@@ -1,7 +1,7 @@
 # README demos
 
 Published as looping animated WebP images. Recordings, timing manifests and QA
-frames live in ignored `tmp/readme-media/`; scripts and regeneration instructions
+frames live in ignored `artifacts/readme-media/`; scripts and regeneration instructions
 live in [tools/readme-media](../../../tools/readme-media/README.md).
 
 All clips are exported at 25 fps; identical frames can be merged with their
