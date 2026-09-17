@@ -6,8 +6,8 @@ Where every setting lives, and how the Settings dialog is built.
 
 | Layer | Storage | Examples |
 |---|---|---|
-| Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/prefs.js](../../frontend/src/prefs.js)) | PDF viewer behavior (incl. the handwriting input rules and the tool strip's presets, eraser and lasso choices, `gamma-ink-*`), context budgets, agent permissions, prompts, the control size (`gamma-ui-scale`, applied pre-paint by `index.html` like the theme). Theme + flip-page-colors live here too but additionally sync per account (next row, `appearance` key) — localStorage is their instant-paint cache |
-| Session only | React state, nothing stored | the Ctrl+scroll text size of the notes list and the chat transcript (`useTextScale` in [widgets.jsx](../../frontend/src/widgets.jsx)) — resets on reload |
+| Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/app/prefs.js](../../frontend/src/app/prefs.js)) | PDF viewer behavior (incl. the handwriting input rules and the tool strip's presets, eraser and lasso choices, `gamma-ink-*`), context budgets, agent permissions, prompts, the control size (`gamma-ui-scale`, applied pre-paint by `index.html` like the theme). Theme + flip-page-colors live here too but additionally sync per account (next row, `appearance` key) — localStorage is their instant-paint cache |
+| Session only | React state, nothing stored | the Ctrl+scroll text size of the notes list and the chat transcript (`useTextScale` in [Widgets.jsx](../../frontend/src/shared/ui/Widgets.jsx)) — resets on reload |
 | Per account, synced | `/api/prefs/{key}` (small JSON KV, `user_prefs` in `users.db`) | per account AND workspace: open tabs (`open-tabs`), the recently-viewed queue (`recent-views`), pinned folders (`pinned-folders`; pinned pages are a page property), reading positions (`read-pos`) — they name one workspace's pages; account-wide: active AI key (`ai-provider`), appearance (`appearance`: theme + flip page colors). Server wins on load, localStorage (keyed `user@workspace`) is the instant-paint cache. The recents-card cover thumbnails are workspace data, through their own `/api/page-snaps` store (`page_snaps` in the workspace's `data.db` — over the prefs size cap) |
 | Per account, server-only | AI provider entries (keys/OAuth tokens) under the reserved `ai-settings` prefs key (account-wide), managed via `/api/ai/providers*`; the browser only ever sees a masked hint | API keys, ChatGPT OAuth |
 | Per workspace | `workspaces` / `workspace_members` in `users.db`, via `/api/workspaces*` ([workspaces.md](workspaces.md)) | name, kind (personal / shared), members and roles, access (private / public + the public role) and a shared workspace's own quota (admins), the account's default workspace, which workspace this tab works in (`?ws=` in the URL, `gamma-last-ws:<user>` remembers the last one) |
@@ -17,7 +17,7 @@ Adding a browser preference = one line in `useAppPrefs()` (with a codec if the
 value needs validation) plus a control in the matching settings pane. Don't
 scatter `usePersistedState` calls through App.jsx.
 
-The last open page and viewer layout use `sessionState.js`, separately from
+The last open page and viewer layout use `app/sessionState.js`, separately from
 synced preferences. Its key is `gamma-session:<user>@<workspace>`. Reads wait
 for workspace selection; changing scope cancels pending saves. Old unscoped
 session caches are ignored because their account owner cannot be determined.
@@ -25,11 +25,11 @@ session caches are ignored because their account owner cannot be determined.
 ## The Settings dialog
 
 Five everyday destinations are defined by `PREFERENCE_NAV` in
-[settings.jsx](../../frontend/src/settings.jsx):
+[SettingsDialog.jsx](../../frontend/src/settings/SettingsDialog.jsx):
 
 - **Appearance**: theme choices and dark PDF pages (account-synced), control
   size and status bar (this browser).
-  [settingsAppearance.jsx](../../frontend/src/settingsAppearance.jsx): six
+  [SettingsAppearance.jsx](../../frontend/src/settings/SettingsAppearance.jsx): six
   theme cards (`PictureChoices`) with palette sketches and short
   descriptions, a PDF sample that follows the page tint and the dark-page
   switch, and the interface controls. Cards wrap into two columns on narrow
@@ -44,7 +44,7 @@ Five everyday destinations are defined by `PREFERENCE_NAV` in
   fallback and saving external PDFs. These are browser preferences. Display
   is one live `PageCard` beside three switches (thumbnails, folders, labels);
   the two chip switches map onto the four `fileLabels` modes.
-  [settingsLibraryDisplay.jsx](../../frontend/src/settingsLibraryDisplay.jsx).
+  [SettingsLibraryDisplay.jsx](../../frontend/src/settings/SettingsLibraryDisplay.jsx).
 - **AI**: opens a second-level sidebar with Connections & models, Assistant,
   Advanced and Prompts. Assistant contains permissions and context presets;
   Advanced contains exact context budgets, technical limits and translation
@@ -68,7 +68,7 @@ Shorter pages keep the main sidebar:
   server backups and logs).
 - **Diagnostics** (main sidebar): browser tracing and the browser session log.
 
-Search is backed by [settingsNavigation.js](../../frontend/src/settingsNavigation.js).
+Search is backed by [settingsNavigation.js](../../frontend/src/settings/settingsNavigation.js).
 It searches labels and synonyms, filters out inaccessible management pages,
 then opens the destination, focusing the
 matching `data-setting` element. Add an entry when adding a new setting.
@@ -104,7 +104,7 @@ the exact values without changing them.
 
 ## Settings primitives
 
-[settingsKit.jsx](../../frontend/src/settingsKit.jsx) provides `PaneHead`,
+[SettingsKit.jsx](../../frontend/src/settings/SettingsKit.jsx) provides `PaneHead`,
 `Section`, `Row`, `Toggle`, `SubDialog` and the shared controls.
 Ordinary rows show a small icon, a label, a short hint and a control, with the
 shared hover background. Put consequences in the visible

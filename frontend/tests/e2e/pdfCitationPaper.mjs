@@ -4,7 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Account, Server, assert, assertEq, assertNoProblems, launchBrowser, openPage, until } from "./harness.mjs";
-import { citationRuns, matchCitation } from "../../src/pdfCitation.js";
+import { citationRuns, matchCitation } from "../../src/pdf/pdfCitation.js";
 
 const input = process.argv[2];
 if (!input) throw new Error("Pass the path to arXiv:1904.06560.pdf");

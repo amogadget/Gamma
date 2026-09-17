@@ -21,7 +21,7 @@ code keeps them apart (decided 2026-09-13, see *Files and documents* below):
 
 - A **file** is content. A content-hashed blob in `uploads/`, referenced
   from a block as `[name](/api/uploads/<hash>.<ext>)` and rendered as a file
-  chip (`frontend/src/fileChip.jsx`). Any type except executables, any number
+  chip (`frontend/src/transfers/FileChip.jsx`). Any type except executables, any number
   per page, download or open in a tab, no semantics. Orphan cleanup follows
   the textual reference.
 - A **document** is the ONE PDF a page *carries*: `properties.doc_id`
@@ -126,7 +126,7 @@ Backend
   "PDF Notes - " auto-title prefix.~~ Gone (migrated, stage 0).
 
 Frontend (all cleared 2026-09-02 except the search panel)
-- ~~`App.jsx`: mode derived from `pdfUrl`.~~ `pageAttach =
+- ~~`app/App.jsx`: mode derived from `pdfUrl`.~~ `pageAttach =
   pageAttachment(focusedBlock)` is the switch; `pdfUrl` is the viewer's input.
 - ~~`pdfTitle` falls back to "PDF Notes".~~ `pageTitle`, "Untitled".
 - ~~Snapshot / read position gated on `pdfUrl`.~~ Text-only pages remember
@@ -208,7 +208,7 @@ in libraryUtils.js, `homeMode`/`pageOnly` derived from the focused page's
 attachment, `pageTitle` state, "Untitled" fallback, copy sweep, Settings group
 "Editor", chat picker lists every page.)*
 - Add `page_attachment()` (`gamma/blocks_store.py`) and `pageAttachment()`
-  (`frontend/src/libraryUtils.js`); route every `doc_id`/`source_url` read
+  (`frontend/src/library/libraryUtils.js`); route every `doc_id`/`source_url` read
   that decides layout, kind, gating or copy through them. — **done
   (backend)**: `page_attachment()` gates `metadata/status`, labels
   `ai_tools.list_pages` (`attachments=[pdf]` / `[]` instead of pdf/note) and
@@ -365,7 +365,7 @@ A multi-PDF viewer with `attachment_id` on highlights is not planned.
   so the chips label PDFs once per page render. `POST /blocks/by-doc/{id}`
   takes `folder` for a page it creates. The Obsidian/markdown zip import
   stores bundled files under the same rule (`markdown_zip_import._is_asset_ext`).
-- **Frontend.** `fileChip.jsx`: the chip — every file looks the same (a
+- **Frontend.** `transfers/FileChip.jsx`: the chip — every file looks the same (a
   small card: kind icon, name, download arrow). A PDF or markdown chip
   whose page exists shows an "open page" button before the arrow; its
   right-click menu says "Open page", or "Add to library" when there is none

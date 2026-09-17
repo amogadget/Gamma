@@ -70,8 +70,8 @@ per test module (the module's name is in the username), so the files never
 see each other's pages or provider entries.
 
 Rules the frontend mirrors — search normalization (`gamma/textnorm.py` ↔
-`frontend/src/textnorm.js`) and folder-label paths (`gamma/foldertags.py` ↔
-`frontend/src/libraryUtils.js`) — are pinned by ONE set of cases both sides
+`frontend/src/shared/lib/textnorm.js`) and folder-label paths (`gamma/foldertags.py` ↔
+`frontend/src/library/libraryUtils.js`) — are pinned by ONE set of cases both sides
 read: `tests/shared/*.json` at the repository root, run by
 `backend/tests/test_shared_fixtures.py` and the matching node tests. Add a
 case there when a rule changes; whichever side drifts fails.

@@ -9,8 +9,8 @@ typeset as their own PDF, and the annotated-PDF writer. Code: `gamma/routers/imp
 `gamma/pdf_notes.py`, `gamma/pdf_document.py`, `gamma/pdf_typeset.py`,
 `gamma/note_markup.py`, `gamma/vector_text.py`, `gamma/pdf_glyphs.py`,
 `gamma/pdf_image.py`; frontend dialogs in
-[importExport.jsx](../../frontend/src/importExport.jsx), re-exported by
-[widgets.jsx](../../frontend/src/widgets.jsx).
+[ImportExport.jsx](../../frontend/src/transfers/ImportExport.jsx), imported directly by
+[App.jsx](../../frontend/src/app/App.jsx).
 
 ## Importing annotations embedded in a PDF
 
@@ -38,7 +38,7 @@ the original is still embedded).
 
 ## The Import dialog
 
-The ⋮ menu's single "Import…" entry → `ImportDialog` in `importExport.jsx`, the
+The ⋮ menu's single "Import…" entry → `ImportDialog` in `transfers/ImportExport.jsx`, the
 export dialog's counterpart. Step one is a source card (annotations embedded
 in this PDF, a Logseq .pdf + .edn, a Zotero library .zip, Markdown notes — one
 `.md` or a `.zip` such as a Notion export, or a Gamma export .zip); double-click
@@ -46,7 +46,7 @@ or Next confirms. Only sources with an option get a review step: the strip
 switch, which applies to embedded annotations, including those inside Zotero's
 exported PDFs. Markdown, Logseq and Gamma open the file picker directly, with
 their preparation notes under the selected card. `resolveImport` in
-`transferFormats.js` decides both.
+`transfers/transferFormats.js` decides both.
 Zotero is the default source (a numbered step guide reusing
 settingsKit's `Step`); with a PDF open, that PDF's own annotations win. Nothing
 is remembered: the switch starts from the Settings preference each time, so the
@@ -224,7 +224,7 @@ switches for it.
 ### Importing a shared page by link
 
 The same pipeline, without the zip ever touching disk: `importSharedPage` in
-`App.jsx` takes a share URL (`https://other/?share=<token>`), resolves the
+`app/App.jsx` takes a share URL (`https://other/?share=<token>`), resolves the
 token against that origin's `/api/share/{token}`, fetches the page as
 `/api/pages/{id}/export?mode=gamma&share=<token>`, and hands the blob to
 `runBackupImport(…, "merge")` with `after.openPage` set — block ids survive
@@ -252,7 +252,7 @@ status line and the transfer row.
 
 ## The Export dialog
 
-The ⋮ menu's single "Export…" entry → `ExportDialog` in `importExport.jsx`.
+The ⋮ menu's single "Export…" entry → `ExportDialog` in `transfers/ImportExport.jsx`.
 Step one is a format card: the PDF row contains Annotated PDF, the Notes row
 contains PDF and Markdown, and the ZIP row contains Obsidian, Logseq, Zotero
 and Gamma. Double-click or Next confirms. Formats with editable options get a
@@ -264,7 +264,7 @@ from step one; Logseq shows only the bundle switch. The breadcrumb returns to
 the cards without losing edits. Both dialogs are a `SubDialog` (focus trap,
 Escape, backdrop) with its close-button header; the footer holds only Next or
 the final action. Zotero's post-export steps expand under "Open this export in
-Zotero". `transferFormats.js` owns the format table (label, category, hint,
+Zotero". `transfers/transferFormats.js` owns the format table (label, category, hint,
 editable and fixed options, `EXPORT_SWITCH_TEXT`) and `resolveExport`, which
 turns the saved options into the controls, whether a review step is needed
 and the one payload the preview and the download share. Zotero highlights

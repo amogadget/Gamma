@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { WHOLE_MAX_BYTES, chooseTransport, docIdOf, layoutFromManifest, rangeOpenOptions } from "../src/pdfSource.js";
+import { WHOLE_MAX_BYTES, chooseTransport, docIdOf, layoutFromManifest, rangeOpenOptions } from "../src/pdf/pdfSource.js";
 
 test("docIdOf reads upload urls only, query or not", () => {
   assert.equal(docIdOf("/api/uploads/0123abcdef0123abcdef0123.pdf"), "0123abcdef0123abcdef0123");

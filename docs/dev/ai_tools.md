@@ -15,12 +15,12 @@ chips (`context_blocks`), `agent_system` adds one line each so "this block" /
 already in the context (see "Pointing the chat at notes" in [ai.md](ai.md)).
 Whenever a reading tool is armed it also tells the model to point at a page
 as a markdown link `[title](/?page=<page_id>)` using ids from the tool
-results; `ChatMarkdown` (`widgets.jsx`) renders such same-origin
+results; `ChatMarkdown` (`shared/ui/Widgets.jsx`) renders such same-origin
 `?page=`/`?block=` links as open-in-place (`onOpenPage` → `openBlock`,
 Ctrl/Cmd-click still opens a tab), so "find me the paper about X" ends in a
 clickable link to the page.
 Folder semantics mirror
-[frontend/src/libraryUtils.js](../../frontend/src/libraryUtils.js) via the
+[frontend/src/library/libraryUtils.js](../../frontend/src/library/libraryUtils.js) via the
 shared `gamma/foldertags.py` rules; keep them in sync.
 
 Attached library pages (`context_pages` in the tool scope) extend reading access
@@ -29,6 +29,12 @@ these references for reads and search. `run_agent_tool` removes `context_pages`
 before dispatching a mutation, so attachments do not grant editing access.
 
 ## The tools
+
+The [MCP adapter](mcp.md) exposes a read-only subset of this same registry to
+external assistants. `agent_tools` filters definitions and `run_agent_tool`
+enforces permissions and an optional explicit allowlist at dispatch. Gamma chat
+passes its armed tool set and permission map; MCP passes its fixed four-tool
+allowlist and a non-writable workspace scope.
 
 | Tool | Permission | Scope | What it does |
 |---|---|---|---|
@@ -163,7 +169,7 @@ makes `content` the block's entire new text. `append` / `prepend` add
 `content` after / before the existing text on its own line, so the model
 sends only the addition and never retypes what is there; a blank line
 separates the two when either side is a heading, list, quote, table, fence,
-display math or multi-line (`join_block_text`, mirrored in `blockTree.jsx`
+display math or multi-line (`join_block_text`, mirrored in `editor/BlockTree.jsx`
 for the streamed preview). The spec tells the model to prefer append for
 "add / extend / note that" and replace for rewrites. The action carries
 `mode`, and its chip reads "Appended to" / "Prepended to" / "Edited". Page

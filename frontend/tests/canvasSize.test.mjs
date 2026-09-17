@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { canvasSize, CANVAS_MAX_PIXELS, CANVAS_MAX_EDGE } from "../src/canvasSize.js";
+import { canvasSize, CANVAS_MAX_PIXELS, CANVAS_MAX_EDGE } from "../src/shared/lib/canvasSize.js";
 
 test("normal pages retain high-DPI resolution", () => {
   assert.deepEqual(canvasSize(612, 792, 2), { width: 1224, height: 1584 });

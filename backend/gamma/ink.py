@@ -18,7 +18,7 @@ writers map ink through the exact conversion they already use for rects.
 always, then any of ``p`` pressure, ``t`` time, ``a`` altitude, ``z``
 azimuth. ``pts`` is one flat integer array — x/y in 1/100 pt and t in ms
 are delta-encoded after the first sample, p is 0..1000, a/z degrees. The
-frontend's ``src/ink.js`` is the mirror of the codec here; keep them in
+frontend's ``src/ink/ink.js`` is the mirror of the codec here; keep them in
 step.
 """
 

@@ -9,7 +9,7 @@ launcher, and desktop release workflows use these locations.
 | `backend/tests/` | Backend tests using temporary data directories |
 | `frontend/tests/` | `node --test` tests of the pure modules; `e2e/` the Playwright browser suite (`npm run e2e`, [debugging.md](debugging.md)) |
 | `tests/shared/` | JSON cases for rules mirrored between backend and frontend (search normalization, folder paths), read by both test suites |
-| `frontend/src/` | React application and code-defined UI icons |
+| `frontend/src/` | React code grouped by function (`editor/`, `pdf/`, `settings/`, etc.), orchestration in `app/`, reused code/assets in `shared/`; [source map](../../frontend/src/README.md) |
 | `frontend/public/` | Files copied as-is into the frontend build |
 | `desktop/` | Electron shell and desktop packaging |
 | `extension/` | Browser connector, loaded unpacked without a build step |
@@ -40,7 +40,7 @@ folders; those folders have not been created yet.
 | `extension/assets/icons/` | Connector toolbar, manifest, and notification icons |
 
 Keep assets with their consumer so the frontend build and the extension
-archive remain self-contained. React SVG components in `frontend/src/icons.jsx`
+archive remain self-contained. React SVG components in `frontend/src/shared/ui/Icons.jsx`
 and inline shell glyphs remain source code; they are not duplicate image files
 to move into a media directory.
 
@@ -49,7 +49,7 @@ content-hashed bundles. The backend sends those files with an immutable,
 one-year cache policy. Unversioned public files belong under `/media/`, sent
 `no-cache` with a real `304` on revalidation (`gamma/app.py`).
 
-The pdf.js worker is one of those hashed assets: `frontend/src/pdfViewer.jsx`
+The pdf.js worker is one of those hashed assets: `frontend/src/pdf/PdfViewer.jsx`
 imports `pdfjs-dist/legacy/build/pdf.worker.min.mjs?url`, so it is always the
 installed package's legacy build and is cached like the bundle. Nothing to
 copy or check when `pdfjs-dist` is upgraded.

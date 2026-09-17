@@ -143,14 +143,14 @@ their page numbers; unlocatable selections fall back to the plain head excerpt.
 
 ### Mentioning library papers
 
-`paperMentionInput.jsx` owns the picker. `paperMentions.js` owns mention text edits
-and `MAX_CHAT_REFERENCES`, shared with `chatDock.jsx`. The six-reference UI limit
+`chat/PaperMentionInput.jsx` owns the picker. `chat/paperMentions.js` owns mention text edits
+and `MAX_CHAT_REFERENCES`, shared with `chat/ChatDock.jsx`. The six-reference UI limit
 mirrors the API's seven-page limit, leaving one slot for the current page.
 Attached papers and message references use the shared flat `crumbBtn` control,
 `linkChipText` for long titles, and `uiClose` to remove context.
 
 Type `@` in the chat composer to search library titles with the same ranking,
-typo tolerance, and separator matching as library search (`librarySearch.js`).
+typo tolerance, and separator matching as library search (`library/librarySearch.js`).
 Arrow keys choose a result; Enter or Tab attaches it, Escape dismisses the
 query, and clicking or tapping a result also works. Results include author,
 year, venue, and folder details. A completed mention inserts the title and
@@ -179,7 +179,7 @@ Three optional request fields say what the message is about inside the
 notes. The server resolves all three against the request's context pages.
 
 - `focus_block_id` — the block row the cursor is on (`focusedId` in
-  `App.jsx` → `focusedNote`). The chat shows it as a "Cursor" chip, like a
+  `app/App.jsx` → `focusedNote`). The chat shows it as a "Cursor" chip, like a
   PDF selection, and sends it with every message; the chip's × leaves it out
   until the cursor moves to another block. Its text and sub-blocks enter the
   context as an id-labelled outline ("The user's cursor is on this note
@@ -241,7 +241,7 @@ button (sliders icon) in each folder/PDF chat header toggles the configured tool
 chat only. New chat resets the switch back to on.
 
 Which tools a chat may use is configured per chat KIND — there are three
-(`CHAT_KINDS` in `prefs.js`, `CHAT_KIND_ROWS` in `settings.jsx`):
+(`CHAT_KINDS` in `app/prefs.js`, `CHAT_KIND_ROWS` in `settings/SettingsDialog.jsx`):
 
 - **Folder chat** — the home/folder view (`agent_scope: "folder"`).
 - **PDF chat** — a page with a PDF attached (`agent_scope: "page"`).
@@ -255,7 +255,7 @@ tool for every chat of the kind. The stored map is localStorage JSON
 `gamma-ai-agent-perms` = `{folder, pdf, notes}` → `{list, read, block_read,
 search, rename, move, block_edit}` (a pre-kind flat map is applied to every
 kind on read). The chat header's ⚙ popover carries the same picker for the
-kind of the chat it is opened in (`AgentToolPicker` in `settings.jsx`,
+kind of the chat it is opened in (`AgentToolPicker` in `settings/SettingsDialog.jsx`,
 bound to the same map), so a change in either place is the same change.
 `ChatDock` derives its kind from its props (`organizeFolder` set → folder;
 else `pageAttach` → pdf; else notes) and sends that kind's map as the
@@ -267,7 +267,7 @@ still `search`), Search papers online (`web_search` → `search_papers`), Fetch
 documents (`web_read` → `fetch_paper`; both web tools are read-only and
 described in [ai_tools.md](ai_tools.md)), Rename pages, Move pages, and Edit
 note blocks (one chip arming `edit_block`/`create_block`/`move_block`
-together). The "Read & search" preset (`chatSettings.js` `READ_TOOLS`)
+together). The "Read & search" preset (`chat/chatSettings.js` `READ_TOOLS`)
 includes the two web tools. Plus:
 
 - **Tool rounds** (`gamma-ai-tool-rounds` → request `tool_rounds`, default 32,
@@ -302,7 +302,7 @@ the reload is skipped — [collab.md](collab.md)).
 ### Watching the agent work (live footprint)
 
 The chat forwards every stream event to the app as it arrives
-(`onAgentEvent` in `chatDock.jsx` → `handleAgentEvent` in `App.jsx`), so the
+(`onAgentEvent` in `chat/ChatDock.jsx` → `handleAgentEvent` in `app/App.jsx`), so the
 notes panel shows where the agent is, not just what it did.
 
 - Actions of `read_block`/`edit_block`/`create_block`/`move_block` carry the
@@ -376,7 +376,7 @@ menu — Translate this page / Translate whole document / Show
 original·translation (Stop translating while running). A whole-document job
 queues pages nearest the current page first (forward before backward at
 equal distance), so the page being read paints immediately. The queue lives
-in `pdfViewer.jsx` (`translateCtl`), producer/consumer style: the producer
+in `pdf/PdfViewer.jsx` (`translateCtl`), producer/consumer style: the producer
 segments queued pages in order and feeds one flat list of ~6-paragraph /
 1200-char chunks, while N workers (Settings → Reading → parallel requests,
 typed, 1–32) stream through it across page boundaries — the first request is
@@ -404,11 +404,11 @@ On the page, a paragraph whose translation is queued gets a faint accent
 wash over its original lines, an in-flight one shimmers, streamed text
 types onto the page behind a caret (masking the original as soon as there
 is something to show), and a landed paragraph fades in. That is
-`TransPending`/`TransPara` in `pdfViewer.jsx`, driven by the entry's
+`TransPending`/`TransPara` in `pdf/PdfViewer.jsx`, driven by the entry's
 `queued`/`busy`/`partial` fields, which the job clears when it ends, halts
 or fails.
 
-Geometry never leaves the client: `frontend/src/pdfTranslate.js` segments
+Geometry never leaves the client: `frontend/src/pdf/pdfTranslate.js` segments
 pdf.js text runs into paragraph blocks (columns via whitespace-river
 detection, paragraphs via indents/font changes, figure-wrap via sustained
 width changes; math-heavy/numeric blocks are skipped), each carrying
@@ -419,7 +419,7 @@ over, and the layout never moves. Translated text is selectable/copyable;
 while shown, the invisible original text layer stands down.
 
 Targets are the allowlisted `TRANSLATE_LANGS` codes (mirrored in
-`frontend/src/prefs.js`); model and reasoning `effort` come from Settings →
+`frontend/src/app/prefs.js`); model and reasoning `effort` come from Settings →
 Reading (model follows the chat model by default; effort omitted unless
 picked — Low/Minimal is the speed lever for reasoning models); the whole
 Translation section can be switched off there too. The server keeps an

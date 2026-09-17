@@ -65,10 +65,12 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-connections-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-connections-light.svg">
-  <img alt="Gamma connects your research: import and export Obsidian vaults and Zotero libraries, import Notion notes, and save papers from your browser with Gamma Connector" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
+  <img alt="Gamma connects your research: import and export Obsidian vaults and Zotero libraries, import Notion notes, save papers with Gamma Connector, and search and read your library with Codex" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
 </picture>
 
 The **Gamma Connector** extension ([extension/](./extension/)) saves the paper you're reading in one click — PDF, metadata, folder, and labels — straight from the arXiv / DOI / publisher tab. Right-click clips a link or a text selection into your notes.
+
+The **[Gamma PDF plugin for Codex](./plugins/gamma/)** lets Codex search and read your papers, notes, highlights, and PDF text with read-only access to a workspace you approve. Open **Settings → AI → External assistants → Codex CLI**, copy the setup command for your operating system, and run it on the computer where you use Codex. It installs the plugin from a published Gamma release and opens Gamma sign-in. Approve a workspace, then start a new Codex chat and ask, “Use Gamma to find my notes about…” Requires the Codex CLI and a running, reachable Gamma server. Other MCP assistants can connect using the server URL in the same panel; see the [connection guide](./docs/dev/mcp.md).
 
 ## Share, sync and move your data
 
@@ -146,6 +148,11 @@ npm install
 npm run dev        # :5173, proxies /api → :9001
 ```
 
+Frontend source is grouped by function (`editor/`, `pdf/`, `settings/`, and
+others), with startup/session code in `app/` and reused code in `shared/`.
+See the [frontend source map](./frontend/src/README.md) for file locations and
+naming conventions.
+
 **Tests**
 
 ```bash
@@ -155,6 +162,10 @@ python -m pytest tests -q
 ```
 
 In-process API tests against a throwaway data dir — auth, the block tree, metadata/BibTeX, PDF-annotation import, full-text search, and export.
+
+Frontend checks, from `frontend/`: `npm test` for module tests, `npm run build`
+for the production bundle, and `npm run e2e` for the browser suite against an
+isolated backend (requires backend dependencies and Playwright Chromium).
 
 **Production without Docker** — build the frontend and let the backend serve it:
 

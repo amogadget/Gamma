@@ -1,5 +1,5 @@
 {
-  "_": "Folder-label path rules shared by backend/gamma/foldertags.py and frontend/src/libraryUtils.js. Read by backend/tests/test_shared_fixtures.py and frontend/tests/libraryUtils.test.mjs.",
+  "_": "Folder-label path rules shared by backend/gamma/foldertags.py and frontend/src/library/libraryUtils.js. Read by backend/tests/test_shared_fixtures.py and frontend/tests/libraryUtils.test.mjs.",
   "parse_tags": [
     {"input": "a, b ,,c", "output": ["a", "b", "c"]},
     {"input": "readout/nondestructive, cooling", "output": ["readout/nondestructive", "cooling"]},

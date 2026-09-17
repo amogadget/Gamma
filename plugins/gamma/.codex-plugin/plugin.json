@@ -1,0 +1,28 @@
+{
+  "name": "gamma",
+  "version": "0.1.0+codex.20260917001608",
+  "description": "Search and read Gamma PDF libraries, pages, highlights, and notes.",
+  "author": {
+    "name": "Gamma",
+    "url": "https://github.com/tim4431/Gamma"
+  },
+  "homepage": "https://github.com/tim4431/Gamma/blob/main/docs/dev/mcp.md",
+  "repository": "https://github.com/tim4431/Gamma",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Gamma PDF",
+    "shortDescription": "Pick and read Gamma papers, notes, and highlights.",
+    "longDescription": "Use a configured Gamma MCP connection to search your workspace and answer questions with citations to pages and PDF passages.",
+    "developerName": "Gamma",
+    "category": "Productivity",
+    "composerIcon": "./skills/gamma/assets/icon.png",
+    "logo": "./skills/gamma/assets/icon.png",
+    "logoDark": "./skills/gamma/assets/icon.png",
+    "capabilities": [],
+    "defaultPrompt": [
+      "Let me choose a paper from Gamma.",
+      "Find my Gamma notes on this topic.",
+      "Summarize the papers in my Gamma library."
+    ]
+  }
+}

@@ -5,7 +5,7 @@ import {
   addChildBlock, addSiblingBlock, blocksToHighlights, expandToBlock, extractBlock, findBlockContext,
   flattenBlocks, indentBlock, insertChild, insertSibling, isDescendant, makeBlockId, normalizeBlocks,
   outdentBlock, toggleCollapsed,
-} from "../src/logseqPdfModel.js";
+} from "../src/shared/model/blockModel.js";
 
 const N = (id, children = [], extra = {}) => ({ id, content: id, properties: {}, collapsed: false, editMode: false, children, ...extra });
 const ids = (list) => list.map((b) => b.id);

@@ -1,11 +1,18 @@
 # App.jsx decomposition plan
 
-Status: proposed, 2026-09-11. Asset organization is implemented separately;
-the application decomposition below has not been applied.
+Status: file organization implemented, 2026-09-16; state decomposition remains
+proposed. The [source map](../../frontend/src/README.md) describes the current
+functional folders. They sit directly under `src/`, alongside `app/` and
+`shared/`, without an extra `features/` layer. Existing modules have moved;
+their state ownership has not been redesigned.
+
+The organization pass also moved the highlight palette to
+`shared/model/highlightColors.js` and made App import transfer dialogs directly
+from `transfers/ImportExport.jsx`, removing their re-export through shared widgets.
 
 ## Goal and current constraints
 
-`frontend/src/App.jsx` currently has 8,516 lines. It combines session checks,
+`frontend/src/app/App.jsx` still combines session checks,
 library mutations, account preference synchronization, page loading and saving,
 PDF state, AI provider forms, dock geometry, and most workspace markup.
 
@@ -18,7 +25,8 @@ may carry a PDF attachment.
 
 ## Proposed ownership
 
-Paths below are relative to `frontend/src/`.
+Paths below are relative to `frontend/src/`. Existing folders now hold the
+relocated files; new hooks and state owners in this table remain proposals.
 
 | Module or area | Responsibility | Existing code to extract |
 |---|---|---|
@@ -26,17 +34,17 @@ Paths below are relative to `frontend/src/`.
 | `app/useSession.js` | Identity, login/logout, conflict detection, session refresh | `checkSession`, `doLogin`, `doGuestLogin`, session event listeners |
 | `app/navigation.js`, `app/useNavigation.js` | Parse/build URLs, home/page transitions, link-jump back stack | `homeUrlFor`, initial query parsing, `openBlock`, `goHome`, `pushNav`, `goBackNav` orchestration |
 | `app/preferences/` | Account-scoped tabs, recents, pinned folders, appearance, and reading positions | `pushPrefSoon`, `applyServerTabs`, read-position and recents synchronization |
-| `features/pages/usePageSession.js` | Active page identity, tree, load state, and metadata updates | Page fields, `loadBlocksForBlock`, the data-loading portion of `openBlock` |
-| `features/editor/` (done: `src/collab.js`) | Queued writes, debounce, retries, explicit flush, unload handling — now the live session hook `usePageCollab` ([collab.md](collab.md)); App keeps only the transition effect and the remote-apply glue | `commit`, `flush`, `onRemoteOps` |
-| `features/editor/` | Block editing, caret/focus, undo, and notes rendering | Existing editor files, `editTail`, notes-window markup and editor actions |
-| `features/library/` | Listing derivation, selection, page/folder/label operations, and library UI | `pageBlocks` through `homeEntries`, click handlers, retagging, rename/move/delete, carousels |
-| `features/workspace/` | Dock arrangement, visibility, panel sizes, drag geometry, and phone presentation | `moveWindow`, `startWindowDock`, `renderSlotGroup`, per-page layout snapshots |
-| `features/pdf/` | Viewer controls, PDF/notes jumps, scroll restoration, translation, and snapshots | Existing viewer/translation files, `restorePdfScroll`, zoom and capture logic |
-| `features/transfers/` | Upload/import/export operations and progress reporting | `uploadFiles`, format imports, backup transfer functions, `runExport`, transfer rows |
-| `features/sharing/` | Share-link resolution/gates and owner share controls | `resolveShare`, `loadShareSettings`, invitation mutations, share popover |
-| `features/settings/` | Settings panels and AI provider form/request state | Existing settings files plus provider CRUD, catalog, OAuth, and usage handlers |
-| `features/chat/` | Chat attachments and page-change notifications | `addBlockToChat`, `addHighlightToChat`, image selection, existing `ChatDock` |
-| `shared/ui/`, `shared/lib/` | Reusable controls, API transport, and small shared functions | Menus, icons, selected parts of `widgets.jsx` and `utils.js` |
+| `pages/usePageSession.js` | Active page identity, tree, load state, and metadata updates | Page fields, `loadBlocksForBlock`, the data-loading portion of `openBlock` |
+| `collaboration/` (existing: `usePageCollab.js`) | Queued writes, debounce, retries, explicit flush, unload handling — the live session hook `usePageCollab` ([collab.md](collab.md)); App keeps the transition effect and the remote-apply glue | `commit`, `flush`, `onRemoteOps` |
+| `editor/` | Block editing, caret/focus, undo, and notes rendering | Existing editor files, `editTail`, notes-window markup and editor actions |
+| `library/` | Listing derivation, selection, page/folder/label operations, and library UI | `pageBlocks` through `homeEntries`, click handlers, retagging, rename/move/delete, carousels |
+| `workspace/` | Dock arrangement, visibility, panel sizes, drag geometry, and phone presentation | `moveWindow`, `startWindowDock`, `renderSlotGroup`, per-page layout snapshots |
+| `pdf/` | Viewer controls, PDF/notes jumps, scroll restoration, translation, and snapshots | Existing viewer/translation files, `restorePdfScroll`, zoom and capture logic |
+| `transfers/` | Upload/import/export operations and progress reporting | `uploadFiles`, format imports, backup transfer functions, `runExport`, transfer rows |
+| `sharing/` | Share-link resolution/gates and owner share controls | `resolveShare`, `loadShareSettings`, invitation mutations, share popover |
+| `settings/` | Settings panels and AI provider form/request state | Existing settings files plus provider CRUD, catalog, OAuth, and usage handlers |
+| `chat/` | Chat attachments and page-change notifications | `addBlockToChat`, `addHighlightToChat`, image selection, existing `ChatDock` |
+| `shared/ui/`, `shared/lib/` | Reusable controls, API transport, and small shared functions | Menus, icons, selected parts of `shared/ui/Widgets.jsx` and `shared/lib/utils.js` |
 
 Split the larger areas into focused files as their state owners emerge.
 For example, library listing selectors, selection state, mutations, and
@@ -71,13 +79,14 @@ Keep `useBlockHistory` as the one undo stack per page. Page loads, collapse,
 and edit-mode changes must retain their existing treatment; maintain caret
 restoration and typing groups.
 
-Give saves a queue keyed by account and page, with writes serialized per
-page. The current pending-save slot is shared across navigation, and a failed
-request can be superseded when another pending edit exists; inspect and cover
-cross-page retry behavior before replacing it. Expose explicit `flush(pageId)`
-and dirty-state operations. Callers such as cross-page block moves must await
-the required write before reparenting or fetching replacement data. Preserve
-the 500 ms debounce and immediate save on editor close.
+The existing `collaboration/collabSession.js` already serializes op batches
+per page and retains pending page sessions across navigation. The module tests
+cover navigating during a slow save and retrying failed batches; the former
+single pending-save slot is no longer the implementation. Preserve `flush`
+and `hasPending`, the current typing/structural debounce policy (350/80 ms),
+and immediate commits where requested. Audit account changes and callers such
+as cross-page block moves before extracting more state: they must await the
+required write before reparenting or fetching replacement data.
 
 Navigation can render the next page while the old page's queue finishes, but
 must not discard the old queue. Failed saves must remain identifiable and
@@ -115,7 +124,7 @@ per page. Do not force all of them through one generic merge algorithm.
 Capture account identity when scheduling a write, and reject stale responses
 after an account change. Move side effects out of React state-updater functions
 so updater replay cannot issue duplicate writes. Put browser preference
-declarations in `prefs.js`, including the home sort/kind/layout declarations
+declarations in `app/prefs.js`, including the home sort/kind/layout declarations
 currently scattered through App, retaining legacy key migration.
 
 ### 5. Library, providers, and shared UI
@@ -129,10 +138,10 @@ AI provider forms should own their drafts, busy/error state, catalog requests,
 and OAuth lifecycle in the settings feature. App should receive the selected
 provider/model and refresh commands rather than every form setter.
 
-Split `widgets.jsx` by ownership: generic controls stay shared; transfer
+Split `shared/ui/Widgets.jsx` by ownership: generic controls stay shared; transfer
 dialogs, workspace docks, and chat/editor rendering belong with their feature.
-Move shared highlight colors out of `pdfViewer.jsx` so the block editor need
-not import the viewer for constants. Split `utils.js` into API transport and
+Shared highlight colors now live in `shared/model/highlightColors.js`, so the
+block editor no longer imports the viewer for constants. Split `shared/lib/utils.js` into API transport and
 domain helpers as actual consumers are moved; avoid another catch-all folder.
 
 ## Implementation order
@@ -157,9 +166,10 @@ domain helpers as actual consumers are moved; avoid another catch-all folder.
    transfers, sharing, metadata, and chat integration into their owners. Features
    communicate via explicit callbacks such as `onPageChanged` and
    `onTransferUpdated`, not an application-wide bag of setters.
-6. **Finish the composition root and styles.** Move App into `app/`, update
-   `main.jsx`, colocate feature CSS, and leave theme/base rules shared.
-   Preserve stylesheet order until cascade interactions have been checked.
+6. **Finish the composition root and styles.** App is now in `app/`, library and
+   settings CSS are colocated, and `main.jsx` retains the stylesheet order.
+   Continue reducing App's responsibilities and split the remaining shared
+   styles only when cascade interactions can be checked.
 
 Each stage should build and remain usable on its own. Keep file moves and
 behavior corrections distinguishable in the diff. No router library, global

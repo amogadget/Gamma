@@ -75,7 +75,7 @@ isn't in the text (it may belong to a work the document cites). Unverified
 records get a red "!" badge on the metadata button, a red Source row in the
 popover, a red "!" + source tag beside the slide citation in the share
 popover, and a red cell in the Settings → Library table. The wording lives
-in one place, `metaSourceInfo` in `frontend/src/utils.js`; the predicate
+in one place, `metaSourceInfo` in `frontend/src/shared/lib/utils.js`; the predicate
 `isUnverifiedPaperMeta(source, kind, unverified)` falls back to the old
 "AI-extracted paper" rule for records stored before the flag existed. The
 AI extractor also classifies the document (`meta.kind`: `paper` / `notes` /
@@ -159,7 +159,7 @@ surfaces.
 
 Resolution only picks a candidate URL — the download behind it can still fail
 (paywall, blocked server-side fetch, HTML behind the link). So `openPdf` in
-`App.jsx` preflights the resolved URL with `probePdfUrl` (`utils.js`): it opens
+`app/App.jsx` preflights the resolved URL with `probePdfUrl` (`shared/lib/utils.js`): it opens
 `/api/pdf` without `save=1`, keeps the headers and cancels the body, and only
 then creates the page. `/api/pdf` is the single arbiter of "is this a PDF" —
 its 400 `detail` becomes the failure status, and no page is left behind. A URL

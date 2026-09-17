@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { setSessionScope, loadSession, saveSession, clearSession } from "../src/sessionState.js";
+import { setSessionScope, loadSession, saveSession, clearSession } from "../src/app/sessionState.js";
 
 test("reading state is isolated by account and workspace, including delayed saves", async (t) => {
   const data = new Map();

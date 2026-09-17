@@ -1,4 +1,6 @@
 import { Account } from "../harness.mjs";
+import fs from "node:fs";
+import path from "node:path";
 
 export async function settingsScenarios(env) {
   const { server, browser, step, openPage, assert, assertEq, assertNoProblems, until, flags } = env;
@@ -29,6 +31,76 @@ export async function settingsScenarios(env) {
     await page.locator(".settingsSearchResult").filter({ has: page.getByText(label, { exact: true }) }).click();
     await row(page, label).waitFor({ state: "visible" });
   }
+
+  await step("settings: external assistant token creation, hiding, and revocation", async () => {
+    const { ctx, page } = await setup();
+    try {
+      await openSettings(page);
+      await nav(page, "AI").click();
+      await nav(page, "External assistants").click();
+      const serverUrl = page.getByRole("textbox", { name: "Gamma MCP server URL" });
+      await serverUrl.waitFor();
+      assertEq(await serverUrl.inputValue(), `${server.base}/mcp`);
+      assert(!await page.getByRole("textbox", { name: "Codex MCP configuration" }).isVisible(), "manual setup starts collapsed");
+      assert(!await page.getByRole("textbox", { name: "Codex setup command", exact: true }).isVisible(), "only the selected method is shown");
+      await page.getByRole("button", { name: "Copy server URL", exact: true }).click();
+      await page.getByText("Copied. You can paste it now.", { exact: true }).waitFor();
+      if (process.env.GAMMA_MCP_SCREENSHOTS) {
+        fs.mkdirSync(process.env.GAMMA_MCP_SCREENSHOTS, { recursive: true });
+        await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "settings-desktop.png") });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "settings-mobile.png"), fullPage: true });
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no horizontal overflow");
+        await page.setViewportSize({ width: 1280, height: 860 });
+      }
+      await page.getByRole("button", { name: "Codex CLI", exact: true }).click();
+      await page.getByRole("button", { name: "Windows PowerShell", exact: true }).click();
+      const commandField = page.getByRole("textbox", { name: "Codex setup command", exact: true });
+      const commands = await commandField.inputValue();
+      assert(commands.includes("install-gamma-codex.ps1"));
+      assert(commands.includes(`-ServerUrl '${server.base}/mcp'`));
+      assert(!commands.includes("GAMMA_TOKEN"));
+      await page.getByRole("button", { name: "macOS / Linux", exact: true }).click();
+      assert((await commandField.inputValue()).includes("install-gamma-codex.sh"));
+      assert((await commandField.inputValue()).endsWith(`'${server.base}/mcp')`), "Unix setup passes the server URL inside its cleanup subshell");
+      await page.getByRole("button", { name: "Copy setup command", exact: true }).click();
+      await page.getByText("Copied. You can paste it now.", { exact: true }).waitFor();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await commandField.scrollIntoViewIfNeeded();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "setup command fits a narrow viewport");
+      if (process.env.GAMMA_MCP_SCREENSHOTS) {
+        await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "codex-setup-mobile.png"), fullPage: true });
+      }
+      await page.setViewportSize({ width: 1280, height: 860 });
+      await page.getByText("Manual setup (advanced)", { exact: true }).click();
+      const config = page.getByRole("textbox", { name: "Codex MCP configuration" });
+      await config.waitFor();
+      assert((await config.inputValue()).includes(`${server.base}/mcp`));
+      await page.getByRole("textbox", { name: "Connection name" }).fill("Codex test");
+      await page.getByRole("button", { name: "Create token", exact: true }).click();
+      const secret = page.getByRole("textbox", { name: "New integration token" });
+      await secret.waitFor();
+      assert((await secret.inputValue()).startsWith("gamma_"));
+      const connections = await user.api("/api/integrations/tokens");
+      assertEq(connections.tokens.length, 1);
+      assert(!JSON.stringify(connections).includes(await secret.inputValue()), "token is never returned in listings");
+      await page.getByRole("button", { name: "Done", exact: true }).click();
+      await secret.waitFor({ state: "detached" });
+      await page.getByRole("button", { name: "Disconnect", exact: true }).click();
+      await page.getByText("No assistants have access to this workspace yet.", { exact: true }).waitFor();
+      assertEq((await user.api("/api/integrations/tokens")).tokens.length, 0);
+      const second = await user.api("/api/workspaces", { method: "POST", body: { name: "Other assistant workspace" } });
+      const elsewhere = await user.api(`/api/integrations/tokens?ws=${second.id}`, { method: "POST", body: { name: "Codex elsewhere" } });
+      const refreshed = page.waitForResponse((response) => response.url().includes("/api/integrations/tokens?") && response.request().method() === "GET");
+      await page.getByRole("button", { name: "Refresh connections", exact: true }).click();
+      assertEq((await (await refreshed).json()).tokens.length, 0);
+      assertEq(await page.getByText("Codex elsewhere", { exact: true }).count(), 0, "other workspace connections stay out of this panel");
+      assert(await page.getByText("No assistants have access to this workspace yet.", { exact: true }).isVisible());
+      assertEq(await page.getByRole("button", { name: "Disconnect", exact: true }).count(), 0, "other workspace connections are not managed as current workspace access");
+      await user.api(`/api/integrations/tokens/${elsewhere.id}?ws=${second.id}`, { method: "DELETE" });
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
 
   await step("settings: navigation, search, scoped management, and preferences survive reload", async () => {
     const { ctx, page } = await setup();

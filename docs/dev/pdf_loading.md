@@ -36,9 +36,9 @@ the endpoint sends that answer `no-store` and a real one with a day of
 Access is the file's own rule: a workspace member, or a share token confined
 to the shared page's document (`_share_can_read_upload`).
 
-## The client (`src/pdfViewer.jsx`, `src/pdfSource.js`)
+## The client (`src/pdf/PdfViewer.jsx`, `src/pdf/pdfSource.js`)
 
-`pdfSource.js` holds the pure decisions, unit-tested in
+`pdf/pdfSource.js` holds the pure decisions, unit-tested in
 `tests/pdfSource.test.mjs`: which URL is an upload (`docIdOf`), which
 transport to use (`chooseTransport`), the pdf.js options of a range open
 (`rangeOpenOptions`), and how a manifest becomes a page layout
@@ -77,7 +77,7 @@ document). The viewer's load effect composes them:
    `disableStream` is the flag that matters; with autofetch off but streaming
    on, pdf.js's full-file reader keeps running underneath and saturates the
    link the ranges race. pdf.js resolves the URL to an absolute one before
-   fetching, and the fetch wrapper in `utils.js` tags absolute same-origin
+   fetching, and the fetch wrapper in `shared/lib/utils.js` tags absolute same-origin
    URLs with the workspace header too — without that the ranges of a document
    in a non-default workspace came back 404, which pdf.js reports as
    "Missing PDF". Browsers never store 206 responses, so three seconds
@@ -107,7 +107,7 @@ itself, so the unhashed files (`index.html`, favicons) get a real 304.
 
 ## High zoom and touch scrolling
 
-`canvasSize.js` bounds every PDF and live-ink backing store to 8 Mi pixels
+`shared/lib/canvasSize.js` bounds every PDF and live-ink backing store to 8 Mi pixels
 and 4096 pixels per edge. Normal zooms keep their supersampling; at 400% or
 on oversized pages the raster can fall below one device pixel per CSS pixel
 while layout, text, links and SVG annotations keep the exact zoom. WebKit
@@ -121,7 +121,7 @@ and keeps its geometry, text and overlays; it repaints on return, and a
 forced render (jumps, the cited page) still works. Effect cleanup cancels
 the pending pdf.js render and text-layer tasks; unmount zeroes the canvas.
 
-`verticalScrollSnap.js` is the always-on one-finger vertical alignment
+`pdf/verticalScrollSnap.js` is the always-on one-finger vertical alignment
 (`installVerticalScrollSnap`, reinstalled on zoom and document changes). It
 judges direction after 8 CSS pixels within a 30° vertical cone and never
 writes scroll offsets while a finger or native momentum is moving: after

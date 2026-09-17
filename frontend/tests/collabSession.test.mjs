@@ -5,8 +5,8 @@
 // is the e2e collab scenario.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyOps } from "../src/blockOps.js";
-import { MAX_RETRIES, RETRY_MS, createCollabSession } from "../src/collabSession.js";
+import { applyOps } from "../src/shared/model/blockOps.js";
+import { MAX_RETRIES, RETRY_MS, createCollabSession } from "../src/collaboration/collabSession.js";
 
 const ME = "this-client";
 const block = (id, content = id, properties = {}) => ({ id, content, properties, children: [], position: "a0" });

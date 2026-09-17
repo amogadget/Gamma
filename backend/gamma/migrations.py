@@ -341,10 +341,22 @@ def _v5_publisher_sessions(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _v6_integration_tokens(conn: sqlite3.Connection) -> None:
+    conn.execute(next(s for s in USERS_SCHEMA if "CREATE TABLE IF NOT EXISTS integration_tokens" in s))
+    conn.commit()
+
+
+def _v7_mcp_oauth(conn: sqlite3.Connection) -> None:
+    conn.execute(next(s for s in USERS_SCHEMA if "CREATE TABLE IF NOT EXISTS mcp_oauth" in s))
+    conn.commit()
+
+
 STEPS = [
     (1, "baseline", _v1_baseline),
     (2, "workspaces", _v2_workspaces),
     (3, "workspace_access", _v3_workspace_access),
     (4, "workspace_kinds", _v4_workspace_kinds),
     (5, "publisher_sessions", _v5_publisher_sessions),
+    (6, "integration_tokens", _v6_integration_tokens),
+    (7, "mcp_oauth", _v7_mcp_oauth),
 ]

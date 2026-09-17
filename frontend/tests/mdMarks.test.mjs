@@ -4,7 +4,7 @@
 // checks the result plus where the selection lands.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { insertLink, isUrl, scanMarks, toggleMark } from "../src/mdMarks.js";
+import { insertLink, isUrl, scanMarks, toggleMark } from "../src/editor/mdMarks.js";
 
 // Apply {from, to, insert} changes addressed to the original text.
 function apply(text, changes) {

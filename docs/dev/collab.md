@@ -3,9 +3,9 @@
 Several people can edit a page together through a shared workspace or an
 editable page share. Their changes and cursor positions appear live. Two
 browsers signed into the same account also work. Backend: `gamma/ops.py`, `gamma/collab.py`,
-`gamma/routers/collab.py`. Frontend: `src/collab.js`, `src/blockOps.js`,
-`src/presence.jsx`, plus small hooks in `App.jsx`, `blockTree.jsx`,
-`blockCmEditor.jsx` and `blockHistory.js`.
+`gamma/routers/collab.py`. Frontend: `src/collaboration/usePageCollab.js`, `src/shared/model/blockOps.js`,
+`src/collaboration/Presence.jsx`, plus small hooks in `app/App.jsx`, `editor/BlockTree.jsx`,
+`editor/BlockCmEditor.jsx` and `editor/blockHistory.js`.
 
 Block undo/redo returns a description of the action (`describeTransition`),
 derived from the before/after trees so a rebased remote change is not named
@@ -107,12 +107,12 @@ A peer is `{client, user, name, color, can_edit, block, anchor, head}`; colour
 is an index into an 8-slot palette handed out per room (CSS `--peer-N`);
 anonymous share viewers are `Anonymous`.
 
-## The client (`src/collabSession.js`, `src/collab.js`, `src/blockOps.js`)
+## The client (`src/collaboration/collabSession.js`, `src/collaboration/usePageCollab.js`, `src/shared/model/blockOps.js`)
 
-`createCollabSession` (`collabSession.js`) is the session as a plain state
+`createCollabSession` (`collaboration/collabSession.js`) is the session as a plain state
 machine over injected dependencies — the JSON call, the socket factory, the
 keepalive POST, timers, and callbacks for peers/me — so the node tests drive
-it with fakes. `usePageCollab` (`collab.js`, one per open page in App.jsx)
+it with fakes. `usePageCollab` (`collaboration/usePageCollab.js`, one per open page in App.jsx)
 only wires it to the browser: `utils.apiJson`, `new WebSocket(...)` on the
 share- or workspace-qualified URL, the pagehide keepalive, and `peers` / `me`
 as React state. The session owns:
@@ -202,7 +202,7 @@ is the default for the next open.
 Ops on the page root (a rename, page properties) update the title / page
 state in App instead of the tree.
 
-## What the user sees (`src/presence.jsx`, CSS in `app.css`)
+## What the user sees (`src/collaboration/Presence.jsx`, CSS in `shared/styles/app.css`)
 
 - the header avatar stack (initial, peer colour; faded while only viewing;
   click jumps to the person's block);
@@ -211,7 +211,7 @@ state in App instead of the tree.
   an embed card's controls), and a coloured left edge
   while someone has that block's editor open;
 - inside an open editor, each peer's caret with a name tag and a tinted
-  selection (`remoteCursorField` in `blockCmEditor.jsx`, keyed by peer: a
+  selection (`remoteCursorField` in `editor/BlockCmEditor.jsx`, keyed by peer: a
   peer whose `rev` changed is placed fresh from its offsets, the others keep
   mapping through every change — ours and other peers' — so a caret stays
   put while we type and shifts correctly when someone else edits before
