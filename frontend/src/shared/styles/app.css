@@ -298,6 +298,7 @@
 
 [data-theme="gamma-dark"] {
   color-scheme: dark;
+  --pdf-paper: var(--bg-surface);
   --bg-page: #1b1b1a;
   --bg-surface: #272725;
   --bg-elevated: #32312e;
@@ -4100,7 +4101,21 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   --scrollbar-thumb-hover: var(--scrollbar-thumb-dark-hover); } /* dark surround + scrollbar even in the light theme */
 .pdfViewer.pdfDark .pdfPageWrap { background: #0f0f0f !important; }
 .pdfViewer.pdfDark .pdfPageCanvas { filter: invert(0.94) hue-rotate(180deg); }
-.pdfViewer.pdfDark .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }
+:is(.pdfViewer.pdfDark, [data-theme="gamma-dark"] .pdfViewer) .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }
+
+/* Gamma Dark uses its charcoal paper with either PDF color preference.
+   Screen blending maps the inverted canvas's black paper to the surface;
+   softer white ink remains readable without a bright white page. */
+[data-theme="gamma-dark"] .pdfViewer { background: var(--bg-deeper); }
+[data-theme="gamma-dark"] .pdfViewer .pdfPageWrap {
+  background: var(--pdf-paper) !important;
+  isolation: isolate;
+}
+[data-theme="gamma-dark"] .pdfViewer .pdfPageCanvas {
+  filter: invert(1) hue-rotate(180deg);
+  mix-blend-mode: screen;
+  opacity: 0.9;
+}
 
 /* Eye-comfort theme: tint the PDF page to the same warm paper as the
    interface. The canvas MULTIPLIES onto the wrapper's cream background
@@ -4228,6 +4243,8 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
    page instead. */
 .pdfViewer.pdfDark :is(.pdfTransMask, .pdfTransText > span) { background: #0f0f0f; }
 .pdfViewer.pdfDark .pdfTransText { color: #c9c9c9; }
+[data-theme="gamma-dark"] .pdfViewer :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
+[data-theme="gamma-dark"] .pdfViewer .pdfTransText { color: var(--text-primary); }
 /* Same for the eye-comfort ground: the masks are opaque divs above the
    canvas, so the page tint's blend never reaches them. */
 :is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"], [data-theme="gamma-light"]) .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
@@ -4879,7 +4896,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .inkEditRow .inkDeleteBtn { color: var(--danger); }
 .inkEditOptions { align-items: center; border-top: 1px solid var(--border); margin-top: 4px; }
 .inkEditOptions .ctlBtn, .inkEditOptions .colorBtn { min-width: 32px; min-height: 32px; }
-.pdfViewer.pdfDark .inkLayer, .pdfViewer.pdfDark .inkCanvas { filter: invert(1) hue-rotate(180deg); }
+:is(.pdfViewer.pdfDark, [data-theme="gamma-dark"] .pdfViewer) :is(.inkLayer, .inkCanvas) { filter: invert(1) hue-rotate(180deg); }
 /* The brief outline after a jump from the notes. */
 .inkFlash {
   fill: none;

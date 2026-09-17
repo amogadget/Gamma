@@ -26,15 +26,15 @@ export function AppearanceSettings({ value, diagnostics }) {
         <p className="appearanceHint">Choose the colors around your work.</p>
         <PictureChoices label="Theme" value={value.theme} onChange={value.setTheme}
           options={THEMES.map((theme) => ({ value: theme[0], label: theme[1], hint: theme[2], preview: <ThemePreview theme={theme} /> }))} />
-        <p className="appearanceFootnote">Sepia, Solarized Light and Gray also tint PDF pages and soften ink.</p>
+        <p className="appearanceFootnote">Gamma themes also match PDF pages to the interface. Sepia, Solarized Light and Gray tint PDF pages and soften ink.</p>
       </Section>
 
       <Section title="PDF pages" action={<span className="appearanceScope">Your account</span>}>
         <div className="appearancePdf">
-          <PdfPreview dark={value.pdfDarkPage} />
+          <PdfPreview dark={value.pdfDarkPage || value.theme === "gamma-dark"} />
           <div className="appearancePdfControls">
             <Toggle icon={MoonIcon} label="Dark PDF pages"
-              hint="Light text on a dark page, with any theme."
+              hint={value.theme === "gamma-dark" ? "Gamma Dark already uses dark pages." : "Light text on a dark page, with any theme."}
               checked={value.pdfDarkPage} onChange={value.setPdfDarkPage} />
             <p className="appearanceFootnote">Photos and figures invert too. Your files and exports keep their original colors.</p>
           </div>

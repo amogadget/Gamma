@@ -221,12 +221,19 @@ configured Gamma MCP server; this keeps per-installation addresses and credentia
 out of a distributable package. A direct MCP connection also works without the
 plugin, including in the Codex IDE extension.
 
-From a Gamma checkout:
+From a Gamma checkout, build into a directory you will keep. Codex registers
+the source path and continues reading its catalog after installation; deleting
+it breaks marketplace discovery even when the plugin remains cached. For
+example, in Windows PowerShell:
 
-```text
-python tools/package_codex_plugin.py --output tmp/gamma-marketplace --archive
-codex plugin marketplace add ./tmp/gamma-marketplace
+```powershell
+python tools/package_codex_plugin.py --output "$env:LOCALAPPDATA/Gamma/codex-plugin/gamma-marketplace" --archive
+codex plugin marketplace add "$env:LOCALAPPDATA/Gamma/codex-plugin/gamma-marketplace"
 ```
+
+On macOS/Linux, use a persistent directory such as
+`~/.local/share/gamma/codex-plugin/gamma-marketplace`. Reserve `tmp/` output for
+package previews, not a registered marketplace source.
 
 Install Gamma PDF through the desktop plugin browser or CLI `/plugins`, then
 start a new conversation. To distribute it, publish the generated directory as
@@ -282,6 +289,15 @@ Official references: [Codex MCP configuration](https://learn.chatgpt.com/docs/ex
 
 ## Troubleshooting
 
+- **Marketplace root does not contain a supported manifest:** run
+  `codex plugin marketplace list` and check whether the registered source still
+  contains `.agents/plugins/marketplace.json`. If a temporary source was deleted,
+  rebuild into a persistent directory, run `codex plugin marketplace remove gamma-local`,
+  then `codex plugin marketplace add <persistent-directory>` and
+  `codex plugin add gamma@gamma-local`. Restart Codex and use a new chat.
+- **MCP disabled by requirements:** `codex mcp list` reports the applicable
+  managed policy. Ask the workspace administrator to permit the Gamma MCP
+  connection; reinstalling the plugin or signing in again cannot override policy.
 - **401:** sign in again if OAuth access expired or was revoked. For a manual token,
   confirm the Codex process inherited the variable. Account/workspace access must
   still exist. OAuth tokens are bound to the exact server URL used when signing in.
