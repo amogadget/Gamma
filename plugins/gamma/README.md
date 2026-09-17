@@ -19,9 +19,9 @@ is not required. To connect manually or install a development package:
 
    ```text
    codex mcp add gamma --url <your-gamma-address>/mcp
-   codex mcp login gamma
    ```
 
+   If sign-in is interrupted, retry with `codex mcp login gamma`.
    Approve read-only access to the workspace in your browser. No manual token
    or environment variable is needed. HTTPS is required for remote servers;
    HTTP localhost is supported. Manual tokens remain available for other clients.

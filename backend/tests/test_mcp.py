@@ -1,5 +1,6 @@
 """Exercise the real SDK transport, scoped credentials, and shared dispatch."""
 
+import json
 import time
 
 import pytest
@@ -107,6 +108,11 @@ def test_paper_picker_resource_search_pagination_and_scope(client, connection):
     assert not result.get("isError")
     assert data["workspace"]["id"] == ws
     assert data["total"] == 24 and len(data["pages"]) == 20 and data["next_offset"] == 20
+    # Text-only clients get usable choices even if structuredContent is omitted.
+    fallback = result["content"][0]["text"]
+    assert json.dumps(data["pages"][0]["title"], ensure_ascii=False) in fallback
+    assert data["pages"][0]["url"] in fallback
+    assert "offset=20" in fallback
     assert "Picker private paper" not in str(result)
     second = pick({"query": "Picker", "offset": 20}, "search_paper_choices")["structuredContent"]
     assert second["next_offset"] is None
@@ -115,6 +121,10 @@ def test_paper_picker_resource_search_pagination_and_scope(client, connection):
     assert len(match) == 1 and match[0]["id"] == special["id"]
     assert f"ws={ws}&page={special['id']}" in match[0]["url"]
     assert pick({"query": "absent"})["structuredContent"]["pages"] == []
+    assert "No papers" in pick({"query": "absent"})["content"][0]["text"]
+    assert pick({"query": "Picker", "offset": 100})["structuredContent"]["total"] == 24
+    literal = make_page(c, "Literal 100%_match")
+    assert [p["id"] for p in pick({"query": "%_"})["structuredContent"]["pages"]] == [literal["id"]]
     for args in ({"workspace_id": other_ws}, {"offset": -1}, {"query": "x" * 201}):
         assert pick(args)["isError"]
     tools = rpc(client, item["token"], "tools/list").json()["result"]["tools"]
@@ -129,6 +139,21 @@ def test_paper_picker_resource_search_pagination_and_scope(client, connection):
     assert "error" in rpc(client, item["token"], "resources/read", {"uri": "file:///users.db"}).json()
     c.delete(f"/api/integrations/tokens/{item['id']}")
     assert rpc(client, item["token"], "resources/read", {"uri": PICKER_URI}).status_code == 401
+
+
+def test_read_links_and_picker_use_canonical_origin(client, connection, monkeypatch):
+    c, ws, item = connection
+    page = make_page(c, "Canonical origin paper")
+    monkeypatch.setenv("GAMMA_PUBLIC_URL", "https://localhost")
+    # The incoming request is HTTP, as it can be behind a TLS proxy.
+    for name, args in (("read_page", {"page_id": page["id"]}), ("list_pages", {})):
+        result = rpc(client, item["token"], "tools/call", {"name": name, "arguments": args}).json()["result"]
+        assert not result["isError"]
+        assert f"https://localhost/?ws={ws}&page=" in result["content"][0]["text"]
+        assert "http://localhost/" not in result["content"][0]["text"]
+    result = rpc(client, item["token"], "tools/call", {
+        "name": "show_paper_picker", "arguments": {"query": "Canonical origin paper"}}).json()["result"]
+    assert result["structuredContent"]["pages"][0]["url"] == f"https://localhost/?ws={ws}&page={page['id']}"
 
 
 def test_tokens_are_hashed_private_and_revocable(client, connection):

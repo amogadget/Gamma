@@ -18,10 +18,10 @@ option. Select **Codex CLI** in the panel for commands using your actual URL:
 
 ```text
 codex mcp add gamma --url https://gamma.example.com/mcp
-codex mcp login gamma
 ```
 
-Codex opens the browser. Sign in with your Gamma account, choose the workspace,
+Codex opens the browser. If sign-in is interrupted, run `codex mcp login gamma`
+to retry. Sign in with your Gamma account, choose the workspace,
 and approve read-only access. Start a new Codex chat. There is no token to copy
 and no environment variable to set. This works with local browser-based Gamma
 and self-hosted servers; the Gamma desktop app is not required. Local installations
@@ -90,8 +90,8 @@ Tokens are never embedded
 in the HTML. The UI is served by Gamma, so updating the skills-only plugin does
 not replace the server's picker code. Restart Gamma after updating the backend.
 
-If the client does not render MCP Apps, tell the assistant to list the returned
-titles from the structured tool result. Choose one in a reply. The assistant is
+If the client does not render MCP Apps, the tool also returns text choices with
+titles and page links. Choose one in a reply. The assistant is
 instructed not to duplicate the list beneath a working picker.
 If the host rejects the selection message, the
 picker shows a copyable reference. A connected MCP server by itself does not

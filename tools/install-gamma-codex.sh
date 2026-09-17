@@ -20,6 +20,16 @@ gamma_digest='__GAMMA_ARCHIVE_SHA256__'
 gamma_root="${XDG_DATA_HOME:-$HOME/.local/share}/gamma/codex-plugin"
 mkdir -p "$gamma_root"
 gamma_install=$(mktemp -d "$gamma_root/install.XXXXXXXX")
+gamma_marketplace="$gamma_root/gamma-marketplace"
+gamma_cleanup() {
+    if [ -d "$gamma_install/previous" ] && [ ! -e "$gamma_marketplace" ]; then
+        # Leave the backup intact if restoration fails.
+        mv "$gamma_install/previous" "$gamma_marketplace" || return 1
+    fi
+    rm -rf "$gamma_install"
+}
+trap gamma_cleanup 0
+trap 'exit 1' HUP INT TERM
 printf 'Downloading the Gamma PDF plugin...\n'
 curl --fail --silent --show-error --location "$gamma_download" -o "$gamma_install/gamma-marketplace.zip"
 if command -v sha256sum >/dev/null 2>&1; then
@@ -29,12 +39,15 @@ else
 fi
 [ "$gamma_actual" = "$gamma_digest" ] || { printf 'The Gamma plugin download is incomplete or changed. Run setup again.\n' >&2; exit 1; }
 unzip -q "$gamma_install/gamma-marketplace.zip" -d "$gamma_install"
-gamma_marketplace="$gamma_install/gamma-marketplace"
-[ -f "$gamma_marketplace/.agents/plugins/marketplace.json" ] || { printf 'The Gamma package is missing its marketplace catalog.\n' >&2; exit 1; }
-# Keep the extracted marketplace: Codex needs the source for future reinstalls.
-mkdir -p "$gamma_root/gamma-marketplace"
-cp -R "$gamma_marketplace/." "$gamma_root/gamma-marketplace/"
-gamma_marketplace="$gamma_root/gamma-marketplace"
+gamma_staged="$gamma_install/gamma-marketplace"
+[ -f "$gamma_staged/.agents/plugins/marketplace.json" ] || { printf 'The Gamma package is missing its marketplace catalog.\n' >&2; exit 1; }
+# Replace the whole package, retaining the old source until the move succeeds.
+if [ -e "$gamma_marketplace" ]; then
+    mv "$gamma_marketplace" "$gamma_install/previous"
+fi
+mv "$gamma_staged" "$gamma_marketplace"
+gamma_cleanup
+trap - 0 HUP INT TERM
 codex plugin marketplace add "$gamma_marketplace"
 codex plugin add gamma@gamma-local
 printf 'Connecting Gamma. Approve the workspace in your browser.\n'

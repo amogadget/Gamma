@@ -34,13 +34,14 @@ class ReleaseTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     release(root / "bad", version)
 
-    def run_installer(self, root, assets, *, fail="", bad_download=False):
+    def run_installer(self, root, assets, *, fail="", bad_download=False, fail_move=False):
         """Exercise the real script; substitute only downloads and the Codex CLI."""
         log = root / "calls.txt"
         if log.exists():
             log.unlink()
         env = {**os.environ, "GAMMA_TEST_ARCHIVE": str(assets[0]), "GAMMA_TEST_LOG": str(log),
-               "GAMMA_TEST_FAIL": fail, "GAMMA_TEST_BAD": "1" if bad_download else ""}
+               "GAMMA_TEST_FAIL": fail, "GAMMA_TEST_BAD": "1" if bad_download else "",
+               "GAMMA_TEST_MOVE_FAIL": "1" if fail_move else ""}
         posix_shell = os.environ.get("GAMMA_TEST_POSIX_SHELL")
         if os.name == "nt" and not posix_shell:
             env["LOCALAPPDATA"] = str(root / "user data")
@@ -55,6 +56,13 @@ function Invoke-WebRequest {
 function codex {
     Add-Content -LiteralPath $env:GAMMA_TEST_LOG -Value ($args -join '|')
     $global:LASTEXITCODE = if ($env:GAMMA_TEST_FAIL -and ($args -join ' ').StartsWith($env:GAMMA_TEST_FAIL)) { 7 } else { 0 }
+}
+function Move-Item {
+    param($LiteralPath, $Destination)
+    if ($env:GAMMA_TEST_MOVE_FAIL -and $LiteralPath.EndsWith('gamma-marketplace') -and $Destination.EndsWith('gamma-marketplace')) {
+        throw 'Simulated replacement failure'
+    }
+    Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath -Destination $Destination
 }
 & $args[0] -ServerUrl 'http://localhost:9001/mcp'
 ''', encoding="utf-8")
@@ -73,6 +81,12 @@ if [ -n "$GAMMA_TEST_BAD" ]; then printf invalid > "$dest"; else cp "$GAMMA_TEST
 joined=$(printf '%s|' "$@")
 printf '%s\\n' "${joined%|}" >> "$GAMMA_TEST_LOG"
 if [ -n "$GAMMA_TEST_FAIL" ]; then case "$*" in "$GAMMA_TEST_FAIL"*) exit 7;; esac; fi
+''')
+            (bin_dir / "mv").write_text('''#!/bin/sh
+if [ -n "$GAMMA_TEST_MOVE_FAIL" ]; then
+    case "$1" in */install.*/gamma-marketplace) exit 7;; esac
+fi
+command -p mv "$@"
 ''')
             for file in bin_dir.iterdir():
                 file.chmod(0o755)
@@ -106,6 +120,39 @@ if [ -n "$GAMMA_TEST_FAIL" ]; then case "$*" in "$GAMMA_TEST_FAIL"*) exit 7;; es
                 self.assertEqual(calls[1], "plugin|add|gamma@gamma-local")
                 self.assertEqual(calls[2], "mcp|add|gamma|--url|http://localhost:9001/mcp")
 
+    def test_upgrade_removes_obsolete_files_and_cleans_staging(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = release(root / "v1", "1.2.3")
+            result, calls = self.run_installer(root, first)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            source = Path(calls[0].split("|", 3)[-1])
+            obsolete = source / "plugins/gamma/skills/obsolete/SKILL.md"
+            obsolete.parent.mkdir()
+            obsolete.write_text("Removed in the next release")
+            second = release(root / "v2", "1.2.4")
+
+            # A bad download must leave the existing installation intact.
+            result, calls = self.run_installer(root, second, bad_download=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(calls, [])
+            self.assertTrue(obsolete.is_file())
+            self.assertEqual(list(source.parent.iterdir()), [source])
+
+            result, calls = self.run_installer(root, second, fail_move=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(calls, [])
+            self.assertTrue(obsolete.is_file(), "restore the previous source if replacement fails")
+            self.assertEqual(list(source.parent.iterdir()), [source])
+
+            result, calls = self.run_installer(root, second)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(Path(calls[0].split("|", 3)[-1]), source)
+            self.assertFalse(obsolete.exists())
+            manifest = json.loads((source / "plugins/gamma/.codex-plugin/plugin.json").read_text())
+            self.assertEqual(manifest["version"], "1.2.4")
+            self.assertEqual(list(source.parent.iterdir()), [source])
+
     def test_failed_download_or_install_never_changes_mcp(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -116,6 +163,8 @@ if [ -n "$GAMMA_TEST_FAIL" ]; then case "$*" in "$GAMMA_TEST_FAIL"*) exit 7;; es
             result, calls = self.run_installer(root, assets, fail="plugin add")
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(len(calls), 2)
+            source = Path(calls[0].split("|", 3)[-1])
+            self.assertEqual(list(source.parent.iterdir()), [source])
             result, calls = self.run_installer(root, assets, fail="mcp add")
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(len(calls), 3)

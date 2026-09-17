@@ -5,9 +5,8 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
 
-from package_codex_plugin import build
+from package_codex_plugin import build, write_archive
 
 
 def release(output: Path, version: str, repo: str = "tim4431/Gamma") -> list[Path]:
@@ -21,10 +20,7 @@ def release(output: Path, version: str, repo: str = "tim4431/Gamma") -> list[Pat
     manifest["version"] = version
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     archive = output / f"gamma-codex-plugin-{version}.zip"
-    with ZipFile(archive, "w", ZIP_DEFLATED) as bundle:
-        for file in sorted(package.rglob("*")):
-            if file.is_file():
-                bundle.write(file, (Path("gamma-marketplace") / file.relative_to(package)).as_posix())
+    write_archive(package, archive)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     assets = [archive]
     for name in ("install-gamma-codex.ps1", "install-gamma-codex.sh"):

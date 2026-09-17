@@ -33,7 +33,6 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 - **Chat with your papers** — ask about the open PDF, paste figures, dictate by voice, or attach the whole PDF so the model sees tables and plots. Use Anthropic or OpenAI models, or sign in with your ChatGPT subscription — no API key.
 - **Mention a paper** — type `@` to find and attach a library page. Its details and text stay in context for follow-up questions.
 - **Put the agent to work** — ask it to search your library, read papers, compare findings, rename pages, or organize them into folders. Expand each tool step to inspect its arguments and results.
-- **Connect Codex and other assistants** — in Settings → AI → External assistants, copy the server URL or use **Codex CLI** for one-command plugin installation and connection from a published Gamma release. Sign in with Gamma in your browser and approve a workspace. The [MCP integration and Codex plugin](docs/dev/mcp.md) let assistants search and read your pages, notes, highlights, and PDF text without copying tokens.
 
 ## ✍️ Take notes
 
@@ -66,10 +65,12 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-connections-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-connections-light.svg">
-  <img alt="Gamma connects your research: import and export Obsidian vaults and Zotero libraries, import Notion notes, and save papers from your browser with Gamma Connector" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
+  <img alt="Gamma connects your research: import and export Obsidian vaults and Zotero libraries, import Notion notes, save papers with Gamma Connector, and search and read your library with Codex" src="./docs/assets/branding/gamma-connections-light.svg" width="100%">
 </picture>
 
 The **Gamma Connector** extension ([extension/](./extension/)) saves the paper you're reading in one click — PDF, metadata, folder, and labels — straight from the arXiv / DOI / publisher tab. Right-click clips a link or a text selection into your notes.
+
+The **[Gamma PDF plugin for Codex](./plugins/gamma/)** lets Codex search and read your papers, notes, highlights, and PDF text with read-only access to a workspace you approve. Open **Settings → AI → External assistants → Codex CLI**, copy the setup command for your operating system, and run it on the computer where you use Codex. It installs the plugin from a published Gamma release and opens Gamma sign-in. Approve a workspace, then start a new Codex chat and ask, “Use Gamma to find my notes about…” Requires the Codex CLI and a running, reachable Gamma server. Other MCP assistants can connect using the server URL in the same panel; see the [connection guide](./docs/dev/mcp.md).
 
 ## Share, sync and move your data
 

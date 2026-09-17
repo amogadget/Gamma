@@ -18,13 +18,14 @@ from fastapi import HTTPException
 from .ai_tools import agent_tools, run_agent_tool
 from .integrations import resolve_token
 from .mcp_oauth import public_base
-from .mcp_picker import PICKER_URI, PICKER_MIME, PICKER_SCHEMA, ICON_URI, picker_html, paper_choices
+from .mcp_picker import PICKER_URI, PICKER_MIME, PICKER_SCHEMA, ICON_URI, picker_html, paper_choices, paper_choices_text
 
 READ_TOOLS = frozenset({"list_pages", "read_page", "read_block", "search_library"})
 ICONS = [Icon(src=ICON_URI, mimeType="image/png", sizes=["512x512"])]
 INSTRUCTIONS = (
     "To let the user choose a paper, call show_paper_picker and wait for their selection. "
-    "Do not repeat the picker results in chat unless the user says the UI is unavailable. "
+    "If the client cannot render the picker, show the returned text choices. "
+    "Otherwise do not repeat the picker results beneath the UI. "
     "A selection supplies a Gamma URL: use its page parameter as the exact ID for read_page. "
     "If the user already names a paper, search for it directly; ask to choose only when ambiguous. "
     "Search and read Gamma pages, notes, highlights and PDF text. Discover IDs with "
@@ -50,7 +51,7 @@ class GammaMCP:
             for name, description, meta in [
                 ("show_paper_picker", "Open a searchable Gamma paper picker so the user can select a paper or notes page. "
                  "Use when asked to choose, attach, mention, or pick a Gamma paper. Wait for the selection; "
-                 "do not repeat the list in chat unless the user reports the picker is unavailable.",
+                 "show the text choices if the client cannot render the picker, but do not duplicate a working UI.",
                  {"ui": {"resourceUri": PICKER_URI}, "openai/outputTemplate": PICKER_URI,
                   "openai/toolInvocation/invoking": "Opening Gamma library",
                   "openai/toolInvocation/invoked": "Choose a Gamma paper",
@@ -82,15 +83,9 @@ class GammaMCP:
             if name in {"show_paper_picker", "search_paper_choices"}:
                 request = self.server.request_context.request
                 _, ws = request.state.gamma_integration
-                try:
-                    base = public_base(request)
-                except HTTPException:
-                    base = str(request.base_url).rstrip("/")  # Manual tokens on HTTP LAN servers.
+                base = request.state.gamma_base
                 data = await run_in_threadpool(paper_choices, ws, base, arguments)
-                fallback = ("Gamma paper picker is available. Wait for the user's selection. "
-                            "Do not repeat titles or instructions in chat. Only if the user reports the UI "
-                            "is unavailable, offer titles from structuredContent and ask which to use.")
-                return CallToolResult(content=[TextContent(type="text", text=fallback)], structuredContent=data)
+                return CallToolResult(content=[TextContent(type="text", text=paper_choices_text(data))], structuredContent=data)
             # Legacy chat aliases have no public MCP schema; reject before
             # dispatch so they cannot bypass the SDK's input validation.
             if name not in READ_TOOLS:
@@ -102,7 +97,7 @@ class GammaMCP:
                 run_agent_tool, ws, scope, name, arguments, allowed_tools=READ_TOOLS)
             error = bool(action.get("error"))
             if not error:
-                base = str(request.base_url).rstrip("/")
+                base = request.state.gamma_base
                 template = base + "/?" + urlencode({"ws": ws}) + "&page=<page_id>"
                 result = f"Gamma page URL template: {template}\n\n{result}"
                 if action.get("page_id"):
@@ -142,6 +137,9 @@ class GammaMCP:
                                    if base else "Bearer"), "Cache-Control": "no-store"})(scope, receive, send)
             return
         request.state.gamma_integration = identity
+        # Use the same canonical origin for picker and read-tool citations.
+        # Manual tokens still support HTTP LAN addresses without an OAuth issuer.
+        request.state.gamma_base = base or str(request.base_url).rstrip("/")
         manager = getattr(request.state, "gamma_mcp_manager", None)
         if manager is None:
             await JSONResponse({"detail": "MCP is starting."}, status_code=503)(scope, receive, send)

@@ -21,8 +21,9 @@ sessions, databases, or private files to work around a missing connection.
   picker in MCP Apps-capable clients. Let the user select the paper; do not
   claim one is selected merely because the picker opened. Do not repeat the
   titles, JSON, or usage instructions beneath the picker. Wait for the selection.
-  Only if the user reports that no UI appears, show a short list of returned
-  titles and ask them to choose. Use `offset` to paginate.
+  If the client cannot render the picker, or the user reports that no UI appears,
+  show a short list from the returned text choices and ask them to choose.
+  Use `show_paper_picker` with the same `query` and the returned next `offset` to paginate.
 - A picker selection sends a title and Gamma URL, optionally with a question.
   Read the URL's `page` parameter as the exact `page_id` and `ws` as its workspace.
   Use `read_page` with that ID for subsequent questions about
