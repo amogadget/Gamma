@@ -16,7 +16,9 @@ $gammaDownload = '__GAMMA_ARCHIVE_URL__'
 $gammaDigest = '__GAMMA_ARCHIVE_SHA256__'
 $gammaRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Gamma/codex-plugin' } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.local/share/gamma/codex-plugin' }
 New-Item -ItemType Directory -Path $gammaRoot -Force | Out-Null
-$gammaRoot = (Resolve-Path -LiteralPath $gammaRoot).Path
+# Normalize the root with the same API as the operation targets below. Windows
+# may expose the profile/temp directory through an 8.3 path alias.
+$gammaRoot = [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $gammaRoot).ProviderPath)
 $gammaInstall = Join-Path $gammaRoot ([Guid]::NewGuid().ToString('N'))
 $gammaMarketplace = Join-Path $gammaRoot 'gamma-marketplace'
 $gammaPrevious = Join-Path $gammaInstall 'previous'

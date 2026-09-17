@@ -34,7 +34,7 @@ class ReleaseTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     release(root / "bad", version)
 
-    def run_installer(self, root, assets, *, fail="", bad_download=False, fail_move=False):
+    def run_installer(self, root, assets, *, fail="", bad_download=False, fail_move=False, short_path=False):
         """Exercise the real script; substitute only downloads and the Codex CLI."""
         log = root / "calls.txt"
         if log.exists():
@@ -45,6 +45,16 @@ class ReleaseTest(unittest.TestCase):
         posix_shell = os.environ.get("GAMMA_TEST_POSIX_SHELL")
         if os.name == "nt" and not posix_shell:
             env["LOCALAPPDATA"] = str(root / "user data")
+            if short_path:
+                import ctypes
+                Path(env["LOCALAPPDATA"]).mkdir(parents=True, exist_ok=True)
+                buffer = ctypes.create_unicode_buffer(32768)
+                length = ctypes.windll.kernel32.GetShortPathNameW(env["LOCALAPPDATA"], buffer, len(buffer))
+                if not length or length >= len(buffer):
+                    raise ctypes.WinError()
+                if buffer.value == env["LOCALAPPDATA"]:
+                    self.skipTest("8.3 path aliases are disabled on this volume")
+                env["LOCALAPPDATA"] = buffer.value
             wrapper = root / "test.ps1"
             wrapper.write_text(r'''
 $ErrorActionPreference = 'Stop'
@@ -151,6 +161,18 @@ command -p mv "$@"
             self.assertFalse(obsolete.exists())
             manifest = json.loads((source / "plugins/gamma/.codex-plugin/plugin.json").read_text())
             self.assertEqual(manifest["version"], "1.2.4")
+            self.assertEqual(list(source.parent.iterdir()), [source])
+
+    @unittest.skipUnless(os.name == "nt" and not os.environ.get("GAMMA_TEST_POSIX_SHELL"), "Windows path aliases")
+    def test_install_accepts_short_local_app_data_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            assets = release(root / "release", "1.2.3")
+            result, calls = self.run_installer(root, assets, short_path=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(len(calls), 3)
+            source = Path(calls[0].split("|", 3)[-1])
+            self.assertTrue((source / ".agents/plugins/marketplace.json").is_file())
             self.assertEqual(list(source.parent.iterdir()), [source])
 
     def test_failed_download_or_install_never_changes_mcp(self):
