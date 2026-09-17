@@ -1,6 +1,6 @@
 // Shared presentational widgets: workspace chrome, dockable windows, chat
 // markdown, and the auto-growing textarea.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -9,6 +9,7 @@ import "katex/dist/katex.min.css";
 import { CheckIcon, CopyIcon, ExternalLinkIcon, FileTextIcon, PinIcon } from "./Icons";
 import { assetUrl, copyText } from "../lib/utils";
 import { parsePdfCitation } from "../../pdf/pdfCitation.js";
+import { remarkPaperLinks } from "../lib/remarkPaperLinks.js";
 
 // Shared chrome for every dockable window: one grip (drag to move/reorder,
 // double-click to collapse), the close button right beside it, then the
@@ -184,6 +185,31 @@ function gammaPageLink(href) {
   try { return decodeURIComponent(m[1]); } catch { return null; }
 }
 
+// Keep the renderer type stable: replacing it on each streamed delta unmounts
+// links and loses clicks when an update lands between mouse-down and mouse-up.
+// Context supplies the latest navigation callback without replacing the link.
+const ChatOpenPageContext = createContext(null);
+function ChatMarkdownLink({ href, children, title }) {
+  const onOpenPage = useContext(ChatOpenPageContext);
+  const pageId = onOpenPage ? gammaPageLink(href) : null;
+  if (pageId) {
+    return (
+      <a href={href} className="chatLinkCard chatPageLink"
+        title={parsePdfCitation(href, window.location.origin) ? "Show this passage in the PDF" : "Open this page"}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          onOpenPage(pageId, parsePdfCitation(href, window.location.origin));
+        }}><FileTextIcon size={14} aria-hidden="true" /><span className="chatLinkLabel">{children}</span></a>
+    );
+  }
+  return <a href={href} className="chatLinkCard" target="_blank" rel="noreferrer" title={title || href}>
+    <ExternalLinkIcon size={14} aria-hidden="true" /><span className="chatLinkLabel">{children}</span>
+  </a>;
+}
+const CHAT_MARKDOWN_COMPONENTS = { a: ChatMarkdownLink };
+const CHAT_MARKDOWN_COPY_COMPONENTS = { ...CHAT_MARKDOWN_COMPONENTS, ...CHAT_COPY_COMPONENTS };
+
 // onOpenPage: opens a Gamma page link in place (the library agent links the
 // pages it found as /?page=<id>); Ctrl/Cmd-click still opens a new tab.
 const ChatMarkdown = React.memo(function ChatMarkdown({ text, onOpenPage, copyBlocks = false }) {
@@ -200,35 +226,18 @@ const ChatMarkdown = React.memo(function ChatMarkdown({ text, onOpenPage, copyBl
         ? m
         : `$${inner.replace(/\\\|/g, "\\Vert ").replace(/\|/g, "\\vert ")}$`), [text]);
   return (
-    <div onCopy={handleMarkdownCopy}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
-        urlTransform={(url) => assetUrl(defaultUrlTransform(url))}
-        components={{
-          ...(copyBlocks ? CHAT_COPY_COMPONENTS : {}),
-          a: ({ href, children, title }) => {
-            const pageId = onOpenPage ? gammaPageLink(href) : null;
-            if (pageId) {
-              return (
-                <a href={href} className="chatLinkCard chatPageLink"
-                  title={parsePdfCitation(href, window.location.origin) ? "Show this passage in the PDF" : "Open this page"}
-                  onClick={(e) => {
-                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-                    e.preventDefault();
-                    onOpenPage(pageId, parsePdfCitation(href, window.location.origin));
-                  }}><FileTextIcon size={14} aria-hidden="true" /><span className="chatLinkLabel">{children}</span></a>
-              );
-            }
-            return <a href={href} className="chatLinkCard" target="_blank" rel="noreferrer" title={title || href}>
-              <ExternalLinkIcon size={14} aria-hidden="true" /><span className="chatLinkLabel">{children}</span>
-            </a>;
-          },
-        }}
-      >
-        {normalized}
-      </ReactMarkdown>
-    </div>
+    <ChatOpenPageContext.Provider value={onOpenPage}>
+      <div onCopy={handleMarkdownCopy}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, remarkMath, remarkPaperLinks]}
+          rehypePlugins={[rehypeKatex]}
+          urlTransform={(url) => assetUrl(defaultUrlTransform(url))}
+          components={copyBlocks ? CHAT_MARKDOWN_COPY_COMPONENTS : CHAT_MARKDOWN_COMPONENTS}
+        >
+          {normalized}
+        </ReactMarkdown>
+      </div>
+    </ChatOpenPageContext.Provider>
   );
 });
 

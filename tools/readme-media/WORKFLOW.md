@@ -8,8 +8,8 @@ library. Use its exported copy for recording, not synthetic replacement papers.
 | Demo | Story | Recording details |
 |---|---|---|
 | Highlight, annotate & draw | Select a sentence, save a text annotation, circle a claim, draw an arrow, highlight with ink | `record-ink.mjs --annotate`; isolated server, note and four strokes checked after reload; `render-feature-demos.py annotate-and-ink` |
-| Native agentic | One Home conversation: zoom before `@`, select a paper, search/read, click `p. 1` to highlight the cited PDF passage | `record-native-agentic.mjs`; tool steps stay collapsed; `render-feature-demos.py native-agentic` trims model waits and adds picker, answer and citation close-ups |
-| Notes | Type markdown, a page reference, nested display math with autocomplete, then a callout | `record-notes.mjs`; starts on an empty Rabi oscillations page; fixed crop keeps the editor readable |
+| Native agentic | One PDF Chat: ask a complex mechanism/evidence question, follow a passage citation, box-select Figure 1c,d and ask a follow-up | `record-native-agentic.mjs`; real model responses and Ctrl-drag; exact citation, PDF context, both saved answers and figure attachment verified; `render-feature-demos.py native-agentic` trims model waits |
+| Notes | Type markdown, a page reference, nested display math with autocomplete, a callout, then paste and resize a picture | `run-case.mjs notes`; isolated copy of the curated export; real clipboard PNG paste and edge drag; image and width checked after reload |
 | Library | Home search, title and PDF results, folder filter, open a highlighted match | `record-library.mjs`; prepare Quantum subfolders, populate recents by navigation; QEC paper must exist |
 | Historical agent source | Ask to organize papers, show real tool calls and the resulting folders | `record-agent.mjs`; clear folders and home chat in the disposable workspace first; requires configured AI; scratch preview |
 | Metadata | Fetch a paper, watch fields fill, copy BibTeX and slide citation | `record-metadata.mjs`; remove arXiv 2312.03982 before recording; never fill metadata by hand |

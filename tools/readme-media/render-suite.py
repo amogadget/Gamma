@@ -65,7 +65,7 @@ def shot(name, directory):
     source = Path((directory / filenames[name]).read_text().strip())
     if name == 'notes':
         m = read(directory, 'notes_marks.json')
-        return source, max(0, m['m0']-0.25), min(duration(source), m['m1']), 'crop=1440:600:0:0'
+        return source, max(0, m['m0']-0.25), min(duration(source), m['m1']), f"crop=1440:{m.get('cropHeight', 600)}:0:0"
     if name == 'library':
         m = read(directory, 'library_marks.json')
         return source, m['m0']-0.25, m['tEnd']-0.8, None

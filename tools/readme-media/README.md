@@ -75,20 +75,39 @@ node tools/readme-media/suite-workspace.mjs --remove
 Remove-Item Env:MEDIA_SCRATCH
 ```
 
-The recorder starts one conversation at Home, zooms in before typing `@`, selects
-a real library paper, and asks the agent to search/read a related paper and
-compare them. Tool steps stay collapsed. It clicks the answer's actual `p. 1`
-link and shows the cited passage highlighted in the PDF, with a final close-up.
-It verifies persisted search/read actions, a single question, no expanded tool
-steps, and an exact citation match on PDF page 1.
+The recorder stays in one paper's PDF Chat. It asks how coherent transport
+enables non-local gates, relates the storage and gate mechanisms to Bell-state
+evidence, and identifies the speed-limiting error. Tool steps stay collapsed.
+It follows a real answer citation to the highlighted passage, then Ctrl-drags
+over Figure 1c,d and asks about raw versus loss-normalized fidelity and parity.
+It verifies the exact citation match, both saved questions and answers, the
+saved figure image, and the PDF context on both actual AI requests.
 `--inspect` captures the layout without sending AI requests. `GAMMA_MEDIA_DIST`
 can point to a private frontend build; only static files are served from that
 build, while PDFs and APIs still reach the real Gamma server.
 
-The edit cuts model waits and preserves the recorded interaction speed. The
-picker zoom finishes before `@` is typed; the response close-up includes the
-citation click, then returns to the whole workspace to establish the opened PDF.
+The edit cuts model waits and preserves the recorded interaction speed. Longer
+questions are pasted and held for reading. Fixed camera close-ups show the
+questions, answer and citation; the whole workspace shows
+the highlighted source, figure selection and completed follow-up answer.
 Inspect the timestamps and sample frames after each capture; model timing varies.
+
+## Take notes: paste and resize a picture
+
+After building the private frontend above, run:
+
+```powershell
+node tools/readme-media/run-case.mjs notes
+backend/venv/Scripts/python.exe tools/readme-media/render-suite.py notes
+node tools/readme-media/check-media.mjs notes
+```
+
+Notes uses an isolated server and imports `artifacts/readme-media/demo.zip`;
+it needs no demo login or suite workspace. The recorder types markdown, a page
+reference, nested math and a callout, then pastes a PNG plot through the browser
+clipboard and drags the image's resize grip. It checks the image and saved width
+after reload. The plot samples the same Rabi-oscillation function as the note.
+The taller crop includes the pasted picture and resize gesture.
 
 ## Record the seven suite cases
 
@@ -137,8 +156,9 @@ animation is retained as an asset; the README currently uses the connections SVG
 - Trim setup and excess static waits. Use fixed detail crops when helpful; keep
   controls and the result in view. A small neutral frame unifies the clips.
 - Export at 25 fps, normally 1120 pixels wide, WebP quality 85 / compression level 6.
-  The first two feature clips and reference-link clip use 1040 pixels, quality 75 /
-  compression level 4 to fit their size budgets.
+  Annotation/ink and reference links use 1040 pixels, quality 75 / compression
+  level 4. Native agentic uses 960 pixels, quality 65 / compression level 6
+  with fixed detail crops to keep the two-question PDF story below 5 MiB.
   The encoder merges identical frames while preserving their duration.
 - Publish only WebP: no MP4 or duplicate GIF. Encode from the source capture or
   lossless intermediate, never from an old GIF. Each image must be below 5 MiB.

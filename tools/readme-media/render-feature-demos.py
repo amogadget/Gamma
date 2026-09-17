@@ -27,23 +27,21 @@ def render(name):
         m = timeline['marks']
         framing = timeline.get('framing', {})
         verified = timeline.get('verified', {})
-        if not verified.get('citationMarks') or not verified.get('singleConversation'):
-            raise ValueError('Capture the single library conversation and verify its PDF citation first')
+        if not all(verified.get(key) for key in ('citationMarks', 'singleConversation', 'pdfChat', 'boxAttachment', 'savedFigure')):
+            raise ValueError('Capture both PDF questions, an exact citation and a persisted figure attachment first')
         if verified.get('expandedSteps') != 0 or verified.get('citationNotice'):
             raise ValueError('Keep tool steps collapsed and show an exact PDF citation match')
-        if m['mentionTyping'] - m['mentionZoom'] < .8:
-            raise ValueError('Finish the camera zoom before typing the paper mention')
         # Keep interactions at real speed; cut only the waits between AI actions.
         segments = [
-            (m['start'], m['mentionZoom'], 'full'),
-            (m['mentionZoom'], m['librarySent'] + .6, 'zoom-bottom'),
+            (m['start'], m['questionZoom'], 'full'),
+            (m['questionZoom'], m['pdfSent'] + .6, 'zoom-bottom'),
         ]
-        actions = [a for a in timeline['actions'] if a['phase'] == 'library']
-        answer_start = max(m['librarySent'] + .6, m['libraryAnswer'] - 3)
+        actions = [a for a in timeline['actions'] if a['phase'] == 'pdf']
+        answer_start = max(m['pdfSent'] + .6, m['pdfAnswer'] - 3)
         # Briefly show real search/read progress without replaying overlapping time.
         windows = []
         for action in actions:
-            start = max(m['librarySent'] + .6, action['at'] - .25)
+            start = max(m['pdfSent'] + .6, action['at'] - .25)
             end = min(answer_start, action['at'] + 1.25)
             if end <= start:
                 continue
@@ -55,7 +53,11 @@ def render(name):
         segments.extend([
             (answer_start, m['citationClick'] + .45, 'detail-response'),
             (m['citationReady'] - .4, m['citationReady'] + 1.5, 'full'),
-            (m['citationReady'] + 1.5, m['end'], 'zoom-passage'),
+            (m['citationReady'] + 1.5, m['passageEnd'], 'zoom-passage'),
+            (m['figureStart'], m['figureQuestionZoom'], 'full'),
+            (m['figureQuestionZoom'], m['figureSent'] + .6, 'zoom-bottom'),
+            (max(m['figureSent'] + .6, m['figureAnswer'] - 2), m['figureAnswer'] + 1, 'detail-figure-answer'),
+            (m['figureAnswer'] + 1, m['end'], 'full'),
         ])
     if any(end <= start for start, end, _ in segments):
         raise ValueError('Capture timing changed; review the edit points')
@@ -64,15 +66,20 @@ def render(name):
     for i, (start, end, camera) in enumerate(segments):
         filters = f'trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS,fps=25'
         if camera != 'full':
-            zoom = '2' if camera.startswith('detail') else '1+min(on/20,1)*min(on/20,1)*(3-2*min(on/20,1))'
+            # Fixed detail cuts keep dense PDF text readable and compact.
+            zoom = '2'
             anchor = '1' if camera.endswith('bottom') else '0.10'
             x, y = 'iw-iw/zoom', f'(ih-ih/zoom)*{anchor}'
             if camera == 'detail-response':
                 y = str(max(0, min(450, framing['citation']['y'] - 300)))
+            elif camera == 'detail-figure-answer':
+                y = str(max(0, min(450, framing['figureAnswer']['y'] - 30)))
             elif camera == 'zoom-passage':
                 box = framing['passage']
-                # Move from the full workspace toward the highlighted passage.
-                x = f'max(0,min(iw-iw/zoom,{box["x"] + box["width"]/2}-iw/zoom/2))'
+                # Frame the highlighted passage inside the PDF pane.
+                # The recorder places the PDF/chat divider at x=790. Keep the
+                # source passage in that pane, including wrapped quote lines.
+                x = f'max(0,min(790-iw/zoom,{box["x"] + box["width"]/2}-iw/zoom/2))'
                 y = f'max(0,min(ih-ih/zoom,{box["y"] + box["height"]/2}-ih/zoom/2))'
             filters += f",zoompan=z='{zoom}':x='{x}':y='{y}':d=1:s=1440x900:fps=25"
         parts.append(f'[0:v]{filters},setsar=1[s{i}]')
@@ -82,8 +89,9 @@ def render(name):
     subprocess.run([get_ffmpeg_exe(), '-v', 'error', '-y', '-i', str(source),
                     '-filter_complex', graph, '-map', '[v]', '-an', '-c:v', 'ffv1', '-level', '3', str(master)], check=True)
     output = directory / f'{name}.webp'
-    report = {'name': name, 'fps': 25, 'width': 1040, 'source': str(source), 'segments': segments,
-              **encode_webp(master, output, 'fps=25,scale=1040:-2:flags=lanczos', quality=75, effort=4)}
+    width, quality, effort = (960, 65, 6) if name == 'native-agentic' else (1040, 75, 4)
+    report = {'name': name, 'fps': 25, 'width': width, 'quality': quality, 'effort': effort, 'source': str(source), 'segments': segments,
+              **encode_webp(master, output, f'fps=25,scale={width}:-2:flags=lanczos', quality=quality, effort=effort)}
     (directory / f'{name}-render.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
     publish(output, OUT / f'demo-{name}.webp')
     print(json.dumps(report), flush=True)

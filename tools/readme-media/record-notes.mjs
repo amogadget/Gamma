@@ -1,7 +1,7 @@
 // README "Take notes" demo: a bare note page typed into, Obsidian-style live
 // preview — markdown marks, a [[ref]] chip, then a display equation typed
 // char by char ($ auto-pairing, \command autocomplete, Tab through {} args,
-// live math preview), then a callout. Ends on the rendered page.
+// live math preview), then a callout, picture paste and drag resize.
 //
 // Run from a dir holding session.txt (the `session` cookie for BASE). Expects
 // an EMPTY page PAGE_ID (reset: PUT /api/blocks/{id}/children {"blocks":[]}).
@@ -53,6 +53,7 @@ const ctx = await browser.newContext({
   recordVideo: { dir: SCRATCH + '/video', size: { width: VW, height: VH } },
 });
 await configureContext(ctx);
+await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE });
 await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 
 // UI scale: the note text is the whole story, so render it like a 125%-zoomed
@@ -84,6 +85,7 @@ await ctx.addInitScript((zoom) => {
 }, ZOOM);
 
 const page = await ctx.newPage();
+try {
 const t0 = Date.now();
 page.on('console', m => { const t = m.text(); if (t.startsWith('SCRIPT:')) console.log(t); });
 
@@ -147,9 +149,7 @@ await T(' \\left(', MATH);                         // ( auto-pairs → \left(|)
 await beat(500);
 await T('|e\\rangle\\langle g| + |g\\rangle\\langle e|', MATH);
 await beat(900);                                   // live preview moment
-await T('\\right', MATH);
-await beat(250);
-await T(')', MATH);                                // types over the paired )
+await K('Tab');                                    // hop over the auto-paired \right)
 await beat(300);
 await T(' - \\hbar\\Delta\\,|e\\rangle\\langle e|', MATH);
 console.log('SCRIPT: equation =', await value());
@@ -172,19 +172,94 @@ await T('Population oscillates as $P_e(t) = \\sin^2(\\Omega t/2)$.');
 console.log('SCRIPT: callout =', await value());
 await beat(900);
 
-// 5. click away (Escape doesn't leave the block editor): everything renders --
-await glide(row.x + 640, row.y + 400, 30);
+// 5. Paste a PNG plot through the real clipboard and editor upload handler.
+// Plot the same analytic function as the note; no external image is needed.
+await K('Enter');
+await beat(400);
+await page.evaluate(async () => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 680; canvas.height = 280;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#f8fafc'; g.fillRect(0, 0, 680, 280);
+  g.fillStyle = '#0f172a'; g.font = '600 19px Arial';
+  g.fillText('Resonant Rabi oscillations', 58, 32);
+  const x = t => 58 + t / (4 * Math.PI) * 590;
+  const y = p => 222 - p * 164;
+  g.font = '14px Arial';
+  for (const p of [0, 0.5, 1]) {
+    g.strokeStyle = '#dbe3ee'; g.lineWidth = 1;
+    g.beginPath(); g.moveTo(58, y(p)); g.lineTo(648, y(p)); g.stroke();
+    g.fillStyle = '#475569'; g.fillText(String(p), 25, y(p) + 5);
+  }
+  for (let n = 0; n <= 4; n++) {
+    g.fillText(n === 0 ? '0' : `${n === 1 ? '' : n}π`, x(n * Math.PI) - 8, 246);
+  }
+  g.fillText('Ωt', 340, 271); g.fillText('Pₑ', 20, 55);
+  g.strokeStyle = '#2563eb'; g.lineWidth = 3; g.beginPath();
+  for (let i = 0; i <= 600; i++) {
+    const t = i / 600 * 4 * Math.PI;
+    if (i === 0) g.moveTo(x(t), y(0));
+    else g.lineTo(x(t), y(Math.sin(t / 2) ** 2));
+  }
+  g.stroke();
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+});
+const paste = (Date.now() - t0) / 1000;
+await K('Control+v');
+await page.waitForFunction(() => document.querySelector('.cm-content')?.textContent.includes('/api/uploads/'));
+await beat(500);
+// Click away to render the pasted image and expose its hover resize grip.
+await glide(1320, 800, 30);
 await beat(200);
 await page.mouse.click(cx, cy);
 await page.waitForSelector('.blockEditorCm', { state: 'detached', timeout: 5000 });
-console.log('SCRIPT: editor closed');
+const picture = page.locator('.mdImg').last();
+await picture.waitFor();
+await picture.evaluate(img => img.decode());
+await picture.scrollIntoViewIfNeeded();
+await beat(1200);
+const before = await picture.boundingBox();
+await glide(before.x + before.width - 4, before.y + before.height / 2, 30);
+const grip = await page.locator('.mdImgResize').last().boundingBox();
+await glide(grip.x + grip.width / 2, grip.y + grip.height / 2, 20);
+await beat(600);
+const resize = (Date.now() - t0) / 1000;
+await page.mouse.down();
+const startX = cx;
+for (let i = 1; i <= 45; i++) {
+  await page.mouse.move(startX - 400 * i / 45, cy);
+  await page.waitForTimeout(24);
+}
+await page.mouse.up();
+await beat(600);
+await glide(1320, 170, 25);
+const after = await picture.boundingBox();
+if (after.width >= before.width - 100) throw new Error('Picture did not visibly shrink');
 await beat(2200);
 const m1 = (Date.now() - t0) / 1000;
+await page.screenshot({ path: SCRATCH + '/notes-final.png' });
+const savedWidth = await picture.getAttribute('width');
+const savedSrc = await picture.getAttribute('src');
+await page.reload({ waitUntil: 'networkidle' });
+await picture.waitFor();
+await picture.evaluate(img => img.decode());
+if (await picture.getAttribute('width') !== savedWidth || await picture.getAttribute('src') !== savedSrc) {
+  throw new Error('Pasted picture or resized width did not persist after reload');
+}
+await page.screenshot({ path: SCRATCH + '/notes-reloaded.png' });
+fs.writeFileSync(SCRATCH + '/notes-verified.json', JSON.stringify({ savedWidth, savedSrc, before, after, persisted: true }, null, 2));
 
 const video = page.video();
 await ctx.close();
 const vpath = await video.path();
 fs.writeFileSync(SCRATCH + '/video_path.txt', vpath);
-fs.writeFileSync(SCRATCH + '/notes_marks.json', JSON.stringify({ m0, m1 }));
+fs.writeFileSync(SCRATCH + '/notes_marks.json', JSON.stringify({ m0, paste, resize, m1, cropHeight: 820 }));
 console.log('SCRIPT: video saved', vpath, 'm0', m0.toFixed(2), 'm1', m1.toFixed(2));
-await browser.close();
+} catch (error) {
+  await page.screenshot({ path: SCRATCH + '/notes-error.png' });
+  throw error;
+} finally {
+  await ctx.close();
+  await browser.close();
+}
