@@ -4,7 +4,6 @@ Clients use dynamic registration, S256 authorization codes and opaque,
 revocable 90-day tokens. No refresh tokens or third-party identity service.
 """
 import json
-import os
 import re
 import secrets
 import time
@@ -23,6 +22,7 @@ from . import ratelimit, workspaces
 from .auth import SESSION_COOKIE, require_user
 from .db import connect_users_db
 from .integrations import create_token, token_digest
+from .server_settings import public_url_settings, mcp_allowed_hosts
 
 router = APIRouter()
 SCOPE = "gamma:read"
@@ -31,9 +31,10 @@ TTL = 90 * 86400
 
 def public_base(request: Request) -> str:
     """Never advertise an issuer from an arbitrary, untrusted Host header."""
-    base = os.environ.get("GAMMA_PUBLIC_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
+    configured = public_url_settings()["public_url"]
+    base = configured or str(request.base_url).rstrip("/")
     url = urlsplit(base)
-    allowed = {h.strip().lower() for h in os.environ.get("GAMMA_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()}
+    allowed = set(mcp_allowed_hosts(configured))
     local = url.hostname in {"localhost", "127.0.0.1", "::1"}
     if (url.scheme not in {"https", "http"} or url.username or url.password or url.query or url.fragment
             or (url.scheme == "http" and not local)):
@@ -41,7 +42,7 @@ def public_base(request: Request) -> str:
     if url.path not in ("", "/"):
         raise HTTPException(400, "MCP browser sign-in requires Gamma at the origin root, without a URL path prefix.")
     if not local and url.netloc.lower() not in allowed:
-        raise HTTPException(421, "Allow this hostname in GAMMA_MCP_ALLOWED_HOSTS first.")
+        raise HTTPException(421, "Confirm the public server URL in Settings > Administration > Server first.")
     # Even with a configured canonical issuer, reject requests routed via an
     # unexpected Host. Local reverse proxies should preserve the external Host.
     if request.url.netloc.lower() != url.netloc.lower():

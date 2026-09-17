@@ -18,8 +18,7 @@ launcher, and desktop release workflows use these locations.
 | `docs/user_guide.md` | User documentation |
 | `docs/assets/` | Documentation images and animations |
 | `tools/readme-media/` | README capture scripts, renderers, and recording recipes |
-| `tools/branding/` | Connections/workspace SVG generators, hero renderer, and palette preview checks |
-| `docs/design/gamma-theme/` | Standalone hero-inspired palette proposal; not imported by the app |
+| `tools/branding/` | Connections/workspace SVG generators, and hero renderer |
 | `artifacts/readme-media/` | Ignored media workspace exports, private builds, raw captures, and QA frames |
 | `artifacts/` | Ignored local sources and outputs; [retention guide](../../artifacts/README.md) |
 | `tmp/` | Disposable test/build scratch only; no maintained source code |

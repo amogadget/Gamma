@@ -107,25 +107,25 @@ it does not provide rendered PDF figures or handwriting recognition.
 
 ## Self-hosted and remote connections
 
-The default MCP Host allowlist accepts localhost and loopback addresses. Set
-`GAMMA_MCP_ALLOWED_HOSTS` to comma-separated additional host authorities before
-starting Gamma, for example `gamma.example.com,nas.local:8000`. Use HTTPS for
-connections crossing untrusted networks. Preserve the external Host header at
-the proxy and configure its trusted forwarding so generated links use HTTPS.
-For browser sign-in, serve Gamma at an origin root (for example
-`https://gamma.example.com`), and optionally set `GAMMA_PUBLIC_URL` to that
-canonical origin. Keep the external Host header and configure trusted proxy
-forwarding so Gamma sees HTTPS. `GAMMA_MCP_ALLOWED_HOSTS` must include that public
-host even when `GAMMA_PUBLIC_URL` is set. OAuth over plain HTTP is restricted to
-localhost/loopback; HTTP LAN deployments can still use manual tokens. Path-prefixed
-reverse proxies currently support manual tokens only.
+Open Gamma at its public HTTPS address, then sign in as an administrator and
+open **Settings > Administration > Server > Public server URL**. The field
+suggests the browser's origin. Check it and click **Confirm address** once.
+Gamma stores the address in `users.db` and immediately uses it for OAuth,
+MCP links, and the MCP hostname allowlist. No environment variables or restart
+are needed. Merely opening the settings page does not trust an address.
 
-Example environment for a remote deployment:
+Serve Gamma at an origin root, such as `https://gamma.example.com`, and preserve
+the external Host header at the reverse proxy. The saved HTTPS address works
+even when the proxy connects to Gamma over HTTP. Changing the address requires
+assistants to reconnect; the previous hostname is removed from the allowlist
+unless separately allowed. Clearing the field restores request-based discovery.
 
-```text
-GAMMA_PUBLIC_URL=https://gamma.example.com
-GAMMA_MCP_ALLOWED_HOSTS=gamma.example.com
-```
+Existing environment configuration remains supported: `GAMMA_PUBLIC_URL`
+overrides the saved address and makes the field read-only. Its hostname is
+automatically allowed too. `GAMMA_MCP_ALLOWED_HOSTS` adds other allowed host
+authorities, for example `nas.local:8000` for manual tokens. Localhost and
+loopback remain allowed by default. Browser sign-in over HTTP is restricted to
+localhost/loopback; HTTP LAN and path-prefixed deployments can use manual tokens.
 
 OAuth handles sign-in, not network reachability. A remote assistant still needs
 to reach Gamma's server; a public listing cannot access a user's localhost by itself.

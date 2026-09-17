@@ -78,6 +78,11 @@ The **Gamma Connector** extension ([extension/](./extension/)) saves the paper y
 
 The **[Gamma PDF plugin for Codex](./plugins/gamma/)** lets Codex search and read your papers, notes, highlights, and PDF text with read-only access to a workspace you approve. Open **Settings → AI → External assistants → Codex CLI**, copy the setup command for your operating system, and run it on the computer where you use Codex. It installs the plugin from a published Gamma release and opens Gamma sign-in. Approve a workspace, then start a new Codex chat and ask, “Use Gamma to find my notes about…” Requires the Codex CLI and a running, reachable Gamma server. Other MCP assistants can connect using the server URL in the same panel; see the [connection guide](./docs/dev/mcp.md).
 
+For a remotely hosted Gamma, an administrator can enable assistant sign-in in
+**Settings → Administration → Server → Public server URL**. Confirm the suggested
+HTTPS address once; Gamma saves it and applies it immediately, without environment
+variables or a server restart. Then connect from **AI → External assistants**.
+
 ## Share, sync and move your data
 
 <picture>

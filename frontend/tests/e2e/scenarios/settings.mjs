@@ -107,6 +107,18 @@ export async function settingsScenarios(env) {
     try {
       await openSettings(page);
       assertEq(await nav(page, "Appearance").getAttribute("aria-current"), "page");
+      for (const [label, theme, scheme] of [["Gamma Light", "gamma-light", "light"], ["Gamma Dark", "gamma-dark", "dark"]]) {
+        await page.getByRole("button", { name: label, exact: true }).click();
+        await until(() => page.locator("html").getAttribute("data-theme").then((v) => v === theme));
+        assertEq(await page.evaluate(() => getComputedStyle(document.documentElement).colorScheme), scheme);
+        await until(async () => (await user.api("/api/prefs/appearance")).value?.theme === theme);
+        await page.reload();
+        await page.waitForSelector(".folderNewBtn");
+        assertEq(await page.locator("html").getAttribute("data-theme"), theme);
+        await openSettings(page);
+        assertEq(await page.getByRole("button", { name: label, exact: true }).getAttribute("aria-pressed"), "true");
+        if (flags.keep) await page.screenshot({ path: `${server.dir}/settings-${theme}.png`, animations: "disabled" });
+      }
       await page.getByRole("button", { name: "Sepia", exact: true }).click();
       await until(() => page.locator("html").getAttribute("data-theme").then((v) => v === "sepia"));
       assertEq(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--text-primary").trim()), "#073642");
@@ -119,7 +131,7 @@ export async function settingsScenarios(env) {
       await until(() => page.locator("html").getAttribute("data-theme").then((v) => v === "solarized"));
       await openSettings(page);
       const themes = page.getByRole("group", { name: "Theme", exact: true });
-      assertEq(await themes.getByRole("button").count(), 6);
+      assertEq(await themes.getByRole("button").count(), 8);
       assertEq(await themes.locator('[aria-pressed="true"]').count(), 1);
       await page.getByRole("checkbox", { name: "Dark PDF pages", exact: true }).check();
       await until(() => user.api("/api/prefs/appearance").then((v) => v.value?.pdfDark === true));

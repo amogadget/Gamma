@@ -9,7 +9,6 @@ This directory is ignored except for this guide. Keep executable source in
 - `readme-media/browsers/`: local Playwright browser installation; set
   `PLAYWRIGHT_BROWSERS_PATH` to this absolute directory when using it.
 - `branding/`: generated PNGs for inspecting the SVG illustrations.
-- `theme-preview/`: screenshots of the proposed Gamma palette.
 - `debug/citation-regression/`: original PDF and extracted text for the citation
   regression already represented in `frontend/tests/fixtures/`.
 

@@ -8,6 +8,8 @@ const THEMES = [
   ["system", "System", "Match your device", "#eef0f3", "#ffffff", "#353b45", "#6089bb"],
   ["light", "Light", "Bright & crisp", "#f5f5f5", "#ffffff", "#1a1a1a", "#3a7bd5"],
   ["dark", "Dark", "A quieter backdrop", "#181818", "#292929", "#eeeeee", "#5b9bd5"],
+  ["gamma-light", "Gamma Light", "Warm gray & amber", "#e7e5de", "#efeee9", "#292822", "#92620e"],
+  ["gamma-dark", "Gamma Dark", "Charcoal & soft gold", "#1b1b1a", "#272725", "#f0ede6", "#e8b451"],
   ["sepia", "Sepia", "Warm paper, deep ink", "#e9e1cb", "#fdf6e3", "#073642", "#1b6fa3"],
   ["solarized", "Solarized Light", "Warm paper, softer ink", "#eee8d5", "#fdf6e3", "#657b83", "#268bd2"],
   ["gray", "Gray", "Soft & neutral", "#e3e3e3", "#f4f4f4", "#2d2d2d", "#3a7bd5"],

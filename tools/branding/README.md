@@ -23,5 +23,5 @@ The renderer uses the existing frontend Playwright dependency and writes
 `--publish-hero` to refresh the two published hero PNGs for store listings.
 If needed, set `PLAYWRIGHT_BROWSERS_PATH` to your browser installation.
 
-The proposed hero-derived palette is in
-[`docs/design/gamma-theme/`](../../docs/design/gamma-theme/README.md).
+The hero-derived Gamma Light and Gamma Dark schemes are available in the app's
+Settings ? Appearance. Their tokens live in `frontend/src/shared/styles/app.css`.

@@ -104,7 +104,7 @@ export function IntegrationSettings({ workspaceId }) {
           <p className="settingDesc">Keep Gamma reachable from your assistant. Shared content is handled by the assistant and its provider.</p>
         </> : <>
           <p>Browser sign-in is not available for this Gamma address yet.</p>
-          <p>Ask your server administrator to enable it, or open manual setup below to connect with a token.</p>
+          <p>An administrator can enable it by confirming the public server URL in Settings → Administration → Server.</p>
           <details><summary>Server setup details</summary><p>{data.oauth_error}</p></details>
         </>}
       </div> : !loadError ? <p role="status">Loading connection settings…</p> : null}
