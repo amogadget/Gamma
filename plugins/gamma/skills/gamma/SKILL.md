@@ -6,10 +6,16 @@ description: Search and read pages, nested notes, highlights, and PDF text in th
 # Gamma library
 
 Use the configured Gamma MCP tools to answer questions about the user's library.
-The connection is read-only and bound to one workspace. If unavailable, explain
-that the user can copy its server URL or Codex setup commands from Gamma's
-External assistants settings, sign in with Gamma, and approve a workspace in their
-browser. Follow the plugin README. Do not request their token in chat or read browser
+The connection is read-only and bound to one workspace. If tools are unavailable,
+do not infer that sign-in failed: the workflow can be installed and OAuth approved
+while the current task has no MCP tools. If setup has not been completed, direct
+the user to Gamma's External assistants settings and the plugin README.
+If setup already succeeded, check `codex mcp get gamma` or the assistant's MCP
+status when available. Report the observed reason: managed requirements need an
+administrator to allow the connection; authentication errors need sign-in; a
+healthy connection may need an app restart and a new task. If status cannot be
+checked, say that the cause is unverified rather than repeating installation.
+Do not request their token in chat or read browser
 sessions, databases, or private files to work around a missing connection.
 
 - Discover page IDs with `list_pages` or `search_library`. Prefer title, folder,

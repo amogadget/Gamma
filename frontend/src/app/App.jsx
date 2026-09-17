@@ -7603,7 +7603,7 @@ function LibraryApp() {
   const centerNotes = pdfHidden || homeMode || pageOnly;
   const winVisible = {
     notes: Boolean(notesWindow) && !centerNotes,
-    chat: !shareMode && !chatHidden,
+    chat: !chatHidden && (!shareMode || !!focusedBlockId),
   };
   function renderWindow(id) {
     // Phone: windows are full-screen overlays — no dock dragging or collapsing,
@@ -7624,10 +7624,12 @@ function LibraryApp() {
       return (
         <ChatDock
           {...common}
+          readOnly={shareMode}
           onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} pageAttach={pageAttach} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pageTitle={pageTitle}
           openTabs={openTabs}
           onOpenPage={async (id, citation) => {
+            if (shareMode && id !== focusedBlockId) return;
             if (citation && id === focusedBlockId) pushNav();
             setPdfCitation(citation ? { ...citation } : null);
             if (id !== focusedBlockId) await openBlock(id, { pushNav: true });
@@ -7723,7 +7725,7 @@ function LibraryApp() {
               <FileTextIcon className="popoverItemIcon" size={15} /> Notes
             </button>
           ) : null}
-          {!menuReadOnly ? (
+          {(!menuReadOnly || focusedBlockId) ? (
             <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
               <span className="check">{!chatHidden ? "✓" : ""}</span>
               <SparklesIcon className="popoverItemIcon" size={15} /> AI Chat
@@ -8650,11 +8652,11 @@ function LibraryApp() {
       {isPhone && winVisible.notes && (phonePanel === "notes" || phoneSeen.current.notes) ? (
         <div className={`phonePanel ${phonePanel === "notes" ? "" : "phonePanelHidden"}`}>{renderWindow("notes")}</div>
       ) : null}
-      {isPhone && !shareMode && (phonePanel === "chat" || phoneSeen.current.chat) ? (
+      {isPhone && (!shareMode || focusedBlockId) && (phonePanel === "chat" || phoneSeen.current.chat) ? (
         <div className={`phonePanel ${phonePanel === "chat" ? "" : "phonePanelHidden"}`}>{renderWindow("chat")}</div>
       ) : null}
       </div>
-      {isPhone && (!centerNotes || !shareMode) ? (
+      {isPhone ? (
         // Phone: one bottom bar — view tabs on the left, the topbar's action
         // buttons on the right. Icon-only, because both groups share the row.
         <div className="phoneBottomBar">
@@ -8679,7 +8681,7 @@ function LibraryApp() {
                 <span>Notes</span>
               </button>
             ) : null}
-            {!shareMode ? (
+            {(!shareMode || focusedBlockId) ? (
               <button
                 className={`phoneTab ${phonePanel === "chat" ? "active" : ""}`}
                 onClick={() => setPhonePanel((p) => (p === "chat" ? null : "chat"))}

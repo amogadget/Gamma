@@ -91,7 +91,7 @@ async function checkAuth(force = false) {
   else {
     try {
       const me = await whoAmI();
-      value = { configured: true, auth: !!me.user, user: me.user, origin, is_guest: !!me.is_guest };
+      value = { configured: true, auth: !!me.user, user: me.user, origin: me.origin, is_guest: !!me.is_guest };
     } catch (err) {
       value = { configured: true, auth: null, user: null, origin, error: err.message };
     }

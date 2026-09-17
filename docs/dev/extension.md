@@ -190,7 +190,9 @@ Companions:
   `metadata.registry_record` (arXiv, then doi.org; a small in-memory cache,
   the data is public). 404 when neither registry answers.
 - `GET /api/library/folders` → `{folders, labels}` (folder paths plus their
-  ancestors).
+  ancestors). Folders rank by the account/workspace's latest `recent-views`
+  page timestamp, then latest page modification, with names breaking ties;
+  ancestors inherit their contained pages' timestamps. Labels stay alphabetical.
 - `POST /api/clip/note {text, source_url, title,
 page_id?}` — the explicit "clip selection INTO a page" append path (with
 `generate_key_between`; without `page_id` it uses/creates the root page
@@ -208,8 +210,15 @@ workspace — they land in the account's personal workspace
   signs in both — one cookie jar. No CORS middleware exists or is needed.
   Verified end-to-end (Playwright, headless Chromium, plain-HTTP origin).
 - The server origin is user-configured (self-hosted); `normalizeServer()`
-  adds `http://` when missing. Plain-HTTP LAN / Tailscale origins work — the
-  cookie isn't `Secure` on http.
+  keeps explicit schemes and adds `http://` when missing. Plain-HTTP LAN /
+  Tailscale origins work — the cookie isn't `Secure` on http.
+- After a successful `/api/session` check, the Connector
+  remembers an HTTP-to-HTTPS redirect to the exact same host, port and API path,
+  with the standard port changing from 80 to 443. The worker and options page
+  use that resolved origin. Other redirect destinations are never saved.
+  Publisher-session requests continue to reject redirects so cookie snapshots
+  cannot be forwarded to another server. This avoids a misleading "Failed to
+  fetch" when ordinary account checks followed an HTTPS redirect successfully.
 - A 401 anywhere flips the tab state to `auth: false` (badge `!`) and the
   popup shows the sign-in view. Login rate limits apply unchanged; guest
   login is not offered.

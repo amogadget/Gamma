@@ -237,6 +237,12 @@ the request's workspace — the extension names none, so its personal one.
 | GET | `/pdf-text-status` | whether a doc has extractable text |
 
 ### Chats (`chats.py`, prefix `/api/chats`)
+
+`GET /chats/{page_id}?share=<token>` exposes only the shared page's active
+saved conversation, subject to the link's audience. Shared pages show this in
+a read-only AI chat window on desktop and mobile, with search and copy.
+Chat mutations reject share tokens, including links that allow page editing;
+archived conversation browsing remains session-only.
 | Method | Path | Purpose |
 |---|---|---|
 | GET/PUT/DELETE | `/chats/{key:path}` | the ACTIVE conversation per bucket: page id, `home`, or `home:<folder>` (hence `:path`); GET → `{messages, title}`, PUT `{messages, title?}` (title omitted = keep) |

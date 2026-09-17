@@ -105,6 +105,7 @@ function SelChip({ kind, label, labelTitle, text, title, onRemove, removeTitle }
 }
 
 export default function ChatDock({
+  readOnly = false,
   docId, pageAttach, focusedBlockId, homeBlocks, pageTitle, openTabs,
   pdfSelections, setPdfSelections,
   // Note chips ([{kind: "block", id, text} | {kind: "note", text}], App
@@ -133,6 +134,7 @@ export default function ChatDock({
 }) {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
+  const [loadError, setLoadError] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   // Tracks which block we've finished loading from the server, so the save
   // effect doesn't fire (and clobber the stored chat) before the load lands.
@@ -283,21 +285,22 @@ export default function ChatDock({
     setChatIncludeNotes(false);
     setChatInput("");
     setDocPicker(false);
-    fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, { credentials: "include" })
-      .then(r => r.ok ? r.json() : { messages: [] })
+    setChatMessages([]);
+    setLoadError("");
+    apiJson(`${API}/chats/${encodeURIComponent(chatKey)}`)
       .then(data => {
         if (cancelled) return;
         showLoaded(data.messages || [], data.title);
         chatLoadedForRef.current = chatKey;
       })
-      .catch(() => { if (!cancelled) chatLoadedForRef.current = chatKey; });
+      .catch((err) => { if (!cancelled) setLoadError(`Could not load chat: ${err.message}`); });
     return () => { cancelled = true; };
-  }, [chatKey, docId]);
+  }, [chatKey, docId, readOnly]);
 
   // Save chat to backend (debounced) when chatMessages changes, but only
   // after the load for the current chat bucket completed.
   useEffect(() => {
-    if (chatLoadedForRef.current !== chatKey) return;
+    if (readOnly || chatLoadedForRef.current !== chatKey) return;
     const timer = setTimeout(() => {
       fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
         method: "PUT",
@@ -307,7 +310,7 @@ export default function ChatDock({
       }).catch(() => {});
     }, 500);
     return () => clearTimeout(timer);
-  }, [chatMessages, chatKey]);
+  }, [chatMessages, chatKey, readOnly]);
 
   // History: the bucket's earlier conversations (server `chat_history`).
   // "New chat" archives the current one there instead of deleting it, and
@@ -322,13 +325,13 @@ export default function ChatDock({
   const historyOpen = openPopover === "chathistory";
   useEffect(() => { setHistory(null); setHistoryQuery(""); setRenaming(null); }, [chatKey]);
   useEffect(() => {
-    if (!historyOpen || history != null) return;
+    if (readOnly || !historyOpen || history != null) return;
     let cancelled = false;
     apiJson(`${API}/chat-history?bucket=${encodeURIComponent(chatKey)}`)
       .then((data) => { if (!cancelled) setHistory(data.sessions || []); })
       .catch((err) => { if (!cancelled) { setHistory([]); setStatus(`Chat history: ${err.message}`); } });
     return () => { cancelled = true; };
-  }, [historyOpen, history, chatKey]);
+  }, [historyOpen, history, chatKey, readOnly]);
   const activeTitle = chatTitle || deriveTitle(chatMessages) || "Untitled";
   const busyHere = chatLoading && chatLoadingKey === chatKey; // a reply is streaming into this conversation
   // Reserve the reply's bubble before the first stream event. This placeholder
@@ -505,6 +508,7 @@ export default function ChatDock({
   // an edited message: everything after the edited message is discarded,
   // ChatGPT-style).
   async function sendChat(rawText, { baseMessages, referenceMessage } = {}) {
+    if (readOnly) return;
     const text = (rawText || "").trim();
     if (!text || chatLoading) return;
     const selectedDocs = referenceMessage ? (referenceMessage.contextPages || []).map((p) => p.id) : chatDocs;
@@ -998,9 +1002,13 @@ export default function ChatDock({
 
   return (
     <DockWindow title="Chat" onGrip={onGrip} onGripDoubleClick={onGripDoubleClick}
-      collapsed={collapsed} onClose={onClose} headerContent={headerContent}>
+      collapsed={collapsed} onClose={onClose} headerContent={readOnly ? <>
+        <span className="uiTag">Read only</span>
+        <button type="button" className="ctlBtn" title="Find in this conversation" aria-label="Find in this conversation"
+          onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}><SearchIcon size={15} /></button>
+      </> : headerContent}>
     <div className="chatPanel chatWindow">
-      {aiHealth && !aiHealth.ok ? (
+      {!readOnly && aiHealth && !aiHealth.ok ? (
         // The login connection check found the active provider broken — say so
         // here, where the failure would otherwise surface mid-conversation.
         <div className="chatHealthStrip" title={aiHealth.error || ""}>
@@ -1063,7 +1071,7 @@ export default function ChatDock({
         {chatTextScale.badge}
         {visibleMessages.length === 0 ? (
           <div className="chatEmpty">
-            {aiInfo && !aiInfo.enabled ? (
+            {loadError || (readOnly ? "No saved conversation for this page." : aiInfo && !aiInfo.enabled ? (
               openAiKeysEditor ? (
                 <>
                   AI is not configured —{" "}
@@ -1072,7 +1080,7 @@ export default function ChatDock({
                 </>
               ) : "AI is not configured."
             ) : focusedBlockId ? "Ask AI about this page…"
-              : agentIntro || "Ask AI anything, or generate a report from your pages…"}
+              : agentIntro || "Ask AI anything, or generate a report from your pages…")}
           </div>
         ) : (
           visibleMessages.map((m, i) => {
@@ -1189,7 +1197,7 @@ export default function ChatDock({
                         ? <CheckIcon size={13} />
                         : <CopyIcon size={13} />}
                     </button>
-                    {isUser && !chatLoading ? (
+                    {!readOnly && isUser && !chatLoading ? (
                       <button type="button" className="chatMsgActionBtn" title="Edit and re-send (removes later messages)"
                         onClick={() => setEditingMsg({ idx: i, text: m.text })}>
                         <PencilIcon size={13} />
@@ -1202,6 +1210,7 @@ export default function ChatDock({
           })
         )}
       </div>
+      {!readOnly ? <>
       {pdfSelections.length || chatNotes?.length || cursorChip ? (
         <div className="chatSelChips">
           {cursorChip ? (
@@ -1385,6 +1394,7 @@ export default function ChatDock({
         </>
         )}
       </form>
+      </> : null}
       {docPicker ? (
         <div className="reportOverlay" onClick={() => setDocPicker(false)}>
           <div className="reportModal docPickerModal" onClick={(e) => e.stopPropagation()}>

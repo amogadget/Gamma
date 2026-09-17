@@ -5,6 +5,47 @@ import { tree, same, editRow, closeEditor, PNG_1PX } from "./notes.mjs";
 import { waitForPdf } from "./pdf.mjs";
 
 export async function shareScenarios({ server, browser, alice, bob, step, until, sleep, assert, assertEq, assertNoProblems, openPage }, { alice2, pdfPageId }) {
+  await step("share chat: saved conversation is read-only on desktop and phone", async () => {
+    const shared = await alice.api("/api/blocks", { method: "POST", body: { parent_id: "root", content: "Shared chat notes" } });
+    const saved = { messages: [{ role: "user", text: "Explain this shared page" }, { role: "assistant", text: "A **saved answer** for visitors." }] };
+    await alice.api(`/api/chats/${shared.id}`, { method: "PUT", body: saved });
+    const { token: chatToken } = await alice.api(`/api/share/${shared.id}`, { method: "POST" });
+    for (const phone of [false, true]) {
+      const ctx = await browser.newContext({ viewport: phone ? { width: 390, height: 844 } : { width: 1280, height: 860 } });
+      const page = await openPage(ctx, `${server.base}/?share=${chatToken}`);
+      const writes = [];
+      page.on("request", (r) => { if (/\/api\/(chats|chat-history|ai)\b/.test(r.url()) && r.method() !== "GET") writes.push(r.url()); });
+      await page.waitForSelector(".readOnlyTitle");
+      if (phone) await page.getByRole("button", { name: "AI chat", exact: true }).click();
+      await page.locator(".chatMessages strong", { hasText: "saved answer" }).waitFor();
+      assertEq(await page.locator(".chatInputRow, .chatMsgActionBtn[title^='Edit']").count(), 0, "no chat editing controls");
+      assertEq(await page.getByRole("button", { name: "New chat", exact: true }).count(), 0, "no new chat action");
+      await page.getByRole("button", { name: "Find in this conversation" }).click();
+      await page.getByPlaceholder("Find in chat…").fill("saved answer");
+      await until(async () => (await page.textContent(".chatFindCount")) === "1/1", { what: "searching saved chat" });
+      await page.getByRole("button", { name: "Close Chat", exact: true }).click();
+      if (phone) {
+        await page.getByRole("button", { name: "AI chat", exact: true }).click();
+      } else {
+        await page.getByRole("button", { name: "Settings", exact: true }).click();
+        await page.locator(".popoverItem", { hasText: "AI Chat" }).click();
+      }
+      await page.locator(".chatMessages strong", { hasText: "saved answer" }).waitFor();
+      await sleep(650); // wait beyond the autosave debounce
+      assertEq(writes.length, 0, "shared chat never writes");
+      assertNoProblems(page);
+      await ctx.close();
+    }
+    await alice.api(`/api/share-settings/${shared.id}`, { method: "PUT", body: { audience: "users", role: "edit" } });
+    const ctx = await bob.context(browser);
+    const page = await openPage(ctx, `${server.base}/?share=${chatToken}`);
+    await page.locator(".chatMessages strong", { hasText: "saved answer" }).waitFor();
+    assertEq(await page.locator(".chatInputRow").count(), 0, "page editors also get read-only chat");
+    assertNoProblems(page);
+    await ctx.close();
+    assertEq(JSON.stringify((await alice.api(`/api/chats/${shared.id}`)).messages), JSON.stringify(saved.messages), "owner's conversation is unchanged");
+  });
+
   const account = alice2;
   let token;
   if (!pdfPageId) { console.log("  skip  share: needs the pdf steps (drop --only)"); return; }

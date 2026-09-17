@@ -86,6 +86,47 @@ export async function settingsScenarios(env) {
       assert(!JSON.stringify(connections).includes(await secret.inputValue()), "token is never returned in listings");
       await page.getByRole("button", { name: "Done", exact: true }).click();
       await secret.waitFor({ state: "detached" });
+      // Separate authorizations can have the same name. Revoking one must
+      // leave the other visible, without claiming the assistant lost access.
+      const duplicate = await user.api("/api/integrations/tokens", { method: "POST", body: { name: "Codex test" } });
+      await page.getByRole("button", { name: "Refresh connections", exact: true }).click();
+      await until(() => page.getByRole("button", { name: "Disconnect", exact: true }).count().then((n) => n === 2));
+      let releaseStale, captured;
+      const staleReady = new Promise((resolve) => { captured = resolve; });
+      const staleGate = new Promise((resolve) => { releaseStale = resolve; });
+      let holdNext = true;
+      const routePattern = "**/api/integrations/tokens?*";
+      await page.route(routePattern, async (route) => {
+        if (!holdNext || route.request().method() !== "GET") return route.continue();
+        holdNext = false;
+        const response = await route.fetch();
+        captured();
+        await staleGate;
+        await route.fulfill({ response });
+      });
+      await page.getByRole("button", { name: "Refresh connections", exact: true }).click();
+      await staleReady;
+      await page.getByRole("button", { name: "Disconnect", exact: true }).first().click();
+      const revoked = page.getByText("Access revoked for the selected “Codex test” connection.", { exact: true });
+      await revoked.waitFor();
+      await until(() => page.getByRole("button", { name: "Disconnect", exact: true }).count().then((n) => n === 1));
+      const staleResponse = page.waitForResponse((response) => response.url().includes("/api/integrations/tokens?") && response.request().method() === "GET");
+      releaseStale();
+      await (await staleResponse).finished();
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assertEq(await page.getByRole("button", { name: "Disconnect", exact: true }).count(), 1, "late refresh cannot restore a revoked connection");
+      await page.unroute(routePattern);
+      const remaining = (await user.api("/api/integrations/tokens")).tokens;
+      assertEq(remaining.length, 1);
+      assert(remaining[0].id !== duplicate.id, "only the selected connection was revoked");
+      // Reconnecting in another tab clears the old notice on window focus.
+      const reconnected = await user.api("/api/integrations/tokens", { method: "POST", body: { name: "Codex reconnected" } });
+      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await page.getByText("Codex reconnected", { exact: true }).waitFor();
+      await revoked.waitFor({ state: "detached" });
+      await user.api(`/api/integrations/tokens/${reconnected.id}`, { method: "DELETE" });
+      await page.getByRole("button", { name: "Refresh connections", exact: true }).click();
+      await until(() => page.getByRole("button", { name: "Disconnect", exact: true }).count().then((n) => n === 1));
       await page.getByRole("button", { name: "Disconnect", exact: true }).click();
       await page.getByText("No assistants have access to this workspace yet.", { exact: true }).waitFor();
       assertEq((await user.api("/api/integrations/tokens")).tokens.length, 0);
@@ -94,6 +135,7 @@ export async function settingsScenarios(env) {
       const refreshed = page.waitForResponse((response) => response.url().includes("/api/integrations/tokens?") && response.request().method() === "GET");
       await page.getByRole("button", { name: "Refresh connections", exact: true }).click();
       assertEq((await (await refreshed).json()).tokens.length, 0);
+      await revoked.waitFor({ state: "detached" });
       assertEq(await page.getByText("Codex elsewhere", { exact: true }).count(), 0, "other workspace connections stay out of this panel");
       assert(await page.getByText("No assistants have access to this workspace yet.", { exact: true }).isVisible());
       assertEq(await page.getByRole("button", { name: "Disconnect", exact: true }).count(), 0, "other workspace connections are not managed as current workspace access");
