@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { generateNKeysBetween } from "fractional-indexing";
-import { applyOps, diffTrees, keepUiFlags, propsPatch, pushOp, seedPositions } from "../src/blockOps.js";
+import { applyOps, diffTrees, keepUiFlags, propsPatch, pushOp, seedPositions } from "../src/shared/model/blockOps.js";
 
 const PAGE = "page1";
 const N = (id, content = "", children = [], properties = {}, extra = {}) =>

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveExport, resolveImport } from "../src/transferFormats.js";
+import { resolveExport, resolveImport } from "../src/transfers/transferFormats.js";
 
 const allOff = Object.freeze({ highlights: false, notes: false, bundle: false });
 const paper = { hasPdf: true, pdfStored: true };

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appendInkSample, predictedInkSamples } from "../src/inkInput.js";
+import { appendInkSample, predictedInkSamples } from "../src/ink/inkInput.js";
 
 const drawing = (k = 1) => ({ samples: [], pen: true, pressure: true, startTime: 100, k,
   use: { tool: "pen" }, toPt: (e) => ({ x: e.clientX / k, y: e.clientY / k }) });

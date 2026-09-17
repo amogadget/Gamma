@@ -150,7 +150,7 @@ username; the session list instead has a boolean `personal`.
 
 ## Browser startup and switching
 
-`App.jsx` waits for the session and selects the workspace before loading
+`app/App.jsx` waits for the session and selects the workspace before loading
 library data:
 
 1. Use an explicit `?ws=` if accessible. Otherwise show an unavailable

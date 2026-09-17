@@ -97,8 +97,8 @@ capabilities. Priorities below are recommendations, not completed features.
 
 ## Gamma source audit: why an edit menu is more than a new button
 
-Reviewed `frontend/src/inkLayer.jsx`, `ink.js`, `inkInput.js`, `App.jsx`,
-`pdfViewer.jsx`, `prefs.js`, `settings.jsx`, and the handwriting e2e scenarios.
+Reviewed `frontend/src/ink/InkLayer.jsx`, `ink/ink.js`, `ink/inkInput.js`, `app/App.jsx`,
+`pdf/PdfViewer.jsx`, `app/prefs.js`, `settings/SettingsDialog.jsx`, and the handwriting e2e scenarios.
 
 1. **Hit testing currently serves erasing.** `hitStrokes` returns every
    stroke within a radius. Direct selection needs a deliberate nearest/topmost

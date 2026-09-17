@@ -7,7 +7,7 @@ import { test } from "node:test";
 import {
   addFolderTag, cleanFolderPath, cleanFolderSegment, defaultPageTitle, findPageForUrl,
   formatRelativeTime, normalizeLinkInput, pageAttachment, parseFolderTags,
-} from "../src/libraryUtils.js";
+} from "../src/library/libraryUtils.js";
 
 const shared = JSON.parse(await readFile(new URL("../../tests/shared/foldertags.json", import.meta.url), "utf8"));
 

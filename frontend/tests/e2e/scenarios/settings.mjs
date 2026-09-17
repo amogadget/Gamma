@@ -62,7 +62,7 @@ export async function settingsScenarios(env) {
       assert(!commands.includes("GAMMA_TOKEN"));
       await page.getByRole("button", { name: "macOS / Linux", exact: true }).click();
       assert((await commandField.inputValue()).includes("install-gamma-codex.sh"));
-      assert((await commandField.inputValue()).endsWith(`'${server.base}/mcp'`));
+      assert((await commandField.inputValue()).endsWith(`'${server.base}/mcp')`), "Unix setup passes the server URL inside its cleanup subshell");
       await page.getByRole("button", { name: "Copy setup command", exact: true }).click();
       await page.getByText("Copied. You can paste it now.", { exact: true }).waitFor();
       await page.setViewportSize({ width: 390, height: 844 });

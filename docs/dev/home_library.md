@@ -1,9 +1,9 @@
 # Home library
 
 Folders, labels, the card surfaces, the recents strip, and cover snapshots.
-Code: [fileBrowser.jsx](../../frontend/src/fileBrowser.jsx),
-[libraryUtils.js](../../frontend/src/libraryUtils.js),
-[menus.jsx](../../frontend/src/menus.jsx), glue in App.jsx.
+Code: [FileBrowser.jsx](../../frontend/src/library/FileBrowser.jsx),
+[libraryUtils.js](../../frontend/src/library/libraryUtils.js),
+[Menus.jsx](../../frontend/src/shared/ui/Menus.jsx), glue in App.jsx.
 
 ## Folders and labels
 
@@ -52,7 +52,7 @@ KindToggle hides and the kind filter is ignored there.
 The labels listing ends with a **"No label"** pseudo-label (dashed tag glyph,
 pinned last regardless of sort, shown only while some page in scope carries
 no label): `labelMeta` rolls unlabelled pages up under the `NO_LABEL`
-sentinel from `libraryUtils.js` — a string containing a comma, which no real
+sentinel from `library/libraryUtils.js` — a string containing a comma, which no real
 label can be since `parseFolderTags` splits on commas — and `labelTitle`
 turns it into the display name. Opening it (`?unlabelled=1` in the URL,
 `homeUrlFor`) lists the pages without any label; a paper dropped on its tile
@@ -81,7 +81,7 @@ folder chips match by prefix.
 
 ## The card
 
-One shared card (`PageCard` in `fileBrowser.jsx`) renders every home card
+One shared card (`PageCard` in `library/FileBrowser.jsx`) renders every home card
 surface — the "Recently viewed" strip, the pinned strip, and the grid
 listing's files, folders AND labels: a cover over a bottom-stuck
 footer of title + folder/label chips + kind and relative time (library cards
@@ -146,7 +146,7 @@ non-passive listener in `CardCarousel`), touch swipes natively.
 
 ## The context menu
 
-The home right-click menu (page/folder/label) is built from the `menus.jsx`
+The home right-click menu (page/folder/label) is built from the `shared/ui/Menus.jsx`
 primitives: a "Move to folder" flyout lists every folder path ordered by the
 *active home sort* (`folderMenuPaths`, via the library-wide `folderMeta`
 rollup), checks the ones the selection already carries, and ends with the

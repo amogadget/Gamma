@@ -1,49 +1,52 @@
-# src/
+# Frontend source
 
-The layout below describes the current code. The proposed feature folders,
-state ownership, and migration order are in the
-[App.jsx decomposition plan](../../docs/dev/frontend-refactor.md).
+Code is grouped by the part of Gamma it serves. Functional folders sit directly
+under `src/`; there is no extra `features/` layer or requirement to route imports
+through barrel files. `main.jsx` remains the Vite entry point.
 
-```
-main.jsx            React root
-App.jsx             application orchestration: routing, autosave, docking, home
-libraryUtils.js     pure library/paper rules shared across application views
-LoginPage.jsx       loading and login screens
-settings.jsx        settings dialog and its papers/AI/search/diagnostic panes
-settingsWorkspace.jsx  Settings → Members & sharing: this workspace, members/roles, all my workspaces
-settingsBackups.jsx    Settings → Advanced → Server backups (admins): snapshot, download, delete
-blockTree.jsx       the Logseq outliner — block rows, [[refs]], drag, markdown
-fileChip.jsx        the file chip a `[name](/api/uploads/…)` link renders as; right-click
-                    menu: download, and for a PDF or markdown file "Open page" /
-                    "Add to library" (FileChipContext); the postFile upload helper
-logseqPdfModel.js   pure tree ops (insert/indent/outdent/flatten/cycle-check)
-pdfViewer.jsx       custom pdf.js viewer — pages, highlights, links, text search; exports COLORS
-ink.js              handwriting: the gamma-ink stroke codec, bounds, eraser hit test,
-                    perfect-freehand outlines (pure; mirror of backend gamma/ink.py)
-inkStore.js         ink files by URL + per-block drafts ahead of upload (plain module state)
-inkLayer.jsx        InkLayer (a page's strokes + pointer capture), InkCard (notes), InkToolbar
-search.jsx          workspace search (Ctrl+F): SearchPanel popover, result groups
-textnorm.js         search normalization + fuzzy regex (mirror of backend
-                    gamma/textnorm.py; tests/shared/textnorm.json pins both)
-collabSession.js    the page's live session as a plain state machine: op batches,
-                    remote ops, reconciliation, catch-up, presence (node-tested)
-collab.js           usePageCollab: collabSession wired to fetch/WebSocket/React
-blockOps.js         diffTrees / applyOps / positions for the op batches
-chatDock.jsx        the AI chat window (self-contained per-page conversation)
-widgets.jsx         shared chrome: dock windows, tabs, popovers, markdown, inputs
-sessionState.js     localStorage: restore the last open page on bare `/` (per workspace)
-utils.js            API base, fetch wrapper (user + workspace headers), ids, hashing, formatting
-app.css             shared controls plus workspace, PDF, blocks, and chat
-library.css         home library, folders, file views, selection, and pins
-settings.css        settings dialog layout and settings-specific controls
-```
+| Folder | Responsibility and entry points |
+| --- | --- |
+| `app/` | `App.jsx` connects the application views, navigation, saves, and docks; `prefs.js` and `sessionState.js` manage browser preferences and session restoration |
+| `auth/` | Login, session/share access screens (`LoginPage.jsx`) and MCP authorization (`McpConsent.jsx`) |
+| `chat/` | AI conversation panel (`ChatDock.jsx`), paper mentions, and chat permission settings |
+| `collaboration/` | `usePageCollab.js`, the pure `collabSession.js` state machine, and presence UI |
+| `editor/` | Outliner (`BlockTree.jsx`), CodeMirror (`BlockCmEditor.jsx`), undo history, Markdown and LaTeX editing, and slash commands |
+| `ink/` | Handwriting codec and geometry, input sampling, draft storage, and `InkLayer.jsx` |
+| `library/` | Library cards and browsing controls (`FileBrowser.jsx`), folder/page rules, title scoring, and `library.css` |
+| `pdf/` | `PdfViewer.jsx`, document loading, citations, translation, and scroll alignment |
+| `search/` | Workspace search (`SearchPanel.jsx`) |
+| `settings/` | `SettingsDialog.jsx`, individual settings panes, shared pane controls (`SettingsKit.jsx`), navigation, integration setup, and `settings.css` |
+| `transfers/` | Import/export dialogs (`ImportExport.jsx`), format rules, and upload/file chips (`FileChip.jsx`) |
+| `shared/model/` | Block tree helpers (`blockModel.js`), block operations (`blockOps.js`), and highlight colors |
+| `shared/lib/` | Existing API/utilities module, search text normalization, and canvas sizing |
+| `shared/ui/` | Reused widgets, menus, icons, and menu hover intent |
+| `shared/illustrations/` | Decorative settings/import previews and their local image assets |
+| `shared/styles/` | `app.css`: theme, base controls, and existing cross-application styles |
 
-## How-tos
+## Placement and naming
 
-- **Label a page** — open the page, click the 🏷 Labels chip → type comma-separated
-  labels. Stored as `properties.category`. Search `:quantum:` to filter by label
-  (colons let labels contain spaces; `:a::b:` requires both).
-- **Highlight** — select text on the PDF → pick a color. Creates a highlight block.
-- **Reference link** — right-click a highlight → *Copy as reference point*, then paste
-  into a link dialog to point one paper's note at an exact spot in another.
-- **Share** — a page's share menu mints a `?share=<token>` read-only public link.
+- Put code beside its main consumer. Sharing a helper between two files does not
+  automatically make it a `shared/` module; library title scoring, for example,
+  stays in `library/` even though chat and workspace search also use it.
+- Use PascalCase for React component modules and camelCase for JavaScript
+  helpers. A hook-only module can use a `use` prefix, as in `usePageCollab.js`.
+- Import the owning module directly. `shared/model/blockModel.js` is the general
+  page/block model, formerly named `logseqPdfModel.js`; it is not an import adapter.
+- Keep styles with their owner when already separate. `main.jsx` deliberately
+  loads application, library, then settings CSS in that order to preserve the cascade.
+- Keep tests in `frontend/tests/`; run `npm test`, `npm run build`, and
+  `npm run e2e` from `frontend/` (the browser suite needs the backend dependencies
+  and a Playwright browser).
+
+## Remaining cleanup
+
+This is a file organization pass, not a completed application decomposition.
+`app/App.jsx` still owns several kinds of state; `shared/ui/Widgets.jsx` and
+`shared/lib/utils.js` still combine responsibilities. In particular, the shared
+Markdown renderer understands PDF citations, so these folders are ownership
+groups rather than enforced dependency layers. Split those modules when changing
+their behavior, with the relevant tests, instead of adding forwarding wrappers.
+
+See the [decomposition plan](../../docs/dev/frontend-refactor.md) for the larger
+state-ownership work, and [UI design](../../docs/dev/ui-design.md) for component
+details and conventions.

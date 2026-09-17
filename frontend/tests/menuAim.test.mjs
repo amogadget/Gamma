@@ -2,7 +2,7 @@
 // was at (fromX, fromY) and is now at (x, y) heading into the open panel?
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isAimingAt } from "../src/menuAim.js";
+import { isAimingAt } from "../src/shared/ui/menuAim.js";
 
 const panel = { left: 200, right: 400, top: 50, bottom: 150 };
 

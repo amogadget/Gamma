@@ -1,5 +1,5 @@
 {
-  "_": "Search normalization cases shared by backend/gamma/textnorm.py (normalize_text, fuzzy_pattern) and the frontend mirrors in frontend/src/textnorm.js (normalizeQuery, normalizeChars, buildSearchRegex). Read by backend/tests/test_shared_fixtures.py and frontend/tests/textnorm.test.mjs. A `normalize` case with `hyphen_break` contains a line break, which a query box never has, so normalizeQuery skips it and normalizeChars covers it.",
+  "_": "Search normalization cases shared by backend/gamma/textnorm.py (normalize_text, fuzzy_pattern) and the frontend mirrors in frontend/src/shared/lib/textnorm.js (normalizeQuery, normalizeChars, buildSearchRegex). Read by backend/tests/test_shared_fixtures.py and frontend/tests/textnorm.test.mjs. A `normalize` case with `hyphen_break` contains a line break, which a query box never has, so normalizeQuery skips it and normalizeChars covers it.",
   "normalize": [
     {
       "note": "NFKC folds ligatures",

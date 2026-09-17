@@ -18,7 +18,7 @@ browser; a pasted link on a cold load works the same way
 (`parsePdfCitation` on the initial URL). Only the cited page is force-rendered.
 No document scan and no server-side coordinates.
 
-`pdfCitation.js` keeps source offsets through Unicode ligature folding,
+`pdf/pdfCitation.js` keeps source offsets through Unicode ligature folding,
 dehyphenation and whitespace normalization. Fallback passes tolerate differing
 spaces and compound-word hyphens that cross line wraps. PDF.js text items are
 mapped directly to their rendered spans, preserving empty EOL items and font

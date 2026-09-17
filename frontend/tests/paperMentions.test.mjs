@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mentionAt, insertMention } from "../src/paperMentions.js";
-import { createTitleScorer } from "../src/librarySearch.js";
+import { mentionAt, insertMention } from "../src/chat/paperMentions.js";
+import { createTitleScorer } from "../src/library/librarySearch.js";
 
 test("mentions follow the caret, support phrases, and exclude email and completed mentions", () => {
   assert.deepEqual(mentionAt("Compare @cavity readout", 23), { start: 8, end: 23, query: "cavity readout" });

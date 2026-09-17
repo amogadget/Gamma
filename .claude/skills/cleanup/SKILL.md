@@ -54,7 +54,7 @@ Each finding is a line: `file:line — what — fix / proposal`.
 - The same computation or rule in two places (two components, backend +
   frontend, two routers). Move it into one helper and call it from both.
   Exception: mirrors the docs declare on purpose (`textnorm.py` ↔
-  `search.jsx`/`pdfViewer.jsx`, `foldertags.py` ↔ `libraryUtils.js`) —
+  `search/SearchPanel.jsx`/`pdf/PdfViewer.jsx`, `foldertags.py` ↔ `library/libraryUtils.js`) —
   those stay mirrored but must actually match.
 - A feature spread across App.jsx state + a component + a util when one
   module would own it whole. Prefer the module the file map in CLAUDE.md
@@ -150,7 +150,7 @@ Signals, in rough order of reliability:
   handlers that only `preventDefault`; empty `catch`.
 - One half of a pair: backend endpoint without a caller, frontend call
   without a route, a setting stored but never read, a pref key in
-  `prefs.js` with no UI, a migration without a reader.
+  `app/prefs.js` with no UI, a migration without a reader.
 - Docs describing behavior the code doesn't have yet, or code the docs
   don't mention.
 - Tests: a backend change under `gamma/routers` or `gamma/*.py` with no

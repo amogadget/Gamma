@@ -179,7 +179,7 @@ def page_attachment(props: dict | None) -> dict | None:
     ``properties.attachments`` list is a drop-in. Lookups BY attachment
     (``by-doc``, the search index, the PDF export) still key on ``doc_id``
     directly; that is fine, they are about the file, not the page.
-    Mirrored by ``pageAttachment()`` in frontend/src/libraryUtils.js."""
+    Mirrored by ``pageAttachment()`` in frontend/src/library/libraryUtils.js."""
     props = props or {}
     doc_id = str(props.get("doc_id") or "")
     url = str(props.get("source_url") or "")

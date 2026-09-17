@@ -101,8 +101,8 @@ pages mirrors the page's `data-theme` attribute (`dark`/`light`/`sepia`/`solariz
 `gray`; none = dark) to the main process, which restyles the bar, the
 launcher, the window background and the Windows title-bar overlay. The last
 theme is persisted so the chrome is right before any page has loaded. The
-tokens in `ui/theme.css` are copies of `frontend/src/app.css`'s, and the
-icons are the same stroke glyphs as `frontend/src/icons.jsx`.
+tokens in `ui/theme.css` are copies of `frontend/src/shared/styles/app.css`'s, and the
+icons are the same stroke glyphs as `frontend/src/shared/ui/Icons.jsx`.
 
 ## In-app updates
 

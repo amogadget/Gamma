@@ -4,8 +4,8 @@ Draw on a PDF page with a stylus, mouse or finger; the strokes become a
 block in the page's notes. The survey behind the shape, and how Notability
 does the same things, is in
 [research/handwriting.md](../research/handwriting.md). Code:
-`gamma/ink.py` + `gamma/routers/ink.py` (server), `frontend/src/ink.js`,
-`inkStore.js`, `inkLayer.jsx`, `inkInput.js` (client), tests `backend/tests/test_ink.py`,
+`gamma/ink.py` + `gamma/routers/ink.py` (server), `frontend/src/ink/ink.js`,
+`ink/inkStore.js`, `ink/InkLayer.jsx`, `ink/inkInput.js` (client), tests `backend/tests/test_ink.py`,
 `frontend/tests/ink.test.mjs`, `frontend/tests/inkInput.test.mjs`,
 e2e `tests/e2e/scenarios/ink.mjs` and `inkEditing.mjs`.
 
@@ -135,12 +135,12 @@ Plain JSON (`application/json`), one per group:
   samples, 4 MB, finite numbers, unique stroke ids.
 
 The codec lives twice by design (`ink.py` `decode_stroke`/`encode_points`,
-`ink.js` `decodeStroke`/`encodeStroke`); the two test files pin the same
+`ink/ink.js` `decodeStroke`/`encodeStroke`); the two test files pin the same
 sample bytes.
 
 ## Client
 
-- `ink.js` (pure): the codec, bounds (`strokeBounds`, `inkBounds`,
+- `ink/ink.js` (pure): the codec, bounds (`strokeBounds`, `inkBounds`,
   `boundsOf`, `unionBox`), `pdfPositionOf`, the stroke edits and the
   rendering. `hitStrokes` is the whole-stroke eraser's test; `eraseAt` the
   partial eraser, which re-encodes the surviving runs as new strokes;
@@ -156,11 +156,11 @@ sample bytes.
   stroke wins ties); `restyleStrokes` changes selected color/width, returning
   the original object for a no-op; `duplicateStrokes` preserves original
   samples and channels while assigning unique IDs to translated copies.
-- `inkStore.js`: files by URL, and per-block **drafts** — the strokes as
+- `ink/inkStore.js`: files by URL, and per-block **drafts** — the strokes as
   edited here, ahead of upload. A draft wins over the block's file until
   the upload replaces `ink_url` with the draft's; a remote `ink_url` change
   on a block with nothing unsaved drops the draft.
-- `inkLayer.jsx`: `InkLayer` (per `PdfPage`, a sibling of the highlight
+- `ink/InkLayer.jsx`: `InkLayer` (per `PdfPage`, a sibling of the highlight
   layer): the retained SVG, a `desynchronized` canvas for the stroke in
   progress, and a capture-phase `pointerdown` listener on the page wrapper
   that claims the pointer when a tool is armed or a stylus touches the page
@@ -176,13 +176,13 @@ sample bytes.
   viewer's pan/pinch handlers. A pen takes over an unfinished finger stroke
   when the palm landed first; a second contact never takes over a pen. Lost
   capture, `pointercancel` and window blur discard the unfinished stroke.
-  `inkInput.js` builds the samples: hardware timestamps (coalesced ones
+  `ink/inkInput.js` builds the samples: hardware timestamps (coalesced ones
   included), the pressure preference snapshotted at stroke start, the
   pointer-up position with the last contact pressure (up reports zero), and
   repeated points dropped. The live outline gets the same endpoint treatment
   as saved ink, so it reaches the pen tip. With `getPredictedEvents()` the
   pen preview adds at most 16 ms / 12 CSS px of prediction, expiring after
-  32 ms and never encoded. `canvasSize.js` caps the live bitmap (8 Mi
+  32 ms and never encoded. `shared/lib/canvasSize.js` caps the live bitmap (8 Mi
   pixels / 4096 per edge) and the context transform uses the real
   backing-to-page ratio; lift and cancel release the bitmap. Canvas and SVG
   share the dark-page colour filter. Pointer-up encodes the stroke and
@@ -200,11 +200,11 @@ sample bytes.
   pages and shares. The global `html { touch-action: manipulation }`
   (app.css) removes Chrome's double-tap zoom everywhere while keeping
   panning and pinch zoom.
-- `App.jsx` owns the tool state: `inkUi` (`open`, the armed `tool` — a
+- `app/App.jsx` owns the tool state: `inkUi` (`open`, the armed `tool` — a
   preset id, `eraser`, `select` or `null` for the hand — its `options` row,
   and `pen`, the last pen preset, which a stylus writes with when nothing
   is armed) plus the prefs (`inkTools`, the preset list validated by
-  `ink.js` `normalizeTools`; the eraser's mode and size; the lasso mode),
+  `ink/ink.js` `normalizeTools`; the eraser's mode and size; the lasso mode),
   the group the next stroke joins (`inkActiveRef`), the lasso
   selection (`inkSelection`) and the **stroke history** (`inkHistRef`:
   entries of `{changes: [{id, page, before, after}], label}`, one per action; a group whose

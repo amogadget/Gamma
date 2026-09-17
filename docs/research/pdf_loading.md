@@ -7,7 +7,7 @@ behind the path Gamma chose; the mechanics, once built, live in `docs/dev/`.
 
 ## Where the time goes in Gamma's viewer today
 
-Read from `frontend/src/pdfViewer.jsx` before the redesign:
+Read from `frontend/src/pdf/PdfViewer.jsx` before the redesign:
 
 1. **Whole-file download first.** `fetchPdfData` drains one GET into memory
    (browser HTTP cache, then IndexedDB, then network). Nothing is parsed until
@@ -88,7 +88,7 @@ thrown away.** Mechanics and measurements: [dev/pdf_loading.md](../dev/pdf_loadi
    indexer, served by `GET /api/pdf-info/{doc_id}` under the upload's access
    rule; the viewer lays out a skeleton from it and drops the measure loop and
    the 50-page refinement.
-3. `src/pdfSource.js`, a pure, unit-tested decision: cached bytes → memory;
+3. `src/pdf/pdfSource.js`, a pure, unit-tested decision: cached bytes → memory;
    small file → one GET; large file → pdf.js range open with a background
    backfill into IndexedDB. Only for `/api/uploads`.
 4. The server preview stays out: not needed for the numbers below.

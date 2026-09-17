@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { installVerticalScrollSnap } from "../src/verticalScrollSnap.js";
+import { installVerticalScrollSnap } from "../src/pdf/verticalScrollSnap.js";
 
 function fixture(t, scrollEnd = true) {
   const doc = new EventTarget(), win = new EventTarget();

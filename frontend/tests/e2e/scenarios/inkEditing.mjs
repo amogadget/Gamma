@@ -1,4 +1,4 @@
-import { encodeStroke, newInk, decodeStroke } from "../../../src/ink.js";
+import { encodeStroke, newInk, decodeStroke } from "../../../src/ink/ink.js";
 import { waitForPdf } from "./pdf.mjs";
 
 export async function inkEditingScenarios({ server, browser, alice, bob, makePdf, step, until, assert, assertEq, assertNoProblems, openPage, flags }) {

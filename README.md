@@ -148,6 +148,11 @@ npm install
 npm run dev        # :5173, proxies /api → :9001
 ```
 
+Frontend source is grouped by function (`editor/`, `pdf/`, `settings/`, and
+others), with startup/session code in `app/` and reused code in `shared/`.
+See the [frontend source map](./frontend/src/README.md) for file locations and
+naming conventions.
+
 **Tests**
 
 ```bash
@@ -157,6 +162,10 @@ python -m pytest tests -q
 ```
 
 In-process API tests against a throwaway data dir — auth, the block tree, metadata/BibTeX, PDF-annotation import, full-text search, and export.
+
+Frontend checks, from `frontend/`: `npm test` for module tests, `npm run build`
+for the production bundle, and `npm run e2e` for the browser suite against an
+isolated backend (requires backend dependencies and Playwright Chromium).
 
 **Production without Docker** — build the frontend and let the backend serve it:
 

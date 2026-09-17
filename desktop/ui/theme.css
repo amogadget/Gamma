@@ -1,5 +1,5 @@
 /* Shell chrome styling — the launcher and the shell bar. Tokens mirror
-   frontend/src/app.css (same names, same values per theme) so the chrome
+   frontend/src/shared/styles/app.css (same names, same values per theme) so the chrome
    looks like a piece of Gamma; the theme comes from the `data-theme` the
    Gamma page last reported (none = dark, like Gamma's :root). */
 

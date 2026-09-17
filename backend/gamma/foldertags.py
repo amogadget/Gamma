@@ -1,5 +1,5 @@
 """Folder-label path and tag helpers, shared by the agent tools and the
-importers. Keep the rules in sync with frontend/src/libraryUtils.js
+importers. Keep the rules in sync with frontend/src/library/libraryUtils.js
 (parseFolderTags / cleanFolderSegment / cleanFolderPath)."""
 
 import re

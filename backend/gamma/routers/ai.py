@@ -750,14 +750,14 @@ def ai_health(payload: AIHealthRequest, request: Request):
 
 # --- PDF translation ----------------------------------------------------------
 # Backs the viewer's translated view: the frontend segments a page into
-# paragraph blocks (frontend/src/pdfTranslate.js) and sends their TEXT here;
+# paragraph blocks (frontend/src/pdf/pdfTranslate.js) and sends their TEXT here;
 # geometry never leaves the client. Translations are cached per (user, target
 # language, model, source text) — IN MEMORY only, deliberately: nothing is
 # persisted to disk, the cache just makes retries, re-shows and halted-job
 # resumes free until the server restarts.
 
 # Allowlisted target languages (code → name spliced into the prompt). Mirrored
-# in frontend/src/prefs.js TRANSLATE_LANGS — keep the two in sync.
+# in frontend/src/app/prefs.js TRANSLATE_LANGS — keep the two in sync.
 TRANSLATE_LANGS = {
     "en": "English", "zh-CN": "Simplified Chinese", "zh-TW": "Traditional Chinese",
     "ja": "Japanese", "ko": "Korean", "de": "German", "fr": "French",

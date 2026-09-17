@@ -4,7 +4,7 @@
 // candidate for merging with the previous keystroke).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyTransition, describeTransition } from "../src/blockHistory.js";
+import { classifyTransition, describeTransition } from "../src/editor/blockHistory.js";
 
 const N = (id, content = id, children = [], extra = {}) => ({ id, content, properties: {}, collapsed: false, editMode: false, children, ...extra });
 const tree = () => [N("a", "a", [N("a1")]), N("b")];

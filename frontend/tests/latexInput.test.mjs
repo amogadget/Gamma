@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { emptyLeftPair, leftDelimiterEdit, rightDelimiterAt } from "../src/latexInput.js";
+import { emptyLeftPair, leftDelimiterEdit, rightDelimiterAt } from "../src/editor/latexInput.js";
 
 const apply = (value, edit) => value.slice(0, edit.changes.from) + edit.changes.insert + value.slice(edit.changes.to);
 

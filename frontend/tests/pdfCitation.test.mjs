@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { citationRuns, matchCitation, parsePdfCitation } from "../src/pdfCitation.js";
+import { citationRuns, matchCitation, parsePdfCitation } from "../src/pdf/pdfCitation.js";
 
 test("citation links preserve encoded quotes and reject invalid or external locations", () => {
   const quote = "A result (n=42) & its evidence";

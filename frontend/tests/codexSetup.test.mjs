@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { codexSetupCommand } from "../src/codexSetup.js";
+import { codexSetupCommand } from "../src/settings/codexSetup.js";
 
 test("setup commands download the release installer and pass this server", () => {
   for (const platform of ["windows", "unix"]) {

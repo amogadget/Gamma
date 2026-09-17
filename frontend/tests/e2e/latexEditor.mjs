@@ -12,8 +12,8 @@ const bundle = await build({
   stdin: { resolveDir: root, loader: "jsx", contents: `
     import React, {useState} from 'react';
     import {createRoot} from 'react-dom/client';
-    import {BlockTree} from './src/blockTree.jsx';
-    import {MathLivePreview, LatexAcPopup, latexCompletions, mathTabJump} from './src/latexEditor.jsx';
+    import {BlockTree} from './src/editor/BlockTree.jsx';
+    import {MathLivePreview, LatexAcPopup, latexCompletions, mathTabJump} from './src/editor/LatexEditor.jsx';
     const noop = () => {};
     const registerRef = (_, ref) => { window.editorRef = ref; };
     function Fixture() {
@@ -59,7 +59,7 @@ try {
   });
   await page.goto("http://localhost/");
   await page.addStyleTag({ content: readFileSync(path.join(root, "node_modules/katex/dist/katex.min.css"), "utf8") });
-  await page.addStyleTag({ content: readFileSync(path.join(root, "src/app.css"), "utf8").replace(/^@import[^;]+;/, "") });
+  await page.addStyleTag({ content: readFileSync(path.join(root, "src/shared/styles/app.css"), "utf8").replace(/^@import[^;]+;/, "") });
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
   await page.waitForFunction(() => window.editorRef?.current?.view);
   const reset = (value = "$$", cursor = 1, end = cursor) => page.evaluate(([v, c, e]) => window.setDoc(v, c, e), [value, cursor, end]);

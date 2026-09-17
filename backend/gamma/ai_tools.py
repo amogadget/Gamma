@@ -32,7 +32,7 @@ scope/permission lines are appended mechanically.  Renamed tools stay
 callable under their old name (``ai_context.DEPRECATED_TOOLS``) so saved
 chats replay.
 
-Folder semantics mirror ``frontend/src/libraryUtils.js``: ``properties.folder``
+Folder semantics mirror ``frontend/src/library/libraryUtils.js``: ``properties.folder``
 is a comma-separated list of ``/``-nested paths, folders exist only through the
 tags in use, and ``properties.category`` holds the flat labels.
 """
