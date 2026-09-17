@@ -245,10 +245,12 @@ jobs:
             codesign --verify --deep --strict --verbose=2 "$app"
             if [ -z "$MAC_CERT_P12" ]; then
               # No certificate: the afterPack hook must have ad-hoc signed it.
-              codesign -dv "$app" 2>&1 | tee /dev/stderr | grep -q 'Signature=adhoc'
+              # Consume the full output: grep -q can close early and make tee
+              # fail with SIGPIPE under the runner's pipefail setting.
+              codesign -dv "$app" 2>&1 | tee /dev/stderr | grep 'Signature=adhoc' > /dev/null
               exit 0
             fi
-            codesign -d --entitlements - "$app/Contents/Resources/gamma-server/gamma-server" | head -20
+            codesign -d --entitlements - "$app/Contents/Resources/gamma-server/gamma-server" | sed -n '1,20p'
             if [ -n "$APPLE_ID" ]; then
               spctl --assess --type execute --verbose=2 "$app"
               xcrun stapler validate "$app"

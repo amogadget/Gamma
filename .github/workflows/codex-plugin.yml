@@ -8,7 +8,7 @@ on:
       - 'tools/package_codex_plugin.py'
       - 'tools/test_package_codex_plugin.py'
       - 'tools/*codex*'
-      - 'frontend/src/codexSetup.js'
+      - 'frontend/src/settings/codexSetup.js'
       - 'frontend/tests/codexSetup.test.mjs'
       - 'docs/dev/mcp.md'
       - 'PRIVACY.md'

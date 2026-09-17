@@ -97,6 +97,11 @@ by `desktop/scripts/adhoc-sign.cjs` when no Developer ID is available (see
 Linux additionally `apt install`s the `.deb` on the runner and runs the
 self-test from `/opt/Gamma/gamma` with the sandbox on.
 
+The macOS signature diagnostics must consume all `codesign` output: an early
+exit from `grep -q` or `head` can break the pipe and fail the release under
+`pipefail` even when the signature is valid. Signature verification errors
+must still fail the job.
+
 The `publish` job merges the three artifacts, writes the notes — download
 table, per-platform install hints, **Changes: the commit subjects since the
 previous tag, restricted to `desktop/ backend/ frontend/`** (this repo's PR
