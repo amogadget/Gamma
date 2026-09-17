@@ -11,7 +11,7 @@ from imageio_ffmpeg import get_ffmpeg_exe
 from media_output import encode_webp, publish
 
 ROOT = Path(__file__).resolve().parents[2]
-SUITE = ROOT / 'tmp/readme-media/suite'
+SUITE = ROOT / 'artifacts/readme-media/suite'
 OUT = SUITE / 'annotate-and-ask/preview.webp'
 directory = SUITE / 'annotate-and-ask'
 directory.mkdir(parents=True, exist_ok=True)

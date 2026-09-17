@@ -17,7 +17,8 @@ async function refreshAccount() {
   }
   try {
     const me = await whoAmI();
-    status("server-status", `Connected to ${settings.server}.`, "ok");
+    $("server").value = me.origin;
+    status("server-status", `Connected to ${me.origin}.`, "ok");
     $("signed-out").classList.toggle("hidden", !!me.user);
     $("signed-in").classList.toggle("hidden", !me.user);
     if (me.user) $("who").textContent = me.user;

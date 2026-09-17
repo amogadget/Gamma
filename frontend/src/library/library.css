@@ -64,6 +64,15 @@
   border-color: var(--border);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
+/* Keep the gray Gamma cards distinct without bringing back white surfaces. */
+[data-theme="gamma-light"] .pageCard {
+  border-color: var(--border);
+  box-shadow: 0 1px 3px rgba(45, 40, 28, 0.12);
+}
+[data-theme="gamma-light"] .pageCard:hover {
+  border-color: var(--border-hover);
+  box-shadow: 0 3px 9px rgba(45, 40, 28, 0.16);
+}
 /* .selected / .dragOver are shared with the list rows — see the :is() rules
    next to .fileRow / .folderRow below (they must sit after those :hover
    rules to win when both apply). */

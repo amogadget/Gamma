@@ -1,6 +1,5 @@
 """MCP transport adapter over the same tools Gamma chat executes directly."""
 
-import os
 from contextlib import asynccontextmanager
 from urllib.parse import urlencode
 
@@ -18,6 +17,7 @@ from fastapi import HTTPException
 from .ai_tools import agent_tools, run_agent_tool
 from .integrations import resolve_token
 from .mcp_oauth import public_base
+from .server_settings import mcp_allowed_hosts
 from .mcp_picker import PICKER_URI, PICKER_MIME, PICKER_SCHEMA, ICON_URI, picker_html, paper_choices, paper_choices_text
 
 READ_TOOLS = frozenset({"list_pages", "read_page", "read_block", "search_library"})
@@ -107,11 +107,10 @@ class GammaMCP:
     @asynccontextmanager
     async def lifespan(self, app):
         # A manager is single-use; fresh instances also allow repeated TestClient lifespans.
-        hosts = [h.strip() for h in os.environ.get("GAMMA_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
         manager = StreamableHTTPSessionManager(
             self.server, stateless=True, json_response=True, max_request_body_size=65536,
             security_settings=TransportSecuritySettings(
-                allowed_hosts=["127.0.0.1", "localhost", "[::1]", "127.0.0.1:*", "localhost:*", "[::1]:*", *hosts],
+                allowed_hosts=mcp_allowed_hosts(),
                 allowed_origins=[]))
         async with manager.run():
             yield {"gamma_mcp_manager": manager}
@@ -144,6 +143,10 @@ class GammaMCP:
         if manager is None:
             await JSONResponse({"detail": "MCP is starting."}, status_code=503)(scope, receive, send)
             return
+        # A confirmed server address applies to the live stateless transport.
+        # Refresh from administrator-controlled settings, never request headers.
+        hosts = await run_in_threadpool(mcp_allowed_hosts)
+        manager.security_settings.allowed_hosts = hosts
         await manager.handle_request(scope, receive, send)
 
     def route(self):

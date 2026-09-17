@@ -33,7 +33,7 @@ from ..blocks_store import (
     last_child_position,
     page_attachment,
 )
-from ..db import connect_pages_db, page_now, safe_doc_id, ws_uploads_dir
+from ..db import connect_pages_db, get_pref, page_now, safe_doc_id, ws_uploads_dir
 from ..foldertags import add_tag, clean_path, clean_segment, parse_tags
 from ..logbuf import log
 from ..ops import after_commit, apply_ops, props_patch
@@ -374,22 +374,37 @@ def library_preview(request: Request, doi: str = "", arxiv_id: str = "", url: st
 @router.get("/library/folders")
 def library_folders(request: Request):
     """Folder paths (with their ancestors) and flat labels in use — the
-    popup's pickers, without pulling every page down."""
+    popup's pickers, with recently viewed folders first."""
+    user = require_user(request)
     ws = require_ws(request)
-    folders: set[str] = set()
+    recent_views, _ = get_pref(user, "recent-views", ws)
+    viewed_at = {
+        entry["id"]: entry["at"]
+        for entry in (recent_views if isinstance(recent_views, list) else [])
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+        and isinstance(entry.get("at"), str)
+    }
+    folders: dict[str, tuple[str, str]] = {}
     labels: set[str] = set()
     with connect_pages_db(ws) as conn:
         rows = conn.execute(
-            "SELECT json_extract(properties, '$.folder'), json_extract(properties, '$.category') "
+            "SELECT id, updated_at, json_extract(properties, '$.folder'), json_extract(properties, '$.category') "
             "FROM unified_blocks WHERE parent_id = 'root'"
         ).fetchall()
-    for folder, category in rows:
+    for page_id, updated_at, folder, category in rows:
         for path in parse_tags(folder):
             parts = [p for p in clean_path(path).split("/") if p]
             for i in range(1, len(parts) + 1):
-                folders.add("/".join(parts[:i]))
+                ancestor = "/".join(parts[:i])
+                viewed, updated = folders.get(ancestor, ("", ""))
+                folders[ancestor] = (max(viewed, viewed_at.get(page_id, "")),
+                                     max(updated, updated_at or ""))
         labels.update(parse_tags(category))
-    return {"folders": sorted(folders, key=str.lower), "labels": sorted(labels, key=str.lower)}
+    # Like the library's Recently viewed sort: viewed first, then modified;
+    # alphabetical order only breaks ties. Ancestors inherit their pages' times.
+    ordered = sorted(folders, key=lambda path: (path.lower(), path))
+    ordered.sort(key=folders.__getitem__, reverse=True)
+    return {"folders": ordered, "labels": sorted(labels, key=str.lower)}
 
 
 class ClipNoteRequest(BaseModel):

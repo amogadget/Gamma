@@ -72,6 +72,7 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
     print(f"Marketplace written to {target}")
+    print("Keep this directory: Codex reads the marketplace source after installation.")
     print(f'Add it with: codex plugin marketplace add "{target}"')
     print("Install Gamma PDF in the plugin browser, then start a new conversation.")
 

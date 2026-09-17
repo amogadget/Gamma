@@ -18,7 +18,7 @@ helpers or generated artifacts.
   for older clips and their account/AI requirements. New demos should follow
   the current pacing and delivery guidance in the tooling README.
 - Keep scripts in `tools/readme-media/`, final media in `docs/assets/demos/` or
-  `docs/assets/screenshots/`, and intermediates in ignored `tmp/readme-media/`.
+  `docs/assets/screenshots/`, and intermediates in ignored `artifacts/readme-media/`.
 - Inspect encoded sample frames, verify the demonstrated action saved correctly,
   update the matching README link, and stop any isolated server you started.
 - Leave changes in the working tree. Do not commit unless the user asks.

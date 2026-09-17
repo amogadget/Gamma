@@ -18,7 +18,10 @@ launcher, and desktop release workflows use these locations.
 | `docs/user_guide.md` | User documentation |
 | `docs/assets/` | Documentation images and animations |
 | `tools/readme-media/` | README capture scripts, renderers, and recording recipes |
-| `tmp/readme-media/` | Ignored media workspace exports, private builds, raw captures, and QA frames |
+| `tools/branding/` | Connections/workspace SVG generators, and hero renderer |
+| `artifacts/readme-media/` | Ignored media workspace exports, private builds, raw captures, and QA frames |
+| `artifacts/` | Ignored local sources and outputs; [retention guide](../../artifacts/README.md) |
+| `tmp/` | Disposable test/build scratch only; no maintained source code |
 | `data/` | Ignored runtime databases and uploads, controlled by `GAMMA_DATA_DIR` |
 
 Desktop-specific developer documentation remains in `desktop/docs/`.
@@ -76,7 +79,7 @@ servers, installers, and Store packages go into `dist-backend/`, `dist/`, and
 The recording instructions and helpers live in [tools/readme-media/](../../tools/readme-media/README.md).
 `.claude/skills/readme-media/SKILL.md` is a short entry point to that workflow.
 Published assets live in `docs/assets/demos/` and `docs/assets/screenshots/`;
-raw captures, workspace exports and QA frames stay in ignored `tmp/readme-media/`.
+raw captures, workspace exports and QA frames stay in ignored `artifacts/readme-media/`.
 Keep the README's
 relative image links and `backend/gamma/seed.py` screenshot URLs in sync when
 renaming media. New guest pages use the seed URLs; existing guest pages pick

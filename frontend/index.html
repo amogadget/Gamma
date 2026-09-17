@@ -14,7 +14,7 @@
     <script>
       try {
         var t = localStorage.getItem("gamma-theme");
-        if (t === "light" || t === "dark" || t === "sepia" || t === "solarized" || t === "gray") document.documentElement.setAttribute("data-theme", t);
+        if (["light", "dark", "gamma-light", "gamma-dark", "sepia", "solarized", "gray"].includes(t)) document.documentElement.setAttribute("data-theme", t);
         var s = parseFloat(localStorage.getItem("gamma-ui-scale"));
         if (s >= 0.7 && s <= 1.6) document.documentElement.style.setProperty("--ui-scale", s); // UI_SCALE in prefs.js
       } catch (e) {}
@@ -30,6 +30,10 @@
       html[data-theme="light"] { color-scheme: light; }
       html[data-theme="dark"], html[data-theme="dark"] body, html[data-theme="dark"] #root { background: #111; }
       html[data-theme="dark"] { color-scheme: dark; }
+      html[data-theme="gamma-light"], html[data-theme="gamma-light"] body, html[data-theme="gamma-light"] #root { background: #e7e5de; }
+      html[data-theme="gamma-light"] { color-scheme: light; }
+      html[data-theme="gamma-dark"], html[data-theme="gamma-dark"] body, html[data-theme="gamma-dark"] #root { background: #1b1b1a; }
+      html[data-theme="gamma-dark"] { color-scheme: dark; }
       html[data-theme="sepia"], html[data-theme="sepia"] body, html[data-theme="sepia"] #root { background: #f0e9d6; }
       html[data-theme="sepia"] { color-scheme: light; }
       html[data-theme="solarized"], html[data-theme="solarized"] body, html[data-theme="solarized"] #root { background: #eee8d5; }

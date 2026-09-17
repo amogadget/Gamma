@@ -8,7 +8,7 @@ library. Use its exported copy for recording, not synthetic replacement papers.
 | Demo | Story | Recording details |
 |---|---|---|
 | Highlight, annotate & draw | Select a sentence, save a text annotation, circle a claim, draw an arrow, highlight with ink | `record-ink.mjs --annotate`; isolated server, note and four strokes checked after reload; `render-feature-demos.py annotate-and-ink` |
-| Native agentic | PDF chat, `@` paper selection, library search/read calls, expanded tool output | `record-native-agentic.mjs`; disposable workspace on the demo account; `render-feature-demos.py native-agentic` trims model waits and adds camera close-ups |
+| Native agentic | One Home conversation: zoom before `@`, select a paper, search/read, click `p. 1` to highlight the cited PDF passage | `record-native-agentic.mjs`; tool steps stay collapsed; `render-feature-demos.py native-agentic` trims model waits and adds picker, answer and citation close-ups |
 | Notes | Type markdown, a page reference, nested display math with autocomplete, then a callout | `record-notes.mjs`; starts on an empty Rabi oscillations page; fixed crop keeps the editor readable |
 | Library | Home search, title and PDF results, folder filter, open a highlighted match | `record-library.mjs`; prepare Quantum subfolders, populate recents by navigation; QEC paper must exist |
 | Historical agent source | Ask to organize papers, show real tool calls and the resulting folders | `record-agent.mjs`; clear folders and home chat in the disposable workspace first; requires configured AI; scratch preview |

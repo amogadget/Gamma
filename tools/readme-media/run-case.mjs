@@ -7,7 +7,7 @@ import { Server, Account } from '../../frontend/tests/e2e/harness.mjs';
 const name = process.argv[2];
 const names = ['notes', 'library', 'metadata', 'agent', 'download-and-chat', 'reference-links', 'connector'];
 if (!names.includes(name)) throw new Error(`Choose: ${names.join(', ')}`);
-const suite = path.join(ROOT, 'tmp/readme-media/suite');
+const suite = path.join(ROOT, 'artifacts/readme-media/suite');
 const state = JSON.parse(fs.readFileSync(path.join(suite, 'workspace.json')));
 if (state.removed) throw new Error('Prepare a suite workspace first');
 const dir = path.join(suite, name);
@@ -21,7 +21,7 @@ try {
     await server.start();
     server.manage('create-user', 'demo', 'isolated-connector-only');
     const account = await new Account(server, 'demo', 'isolated-connector-only').login();
-    await account.upload('/api/import-data', fs.readFileSync(path.join(ROOT, 'tmp/readme-media/demo.zip')), 'demo.zip', 'application/zip');
+    await account.upload('/api/import-data', fs.readFileSync(path.join(ROOT, 'artifacts/readme-media/demo.zip')), 'demo.zip', 'application/zip');
     await account.api('/api/blocks/fy0-h_BqOHcH', { method: 'PUT', body: { properties: { folder: 'Quantum' } } });
     state.base = server.base; state.workspace = account.ws;
     fs.writeFileSync(path.join(dir, 'session.txt'), account.session);

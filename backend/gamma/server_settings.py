@@ -19,6 +19,11 @@ What a workspace's uploads are checked against (`workspace_quota`):
 The databases are not metered.
 """
 
+import os
+import re
+from ipaddress import IPv6Address
+from urllib.parse import urlsplit
+
 from fastapi import HTTPException
 
 from .config import MAX_UPLOAD_BYTES
@@ -65,6 +70,66 @@ def _set_raw(key: str, value: str) -> None:
             (key, value, page_now()),
         )
         conn.commit()
+
+
+def validate_public_url(value: str) -> str:
+    value = value.strip()
+    if not value:
+        return ""
+    try:
+        url = urlsplit(value)
+        host = url.hostname or ""
+        port = url.port
+        local = host in {"localhost", "127.0.0.1", "::1"}
+        if (len(value) > 2048 or re.search(r"[\s\\\x00-\x1f\x7f]", value)
+                or url.scheme not in {"http", "https"} or not host
+                or (url.scheme != "https" and not local)
+                or url.username is not None or url.password is not None
+                or url.path not in ("", "/") or "?" in value or "#" in value
+                or (port is not None and port < 1)):
+            raise ValueError
+        if ":" in host:
+            host = str(IPv6Address(host))
+            if "%" in host:
+                raise ValueError
+        else:
+            host = host.encode("idna").decode("ascii")
+            if len(host) > 253 or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+                                          for label in host.split(".")):
+                raise ValueError
+        authority = f"[{host}]" if ":" in host else host
+        if port is not None and port != (443 if url.scheme == "https" else 80):
+            authority += f":{port}"
+        return f"{url.scheme}://{authority}"
+    except (ValueError, UnicodeError):
+        raise ValueError("Enter an HTTPS server address without a path, query, or fragment. HTTP is allowed only for localhost.") from None
+
+
+def public_url_settings() -> dict:
+    override = os.environ.get("GAMMA_PUBLIC_URL", "").strip().rstrip("/")
+    with connect_users_db() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'public_url'").fetchone()
+    saved = row[0] if row else ""
+    return {"public_url": override or saved,
+            "public_url_source": "environment" if override else "saved" if saved else "unset"}
+
+
+def set_public_url(value: str) -> None:
+    if os.environ.get("GAMMA_PUBLIC_URL", "").strip():
+        raise ValueError("The public server URL is managed by GAMMA_PUBLIC_URL on this server.")
+    _set_raw("public_url", validate_public_url(value))
+
+
+def mcp_allowed_hosts(public_url: str | None = None) -> list[str]:
+    hosts = [h.strip().lower() for h in os.environ.get("GAMMA_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    if public_url is None:
+        public_url = public_url_settings()["public_url"]
+    if public_url:
+        try:
+            hosts.append(urlsplit(validate_public_url(public_url)).netloc)
+        except ValueError:
+            pass  # An invalid configured URL must never widen the allowlist.
+    return ["127.0.0.1", "localhost", "[::1]", "127.0.0.1:*", "localhost:*", "[::1]:*", *hosts]
 
 
 def _defaults(conn) -> tuple[int, int]:

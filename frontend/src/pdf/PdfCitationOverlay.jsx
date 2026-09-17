@@ -32,9 +32,10 @@ export function PdfCitationOverlay({ citation, textRef, wrapRef, ready }) {
   return <>
     {result.rects.map((r, i) => <div key={i} className="pdfCitationMark" aria-hidden="true"
       style={{ left: `${r.left}%`, top: `${r.top}%`, width: `${r.width}%`, height: `${r.height}%` }} />)}
-    {result.status !== "matched" && <div role="status" className="pdfCitationNotice">
-      {result.status === "ambiguous" ? "This quote appears more than once on this page."
-        : "Opened the cited page; the exact quote could not be located in its text layer."}
+    {(result.status !== "matched" || result.approximate) && <div role="status" className="pdfCitationNotice">
+      {result.approximate ? "Highlighted an approximate text match."
+        : result.status === "ambiguous" ? "More than one passage on this page matches this quote."
+        : "Opened the cited page; the quote could not be located in its text layer."}
     </div>}
   </>;
 }

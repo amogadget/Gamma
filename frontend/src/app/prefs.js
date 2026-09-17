@@ -77,7 +77,7 @@ const SIZE_INDEX_CODEC = {
   serialize: String,
 };
 
-export const THEMES = ["system", "light", "dark", "sepia", "solarized", "gray"];
+export const THEMES = ["system", "light", "dark", "gamma-light", "gamma-dark", "sepia", "solarized", "gray"];
 
 // Control size (Settings → General): a CSS `zoom` on every button and toggle
 // (app.css, `--ui-scale`) — the interface chrome, not the notes/chat text,

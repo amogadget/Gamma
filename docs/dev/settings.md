@@ -68,6 +68,12 @@ Shorter pages keep the main sidebar:
   server backups and logs).
 - **Diagnostics** (main sidebar): browser tracing and the browser session log.
 
+Administrators can confirm the **Public server URL** under Server. It is
+prefilled from the browser origin but saved only on confirmation. The saved
+address immediately configures assistant sign-in and the MCP host allowlist;
+it persists in the server `settings` table. An existing `GAMMA_PUBLIC_URL`
+environment override takes precedence and is shown read-only.
+
 Search is backed by [settingsNavigation.js](../../frontend/src/settings/settingsNavigation.js).
 It searches labels and synonyms, filters out inaccessible management pages,
 then opens the destination, focusing the

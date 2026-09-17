@@ -9,6 +9,7 @@ import { API, apiJson } from "../shared/lib/utils";
 import { PaneHead, Section, Row, UnitInput, LogBox, useSettingsDraft } from "./SettingsKit";
 import { WorkspacesAdmin } from "./SettingsWorkspacesAdmin";
 import { ServerBackups } from "./SettingsBackups";
+import { PublicUrlSettings } from "./SettingsPublicUrl";
 import { ImportIcon, ServerIcon } from "../shared/ui/Icons";
 
 export function ServerSettings({ value }) {
@@ -17,6 +18,9 @@ export function ServerSettings({ value }) {
       <PaneHead icon={ServerIcon} title="Server">
         Storage defaults, the shared workspaces, snapshots of the whole data directory, and the server log.
       </PaneHead>
+      <Section title="Assistant connections">
+        <PublicUrlSettings setStatus={value.setStatus} />
+      </Section>
       <Section title="Storage defaults">
         <ServerLimitRows setStatus={value.setStatus} refreshQuota={value.refreshQuota} />
       </Section>

@@ -46,6 +46,12 @@ Highlights and free notes are the same kind of block, so a paper's notes and a p
 
 ## 🔗 Link and organize
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-library-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-library-light.svg">
+  <img alt="Gamma fills metadata when a paper is downloaded, organizes papers with folders and labels, searches titles, notes and PDF text, and follows references to other papers with Back returning to the previous reading position" src="./docs/assets/branding/gamma-library-light.svg" width="100%">
+</picture>
+
 ![Follow a citation to its reference, then fetch the cited arXiv paper into Gamma with one click](./docs/assets/demos/demo-reference-links.webp)
 
 - **Reference links** — citations in the PDF are clickable: jump to the reference, unwind jumps across documents with a global **← Back**, and fetch a cited arXiv/DOI paper into your library in one click. You can also link a citation to a paper you already have.
@@ -72,7 +78,18 @@ The **Gamma Connector** extension ([extension/](./extension/)) saves the paper y
 
 The **[Gamma PDF plugin for Codex](./plugins/gamma/)** lets Codex search and read your papers, notes, highlights, and PDF text with read-only access to a workspace you approve. Open **Settings → AI → External assistants → Codex CLI**, copy the setup command for your operating system, and run it on the computer where you use Codex. It installs the plugin from a published Gamma release and opens Gamma sign-in. Approve a workspace, then start a new Codex chat and ask, “Use Gamma to find my notes about…” Requires the Codex CLI and a running, reachable Gamma server. Other MCP assistants can connect using the server URL in the same panel; see the [connection guide](./docs/dev/mcp.md).
 
+For a remotely hosted Gamma, an administrator can enable assistant sign-in in
+**Settings → Administration → Server → Public server URL**. Confirm the suggested
+HTTPS address once; Gamma saves it and applies it immediately, without environment
+variables or a server restart. Then connect from **AI → External assistants**.
+
 ## Share, sync and move your data
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-workspaces-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-workspaces-light.svg">
+  <img alt="Gamma workspaces: separate personal libraries alongside a shared research library, where owners, editors and viewers collaborate on organized papers, highlights and notes with live edits and cursors" src="./docs/assets/branding/gamma-workspaces-light.svg" width="100%">
+</picture>
 
 - **Workspaces** — keep separate personal libraries or collaborate in a shared library created by a server administrator. Owners manage members; editors change pages; viewers read. Switch from the account menu and manage libraries in Settings → Workspaces.
 - **Share a page** — send a link to an annotated paper; invite people with view or edit rights, or open it to anyone with the link.

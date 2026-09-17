@@ -1,0 +1,250 @@
+[
+  {
+    "title": "Quantum-enabled millimetre wave to optical transduction using neutral atoms",
+    "source": "https://einstein.nju.edu.cn/upload/uploadify/20230327/20230322-Nature-Quantum-enabledmillimetrewavetoopticaltransductionusingneutralatoms_202303271346016328.pdf",
+    "page": 4,
+    "quote": "To systematically study interconversion we first vary ∆, which controls Cmm, the collective cooperativity of the mmwave transition, through the steady-state dressing fraction in the 35P1/2 state.",
+    "items": [
+      {
+        "str": "To systematically study interconversion we first vary ∆, which",
+        "dir": "ltr",
+        "width": 246.53712968259347,
+        "height": 8.25,
+        "transform": [
+          8.49750041,
+          0,
+          0,
+          8.25,
+          314.64569091,
+          488.10040283
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": true
+      },
+      {
+        "str": "controls",
+        "dir": "ltr",
+        "width": 31.831112848816087,
+        "height": 8.25,
+        "transform": [
+          8.28999996,
+          0,
+          0,
+          8.25,
+          306.14181518,
+          477.35040283
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": false
+      },
+      {
+        "str": " ",
+        "dir": "ltr",
+        "width": 0.17650000000000007,
+        "height": 0,
+        "transform": [
+          8.28999996,
+          0,
+          0,
+          8.25,
+          337.97292802881606,
+          477.35040283
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": false
+      },
+      {
+        "str": "C",
+        "dir": "ltr",
+        "width": 5.20611997488,
+        "height": 8.25,
+        "transform": [
+          8.28999996,
+          0,
+          0,
+          8.25,
+          339.43611302175606,
+          477.35040283
+        ],
+        "fontName": "g_d0_f4",
+        "hasEOL": false
+      },
+      {
+        "str": "mm",
+        "dir": "ltr",
+        "width": 9.007913945669992,
+        "height": 4.9499998,
+        "transform": [
+          4.97399997,
+          0,
+          0,
+          4.9499998,
+          344.6442871,
+          475.70040893
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": false
+      },
+      {
+        "str": " ",
+        "dir": "ltr",
+        "width": 7.243236827364224e-05,
+        "height": 0,
+        "transform": [
+          4.97399997,
+          0,
+          0,
+          4.9499998,
+          353.6522010456699,
+          475.70040893
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": false
+      },
+      {
+        "str": ", the collective cooperativity of the mmwave transition,",
+        "dir": "ltr",
+        "width": 207.67113099962611,
+        "height": 8.25,
+        "transform": [
+          8.28999996,
+          0,
+          0,
+          8.25,
+          353.65280151,
+          477.35040283
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": true
+      },
+      {
+        "str": "through the steady-state dressing fraction in the 35P",
+        "dir": "ltr",
+        "width": 200.33471319468188,
+        "height": 8.25,
+        "transform": [
+          8.42160034,
+          0,
+          0,
+          8.25,
+          306.14181518,
+          466.60040283
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": false
+      },
+      {
+        "str": " ",
+        "dir": "ltr",
+        "width": 0.025940867566826335,
+        "height": 0,
+        "transform": [
+          8.42160034,
+          0,
+          0,
+          8.25,
+          506.47652837468155,
+          466.60040283
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": false
+      },
+      {
+        "str": "1",
+        "dir": "ltr",
+        "width": 2.11211212894,
+        "height": 4.9499998,
+        "transform": [
+          5.05289983,
+          0,
+          0,
+          4.9499998,
+          506.60760498,
+          464.95040893
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": false
+      },
+      {
+        "str": "/",
+        "dir": "ltr",
+        "width": 1.7381975415200002,
+        "height": 4.9499998,
+        "transform": [
+          5.05289983,
+          0,
+          0,
+          4.9499998,
+          508.729822807542,
+          464.95040893
+        ],
+        "fontName": "g_d0_f4",
+        "hasEOL": false
+      },
+      {
+        "str": "2",
+        "dir": "ltr",
+        "width": 2.7386717078600005,
+        "height": 4.9499998,
+        "transform": [
+          5.05289983,
+          0,
+          0,
+          4.9499998,
+          510.311380454332,
+          464.95040893
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": false
+      },
+      {
+        "str": " ",
+        "dir": "ltr",
+        "width": 0.17965926988267733,
+        "height": 0,
+        "transform": [
+          5.05289983,
+          0,
+          0,
+          4.9499998,
+          513.050052162192,
+          464.95040893
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": false
+      },
+      {
+        "str": "state (Meth-",
+        "dir": "ltr",
+        "width": 46.69685883420004,
+        "height": 8.25,
+        "transform": [
+          8.42160034,
+          0,
+          0,
+          8.25,
+          514.56307073052,
+          466.60040283
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": true
+      },
+      {
+        "str": "ods). A clear maximum in the conversion efficiency can be seen",
+        "dir": "ltr",
+        "width": 255.12555330075264,
+        "height": 8.25,
+        "transform": [
+          8.49750041,
+          0,
+          0,
+          8.25,
+          306.14181518,
+          455.85040283
+        ],
+        "fontName": "g_d0_f3",
+        "hasEOL": true
+      }
+    ]
+  }
+]
