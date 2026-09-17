@@ -173,13 +173,46 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     await page.locator("a.chatPageLink", { hasText: "other source" }).click();
     await page.waitForSelector('[data-page="1"] .pdfCitationMark');
     assert((await page.textContent('[data-page="1"] .textLayer')).includes(quote), "citation resolved against the requested document");
-    for (const [text, message] of [["This passage does not exist.", "could not be located"], ["Repeated source passage.", "more than once"]]) {
+    for (const [text, message] of [["This passage does not exist.", "could not be located"], ["Repeated source passage.", "More than one passage"]]) {
       await page.goto(`${server.base}/?page=${target.id}&pdf_page=1&quote=${encodeURIComponent(text)}&ws=${account.ws}`);
       await page.locator('.pdfCitationNotice', { hasText: message }).waitFor();
       assertEq(await page.locator('.pdfCitationMark').count(), 0, "unresolved reference does not highlight guessed text");
       await page.locator(".chatInputArea").click();
       await until(async () => await page.locator('.pdfCitationNotice').count() === 0, { what: "clicking elsewhere dismisses an unresolved reference" });
     }
+    assertNoProblems(page);
+    await page.goto(`${server.base}/?page=${pageId}&ws=${account.ws}`);
+    await waitForPdf(page);
+  });
+
+  await step("pdf: fuzzy citations align with source glyphs and reject changed numbers or competing passages", async () => {
+    const text = "We carefully measured 53 atoms under stable experimental conditions";
+    const quote = text.replace("carefully", "carefuly");
+    const pdf = makePdf([{ lines: [text], box: [900, 792] }, { lines: [text, text], box: [900, 792] }]);
+    const up = await account.upload("/api/uploads", pdf, "fuzzy-citation.pdf", "application/pdf");
+    const target = await account.api(`/api/blocks/by-doc/${up.doc_id}`, { method: "POST", body: { default_title: "Fuzzy citation source", source_url: up.source_url } });
+    const before = await account.api(`/api/blocks/${target.id}/subtree`);
+    const href = (number, value) => `${server.base}/?page=${target.id}&pdf_page=${number}&quote=${encodeURIComponent(value)}&ws=${account.ws}`;
+    await page.goto(href(1, quote));
+    await page.locator('.pdfCitationNotice', { hasText: "approximate text match" }).waitFor();
+    const aligned = () => page.evaluate(text => {
+      const mark = document.querySelector('[data-page="1"] .pdfCitationMark')?.getBoundingClientRect();
+      const span = [...document.querySelectorAll('[data-page="1"] .textLayer span')].find(s => s.textContent === text);
+      if (!mark || !span) return false;
+      const range = document.createRange(); range.selectNodeContents(span);
+      const box = range.getBoundingClientRect();
+      return ['left', 'top', 'width', 'height'].every(k => Math.abs(mark[k] - box[k]) < 3);
+    }, text);
+    await until(aligned, { what: "approximate citation covers the actual source glyphs" });
+    await page.keyboard.press("Escape");
+    await until(async () => await page.locator('.pdfCitationMark, .pdfCitationNotice').count() === 0, { what: "fuzzy citation and notice dismiss together" });
+    for (const [number, value, message] of [[1, quote.replace("53", "54"), "could not be located"], [2, quote, "More than one passage"]]) {
+      await page.goto(href(number, value));
+      await page.locator('.pdfCitationNotice', { hasText: message }).waitFor();
+      assertEq(await page.locator('.pdfCitationMark').count(), 0, "unsafe or ambiguous approximate citation has no highlight");
+    }
+    const after = await account.api(`/api/blocks/${target.id}/subtree`);
+    assertEq(JSON.stringify(after.block.children), JSON.stringify(before.block.children), "fuzzy citation creates no annotations or notes");
     assertNoProblems(page);
     await page.goto(`${server.base}/?page=${pageId}&ws=${account.ws}`);
     await waitForPdf(page);

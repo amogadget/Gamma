@@ -1,5 +1,5 @@
-// Optional regression against the original public paper (arXiv:1904.06560).
-// node tests/e2e/pdfCitationPaper.mjs /path/to/1904.06560.pdf [screenshot-dir]
+// Optional regression against a public paper (defaults to arXiv:1904.06560).
+// node tests/e2e/pdfCitationPaper.mjs /path/to/paper.pdf [screenshot-dir] [fixture-json]
 // Uses an isolated backend; never opens or writes the user's library.
 import fs from "node:fs";
 import path from "node:path";
@@ -7,19 +7,20 @@ import { Account, Server, assert, assertEq, assertNoProblems, launchBrowser, ope
 import { citationRuns, matchCitation } from "../../src/pdf/pdfCitation.js";
 
 const input = process.argv[2];
-if (!input) throw new Error("Pass the path to arXiv:1904.06560.pdf");
+if (!input) throw new Error("Pass the path to the PDF matching the fixtures");
 const screenshots = process.argv[3] && path.resolve(process.argv[3]);
 if (screenshots) fs.mkdirSync(screenshots, { recursive: true });
-const cases = JSON.parse(fs.readFileSync(new URL("../fixtures/pdfCitationPaper.json", import.meta.url)));
+const cases = JSON.parse(fs.readFileSync(process.argv[4] || new URL("../fixtures/pdfCitationPaper.json", import.meta.url)));
+assert(cases.length > 0, "at least one citation fixture");
 const server = new Server();
 let browser;
 try {
   await server.start();
   server.manage("create-user", "citation-test", "test-password");
   const account = await new Account(server, "citation-test", "test-password").login();
-  const up = await account.upload("/api/uploads", fs.readFileSync(input), "1904.06560.pdf", "application/pdf");
+  const up = await account.upload("/api/uploads", fs.readFileSync(input), path.basename(input), "application/pdf");
   const created = await account.api(`/api/blocks/by-doc/${up.doc_id}`, { method: "POST", body: {
-    default_title: "A quantum engineer's guide to superconducting qubits", source_url: up.source_url,
+    default_title: cases[0].title || "A quantum engineer's guide to superconducting qubits", source_url: up.source_url,
   } });
   const links = cases.map(c => `[p. ${c.page}](/?page=${created.id}&pdf_page=${c.page}&quote=${encodeURIComponent(c.quote)})`);
   await account.api(`/api/chats/${created.id}`, { method: "PUT", body: { messages: [
@@ -34,7 +35,8 @@ try {
     await page.getByRole("link", { name: `p. ${c.page}`, exact: true }).click();
     const mark = page.locator(`[data-page="${c.page}"] .pdfCitationMark`);
     await mark.first().waitFor();
-    assertEq(await page.locator(".pdfCitationNotice").count(), 0, `p.${c.page}: resolves without a warning`);
+    if (c.approximate) await page.locator('.pdfCitationNotice', { hasText: "approximate text match" }).waitFor();
+    else assertEq(await page.locator(".pdfCitationNotice").count(), 0, `p.${c.page}: resolves without a warning`);
     const aligned = () => page.evaluate(({ number, expected }) => {
       const root = document.querySelector(`[data-page="${number}"]`);
       const marks = [...root.querySelectorAll('.pdfCitationMark')];
@@ -75,10 +77,9 @@ try {
   }
   const after = await account.api(`/api/blocks/${created.id}/subtree`);
   assertEq(JSON.stringify(after.block.children), JSON.stringify(before.block.children), "no annotation or note was created");
-  assert(cases.length === 3);
 } finally {
   if (browser) await browser.close();
   await server.stop();
 }
-console.log("3/3 real-paper citation scenarios passed");
+console.log(`${cases.length}/${cases.length} real-paper citation scenarios passed`);
 process.exit(0);
