@@ -1,6 +1,6 @@
 # GitHub Actions
 
-Four workflows live in `.github/workflows/`. A merge to `main` publishes
+Five workflows live in `.github/workflows/`. A merge to `main` publishes
 only the Docker image. The desktop app and the extension are released by
 dispatching their workflows — the `release` skill does that — and nothing
 is bumped or tagged by hand: versions are computed from the tags.
@@ -11,6 +11,13 @@ is bumped or tagged by hand: versions are computed from the tags.
 | `desktop` | `desktop.yml` | manual dispatch only (`release` skill) | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files → GitHub Release `v<version>`; the MSIX artifact + a Microsoft Store submission when the secrets exist; a Docker tag `<version>` |
 | `extension` | `extension.yml` | manual dispatch only (`release` skill) | `gamma-connector-<version>.zip` → GitHub Release `extension-v<version>` |
 | `docker` | `docker.yml` | every push to `main`; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64 |
+| `Codex plugin package` | `codex-plugin.yml` | relevant PRs or manual dispatch | installer tests on Windows/macOS/Linux and preview plugin release assets |
+
+The `desktop` workflow also builds the versioned Gamma PDF plugin ZIP, setup
+scripts for Windows and macOS/Linux, and checksums. Its publish job waits for
+that build and uploads the assets onto the same Gamma release. This does not
+require the desktop app to use the plugin; browser and self-hosted users install
+it through External assistants. Build-only runs retain these as CI artifacts.
 
 ```
 PR → main ──▶ check (pytest, npm test + build, e2e, extension zip)   ← merge skill waits for this

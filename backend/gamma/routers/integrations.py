@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from ..auth import require_user, require_ws
 from ..db import connect_users_db
 from ..integrations import create_token
+from ..mcp_oauth import public_base
 
 router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
@@ -31,11 +32,18 @@ class TokenCreate(BaseModel):
 def list_tokens(request: Request, response: Response):
     username, ws = _owner(request)
     response.headers["Cache-Control"] = "no-store"
+    try:
+        base = public_base(request)
+        oauth_error = None
+    except HTTPException as exc:
+        base = str(request.base_url).rstrip("/")
+        oauth_error = str(exc.detail)
     with connect_users_db() as conn:
         rows = conn.execute("SELECT id, name, created_at, expires_at FROM integration_tokens "
                             "WHERE username = ? AND workspace_id = ? ORDER BY created_at DESC", (username, ws))
         return {"tokens": [dict(zip(("id", "name", "created_at", "expires_at"), r)) for r in rows],
-                "workspace_id": ws, "mcp_url": str(request.base_url).rstrip("/") + "/mcp"}
+                "workspace_id": ws, "mcp_url": base + "/mcp", "oauth_available": oauth_error is None,
+                "oauth_error": oauth_error}
 
 
 @router.post("/tokens", status_code=201)

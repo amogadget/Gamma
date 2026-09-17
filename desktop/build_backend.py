@@ -49,6 +49,8 @@ def main():
         "--paths", str(REPO / "backend"),
         # The SPA the server serves; backend_entry points GAMMA_STATIC_DIR here.
         "--add-data", f"{frontend_dist}{sep}frontend_dist",
+        "--add-data", f"{REPO / 'backend' / 'gamma' / 'mcp_paper_picker.html'}{sep}gamma",
+        "--add-data", f"{REPO / 'backend' / 'gamma' / 'mcp_icon.png'}{sep}gamma",
         # uvicorn resolves loop/protocol classes from strings at runtime.
         "--collect-all", "uvicorn",
         "--collect-all", "websockets",  # uvicorn loads its websocket protocol lazily

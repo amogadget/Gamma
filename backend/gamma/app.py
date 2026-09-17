@@ -11,6 +11,7 @@ from .auth import session_middleware
 from .db import connect_data_db, connect_pages_db, connect_users_db
 from .logbuf import log, setup_logging
 from .mcp_server import GammaMCP
+from .mcp_oauth import router as mcp_oauth_router
 from .routers import (
     admin,
     ai,
@@ -117,6 +118,7 @@ def create_app() -> FastAPI:
     app.include_router(chats.history_router)
     app.include_router(prefs.router)
     app.include_router(integrations.router)
+    app.include_router(mcp_oauth_router)
     app.router.routes.append(mcp.route())
     app.include_router(metadata.router)
     app.include_router(search.router)

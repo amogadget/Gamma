@@ -5,6 +5,7 @@ every request, so removing membership also removes integration access.
 """
 
 import hashlib
+import json
 import secrets
 import time
 
@@ -18,9 +19,9 @@ def token_digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_token(username: str, ws: str, name: str, days: int) -> dict:
+def create_token(username: str, ws: str, name: str, days: int, *, oauth_resource: str | None = None) -> dict:
     now = int(time.time())
-    token = "gamma_" + secrets.token_urlsafe(32)
+    token = ("gamma_oauth_" if oauth_resource else "gamma_") + secrets.token_urlsafe(32)
     item = {"id": secrets.token_hex(16), "name": name, "workspace_id": ws,
             "created_at": page_now(), "expires_at": now + days * 86400}
     with connect_users_db() as conn:
@@ -32,13 +33,21 @@ def create_token(username: str, ws: str, name: str, days: int) -> dict:
             raise HTTPException(400, "Revoke an existing connection before creating another (limit 20).")
         conn.execute("INSERT INTO integration_tokens VALUES (?, ?, ?, ?, ?, ?, ?)",
                      (item["id"], token_digest(token), username, ws, name, item["created_at"], item["expires_at"]))
+        if oauth_resource:
+            conn.execute("INSERT INTO mcp_oauth VALUES ('access', ?, ?, ?)",
+                         (token_digest(token), json.dumps({"resource": oauth_resource}), item["expires_at"]))
     return {**item, "token": token}
 
 
-def resolve_token(token: str) -> tuple[str, str] | None:
+def resolve_token(token: str, resource: str | None = None) -> tuple[str, str] | None:
     if not token.startswith("gamma_") or len(token) > 128:
         return None
     with connect_users_db() as conn:
+        if token.startswith("gamma_oauth_"):
+            audience = conn.execute("SELECT value FROM mcp_oauth WHERE kind = 'access' AND key_hash = ? AND expires_at > ?",
+                                    (token_digest(token), int(time.time()))).fetchone()
+            if not audience or json.loads(audience[0]).get("resource") != resource:
+                return None
         row = conn.execute(
             "SELECT t.username, t.workspace_id FROM integration_tokens t "
             "JOIN users u ON u.username = t.username "

@@ -20,6 +20,7 @@ import { fileScenarios } from "./scenarios/files.mjs";
 import { collabScenarios } from "./scenarios/collab.mjs";
 import { shareScenarios } from "./scenarios/share.mjs";
 import { settingsScenarios } from "./scenarios/settings.mjs";
+import { mcpScenarios } from "./scenarios/mcp.mjs";
 import { mentionScenarios } from "./scenarios/mentions.mjs";
 import { transferScenarios } from "./scenarios/transfers.mjs";
 import { inkScenarios } from "./scenarios/ink.mjs";
@@ -80,6 +81,7 @@ try {
   });
 
   await settingsScenarios(env);
+  await mcpScenarios(env);
   await mentionScenarios(env);
   await transferScenarios(env);
   const notes = await noteScenarios(env);

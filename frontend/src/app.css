@@ -4897,3 +4897,14 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   pointer-events: none;
 }
 .pdfViewer.inkSelect .pdfPageWrap { cursor: default; }
+.mcpConsent { max-width: 480px; }
+.mcpConsentPage { overflow: auto; }
+.mcpConsentPage .loginPage { padding: 24px 12px; }
+.mcpConsent p { line-height: 1.5; }
+.mcpCallback { overflow-wrap: anywhere; }
+.mcpPermissions { margin: 8px 0 16px; padding: 16px; border: 1px solid var(--border-subtle); border-radius: 8px; }
+.mcpPermissions ul { padding-left: 18px; margin: 10px 0; line-height: 1.6; font-size: 13px; }
+.mcpPermissions p { margin-bottom: 0; }
+.mcpConnectionDetails { margin: 16px 0; font-size: 13px; }
+.mcpConnectionDetails summary { cursor: pointer; color: var(--text-secondary); }
+.mcpConsentActions { display: grid; gap: 8px; margin-bottom: 16px; }

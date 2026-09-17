@@ -61,6 +61,7 @@ import {
 import { loadSession, saveSession, clearSession, setSessionScope } from "./sessionState";
 import { ROLE_LABEL, useAccounts, workspaceMeta } from "./settingsWorkspace";
 import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage, WorkspaceUnavailablePage } from "./LoginPage";
+import { McpAuthorization } from "./McpConsent";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
 import { useBlockHistory } from "./blockHistory.js";
 import { InkToolbar } from "./inkLayer";
@@ -294,6 +295,13 @@ function ShareInviteBox({ exclude, value, onChange }) {
 }
 
 export default function App() {
+  // Authorization must never mount library effects (saved-page restore,
+  // autosave, navigation hotkeys). They can otherwise replace its URL.
+  const requestId = new URLSearchParams(window.location.search).get("gamma_oauth");
+  return requestId ? <McpAuthorization requestId={requestId} /> : <LibraryApp />;
+}
+
+function LibraryApp() {
   const params = new URLSearchParams(window.location.search);
   const initialUrl = params.get("src") || params.get("url") || "";
   const initialShare = params.get("share") || "";

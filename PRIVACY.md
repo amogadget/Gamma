@@ -52,11 +52,19 @@ needs them. What is sent is limited to what the feature requires:
   configured (for example Anthropic, OpenAI, or a server you host) using
   your own API key or account. Their privacy policies apply to that data.
   Your keys are stored only in your Gamma data directory.
-- **External assistants (MCP)**: when you create a workspace connection and give
-  its token to Codex or another MCP client, that client can read the workspace's
+- **External assistants (MCP)**: when you approve a workspace in Gamma's browser
+  sign-in flow, or create a manual token and give it to an MCP client, that client can read the workspace's
   pages, notes, highlights, metadata, and extracted PDF text. Retrieved content
+  includes titles and page IDs returned by the optional paper picker before you
+  select a paper. Selecting **Use this paper** sends its title and Gamma URL
+  (including the page and workspace IDs) as a message in your assistant's
+  conversation, along with any question you enter in the picker. The picker
+  itself loads no third-party scripts and receives no connection tokens. Content
   is handled by the assistant and its provider under their policies. Gamma
-  stores only a hash of the connection token; tokens expire and can be revoked
+  stores only a hash of the connection token. Browser sign-in also stores client
+  registration metadata and temporary authorization/consent records; authorization
+  codes are stored as hashes and expire after two minutes. Tokens expire after
+  90 days and can be revoked
   in Settings → AI → External assistants. This does not send data to the Gamma
   developer or require configuring an AI provider inside Gamma.
 - **Update checks** (desktop app, non-Store installs): the app asks GitHub

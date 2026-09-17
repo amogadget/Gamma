@@ -368,8 +368,35 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  codex-plugin:
+    needs: meta
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Test plugin packaging and setup
+        run: python -m unittest discover -s tools -p 'test_*codex*.py'
+      - name: Build plugin release assets
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: python tools/release_codex_plugin.py --output dist/codex-plugin --version "$VERSION" --repo "$REPO"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: gamma-codex-plugin
+          path: |
+            dist/codex-plugin/*.zip
+            dist/codex-plugin/*.ps1
+            dist/codex-plugin/*.sh
+            dist/codex-plugin/*SHA256SUMS.txt
+          if-no-files-found: error
+
   publish:
-    needs: [meta, desktop]
+    needs: [meta, desktop, codex-plugin]
     if: needs.meta.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -384,6 +411,10 @@ jobs:
           path: assets
           pattern: desktop-*
           merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: gamma-codex-plugin
+          path: assets
       - name: Release notes
         shell: bash
         env:
@@ -428,6 +459,12 @@ jobs:
             echo "## Browser extension"
             echo
             echo "The Gamma Connector has its own releases, tagged \`extension-v<version>\`: [latest extension release](https://github.com/$REPO/releases?q=extension-v&expanded=true)."
+            echo
+            echo "## Gamma PDF plugin for Codex"
+            echo
+            echo "[Plugin ZIP]($base/gamma-codex-plugin-$VERSION.zip) · [Windows setup]($base/install-gamma-codex.ps1) · [macOS/Linux setup]($base/install-gamma-codex.sh)"
+            echo
+            echo "In Gamma, open Settings → AI → External assistants → Codex CLI and copy the setup command. It installs the plugin and connects your Gamma server, then asks you to approve a workspace in your browser. Requires the Codex CLI; works with browser and self-hosted Gamma."
             echo
             echo "## Server (Docker)"
             echo

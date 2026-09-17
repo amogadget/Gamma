@@ -1,7 +1,25 @@
 import React from "react";
 import { API, apiJson, copyText } from "./utils";
-import { PaneHead, Section, Row } from "./settingsKit";
+import { PaneHead, Section, Row, Segmented, Step } from "./settingsKit";
 import { LinkIcon } from "./icons";
+import { codexSetupCommand } from "./codexSetup";
+
+function CopyField({ label, value, action, rows = 2 }) {
+  const [status, setStatus] = React.useState("");
+  React.useEffect(() => setStatus(""), [value]);
+  const copy = async () => {
+    try { setStatus(await copyText(value) ? "Copied. You can paste it now." : "Select the text above and copy it manually."); }
+    catch { setStatus("Select the text above and copy it manually."); }
+  };
+  return <div className="integrationDetails">
+    <textarea className="aiKeyInput" aria-label={label} readOnly rows={rows} value={value}
+      onFocus={(event) => event.target.select()} />
+    <div className="integrationActions">
+      <button className="uiBtn" onClick={copy}>{action}</button>
+      <span className="settingDesc" role="status">{status}</span>
+    </div>
+  </div>;
+}
 
 export function IntegrationSettings({ workspaceId }) {
   const [data, setData] = React.useState(null);
@@ -9,14 +27,26 @@ export function IntegrationSettings({ workspaceId }) {
   const [secret, setSecret] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState("");
+  const [method, setMethod] = React.useState("settings");
+  const [platform, setPlatform] = React.useState(() => /Windows/i.test(navigator.userAgent) ? "windows" : "unix");
+  const [loadError, setLoadError] = React.useState("");
   const endpoint = `${API}/integrations/tokens?ws=${encodeURIComponent(workspaceId)}`;
   React.useEffect(() => {
     let active = true;
-    apiJson(endpoint).then((value) => { if (active) setData(value); })
-      .catch((err) => { if (active) setMessage(err.message); });
-    return () => { active = false; };
+    setData(null); setSecret(null); setMessage(""); setLoadError("");
+    const load = () => apiJson(endpoint).then((value) => { if (active) { setData(value); setLoadError(""); } })
+      .catch((err) => { if (active) setLoadError(err.message); });
+    load();
+    window.addEventListener("focus", load);
+    const visible = () => { if (document.visibilityState === "visible") load(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", load);
+      document.removeEventListener("visibilitychange", visible);
+    };
   }, [endpoint]);
-  const refresh = async () => setData(await apiJson(endpoint));
+  const refresh = async () => { setData(await apiJson(endpoint)); setLoadError(""); };
   const create = async () => {
     setBusy(true); setMessage("");
     try {
@@ -33,21 +63,65 @@ export function IntegrationSettings({ workspaceId }) {
       await apiJson(`${API}/integrations/tokens/${id}?ws=${encodeURIComponent(workspaceId)}`, { method: "DELETE" });
       if (secret?.id === id) setSecret(null);
       await refresh();
-      setMessage("Connection revoked.");
+      setMessage("Assistant disconnected. It can no longer access this workspace.");
     } catch (err) { setMessage(err.message); }
     finally { setBusy(false); }
   };
-  const copy = async (text) => {
-    try { setMessage(await copyText(text) ? "Copied." : "Could not copy. Select the text and copy it manually."); }
-    catch { setMessage("Could not copy. Select the text and copy it manually."); }
-  };
   const config = data ? `[mcp_servers.gamma]\nurl = ${JSON.stringify(data.mcp_url)}\nbearer_token_env_var = "GAMMA_TOKEN"` : "";
+  const setup = data ? codexSetupCommand(data.mcp_url, platform) : "";
   return <>
     <PaneHead icon={LinkIcon} title="External assistants">
-      Let Codex and other assistants read this workspace's pages, notes, highlights, and PDF text.
-      Retrieved content is sent to the assistant's provider. Connections cannot edit your library.
+      Connect Codex or another assistant to read your pages, notes, highlights, and PDFs.
+      You choose which workspace to share. Your assistant cannot edit your library.
     </PaneHead>
-    <Section title="New connection">
+    {loadError ? <div className="integrationDetails" role="alert">
+      <p>Could not load your connections. {loadError}</p>
+      <button className="uiBtn" onClick={() => refresh().catch((err) => setLoadError(err.message))}>Try again</button>
+    </div> : null}
+    <Section title="Connect an assistant">
+      {data ? <div className="integrationDetails">
+        {data.oauth_available ? <>
+          <div role="group" aria-label="Connection method">
+            <Segmented value={method} onChange={setMethod} options={[["settings", "Assistant settings"], ["terminal", "Codex CLI"]]} />
+          </div>
+          <Step n={1} title={method === "settings" ? "Add Gamma to your assistant" : "Install and connect Gamma PDF"}
+            hint={method === "settings" ? "In your assistant's settings, add an MCP server with this URL." : "Run this command on the computer where you use Codex. It installs the plugin and opens Gamma sign-in."}>
+            {method === "settings"
+              ? <CopyField key="url" label="Gamma MCP server URL" value={data.mcp_url} action="Copy server URL" />
+              : <>
+                <div role="group" aria-label="Terminal platform">
+                  <Segmented value={platform} onChange={setPlatform} options={[["windows", "Windows PowerShell"], ["unix", "macOS / Linux"]]} />
+                </div>
+                <CopyField key="commands" label="Codex setup command" value={setup} action="Copy setup command" rows={4} />
+                <p className="settingDesc">Requires the <a href="https://learn.chatgpt.com/docs/cli" target="_blank" rel="noreferrer">Codex CLI</a>.
+                  Downloads the setup script and plugin from <a href="https://github.com/tim4431/Gamma/releases/latest" target="_blank" rel="noreferrer">Gamma's latest release</a>.</p>
+              </>}
+          </Step>
+          <Step n={2} title="Sign in and choose a workspace"
+            hint="Follow your assistant's sign-in prompt. Approve read-only access in Gamma. No token to create or paste." />
+          <Step n={3} title="Start a new chat"
+            hint={method === "terminal" ? 'Mention @Gamma PDF and ask about a paper, or say “Let me choose a paper”.' : 'Try asking: “Use Gamma to find my notes about…”'} />
+          <p className="settingDesc">Keep Gamma reachable from your assistant. Shared content is handled by the assistant and its provider.</p>
+        </> : <>
+          <p>Browser sign-in is not available for this Gamma address yet.</p>
+          <p>Ask your server administrator to enable it, or open manual setup below to connect with a token.</p>
+          <details><summary>Server setup details</summary><p>{data.oauth_error}</p></details>
+        </>}
+      </div> : !loadError ? <p role="status">Loading connection settings…</p> : null}
+    </Section>
+    <Section title="Workspace access" action={<button className="uiBtn sm" onClick={() => refresh().catch((err) => setLoadError(err.message))}>Refresh connections</button>}>
+      {data ? data.tokens.length ? data.tokens.map((item) =>
+        <Row key={item.id} label={item.name}
+          hint={`${item.expires_at * 1000 <= Date.now() ? "Expired" : "Read-only · Expires"} ${new Date(item.expires_at * 1000).toLocaleDateString()}`}>
+          <button className="uiBtn" disabled={busy} onClick={() => revoke(item.id)}>Disconnect</button>
+        </Row>) : <div className="integrationDetails"><p>No assistants have access to this workspace yet.</p>
+          <p className="settingDesc">The workspace you choose on the approval screen determines what your assistant can read.</p></div> : null}
+    </Section>
+    {message ? <p role="status">{message}</p> : null}
+    <details className="integrationAdvanced">
+      <summary>Manual setup (advanced)</summary>
+      <div className="integrationDetails"><p>Use a token if your assistant does not support browser sign-in.</p></div>
+      <Section title="Create a token">
       <Row label="Connection name" hint="Read-only access to the current workspace. Expires after 90 days.">
         <div className="integrationCreateControls">
           <input className="aiKeyInput" aria-label="Connection name" value={name} maxLength={80}
@@ -57,29 +131,20 @@ export function IntegrationSettings({ workspaceId }) {
       </Row>
       {secret ? <div className="integrationDetails">
         <p>Copy this token now. Gamma will not show it again. Keep it private.</p>
-        <textarea className="aiKeyInput" aria-label="New integration token" readOnly rows={2} value={secret.token} />
+        <CopyField label="New integration token" value={secret.token} action="Copy token" />
         <div className="integrationActions">
-          <button className="uiBtn" onClick={() => copy(secret.token)}>Copy token</button>
           <button className="uiBtn" onClick={() => setSecret(null)}>Done</button>
         </div>
       </div> : null}
     </Section>
-    <Section title="Connect Codex">
+    <Section title="Add the token to Codex">
       {data ? <div className="integrationDetails">
         <p>Set the <code>GAMMA_TOKEN</code> environment variable to your token before starting Codex.
           Add this connection to <code>~/.codex/config.toml</code>, then restart Codex.</p>
-        <textarea className="aiKeyInput" aria-label="Codex MCP configuration" readOnly rows={4} value={config} />
-        <button className="uiBtn" onClick={() => copy(config)}>Copy configuration</button>
+        <CopyField label="Codex MCP configuration" value={config} action="Copy configuration" rows={4} />
         <p>Gamma must be running. For a remote server, its administrator must allow the server's hostname for MCP.</p>
       </div> : null}
     </Section>
-    <Section title="Your connections in this workspace">
-      {!data ? <p>Loading connections…</p> : data.tokens.length ? data.tokens.map((item) =>
-        <Row key={item.id} label={item.name}
-          hint={`${item.expires_at * 1000 <= Date.now() ? "Expired" : "Expires"} ${new Date(item.expires_at * 1000).toLocaleDateString()}`}>
-          <button className="uiBtn" disabled={busy} onClick={() => revoke(item.id)}>Revoke</button>
-        </Row>) : <p>No connections yet.</p>}
-    </Section>
-    {message ? <p role="status">{message}</p> : null}
+    </details>
   </>;
 }
