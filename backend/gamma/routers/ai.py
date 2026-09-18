@@ -1294,6 +1294,10 @@ def ai_chat(payload: AIChatRequest, request: Request):
                             mode = str(args.get("mode") or "replace").lower()
                             if mode in ("append", "prepend"):
                                 progress["mode"] = mode
+                            elif mode == "patch" and isinstance(args.get("find"), str):
+                                # patch: the preview swaps the passage in place.
+                                progress["mode"] = mode
+                                progress["find"] = args["find"]
                         else:
                             progress["parent_id"] = target
                             if args.get("after_id"):

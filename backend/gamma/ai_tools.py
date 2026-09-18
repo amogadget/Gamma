@@ -409,7 +409,7 @@ def _run_read_block(conn, ws: str, scope: dict, args: dict):
                  "summary": f"Read notes of {what}"}
 
 
-EDIT_MODES = ("replace", "append", "prepend")
+EDIT_MODES = ("replace", "append", "prepend", "patch")
 # Lines that start a paragraph-level construct: heading, list item, quote,
 # table row, fence, display math, rule.
 _BLOCKY_LINE = re.compile(r"^\s*(#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\||```|\$\$|---)")
@@ -433,6 +433,30 @@ def join_block_text(existing: str, addition: str, mode: str) -> str:
     return head + ("\n\n" if blank else "\n") + tail
 
 
+def patch_block_text(existing: str, find: str, replacement: str):
+    """The block text with its one occurrence of `find` replaced (an empty
+    replacement cuts it). Exact match, then a whitespace-relaxed one (any run
+    of spaces/newlines matches any other), so a model quoting a wrapped line
+    still hits. Returns (text, None) or (None, error message).
+    Mirrored in frontend editor/BlockTree.jsx (the streamed preview)."""
+    if not find:
+        return None, "error: patch needs `find` — the exact text to replace or cut"
+    n = existing.count(find)
+    if n == 1:
+        i = existing.index(find)
+        return existing[:i] + replacement + existing[i + len(find):], None
+    if n == 0:
+        loose = re.compile(r"\s+".join(re.escape(part) for part in find.split()))
+        hits = list(loose.finditer(existing))
+        if len(hits) == 1:
+            m = hits[0]
+            return existing[:m.start()] + replacement + existing[m.end():], None
+        n = len(hits)
+    if n == 0:
+        return None, "error: `find` text not found in the block — quote it exactly as read_block shows it"
+    return None, f"error: `find` matches {n} places in the block — include more surrounding text so it matches once"
+
+
 def _run_edit_block(conn, ws: str, scope: dict, args: dict):
     loaded, error = _load_scoped_block(conn, scope, args.get("block_id"))
     if error:
@@ -446,7 +470,16 @@ def _run_edit_block(conn, ws: str, scope: dict, args: dict):
     mode = str(args.get("mode") or "replace").strip().lower()
     if mode not in EDIT_MODES:
         return f"error: mode must be one of {', '.join(EDIT_MODES)}", None
-    if mode != "replace":
+    if mode == "patch":
+        # Patch rewrites one passage in place: `find` names it, `content`
+        # replaces it (empty = cut). The rest of the block is never retyped.
+        find = args.get("find")
+        if not isinstance(find, str):
+            return "error: patch needs `find` — the exact text to replace or cut", None
+        content, err = patch_block_text(block["content"] or "", find, content)
+        if err:
+            return err, None
+    elif mode != "replace":
         # Append/prepend never retype the existing text: the model sends only
         # the addition, joined on its own line(s). A blank line keeps a new
         # paragraph/heading/list/fence from gluing onto the existing text.
@@ -462,7 +495,8 @@ def _run_edit_block(conn, ws: str, scope: dict, args: dict):
     after_commit(ws, conn, apply_ops(
         conn, page_id, [{"op": "set", "id": block["id"], "content": content, "base": block["content"] or ""}],
         actor=scope.get("actor", ""), client="ai"))
-    verb = {"replace": "Edited", "append": "Appended to", "prepend": "Prepended to"}[mode]
+    verb = {"replace": "Edited", "append": "Appended to", "prepend": "Prepended to",
+            "patch": "Edited part of"}[mode]
     return (f'ok — block [{block["id"]}] updated' + (f" ({mode})" if mode != "replace" else ""),
             {"kind": "edit", "page_id": page_id, "block_id": block["id"], "mode": mode,
              "summary": f"{verb} a note in “{page_title[:60]}”"})
@@ -929,21 +963,28 @@ TOOLS = [
                 "makes `content` the block's ENTIRE new text — include everything that "
                 "should stay; \"append\" / \"prepend\" add `content` after / before the "
                 "existing text on its own line (send ONLY the addition — the existing "
-                "text is kept untouched, no read needed). Prefer append when asked to "
-                "add, extend, note something, or continue a block; use replace to "
-                "rewrite or fix. Use exact block ids from read_block (never page ids — "
+                "text is kept untouched, no read needed); \"patch\" replaces just the "
+                "passage `find` (quoted exactly as read_block shows it, occurring once) "
+                "with `content` — an empty `content` cuts it. Prefer append when asked "
+                "to add, extend, note something, or continue a block; patch to delete, "
+                "shorten or correct one part of a long block; replace only for a full "
+                "rewrite. Use exact block ids from read_block (never page ids — "
                 "titles change via rename_page). Editing a highlight block changes its "
                 "note text; the highlighted PDF passage itself cannot be changed."),
             "parameters": {
                 "type": "object",
                 "properties": {"block_id": {"type": "string"},
                                "mode": {"type": "string",
-                                        "enum": ["replace", "append", "prepend"],
-                                        "description": "replace (default), append or prepend"},
+                                        "enum": ["replace", "append", "prepend", "patch"],
+                                        "description": "replace (default), append, prepend or patch"},
+                               "find": {"type": "string",
+                                        "description": "patch only: the exact existing text "
+                                                       "to replace or cut (must occur once)"},
                                "content": {"type": "string",
                                            "description": "replace: the block's full new "
                                                           "markdown; append/prepend: only "
-                                                          "the text to add"}},
+                                                          "the text to add; patch: what "
+                                                          "replaces `find` (\"\" to cut it)"}},
                 "required": ["block_id", "content"],
             },
         },

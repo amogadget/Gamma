@@ -128,7 +128,7 @@ try {
   assert((await value()).includes("a&=b\n"), "Enter in display math stays in the equation");
   await reset();
   await page.keyboard.type("\\sq");
-  await page.locator(".latexAcItem").filter({ hasText: "\\sqrt" }).click();
+  await page.locator(".latexAcItem").filter({ hasText: "\\sqrt{}" }).click();
   await page.keyboard.type("x");
   assert.equal(await value(), "$\\sqrt{x}$", "mouse completion retains the editor/caret");
   for (const [text, pos] of [["", 0], ["```tex\n$$\n```", 8]]) {

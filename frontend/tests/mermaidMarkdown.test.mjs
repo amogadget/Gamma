@@ -3,7 +3,7 @@ import { test } from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
-import { mermaidFence, normalizeChatMarkdown, remarkMermaid } from "../src/shared/lib/mermaidMarkdown.js";
+import { mermaidFence, mermaidWidth, normalizeChatMarkdown, remarkMermaid, scanMermaidFences, setMermaidWidth } from "../src/shared/lib/mermaidMarkdown.js";
 
 const render = (text) => renderToStaticMarkup(React.createElement(ReactMarkdown, {
   remarkPlugins: [remarkMermaid], children: text,
@@ -39,4 +39,36 @@ test("copy fences round-trip source containing backticks", () => {
   assert(md.startsWith("````mermaid\n"));
   assert.match(render(md), /data-mermaid-pending="false"/);
   assert(render(md).includes("```literal```"));
+});
+
+test("a diagram's width lives in the fence info string and rides into the HTML", () => {
+  assert.equal(mermaidWidth("width=420"), 420);
+  assert.equal(mermaidWidth("theme=x width=420 other"), 420);
+  assert.equal(mermaidWidth("widths=1 xwidth=2"), null);
+  assert.equal(mermaidWidth(""), null);
+  const html = render("```mermaid width=300\nflowchart LR\nA-->B\n```");
+  assert.match(html, /data-mermaid-width="300"/);
+  assert.doesNotMatch(render("```mermaid\nflowchart LR\nA-->B\n```"), /data-mermaid-width/);
+});
+
+test("setMermaidWidth rewrites only the nth diagram's opening line", () => {
+  const note = [
+    "intro",
+    "```js\nconst a = 1;\n```",
+    "```mermaid\nflowchart LR\nA-->B\n```",
+    "> ```mermaid width=200 theme=dark\n> flowchart LR\n> C-->D\n> ```",
+    "~~~~Mermaid\nsequenceDiagram\n~~~~",
+  ].join("\n\n");
+  const fences = scanMermaidFences(note);
+  assert.deepEqual(fences.map((f) => [f.lang, f.width, f.prefix]), [["mermaid", null, ""], ["mermaid", 200, "> "], ["Mermaid", null, ""]]);
+  const sized = setMermaidWidth(note, 0, 480);
+  assert.match(sized, /\n```mermaid width=480\nflowchart LR\nA-->B\n```/);
+  assert.equal(sized.replace("```mermaid width=480", "```mermaid"), note, "nothing else changes");
+  // A quoted fence keeps its prefix and the rest of its meta; 0 clears.
+  assert.match(setMermaidWidth(note, 1, 333), /> ```mermaid theme=dark width=333\n/);
+  assert.match(setMermaidWidth(note, 1, 0), /> ```mermaid theme=dark\n> flowchart/);
+  assert.match(setMermaidWidth(note, 2, 50), /~~~~Mermaid width=50\nsequenceDiagram/);
+  assert.equal(setMermaidWidth(note, 3, 100), null, "a stale index edits nothing");
+  // A fence inside another fence's code is not a diagram.
+  assert.equal(scanMermaidFences("````md\n```mermaid\nx\n```\n````").length, 0);
 });

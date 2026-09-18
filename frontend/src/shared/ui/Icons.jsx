@@ -245,6 +245,9 @@ export const RefreshIcon = (p) => (
 export const HistoryIcon = (p) => (
   <Icon {...p}><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l3 2" /></Icon>
 );
+export const CodeIcon = (p) => (
+  <Icon {...p}><path d="m16 18 6-6-6-6" /><path d="m8 6-6 6 6 6" /></Icon>
+);
 export const TerminalIcon = (p) => (
   <Icon {...p}><path d="m4 17 6-6-6-6" /><path d="M12 19h8" /></Icon>
 );

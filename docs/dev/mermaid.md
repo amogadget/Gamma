@@ -3,8 +3,23 @@
 Notes and AI replies render closed `mermaid` Markdown fences as SVG diagrams.
 Use `/mermaid` in a note to insert a starter flowchart. Clicking a note's diagram
 opens the normal source editor; leaving the editor renders the updated diagram.
-The diagram toolbar offers Source, Copy source, and Download SVG. Ordinary code
-blocks keep their existing behavior.
+Hovering a diagram shows its toolbar — the same flat icon buttons as a note
+image's hover strip: show source (`</>`), copy source, download SVG. Ordinary
+code blocks keep their existing behavior.
+
+A note's diagram resizes like a note image: the right-edge grip
+(`shared/ui/ResizeGrip.jsx`, shared with `MdImage`) drags the width, and
+double-clicking it restores the natural size. The size is stored in the
+fence's info string after the language — `` ```mermaid width=420 `` —
+which other Markdown renderers ignore, so the source stays portable (the
+diagram analogue of the Obsidian `![alt|420]` image size). `setMermaidWidth`
+in `shared/lib/mermaidMarkdown.js` rewrites only the nth diagram's opening
+line (fences in quotes and list items included, in rendered order — the
+same nth-construct idiom as images and tables in `editor/MdTools.jsx`);
+`remarkMermaid` carries the width into the HTML as `data-mermaid-width`. The
+figure hugs the drawing even without a stored size (it reads Mermaid's own
+`max-width` cap), so the grip always sits at the diagram's edge. Read-only
+views and chat replies show no grip.
 
 Math in flowchart and sequence labels uses Mermaid's `$$...$$` delimiters, not
 the single-dollar syntax of surrounding Markdown. For example,
@@ -45,4 +60,6 @@ npm run e2e -- --only mermaid
 
 The browser scenarios cover notes, editing and reload, the slash command, chat
 streaming, multiple diagrams, errors, source copying, SVG downloads, theme
-changes, locked security settings, ordinary code, and Markdown round trips.
+changes, locked security settings, ordinary code, Markdown round trips, and
+the width grip (drag → `width=N` stored and kept across a reload, double-click
+clears it).

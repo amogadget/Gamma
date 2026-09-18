@@ -24,8 +24,9 @@ export async function mermaidScenarios(env) {
       const diagrams = page.locator(".mermaidDiagram");
       const first = diagrams.first();
       assertEq(await first.getAttribute("data-mermaid-source"), flow);
-      const ids = await page.locator(".mermaidPreview > svg").evaluateAll((els) => els.map((el) => el.id));
+      const ids = await page.locator(".mermaidPreview svg").evaluateAll((els) => els.map((el) => el.id));
       assertEq(new Set(ids).size, 2, "SVG IDs are unique");
+      await first.hover(); // the toolbar is a hover strip, like an image's
       await first.getByRole("button", { name: "Copy source", exact: true }).click();
       assertEq((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, "\n"), flow);
       assertEq(await page.locator(".blockEditorCm").count(), 0, "toolbar does not start editing");
@@ -40,10 +41,10 @@ export async function mermaidScenarios(env) {
 
       const initialTheme = await page.evaluate(() => document.documentElement.dataset.theme);
       for (const theme of initialTheme === "light" ? ["dark", "light"] : ["light", "dark"]) {
-        const oldId = await first.locator("svg").getAttribute("id");
+        const oldId = await first.locator(".mermaidSvg svg").getAttribute("id");
         await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
         await until(async () => {
-          const id = await first.locator("svg").getAttribute("id").catch(() => null);
+          const id = await first.locator(".mermaidSvg svg").getAttribute("id").catch(() => null);
           return id && id !== oldId;
         });
         assertEq(await first.getAttribute("data-mermaid-theme"), theme === "light" ? "default" : "dark");
@@ -65,7 +66,7 @@ export async function mermaidScenarios(env) {
 
       if (process.env.GAMMA_MERMAID_SCREENSHOT) await page.screenshot({ path: process.env.GAMMA_MERMAID_SCREENSHOT });
       await page.goto(`${server.base}/?ws=${alice.ws}`);
-      await newPageViaUi(page, "Mermaid starter");
+      const starter = await newPageViaUi(page, "Mermaid starter");
       await page.keyboard.type("/mermaid");
       await page.getByRole("button", { name: /Mermaid diagram/ }).click();
       await page.waitForFunction(() => window.getSelection()?.toString() === "Start", null, { timeout: 5000 });
@@ -80,6 +81,33 @@ export async function mermaidScenarios(env) {
       await page.locator(".mermaidPreview").filter({ hasText: "Edited" }).waitFor();
       await page.reload();
       await page.locator(".mermaidPreview").filter({ hasText: "Edited" }).waitFor();
+
+      // Resize: the image grip's drag writes `width=N` into the fence's info
+      // string, the figure follows it, double-click clears it again.
+      const figure = page.locator(".mermaidFigure");
+      const grip = figure.locator(".mdResizeGrip");
+      await figure.hover();
+      const startW = (await figure.boundingBox()).width;
+      const box = await grip.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 - 80, box.y + box.height / 2, { steps: 4 });
+      await page.mouse.up();
+      const stored = async () => {
+        const tree = await alice.api(`/api/blocks/${starter}/subtree`);
+        return (tree.block.children || []).map((b) => b.content).find((c) => c.includes("mermaid")) || "";
+      };
+      await until(async () => /```mermaid width=\d+/.test(await stored()));
+      const width = Number(/width=(\d+)/.exec(await stored())[1]);
+      assert(width < startW && width >= 60, `dragged width ${width} is narrower than ${startW}`);
+      await until(async () => Math.abs((await figure.boundingBox()).width - width) < 2, "figure takes the stored width");
+      await page.reload();
+      await page.locator(".mermaidPreview").filter({ hasText: "Edited" }).waitFor();
+      await until(async () => Math.abs((await figure.boundingBox()).width - width) < 2, "stored width survives a reload");
+      await figure.hover();
+      await grip.dblclick();
+      await until(async () => !/width=/.test(await stored()));
+      assertEq(await page.locator(".blockEditorCm").count(), 0, "resizing never opens the editor");
       assertNoProblems(page);
     } finally { await ctx.close(); }
   });
@@ -143,6 +171,7 @@ export async function mermaidScenarios(env) {
         const box = el.getBoundingClientRect(); return box.width > 0 && box.height > 0;
       })), "math labels have visible dimensions");
       const downloadEvent = page.waitForEvent("download");
+      await diagram.hover();
       await diagram.getByRole("button", { name: "Download SVG", exact: true }).click();
       const svg = await readFile(await (await downloadEvent).path(), "utf8");
       assertEq(await page.evaluate((source) => new DOMParser().parseFromString(source, "image/svg+xml").querySelectorAll("math").length, svg), 5);

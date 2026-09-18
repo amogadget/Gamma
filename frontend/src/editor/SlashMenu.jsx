@@ -4,6 +4,7 @@
 // editor/BlockTree.jsx owns the trigger detection, keyboard handling and state.
 import React, { useEffect } from "react";
 import { useCaretAnchored } from "./LatexEditor";
+import { TEXT_COLORS, colorSpan } from "./mdMarks";
 
 // Every command edits through ctx:
 //   { value, start, cursor, setText(newVal, selStart, selEnd),
@@ -111,11 +112,26 @@ export const SLASH_COMMANDS = [
     name: "date", label: "Today's date", glyph: "@", keywords: ["today", "now", "time"],
     run: (ctx) => replaceRange(ctx, new Date().toISOString().slice(0, 10)),
   },
+  // Colored text / background tint, Notion's palette written as Obsidian-
+  // compatible inline HTML (mdMarks TEXT_COLORS): an empty span with the
+  // caret inside, like the `**|**` of Ctrl+B. `hidden` keeps the sixteen
+  // entries out of the bare "/" list — type a color or "color".
+  ...TEXT_COLORS.flatMap(({ name, color }) => [false, true].map((background) => ({
+    name: `${name}-${background ? "background" : "text"}`,
+    label: `${name[0].toUpperCase()}${name.slice(1)} ${background ? "background" : "text"}`,
+    glyph: "A", glyphStyle: background ? { background: `${color}55`, borderRadius: 3 } : { color },
+    keywords: ["color", "colour", background ? "highlight" : "font", name],
+    hidden: true,
+    run: (ctx) => {
+      const open = colorSpan(color, background);
+      replaceRange(ctx, `${open}</span>`, open.length);
+    },
+  }))),
 ];
 
 export function filterSlashCommands(query) {
   const q = (query || "").toLowerCase();
-  if (!q) return SLASH_COMMANDS;
+  if (!q) return SLASH_COMMANDS.filter((c) => !c.hidden);
   const scored = [];
   for (const c of SLASH_COMMANDS) {
     const names = [c.name, ...(c.keywords || []), ...c.label.toLowerCase().split(/\s+/)];
@@ -147,7 +163,7 @@ export function SlashMenuPopup({ items, selected, anchor, onPick, title }) {
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => onPick(c)}
         >
-          <span className="slashMenuGlyph">{c.glyph}</span>
+          <span className="slashMenuGlyph" style={c.glyphStyle}>{c.glyph}</span>
           <span className="slashMenuLabel">{c.label}</span>
           {c.hint ? <span className="slashMenuHint">{c.hint}</span> : null}
         </button>

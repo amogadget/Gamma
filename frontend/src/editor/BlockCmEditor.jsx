@@ -16,7 +16,7 @@ import { findMathAtCursor, renderKatex } from "./LatexEditor";
 import { emptyLeftPair, escapedAt, leftDelimiterEdit, rightDelimiterAt } from "./latexInput";
 import { calloutType } from "./callouts";
 import { fenceInnerAt, highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
-import { insertLink, isUrl, scanImageSyntax, scanMarks, toggleMark } from "./mdMarks";
+import { insertLink, isUrl, scanColorSpans, scanImageSyntax, scanMarks, toggleMark } from "./mdMarks";
 import { assetUrl } from "../shared/lib/utils";
 
 // All CLOSED math spans in the text: [{from, to, display}] with from/to
@@ -362,6 +362,22 @@ function buildInlineDecos(state, labelsRef) {
     ranges.push(Decoration.replace({}).range(to - dlen, to));
   }
 
+  // Colored runs (`<span style="color:…">` / background tints, mdMarks
+  // scanColorSpans — the Obsidian-compatible inline HTML the "/" color
+  // commands write): tags hidden, the text shown in its color; touched, the
+  // raw markup comes back like any other mark.
+  for (const s of scanColorSpans(text)) {
+    if (overlapsClaimed(s.from, s.to)) continue;
+    claimed.push([s.from, s.to]);
+    // An empty span (just inserted by the "/" command) stays raw too — there
+    // is nothing to color, and a zero-length mark decoration throws.
+    if (touched(s.from, s.to) || s.to - s.closeLen <= s.from + s.openLen) continue;
+    ranges.push(Decoration.replace({}).range(s.from, s.from + s.openLen));
+    ranges.push(Decoration.mark({ class: "cmColorSpan", attributes: { style: s.style } })
+      .range(s.from + s.openLen, s.to - s.closeLen));
+    ranges.push(Decoration.replace({}).range(s.to - s.closeLen, s.to));
+  }
+
   // [text](url): show just the text, link-styled.
   for (const m of text.matchAll(/\[([^\]\n]+)\]\(([^)\n]+)\)/g)) {
     const from = m.index, to = m.index + m[0].length;
@@ -394,7 +410,9 @@ function buildInlineDecos(state, labelsRef) {
   const quoteRun = [];
   const flushQuoteRun = () => {
     if (!quoteRun.length) return;
-    const co = quoteRun[0].line.text.match(/^> ?\[!(\w+)\][ \t]*/);
+    // The marker may carry Obsidian's fold flag ("[!note]-" / "+"), hidden
+    // with the rest of it (callouts.js CALLOUT_MARKER_RE).
+    const co = quoteRun[0].line.text.match(/^> ?\[!(\w+)\][-+]?[ \t]*/);
     const type = co ? calloutType(co[1]) : null;
     quoteRun.forEach(({ line, prefixLen, lineTouched }, i) => {
       let cls = "cmQuoteLine";

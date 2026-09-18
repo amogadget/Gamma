@@ -170,9 +170,17 @@ makes `content` the block's entire new text. `append` / `prepend` add
 sends only the addition and never retypes what is there; a blank line
 separates the two when either side is a heading, list, quote, table, fence,
 display math or multi-line (`join_block_text`, mirrored in `editor/BlockTree.jsx`
-for the streamed preview). The spec tells the model to prefer append for
-"add / extend / note that" and replace for rewrites. The action carries
-`mode`, and its chip reads "Appended to" / "Prepended to" / "Edited". Page
+for the streamed preview). `patch` rewrites one passage in place: `find`
+quotes the existing text (it must occur once — exact match first, then a
+whitespace-relaxed one so a wrapped quote still hits; zero or several hits
+are refused with the count) and `content` replaces it, an empty `content`
+cutting it, so deleting or correcting one sentence of a long block never
+retypes the rest (`patch_block_text`, also mirrored in `editor/BlockTree.jsx`).
+The spec tells the model to prefer append for
+"add / extend / note that", patch for deleting or fixing one part, and
+replace only for full rewrites. The action carries
+`mode`, and its chip reads "Appended to" / "Prepended to" / "Edited part of" /
+"Edited". Page
 roots are refused (titles go through `rename_page`); editing a highlight
 block edits its note text, never the anchored passage.
 `create_block` inserts a new block

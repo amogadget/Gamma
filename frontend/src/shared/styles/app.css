@@ -1064,8 +1064,10 @@ body {
   color: var(--text-secondary);
 }
 /* Callouts (callouts.js): "> [!note] Title" blockquotes. Each type sets
-   --co-color; tint and border derive from it so both themes work. */
-.blockRendered blockquote.callout {
+   --co-color; tint and border derive from it so both themes work. A foldable
+   one ("[!note]-" / "+") is a native <details> whose title is the <summary>,
+   with a chevron that turns when open. */
+.blockRendered :is(blockquote, details).callout {
   --co-color: var(--callout-note);
   border-left: 3px solid var(--co-color);
   border-radius: 6px;
@@ -1073,6 +1075,25 @@ body {
   background: color-mix(in srgb, var(--co-color) 8%, transparent);
   color: var(--text-primary);
 }
+.blockRendered details.callout > summary.calloutTitle {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.blockRendered details.callout > summary.calloutTitle::-webkit-details-marker { display: none; }
+.blockRendered details.callout > summary.calloutTitle::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 8px 2px 0;
+  border-right: 2px solid var(--co-color);
+  border-bottom: 2px solid var(--co-color);
+  transform: rotate(-45deg);
+  transition: transform 0.12s;
+}
+.blockRendered details.callout[open] > summary.calloutTitle::before { transform: rotate(45deg); }
+.blockRendered details.callout[open] > summary.calloutTitle { margin-bottom: 4px; }
 .blockRendered .callout-tip { --co-color: var(--callout-tip); }
 .blockRendered .callout-warning { --co-color: var(--callout-warning); }
 .blockRendered .callout-danger { --co-color: var(--callout-danger); }
@@ -1083,7 +1104,7 @@ body {
   color: var(--co-color);
   margin: 0 0 2px;
 }
-.blockRendered blockquote.callout p:last-child { margin-bottom: 0; }
+.blockRendered :is(blockquote, details).callout p:last-child { margin-bottom: 0; }
 /* Every note table renders inside MdTableWrap (editor/MdTools.jsx): the wrapper owns
    scrolling and, when editable, hosts the hover controls — "+" strips on the
    right/bottom edges and the column/row handle pills. */
@@ -1207,7 +1228,9 @@ body {
 .mdImgFrame:hover .mdImgTools { opacity: 1; pointer-events: auto; }
 .mdImgTools a.ctlBtn { text-decoration: none; }
 .mdImgTools .ctlBtn.danger:hover { background: rgba(224, 92, 92, 0.15); color: #e05c5c; }
-.mdImgResize {
+/* The right-edge drag grip shared by sized figures (note images, Mermaid
+   diagrams — shared/ui/ResizeGrip.jsx); each frame reveals it on hover. */
+.mdResizeGrip {
   position: absolute;
   top: 50%;
   right: -3px;
@@ -1222,8 +1245,8 @@ body {
   touch-action: none;
   transition: opacity 0.12s;
 }
-.mdImgFrame:hover .mdImgResize { opacity: 0.55; }
-.mdImgResize:hover, .mdImgResize:active { opacity: 0.9; }
+.mdImgFrame:hover .mdResizeGrip { opacity: 0.55; }
+.mdImgFrame .mdResizeGrip:hover, .mdImgFrame .mdResizeGrip:active { opacity: 0.9; }
 .mdImgCaption {
   display: block;
   margin: 2px 0 4px;

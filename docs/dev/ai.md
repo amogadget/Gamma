@@ -313,7 +313,7 @@ notes panel shows where the agent is, not just what it did.
   edit reloads the tree immediately (same guards as `onNotesChange`, plus
   never while the user has a block editor open), so the change is visible
   while the agent carries on.
-- `{"progress": {tool, id, block_id (+ mode) | parent_id (+ after_id), content}}`
+- `{"progress": {tool, id, block_id (+ mode, + find for patch) | parent_id (+ after_id), content}}`
   lines preview an `edit_block`/`create_block` call the model is still
   writing. `ai_client.sse_events` yields `tool_delta` events with the raw
   argument JSON so far, on all three wires (Anthropic `input_json_delta`,

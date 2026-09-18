@@ -3899,7 +3899,7 @@ function LibraryApp() {
       // Only blocks of THIS page can be previewed: an edit targets a block in
       // the tree, a create a parent in it (the page id = a top-level block).
       if (!inTree(ev.tool === "edit_block" ? ev.block_id : ev.parent_id)) return;
-      setAiLive({ tool: ev.tool, blockId: ev.block_id, parentId: ev.parent_id, afterId: ev.after_id, mode: ev.mode || "replace", content: ev.content || "" });
+      setAiLive({ tool: ev.tool, blockId: ev.block_id, parentId: ev.parent_id, afterId: ev.after_id, mode: ev.mode || "replace", find: ev.find, content: ev.content || "" });
       return;
     }
     const a = ev.action;
