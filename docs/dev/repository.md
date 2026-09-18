@@ -13,6 +13,7 @@ launcher, and desktop release workflows use these locations.
 | `frontend/public/` | Files copied as-is into the frontend build |
 | `desktop/` | Electron shell and desktop packaging |
 | `extension/` | Browser connector, loaded unpacked without a build step |
+| `sites/` | The gammapdf.com website: static pages deployed as a Cloudflare Worker; its build copies the branding, demos and screenshot from `docs/assets/` ([sites/README.md](../../sites/README.md)) |
 | `docs/dev/` | Architecture, implementation notes, and plans |
 | `docs/research/` | Design research: surveys, findings, and the reasoning behind chosen shapes |
 | `docs/user_guide.md` | User documentation |

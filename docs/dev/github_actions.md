@@ -1,7 +1,7 @@
 # GitHub Actions
 
-Five workflows live in `.github/workflows/`. A merge to `main` publishes
-only the Docker image. The desktop app and the extension are released by
+Six workflows live in `.github/workflows/`. A merge to `main` publishes
+only the Docker image and, when the site or its inputs changed, the website. The desktop app and the extension are released by
 dispatching their workflows — the `release` skill does that — and nothing
 is bumped or tagged by hand: versions are computed from the tags.
 
@@ -11,6 +11,7 @@ is bumped or tagged by hand: versions are computed from the tags.
 | `desktop` | `desktop.yml` | manual dispatch only (`release` skill) | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files → GitHub Release `v<version>`; the MSIX artifact + a Microsoft Store submission when the secrets exist; a Docker tag `<version>` |
 | `extension` | `extension.yml` | manual dispatch only (`release` skill) | `gamma-connector-<version>.zip` → GitHub Release `extension-v<version>` |
 | `docker` | `docker.yml` | every push to `main`; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64 |
+| `site` | `site.yml` | a push to `main` touching `sites/`, the artwork and demos it copies, or `PRIVACY.md`; or manual dispatch | gammapdf.com: `sites/dist` built and deployed as a Cloudflare Worker (static assets only; needs `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID`; [sites/README.md](../../sites/README.md)) |
 | `Codex plugin package` | `codex-plugin.yml` | PRs touching the plugin or its tooling, or manual dispatch | installer tests on Windows/macOS/Linux and preview plugin release assets (pins `checkout@v4`/`setup-python@v5`/`upload-artifact@v4`, older than the rule below) |
 
 The `desktop` workflow also builds the versioned Codex plugin ZIP, its setup
@@ -19,7 +20,8 @@ same release (`tools/release_codex_plugin.py`).
 
 ```
 PR → main ──▶ check (pytest, npm test + build, e2e, extension zip)   ← merge skill waits for this
-merge ───────▶ docker.yml  ghcr :latest                              ← the only push trigger
+merge ───────▶ docker.yml  ghcr :latest                              ← every merge
+         └──▶ site.yml    gammapdf.com                              ← only when sites/ or its inputs changed
 release skill ─┬──▶ desktop.yml  meta: version = max(package.json, newest v* tag + patch)
  (gh workflow  │        build Win/mac/Linux with that version pinned, smoke on all three
   run)         │        publish: Release v<version> (notes = commits since previous tag)
