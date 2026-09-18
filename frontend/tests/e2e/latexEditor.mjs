@@ -1,5 +1,5 @@
 // Standalone browser regression: real block editor, no backend or saved data.
-// Run from frontend: node tests/e2e/latexEditor.mjs
+// Run from frontend: npm run e2e:latex
 import assert from "node:assert/strict";
 import { build } from "esbuild";
 import { chromium } from "playwright";

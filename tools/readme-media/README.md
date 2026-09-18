@@ -6,7 +6,7 @@ The production research is in [demo-production.md](../../docs/research/demo-prod
 | Location | Contents |
 |---|---|
 | This directory | Recorders, renderers, shared helpers and [shot recipes](WORKFLOW.md) |
-| `docs/assets/demos/` | Published WebP animations, one per README slot |
+| `docs/assets/demos/` | Published WebP animations, including the retained connector demo |
 | `docs/assets/screenshots/` | Documentation stills |
 | `artifacts/readme-media/` | Ignored workspace export, private build, WebM recordings, timing files and QA frames |
 | `.claude/skills/readme-media/SKILL.md` | Agent entry point pointing here |
@@ -102,7 +102,7 @@ Notes uses an isolated server and imports `artifacts/readme-media/demo.zip`;
 it needs no demo login or suite workspace. The recorder checks the pasted image
 and its saved width after a reload.
 
-## Record the seven suite cases
+## Record the published suite cases
 
 The suite uses a disposable workspace on the curated demo account so AI shots
 can use its configured provider. The extension uses an isolated server/account
@@ -131,10 +131,6 @@ A failed recording leaves the workspace available for inspection; remove it
 after finishing. Never read account databases for credentials or commit
 cookies, passwords, exports, or raw recordings.
 
-`agent` and `download-and-chat` are two more `run-case.mjs` cases (they need
-the account's AI provider); `render-suite.py` writes their renders as
-`preview.webp` next to the capture and no README slot uses them.
-
 ## Delivery and review
 
 `render-suite.py <name>` re-renders one published slot; `all` renders every
@@ -148,8 +144,15 @@ contact sheets in `artifacts/readme-media/qa/`. Review the contact sheets and
 loop playback before updating README links. Timing manifests and render reports
 stay next to the raw recordings in scratch.
 
-The three `gen-*.py` files are GIF experiments that write to scratch; nothing
-calls them. `runtime.mjs` resolves Playwright through the frontend dependency,
+## Optional experiments
+
+The retained `agent` and `download-and-chat` cases need the account's AI
+provider. They are not part of README production: `render-suite.py` writes
+their renders as `preview.webp` next to the capture, and no README slot uses
+them. The ink-only renderer and the three `gen-*.py` GIF experiments are also
+retained for reuse; the GIF experiments write to scratch and have no callers.
+
+`runtime.mjs` resolves Playwright through the frontend dependency,
 so no second Node project is needed, and holds the recorders' shared pieces:
 `BASE`, `readSession`, the cursor dot, paced pointer travel and the curated
 page ids.

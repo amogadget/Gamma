@@ -16,7 +16,9 @@ export function renderMermaid(source, theme, cancelled = () => false) {
     if (cancelled()) return null;
     mermaid.initialize({
       startOnLoad: false, securityLevel: "strict", theme,
-      htmlLabels: false, suppressErrorRendering: true,
+      // Mermaid's KaTeX/MathML labels need foreignObject, including edge math.
+      // Strict mode still sanitizes labels; HTML layout is not loose security.
+      htmlLabels: true, suppressErrorRendering: true,
       maxTextSize: 50000, maxEdges: 500,
       secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "maxEdges", "suppressErrorRendering", "htmlLabels"],
     });

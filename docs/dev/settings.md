@@ -6,7 +6,7 @@ Where every setting lives, and how the Settings dialog is built.
 
 | Layer | Storage | Examples |
 |---|---|---|
-| Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/app/prefs.js](../../frontend/src/app/prefs.js)) | PDF viewer behavior (incl. the handwriting input rules and the tool strip's presets, eraser and lasso choices, `gamma-ink-*`), context budgets, agent permissions, prompts, the control size (`gamma-ui-scale`, applied pre-paint by `index.html` like the theme). Theme + flip-page-colors live here too but additionally sync per account (next row, `appearance` key) — localStorage is their instant-paint cache |
+| Per browser | `localStorage`, one `gamma-*` key per preference, all declared in `useAppPrefs()` ([frontend/src/app/prefs.js](../../frontend/src/app/prefs.js)) — except `gamma-link-name`, the share view's display name for a visitor without an account, owned by `src/collaboration/linkName.js` because the fetch wrapper reads it outside React | PDF viewer behavior (incl. the handwriting input rules and the tool strip's presets, eraser and lasso choices, `gamma-ink-*`), context budgets, agent permissions, prompts, the control size (`gamma-ui-scale`, applied pre-paint by `index.html` like the theme). Theme + flip-page-colors live here too but additionally sync per account (next row, `appearance` key) — localStorage is their instant-paint cache |
 | Session only | React state, nothing stored | the Ctrl+scroll text size of the notes list and the chat transcript (`useTextScale` in [Widgets.jsx](../../frontend/src/shared/ui/Widgets.jsx)) — resets on reload |
 | Per account, synced | `/api/prefs/{key}` (small JSON KV, `user_prefs` in `users.db`) | per account AND workspace: open tabs (`open-tabs`), the recently-viewed queue (`recent-views`), pinned folders (`pinned-folders`; pinned pages are a page property), reading positions (`read-pos`) — they name one workspace's pages; account-wide: active AI key (`ai-provider`), appearance (`appearance`: theme + flip page colors). Server wins on load, localStorage (keyed `user@workspace`) is the instant-paint cache. The recents-card cover thumbnails are workspace data, through their own `/api/page-snaps` store (`page_snaps` in the workspace's `data.db` — over the prefs size cap) |
 | Per account, server-only | AI provider entries (keys/OAuth tokens) under the reserved `ai-settings` prefs key (account-wide), managed via `/api/ai/providers*`; the browser only ever sees a masked hint | API keys, ChatGPT OAuth |
@@ -63,9 +63,10 @@ Shorter pages keep the main sidebar:
   per-paper metadata/text/index health table. Also linked from the Library
   preferences page and the library operations menu.
 - **Administration** (admins only): Users (accounts, each with its personal
-  workspaces) and Server (shared workspaces, server-wide storage defaults,
-  the Assistant connections section with the public server URL, server
-  backups and logs).
+  workspaces) and Server (the dashboard — build, uptime, warnings, the
+  update check — shared workspaces, server-wide storage defaults, the
+  Assistant connections section with the public server URL, server backups
+  and the log with its level filter; [user_db.md](user_db.md)).
 - **Diagnostics** (main sidebar): browser tracing and the browser session log.
 
 Administrators can confirm the **Public server URL** under Server. It is

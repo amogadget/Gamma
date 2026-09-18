@@ -9,12 +9,18 @@ import secrets
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 
 from .. import collab
-from ..auth import (SESSION_COOKIE, require_ws_writer, requested_ws, resolve_ws, session_lookup,
-                    share_access, share_lookup, share_scope_page, workspace_access)
+from ..auth import (ANONYMOUS_NAME, SESSION_COOKIE, actor_of, is_link_visitor, link_name, link_ratelimit,
+                    note_share_miss, require_ws_writer, requested_ws, resolve_ws, session_lookup, share_access,
+                    share_lookup, share_scope_page, workspace_access)
 from ..db import connect_pages_db
 from ..ops import OpError, OpsRequest, commit_ops, latest_seq, ops_since
 
 router = APIRouter(prefix="/api", tags=["collab"])
+
+# Link visitors (an anyone-with-the-link edit share) are rate limited per IP:
+# typing flushes a batch every few hundred ms at most, so this stops floods
+# without touching a real editor.
+LINK_OPS_PER_MINUTE = 600
 
 
 def _scope_page(request: Request, page_id: str):
@@ -33,6 +39,7 @@ async def post_ops(page_id: str, payload: OpsRequest, request: Request):
     batch and stored as the writer's presence. A workspace editor or an
     edit share."""
     ws = require_ws_writer(request)
+    link_ratelimit(request, "ops", LINK_OPS_PER_MINUTE, 60)
     scope = _scope_page(request, page_id)
     ops = [op.model_dump(exclude_unset=True) for op in payload.ops]
     cursor = None
@@ -40,7 +47,7 @@ async def post_ops(page_id: str, payload: OpsRequest, request: Request):
         cursor = {"block": payload.cursor.block[:64], "anchor": payload.cursor.anchor,
                   "head": payload.cursor.head}
     try:
-        result = commit_ops(ws, page_id, ops, actor=request.state.user or "",
+        result = commit_ops(ws, page_id, ops, actor=actor_of(request),
                             client=payload.client[:32], share_scoped=scope is not None,
                             cursor=cursor)
     except OpError as e:
@@ -74,7 +81,8 @@ def _socket_access(sock: WebSocket, page_id: str):
     session cookie, the workspace (``?ws=`` or the account's default) and
     the share token are resolved here with the same rules as HTTP
     (``auth.share_access``): a member joins with their workspace role; a
-    share token admits its audience, view or edit."""
+    share token admits its audience, view or edit. A visitor without an
+    account shows under the display name in ``?name=`` (else Anonymous)."""
     sess = session_lookup(sock.cookies.get(SESSION_COOKIE))
     sock.state.user = sess[0] if sess else None
     sock.state.is_guest = bool(sess and sess[1])
@@ -82,7 +90,13 @@ def _socket_access(sock: WebSocket, page_id: str):
     token = sock.query_params.get("share") or ""
     if token:
         share = share_lookup(token)
-        if not share or share["page_id"] != page_id:
+        if not share:
+            try:
+                note_share_miss(sock)
+            except HTTPException:
+                pass  # the socket is closed either way
+            return None
+        if share["page_id"] != page_id:
             return None
         level, _reason = share_access(share, sock)
         if not level:
@@ -101,7 +115,9 @@ def _socket_access(sock: WebSocket, page_id: str):
         if not row or row[0] != "root":
             return None
         seq = latest_seq(conn, page_id)
-    return ws, sock.state.user or "", sock.state.user or "Anonymous", can_edit, seq
+    if is_link_visitor(sock):
+        return ws, "", link_name(sock.query_params.get("name", "")), can_edit, seq
+    return ws, sock.state.user or "", sock.state.user or ANONYMOUS_NAME, can_edit, seq
 
 
 @router.websocket("/ws/page/{page_id}")

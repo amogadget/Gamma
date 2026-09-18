@@ -39,7 +39,7 @@ websocket-delivered state. Selectors the scenarios already use: `.folderNewBtn`
 (New page), `.titleEdit`, `.blockRow` / `.blockBody` (click opens the editor),
 `.blockEditorCm .cm-content`, `.sortableBlockWrap .dragHandle` → `.ctxMenuItem`,
 `[data-page="N"] .textLayer span`, `.plainTip .colorBtn`, `[data-hl-id]`,
-`.searchPopover .searchInput`, `button[aria-label='Share']` → `.sharePopover`,
+`.searchPopover .searchInput`, `button[aria-label='Share']` → `.shareDialog`,
 `.presenceBar .peerAvatar`, `.peerChips`. Editor rules that matter: plain
 Enter is a line break and Shift+Enter a new block (unless the
 `gamma-enter-new-note` preference is set), Escape does not close the editor

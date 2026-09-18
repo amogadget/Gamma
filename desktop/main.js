@@ -112,6 +112,7 @@ function appInfo() {
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     userDataDir: app.getPath('userData'),
+    version: app.getVersion(), // the sidecar reports it as its build (GAMMA_VERSION)
   };
 }
 

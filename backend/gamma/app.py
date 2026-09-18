@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, Response
 
 from . import config, migrations
+from . import version
 from .auth import session_middleware
 from .db import connect_data_db, connect_pages_db, connect_users_db
 from .logbuf import log, setup_logging
@@ -68,6 +69,7 @@ def _startup_maintenance():
     directory), create users.db on a fresh install, seed the first admin,
     then per workspace: prune orphaned uploads and apply the per-file
     schema statements (a restored backup gains page_ops, WAL, ...)."""
+    log.info(f"[startup] Gamma {version.label()}")
     try:
         done = migrations.ensure_current()
     except migrations.MigrationError as e:

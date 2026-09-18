@@ -4,7 +4,7 @@ import PdfViewer, { clampZoom } from "../pdf/PdfViewer";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { ExportDialog, ImportDialog } from "../transfers/ImportExport";
 import { parsePdfCitation } from "../pdf/pdfCitation.js";
-import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
+import { API, apiJson, withShare, withWorkspace, setCurrentWorkspace, getCurrentWorkspace, setLinkName, makeId, fmtBytes, getDocIdForUrl, isPdfFile, isMarkdownFile, metaSourceInfo, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson } from "../shared/lib/utils";
 import {
   BlockDropIndicator,
   ChatMarkdown,
@@ -26,7 +26,7 @@ import {
   ExternalLinkIcon, EyeIcon, EyeOffIcon, FileGlyph, FileIcon, FileTextIcon, FitWidthIcon, FolderGlyph,
   FilePlusIcon, PaperclipIcon, FolderIcon, FolderOpenIcon, FolderPlusIcon, GlobeIcon, HomeIcon, ImportIcon, InfoIcon, LabelGlyph, LabelIcon,
   LanguagesIcon, LanguagesOffIcon, LinkIcon, LogOutIcon, MaximizeIcon, MenuIcon, MinimizeIcon, PenIcon, PinIcon, PlusIcon,
-  RectSelectIcon, SearchIcon, SettingsIcon, ShieldIcon, SparklesIcon, TextCursorIcon, TrashIcon, TypeIcon, UploadIcon,
+  RectSelectIcon, RefreshIcon, SearchIcon, SettingsIcon, ShieldIcon, SparklesIcon, TextCursorIcon, TrashIcon, TypeIcon, UploadIcon,
   ScissorsIcon, UserIcon, UsersIcon, XIcon, ZoomInIcon, ZoomOutIcon,
   ServerIcon,
 } from "../shared/ui/Icons";
@@ -60,7 +60,7 @@ import {
   findBlock,
 } from "../shared/model/blockModel";
 import { loadSession, saveSession, clearSession, setSessionScope } from "./sessionState";
-import { ROLE_LABEL, useAccounts, workspaceMeta } from "../settings/SettingsWorkspace";
+import { ROLE_LABEL, workspaceMeta } from "../settings/SettingsWorkspace";
 import { AuthLoading, LoginPage, SessionConflictPage, ShareBlockedPage, WorkspaceUnavailablePage } from "../auth/LoginPage";
 import { McpAuthorization } from "../auth/McpConsent";
 import { THEMES, TRANSLATE_LANGS, useAppPrefs } from "./prefs";
@@ -71,8 +71,10 @@ import * as inkStore from "../ink/inkStore";
 import { usePageCollab } from "../collaboration/usePageCollab";
 import { applyOps, applyPatch, keepUiFlags } from "../shared/model/blockOps";
 import { PresenceBar } from "../collaboration/Presence";
+import { cleanLinkName, loadLinkName, saveLinkName, LINK_NAME_MAX } from "../collaboration/linkName";
 import SettingsDialog from "../settings/SettingsDialog";
-import { AccountPicker, QuotaMeter } from "../settings/SettingsKit";
+import { QuotaMeter, Section } from "../settings/SettingsKit";
+import { ShareDialog } from "../sharing/ShareDialog";
 import {
   addFolderTag,
   cleanFolderPath,
@@ -290,11 +292,6 @@ function CardCarousel({ label, children, className }) {
 
 // The share popover's invite box: the account directory as a picker, fetched
 // only while the popover is open (the box mounts with it).
-function ShareInviteBox({ exclude, value, onChange }) {
-  const accounts = useAccounts();
-  return <AccountPicker accounts={accounts} exclude={exclude} value={value} onChange={onChange} placeholder="Invite an account…" compact />;
-}
-
 export default function App() {
   // Authorization must never mount library effects (saved-page restore,
   // autosave, navigation hotkeys). They can otherwise replace its URL.
@@ -317,6 +314,8 @@ function LibraryApp() {
   const [readOnly, setReadOnly] = useState(shareMode);
   const [shareInfo, setShareInfo] = useState(null); // resolved share: {owner, role, canEdit, audience, viewer}
   const [shareGate, setShareGate] = useState(null); // "login" | "forbidden" | "missing" while the share can't open
+  const [linkName, setLinkNameState] = useState(""); // the share view's display name when the viewer has no account
+  const [renamingLink, setRenamingLink] = useState(false);
 
   // The workspace this tab works in and the ones the account may switch to
   // (from /api/session). Every API call carries the id (utils fetch
@@ -2237,9 +2236,8 @@ function LibraryApp() {
   // The owner's share of the open page: null = not loaded, {token: null} =
   // not shared, else {token, audience, role, users}. The link is derived.
   const [shareSettings, setShareSettings] = useState(null);
-  const [shareInviteDraft, setShareInviteDraft] = useState("");
+  const [shareOpen, setShareOpen] = useState(false); // the Share dialog (sharing/ShareDialog.jsx)
   const [shareError, setShareError] = useState("");
-  const [shareUrlShown, setShareUrlShown] = useState(false); // fallback when the clipboard is unavailable
   const shareUrl = shareSettings?.token
     ? `${window.location.origin}${window.location.pathname}?share=${shareSettings.token}`
     : "";
@@ -4457,6 +4455,13 @@ function LibraryApp() {
       setShareInfo({ owner: data.username || "", role: data.role || "view", canEdit: Boolean(data.can_edit),
                      audience: data.audience || "anyone", viewer: data.viewer || "",
                      viewerIsGuest: Boolean(data.viewer_is_guest) });
+      if (!data.viewer || data.viewer_is_guest) {
+        // No account behind this visitor: a per-browser display name labels
+        // their presence and edits (X-Gamma-Name / the socket's ?name=).
+        const name = loadLinkName();
+        setLinkName(name);
+        setLinkNameState(name);
+      }
 
       // The share names a page block directly (PDF pages and note pages
       // alike). Read access rides on the token, which apiJson appends to every
@@ -4940,9 +4945,10 @@ function LibraryApp() {
     }
   }
 
-  // Share popover (owner). Opening it only LOADS the state — a page is not
-  // published until "Create link"; settings changes save immediately and the
-  // token never changes until "Stop sharing".
+  // Share dialog (owner; sharing/ShareDialog.jsx). Opening it only LOADS the
+  // state — a page is not published until "Create link"; settings changes
+  // save immediately and the token only changes on "Reset link" / "Stop
+  // sharing".
   function applyShareSettings(data) {
     setShareSettings(data);
     setShareError("");
@@ -4967,27 +4973,35 @@ function LibraryApp() {
     }
   }
   async function updateShareSettings(patch) {
-    if (!focusedBlockId || !shareSettings?.token) return;
+    if (!focusedBlockId || !shareSettings?.token) return false;
     try {
       applyShareSettings(await apiJson(`${API}/share-settings/${encodeURIComponent(focusedBlockId)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       }));
+      return true;
     } catch (err) {
-      setShareError(err.message); // e.g. "unknown user(s): …" — shown in the popover
+      setShareError(err.message); // e.g. "unknown user(s): …" — shown in the dialog
+      return false;
     }
   }
   // People: invitations are additive to general access (Notion-style) —
   // each invited account carries its own view/edit.
-  async function inviteShareUsers(e) {
-    e?.preventDefault();
-    const names = [shareInviteDraft.trim()].filter(Boolean);
-    if (!names.length) return;
+  function inviteShareUser(name, role) {
     const current = shareSettings?.users || [];
-    const users = [...current, ...names.filter((n) => !current.some((u) => u.name === n)).map((name) => ({ name, role: "view" }))];
-    await updateShareSettings({ users });
-    setShareInviteDraft("");
+    if (current.some((u) => u.name === name)) return true;
+    return updateShareSettings({ users: [...current, { name, role }] });
+  }
+  async function resetShareLink() {
+    if (!focusedBlockId || !shareSettings?.token) return;
+    try {
+      applyShareSettings(await apiJson(`${API}/share/${encodeURIComponent(focusedBlockId)}/reset`, { method: "POST" }));
+      resetShareCopied();
+      setStatus("Link reset — the old address no longer opens.");
+    } catch (err) {
+      setStatus(`Reset failed: ${err.message}`);
+    }
   }
   function setShareUserRole(name, role) {
     updateShareSettings({ users: (shareSettings?.users || []).map((u) => u.name === name ? { ...u, role } : u) });
@@ -5005,16 +5019,20 @@ function LibraryApp() {
       setStatus(`Stop sharing failed: ${err.message}`);
     }
   }
-  // One line under the general-access row: who that row admits.
-  const shareGeneralSub = shareSettings?.audience === "anyone"
-    ? "No login needed — view only"
-    : shareSettings?.audience === "users"
-      ? "Any signed-in account on this server"
-      : "Nobody beyond the people invited above";
+  // The share view's visitor renamed themself: keep it, and rejoin the room
+  // so presence shows the new name (it travels in the socket handshake).
+  function commitLinkName(raw) {
+    const name = cleanLinkName(raw) || linkName;
+    setRenamingLink(false);
+    if (name === linkName) return;
+    saveLinkName(name);
+    setLinkName(name);
+    setLinkNameState(name);
+    collab.reconnect();
+  }
 
   async function copyShareLink() {
     if (await copyText(shareUrl)) { flashShareCopied(); return; }
-    setShareUrlShown(true); // no clipboard (plain-HTTP origins) — show it to select by hand
     setStatus("Copy failed — select the link in the popover instead.");
   }
 
@@ -7955,195 +7973,15 @@ function LibraryApp() {
         onFindMarks={setFindMarks}
       />
       {focusedBlockId && !homeMode ? (
-        <span data-popover="share" className="popoverAnchor">
-          <button
-            className={`iconBtn ${openPopover === "share" ? "activeIcon" : ""}`}
-            onClick={() => {
-              const opening = openPopover !== "share";
-              setOpenPopover(opening ? "share" : null);
-              if (opening) loadShareSettings();
-            }}
-            disabled={loading}
-            title="Share"
-            aria-label="Share"
-          >
-            <LinkIcon size={16} />
-          </button>
-          {openPopover === "share" ? (
-            <div className="popover sharePopover">
-              <div className="popoverTitle">Share this page</div>
-              {shareSettings === null ? (
-                <div className="popoverHint">Loading…</div>
-              ) : !shareSettings.token ? (
-                <>
-                  <div className="popoverHint">
-                    Not shared yet. Create a link, then invite people or open it up — read-only or editable.
-                  </div>
-                  <div className="shareFooter">
-                    <span />
-                    <button type="button" className="uiBtn sm primary" onClick={createShareLink}>
-                      <LinkIcon size={13} />Create link
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <form className="shareInvite" onSubmit={inviteShareUsers}>
-                    <ShareInviteBox
-                      exclude={[authUser?.user, ...(shareSettings.users || []).map((u) => u.name)]}
-                      value={shareInviteDraft}
-                      onChange={(name) => { setShareInviteDraft(name); if (shareError) setShareError(""); }}
-                    />
-                    <button type="submit" className="uiBtn sm primary" disabled={!shareInviteDraft.trim()}>Invite</button>
-                  </form>
-                  {shareError ? <div className="popoverHint shareError">{shareError}</div> : null}
-                  <div className="shareEntry">
-                    <span className="shareAvatar" aria-hidden="true">
-                      {authUser?.is_guest ? <UserIcon size={14} /> : (authUser?.user || "?").charAt(0).toUpperCase()}
-                    </span>
-                    <span className="shareEntryMain">
-                      <span className="shareEntryName">{authUser?.user}<span className="uiTag">you</span></span>
-                      <span className="shareEntrySub">Owner</span>
-                    </span>
-                    <span className="shareEntryStatic">Full access</span>
-                  </div>
-                  {(shareSettings.users || []).map((u) => (
-                    <div className="shareEntry" key={u.name}>
-                      <span className="shareAvatar" aria-hidden="true">{u.name.charAt(0).toUpperCase()}</span>
-                      <span className="shareEntryMain">
-                        <span className="shareEntryName">{u.name}</span>
-                        <span className="shareEntrySub">Invited · signs in to open</span>
-                      </span>
-                      <MenuSelect
-                        label={`What ${u.name} may do`}
-                        value={u.role}
-                        onChange={(v) => setShareUserRole(u.name, v)}
-                        options={[["view", "Can view"], ["edit", "Can edit"]]}
-                      />
-                      <button
-                        type="button"
-                        className="uiClose uiCloseSm"
-                        title={`Remove ${u.name}`}
-                        aria-label={`Remove ${u.name}`}
-                        onClick={() => removeShareUser(u.name)}
-                      >×</button>
-                    </div>
-                  ))}
-                  <div className="popoverSection">General access</div>
-                  <div className="shareEntry">
-                    <span className="shareAvatar shareAvatarIcon" aria-hidden="true">
-                      {shareSettings.audience === "anyone" ? <GlobeIcon size={15} />
-                        : shareSettings.audience === "users" ? <UsersIcon size={15} />
-                          : <ShieldIcon size={15} />}
-                    </span>
-                    <span className="shareEntryMain">
-                      <MenuSelect
-                        label="Who can open the link"
-                        value={shareSettings.audience}
-                        onChange={(v) => updateShareSettings(v === "anyone" ? { audience: v, role: "view" } : { audience: v })}
-                        options={[
-                          ["anyone", "Anyone with the link"],
-                          ["users", "Signed-in users"],
-                          ["list", "Only people invited"],
-                        ]}
-                      />
-                      <span className="shareEntrySub">{shareGeneralSub}</span>
-                    </span>
-                    {shareSettings.audience === "users" ? (
-                      <MenuSelect
-                        label="What they may do"
-                        value={shareSettings.role}
-                        onChange={(v) => updateShareSettings({ role: v })}
-                        options={[["view", "Can view"], ["edit", "Can edit"]]}
-                      />
-                    ) : shareSettings.audience === "anyone" ? (
-                      <span className="shareEntryStatic" title="Editing needs a signed-in editor — invite people or choose signed-in users">Can view</span>
-                    ) : (
-                      <span className="shareEntryStatic">Invite only</span>
-                    )}
-                  </div>
-                  <div className="shareFooter">
-                    <button type="button" className="uiBtn sm danger" onClick={stopSharing}
-                      title="The link stops working; sharing again makes a new one">Stop sharing</button>
-                    <button type="button" className={`uiBtn sm ${shareCopied ? "on" : ""}`} onClick={copyShareLink}
-                      title={shareUrl}>
-                      {shareCopied ? <CheckIcon size={13} /> : <LinkIcon size={13} />}
-                      {shareCopied ? "Copied" : "Copy link"}
-                    </button>
-                  </div>
-                  {shareUrlShown ? (
-                    <div className="shareRow">
-                      <input readOnly value={shareUrl} onFocus={(e) => e.target.select()} />
-                    </div>
-                  ) : null}
-                </>
-              )}
-              {(pageMeta || pageBibtex) ? (
-                <>
-                  <div className="popoverDivider" />
-                  <div className="popoverSection citeSectionRow">
-                    <span>
-                      Slide citation
-                      {/* Provenance right where the citation gets copied:
-                          a registry name, or a red "!" when nothing tied
-                          the record to this document. */}
-                      {metaSrc ? (
-                        <span className={`citeSourceTag${metaSrc.warn ? " warn" : ""}`} title={metaSrc.hint}>
-                          {metaSrc.warn ? <span className="metaWarnDot inline" aria-hidden="true">!</span> : null}
-                          {metaSrc.label}
-                        </span>
-                      ) : null}
-                    </span>
-                    <button
-                      className="searchToggle"
-                      title="Regenerate the citation"
-                      disabled={pptCiteBusy}
-                      onClick={() => makePptCitation(true)}
-                    >{pptCiteBusy ? "…" : "↻"}</button>
-                  </div>
-                  {metaSrc?.warn ? (
-                    <div className="popoverHint citeWarnHint">{metaSrc.hint}.</div>
-                  ) : null}
-                  {pptCite ? (
-                    <div className="pptCiteBox">
-                      <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
-                      <button
-                        className="chatMsgActionBtn"
-                        onClick={() => copyFlash("ppt", pptCite)}
-                        title="Copy — pastes with real italics/bold into PowerPoint"
-                        aria-label="Copy slide citation"
-                      >
-                        {copiedKey === "ppt"
-                          ? <CheckIcon size={13} />
-                          : <CopyIcon size={13} />}
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
-                  )}
-                  {pageBibtex ? (
-                    <>
-                      <div className="popoverSection">BibTeX</div>
-                      <div className="pptCiteBox">
-                        <pre className="bibtexPre">{pageBibtex}</pre>
-                        <button
-                          className="chatMsgActionBtn"
-                          onClick={() => copyFlash("bibtex", pageBibtex)}
-                          title="Copy the BibTeX entry"
-                          aria-label="Copy BibTeX"
-                        >
-                          {copiedKey === "bibtex"
-                            ? <CheckIcon size={13} />
-                            : <CopyIcon size={13} />}
-                        </button>
-                      </div>
-                    </>
-                  ) : null}
-                </>
-              ) : null}
-            </div>
-          ) : null}
-        </span>
+        <button
+          className={`iconBtn ${shareOpen ? "activeIcon" : ""}`}
+          onClick={() => { setShareOpen(true); loadShareSettings(); }}
+          disabled={loading}
+          title="Share"
+          aria-label="Share"
+        >
+          <LinkIcon size={16} />
+        </button>
       ) : null}
       {authUser?.user && (
         <span data-popover="user" className="popoverAnchor">
@@ -8361,6 +8199,27 @@ function LibraryApp() {
               {shareInfo.canEdit ? "Can edit" : "View only"}{shareInfo.owner ? ` · shared by ${shareInfo.owner}` : ""}
             </span>
           ) : null}
+          {shareInfo?.canEdit && linkName ? (renamingLink ? (
+            <input
+              className="linkNameInput"
+              autoFocus
+              defaultValue={linkName}
+              maxLength={LINK_NAME_MAX}
+              aria-label="Your name on this page"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitLinkName(e.currentTarget.value);
+                else if (e.key === "Escape") setRenamingLink(false);
+              }}
+              onBlur={(e) => commitLinkName(e.currentTarget.value)}
+            />
+          ) : (
+            <button
+              type="button"
+              className="uiTag linkNameTag"
+              title="How others on this page see you — click to change"
+              onClick={() => setRenamingLink(true)}
+            >as {linkName}</button>
+          )) : null}
           {shareInfo?.owner && shareInfo.viewer === shareInfo.owner ? (
             // The owner landed on their own link: the page is theirs already.
             <button
@@ -8710,6 +8569,91 @@ function LibraryApp() {
       ) : null}
       {dockPreview ? (
         <div className="dockPreview" style={dockPreview} />
+      ) : null}
+      {shareOpen && focusedBlockId && !homeMode ? (
+        <ShareDialog
+          settings={shareSettings}
+          error={shareError}
+          me={authUser?.user || ""}
+          meIsGuest={!!authUser?.is_guest}
+          shareUrl={shareUrl}
+          copied={!!shareCopied}
+          onCopy={copyShareLink}
+          onCreate={createShareLink}
+          onUpdate={updateShareSettings}
+          onInvite={inviteShareUser}
+          onSetRole={setShareUserRole}
+          onRemove={removeShareUser}
+          onReset={resetShareLink}
+          onStop={stopSharing}
+          onClose={() => { setShareOpen(false); setShareError(""); }}
+          citation={(
+            <>
+              {(pageMeta || pageBibtex) ? (
+                <Section title="Citation">
+                  <div className="popoverSection citeSectionRow">
+                    <span>
+                      Slide citation
+                      {/* Provenance right where the citation gets copied:
+                          a registry name, or a red "!" when nothing tied
+                          the record to this document. */}
+                      {metaSrc ? (
+                        <span className={`citeSourceTag${metaSrc.warn ? " warn" : ""}`} title={metaSrc.hint}>
+                          {metaSrc.warn ? <span className="metaWarnDot inline" aria-hidden="true">!</span> : null}
+                          {metaSrc.label}
+                        </span>
+                      ) : null}
+                    </span>
+                    <button
+                      className="uiBtn sm iconSq"
+                      title="Regenerate the citation"
+                      disabled={pptCiteBusy}
+                      onClick={() => makePptCitation(true)}
+                    >{pptCiteBusy ? "…" : <RefreshIcon size={13} />}</button>
+                  </div>
+                  {metaSrc?.warn ? (
+                    <div className="popoverHint citeWarnHint">{metaSrc.hint}.</div>
+                  ) : null}
+                  {pptCite ? (
+                    <div className="pptCiteBox">
+                      <div className="pptCitePreview"><ChatMarkdown text={pptCite} /></div>
+                      <button
+                        className="chatMsgActionBtn"
+                        onClick={() => copyFlash("ppt", pptCite)}
+                        title="Copy — pastes with real italics/bold into PowerPoint"
+                        aria-label="Copy slide citation"
+                      >
+                        {copiedKey === "ppt"
+                          ? <CheckIcon size={13} />
+                          : <CopyIcon size={13} />}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="popoverHint">{pptCiteBusy ? "Generating…" : "Citation will generate when metadata is ready."}</div>
+                  )}
+                  {pageBibtex ? (
+                    <>
+                      <div className="popoverSection">BibTeX</div>
+                      <div className="pptCiteBox">
+                        <pre className="bibtexPre">{pageBibtex}</pre>
+                        <button
+                          className="chatMsgActionBtn"
+                          onClick={() => copyFlash("bibtex", pageBibtex)}
+                          title="Copy the BibTeX entry"
+                          aria-label="Copy BibTeX"
+                        >
+                          {copiedKey === "bibtex"
+                            ? <CheckIcon size={13} />
+                            : <CopyIcon size={13} />}
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
+                </Section>
+              ) : null}
+            </>
+          )}
+        />
       ) : null}
       {importOpen ? (
         <ImportDialog

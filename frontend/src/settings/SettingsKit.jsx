@@ -350,25 +350,43 @@ export function Stat({ icon: Icon, label, value, total, title }) {
   );
 }
 
+// A text-valued tile beside Stat's numeric ones: a version, an uptime, a
+// pair of counts. `tone` "warn" / "error" colours the frame.
+export function StatText({ icon: Icon, label, value, hint, tone = "", title }) {
+  return (
+    <div className={`setStat setStatText ${tone}`} title={title}>
+      <span className="setStatTop"><span className="setStatNum">{value}</span></span>
+      <span className="setStatLabel"><Icon size={12} />{label}</span>
+      {hint ? <span className="setStatHint">{hint}</span> : null}
+    </div>
+  );
+}
+
 // Newest-first log list with a Copy button — one rendering for the session
 // log (Advanced) and the admin server log (Server). Entries are normalized
-// to {key, timeMs, text}.
-export function LogBox({ icon, label, description, entries, emptyText, copyStatus, setStatus }) {
+// to {key, timeMs, text, tone?} — tone "warn" / "error" adds a badge.
+// `extra` sits before the Copy button (a level filter).
+export function LogBox({ icon, label, description, entries, emptyText, copyStatus, setStatus, extra }) {
+  const prefix = (entry) => (entry.tone ? `[${entry.tone === "error" ? "ERROR" : "WARNING"}] ` : "");
   function copy() {
     const text = entries
-      .map((entry) => `${new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })} ${entry.text}`)
+      .map((entry) => `${new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })} ${prefix(entry)}${entry.text}`)
       .join("\n");
     copyText(text).then((ok) => setStatus(ok ? copyStatus : "Copy failed—copy manually."));
   }
   return (
     <>
       <Row icon={icon} label={label} hint={description}>
-        <button className="uiBtn sm" disabled={!entries.length} onClick={copy}>Copy</button>
+        <span className="setRowControls">
+          {extra}
+          <button className="uiBtn sm" disabled={!entries.length} onClick={copy}>Copy</button>
+        </span>
       </Row>
       <div className="sysLogBox">
         {entries.length ? [...entries].reverse().map((entry) => (
           <div key={entry.key} className="sysLogRow">
             <span className="sysLogTime">{new Date(entry.timeMs).toLocaleTimeString([], { hour12: false })}</span>
+            {entry.tone ? <span className={`sysLogLevel ${entry.tone}`}>{entry.tone === "error" ? "ERR" : "WARN"}</span> : null}
             <span className="sysLogMsg">{entry.text}</span>
           </div>
         )) : <div className="sysLogEmpty">{emptyText}</div>}

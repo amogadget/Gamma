@@ -24,6 +24,7 @@ _MAX_ENTRIES = 2000
 _buf = deque(maxlen=_MAX_ENTRIES)
 _lock = threading.Lock()
 _seq = 0
+_counts = {"info": 0, "warning": 0, "error": 0}  # since startup, beyond what the ring still holds
 
 _SCRUB_RULES = (
     # Bearer/sk- first: the key=value rule below would otherwise consume the
@@ -58,6 +59,15 @@ class _BufferHandler(logging.Handler):
         with _lock:
             _seq += 1
             _buf.append({"seq": _seq, "t": time.time(), "level": record.levelname, "msg": msg})
+            key = "error" if record.levelno >= logging.ERROR else "warning" if record.levelno >= logging.WARNING else "info"
+            _counts[key] += 1
+
+
+def counts() -> dict:
+    """Lines logged since startup by level: ``{info, warning, error}`` — the
+    dashboard's tiles, unaffected by the ring buffer's cap."""
+    with _lock:
+        return dict(_counts)
 
 
 def tail(after: int = 0) -> list:

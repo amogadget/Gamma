@@ -225,3 +225,8 @@ ghcr.io/tim4431/gamma
 Multi-stage build: a Node stage compiles the frontend, the final Python image runs FastAPI serving both the API and the SPA on port 9001. See [Dockerfile](./Dockerfile) and [.github/workflows/docker.yml](./.github/workflows/docker.yml).
 
 </details>
+
+## License
+
+Gamma is licensed under the [GNU Affero General Public License v3.0 only](LICENSE)
+(`AGPL-3.0-only`). Third-party components and assets retain their respective licenses.

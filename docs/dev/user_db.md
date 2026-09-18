@@ -134,6 +134,9 @@ every account + missing files). Workspaces: `list-workspaces`,
 updates every row that names the account (users, sessions, shares,
 memberships, prefs) — no files move.
 
+`set-password` revokes the account's existing browser sessions and integration
+tokens, matching password changes through the admin API.
+
 ## User management GUI
 
 `gamma/routers/admin.py` (`/api/admin/users*`, `/api/admin/workspaces`),
@@ -178,12 +181,26 @@ own for a shared one), `workspace_bytes` (this workspace's), and `account`
 deliberately NOT part of `/api/session` (identity only). Backup-restore imports are unmetered.
 Details + UI in [settings.md](settings.md).
 
-## Server log
+## Server dashboard and log
+
+Settings → Server opens with a **Dashboard** (`GET /api/admin/server-info`,
+`gamma/version.py`, [api.md](api.md)): three tiles — the build (`v<version>`
+from `GAMMA_VERSION`, stamped by the Docker build and the desktop shell;
+"dev build" for a checkout), uptime, and warnings · errors logged since
+startup (`logbuf.counts()`) — plus an Updates row comparing the build with
+the newest GitHub release (cached; "Check now" refetches; `GAMMA_UPDATE_CHECK=off`
+for air-gapped servers). A Docker server cannot update itself, so an
+available update only says which image to pull; the desktop app updates
+on its own. Things worth an admin's eye are logged at WARNING — a
+share-link visitor over the write throttle, an address probing unknown
+share links ([api.md](api.md) "Link visitors") — so the tile turns amber
+and the log's "Warnings" filter shows them.
 
 `gamma/logbuf.py`, `GET /api/admin/logs?after=<seq>`: all backend logging goes
 through `logbuf.log` (a `logging` logger — use it, not `print()`), which tees
 to the console and a scrubbed in-memory ring buffer (2000 entries, gone on
-restart) shown admin-only in Settings → Server → "Log". Secret-shaped
+restart) shown admin-only in Settings → Server → "Log", with a level filter
+(All / Warnings / Errors) and a badge per non-info line. Secret-shaped
 substrings (Bearer/sk- keys, `password=`/`token=` pairs, 40+-char urlsafe runs
 — session/share tokens) are masked at insert time; the one-time seeded admin
 password in `seed.py` stays a raw `print()` on purpose and must never route

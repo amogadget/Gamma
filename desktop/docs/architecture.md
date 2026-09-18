@@ -216,7 +216,8 @@ dialog (tests only); `GAMMA_SHELL_NO_UPDATE=1` disables the updater.
 
 - The shell must keep treating Gamma as a black box: talk to it only via the
   public HTTP API + env config (`GAMMA_DATA_DIR`, `GAMMA_STATIC_DIR`,
-  `GAMMA_ADMIN_USER`, `GAMMA_ADMIN_PASSWORD`), `/api/health` and
+  `GAMMA_ADMIN_USER`, `GAMMA_ADMIN_PASSWORD`, `GAMMA_VERSION` = the shell's
+  own version, so the server's admin dashboard names the app), `/api/health` and
   `/api/session` (+ the `?ws=` URL parameter). No imports from `backend/`,
   no frontend patches. The one thing it reads off the page is the
   `data-theme` attribute (read-only, via the preload).

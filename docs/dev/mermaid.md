@@ -6,6 +6,12 @@ opens the normal source editor; leaving the editor renders the updated diagram.
 The diagram toolbar offers Source, Copy source, and Download SVG. Ordinary code
 blocks keep their existing behavior.
 
+Math in flowchart and sequence labels uses Mermaid's `$$...$$` delimiters, not
+the single-dollar syntax of surrounding Markdown. For example,
+`A["$$a_1$$"] -->|"$$J$$"| B["$$a_2$$"]`. HTML label layout is enabled so Mermaid
+can embed KaTeX's MathML in SVG `foreignObject` elements. Labels remain sanitized
+by strict security mode. Source copying preserves the original delimiters.
+
 `shared/ui/MermaidDiagram.jsx` is shared by `editor/BlockTree.jsx` and
 `shared/ui/Widgets.jsx` (chat, note tooltips, and other chat-Markdown consumers).
 It follows the app's computed light/dark color scheme, preserves original source
@@ -18,8 +24,8 @@ the closing fence. Both backticks and tildes are supported.
 there is no CDN or rendering service. It serializes initialization/rendering
 because Mermaid configuration is global, gives every SVG a unique ID, and drops
 results belonging to an edited or unmounted component. Temporary measurement
-containers are removed even after parse failures. Strict security, disabled HTML
-labels, suppressed automatic error diagrams, a 50,000-character limit and a
+containers are removed even after parse failures. Strict security, HTML label
+layout, suppressed automatic error diagrams, a 50,000-character limit and a
 500-edge limit are locked against diagram configuration overrides.
 SVG anchors are unwrapped after rendering, and Mermaid event bindings are never
 installed, so diagram links and callbacks stay inactive in previews/downloads.

@@ -3,6 +3,9 @@ import { closeEditor, newPageViaUi } from "./notes.mjs";
 
 const flow = 'flowchart LR\n  A["Start $a|b$ \\(x\\)"] --> B[Finish]';
 const sequence = "sequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>Alice: Hi";
+const quantum = String.raw`flowchart LR
+  S(("$$S_z$$")) -. "$$\chi$$" .- A(("$$a_1$$"))
+  A <-->|"$$J$$"| B(("$$a_2: |\alpha\rangle$$"))`;
 const fence = (source) => "```mermaid\n" + source + "\n```";
 
 export async function mermaidScenarios(env) {
@@ -111,14 +114,39 @@ export async function mermaidScenarios(env) {
       await page.evaluate(() => window.mermaidStream.push("\n```\n\n"));
       await page.locator(".mermaidPreview svg").waitFor();
       const firstId = await page.locator(".mermaidPreview svg").getAttribute("id");
-      const untrusted = '%%{init: {"securityLevel":"loose","htmlLabels":true}}%%\nflowchart LR\nA[Start] --> B[Safe]\nclick A href "https://example.com"';
+      const untrusted = '%%{init: {"securityLevel":"loose","htmlLabels":false}}%%\nflowchart LR\nA["<img src=x onerror=alert(1)>"] --> B[Safe]\nclick A href "https://example.com"';
       await page.evaluate((text) => { window.mermaidStream.push(text); window.mermaidStream.finish(); },
         [fence("invalid diagram"), fence(sequence), fence(untrusted)].join("\n\n"));
       await until(async () => await page.locator(".mermaidPreview svg").count() === 3);
       await page.locator(".mermaidError").waitFor();
-      assertEq(await page.locator(".mermaidPreview").last().locator("a, foreignObject, script").count(), 0,
-        "diagram directives cannot enable links or HTML labels");
+      assertEq(await page.locator(".mermaidPreview").last().locator("a, script, [onerror], [onclick]").count(), 0,
+        "diagram directives cannot enable links or unsafe HTML");
       assertEq(await page.locator(".mermaidPreview svg").first().getAttribute("id"), firstId, "streaming leaves completed SVG mounted");
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
+
+  await step("mermaid: LaTeX in node and edge labels survives SVG download", async () => {
+    const imported = await alice.upload("/api/import/markdown", Buffer.from(fence(quantum)), "Quantum diagram.md", "text/markdown");
+    const ctx = await alice.context(browser);
+    const page = await openPage(ctx, `${server.base}/?ws=${alice.ws}&block=${imported.block_id}`);
+    try {
+      const diagram = page.locator(".mermaidDiagram");
+      await until(async () => await diagram.locator("math").count() === 5);
+      assertEq(await diagram.locator(".node math").count(), 3, "node labels contain typeset math");
+      assertEq(await diagram.locator(".edgeLabel math").count(), 2, "edge labels contain typeset math");
+      assertEq(await diagram.getAttribute("data-mermaid-source"), quantum, "math source is preserved");
+      const labels = (await diagram.locator("math").allTextContents()).join(" ");
+      assert(labels.includes("χ") && labels.includes("α") && labels.includes("J"), "LaTeX commands become math symbols");
+      assertEq(await diagram.locator("math msub").count(), 3, "subscripts are typeset");
+      assert(await diagram.locator("math").evaluateAll((els) => els.every((el) => {
+        const box = el.getBoundingClientRect(); return box.width > 0 && box.height > 0;
+      })), "math labels have visible dimensions");
+      const downloadEvent = page.waitForEvent("download");
+      await diagram.getByRole("button", { name: "Download SVG", exact: true }).click();
+      const svg = await readFile(await (await downloadEvent).path(), "utf8");
+      assertEq(await page.evaluate((source) => new DOMParser().parseFromString(source, "image/svg+xml").querySelectorAll("math").length, svg), 5);
+      if (process.env.GAMMA_MERMAID_SCREENSHOT) await diagram.screenshot({ path: process.env.GAMMA_MERMAID_SCREENSHOT });
       assertNoProblems(page);
     } finally { await ctx.close(); }
   });

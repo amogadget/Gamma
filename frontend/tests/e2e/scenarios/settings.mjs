@@ -383,6 +383,11 @@ export async function settingsScenarios(env) {
       await page.keyboard.press("Escape");
       await page.locator(".subDialog").waitFor({ state: "detached" });
       await nav(page, "Server").click();
+      // the dashboard: three tiles and the update row (the release check is
+      // disabled for the isolated backend, so the row says so)
+      await until(() => page.locator(".settingsPane .setStatText").count().then((n) => n === 3));
+      await page.getByText("could not check", { exact: false }).waitFor();
+      await page.locator(".settingsPane .segGroup button", { hasText: "Warnings" }).click();
       await page.getByText("Shared workspaces", { exact: true }).waitFor();
       assertEq(await page.getByText("Personal workspaces", { exact: true }).count(), 0);
       assertNoProblems(page);

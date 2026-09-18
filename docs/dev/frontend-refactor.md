@@ -36,7 +36,7 @@ and state owners in this table are proposals.
 | `workspace/` | Dock arrangement, visibility, panel sizes, drag geometry, and phone presentation | `moveWindow`, `startWindowDock`, `renderSlotGroup`, per-page layout snapshots |
 | `pdf/` | Viewer controls, PDF/notes jumps, scroll restoration, translation, and snapshots | Existing viewer/translation files, `restorePdfScroll`, zoom and capture logic |
 | `transfers/` | Upload/import/export operations and progress reporting | `uploadFiles`, format imports, backup transfer functions, `runExport`, transfer rows |
-| `sharing/` | Share-link resolution/gates and owner share controls | `resolveShare`, `loadShareSettings`, invitation mutations, share popover |
+| `sharing/` | Share-link resolution/gates and owner share controls | `resolveShare`, `loadShareSettings`, invitation mutations (the dialog itself, `ShareDialog.jsx`, already lives here) |
 | `settings/` | Settings panels and AI provider form/request state | Existing settings files plus provider CRUD, catalog, OAuth, and usage handlers |
 | `chat/` | Chat attachments and page-change notifications | `addBlockToChat`, `addHighlightToChat`, image selection, existing `ChatDock` |
 | `shared/ui/`, `shared/lib/` | Reusable controls, API transport, and small shared functions | Menus, icons, selected parts of `shared/ui/Widgets.jsx` and `shared/lib/utils.js` |

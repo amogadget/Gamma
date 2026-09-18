@@ -38,7 +38,8 @@ Administrators also choose shared workspace access:
   creation slot.
 
 Public does not mean anonymous. Page share links provide access for people
-without accounts. The guest account has its own daily-reset personal
+without accounts — including editing, when the sharer sets "Anyone with the
+link" to "Can edit" ([api.md](api.md) "Link visitors"). The guest account has its own daily-reset personal
 workspace; it cannot create workspaces, join shared ones or use public access.
 
 Administrators may manage a workspace without joining it. This does not grant

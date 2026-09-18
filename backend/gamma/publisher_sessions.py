@@ -49,7 +49,7 @@ def valid_host(host: str) -> str:
 
 
 def _cipher() -> Fernet:
-    configured = os.environ.get("GAMMA_PUBLISHER_SESSION_KEY")
+    configured = config.publisher_session_key()
     if configured:
         return Fernet(configured.encode("ascii"))
     path = config.DATA_DIR / "publisher-sessions.key"

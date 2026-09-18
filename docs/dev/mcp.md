@@ -181,7 +181,8 @@ manual tokens in **External assistants**, where users can revoke them.
   Removing access, expiration, or revocation denies subsequent requests. A request
   already running may finish. Public workspace access follows Gamma's existing rules.
 - Account/workspace deletion removes the associated tokens. Account rename preserves
-  them; password changes through the admin API revoke them along with sessions.
+  them; password changes through the admin API or `manage.py set-password`
+  revoke them along with sessions.
 - MCP always disables writes and external web tools. The allowlist is enforced on
   every dispatch, independent of which tools the client was offered. Deprecated chat
   aliases are not accepted by the MCP transport.
@@ -317,6 +318,10 @@ Official references: [Codex MCP configuration](https://learn.chatgpt.com/docs/ex
 `backend/tests/test_mcp.py` exercises the SDK endpoint, real tool reads, input
 validation, workspace isolation, permissions, expiration, and revocation.
 `test_mcp_oauth.py` covers discovery, approval, PKCE, resource/client/redirect
-binding, expiration, replay prevention, and revocation. `test_migrations.py` covers
+binding, expiration, replay prevention, revocation, and streamed body limits.
+`test_integration_lifecycle.py` covers manual and OAuth tokens across account
+rename, password changes through the admin API and CLI, workspace deletion,
+and account deletion through the admin API and `manage.py delete-user`.
+`test_migrations.py` covers
 schema upgrades. Browser scenarios cover sign-in, approval, cancellation, and MCP
 reads as well as manual-token creation and revocation.

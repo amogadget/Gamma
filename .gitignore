@@ -1,6 +1,4 @@
 archive/
-!/docs/archive/
-!/docs/archive/**
 example/
 HANDOFF.md
 STATUS.md

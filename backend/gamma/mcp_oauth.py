@@ -152,17 +152,25 @@ def authorization_metadata(request: Request):
             "scopes_supported": [SCOPE]}
 
 
-async def body(request):
-    # The SDK handlers read the request again; hand them the capped body
-    # through Starlette's private cache (checked against Starlette 1.3).
-    request._body = await read_body(request, 16384, "OAuth request is too large.")
+async def bounded_request(request: Request) -> Request:
+    """Replay a capped body through the public ASGI receive interface."""
+    content = await read_body(request, 16384, "OAuth request is too large.")
+
+    async def receive():
+        return {"type": "http.request", "body": content, "more_body": False}
+
+    replay = Request(request.scope, receive)
+    # Populate the public body cache before form parsing so the SDK can
+    # read either representation again without consuming the original stream.
+    await replay.body()
+    return replay
 
 
 @router.post("/oauth/register")
 async def register(request: Request):
     base = public_base(request)
     ratelimit.check("mcp-register:" + ratelimit.client_ip(request), 30, 3600)
-    await body(request)
+    request = await bounded_request(request)
     try:
         metadata = OAuthClientMetadata.model_validate(await request.json())
         if metadata.token_endpoint_auth_method not in (None, "none") or not metadata.redirect_uris or len(metadata.redirect_uris) > 10:
@@ -199,7 +207,7 @@ async def authorize(request: Request):
 async def token(request: Request):
     base = public_base(request)
     ratelimit.check("mcp-token:" + ratelimit.client_ip(request), 120, 600)
-    await body(request)
+    request = await bounded_request(request)
     form = await request.form()
     if form.get("resource") != base + "/mcp":
         return _no_store({"error": "invalid_target"}, 400)

@@ -88,8 +88,10 @@ cookie itself (`auth.session_lookup`), the workspace (`?ws=`, else the
 account's default — `auth.workspace_access`) and the share grant with the
 same rules as HTTP (`share_lookup` + `share_access` on the socket's
 `state`): a member joins with their workspace role (viewers presence-only),
-a share token admits its audience (view or edit); anything else is closed
-before accept. Messages:
+a share token admits its audience (view or edit — an anyone-with-the-link
+edit share admits a visitor without an account, who joins under the display
+name in `?name=`, [api.md](api.md) "Link visitors"); anything else is
+closed before accept. Messages:
 
 - server → client: `hello {client, color, seq, peers}` on join; `join {peer}`
   / `leave {client}`; `cursor {client, block, anchor, head}`; `ops {seq, at,
@@ -104,8 +106,11 @@ before accept. Messages:
   to flush queued edits with a keepalive fetch.
 
 A peer is `{client, user, name, color, can_edit, block, anchor, head}`; colour
-is an index into an 8-slot palette handed out per room (CSS `--peer-N`);
-anonymous share viewers are `Anonymous`.
+is an index into an 8-slot palette handed out per room (CSS `--peer-N`).
+A share-link visitor without an account has `user: ""` and `name` = their
+display name (`?name=`, else `Anonymous`); their op batches carry
+`actor: "link:<name>"`. A rename in the share view reconnects the socket
+(`usePageCollab`'s `reconnect`) so presence picks up the new name.
 
 ## The client (`src/collaboration/collabSession.js`, `src/collaboration/usePageCollab.js`, `src/shared/model/blockOps.js`)
 
@@ -205,7 +210,8 @@ state in App instead of the tree.
 ## What the user sees (`src/collaboration/Presence.jsx`, CSS in `shared/styles/app.css`)
 
 - the header avatar stack (initial, peer colour; faded while only viewing;
-  click jumps to the person's block);
+  click jumps to the person's block; the tooltip marks an account-less
+  share-link visitor "(via link)");
 - small avatar chips before the row a person is on (in the ⋮⋮ handle
   column, fading while the row is hovered — never over the row's content or
   an embed card's controls), and a coloured left edge
@@ -245,7 +251,9 @@ state in App instead of the tree.
   along), undo after a remote edit
   keeps the remote edit, a rename reaches the other tab, an edit made offline
   lands once the network is back, a remote delete, a highlight made by the
-  other person; `share.mjs` covers the invited editor on a share link.
+  other person; `share.mjs` covers the invited editor on a share link and
+  the stranger typing through an anyone-with-the-link edit share under a
+  renamed display name.
 
 ## Limits and next steps
 

@@ -95,18 +95,21 @@ Destructive affordances all read from one set of tokens — `--danger`,
 secondary, `.uiBtn.danger` and a menu's `danger` row are the same red in both
 themes. Never hardcode a red.
 
-### The share popover
+### The share dialog
 
-`.sharePopover` (App.jsx, the topbar link button) is the one place a page is
-published, shaped like Notion's share sheet but built only from the shared
-controls: an invite row (`aiKeyInput` + `uiBtn sm primary`), people entries
-(`.shareEntry`: `.shareAvatar` initial · name + one-line sub · a `MenuSelect`
-for Can view / Can edit · `uiClose` remove), a "General access" entry whose
-avatar is the audience glyph and whose `MenuSelect` picks Anyone with the
-link / Signed-in users / Only people invited, and a `.shareFooter` with Stop
-sharing (`uiBtn sm danger`) left and Copy link right. The `.share*` classes
-are layout only. The read-only view shows the counterpart `.shareBadge`
-("Can edit · shared by …") in its top bar.
+`sharing/ShareDialog.jsx` (the topbar link button) is the one place a page is
+published. It is built exactly like the workspace Manage dialog: a
+`SubDialog` of `Section`s — Link (the address as the row hint, Copy link),
+General access (`Row`s with a `MenuSelect` for Anyone with the link /
+Signed-in users / Only people invited and one for Can view / Can edit, an
+amber `.shareWarn` hint when a link is editable without sign-in), People
+(`aiProvRow` rows: the owner, then each invited account with its own
+`MenuSelect` and a `uiBtn sm iconSq` remove; the section's action opens the
+invite sub-dialog: `AccountPicker` + access), the page's Citation section
+(App.jsx owns it) and Actions (Reset link, Stop sharing `uiBtn sm danger`).
+Every change saves at once; nothing is a bespoke control. The read-only view
+shows the counterpart tag ("Can edit · shared by …", and "as <name>" for a
+visitor without an account) in its top bar.
 
 ## Settings primitives
 
@@ -171,7 +174,9 @@ Settings panes are built only from
   input's right edge, outside the Tab order; it wraps the input's own class,
   so the login page uses it with `loginInput` and every secret field in
   Settings — account passwords, API keys — with `aiKeyInput`),
-  `CharSlider` (log-scaled character budget), `Stat`, `Empty`, `QuotaMeter`.
+  `CharSlider` (log-scaled character budget), `Stat` and `StatText` (the
+  numeric and the text tiles of a `.setStats` grid — the Server dashboard),
+  `LogBox` (level badges, an `extra` slot for a filter), `Empty`, `QuotaMeter`.
 
 ## Theme
 

@@ -218,6 +218,18 @@
 .setStatBar > i { display: block; height: 100%; border-radius: 2px; background: var(--accent-dark); transition: width 0.3s ease; }
 .setStatBar > i.ok { background: var(--ok); }
 .setStatBar > i.warn { background: #d9822b; }
+/* Text tiles (StatText): version, uptime, counts — a smaller value, a hint line, a toned frame. */
+.setStatText .setStatNum { font-size: 15px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setStatHint { font-size: 10.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.setStat.warn { border-color: rgba(217, 130, 43, 0.55); }
+.setStat.error { border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+/* Several controls at the end of one settings row (a filter + Copy on the log row). */
+.setRowControls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+/* Level badge in a log row (LogBox entries with a tone). */
+.sysLogLevel { flex: none; align-self: flex-start; font-size: 9.5px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 4px; border-radius: 4px; }
+.sysLogLevel.warn { color: #d9822b; background: rgba(217, 130, 43, 0.14); }
+.sysLogLevel.error { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.sysLogRow:has(.sysLogLevel) .sysLogMsg { color: var(--text-secondary); }
 
 /* --- empty / loading state: a glyph and one sentence, centred --- */
 .setEmpty {

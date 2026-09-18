@@ -12,7 +12,9 @@ Two questions every endpoint answers through this module:
   takes (``connect_pages_db``, ``ws_uploads_dir``, ...). docs/dev/workspaces.md.
 """
 
+import re
 import secrets
+from urllib.parse import unquote
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -354,10 +356,12 @@ def share_access(share: dict, carrier):
     only add to that, never take away); a signed-in account the sharer
     INVITED (``users``) gets its own per-person role regardless of general
     access; everyone else goes through the general access gate — ``anyone``
-    needs no session (and is always view-only), ``users`` admits any
-    signed-in non-guest account with the share's role, ``list`` admits nobody
-    beyond the invited. Guests count as not signed in. ``carrier`` is a
-    Request or a WebSocket (its ``state`` carries user / is_guest).
+    needs no session and grants the share's role (an edit link works for
+    whoever holds it, attributed as ``link:<name>`` by actor_of), ``users``
+    admits any signed-in non-guest account with the share's role, ``list``
+    admits nobody beyond the invited. Guests count as not signed in.
+    ``carrier`` is a Request or a WebSocket (its ``state`` carries user /
+    is_guest).
     """
     from . import workspaces
 
@@ -375,7 +379,7 @@ def share_access(share: dict, carrier):
                 return invited["role"], ""
     audience = share["audience"]
     if audience == "anyone":
-        return "view", ""
+        return share["role"], ""
     if not signed_in:
         return None, "login"
     if audience == "list":
@@ -400,12 +404,86 @@ def share_grant(request: Request):
     token = request.query_params.get("share")
     if token:
         share = share_lookup(token)
-        if share:
+        if not share:
+            note_share_miss(request)
+        else:
             level, _reason = share_access(share, request)
             if level:
                 grant = (share["workspace_id"], share["page_id"], level)
     request.state._share_grant = grant
     return grant
+
+
+# ---- Who a write is attributed to ------------------------------------------
+# Anyone-with-the-link shares may grant edit. A visitor without an account
+# gets a display name in the share view; the frontend sends it as the
+# X-Gamma-Name header on writes (percent-encoded UTF-8 — header values may
+# not carry non-Latin-1 text) and as ?name= on the page websocket (browser
+# handshakes cannot carry headers). It is a label, not an identity: stored
+# as ``link:<name>`` in the op log and shown as the name in presence — never
+# confusable with an account, since usernames may not contain ":".
+LINK_NAME_HEADER = "x-gamma-name"
+LINK_ACTOR_PREFIX = "link:"
+LINK_NAME_MAX = 40
+ANONYMOUS_NAME = "Anonymous"
+
+
+def link_name(raw) -> str:
+    """A visitor's display name, cleaned: control characters dropped,
+    whitespace collapsed, capped at LINK_NAME_MAX; ``Anonymous`` when empty."""
+    text = re.sub(r"[\x00-\x1f\x7f]", "", str(raw or ""))
+    text = re.sub(r"\s+", " ", text).strip()[:LINK_NAME_MAX].strip()
+    return text or ANONYMOUS_NAME
+
+
+def is_link_visitor(carrier) -> bool:
+    """A share-token request from someone without a personal account (no
+    session, or the guest account) — the case a display name stands in for."""
+    return bool(carrier.query_params.get("share")) and (not carrier.state.user or carrier.state.is_guest)
+
+
+def actor_of(carrier) -> str:
+    """The name a write is recorded under: the signed-in account, else — for
+    a link visitor — ``link:<display name>``. Takes a Request or a WebSocket."""
+    if is_link_visitor(carrier):
+        if isinstance(carrier, Request):
+            raw = unquote(carrier.headers.get(LINK_NAME_HEADER, ""))
+        else:
+            raw = carrier.query_params.get("name", "")
+        return LINK_ACTOR_PREFIX + link_name(raw)
+    return carrier.state.user or ""
+
+
+def link_ratelimit(request: Request, what: str, max_hits: int, window_seconds: int) -> None:
+    """Per-IP fixed-window limit that applies to link visitors only — an
+    account is accountable, a link is not. Crossing it is one warning in
+    the server log per window (Settings → Server → Dashboard)."""
+    if is_link_visitor(request):
+        from . import ratelimit
+        ip = ratelimit.client_ip(request)
+        ratelimit.check(f"link:{what}:{ip}", max_hits=max_hits, window_seconds=window_seconds,
+                        on_first_exceed=lambda n: log.warning(
+                            f"[share] link visitor {ip} sent more than {max_hits} {what} requests in "
+                            f"{window_seconds}s — throttled for the rest of the window"))
+
+
+# Unknown share tokens. Links are 96 random bits, so guessing one is hopeless,
+# but a scanner trying is worth seeing: past this many misses in five minutes
+# the address is answered 429 for the rest of the window and the server log
+# gets one warning — the only signal an admin has that someone is probing.
+SHARE_MISSES_PER_5_MIN = 30
+
+
+def note_share_miss(carrier) -> None:
+    """A ?share= token that names no share. Counted per IP (a Request or a
+    WebSocket — both carry headers and a client address); raises 429 once
+    the address is over the limit."""
+    from . import ratelimit
+    ip = ratelimit.client_ip(carrier)
+    ratelimit.check(f"share-miss:{ip}", max_hits=SHARE_MISSES_PER_5_MIN, window_seconds=300,
+                    on_first_exceed=lambda n: log.warning(
+                        f"[share] {ip} opened {n} unknown share links in 5 min — blocked for the rest of "
+                        f"the window; someone may be probing for links"))
 
 
 def _share_denied(request: Request) -> HTTPException:

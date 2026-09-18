@@ -11,12 +11,17 @@ of the page's workspace manages it. Settings:
   the invited people).
 - ``role``: what general access grants — ``view`` or ``edit``. Editing is
   confined to the page's block tree (gamma/auth.py require_ws_writer + the
-  blocks router's scope checks) and needs a signed-in editor — ``edit`` with
-  ``anyone`` is refused.
+  blocks router's scope checks). ``edit`` with ``anyone`` makes the link
+  itself the key: whoever opens it may edit, attributed as ``link:<name>``
+  (gamma/auth.py actor_of) — the sharer's call, warned about in the dialog.
 
 Workspace members keep their workspace role on top (gamma/auth.py
 share_access). The token confines reads (and edit writes) to that page's
 subtree and assets (share_grant / share_scope_page).
+
+The token lives until "Stop sharing" (DELETE) or "Reset link" (POST
+/share/{page_id}/reset — a new token, same settings, for a link that
+leaked). Unknown tokens are counted per IP (gamma/auth.py note_share_miss).
 """
 
 import json
@@ -26,7 +31,7 @@ import sqlite3
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..auth import (SHARE_AUDIENCES, SHARE_ROLES, require_ws, serialize_share_users,
+from ..auth import (SHARE_AUDIENCES, SHARE_ROLES, note_share_miss, require_ws, serialize_share_users,
                     share_access, share_lookup)
 from ..blocks_store import page_attachment
 from ..db import connect_pages_db, connect_users_db, page_now
@@ -89,9 +94,6 @@ def _validated(editor: str, current: dict, payload: ShareSettings) -> dict:
         raise HTTPException(status_code=400, detail="audience must be anyone, users or list")
     if role not in SHARE_ROLES:
         raise HTTPException(status_code=400, detail="role must be view or edit")
-    if role == "edit" and audience == "anyone":
-        raise HTTPException(status_code=400,
-                            detail="editing needs a signed-in editor — choose signed-in users or specific people")
     cleaned: list[dict] = []
     for entry in users:
         if isinstance(entry, dict):
@@ -134,6 +136,23 @@ async def create_share(page_id: str, request: Request, payload: ShareSettings | 
             (token, ws, page_id, request.state.user, fields["audience"], fields["role"],
              serialize_share_users(fields["users"]), page_now()),
         )
+        conn.commit()
+    return _settings(share_lookup(token))
+
+
+@router.post("/share/{page_id}/reset")
+async def reset_share(page_id: str, request: Request):
+    """Mint a NEW token for the page's existing share, keeping audience,
+    role and the invited people — for a link that got around further than
+    intended. The old link stops opening at once. 404 when the page is not
+    shared."""
+    ws = require_ws(request, write=True)
+    existing = _page_share(ws, page_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="page is not shared")
+    token = secrets.token_urlsafe(12)
+    with connect_users_db() as conn:
+        conn.execute("UPDATE shares SET token = ? WHERE workspace_id = ? AND page_id = ?", (token, ws, page_id))
         conn.commit()
     return _settings(share_lookup(token))
 
@@ -186,6 +205,7 @@ async def get_share(token: str, request: Request):
     "Add to my library" (an account that can import)."""
     share = share_lookup(token)
     if not share:
+        note_share_miss(request)
         raise HTTPException(status_code=404, detail="share not found")
     level, reason = share_access(share, request)
     if not level:

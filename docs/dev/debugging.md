@@ -88,7 +88,7 @@ geometry). A module is testable there when its relative imports carry the
 `.js` extension (node resolves nothing else); modules that import React can
 still be imported for their pure exports. Actual React rendering and
 interactions are exercised by the browser suite below, plus one standalone
-browser regression: `node tests/e2e/latexEditor.mjs` bundles the block
+browser regression: `npm run e2e:latex` bundles the block
 editor with esbuild over an in-memory fixture ([latex_editing.md](latex_editing.md)).
 
 ### Browser end-to-end suite
@@ -200,9 +200,11 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
 ## Debugging surfaces
 
 - **Server log** — Settings → Server → "Server log" (admin only): the
-  in-memory ring buffer behind `GET /api/admin/logs`. Backend code must log
-  through `gamma/logbuf.py`'s `log` (never `print()`); secrets are masked at
-  insert time. Gone on restart.
+  in-memory ring buffer behind `GET /api/admin/logs`, filterable to
+  warnings / errors; the Dashboard above it counts them since startup and
+  shows the build and the update check. Backend code must log through
+  `gamma/logbuf.py`'s `log` (never `print()`); use `log.warning` for what an
+  admin should notice. Secrets are masked at insert time. Gone on restart.
 - **Session log + debug tracing** — Settings → Advanced: browser-side event
   log; the "Debug logging" toggle traces reading-position/restore/sync
   events into it and the console. Every PDF load phase lands here as

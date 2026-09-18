@@ -39,19 +39,42 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   the sharer INVITES people (`users: [{name, role}]`, stored as
   `carol:edit,dave:view`) who get in with their own `view`/`edit` whatever
   general access says; everyone else goes through general access —
-  `audience` `anyone` (no session, always view), `users` (any signed-in
-  non-guest account, with the share's `role`), `list` (nobody beyond the
-  invited). When a request carries `?share=`, the token decides WHICH
-  WORKSPACE is read (the page's — a signed-in visitor sees the shared page,
-  not their own library) while the session decides whether the audience gate
-  admits them; a refused token is 401 when signing in could help, else 403.
-  `edit` shares (never valid with `anyone`) let `require_ws_writer` resolve
-  the workspace for the block writers — `POST /blocks`, `PUT /blocks/{id}`,
+  `audience` `anyone` (no session needed, with the share's `role`), `users`
+  (any signed-in non-guest account, with the share's `role`), `list` (nobody
+  beyond the invited). When a request carries `?share=`, the token decides
+  WHICH WORKSPACE is read (the page's — a signed-in visitor sees the shared
+  page, not their own library) while the session decides whether the
+  audience gate admits them; a refused token is 401 when signing in could
+  help, else 403. `edit` shares let `require_ws_writer` resolve the
+  workspace for the block writers — `POST /blocks`, `PUT /blocks/{id}`,
   `DELETE /blocks/{id}`, `PUT /blocks/{id}/children`, `POST /blocks/{id}/reorder`,
   `POST /pages/{id}/ops` (and the page websocket, view or edit),
   `POST /upload-image`, `POST /upload-file` — each of which confines the touched blocks to the
   shared page (no new pages, no deleting/moving the page itself, no changes to
   the page root's properties). Everything else stays session-only.
+- **Link visitors.** An `anyone` + `edit` share makes the link itself the
+  key: whoever opens it edits the page, without an account. Such a writer
+  (no session, or the guest account — `auth.is_link_visitor`) is recorded
+  as `link:<name>` (`auth.actor_of`): the display name the share view keeps
+  per browser (`src/collaboration/linkName.js`, generated "Curious Otter"
+  style, renamable from the topbar tag), sent percent-encoded as the
+  `X-Gamma-Name` header on every API call (`utils.js` injects it) and as
+  `?name=` on the page websocket; cleaned server-side (`auth.link_name`:
+  control characters out, 40 chars, `Anonymous` when empty). A label, not
+  an identity — usernames cannot contain `:`, so the log never confuses the
+  two. Link visitors alone are rate limited per IP (`auth.link_ratelimit`:
+  `collab.LINK_OPS_PER_MINUTE` op batches, `uploads.LINK_UPLOADS_PER_5_MIN`
+  uploads); their uploads count against the page's workspace like any
+  share editor's. Flipping the share back to `view`, or stopping it,
+  revokes the link's writes at once (the grant is re-read per request).
+- **Unknown tokens.** A `?share=` that names no share is counted per IP
+  (`auth.note_share_miss`, from `share_grant`, `GET /share/{token}` and the
+  page socket): past `auth.SHARE_MISSES_PER_5_MIN` (30) in five minutes the
+  address gets 429 for the rest of the window and the server log carries
+  one warning per window — the admin's only signal that someone is probing
+  for links. Tokens are 96 random bits, so guessing one is hopeless; the
+  throttle is about noise and visibility, not about protecting the space.
+  The link-visitor throttles above log the same way.
   Keep that read/write + scope distinction when adding endpoints.
 - Outbound fetches of user-supplied URLs (PDF proxy/resolver, AI PDF
   re-download) go through `gamma.net_guard.guarded_urlopen`, which blocks
@@ -67,7 +90,9 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   `SESSION_MAX_AGE` (expired rows are deleted in the middleware) and are revoked
   when the account's password is changed.
 - `/api/login` and `/api/login-guest` are rate-limited per IP/username
-  (`gamma/ratelimit.py`, in-process fixed windows → 429). Not an edge WAF; add
+  (`gamma/ratelimit.py`, in-process fixed windows → 429), as are share-link
+  visitors' writes and unknown share tokens (above; those log a warning
+  once per window through `check`'s `on_first_exceed`). Not an edge WAF; add
   one for large public deployments.
 - Every response carries baseline hardening headers (`X-Content-Type-Options`,
   `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy`, `Content-Security-Policy:
@@ -172,7 +197,8 @@ guarded fetch path.
 | GET, HEAD | `/uploads/{filename}` | serve stored files (HEAD: the headers alone, which is how the viewer learns a file's size before choosing its transport); with their media type (`storage.FILE_MEDIA_TYPES`, else `application/octet-stream`); pdf / images / txt / md render inline, everything else is `Content-Disposition: attachment` (html additionally sandboxed like svg); blocked or malformed extensions 400 |
 | GET | `/quota` | the limits that apply to uploads into the request's workspace — the account's for a personal one (`used_bytes` = all its personal workspaces), the workspace's own for a shared one — with `workspace_bytes` and `account` (the person, or "") |
 | POST | `/share/{page_id}` | create the page's share link (defaults `anyone`/`view`; optional body `{audience, role, users}` applies to a NEW link) or return the existing one unchanged — root blocks only (400 otherwise); workspace editors and owners |
-| GET/PUT/DELETE | `/share-settings/{page_id}` | read settings (`{token: null}` when unshared; any member) / change `audience`, `role`, `users` (`["carol"]` or `[{name, role}]`; validated: `edit`+`anyone` → 400, unknown usernames or roles → 400; the token stays) / stop sharing (the token dies) — editors and owners |
+| POST | `/share/{page_id}/reset` | mint a NEW token for the existing share, keeping audience, role and the invited people — for a link that got around; the old link stops opening at once (404 when the page is not shared); editors and owners. Stop + share again does the same but resets the settings |
+| GET/PUT/DELETE | `/share-settings/{page_id}` | read settings (`{token: null}` when unshared; any member) / change `audience`, `role`, `users` (`["carol"]` or `[{name, role}]`; validated: unknown usernames or roles → 400; the token stays; `edit`+`anyone` is allowed — see "Link visitors" above) / stop sharing (the token dies) — editors and owners |
 | GET | `/share/{token}` | resolve a link for this viewer → `{page_id, doc_id, username (who shared it), workspace_id, audience, role, can_edit, viewer, viewer_is_guest}` (`doc_id` = the page's PDF attachment id via `page_attachment`, `""` without one; `viewer`/`viewer_is_guest` let the share view offer "Open in my library" or "Add to my library"); 404 unknown, 401 sign in first, 403 signed in but not allowed |
 
 ### Search (`search.py`, `gamma/block_index.py`, `gamma/pdf_index.py`)
@@ -305,6 +331,7 @@ archived conversation browsing remains session-only.
 | DELETE | `/admin/backups/{name}` | delete a snapshot (restoring is `manage.py backups --restore`, server stopped — [migrations.md](migrations.md)) |
 | GET/PUT | `/admin/settings` | server-wide storage defaults, plus `public_url` / `public_url_source` (the admin-confirmed public server URL, [mcp.md](mcp.md)) |
 | GET | `/admin/logs?after=<seq>` | scrubbed in-memory server log |
+| GET | `/admin/server-info?refresh=` | the Server dashboard (`gamma/version.py`): `version` / `commit` / `label` (from `GAMMA_VERSION` / `GAMMA_COMMIT` — the Docker build and the desktop shell set them; a checkout is a "development build"), `started_at`, `uptime_seconds`, `python`, `platform`, `schema_version`, `frozen`, `log_counts` `{info, warning, error}` since startup, `latest` (`{version, url, published_at}` from the GitHub Releases API, cached six hours, ten minutes after a failure, `refresh=1` refetches; `GAMMA_UPDATE_CHECK=off` disables) or `latest_error`, `update_available` (True/False, None without a version to compare), `image`, `releases_url`. Sync: it may hit the network |
 
 Rails: the guest account is untouchable, no self-delete, the last admin
 can't be demoted or deleted.

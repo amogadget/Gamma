@@ -387,7 +387,8 @@
   .loginInput,
   .folderNewInput,
   .fileRowRename,
-  .tileRenameInput
+  .tileRenameInput,
+  .linkNameInput
 ) {
   box-sizing: border-box;
   background: var(--bg-input);
@@ -2312,39 +2313,12 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .topbar .iconBtn.activeIcon { background: var(--bg-hover); color: var(--text-primary); }
 /* Fixed width: the BibTeX pre would otherwise stretch the popover to its
    longest line — it scrolls inside instead. */
-.sharePopover { width: 384px; }
-/* Share popover (Notion-shaped): invite row › people entries › "General
-   access" entry › footer. Entries are avatar · name+sub · trailing control;
-   every control is a shared class (aiKeyInput, uiBtn, MenuSelect, uiClose). */
-.shareInvite { display: flex; gap: 6px; align-items: center; padding: 2px 4px 4px; }
-.shareInvite .aiKeyInput { flex: 1; min-width: 0; margin: 0; }
-.shareEntry { display: flex; align-items: center; gap: 10px; padding: 5px 4px; min-height: 40px; }
-.shareEntry .uiSelectBtn { flex-shrink: 0; }
-.shareEntry .uiClose { flex-shrink: 0; }
-.shareAvatar {
-  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
-  display: inline-flex; align-items: center; justify-content: center;
-  font-size: 13px; font-weight: 600;
-  background: var(--accent-bg); color: var(--accent-bright); border: 1px solid var(--border);
-}
-.shareAvatar.shareAvatarIcon { background: var(--bg-subtle); color: var(--text-secondary); }
-.shareEntryMain { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; }
-.shareEntryName { font-size: 13px; font-weight: 500; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.shareEntrySub { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
-.shareEntryStatic { font-size: 12px; color: var(--text-muted); white-space: nowrap; padding: 0 6px; }
-.shareFooter { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 4px 2px; margin-top: 4px; border-top: 1px solid var(--border-subtle); }
-.shareError { color: var(--danger); }
-.shareRow { display: flex; align-items: center; gap: 6px; }
-.shareRow input {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  padding: 6px 8px;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text-secondary);
-}
+/* The Share dialog (sharing/ShareDialog.jsx): settings rows and people rows
+   from the settings kit; only the long link needs its own rule. */
+.shareDialog .settingText { min-width: 0; }
+.shareDialog .setRow .settingDesc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settingsPaneHint.shareWarn { display: flex; align-items: flex-start; gap: 6px; color: #d9822b; }
+.shareWarn svg { flex-shrink: 0; margin-top: 2px; }
 .userPopover { min-width: 268px; }
 
 /* workspace switcher rows in the account popover */
@@ -3365,6 +3339,17 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   vertical-align: 1px;
 }
 .uiTag.admin { color: #4a9eff; border-color: rgba(74, 158, 255, 0.4); }
+/* The share view's "as <name>" tag (an editing visitor without an account) and
+   its rename field. The tag is a button, so it out-specifies the topbar's
+   generic pill and keeps the tag's own size; it never squeezes the title. */
+.topbar button.linkNameTag {
+  padding: 1px 7px; font-size: 10px; line-height: inherit; border-radius: 999px;
+  border: 1px solid var(--border-subtle); background: var(--bg-block); color: var(--text-muted);
+  flex-shrink: 1; min-width: 0; max-width: 38%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: pointer;
+}
+.topbar button.linkNameTag:hover { border-color: var(--accent-dark); color: var(--text-primary); }
+.topbar .linkNameInput { margin-left: 6px; width: 11em; max-width: 38%; padding: 1px 7px; font-size: 12px; }
 .uiCheckRow {
   display: flex;
   align-items: center;
@@ -4330,14 +4315,6 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 /* Beat the generic ".topbar button" pill when the box renders inside the
    topbar (share popover) — keep the flat icon look it has elsewhere. */
 .pptCiteBox .chatMsgActionBtn,
-.shareRow .chatMsgActionBtn {
-  padding: 0;
-  background: none;
-  border: none;
-  border-radius: 4px;
-  flex: 0 0 auto;
-  color: var(--text-muted);
-}
 
 /* --- paper metadata popover --- */
 .metaPopover { min-width: 340px; max-width: 420px; }

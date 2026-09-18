@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fractional_indexing import generate_key_between
 from pydantic import BaseModel
 
-from ..auth import require_ws, require_ws_writer, resolve_ws, share_scope_page
+from ..auth import actor_of, require_ws, require_ws_writer, resolve_ws, share_scope_page
 from ..blocks_store import (
     BLOCK_COLUMNS,
     ancestor_chains,
@@ -328,7 +328,7 @@ def _ops(ws: str, page_id: str, ops: list[dict], request: Request, scope) -> dic
     if scope is not None and scope != page_id:
         raise HTTPException(status_code=403, detail="not accessible via this share link")
     try:
-        return commit_ops(ws, page_id, ops, actor=request.state.user or "",
+        return commit_ops(ws, page_id, ops, actor=actor_of(request),
                           share_scoped=scope is not None)
     except OpError as e:
         raise HTTPException(status_code=e.status, detail=e.detail)

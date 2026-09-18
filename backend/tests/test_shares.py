@@ -205,9 +205,9 @@ def test_share_settings_roundtrip(bob, carol, anon):
     token = created["token"]
     assert bob.get(f"/api/share-settings/{page['id']}").json()["token"] == token
 
-    # editing needs a signed-in audience
+    # any audience may edit — anyone-with-the-link included (the link is the key)
     r = bob.put(f"/api/share-settings/{page['id']}", json={"role": "edit"})
-    assert r.status_code == 400 and "signed-in" in r.json()["detail"]
+    assert r.status_code == 200 and (r.json()["audience"], r.json()["role"]) == ("anyone", "edit")
     r = bob.put(f"/api/share-settings/{page['id']}", json={"audience": "users", "role": "edit"})
     assert r.status_code == 200 and r.json()["role"] == "edit"
     assert r.json()["token"] == token  # the link itself never changes
@@ -307,6 +307,111 @@ def test_view_role_never_writes(bob, carol, anon):
     _share(bob, page["id"], audience="anyone")
     assert anon.put(f"/api/blocks/{page['id']}/children", params=q, json={"blocks": []}).status_code == 403
     assert bob.get(f"/api/blocks/{page['id']}").json()["content"] == "Look, don't touch"
+
+
+def test_anyone_edit_link_lets_a_stranger_write_under_a_display_name(bob, guest, anon):
+    page = make_page(bob, "Open draft", properties={"doc_id": "open_doc"})
+    line = _child(bob, page["id"], "owner's line")
+    other = make_page(bob, "Bob's private page")
+    token = _share(bob, page["id"], audience="anyone", role="edit")["token"]
+    q = {"share": token}
+    assert anon.get(f"/api/share/{token}").json()["can_edit"] is True
+
+    # a write with a display name is logged as link:<name> …
+    r = anon.post(f"/api/pages/{page['id']}/ops", params=q, headers={"X-Gamma-Name": "  Otter\x07 the  Bold "},
+                  json={"client": "c1", "ops": [{"op": "set", "id": line["id"], "content": "edited by a stranger"}]})
+    assert r.status_code == 200, r.text
+    assert bob.get(f"/api/blocks/{line['id']}").json()["content"] == "edited by a stranger"
+    batches = bob.get(f"/api/pages/{page['id']}/ops").json()["batches"]
+    assert batches[-1]["actor"] == "link:Otter the Bold"
+    # … without one as link:Anonymous, and the guest account counts as a visitor too
+    r = anon.post("/api/blocks", params=q, json={"parent_id": page["id"], "content": "anon line"})
+    assert r.status_code == 200, r.text
+    assert bob.get(f"/api/pages/{page['id']}/ops").json()["batches"][-1]["actor"] == "link:Anonymous"
+    r = guest.post("/api/blocks", params=q, headers={"X-Gamma-Name": "Guest Heron"},
+                   json={"parent_id": page["id"], "content": "guest line"})
+    assert r.status_code == 200, r.text
+    assert bob.get(f"/api/pages/{page['id']}/ops").json()["batches"][-1]["actor"] == "link:Guest Heron"
+    # the header is percent-encoded UTF-8 (fetch cannot carry non-Latin-1 header values)
+    r = anon.post("/api/blocks", params=q, headers={"X-Gamma-Name": "%E5%B0%8F%E6%98%8E"},
+                  json={"parent_id": page["id"], "content": "cjk"})
+    assert r.status_code == 200 and bob.get(f"/api/pages/{page['id']}/ops").json()["batches"][-1]["actor"] == "link:小明"
+    # the name is capped, the scope is still the page
+    r = anon.post("/api/blocks", params=q, headers={"X-Gamma-Name": "N" * 80},
+                  json={"parent_id": page["id"], "content": "capped"})
+    assert r.status_code == 200 and bob.get(f"/api/pages/{page['id']}/ops").json()["batches"][-1]["actor"] == "link:" + "N" * 40
+    assert anon.post("/api/blocks", params=q, json={"parent_id": other["id"], "content": "x"}).status_code == 403
+    assert anon.put(f"/api/blocks/{page['id']}", params=q, json={"properties": {"doc_id": "evil"}}).status_code == 403
+    assert bob.get(f"/api/blocks/{page['id']}").json()["properties"]["doc_id"] == "open_doc"
+    # images too, into the owner's uploads
+    r = anon.post("/api/upload-image", params=q, headers={"X-Gamma-Name": "Otter"},
+                  files={"file": ("dot.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 64, "image/png")})
+    assert r.status_code == 200, r.text
+    # flipping general access back to view revokes the link's writes at once
+    _share(bob, page["id"], role="view")
+    assert anon.post("/api/blocks", params=q, json={"parent_id": page["id"], "content": "late"}).status_code == 403
+    assert anon.get(f"/api/share/{token}").json()["can_edit"] is False
+
+
+def test_reset_link_mints_a_new_token_and_keeps_the_settings(bob, carol, anon):
+    page = make_page(bob, "Leaked link")
+    old = _share(bob, page["id"], audience="list", role="edit", users=[{"name": "carol_share", "role": "edit"}])["token"]
+    r = bob.post(f"/api/share/{page['id']}/reset")
+    assert r.status_code == 200, r.text
+    new = r.json()["token"]
+    assert new != old and len(new) >= 16
+    assert (r.json()["audience"], r.json()["role"], r.json()["users"]) == ("list", "edit", [{"name": "carol_share", "role": "edit"}])
+    assert bob.get(f"/api/share-settings/{page['id']}").json()["token"] == new
+    # the old address is dead at once, the new one works for the invited editor
+    assert carol.get(f"/api/share/{old}").status_code == 404
+    assert carol.get(f"/api/share/{new}").json()["can_edit"] is True
+    # only an editor of the workspace, and only for a shared page
+    assert carol.post(f"/api/share/{page['id']}/reset").status_code == 404
+    assert anon.post(f"/api/share/{page['id']}/reset").status_code == 401
+    assert bob.post(f"/api/share/{make_page(bob, 'Never shared')['id']}/reset").status_code == 404
+
+
+def test_unknown_share_tokens_are_throttled_per_ip_and_logged(bob, anon, monkeypatch):
+    from gamma import auth
+    from gamma.logbuf import tail
+    monkeypatch.setattr(auth, "SHARE_MISSES_PER_5_MIN", 3)
+    page = make_page(bob, "Probed page")
+    token = _share(bob, page["id"])["token"]
+    before = tail()[-1]["seq"] if tail() else 0
+    for i in range(3):
+        assert anon.get(f"/api/share/bogus{i}").status_code == 404
+    # the fourth miss is refused, and every share-token read from that address with it
+    assert anon.get("/api/share/bogus3").status_code == 429
+    assert anon.get(f"/api/blocks/{page['id']}", params={"share": "bogus4"}).status_code == 429
+    warnings = [e for e in tail(before) if e["level"] == "WARNING" and "unknown share links" in e["msg"]]
+    assert len(warnings) == 1, warnings  # one line per window, not per request
+    # a real token still opens for everyone else (misses are per address; the
+    # test client is one address, so check the grant path with a fresh window)
+    monkeypatch.setattr(auth, "SHARE_MISSES_PER_5_MIN", 30)
+    from gamma import ratelimit
+    ratelimit._buckets.clear()
+    assert anon.get(f"/api/share/{token}").status_code == 200
+
+
+def test_link_visitors_are_rate_limited_per_ip(bob, anon, monkeypatch):
+    from gamma.routers import collab as collab_router, uploads as uploads_router
+    monkeypatch.setattr(collab_router, "LINK_OPS_PER_MINUTE", 2)
+    monkeypatch.setattr(uploads_router, "LINK_UPLOADS_PER_5_MIN", 1)
+    page = make_page(bob, "Flooded page")
+    token = _share(bob, page["id"], audience="anyone", role="edit")["token"]
+    q = {"share": token}
+    body = lambda i: {"client": "c", "ops": [{"op": "insert", "id": f"fl{i}", "parent": page["id"], "content": "x"}]}
+    assert anon.post(f"/api/pages/{page['id']}/ops", params=q, json=body(1)).status_code == 200
+    assert anon.post(f"/api/pages/{page['id']}/ops", params=q, json=body(2)).status_code == 200
+    assert anon.post(f"/api/pages/{page['id']}/ops", params=q, json=body(3)).status_code == 429
+    from gamma.logbuf import tail
+    assert any(e["level"] == "WARNING" and "link visitor" in e["msg"] and "ops" in e["msg"] for e in tail()[-5:])
+    png = {"file": ("dot.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 64, "image/png")}
+    assert anon.post("/api/upload-image", params=q, files=png).status_code == 200
+    assert anon.post("/api/upload-image", params=q, files=png).status_code == 429
+    # the owner's own writes are never counted
+    for i in range(4):
+        assert bob.post(f"/api/pages/{page['id']}/ops", json=body(10 + i)).status_code == 200
 
 
 def test_edit_role_writes_inside_the_page_only(bob, carol, dave):

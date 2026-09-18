@@ -59,12 +59,19 @@ export async function shareScenarios({ server, browser, alice, bob, step, until,
     const page = await openPage(ctx, `${server.base}/?page=${pdfPageId}&ws=${account.ws}`);
     await waitForPdf(page, 1);
     await page.click("button[aria-label='Share']");
-    await page.waitForSelector(".sharePopover");
-    await page.locator(".sharePopover button", { hasText: "Create link" }).click();
-    const copyBtn = page.locator(".sharePopover button", { hasText: /Copy link|Copied/ }).first();
+    await page.waitForSelector(".shareDialog");
+    await page.locator(".shareDialog button", { hasText: "Create link" }).click();
+    const copyBtn = page.locator(".shareDialog button", { hasText: /Copy link|Copied/ }).first();
     await copyBtn.waitFor({ timeout: 10000 });
-    const url = await copyBtn.getAttribute("title");
-    token = url && new URL(url).searchParams.get("share");
+    const tokenOf = async () => new URL(await copyBtn.getAttribute("title")).searchParams.get("share");
+    const first = await tokenOf();
+    // Reset link: a new address, the settings stay
+    await page.locator(".shareDialog button", { hasText: "Reset link" }).click();
+    await until(async () => (await tokenOf()) !== first, { what: "link reset" });
+    token = await tokenOf();
+    assert((await account.api(`/api/share/${first}`).catch((e) => e)).status === 404, "the old link is dead");
+    await page.keyboard.press("Escape");
+    await page.locator(".shareDialog").waitFor({ state: "detached" });
     if (!token) token = (await account.api(`/api/share-settings/${pdfPageId}`)).token;
     assert(token, "share token");
     assertNoProblems(page);
@@ -100,6 +107,28 @@ export async function shareScenarios({ server, browser, alice, bob, step, until,
     await page.keyboard.type(" edited by bob");
     await closeEditor(page);
     await until(async () => JSON.stringify(await tree(account, pdfPageId)).includes("edited by bob"), { what: "bob's edit saved to alice's page" });
+    assertNoProblems(page);
+    await ctx.close();
+  });
+
+  await step("share: an anyone-with-the-link edit share lets a stranger type under a display name", async () => {
+    await account.api(`/api/share-settings/${pdfPageId}`, { method: "PUT", body: { audience: "anyone", role: "edit" } });
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 860 } }); // no session at all
+    const page = await openPage(ctx, `${server.base}/?share=${token}`);
+    await page.waitForSelector(".readOnlyTitle", { timeout: 15000 });
+    await until(async () => (await page.textContent("body")).includes("Can edit"), { what: "edit badge" });
+    // a generated name, changeable from the tag
+    assert(/^as \S+ \S+$/.test((await page.locator(".linkNameTag").textContent()).trim()), "a generated two-word name");
+    await page.locator(".linkNameTag").click();
+    await page.locator(".linkNameInput").fill("Otter");
+    await page.keyboard.press("Enter");
+    await until(async () => (await page.locator(".linkNameTag").textContent()).trim() === "as Otter", { what: "renamed" });
+    await editRow(page, "figure");
+    await page.keyboard.type(" edited by a stranger");
+    await closeEditor(page);
+    await until(async () => JSON.stringify(await tree(account, pdfPageId)).includes("edited by a stranger"), { what: "stranger's edit saved" });
+    const { batches } = await account.api(`/api/pages/${pdfPageId}/ops`);
+    assertEq(batches[batches.length - 1].actor, "link:Otter", "the edit is attributed to the display name");
     assertNoProblems(page);
     await ctx.close();
   });

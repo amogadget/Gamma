@@ -1,7 +1,6 @@
 """Storage limits admins edit at runtime, and their enforcement.
 
-Two layers, both in users.db (unlike config.py's env vars, which are fixed at
-process start):
+Two layers, both in users.db:
   - server-wide defaults in the `settings` KV: per-file upload cap and total
     storage quota per account;
   - per-user overrides in nullable `users` columns (NULL = inherit default).
@@ -23,13 +22,13 @@ The module also owns the admin-confirmed public server URL (`settings` key
 derived from it ([mcp.md](../../docs/dev/mcp.md)).
 """
 
-import os
 import re
 from ipaddress import IPv6Address
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 
+from . import config
 from .config import MAX_UPLOAD_BYTES
 from .db import connect_users_db, page_now, ws_uploads_dir
 
@@ -114,7 +113,7 @@ def validate_public_url(value: str) -> str:
 
 
 def public_url_settings() -> dict:
-    override = os.environ.get("GAMMA_PUBLIC_URL", "").strip().rstrip("/")
+    override = config.public_url_override().rstrip("/")
     with connect_users_db() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = 'public_url'").fetchone()
     saved = row[0] if row else ""
@@ -123,13 +122,13 @@ def public_url_settings() -> dict:
 
 
 def set_public_url(value: str) -> None:
-    if os.environ.get("GAMMA_PUBLIC_URL", "").strip():
+    if config.public_url_override():
         raise ValueError("The public server URL is managed by GAMMA_PUBLIC_URL on this server.")
     _set_raw("public_url", validate_public_url(value))
 
 
 def mcp_allowed_hosts(public_url: str | None = None) -> list[str]:
-    hosts = [h.strip().lower() for h in os.environ.get("GAMMA_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+    hosts = config.mcp_extra_hosts()
     if public_url is None:
         public_url = public_url_settings()["public_url"]
     if public_url:

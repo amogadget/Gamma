@@ -1,23 +1,27 @@
 // Settings → Server (admins only): everything that is about the server
-// rather than one account — the storage defaults every account inherits,
-// the shared workspaces (settingsWorkspacesAdmin.jsx), whole-data-
-// directory snapshots (settingsBackups.jsx ServerBackups) and the scrubbed
-// server log. Per-account things — including each account's personal
+// rather than one account — the dashboard (build, uptime, warnings, the
+// update check), the storage defaults every account inherits, the shared
+// workspaces (settingsWorkspacesAdmin.jsx), whole-data-directory snapshots
+// (settingsBackups.jsx ServerBackups) and the scrubbed server log with a
+// level filter. Per-account things — including each account's personal
 // workspaces — stay in Users; per-workspace backups in Backups.
 import React from "react";
 import { API, apiJson } from "../shared/lib/utils";
-import { PaneHead, Section, Row, UnitInput, LogBox, useSettingsDraft } from "./SettingsKit";
+import { PaneHead, Section, Row, Segmented, StatText, UnitInput, LogBox, useSettingsDraft } from "./SettingsKit";
 import { WorkspacesAdmin } from "./SettingsWorkspacesAdmin";
 import { ServerBackups } from "./SettingsBackups";
 import { PublicUrlSettings } from "./SettingsPublicUrl";
-import { ImportIcon, ServerIcon } from "../shared/ui/Icons";
+import { ActivityIcon, AlertCircleIcon, CloudDownloadIcon, ImportIcon, ServerIcon } from "../shared/ui/Icons";
 
 export function ServerSettings({ value }) {
   return (
     <>
       <PaneHead icon={ServerIcon} title="Server">
-        Storage defaults, the shared workspaces, snapshots of the whole data directory, and the server log.
+        What this server runs and how it is doing, storage defaults, the shared workspaces, snapshots of the whole data directory, and the server log.
       </PaneHead>
+      <Section title="Dashboard">
+        <ServerDashboard />
+      </Section>
       <Section title="Assistant connections">
         <PublicUrlSettings setStatus={value.setStatus} />
       </Section>
@@ -31,6 +35,85 @@ export function ServerSettings({ value }) {
       </Section>
     </>
   );
+}
+
+function fmtUptime(seconds) {
+  const s = Math.max(0, Number(seconds) || 0);
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  if (d) return `${d}d ${h}h`;
+  if (h) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+// What the update row says: newer / current / unknown, in that order of use.
+function updateHint(info) {
+  const latest = info.latest?.version;
+  if (info.update_available) return `v${latest} is out — this server runs v${info.version}`;
+  if (info.update_available === false) return `up to date · latest release v${latest}`;
+  if (latest) return `latest release v${latest} · this build carries no version to compare`;
+  if (info.latest_error) return `could not check: ${info.latest_error}`;
+  return "checking…";
+}
+
+// GET /api/admin/server-info: the build, uptime, log counts by level and the
+// GitHub release check (cached server-side; "Check now" refreshes). A
+// Docker server cannot update itself, so an available update is a hint
+// to pull the image; the desktop app updates on its own.
+function ServerDashboard() {
+  const [info, setInfo] = React.useState(null);
+  const [error, setError] = React.useState("");
+  const [checking, setChecking] = React.useState(false);
+  const load = React.useCallback(async (refresh) => {
+    if (refresh) setChecking(true);
+    try {
+      setInfo(await apiJson(`${API}/admin/server-info${refresh ? "?refresh=1" : ""}`));
+      setError("");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setChecking(false);
+    }
+  }, []);
+  React.useEffect(() => {
+    load(false);
+    const timer = setInterval(() => load(false), 30000);
+    return () => clearInterval(timer);
+  }, [load]);
+  if (!info) {
+    return error ? <p className="settingsPaneHint aiKeysError" role="alert">Dashboard unavailable: {error}</p>
+      : <p className="setNotice">Loading…</p>;
+  }
+  const counts = info.log_counts || {};
+  const logTone = counts.error ? "error" : counts.warning ? "warn" : "";
+  const updateTone = info.update_available ? "warn" : "";
+  return <>
+    <div className="setStats">
+      <StatText icon={ServerIcon} label="version" value={info.version ? `v${info.version}` : "dev build"}
+        hint={info.commit ? `build ${info.commit}` : info.frozen ? "desktop app" : "run from a checkout"}
+        title={`Gamma ${info.label} · Python ${info.python} · ${info.platform} · data schema ${info.schema_version}`} />
+      <StatText icon={ActivityIcon} label="uptime" value={fmtUptime(info.uptime_seconds)}
+        hint={`since ${new Date(info.started_at).toLocaleString()}`} />
+      <StatText icon={AlertCircleIcon} label="warnings · errors" value={`${counts.warning || 0} · ${counts.error || 0}`}
+        hint={`${counts.info || 0} info lines since start`} tone={logTone}
+        title="Lines logged since the server started, by level. The log below shows the most recent ones." />
+    </div>
+    <Row icon={CloudDownloadIcon} label="Updates" hint={updateHint(info)}
+      title="Compared against the newest GitHub release. Checked at most every six hours; Check now asks again.">
+      <span className="setRowControls">
+        {info.latest?.url ? (
+          <button className="uiBtn sm" onClick={() => window.open(info.latest.url, "_blank", "noopener")}>Release notes</button>
+        ) : null}
+        <button className={`uiBtn sm ${updateTone ? "primary" : ""}`} disabled={checking} onClick={() => load(true)}>
+          {checking ? "Checking…" : "Check now"}
+        </button>
+      </span>
+    </Row>
+    {info.update_available ? (
+      <div className="settingsPaneHint">
+        A server in Docker does not update itself: pull <code>{info.image}:latest</code> (or <code>:{info.latest.version}</code>) and restart the container. The desktop app updates on its own.
+      </div>
+    ) : null}
+  </>;
 }
 
 // Server-wide default storage limits (users.db via /api/admin/settings).
@@ -82,12 +165,16 @@ function ServerLimitRows({ setStatus, refreshQuota }) {
   </>;
 }
 
+const LEVEL_FILTERS = [["all", "All"], ["warn", "Warnings"], ["error", "Errors"]];
+const toneOf = (level) => (level === "ERROR" || level === "CRITICAL" ? "error" : level === "WARNING" ? "warn" : "");
+
 // The backend's in-memory log (GET /api/admin/logs). Polls with a seq
 // cursor while the pane is open; secrets are scrubbed server-side before
-// entries ever reach the buffer.
+// entries ever reach the buffer. The filter narrows to warnings or errors.
 function ServerLogBox({ setStatus }) {
   const [entries, setEntries] = React.useState(null); // null = first poll pending
   const [error, setError] = React.useState("");
+  const [level, setLevel] = React.useState("all");
   const stateRef = React.useRef({ cursor: 0, entries: [] });
   React.useEffect(() => {
     let alive = true;
@@ -110,11 +197,9 @@ function ServerLogBox({ setStatus }) {
     const timer = setInterval(poll, 2000);
     return () => { alive = false; clearInterval(timer); };
   }, []);
-  const shown = (entries || []).map((entry) => ({
-    key: entry.seq,
-    timeMs: entry.t * 1000,
-    text: `${entry.level !== "INFO" ? `[${entry.level}] ` : ""}${entry.msg}`,
-  }));
+  const shown = (entries || [])
+    .map((entry) => ({ key: entry.seq, timeMs: entry.t * 1000, text: entry.msg, tone: toneOf(entry.level) }))
+    .filter((entry) => level === "all" || (level === "warn" ? !!entry.tone : entry.tone === "error"));
   return (
     <LogBox
       icon={ServerIcon}
@@ -122,10 +207,12 @@ function ServerLogBox({ setStatus }) {
       description="Backend events since startup · secrets masked"
       entries={shown}
       emptyText={error ? `Server log unavailable: ${error}`
-        : entries ? "Nothing logged since the server started."
-          : "Loading…"}
+        : !entries ? "Loading…"
+          : level === "all" ? "Nothing logged since the server started."
+            : `No ${level === "warn" ? "warnings" : "errors"} since the server started.`}
       copyStatus="Server log copied."
       setStatus={setStatus}
+      extra={<Segmented value={level} onChange={setLevel} options={LEVEL_FILTERS} />}
     />
   );
 }

@@ -38,7 +38,7 @@ Validation (from `frontend`):
 
 ```sh
 node --test tests/latexInput.test.mjs
-node tests/e2e/latexEditor.mjs
+npm run e2e:latex
 ```
 
 The browser regression (`tests/e2e/latexEditor.mjs`) bundles the real note

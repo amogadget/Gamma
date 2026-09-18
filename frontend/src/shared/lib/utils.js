@@ -36,6 +36,21 @@ function getCurrentWorkspace() {
   return currentWorkspace;
 }
 
+// ---- Link visitors -----------------------------------------------------------
+// In a share view opened without an account, the visitor's display name
+// (collaboration/linkName.js) goes out as X-Gamma-Name on every API call —
+// percent-encoded, since header values cannot carry non-Latin-1 text — and
+// as ?name= on the page socket. The server records writes as `link:<name>`.
+let linkName = "";
+
+function setLinkName(name) {
+  linkName = name || "";
+}
+
+function getLinkName() {
+  return linkName;
+}
+
 // Append the workspace to an in-app URL (links, history entries) so a reload
 // or a copied link lands in the same library. Share URLs never carry it.
 function withWorkspace(url) {
@@ -84,11 +99,12 @@ window.fetch = function (input, options) {
   const method = String(options?.method || input?.method || "GET").toUpperCase();
   const expectedAtStart = expectedUser;
   const started = performance.now();
-  if ((expectedUser || currentWorkspace) && isApi && !AUTH_PATHS.has(path)) {
+  if ((expectedUser || currentWorkspace || linkName) && isApi && !AUTH_PATHS.has(path)) {
     options = { ...(options || {}) };
     const extra = {};
     if (expectedUser) extra["X-Gamma-User"] = expectedUser;
     if (currentWorkspace) extra["X-Gamma-Workspace"] = currentWorkspace;
+    if (linkName) extra["X-Gamma-Name"] = encodeURIComponent(linkName);
     if (options.headers instanceof Headers) {
       options.headers = new Headers(options.headers);
       for (const [k, v] of Object.entries(extra)) options.headers.set(k, v);
@@ -395,4 +411,4 @@ async function readNdjson(res, onBatch) {
   }
 }
 
-export { API, makeId, fmtBytes, sha256, getDocIdForUrl, isPdfFile, isMarkdownFile, isUnverifiedPaperMeta, metaSourceInfo, apiJson, withShare, withWorkspace, assetUrl, setCurrentWorkspace, getCurrentWorkspace, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson };
+export { API, makeId, fmtBytes, sha256, getDocIdForUrl, isPdfFile, isMarkdownFile, isUnverifiedPaperMeta, metaSourceInfo, apiJson, withShare, withWorkspace, assetUrl, setCurrentWorkspace, getCurrentWorkspace, setLinkName, getLinkName, importZoteroZip, resolvePdfUrl, pdfProxyUrl, probePdfUrl, setExpectedUser, getExpectedUser, usePersistedState, usePersistedFlag, copyText, copyRich, readNdjson };

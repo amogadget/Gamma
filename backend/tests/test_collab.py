@@ -277,6 +277,32 @@ def test_socket_hello_and_fanout(guest):
         assert _recv(a, "leave")["client"] == "bb"
 
 
+def test_socket_link_visitor_joins_under_its_display_name(owner):
+    page = make_page(owner, "Open socket page")
+    token = _share(owner, page["id"], audience="anyone", role="edit")
+    from fastapi.testclient import TestClient
+    from gamma.app import app
+    anon = TestClient(app)
+    with owner.websocket_connect(f"/api/ws/page/{page['id']}?client=ow") as o:
+        _hello(o)
+        with anon.websocket_connect(f"/api/ws/page/{page['id']}?client=vis&share={token}&name=Otter%20the%20Bold") as v:
+            hv = _hello(v)
+            me = next(p for p in hv["peers"] if p["client"] == "vis")
+            assert (me["user"], me["name"], me["can_edit"]) == ("", "Otter the Bold", True)
+            joined = _recv(o, "join")["peer"]
+            assert (joined["user"], joined["name"]) == ("", "Otter the Bold")
+            # the visitor's write fans out under the same label
+            r = anon.post(f"/api/pages/{page['id']}/ops", params={"share": token}, headers={"X-Gamma-Name": "Otter the Bold"},
+                          json={"client": "vis", "ops": [{"op": "insert", "id": "visA", "parent": page["id"], "content": "hi"}]})
+            assert r.status_code == 200, r.text
+            assert _recv(o, "ops")["actor"] == "link:Otter the Bold"
+        # a view-only link still joins, presence-only, and without a name it is Anonymous
+        _share(owner, page["id"], audience="anyone", role="view")
+        with anon.websocket_connect(f"/api/ws/page/{page['id']}?client=v2&share={token}") as v:
+            me = next(p for p in _hello(v)["peers"] if p["client"] == "v2")
+            assert (me["name"], me["can_edit"]) == ("Anonymous", False)
+
+
 def test_socket_cursor_presence(guest):
     page = make_page(guest, "Socket cursor page")
     assert _ops(guest, page["id"], [{"op": "insert", "id": "wsC", "parent": page["id"], "content": "hi"}]).status_code == 200
