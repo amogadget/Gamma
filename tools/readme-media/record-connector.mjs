@@ -1,4 +1,4 @@
-// Records docs/assets/demos/demo-connector.webp sources: arXiv abs page (segment A),
+// Optional connector capture (the README now uses the connections illustration): arXiv abs page (segment A),
 // the extension popup driven as a page (segment B, composited as an overlay),
 // and the saved paper opening in Gamma (segment C).
 import { chromium, ROOT, configureContext, addCursor, readSession, BASE as SERVER } from './runtime.mjs';

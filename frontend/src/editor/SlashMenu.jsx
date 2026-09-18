@@ -42,6 +42,7 @@ function blockInsert(ctx, body, caretRelInBody, selLen = 0) {
 }
 
 const TABLE_MD = "| Column 1 | Column 2 |\n| --- | --- |\n|   |   |";
+const MERMAID_MD = "```mermaid\nflowchart LR\n  A[Start] --> B[Finish]\n```";
 
 export const SLASH_COMMANDS = [
   {
@@ -89,6 +90,11 @@ export const SLASH_COMMANDS = [
     name: "code", label: "Code block", glyph: "</>", hint: "fenced code",
     keywords: ["fence", "pre", "snippet"],
     run: (ctx) => blockInsert(ctx, "```\n\n```", 4),
+  },
+  {
+    name: "mermaid", label: "Mermaid diagram", glyph: "◇", hint: "flowchart or sequence diagram",
+    keywords: ["diagram", "flowchart", "sequence", "chart"],
+    run: (ctx) => blockInsert(ctx, MERMAID_MD, MERMAID_MD.indexOf("Start"), 5),
   },
   { name: "divider", label: "Divider", glyph: "—", keywords: ["hr", "rule", "separator", "line"], run: (ctx) => blockInsert(ctx, "---\n") },
   {

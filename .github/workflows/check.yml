@@ -16,6 +16,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  branding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node tools/branding/build.mjs --check
+      - run: node --test tools/branding/check.test.mjs
+
   backend:
     runs-on: ubuntu-latest
     steps:

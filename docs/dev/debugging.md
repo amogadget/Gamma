@@ -123,6 +123,9 @@ cookie + `X-Gamma-Workspace` for API seeding, browser contexts logged in as
 that account), `makePdf` (a small real PDF with a text layer), and `step()`.
 The scenarios live in `tests/e2e/scenarios/`:
 
+- `mermaid.mjs`: note/chat diagrams, streaming fences, editing, source copying,
+  SVG downloads, theme changes and Markdown round trips. Run with `--only mermaid`;
+  implementation details in [mermaid.md](mermaid.md).
 - `mentions.mjs`: paper search, keyboard and touch selection, reference limits,
   persistence, PDF receipts and textarea shrink after clearing context. Run with `--only mentions`.
 - `chatNavigation.mjs`: a library or PDF chat reply keeps streaming and is

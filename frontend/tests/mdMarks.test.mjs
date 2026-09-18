@@ -4,7 +4,7 @@
 // checks the result plus where the selection lands.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { insertLink, isUrl, scanMarks, toggleMark } from "../src/editor/mdMarks.js";
+import { expandBlankLines, insertLink, isUrl, scanMarks, toggleMark } from "../src/editor/mdMarks.js";
 
 // Apply {from, to, insert} changes addressed to the original text.
 function apply(text, changes) {
@@ -77,4 +77,12 @@ test("insertLink builds the link and parks the caret in the empty slot", () => {
   assert.equal(isUrl(" https://a.b/c "), true);
   assert.equal(isUrl("https://a b"), false);
   assert.equal(isUrl("ftp://a"), false);
+});
+
+test("expandBlankLines keeps every blank line after the first as an empty paragraph", () => {
+  assert.equal(expandBlankLines("a\nb"), "a\nb");
+  assert.equal(expandBlankLines("a\n\nb"), "a\n\nb", "one blank line is the paragraph break");
+  assert.equal(expandBlankLines("a\n\n\nb"), "a\n\n&nbsp;\n\nb", "two blank lines show one empty line");
+  assert.equal(expandBlankLines("a\n\n\n\nb"), "a\n\n&nbsp;\n\n&nbsp;\n\nb");
+  assert.equal(expandBlankLines("a\n  \n\t\nb"), "a\n\n&nbsp;\n\nb", "whitespace-only lines are blank");
 });

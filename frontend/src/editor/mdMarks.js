@@ -190,3 +190,16 @@ export function scanImageSyntax(text) {
   }
   return out;
 }
+
+// Blank lines the rendered view keeps. Markdown folds any run of blank lines
+// into one paragraph break, so in a note "a / blank / blank / b" looked like
+// "a / b" once the editor closed while the editor showed both empty rows.
+// One blank line stays the paragraph break; every further one becomes an
+// empty (`&nbsp;`) paragraph, i.e. a visible empty line. Whitespace-only
+// lines count as blank. Callers keep code and math spans out of it.
+export function expandBlankLines(text) {
+  return text.replace(/\n(?:[ \t]*\n){2,}/g, (run) => {
+    const breaks = run.split("\n").length - 1;
+    return "\n\n" + "&nbsp;\n\n".repeat(breaks - 2);
+  });
+}

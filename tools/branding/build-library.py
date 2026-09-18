@@ -31,8 +31,7 @@ MARK
     <path d="M-60 985 C240 1210 590 1110 920 1055 S1530 1010 1980 1150"/>
   </g>
   <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-    <use href="#gammaMark" transform="translate(100 92) scale(1.2)"/>
-    <text x="178" y="138" font-size="44" font-weight="700" letter-spacing="-1" fill="#1a1a18">Gamma<tspan dx="11" font-weight="400" fill="#e8a020">PDF</tspan></text>
+    <use href="#gammaLogo" transform="translate(100 92) scale(0.45)"/>
     <text x="100" y="255" font-size="76" font-weight="600" letter-spacing="-2" fill="#1a1a18">Find your papers. Follow your ideas.</text>
     <text x="103" y="313" font-size="29" fill="#6b6a65">From the first download to the next connection — without losing your place.</text>
 

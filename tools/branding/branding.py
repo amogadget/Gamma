@@ -6,16 +6,15 @@ import xml.etree.ElementTree as ET
 ROOT = Path(__file__).resolve().parents[2]
 ASSETS = ROOT / 'docs/assets/branding'
 
-# Every illustration reuses the hand-authored hero's Gamma mark, as one <defs> block.
-_hero = (ASSETS / 'gamma-hero-light.svg').read_text(encoding='utf-8')
-_mark = re.search(r'<g transform="translate\(140 300\) scale\(2\)">(.*?)\n  </g>', _hero, re.S).group(1)
-MARK = f"""    <radialGradient id="markGlow" cx="24" cy="18" r="22" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#e8a020" stop-opacity="0.3"/>
-      <stop offset="1" stop-color="#e8a020" stop-opacity="0"/>
-    </radialGradient>
-    <clipPath id="markClip"><rect width="48" height="48" rx="11"/></clipPath>
-    <g id="gammaMark">{_mark}
-    </g>"""
+# The mark is independent of the hero composition.
+_mark = (ROOT / 'design/brand/marks/favicon.svg').read_text(encoding='utf-8').strip()
+ET.fromstring(_mark)  # The editable source must also open as a standalone SVG.
+_mark = re.sub(r'\bwidth="32" height="32"', 'width="48" height="48"', _mark, count=1)
+MARK = f'<g id="gammaMark">{_mark}</g>'
+_logo = (ROOT / 'design/brand/compositions/logo.svg').read_text(encoding='utf-8').strip()
+_logo = re.fullmatch(r'<svg\b[^>]*>(.*)</svg>', _logo, re.S).group(1)
+_logo = _logo.replace('{{gamma-mark}}', _mark).replace('{{logo-text}}', '#1a1a18')
+MARK += f'<g id="gammaLogo">{_logo}</g>'
 
 # Light-theme colours of the workspace and library scenes and their dark counterparts.
 DARK_PALETTE = {

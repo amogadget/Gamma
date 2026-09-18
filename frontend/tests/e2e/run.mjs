@@ -15,6 +15,7 @@ import {
   openPage, results, sleep, step, until,
 } from "./harness.mjs";
 import { noteScenarios } from "./scenarios/notes.mjs";
+import { mermaidScenarios } from "./scenarios/mermaid.mjs";
 import { pdfScenarios } from "./scenarios/pdf.mjs";
 import { fileScenarios } from "./scenarios/files.mjs";
 import { collabScenarios } from "./scenarios/collab.mjs";
@@ -86,6 +87,7 @@ try {
   await mentionScenarios(env);
   await chatNavigationScenarios(env);
   await transferScenarios(env);
+  await mermaidScenarios(env);
   const notes = await noteScenarios(env);
   const pdf = await pdfScenarios(env, notes);
   await inkScenarios(env);

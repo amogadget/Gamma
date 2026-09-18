@@ -18,7 +18,8 @@ launcher, and desktop release workflows use these locations.
 | `docs/user_guide.md` | User documentation |
 | `docs/assets/` | Documentation images and animations |
 | `tools/readme-media/` | README capture scripts, renderers, and recording recipes |
-| `tools/branding/` | Generators of the three README illustrations and the PNG renderer of all branding SVGs |
+| `design/brand/` | Authoritative Gamma artwork, variant guidance and output provenance |
+| `tools/branding/` | Unified asset generation and consistency checks; README and Store layout recipes |
 | `tools/*codex*` | Codex plugin packaging, release and installer scripts with their unit tests |
 | `plugins/gamma/` | The Codex plugin source (`.codex-plugin/plugin.json`, the `gamma` skill) |
 | `artifacts/` | Ignored local sources and outputs; [retention guide](../../artifacts/README.md) |
@@ -32,7 +33,7 @@ App.jsx decomposition.
 
 | Location | Contents and consumers |
 |---|---|
-| `docs/assets/branding/` | Light/dark SVG wordmarks; the hand-authored hero (`gamma-hero-*.svg`; its `.png` renders are for the Microsoft Store listing); the generated `gamma-connections-*`, `gamma-workspaces-*` and `gamma-library-*` illustrations (`tools/branding/`); all used by the root README |
+| `docs/assets/branding/` | Generated Gamma PDF logo, hero SVG/PNG pairs and README illustrations; edit sources in `design/brand/` and `tools/branding/` |
 | `docs/assets/demos/` | README demos as small animated WebP images |
 | `docs/assets/screenshots/` | Documentation stills; guest welcome blocks reference their GitHub raw URLs |
 | `frontend/public/media/icons/` | Favicon, served at `/media/icons/favicon.svg` |
@@ -42,8 +43,13 @@ App.jsx decomposition.
 | `desktop/assets/store/` | Store listing artwork and listing text |
 | `extension/assets/icons/` | Connector toolbar, manifest, and notification icons |
 
-Keep assets with their consumer so the frontend build and the extension
-archive remain self-contained. React SVG components in `frontend/src/shared/ui/Icons.jsx`
+Keep generated assets with their consumer so the frontend build and the extension
+archive remain self-contained. Edit authoritative brand sources in
+[`design/brand/`](../../design/brand/README.md), then run
+`node tools/branding/build.mjs`; `--check` validates all published copies in CI.
+All marks derive from `design/brand/marks/favicon.svg`; the desktop, plugin, MCP
+and extension PNGs are rendered from this same source, with grayscale disabled
+connector variants. React SVG components in `frontend/src/shared/ui/Icons.jsx`
 and inline shell glyphs remain source code; they are not duplicate image files
 to move into a media directory.
 
@@ -64,10 +70,11 @@ to `assets`. This lets the packager discover `assets/appx/` and the app icon.
 Its application file list includes `assets/icon.png` for the Electron window;
 Store artwork and signing inputs do not need to ship inside the application.
 
-`npm run store-art` runs `desktop/scripts/store-art.js` and writes the tracked
-images in `desktop/assets/store/` and `desktop/assets/appx/`. It requires the
-existing Windows/Chromium setup described in
-[desktop release documentation](../../desktop/docs/release.md).
+`npm run store-art` delegates to the unified `tools/branding/build.mjs` generator,
+which refreshes all brand outputs, including `desktop/assets/store/` and
+`desktop/assets/appx/`. It uses the frontend's locked Playwright/Chromium, Python 3,
+and the hero's system font stack; generation works offline. See the
+[brand guide](../../design/brand/README.md).
 
 Generated PyInstaller intermediates remain under `desktop/build/`; frozen
 servers, installers, and Store packages go into `dist-backend/`, `dist/`, and

@@ -10,6 +10,8 @@ import { CheckIcon, CopyIcon, ExternalLinkIcon, FileTextIcon, PinIcon } from "./
 import { assetUrl, copyText } from "../lib/utils";
 import { parsePdfCitation } from "../../pdf/pdfCitation.js";
 import { remarkPaperLinks } from "../lib/remarkPaperLinks.js";
+import { mermaidFence, normalizeChatMarkdown, remarkMermaid } from "../lib/mermaidMarkdown.js";
+import { MermaidDiagram, mermaidCodeProps } from "./MermaidDiagram";
 
 // Shared chrome for every dockable window: one grip (drag to move/reorder,
 // double-click to collapse), the close button right beside it, then the
@@ -58,6 +60,7 @@ function fragmentToMarkdown(node, ctx = {}) {
   if (node.nodeType !== Node.ELEMENT_NODE) return "";
   const el = node;
   if (el.hasAttribute("data-markdown-copy-ignore")) return "";
+  if (el.hasAttribute("data-mermaid-source")) return `\n\n${mermaidFence(el.getAttribute("data-mermaid-source"))}\n\n`;
   if (el.classList.contains("katex-display")) {
     const tex = el.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
     return tex != null ? `\n\n$$\n${tex.trim()}\n$$\n\n` : el.textContent;
@@ -163,8 +166,14 @@ function ChatCopyBlock({ as: Tag, children }) {
     </div>
   );
 }
+function ChatPre({ children, copy = false }) {
+  const diagram = mermaidCodeProps(children);
+  if (diagram) return <MermaidDiagram {...diagram} />;
+  return copy ? <ChatCopyBlock as="pre">{children}</ChatCopyBlock> : <pre>{children}</pre>;
+}
+const ChatCopyPre = ({ children }) => <ChatPre copy>{children}</ChatPre>;
 const CHAT_COPY_COMPONENTS = {
-  pre: ({ children }) => <ChatCopyBlock as="pre">{children}</ChatCopyBlock>,
+  pre: ChatCopyPre,
   blockquote: ({ children }) => <ChatCopyBlock as="blockquote">{children}</ChatCopyBlock>,
 };
 
@@ -208,29 +217,18 @@ function ChatMarkdownLink({ href, children, title }) {
     <ExternalLinkIcon size={14} aria-hidden="true" /><span className="chatLinkLabel">{children}</span>
   </a>;
 }
-const CHAT_MARKDOWN_COMPONENTS = { a: ChatMarkdownLink };
+const CHAT_MARKDOWN_COMPONENTS = { a: ChatMarkdownLink, pre: ChatPre };
 const CHAT_MARKDOWN_COPY_COMPONENTS = { ...CHAT_MARKDOWN_COMPONENTS, ...CHAT_COPY_COMPONENTS };
 
 // onOpenPage: opens a Gamma page link in place (the library agent links the
 // pages it found as /?page=<id>); Ctrl/Cmd-click still opens a new tab.
 const ChatMarkdown = React.memo(function ChatMarkdown({ text, onOpenPage, copyBlocks = false }) {
-  const normalized = useMemo(() => (text || "")
-    .replace(/\\\[([\s\S]*?)\\\]/g, (_, m) => `\n$$\n${m}\n$$\n`)
-    .replace(/\\\(([\s\S]*?)\\\)/g, (_, m) => `$${m}$`)
-    // GFM splits table cells on every unescaped "|", including ones inside
-    // $…$ math — so a table with $|\Omega|T$ in a header cell never parses
-    // as a table (header/delimiter cell counts disagree) and collapses into
-    // a paragraph. Spell pipes inside inline math as \vert/\Vert, which
-    // KaTeX renders identically but the table tokenizer doesn't see.
-    .replace(/\$\$[\s\S]*?\$\$|\$([^$\n]+)\$/g, (m, inner) =>
-      inner == null || !inner.includes("|")
-        ? m
-        : `$${inner.replace(/\\\|/g, "\\Vert ").replace(/\|/g, "\\vert ")}$`), [text]);
+  const normalized = useMemo(() => normalizeChatMarkdown(text), [text]);
   return (
     <ChatOpenPageContext.Provider value={onOpenPage}>
       <div onCopy={handleMarkdownCopy}>
         <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkMath, remarkPaperLinks]}
+          remarkPlugins={[remarkGfm, remarkMath, remarkPaperLinks, remarkMermaid]}
           rehypePlugins={[rehypeKatex]}
           urlTransform={(url) => assetUrl(defaultUrlTransform(url))}
           components={copyBlocks ? CHAT_MARKDOWN_COPY_COMPONENTS : CHAT_MARKDOWN_COMPONENTS}

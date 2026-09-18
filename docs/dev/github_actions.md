@@ -7,7 +7,7 @@ is bumped or tagged by hand: versions are computed from the tags.
 
 | Workflow | File | Runs when | Produces |
 |---|---|---|---|
-| `check` | `check.yml` | every pull request to `main` | pass/fail: backend pytest, frontend unit tests + build, the browser suite, extension zip (~4 min) |
+| `check` | `check.yml` | every pull request to `main` | pass/fail: brand asset consistency, backend pytest, frontend unit tests + build, the browser suite, extension zip (~4 min) |
 | `desktop` | `desktop.yml` | manual dispatch only (`release` skill) | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files → GitHub Release `v<version>`; the MSIX artifact + a Microsoft Store submission when the secrets exist; a Docker tag `<version>` |
 | `extension` | `extension.yml` | manual dispatch only (`release` skill) | `gamma-connector-<version>.zip` → GitHub Release `extension-v<version>` |
 | `docker` | `docker.yml` | every push to `main`; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64 |

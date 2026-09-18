@@ -18,7 +18,7 @@ for theme in ('light', 'dark'):
   <title id="title">Gamma PDF: your research, connected</title>
   <desc id="desc">Save papers and web clips with Gamma Connector. Import and export Obsidian vaults and Zotero libraries, import Notion exports, and let Codex search and read your Gamma library with read-only access.</desc>
   <defs>
-{MARK}
+{MARK.replace('#1a1a18', ink)}
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
       <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="{'0.24' if dark else '0.10'}"/>
     </filter>
@@ -34,8 +34,7 @@ for theme in ('light', 'dark'):
   </g>
   <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
     <!-- Promise and browser capture, in the same editorial layout as the hero. -->
-    <use href="#gammaMark" transform="translate(140 132) scale(1.5)"/>
-    <text x="236" y="186" font-size="58" font-weight="700" letter-spacing="-1.5" fill="{ink}">Gamma<tspan dx="14" font-weight="400" fill="#e8a020">PDF</tspan></text>
+    <use href="#gammaLogo" transform="translate(140 132) scale(0.6)"/>
     <text x="140" y="328" font-size="80" font-weight="600" letter-spacing="-2" fill="{ink}">Your research.</text>
     <text x="140" y="420" font-size="80" font-weight="600" letter-spacing="-2" fill="{ink}">Connected.</text>
     <text x="142" y="492" font-size="28" fill="{muted}">Bring your notes. Take your highlights with you.</text>

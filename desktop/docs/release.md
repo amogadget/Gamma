@@ -176,8 +176,9 @@ listing's *Store logos* (9:16 poster art, 1:1 box art) and *Store display
 images* (300/150/71 px app tile icons) are pre-rendered in `assets/store/`;
 `npm run store-art` regenerates them, together with the package assets in
 `assets/appx/`, from the logo mark with Playwright's Chromium
-(`scripts/store-art.js`, Windows only, and online: the poster's wordmark
-font comes from Google Fonts).
+(`scripts/store-art.js` delegates to the shared brand generator). Generation
+uses the frontend's locked Playwright, Python 3 and the shared hero logo/font stack;
+no font download is needed. See [brand sources](../../design/brand/README.md).
 The package version must increase per submission
 (`package.json` `<version>` becomes `<version>.0`; the Store requires the
 fourth part to be 0, which electron-builder guarantees). Certification takes one

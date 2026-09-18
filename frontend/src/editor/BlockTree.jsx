@@ -11,6 +11,8 @@ import { withLegacyAccessors } from "../shared/model/blockModel";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { InkCard } from "../ink/InkLayer";
 import { handleMarkdownCopy } from "../shared/ui/Widgets";
+import { MermaidDiagram, mermaidCodeProps } from "../shared/ui/MermaidDiagram";
+import { mapOutsideCodeFences, remarkMermaid } from "../shared/lib/mermaidMarkdown.js";
 import { LinkIcon, PenIcon } from "../shared/ui/Icons";
 import { FileChip, parseUploadUrl, postFile, uploadFilesAsLines } from "../transfers/FileChip";
 import {
@@ -18,6 +20,7 @@ import {
   LatexAcPopup, MathLivePreview, mathTabJump,
 } from "./LatexEditor";
 import { BlockCmEditor, scanMathSpans } from "./BlockCmEditor";
+import { expandBlankLines } from "./mdMarks";
 import { fenceInnerAt, highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
 import { filterSlashCommands, SlashMenuPopup } from "./SlashMenu";
 import { remarkCallouts } from "./callouts";
@@ -51,6 +54,10 @@ function applyOutsideSpans(text, spans, fn) {
 }
 
 function mdPreprocess(content, nested) {
+  return mapOutsideCodeFences(content, (prose) => mdPreprocessProse(prose, nested));
+}
+
+function mdPreprocessProse(content, nested) {
   // The editor centres every $$…$$ on its own row (cmMathDisplay); remark-math
   // only does that when the fences sit alone on their lines (same-line content
   // becomes "meta" and is dropped — raw source in the rendered view). So a
@@ -58,6 +65,10 @@ function mdPreprocess(content, nested) {
   // (blank-line separated, KaTeX display mode → centred like the editor); one
   // embedded mid-sentence collapses onto one line instead, which remark-math
   // reads as inline math and the sentence stays intact.
+  // Two or more blank lines stay visible (expandBlankLines): markdown would
+  // fold them into the one paragraph break. Done first and outside math, so
+  // a blank line the display-math reshape below adds is never counted.
+  content = applyOutsideSpans(content, scanMathSpans(content).map((s) => ({ from: s.from, to: s.to })), expandBlankLines);
   const displays = scanMathSpans(content).filter((s) => s.display);
   for (let i = displays.length - 1; i >= 0; i--) {
     const s = displays[i];
@@ -436,6 +447,11 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
 // The copy button is the shared DOM one (makeCopyButton — same behavior as
 // the editor's code card), mounted once outside React's reconciliation.
 function CodePre({ children }) {
+  const diagram = mermaidCodeProps(children);
+  return diagram ? <MermaidDiagram {...diagram} /> : <HighlightedCodePre>{children}</HighlightedCodePre>;
+}
+
+function HighlightedCodePre({ children }) {
   const codeProps = React.Children.toArray(children).find((c) => c?.props)?.props || {};
   const lang = /language-([\w+#-]+)/.exec(codeProps.className || "")?.[1] || "";
   const raw = textOf(codeProps.children).replace(/\n$/, "");
@@ -479,7 +495,7 @@ const BlockMarkdown = React.memo(function BlockMarkdown({ content, blockId, refL
       // remark-breaks: a single Enter inside a note renders as a real line
       // break (the editor lets you type them), not markdown's soft-break space.
       // remarkCallouts must run before it (it eats the marker line's "\n").
-      remarkPlugins={[remarkGfm, remarkMath, remarkCallouts, remarkBreaks]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkCallouts, remarkBreaks, remarkMermaid]}
       rehypePlugins={[rehypeRaw, rehypeKatex]}
       // Upload URLs get the workspace / share token here (assetUrl): the
       // browser fetches <img> src and link hrefs without the API header.

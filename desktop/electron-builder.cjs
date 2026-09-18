@@ -84,7 +84,7 @@ module.exports = {
     displayName: 'Gamma PDF',
     applicationId: 'Gamma',
     languages: ['en-US'],
-    backgroundColor: '#1e1e1c', // the logo tile's background (scripts/store-art.js BG)
+    backgroundColor: '#1e1e1c', // keep aligned with design/brand/tokens.json background
     showNameOnTiles: true,
     // The Store's submission API rejects MSIX packages whose MinVersion is
     // <= 10.0.17134.0 (electron-builder's default is 10.0.14316.0; the web

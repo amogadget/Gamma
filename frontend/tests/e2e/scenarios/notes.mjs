@@ -180,6 +180,19 @@ export async function noteScenarios({ server, browser, alice, step, until, sleep
     assertNoProblems(page);
   });
 
+  await step("notes: one blank line is a paragraph break, a second one renders as an empty line", async () => {
+    await editRow(page, "third");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("after gap");
+    await closeEditor(page);
+    await until(async () => JSON.stringify(await tree(alice2, pageId)).includes("third\\n\\n\\nafter gap"), { what: "blank lines saved" });
+    const paras = await row(page, "after gap").locator(".blockRendered p").allTextContents();
+    assertEq(JSON.stringify(paras), JSON.stringify(["third", "\u00a0", "after gap"]), "an empty paragraph between the two");
+    assertNoProblems(page);
+  });
+
   await step("notes: Export… as an Obsidian vault downloads a zip", async () => {
     await page.click("button[aria-label='Settings']");
     await page.locator(".popoverItem", { hasText: "Export…" }).click();

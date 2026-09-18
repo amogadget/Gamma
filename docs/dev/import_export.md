@@ -73,6 +73,10 @@ receive the same subfolder labels; unsupported files are skipped.
 
 ## Markdown zips: Obsidian vaults, Notion exports, Gamma exports, zipped notes
 
+Mermaid fences stay as editable Markdown through import/export and render as
+diagrams in the frontend. The diagram toolbar can download SVG separately;
+backend PDF exports retain code-block output. See [mermaid.md](mermaid.md).
+
 `POST /api/import/markdown-zip` (Import dialog → "Markdown notes", pick a
 `.zip`; `gamma/markdown_zip_import.py`) turns a zip of `.md` files into one
 page per file. One logic covers a zipped Obsidian vault, Notion's Export →
