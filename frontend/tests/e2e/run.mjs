@@ -22,6 +22,7 @@ import { shareScenarios } from "./scenarios/share.mjs";
 import { settingsScenarios } from "./scenarios/settings.mjs";
 import { mcpScenarios } from "./scenarios/mcp.mjs";
 import { mentionScenarios } from "./scenarios/mentions.mjs";
+import { chatNavigationScenarios } from "./scenarios/chatNavigation.mjs";
 import { transferScenarios } from "./scenarios/transfers.mjs";
 import { inkScenarios } from "./scenarios/ink.mjs";
 import { inkEditingScenarios } from "./scenarios/inkEditing.mjs";
@@ -83,6 +84,7 @@ try {
   await settingsScenarios(env);
   await mcpScenarios(env);
   await mentionScenarios(env);
+  await chatNavigationScenarios(env);
   await transferScenarios(env);
   const notes = await noteScenarios(env);
   const pdf = await pdfScenarios(env, notes);

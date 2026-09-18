@@ -18,6 +18,7 @@ import { BlockTree, _dragState } from "../editor/BlockTree";
 import { FileChipContext, forgetDocPages, rememberDocPage, setUploadReporter, uploadFilesAsLines } from "../transfers/FileChip";
 import { CardLabels, KindToggle, ListFindBox, PageCard, ViewToggle } from "../library/FileBrowser";
 import ChatDock from "../chat/ChatDock";
+import { createChatSession } from "../chat/chatSession";
 import SearchPanel from "../search/SearchPanel";
 import { ContextMenu, MenuItem, MenuLabel, MenuSelect, SubMenuItem } from "../shared/ui/Menus";
 import {
@@ -330,6 +331,15 @@ function LibraryApp() {
 
   // Auth state: null=loading, false=logged out, {user, is_guest}=logged in
   const [authUser, setAuthUser] = useState(shareMode ? {user:"_public"} : null);
+  const chatSession = useMemo(() => createChatSession((key, messages) => {
+    if (getExpectedUser() !== authUser?.user || getCurrentWorkspace() !== wsId) {
+      throw new Error("The account or workspace changed.");
+    }
+    return apiJson(`${API}/chats/${encodeURIComponent(key)}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
+    });
+  }), [authUser?.user, wsId]);
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
@@ -7624,6 +7634,7 @@ function LibraryApp() {
       return (
         <ChatDock
           {...common}
+          session={chatSession}
           readOnly={shareMode}
           onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} pageAttach={pageAttach} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pageTitle={pageTitle}
