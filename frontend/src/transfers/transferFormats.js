@@ -39,7 +39,10 @@ const EXPORT_SWITCH_TEXT = {
   },
 };
 
-export const EXPORT_FORMATS = [
+// The rows of both dialogs, in order; a format's `category` names its row.
+export const CATEGORIES = ["PDF", "Notes", "MD", "ZIP"];
+
+const EXPORT_FORMATS = [
   { id: "pdf", label: "Annotated PDF", category: "PDF",
     hint: "Your original paper, with annotations", editable: ["highlights", "notes"], fixed: { bundle: false } },
   { id: "notespdf", label: "PDF", category: "Notes",
@@ -100,20 +103,18 @@ export function exportSummary({ payload, noPdfCopy }, folder) {
   }
 }
 
-const IMPORT_HINTS = {
-  annots: "Highlights, notes and boxes saved inside this PDF (a Gamma export, SumatraPDF, Acrobat…) become regular blocks. Importing twice adds nothing — each annotation is matched to the block it already made.",
-  logseq: "Pick a Logseq .pdf and its .edn (a .md of notes is optional). The paper and its highlights land in your library as a new page.",
-  gamma: "A zip made by another Gamma's Export → Gamma format (a full backup works too). Its pages, files and chats merge into your library — nothing existing is touched, and re-importing the same zip adds nothing. (A single shared page needs no zip: paste its share link into the + menu.)",
-  markdown: "A single .md becomes a note page. A .zip of Markdown — a zipped Obsidian vault, Notion's Export → Markdown & CSV (subpages included), a Gamma Markdown export, or any zipped folder of notes — becomes one page per file: folders become folder labels, links between the notes ([[wikilinks]] included) become mentions, ![[block]] embeds synced blocks, tags labels, and images and files come along. Notes already imported are skipped.",
-};
-
-export const IMPORT_SOURCES = [
-  { id: "annots", label: "Annotations in this PDF", category: "PDF", hint: "Bring embedded highlights and notes into Gamma", strip: true, actionLabel: "Import" },
+// `instructions` is the preparation note shown under a selected card.
+const IMPORT_SOURCES = [
+  { id: "annots", label: "Annotations in this PDF", category: "PDF", hint: "Bring embedded highlights and notes into Gamma", strip: true, actionLabel: "Import",
+    instructions: "Highlights, notes and boxes saved inside this PDF (a Gamma export, SumatraPDF, Acrobat…) become regular blocks. Importing twice adds nothing — each annotation is matched to the block it already made." },
   { id: "zotero", label: "Zotero library (.zip)", category: "ZIP", hint: "Papers, collections, tags and notes", strip: true, actionLabel: "Choose .zip…" },
-  { id: "markdown", label: "Markdown notes", category: "MD", hint: "Markdown files, Obsidian vaults or Notion exports", actionLabel: "Choose file…" },
-  { id: "logseq", label: "Logseq highlights", category: "PDF", hint: "A PDF and its .edn, with optional notes", actionLabel: "Choose files…" },
-  { id: "gamma", label: "Gamma export (.zip)", category: "ZIP", hint: "Merge pages, files and chats from Gamma", actionLabel: "Choose .zip…" },
-].map((source) => ({ ...source, instructions: IMPORT_HINTS[source.id] }));
+  { id: "markdown", label: "Markdown notes", category: "MD", hint: "Markdown files, Obsidian vaults or Notion exports", actionLabel: "Choose file…",
+    instructions: "A single .md becomes a note page. A .zip of Markdown — a zipped Obsidian vault, Notion's Export → Markdown & CSV (subpages included), a Gamma Markdown export, or any zipped folder of notes — becomes one page per file: folders become folder labels, links between the notes ([[wikilinks]] included) become mentions, ![[block]] embeds synced blocks, tags labels, and images and files come along. Notes already imported are skipped." },
+  { id: "logseq", label: "Logseq highlights", category: "PDF", hint: "A PDF and its .edn, with optional notes", actionLabel: "Choose files…",
+    instructions: "Pick a Logseq .pdf and its .edn (a .md of notes is optional). The paper and its highlights land in your library as a new page." },
+  { id: "gamma", label: "Gamma export (.zip)", category: "ZIP", hint: "Merge pages, files and chats from Gamma", actionLabel: "Choose .zip…",
+    instructions: "A zip made by another Gamma's Export → Gamma format (a full backup works too). Its pages, files and chats merge into your library — nothing existing is touched, and re-importing the same zip adds nothing. (A single shared page needs no zip: paste its share link into the + menu.)" },
+];
 
 export function resolveImport(source, { hasPdf, strip } = {}) {
   const formats = IMPORT_SOURCES.filter(({ id }) => id !== "annots" || hasPdf);

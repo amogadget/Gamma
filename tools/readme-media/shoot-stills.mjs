@@ -8,21 +8,18 @@
 // first so the recents strip is populated (most recent = the annotated paper).
 // Needs a working AI provider on the instance for the chat answer; without
 // one, 01 is shot with the question sent but unanswered (the script says so).
-import { chromium, ROOT } from './runtime.mjs';
+import { chromium, ROOT, readSession, BASE, CURATED } from './runtime.mjs';
 import fs from 'fs';
 
-const SCRATCH = process.cwd();
-const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
+const SESSION = readSession();
 const OUT = process.env.STILLS_OUT || ROOT + 'docs/assets/screenshots';
-const ATOMS = 'fy0-h_BqOHcH';         // the paper with the real highlight (page 2)
-const OTHERS = ['p8oNV3s3XNhC', 'BHuT16WnxdQb'];
+const ATOMS = CURATED.atoms;         // the paper with the real highlight (page 2)
+const OTHERS = ['p8oNV3s3XNhC', CURATED.qec];
 const QUESTION = 'What is the key idea of this paper in one sentence?';
 const QUERY = 'error correction';
-const EXE = process.env.CHROME_PATH;
 
 fs.mkdirSync(OUT, { recursive: true });
-const browser = await chromium.launch({ headless: true, executablePath: EXE });
+const browser = await chromium.launch({ headless: true });
 const ctx = await browser.newContext({ colorScheme: 'light', viewport: { width: 1680, height: 1000 }, deviceScaleFactor: 1 });
 await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 await ctx.addInitScript(() => {

@@ -1,20 +1,14 @@
-import { chromium, configureContext } from './runtime.mjs';
+// Historical README source (paste a PDF URL, highlight a sentence, ask the
+// chat); render-suite.py keeps its render as a scratch preview.
+import { chromium, configureContext, addCursor, pointer, readSession, BASE } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();
-const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
+const SESSION = readSession(SCRATCH);
 const PDF_URL = 'https://proceedings.neurips.cc/paper_files/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf';
 const VW = 1440, VH = 900;
 const beat = (ms) => page.waitForTimeout(ms);
 
-// fake cursor helpers ---------------------------------------------------------
-let cx = VW / 2, cy = VH / 2;
-async function glide(x, y, steps = 28) {
-  await page.mouse.move(x, y, { steps });
-  cx = x; cy = y;
-  await beat(120);
-}
 async function typeSlow(sel, text, delay = 55) {
   await page.click(sel);
   await page.type(sel, text, { delay });
@@ -30,24 +24,10 @@ const ctx = await browser.newContext({
 await configureContext(ctx);
 await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 
-// inject a visible cursor dot (Playwright videos have none)
-await ctx.addInitScript(() => {
-  window.addEventListener('DOMContentLoaded', () => {
-    const c = document.createElement('div');
-    c.id = '__fakecur';
-    c.style.cssText = 'position:fixed;z-index:2147483647;width:16px;height:16px;'
-      + 'border-radius:50%;background:rgba(20,20,20,.35);border:2px solid #fff;'
-      + 'box-shadow:0 1px 4px rgba(0,0,0,.4);pointer-events:none;left:0;top:0;'
-      + 'margin:-9px 0 0 -9px;transition:transform .05s linear';
-    document.body.appendChild(c);
-    const move = e => { c.style.transform = `translate(${e.clientX}px,${e.clientY}px)`; };
-    document.addEventListener('mousemove', move, true);
-    document.addEventListener('mousedown', () => { c.style.background = 'rgba(60,120,255,.6)'; }, true);
-    document.addEventListener('mouseup', () => { c.style.background = 'rgba(20,20,20,.35)'; }, true);
-  });
-});
+await addCursor(ctx);
 
 const page = await ctx.newPage();
+const { glide, at } = pointer(page, VW / 2, VH / 2);
 const captureStart = Date.now();
 const M = {};
 const mark = () => (Date.now() - captureStart) / 1000;
@@ -55,7 +35,7 @@ page.on('console', m => { const t = m.text(); if (t.startsWith('SCRIPT:')) conso
 
 // 1. home ---------------------------------------------------------------------
 await page.goto(BASE + '/', { waitUntil: 'networkidle' });
-await page.mouse.move(cx, cy);
+await page.mouse.move(at().x, at().y);
 await beat(900);
 
 // 2. open the paper by URL ----------------------------------------------------

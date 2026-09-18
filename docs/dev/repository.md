@@ -18,21 +18,21 @@ launcher, and desktop release workflows use these locations.
 | `docs/user_guide.md` | User documentation |
 | `docs/assets/` | Documentation images and animations |
 | `tools/readme-media/` | README capture scripts, renderers, and recording recipes |
-| `tools/branding/` | Connections/workspace SVG generators, and hero renderer |
-| `artifacts/readme-media/` | Ignored media workspace exports, private builds, raw captures, and QA frames |
+| `tools/branding/` | Generators of the three README illustrations and the PNG renderer of all branding SVGs |
+| `tools/*codex*` | Codex plugin packaging, release and installer scripts with their unit tests |
+| `plugins/gamma/` | The Codex plugin source (`.codex-plugin/plugin.json`, the `gamma` skill) |
 | `artifacts/` | Ignored local sources and outputs; [retention guide](../../artifacts/README.md) |
-| `tmp/` | Disposable test/build scratch only; no maintained source code |
 | `data/` | Ignored runtime databases and uploads, controlled by `GAMMA_DATA_DIR` |
 
 Desktop-specific developer documentation remains in `desktop/docs/`.
-The [frontend refactor plan](frontend-refactor.md) describes proposed source
-folders; those folders have not been created yet.
+The [frontend refactor plan](frontend-refactor.md) covers what remains of the
+App.jsx decomposition.
 
 ## Asset ownership
 
 | Location | Contents and consumers |
 |---|---|
-| `docs/assets/branding/` | Light/dark SVG wordmarks, and the light/dark hero image (`gamma-hero-*.svg`, hand-authored vector; the `.png` renders are for the Microsoft Store listing) used by the root README |
+| `docs/assets/branding/` | Light/dark SVG wordmarks; the hand-authored hero (`gamma-hero-*.svg`; its `.png` renders are for the Microsoft Store listing); the generated `gamma-connections-*`, `gamma-workspaces-*` and `gamma-library-*` illustrations (`tools/branding/`); all used by the root README |
 | `docs/assets/demos/` | README demos as small animated WebP images |
 | `docs/assets/screenshots/` | Documentation stills; guest welcome blocks reference their GitHub raw URLs |
 | `frontend/public/media/icons/` | Favicon, served at `/media/icons/favicon.svg` |

@@ -3,7 +3,7 @@
 The opening hero is hand-authored vector source:
 [`gamma-hero-light.svg`](../../docs/assets/branding/gamma-hero-light.svg) and
 [`gamma-hero-dark.svg`](../../docs/assets/branding/gamma-hero-dark.svg).
-Edit those directly. The related illustrations are generated here, not in `tmp/`.
+Edit those directly. The three related illustrations are generated here.
 
 From the repository root (Python uses only its standard library):
 
@@ -14,14 +14,13 @@ python tools/branding/build-library.py
 node tools/branding/render.mjs
 ```
 
-Run connections first: the workspace and library illustrations reuse its Gamma mark.
-All generators write the light/dark SVGs in `docs/assets/branding/`.
-`build-library.py` tells the Link and organize story: automatic metadata on
-download, folder/label filtering and search, then a citation jump and Back.
-The renderer uses the existing frontend Playwright dependency and writes
-1920 × 1080 inspection PNGs to ignored `artifacts/branding/`. Use
-`--publish-hero` to refresh the two published hero PNGs for store listings.
-If needed, set `PLAYWRIGHT_BROWSERS_PATH` to your browser installation.
+All generators write light/dark SVGs into `docs/assets/branding/`; `branding.py`
+holds what they share (the hero's Gamma mark as a `<defs>` block, the light to
+dark palette, the validating writer). The renderer uses the frontend's
+Playwright dependency and writes 1920 × 1080 inspection PNGs to ignored
+`artifacts/branding/`; `--publish-hero` also refreshes the two published hero
+PNGs for store listings. Browser location: see
+[artifacts/README.md](../../artifacts/README.md).
 
-The hero-derived Gamma Light and Gamma Dark schemes are available in the app's
-Settings ? Appearance. Their tokens live in `frontend/src/shared/styles/app.css`.
+The hero-derived Gamma Light and Gamma Dark themes live in the app's
+Settings → Appearance; their tokens are in `frontend/src/shared/styles/app.css`.

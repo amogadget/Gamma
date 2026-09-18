@@ -10,9 +10,8 @@ import subprocess
 import sys
 
 from imageio_ffmpeg import get_ffmpeg_exe
-from media_output import encode_webp, publish
+from media_output import ROOT, concat_segments, encode_webp, publish
 
-ROOT = Path(__file__).resolve().parents[2]
 FF = get_ffmpeg_exe()
 SUITE = ROOT / 'artifacts/readme-media/suite'
 OUT = ROOT / 'docs/assets/demos'
@@ -112,13 +111,10 @@ def render(name):
         if a > cursor and b < end:
             segments.append((cursor, a)); cursor = b
     segments.append((cursor, end))
-    parts = [f'[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS[s{i}]' for i, (a, b) in enumerate(segments)]
-    graph = ';'.join(parts) + ';' + ''.join(f'[s{i}]' for i in range(len(segments))) + f'concat=n={len(segments)}:v=1:a=0,fps=25'
-    if crop:
-        graph += ',' + crop
-    graph += ',scale=1440:-2:flags=lanczos,pad=iw+48:ih+48:24:24:color=0xe8edf5,setsar=1[v]'
+    parts = [f'[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS' for a, b in segments]
+    tail = 'fps=25' + (f',{crop}' if crop else '') + ',scale=1440:-2:flags=lanczos,pad=iw+48:ih+48:24:24:color=0xe8edf5,setsar=1'
     master = directory / 'master.mkv'
-    run('-i', source, '-filter_complex', graph, '-map', '[v]', '-an', '-c:v', 'ffv1', '-level', '3', master)
+    concat_segments(master, [source], parts, tail)
     output = directory / 'rendered.webp'
     # This shot contains full-page scrolling; a smaller raster and quality 75
     # keep it compact while retaining the actual pointer/streaming cadence.
@@ -127,8 +123,8 @@ def render(name):
               **encode_webp(master, output, f'fps=25,scale={width}:-2:flags=lanczos', quality, effort),
               'segments': segments, 'source': str(source), 'crop': crop}
     (directory / 'render.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
-    # Historical AI source captures remain scratch previews. The current
-    # annotation and agentic stories use render-feature-demos.py.
+    # The agent and download-and-chat captures feed no README slot; they stay
+    # scratch previews (the README's AI story is render-feature-demos.py).
     target = directory / 'preview.webp' if name in ('agent', 'download-and-chat') else OUT / f'demo-{name}.webp'
     publish(output, target)
     print(json.dumps(report), flush=True)

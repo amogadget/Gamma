@@ -419,7 +419,7 @@ def join_block_text(existing: str, addition: str, mode: str) -> str:
     """Existing block text plus an addition, appended or prepended on its own
     line — with a blank line between when either side is a paragraph-level
     construct or multi-line, so markdown keeps rendering as intended.
-    Mirrored in frontend blockTree.jsx (the streamed preview of an append)."""
+    Mirrored in frontend editor/BlockTree.jsx (the streamed preview of an append)."""
     existing = existing.rstrip("\n")
     addition = addition.strip("\n")
     if not existing:
@@ -1128,12 +1128,12 @@ def tool_action(kind: str, summary: str, name: str, args: dict, result: str,
 
 
 def run_agent_tool(ws: str, scope: dict, name: str, args: dict,
-                   *, permissions: dict | None = None, allowed_tools=None) -> tuple[str, dict]:
+                   *, allowed_tools=None) -> tuple[str, dict]:
     """Execute one tool call against a trusted, caller-resolved workspace/scope.
 
-    Chat and MCP share this dispatcher. Callers supply their permission map
-    and/or explicit tool allowlist; omitted policies preserve legacy internal
-    callers. The caller authenticates the workspace before invoking this layer.
+    Chat and MCP share this dispatcher; each passes the tool names it armed
+    (`allowed_tools`, None = every tool of the scope). The caller
+    authenticates the workspace before invoking this layer.
 
     Returns ``(result_text, action)`` — result_text goes back to the model;
     action is the ``{kind, summary, tool, args, result}`` UI event for EVERY
@@ -1151,8 +1151,7 @@ def run_agent_tool(ws: str, scope: dict, name: str, args: dict,
     if tool["mutating"] and not scope.get("can_write", True):
         result = "error: you can only view this workspace — no changes are possible"
         return result, tool_action("error", result[:200], name, args, result, error=True)
-    permitted = {s["name"] for s in agent_tools(scope.get("type") or "", permissions,
-                                               allowed_tools=allowed_tools)}
+    permitted = {s["name"] for s in agent_tools(scope.get("type") or "", allowed_tools=allowed_tools)}
     if name not in permitted:
         result = "error: tool not enabled — the user's permission settings do not allow it"
         return result, tool_action("error", f"{name} — blocked by permissions", name, args, result, error=True)

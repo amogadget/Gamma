@@ -169,3 +169,24 @@ export function insertLink(text, from, to, url = "") {
 }
 
 export const isUrl = (s) => /^https?:\/\/\S+$/i.test((s || "").trim());
+
+// Images: `![alt](url)`, sized Obsidian-style (`![alt|300](url)`) or with the
+// legacy Logseq `{:width N}` suffix. `![[embeds]]` can't match — their "alt"
+// holds an unclosed "[" and no "(". Every occurrence in text, in order:
+// [{from, to, alt, url, width}] with from/to including the whole construct;
+// callers that must skip code/math spans filter the result.
+const IMG_RE = /!\[([^\]\n]*)\]\(([^)\n]+)\)(\{:width\s+(\d+)\})?/g;
+const ALT_WIDTH_RE = /^(.*?)\|(\d+)(?:x\d+)?$/;
+export function scanImageSyntax(text) {
+  const out = [];
+  for (const m of text.matchAll(IMG_RE)) {
+    let alt = m[1], width = m[4] ? Number(m[4]) : null;
+    const pipe = ALT_WIDTH_RE.exec(alt);
+    if (pipe) {
+      alt = pipe[1];
+      if (width == null) width = Number(pipe[2]);
+    }
+    out.push({ from: m.index, to: m.index + m[0].length, alt, url: m[2], width });
+  }
+  return out;
+}

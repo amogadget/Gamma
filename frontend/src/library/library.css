@@ -27,7 +27,7 @@
 .carouselTrack::-webkit-scrollbar {
   display: none;
 }
-/* The shared home card (PageCard in fileBrowser.jsx): a cover — page snapshot
+/* The shared home card (PageCard in library/FileBrowser.jsx): a cover — page snapshot
    when available, else the file/folder glyph — over a footer of title + label
    chips + kind/time. ONE geometry for every surface (both carousels, the
    pinned strip, the grid): a 16/10 cover, two reserved title lines and one

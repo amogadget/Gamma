@@ -95,7 +95,7 @@ export async function settingsScenarios(env) {
       const staleReady = new Promise((resolve) => { captured = resolve; });
       const staleGate = new Promise((resolve) => { releaseStale = resolve; });
       let holdNext = true;
-      const routePattern = "**/api/integrations/tokens?*";
+      const routePattern = "**/api/integrations/tokens";
       await page.route(routePattern, async (route) => {
         if (!holdNext || route.request().method() !== "GET") return route.continue();
         holdNext = false;
@@ -110,7 +110,7 @@ export async function settingsScenarios(env) {
       const revoked = page.getByText("Access revoked for the selected “Codex test” connection.", { exact: true });
       await revoked.waitFor();
       await until(() => page.getByRole("button", { name: "Disconnect", exact: true }).count().then((n) => n === 1));
-      const staleResponse = page.waitForResponse((response) => response.url().includes("/api/integrations/tokens?") && response.request().method() === "GET");
+      const staleResponse = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/api/integrations/tokens") && response.request().method() === "GET");
       releaseStale();
       await (await staleResponse).finished();
       await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -132,7 +132,7 @@ export async function settingsScenarios(env) {
       assertEq((await user.api("/api/integrations/tokens")).tokens.length, 0);
       const second = await user.api("/api/workspaces", { method: "POST", body: { name: "Other assistant workspace" } });
       const elsewhere = await user.api(`/api/integrations/tokens?ws=${second.id}`, { method: "POST", body: { name: "Codex elsewhere" } });
-      const refreshed = page.waitForResponse((response) => response.url().includes("/api/integrations/tokens?") && response.request().method() === "GET");
+      const refreshed = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith("/api/integrations/tokens") && response.request().method() === "GET");
       await page.getByRole("button", { name: "Refresh connections", exact: true }).click();
       assertEq((await (await refreshed).json()).tokens.length, 0);
       await revoked.waitFor({ state: "detached" });

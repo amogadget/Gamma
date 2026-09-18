@@ -2,12 +2,9 @@
 import argparse
 import json
 from pathlib import Path
-import subprocess
 
-from imageio_ffmpeg import get_ffmpeg_exe
-from media_output import encode_webp, publish
+from media_output import ROOT, FRAME, concat_segments, encode_webp, publish
 
-ROOT = Path(__file__).resolve().parents[2]
 SCRATCH = ROOT / 'artifacts/readme-media'
 OUT = ROOT / 'docs/assets/demos'
 
@@ -82,12 +79,9 @@ def render(name):
                 x = f'max(0,min(790-iw/zoom,{box["x"] + box["width"]/2}-iw/zoom/2))'
                 y = f'max(0,min(ih-ih/zoom,{box["y"] + box["height"]/2}-ih/zoom/2))'
             filters += f",zoompan=z='{zoom}':x='{x}':y='{y}':d=1:s=1440x900:fps=25"
-        parts.append(f'[0:v]{filters},setsar=1[s{i}]')
-    graph = ';'.join(parts) + ';' + ''.join(f'[s{i}]' for i in range(len(parts)))
-    graph += f'concat=n={len(parts)}:v=1:a=0,pad=1488:948:24:24:color=0xe8edf5[v]'
+        parts.append(f'[0:v]{filters},setsar=1')
     master = directory / f'{name}-master.mkv'
-    subprocess.run([get_ffmpeg_exe(), '-v', 'error', '-y', '-i', str(source),
-                    '-filter_complex', graph, '-map', '[v]', '-an', '-c:v', 'ffv1', '-level', '3', str(master)], check=True)
+    concat_segments(master, [source], parts, FRAME)
     output = directory / f'{name}.webp'
     width, quality, effort = (960, 65, 6) if name == 'native-agentic' else (1040, 75, 4)
     report = {'name': name, 'fps': 25, 'width': width, 'quality': quality, 'effort': effort, 'source': str(source), 'segments': segments,

@@ -5,8 +5,6 @@ on:
   pull_request:
     paths:
       - 'plugins/gamma/**'
-      - 'tools/package_codex_plugin.py'
-      - 'tools/test_package_codex_plugin.py'
       - 'tools/*codex*'
       - 'frontend/src/settings/codexSetup.js'
       - 'frontend/tests/codexSetup.test.mjs'

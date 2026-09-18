@@ -2,6 +2,14 @@
 // text, not the quote, so edits never turn into estimated highlight geometry.
 const negations = new Set(["no", "not", "nor", "neither", "never", "without", "cannot"]);
 
+// A hyphen between two words (one of them longer than a letter) is typography:
+// a compound or a wrapped word. `x-y` and `53-70` are not.
+export function compoundHyphen(text, i) {
+  const left = text.slice(0, i).match(/\p{L}+$/u)?.[0] || "";
+  const right = text.slice(i + 1).match(/^\s*(\p{L}+)/u)?.[1] || "";
+  return left && right && Math.max(left.length, right.length) > 1;
+}
+
 function tokens(text) {
   const result = [];
   const proseParentheses = new Set();
@@ -16,17 +24,13 @@ function tokens(text) {
   for (const match of text.matchAll(/\p{L}[\p{L}\p{M}]*|\p{N}+|[^\s]/gu)) {
     const value = match[0], start = match.index, end = start + value.length;
     // Ignore prose punctuation, but retain decimal points and mathematical
-    // signs. A hyphen between words is typography; x-y and 53-70 are not.
+    // signs.
     if (proseParentheses.has(start)) continue;
     const previous = result.at(-1);
     const afterVariable = previous?.end === start && (previous.value.length === 1 || /\p{N}/u.test(previous.value));
     if (/^[,;:!?"']$/.test(value) && !afterVariable) continue;
     if (value === "." && !(/\d/.test(text[start - 1] || "") && /\d/.test(text[end] || ""))) continue;
-    if (value === "-") {
-      const left = text.slice(0, start).match(/\p{L}+$/u)?.[0] || "";
-      const right = text.slice(end).match(/^\p{L}+/u)?.[0] || "";
-      if (left && right && Math.max(left.length, right.length) > 1) continue;
-    }
+    if (value === "-" && compoundHyphen(text, start)) continue;
     const locked = /[\p{N}\p{Script=Greek}]|[^\p{L}\p{M}]/u.test(value)
       || value.length === 1 || negations.has(value);
     result.push({ value, start, end, locked });

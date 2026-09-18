@@ -7,11 +7,11 @@ browsers signed into the same account also work. Backend: `gamma/ops.py`, `gamma
 `src/collaboration/Presence.jsx`, plus small hooks in `app/App.jsx`, `editor/BlockTree.jsx`,
 `editor/BlockCmEditor.jsx` and `editor/blockHistory.js`.
 
-Block undo/redo returns a description of the action (`describeTransition`),
-derived from the before/after trees so a rebased remote change is not named
-as ours, and the status pill shows it: note creation/deletion/move, a text
-edit with a short preview, a properties or highlight edit. The handwriting
-stroke history is separate ([handwriting.md](handwriting.md)).
+Block undo/redo returns a description of the action (`describeTransition`):
+note creation/deletion/move, a text edit with a short preview, a properties
+or highlight edit. It is derived from the before/after trees, so a rebased
+remote change is never named as ours. The status pill shows it. The
+handwriting stroke history is separate ([handwriting.md](handwriting.md)).
 
 ## The model in one paragraph
 

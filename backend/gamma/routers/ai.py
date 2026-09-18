@@ -14,7 +14,7 @@ from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .. import chatgpt_oauth
 from ..ai_client import (
@@ -110,6 +110,11 @@ class AIChatRequest(BaseModel):
     effort: str = ""      # reasoning effort; empty = provider default (param omitted)
     system: str = ""      # custom system prompt; empty = built-in default
     pages: list[str] = Field(default_factory=list, max_length=7)  # open page + up to six references
+
+    @field_validator("pages")
+    @classmethod
+    def _unique_pages(cls, pages):
+        return list(dict.fromkeys(str(page) for page in pages if page))
     # Also include the user's highlights + notes for pages that carry a PDF
     # (a page without one is its notes — they always go).
     include_notes: bool = False
@@ -214,6 +219,21 @@ _SYSTEM_PROMPT = (
     "knowledge — just make clear it is background, not something these pages state. "
     "Be concise; when you cite a specific value from a PDF, give its PDF page number, "
     "and say when something comes from the user's notes rather than the document.")
+
+# Appended whenever a document is in context, custom system prompt or not:
+# the clickable-citation link shape (docs/dev/pdf_citations.md).
+_CITATION_PROMPT = (
+    "\n\nWhen citing a passage from a library PDF, provide a clickable citation "
+    "as [p. N](/?page=PAGE_ID&pdf_page=N&quote=URL_ENCODED_QUOTE). "
+    "Use the Gamma page ID supplied in context or tool results, the 1-based physical "
+    "PDF page number from [PDF page N] labels (not printed page numbers), and a "
+    "verbatim, distinctive quote of 8-2000 characters contained on that page, preferably one sentence. "
+    "Percent-encode the quote, including spaces, ampersands and parentheses. "
+    "These links only navigate and visually highlight text; they never create notes. "
+    "Never invent quotes, IDs or page numbers. If the location is unknown, read the "
+    "page first when tools are available, otherwise use an ordinary page link. "
+    "Do not use these links for external or uploaded files without a Gamma page ID."
+)
 
 # Default prompt for AI-based metadata extraction (used when neither an arXiv id
 # nor a DOI identifies the paper). Editable per-user in the frontend prompt editor.
@@ -1180,7 +1200,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
     # armed subset — an empty result (or no scope) is a plain chat.
     scope = {"type": payload.agent_scope, "folder": payload.folder,
              "page_id": payload.page_id, "read_chars": payload.read_char_limit,
-             "context_pages": list(dict.fromkeys(payload.pages)),
+             "context_pages": list(payload.pages),
              # The agent prompt names the cursor block / attached chips so
              # "this block" resolves without a read_block round-trip.
              "focus_block_id": (payload.focus_block_id or "").strip()[:64],
@@ -1202,18 +1222,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
         # A custom prompt always applies; the built-in one only when there's a document
         system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
         if context or pdf_b64s:
-            system += (
-                "\n\nWhen citing a passage from a library PDF, provide a clickable citation "
-                "as [p. N](/?page=PAGE_ID&pdf_page=N&quote=URL_ENCODED_QUOTE). "
-                "Use the Gamma page ID supplied in context or tool results, the 1-based physical "
-                "PDF page number from [PDF page N] labels (not printed page numbers), and a "
-                "verbatim, distinctive quote of 8-2000 characters contained on that page, preferably one sentence. "
-                "Percent-encode the quote, including spaces, ampersands and parentheses. "
-                "These links only navigate and visually highlight text; they never create notes. "
-                "Never invent quotes, IDs or page numbers. If the location is unknown, read the "
-                "page first when tools are available, otherwise use an ordinary page link. "
-                "Do not use these links for external or uploaded files without a Gamma page ID."
-            )
+            system += _CITATION_PROMPT
         if tools:
             system = ((system + "\n\n" if system else "")
                       + agent_system(scope, payload.permissions,
@@ -1308,8 +1317,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                     action = tool_action("error", f'{name} — change limit reached',
                                          name, call["arguments"], result, error=True)
                 else:
-                    result, action = run_agent_tool(ws, scope, name, call["arguments"],
-                                                    permissions=payload.permissions, allowed_tools=armed)
+                    result, action = run_agent_tool(ws, scope, name, call["arguments"], allowed_tools=armed)
                 # Reads and failures render as chips too, but only applied
                 # mutations count against the change budget.
                 if name in MUTATING_TOOLS and not action.get("error"):

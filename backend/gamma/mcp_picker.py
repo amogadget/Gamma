@@ -71,5 +71,5 @@ def paper_choices(ws: str, base: str, args: dict) -> dict:
                           "url": base + "/?" + urlencode({"ws": ws, "page": page_id})})
     workspace = get(ws)
     return {"pages": pages, "workspace": {"id": ws, "name": workspace["name"] if workspace else ws},
-            "query": query, "offset": offset, "total": total,
+            "query": query, "offset": offset, "total": total, "page_size": PAGE_SIZE,
             "next_offset": offset + PAGE_SIZE if offset + PAGE_SIZE < total else None}

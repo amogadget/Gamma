@@ -3,22 +3,21 @@
 // char by char ($ auto-pairing, \command autocomplete, Tab through {} args,
 // live math preview), then a callout, picture paste and drag resize.
 //
-// Run from a dir holding session.txt (the `session` cookie for BASE). Expects
-// an EMPTY page PAGE_ID (reset: PUT /api/blocks/{id}/children {"blocks":[]}).
+// Prepared by `run-case.mjs notes` (an empty page whose id arrives as PAGE_ID).
 // Writes the webm path to video_path.txt and the pre-roll trim mark to
 // notes_marks.json (m0 = video-time of the first click).
-import { chromium, configureContext } from './runtime.mjs';
+import { chromium, configureContext, addCursor, pointer, readSession, BASE } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();
-const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
+const SESSION = readSession(SCRATCH);
 const PAGE_ID = process.env.PAGE_ID || 'QDz3vbdoRlFJ';
 const VW = 1440, VH = 900;
-const CHROME = process.env.CHROME_PATH;
+// This shot's pauses are written a little long; the factor keeps the edit brisk
+// without touching the typing delays below.
 const beat = (ms) => page.waitForTimeout(ms * 0.7);
 
-// typing: prose ~55 ms/key, math a touch slower so the reader can follow
+// typing: prose 28 ms/key, math a touch slower so the reader can follow
 const PROSE = 28, MATH = 38;
 const T = (text, delay = PROSE) => page.keyboard.type(text, { delay });
 const K = (key) => page.keyboard.press(key);
@@ -38,15 +37,8 @@ async function reopenFocused() {
   await page.waitForSelector('.blockEditorCm .cm-content');
 }
 
-let cx = VW / 2, cy = VH / 2;
-async function glide(x, y, steps = 28) {
-  await page.mouse.move(x, y, { steps });
-  cx = x; cy = y;
-  await beat(120);
-}
-
-const browser = await chromium.launch({ headless: true, slowMo: 0, executablePath: CHROME });
-const ctx = await browser.newContext({
+const browser = await chromium.launch({ headless: true, slowMo: 0 });
+let ctx = await browser.newContext({
   colorScheme: 'light',
   viewport: { width: VW, height: VH },
   deviceScaleFactor: 2,
@@ -58,40 +50,23 @@ await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 
 // UI scale: the note text is the whole story, so render it like a 125%-zoomed
 // window (standard CSS zoom on <html>; layout + rects follow, popups too).
-const ZOOM = process.env.ZOOM || '1.25';
+const ZOOM = '1.25';
 await ctx.addInitScript((zoom) => {
   // Enter = new block (Settings → Notes); the default is Shift+Enter.
   try { localStorage.setItem('gamma-enter-new-note', '1'); } catch {}
-  window.addEventListener('DOMContentLoaded', () => {
-    document.documentElement.style.zoom = zoom;
-    const c = document.createElement('div');
-    c.id = '__fakecur';
-    c.style.cssText = 'position:fixed;z-index:2147483647;width:16px;height:16px;'
-      + 'border-radius:50%;background:rgba(20,20,20,.35);border:2px solid #fff;'
-      + 'box-shadow:0 1px 4px rgba(0,0,0,.4);pointer-events:none;left:0;top:0;'
-      + 'margin:-9px 0 0 -9px;transition:transform .05s linear';
-    document.body.appendChild(c);
-    // the dot lives inside the zoomed <html>, so its CSS px are zoom× bigger
-    // than the pointer's viewport px — divide to land it under the pointer
-    const z = Number(zoom) || 1;
-    document.addEventListener('mousemove', e => {
-      c.style.transform = `translate(${e.clientX / z}px,${e.clientY / z}px)`;
-    }, true);
-    const rest = () => { c.style.background = 'rgba(20,20,20,.35)'; };
-    // flash blue on click; the editor swallows some mouseups, so also time out
-    document.addEventListener('mousedown', () => { c.style.background = 'rgba(60,120,255,.6)'; setTimeout(rest, 300); }, true);
-    document.addEventListener('mouseup', rest, true);
-  });
+  window.addEventListener('DOMContentLoaded', () => { document.documentElement.style.zoom = zoom; });
 }, ZOOM);
+await addCursor(ctx, { zoom: Number(ZOOM) });
 
 const page = await ctx.newPage();
+const { glide, at } = pointer(page, VW / 2, VH / 2);
 try {
 const t0 = Date.now();
 page.on('console', m => { const t = m.text(); if (t.startsWith('SCRIPT:')) console.log(t); });
 
 // 0. open the empty page; close the chat dock so the notes take the width ---
 await page.goto(BASE + '/?page=' + PAGE_ID, { waitUntil: 'networkidle' });
-await page.mouse.move(cx, cy);
+await page.mouse.move(at().x, at().y);
 await beat(600);
 if (await page.locator('[aria-label="Close Chat"]').count()) {
   await page.click('[aria-label="Close Chat"]');
@@ -105,7 +80,7 @@ const row = await page.locator('.blockRow').first().boundingBox();
 await glide(row.x + 120, row.y + row.height / 2 + 6, 30);
 await beat(250);
 const m0 = (Date.now() - t0) / 1000;
-await page.mouse.click(cx, cy);
+await page.mouse.click(at().x, at().y);
 await page.waitForSelector('.blockEditorCm .cm-content');
 await glide(row.x + 120, row.y + 420, 24);   // park the pointer well below the text
 await beat(400);
@@ -212,7 +187,7 @@ await beat(500);
 // Click away to render the pasted image and expose its hover resize grip.
 await glide(1320, 800, 30);
 await beat(200);
-await page.mouse.click(cx, cy);
+await page.mouse.click(at().x, at().y);
 await page.waitForSelector('.blockEditorCm', { state: 'detached', timeout: 5000 });
 const picture = page.locator('.mdImg').last();
 await picture.waitFor();
@@ -226,9 +201,9 @@ await glide(grip.x + grip.width / 2, grip.y + grip.height / 2, 20);
 await beat(600);
 const resize = (Date.now() - t0) / 1000;
 await page.mouse.down();
-const startX = cx;
+const { x: startX, y: startY } = at();
 for (let i = 1; i <= 45; i++) {
-  await page.mouse.move(startX - 400 * i / 45, cy);
+  await page.mouse.move(startX - 400 * i / 45, startY);
   await page.waitForTimeout(24);
 }
 await page.mouse.up();
@@ -252,6 +227,7 @@ fs.writeFileSync(SCRATCH + '/notes-verified.json', JSON.stringify({ savedWidth, 
 
 const video = page.video();
 await ctx.close();
+ctx = null;
 const vpath = await video.path();
 fs.writeFileSync(SCRATCH + '/video_path.txt', vpath);
 fs.writeFileSync(SCRATCH + '/notes_marks.json', JSON.stringify({ m0, paste, resize, m1, cropHeight: 820 }));
@@ -260,6 +236,6 @@ console.log('SCRIPT: video saved', vpath, 'm0', m0.toFixed(2), 'm1', m1.toFixed(
   await page.screenshot({ path: SCRATCH + '/notes-error.png' });
   throw error;
 } finally {
-  await ctx.close();
+  if (ctx) await ctx.close();
   await browser.close();
 }

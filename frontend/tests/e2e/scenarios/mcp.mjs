@@ -73,7 +73,9 @@ export async function mcpScenarios(env) {
       await page.locator('input[type="password"]').fill("alice-pw");
       await page.getByRole("button", { name: "Log in", exact: true }).click();
       await page.getByRole("button", { name: "Allow read-only access" }).waitFor();
-      assertEq(await page.getByLabel("Workspace", { exact: true }).inputValue(), alice.ws);
+      const workspaces = (await alice.api("/api/session")).workspaces || [];
+      const chosen = page.getByRole("button", { name: "Workspace", exact: true });
+      assertEq((await chosen.textContent()).trim(), workspaces.find((w) => w.id === alice.ws)?.name || "");
       if (process.env.GAMMA_MCP_SCREENSHOTS) {
         fs.mkdirSync(process.env.GAMMA_MCP_SCREENSHOTS, { recursive: true });
         await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "consent-desktop.png") });
@@ -117,8 +119,8 @@ export async function mcpScenarios(env) {
       const before = (await alice.api("/api/integrations/tokens")).tokens.length;
       await page.goto((await request()).url);
       await page.getByRole("button", { name: "Allow read-only access" }).waitFor();
-      // Give the asynchronous saved-page restore time to finish. Previously it
-      // replaced ?gamma_oauth with ?block and unmounted the consent screen.
+      // The asynchronous saved-page restore must leave ?gamma_oauth in the
+      // URL and the consent screen mounted; give it time to run.
       await sleep(1500);
       assert(new URL(page.url()).searchParams.has("gamma_oauth"), "authorization URL is preserved");
       assert(await page.getByRole("button", { name: "Allow read-only access" }).isVisible());

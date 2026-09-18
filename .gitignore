@@ -26,7 +26,7 @@ HANDOFF.md.bak
 docker-compose.yml
 run-local.bat
 
-# Private workspace exports, media captures, and render intermediates
+# Disposable scratch
 /tmp
 
 # Local source recordings, workspace exports, debugging inputs and render output.

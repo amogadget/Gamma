@@ -1,4 +1,5 @@
 import React from "react";
+import { MenuSelect } from "../shared/ui/Menus";
 import { API, apiJson, setExpectedUser } from "../shared/lib/utils";
 import { AuthLoading, LoginPage, SessionConflictPage } from "./LoginPage";
 
@@ -102,11 +103,9 @@ export default function McpConsent({ requestId }) {
     {details ? <>
       <p><strong>{details.client_name}</strong> wants to connect to Gamma.</p>
       <p className="loginConflictHint">Signed in as <strong>{details.username}</strong>.</p>
-      <label htmlFor="mcpWorkspace">Workspace</label>
-      <select id="mcpWorkspace" className="loginInput" value={workspace} disabled={busy}
-        onChange={(event) => setWorkspace(event.target.value)}>
-        {details.workspaces.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-      </select>
+      <label>Workspace</label>
+      <MenuSelect label="Workspace" block value={workspace} onChange={setWorkspace}
+        options={details.workspaces.map((item) => [item.id, item.name])} />
       <div className="mcpPermissions">
         <strong>Read-only access</strong>
         <ul><li>Read pages, notes, highlights, and PDF text.</li>

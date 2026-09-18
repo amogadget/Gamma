@@ -1,22 +1,12 @@
 // Records docs/assets/demos/demo-connector.webp sources: arXiv abs page (segment A),
 // the extension popup driven as a page (segment B, composited as an overlay),
 // and the saved paper opening in Gamma (segment C).
-import { chromium, ROOT, configureContext } from './runtime.mjs';
+import { chromium, ROOT, configureContext, addCursor, readSession, BASE as SERVER } from './runtime.mjs';
 import fs from 'fs';
 import path from 'path';
 
 const EXT = ROOT + 'extension';
-const SERVER = process.env.BASE_URL || 'http://127.0.0.1:9002';
 const ARXIV = 'https://arxiv.org/abs/2312.03982';
-const CURSOR = () => addEventListener('DOMContentLoaded', () => {
-  const c = document.createElement('div');
-  c.style.cssText = 'position:fixed;z-index:99999;width:14px;height:14px;'
-    + 'border-radius:50%;background:rgba(0,0,0,.45);border:2px solid #fff;'
-    + 'pointer-events:none;margin:-8px 0 0 -8px;transition:transform .05s';
-  document.body.appendChild(c);
-  addEventListener('mousemove', e => c.style.transform =
-    `translate(${e.clientX}px,${e.clientY}px)`, true);
-});
 
 const userDir = fs.mkdtempSync(path.resolve('chrome-profile-'));
 const context = await chromium.launchPersistentContext(userDir, {
@@ -29,8 +19,8 @@ const context = await chromium.launchPersistentContext(userDir, {
   recordVideo: { dir: 'video-conn', size: { width: 1440, height: 900 } },
 });
 await configureContext(context);
-await context.addInitScript(CURSOR);
-await context.addCookies([{ name: 'session', value: fs.readFileSync('session.txt', 'utf8').trim(), url: SERVER }]);
+await addCursor(context);
+await context.addCookies([{ name: 'session', value: readSession(), url: SERVER }]);
 let sw = context.serviceWorkers()[0];
 if (!sw) sw = await context.waitForEvent('serviceworker');
 await sw.evaluate((server) => chrome.storage.sync.set({ server }), SERVER);

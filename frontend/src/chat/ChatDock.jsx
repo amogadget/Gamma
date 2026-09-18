@@ -827,6 +827,13 @@ export default function ChatDock({
   // ⚙ chat settings (model, reasoning effort, context size — the same prefs
   // Settings / AI edits, in a popover), Tools, Find, New chat.
   const settingsOpen = openPopover === "chatsettings";
+  const findBtn = (
+    <button type="button" className={`ctlBtn ${chatFindOpen ? "modeActive" : ""}`}
+      onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}
+      title="Find in this conversation" aria-label="Find in this conversation">
+      <SearchIcon size={15} />
+    </button>
+  );
   const headerContent = (
     <>
       {aiInfo && !aiInfo.enabled && openAiKeysEditor ? (
@@ -910,11 +917,7 @@ export default function ChatDock({
         >
           <SlidersIcon size={15} />
         </button>
-        <button type="button" className={`ctlBtn ${chatFindOpen ? "modeActive" : ""}`}
-          onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}
-          title="Find in this conversation" aria-label="Find in this conversation">
-          <SearchIcon size={15} />
-        </button>
+        {findBtn}
         <span data-popover="chathistory" className="popoverAnchor">
           <button type="button" className={`ctlBtn ${historyOpen ? "modeActive" : ""}`}
             onClick={() => setOpenPopover((p) => (p === "chathistory" ? null : "chathistory"))}
@@ -990,8 +993,7 @@ export default function ChatDock({
     <DockWindow title="Chat" onGrip={onGrip} onGripDoubleClick={onGripDoubleClick}
       collapsed={collapsed} onClose={onClose} headerContent={readOnly ? <>
         <span className="uiTag">Read only</span>
-        <button type="button" className="ctlBtn" title="Find in this conversation" aria-label="Find in this conversation"
-          onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}><SearchIcon size={15} /></button>
+        {findBtn}
       </> : headerContent}>
     <div className="chatPanel chatWindow">
       {!readOnly && aiHealth && !aiHealth.ok ? (

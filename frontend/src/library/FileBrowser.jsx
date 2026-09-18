@@ -1,7 +1,7 @@
 // Presentational pieces for the modern file-manager home library: the shared
 // page/folder card, the folder+label chip strip, the List/Grid view switch and
 // the folders/files kind filter. The large iPadOS-style tile glyphs
-// (FolderGlyph, FileGlyph) live in icons.jsx with the rest of the shared
+// (FolderGlyph, FileGlyph) live in shared/ui/Icons.jsx with the rest of the shared
 // icons. All interaction (selection, drag, rename, context menus) stays wired
 // in App.jsx alongside the shared handlers.
 import React from "react";

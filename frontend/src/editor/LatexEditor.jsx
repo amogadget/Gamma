@@ -1,12 +1,11 @@
 // LaTeX editing aids for the block editor, modeled on Overleaf/VSCode:
 // a caret-anchored live KaTeX preview of the math span being typed, and
 // \command autocompletion (Tab/Enter to accept). Pure helpers + two small
-// presentational components; blockTree.jsx owns the state and key handling.
+// presentational components; editor/BlockTree.jsx owns the state and key handling.
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import katex from "katex";
 import { escapedAt, leftDelimiterEdit, rightDelimiterAt } from "./latexInput";
-export { escapedAt } from "./latexInput";
 
 // --- command catalog -------------------------------------------------------
 // Order = rank within an equal match tier. Entries: name, args (brace count

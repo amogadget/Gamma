@@ -1,7 +1,7 @@
 // The "/" command menu in the block editor, Notion-style: typing "/" at the
 // start of a word opens a filterable list of insertions (link, equations,
 // headings, to-do, code, table, ...). Pure catalog + a presentational popup;
-// blockTree.jsx owns the trigger detection, keyboard handling and state.
+// editor/BlockTree.jsx owns the trigger detection, keyboard handling and state.
 import React, { useEffect } from "react";
 import { useCaretAnchored } from "./LatexEditor";
 

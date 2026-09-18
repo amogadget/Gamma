@@ -114,7 +114,7 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       let dialog = await openDialog(page, "Export");
       await choice(dialog, "Annotated PDF").click();
       await choice(dialog, "Next").click();
-      assertEq(await dialog.locator(".transferOriginalPaper").count(), 1);
+      assertEq(await dialog.locator('[data-preview="original"]').count(), 1);
       await toggle(dialog, "Notes").uncheck();
       assertEq(await dialog.locator('[data-preview="notes"]').count(), 0);
       await choice(dialog, "Close Export").click();

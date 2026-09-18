@@ -31,8 +31,8 @@ A typography fallback permits omitted standalone section pointers: `(Methods)`,
 `(Online Methods)`, and `(Supplementary Information/Methods/Material)` (one
 of those three names). Wrapped pointers such as `(Meth-\nods)` work too.
 Other parentheticals must still match in this pass. Omitted pointers are
-excluded from the highlight, even when
-they share a text run with the quote; exact matches take priority.
+excluded from the highlight, even when they share a text run with the quote;
+exact matches take priority.
 
 If those passes fail, `pdf/fuzzyCitation.js` aligns the quote's words against
 the cited page with bounded edit distance. It tolerates punctuation changes,
@@ -45,7 +45,7 @@ single-letter variables and negations cannot be inserted, deleted or changed
 by this pass (the existing case folding still applies). A second qualifying
 passage is ambiguous. Exact matches always win over approximate ones.
 
-Fuzzy matches highlight the actual source passage, including internal words
+Fuzzy matches highlight the source passage, including internal words
 omitted by the quote, and show “Highlighted an approximate text match.” The
 matcher preserves source offsets and stops after at most one million word
 comparison cells; unusually dense pages fall back to the unresolved notice
@@ -63,7 +63,7 @@ the passage or Escape removes them; there is no close button.
 
 Coverage: `frontend/tests/pdfCitation.test.mjs`, the citation scenario in
 `frontend/tests/e2e/scenarios/pdf.mjs`, and `backend/tests/test_pdf_citations.py`.
-The frontend fixture includes the actual failing PDF.js runs from physical
+The frontend fixture includes the failing PDF.js runs from physical
 pages 20–22 of Krantz et al., *A quantum engineer's guide to superconducting
 qubits*. `node tests/e2e/pdfCitationPaper.mjs /path/to/1904.06560.pdf` runs the
 saved citations against that complete PDF in an isolated browser test.

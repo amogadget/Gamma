@@ -1,8 +1,9 @@
 // Logseq-style block model: each block has id, content, properties, children.
 // Highlights are blocks with properties.highlight_id set.
 // Free notes are blocks without properties.highlight_id.
+import { COLORS } from "./highlightColors.js";
 
-const DEFAULT_COLOR = "rgba(255, 226, 143, 0.65)";
+const DEFAULT_COLOR = COLORS[0];
 
 // 9 random bytes, base64url — same shape and strength as the backend's
 // secrets.token_urlsafe(9) (12 chars, 72 bits; the old Math.random base36

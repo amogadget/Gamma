@@ -223,7 +223,7 @@ the request's workspace — the extension names none, so its personal one.
 ### AI (`ai.py`) — all config is per-user GUI entries, no env API keys
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/ai/chat` | chat; NDJSON stream of `{context}` (first line: per-page coverage — native/text, pages shown of total; `doc_id` `""` for a page without a PDF) then `{delta}`/`{action}`/`{progress}`/`{error}`; `progress` previews an edit_block/create_block call still being written (target id + markdown so far). Context is `pages` (several) or `page_id` (one; its PDF attachment derived server-side; `doc_id` is accepted as a compatibility input and resolves to its page), plus model id, effort, images, files, the agent scope, and the notes pointers `focus_block_id` (cursor block), `context_blocks` (attached block ids), `note_passages` (Ctrl-selected note text). See [ai.md](ai.md) |
+| POST | `/ai/chat` | chat; NDJSON stream of `{context}` (first line: per-page coverage — native/text, pages shown of total; `doc_id` `""` for a page without a PDF) then `{delta}`/`{action}`/`{progress}`/`{error}`; `progress` previews an edit_block/create_block call still being written (target id + markdown so far). Context is `pages` (up to 7 page ids, de-duplicated; they also become the tool scope's `context_pages`) or `page_id` (one; its PDF attachment derived server-side; `doc_id` is accepted as a compatibility input and resolves to its page), plus model id, effort, images, files, the agent scope, and the notes pointers `focus_block_id` (cursor block), `context_blocks` (attached block ids), `note_passages` (Ctrl-selected note text). See [ai.md](ai.md) |
 | GET | `/ai/models` | model registry (each model carries `native_pdf`: whether its provider accepts the PDF file itself) + default prompts (feeds the model switchers and prompt editor) |
 | GET | `/ai/settings` | masked provider list (key hints only) |
 | POST/PUT/DELETE | `/ai/providers[/{id}]` | manage provider entries |
@@ -274,6 +274,25 @@ archived conversation browsing remains session-only.
 | PUT | `/page-snaps/{page_id}` | store a cover (JPEG data URL body `{img, at}`; per-page newest-`at` wins, count-capped server-side) |
 | DELETE | `/page-snaps/{page_id}` | drop a cover (the recents card's ×) |
 
+### Integrations and MCP (`routers/integrations.py`, `mcp_oauth.py`, `mcp_server.py`) — see [mcp.md](mcp.md)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/integrations/tokens` | the current workspace's assistant connections (manual tokens and OAuth grants: id, name, dates), the MCP URL and whether browser sign-in is available; session only, never a guest |
+| POST | `/integrations/tokens` | mint a manual token `{name}` (shown once); at most 20 unexpired per account |
+| DELETE | `/integrations/tokens/{id}` | revoke a connection |
+| GET | `/integrations/oauth/request?request_id=` | the pending consent (client name, the account's workspaces) for the consent screen |
+| POST | `/integrations/oauth/consent` | approve or deny a pending sign-in for one workspace |
+| GET | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource` | OAuth discovery for MCP clients (no `/api` prefix) |
+| POST | `/oauth/register`; GET `/oauth/authorize`; POST `/oauth/token` | dynamic client registration, the authorization redirect, the PKCE code exchange (no `/api` prefix) |
+| POST | `/mcp` | the Streamable HTTP MCP endpoint (bearer token or OAuth access token; no `/api` prefix, browser origins refused) |
+
+### Publisher sessions (`routers/publisher_sessions.py`) — see [extension.md](extension.md)
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/publisher-sessions` | the account's connected publisher hosts (metadata only) and the supported roots |
+| POST | `/publisher-sessions` | store a cookie snapshot for one host (JSON, 256 KiB cap; HTTPS or localhost, personal accounts only) |
+| DELETE | `/publisher-sessions/{host}` | forget a host |
+
 ### Admin (`admin.py`, prefix `/api/admin`)
 | Method | Path | Purpose |
 |---|---|---|
@@ -284,7 +303,7 @@ archived conversation browsing remains session-only.
 | GET/POST | `/admin/backups` | list the whole-data-directory snapshots under `backups/` / take one now (`{label?, uploads?}` — databases, plus every upload with `uploads: true`); per-workspace snapshots are `/workspaces/{id}/backups` |
 | GET | `/admin/backups/{name}/download` | the snapshot as a zip |
 | DELETE | `/admin/backups/{name}` | delete a snapshot (restoring is `manage.py backups --restore`, server stopped — [migrations.md](migrations.md)) |
-| GET/PUT | `/admin/settings` | server-wide storage defaults |
+| GET/PUT | `/admin/settings` | server-wide storage defaults, plus `public_url` / `public_url_source` (the admin-confirmed public server URL, [mcp.md](mcp.md)) |
 | GET | `/admin/logs?after=<seq>` | scrubbed in-memory server log |
 
 Rails: the guest account is untouchable, no self-delete, the last admin

@@ -1,12 +1,12 @@
 import React, { useLayoutEffect, useRef, useState } from "react";
 import { citationRects } from "./pdfCitation.js";
 
-export function PdfCitationOverlay({ citation, textRef, wrapRef, ready }) {
+export function PdfCitationOverlay({ citation, wrapRef, ready }) {
   const [result, setResult] = useState(null);
   const scrolled = useRef(null);
   useLayoutEffect(() => {
     setResult(null);
-    if (!citation || !ready || !textRef.current || !wrapRef.current) return;
+    if (!citation || !ready || !wrapRef.current) return;
     const frame = requestAnimationFrame(() => {
       const found = citationRects(ready.runs, wrapRef.current, citation.quote);
       setResult(found);
@@ -27,7 +27,7 @@ export function PdfCitationOverlay({ citation, textRef, wrapRef, ready }) {
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [citation, ready, textRef, wrapRef]);
+  }, [citation, ready, wrapRef]);
   if (!citation || !result) return null;
   return <>
     {result.rects.map((r, i) => <div key={i} className="pdfCitationMark" aria-hidden="true"

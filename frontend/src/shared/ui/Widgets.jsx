@@ -193,13 +193,14 @@ function ChatMarkdownLink({ href, children, title }) {
   const onOpenPage = useContext(ChatOpenPageContext);
   const pageId = onOpenPage ? gammaPageLink(href) : null;
   if (pageId) {
+    const citation = parsePdfCitation(href, window.location.origin);
     return (
       <a href={href} className="chatLinkCard chatPageLink"
-        title={parsePdfCitation(href, window.location.origin) ? "Show this passage in the PDF" : "Open this page"}
+        title={citation ? "Show this passage in the PDF" : "Open this page"}
         onClick={(e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
           e.preventDefault();
-          onOpenPage(pageId, parsePdfCitation(href, window.location.origin));
+          onOpenPage(pageId, citation);
         }}><FileTextIcon size={14} aria-hidden="true" /><span className="chatLinkLabel">{children}</span></a>
     );
   }

@@ -13,7 +13,8 @@ from .db import connect_pages_db, pdf_upload_path, ws_db_path
 from .foldertags import parse_tags
 from .logbuf import log
 from .net_guard import guarded_urlopen
-from .pdf_text import PDF_EXTRACT_FAILED, extract_pages, extract_text, extract_text_pages, page_count
+from .pdf_text import (PAGE_LABEL_RE, PDF_EXTRACT_FAILED, extract_pages, extract_text, extract_text_pages,
+                       page_count, page_label)
 from .server_settings import can_store
 from .textnorm import normalize_text
 
@@ -453,11 +454,10 @@ def pdf_excerpt(ws: str, doc_id: str, limit: int, offset: int = 0,
     # A continuation may start halfway through a physical page. Repeat its
     # label outside the window; offsets still count only the extracted text.
     if offset and text:
-        labels = [m for m in re.finditer(r"(?m)^\[PDF page (\d+)\]\n", full)
-                  if m.start() <= offset]
+        labels = [m for m in PAGE_LABEL_RE.finditer(full) if m.start() <= offset]
         if labels:
             text = text[max(0, labels[-1].end() - offset):]
-            text = f"[PDF page {labels[-1].group(1)}; continued]\n{text}"
+            text = page_label(labels[-1].group(1), continued=True) + text
     return (text, next_offset, len(full), pages) if with_pages else (text, next_offset, len(full))
 
 
@@ -536,7 +536,7 @@ def _join_upto(pages: list[str], start: int, limit: int) -> str:
     materializing the whole rest of the document just to slice it."""
     parts, total = [], 0
     for page_no, page in enumerate(pages[start:], start + 1):
-        page = f"[PDF page {page_no}]\n{page}"
+        page = page_label(page_no) + page
         parts.append(page)
         total += len(page) + 2
         if total >= limit:
@@ -733,7 +733,7 @@ def gather_inputs(ws: str, payload, allow_native: bool) -> tuple[list[str], str,
         coverage.append({"title": title, "doc_id": doc_id, "native": native,
                          "native_requested": bool(payload.attach_pdf), **(cover or none)})
 
-    page_ids = list(dict.fromkeys(str(page) for page in (payload.pages or []) if page))[:7]
+    page_ids = list(payload.pages or [])
     single = not page_ids
     with connect_pages_db(ws) as connection:
         if single:

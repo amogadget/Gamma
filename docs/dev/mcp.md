@@ -6,13 +6,21 @@ tool definitions, executors, page/folder scope checks, and dispatch permissions.
 The chat calls these functions directly. Gamma is not an MCP client for external
 servers, and connecting Codex does not invoke Gamma's AI provider.
 
+| File | Owns |
+|---|---|
+| `gamma/mcp_server.py` | the `/mcp` transport (official Python MCP SDK), the four read tools plus the two picker tools |
+| `gamma/mcp_oauth.py` | discovery, dynamic registration, PKCE authorization and token exchange, the consent API (`/api/integrations/oauth/*`), `public_base` |
+| `gamma/mcp_picker.py` + `mcp_paper_picker.html` | the sandboxed MCP-Apps paper picker and its text fallback |
+| `gamma/integrations.py` | integration tokens (`integration_tokens` table, hashes only) and their resolution |
+| `gamma/server_settings.py` | the admin-confirmed public URL and the MCP host allowlist |
+| `gamma/routers/integrations.py` | the session-only token management API |
+| `users.db` tables `integration_tokens`, `mcp_oauth` | migrations 6 and 7 ([migrations.md](migrations.md)) |
+| `frontend/src/settings/SettingsIntegrations.jsx`, `frontend/src/auth/McpConsent.jsx` | the External assistants pane, the consent screen |
+| `plugins/gamma/`, `tools/*codex*`, `.github/workflows/codex-plugin.yml` | the Codex plugin and its packaging |
+
 ## Connect
 
-Install the updated `backend/requirements.txt` and restart Gamma. Startup
-migrates the data directory to schema 7, with the existing migration snapshot
-mechanism. Desktop builds bundle the dependency.
-
-Open Gamma in your browser and go to **Settings > AI > External assistants**.
+Open Gamma in your browser and go to **Settings → AI → External assistants**.
 Copy its server URL into your assistant's MCP settings and choose its sign-in
 option. Select **Codex CLI** in the panel for commands using your actual URL:
 
@@ -27,11 +35,11 @@ and no environment variable to set. This works with local browser-based Gamma
 and self-hosted servers; the Gamma desktop app is not required. Local installations
 may use `http://127.0.0.1:8000/mcp` (substitute your actual port).
 
-If you previously configured `gamma` with `bearer_token_env_var` or an Authorization
-header, remove that old server entry first (`codex mcp remove gamma`), then add it
-again with just the URL before signing in. Existing manual tokens remain valid
-until revoked. Installing the optional plugin does not install this per-user
-connection. A browser cannot directly edit Codex's configuration on your computer.
+A `gamma` entry configured with `bearer_token_env_var` or an Authorization
+header must be removed (`codex mcp remove gamma`) and added again with just the
+URL before signing in. Installing the optional plugin does not install this
+per-user connection. A browser cannot directly edit Codex's configuration on
+your computer.
 
 ### Manual tokens (advanced)
 
@@ -88,7 +96,7 @@ Gamma's existing icon is bundled with the plugin, MCP metadata, and picker;
 whether the tool card displays the supplied icon depends on the host.
 Tokens are never embedded
 in the HTML. The UI is served by Gamma, so updating the skills-only plugin does
-not replace the server's picker code. Restart Gamma after updating the backend.
+not replace the server's picker code.
 
 If the client does not render MCP Apps, the tool also returns text choices with
 titles and page links. Choose one in a reply. The assistant is
@@ -102,13 +110,13 @@ and [MCP Apps](https://modelcontextprotocol.io/extensions/apps/overview).
 
 Results include an absolute page URL or URL template carrying the workspace ID.
 PDF page numbers are physical 1-based page numbers. Existing read budgets and
-indexing/incomplete-result notices still apply. The initial release reads text;
-it does not provide rendered PDF figures or handwriting recognition.
+indexing/incomplete-result notices still apply. The tools read text only: no
+rendered PDF figures, no handwriting recognition.
 
 ## Self-hosted and remote connections
 
 Open Gamma at its public HTTPS address, then sign in as an administrator and
-open **Settings > Administration > Server > Public server URL**. The field
+open **Settings → Administration → Server → Public server URL**. The field
 suggests the browser's origin. Check it and click **Confirm address** once.
 Gamma stores the address in `users.db` and immediately uses it for OAuth,
 MCP links, and the MCP hostname allowlist. No environment variables or restart
@@ -120,15 +128,14 @@ even when the proxy connects to Gamma over HTTP. Changing the address requires
 assistants to reconnect; the previous hostname is removed from the allowlist
 unless separately allowed. Clearing the field restores request-based discovery.
 
-Existing environment configuration remains supported: `GAMMA_PUBLIC_URL`
-overrides the saved address and makes the field read-only. Its hostname is
+`GAMMA_PUBLIC_URL` overrides the saved address and makes the field read-only. Its hostname is
 automatically allowed too. `GAMMA_MCP_ALLOWED_HOSTS` adds other allowed host
 authorities, for example `nas.local:8000` for manual tokens. Localhost and
 loopback remain allowed by default. Browser sign-in over HTTP is restricted to
 localhost/loopback; HTTP LAN and path-prefixed deployments can use manual tokens.
 
 OAuth handles sign-in, not network reachability. A remote assistant still needs
-to reach Gamma's server; a public listing cannot access a user's localhost by itself.
+to reach Gamma's server. A public listing cannot access a user's localhost by itself.
 
 Browser-origin requests to `/mcp` are rejected. This endpoint targets native
 MCP clients; it does not enable cross-origin browser access. The official Python
@@ -140,9 +147,12 @@ SDK manager; it must run when embedding Gamma's ASGI app.
 
 Gamma provides OAuth authorization-server discovery, protected-resource discovery,
 dynamic public-client registration, and authorization-code exchange with S256
-PKCE. The SDK validates client identity, redirect matching, and PKCE. Gamma adds
-resource binding, an explicit workspace approval screen, session-bound consent,
-rate/body limits, persistent expiring records, and atomic single-use codes.
+PKCE. The SDK validates client identity, redirect matching, and PKCE. Gamma adds:
+
+- resource binding and an explicit workspace approval screen;
+- session-bound consent, rate and body limits;
+- persistent expiring records and atomic single-use codes.
+
 Only `gamma:read` is supported. Callback URLs must be HTTPS or HTTP loopback.
 
 ```text
@@ -191,7 +201,7 @@ DELETE /api/integrations/tokens/{id}
 ### Install from a Gamma release
 
 Open **Settings → AI → External assistants → Codex CLI** in browser or self-hosted
-Gamma. Select **Windows PowerShell** or **macOS / Linux**, copy the setup command,
+Gamma (the same walkthrough ships in `plugins/gamma/README.md`). Select **Windows PowerShell** or **macOS / Linux**, copy the setup command,
 and run it on the computer where you use Codex. The Codex CLI must already be
 installed. Setup installs **Gamma PDF**, adds this server's MCP URL, and opens
 browser sign-in. Approve a workspace and start a new chat. No Gamma desktop app
@@ -209,10 +219,6 @@ If sign-in is interrupted, resume with `codex mcp login gamma`.
 If `gamma-local` is already registered from another directory, keep using it or
 remove that marketplace registration in Codex before switching to release setup.
 Setup does not remove existing marketplaces or plugins.
-
-The combined command works after the first release containing the setup scripts
-is published. A 404 from an older release means they have not shipped yet; use
-Assistant settings with the server URL in the meantime.
 
 ### Build and publish
 
@@ -267,21 +273,17 @@ the computed release version and publishes these assets on the same `vX.Y.Z` rel
 - `install-gamma-codex.ps1` and `install-gamma-codex.sh`
 - `gamma-codex-SHA256SUMS.txt`
 
-These assets are built before publication, including in build-only runs. Keeping
-them on the existing release preserves the desktop updater's latest-release
-convention. No follow-up release event is needed (GitHub-token-created releases
-do not trigger other workflows). Preview the assets locally with:
+Build-only runs keep them as CI artifacts. Keeping them on the existing
+release preserves the desktop updater's latest-release convention. Preview the
+assets locally with:
 
 ```text
 python tools/release_codex_plugin.py --output tmp/gamma-plugin-release --version 1.2.3
 ```
 
-The packager sets the version only in the exported manifest. It does not tag
-or publish; the normal Gamma release workflow publishes after these changes ship.
-
-This does not publish a public directory listing. Public MCP submissions currently
-require a stable public HTTPS endpoint and review. Gamma now supports OAuth browser
-sign-in, but this package does not deploy a hosted service or submit a public listing.
+The packager sets the version only in the exported manifest; it does not tag
+or publish. Nothing here submits a public directory listing, which needs a
+stable public HTTPS endpoint and a review.
 
 Official references: [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli),
 [plugin packaging](https://developers.openai.com/plugins/build/plugins), and
@@ -301,7 +303,8 @@ Official references: [Codex MCP configuration](https://learn.chatgpt.com/docs/ex
 - **401:** sign in again if OAuth access expired or was revoked. For a manual token,
   confirm the Codex process inherited the variable. Account/workspace access must
   still exist. OAuth tokens are bound to the exact server URL used when signing in.
-- **421:** server hostname is not in `GAMMA_MCP_ALLOWED_HOSTS`.
+- **421:** the request's host is neither loopback nor the confirmed public
+  server URL (Settings → Administration → Server); confirm the address first.
 - **503:** the ASGI lifespan is not running.
 - **Connection refused:** Gamma is stopped, the desktop port changed, or the MCP
   client is running on a different machine where localhost means that machine.

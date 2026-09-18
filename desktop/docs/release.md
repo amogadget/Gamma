@@ -32,9 +32,9 @@ on Ubuntu ≥ 24.04), so `test/smoke.js` and `test/e2e.js` start it with
 ## The `desktop` workflow
 
 **A release is a dispatch, not a merge.** `.github/workflows/desktop.yml`
-has no push trigger; it runs by hand (`gh workflow run desktop.yml --ref
-main`, what the `release` skill does) against whatever is on `main` — a
-merge to `main` only publishes the Docker image. Every run builds Windows + macOS + Linux (pin the version →
+has no push trigger. The `release` skill dispatches it against whatever is
+on `main` (`gh workflow run desktop.yml --ref main`); a merge to `main`
+publishes only the Docker image. Every run builds Windows + macOS + Linux (pin the version →
 frontend build → backend freeze → frozen-server health check →
 electron-builder → signature verification → packaged `--smoke`; the Linux
 job additionally `apt install`s the `.deb` on the runner and runs the

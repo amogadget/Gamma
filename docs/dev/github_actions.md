@@ -11,13 +11,11 @@ is bumped or tagged by hand: versions are computed from the tags.
 | `desktop` | `desktop.yml` | manual dispatch only (`release` skill) | Windows installer, macOS dmg + zip, Debian/Ubuntu deb, the update-feed files → GitHub Release `v<version>`; the MSIX artifact + a Microsoft Store submission when the secrets exist; a Docker tag `<version>` |
 | `extension` | `extension.yml` | manual dispatch only (`release` skill) | `gamma-connector-<version>.zip` → GitHub Release `extension-v<version>` |
 | `docker` | `docker.yml` | every push to `main`; dispatched by the desktop release with a version | `ghcr.io/tim4431/gamma:latest`; plus `:<version>` and `:<major.minor>` when dispatched, linux/amd64 + arm64 |
-| `Codex plugin package` | `codex-plugin.yml` | relevant PRs or manual dispatch | installer tests on Windows/macOS/Linux and preview plugin release assets |
+| `Codex plugin package` | `codex-plugin.yml` | PRs touching the plugin or its tooling, or manual dispatch | installer tests on Windows/macOS/Linux and preview plugin release assets (pins `checkout@v4`/`setup-python@v5`/`upload-artifact@v4`, older than the rule below) |
 
-The `desktop` workflow also builds the versioned Gamma PDF plugin ZIP, setup
-scripts for Windows and macOS/Linux, and checksums. Its publish job waits for
-that build and uploads the assets onto the same Gamma release. This does not
-require the desktop app to use the plugin; browser and self-hosted users install
-it through External assistants. Build-only runs retain these as CI artifacts.
+The `desktop` workflow also builds the versioned Codex plugin ZIP, its setup
+scripts for Windows and macOS/Linux, and checksums, and uploads them onto the
+same release (`tools/release_codex_plugin.py`).
 
 ```
 PR → main ──▶ check (pytest, npm test + build, e2e, extension zip)   ← merge skill waits for this
@@ -28,7 +26,6 @@ release skill ─┬──▶ desktop.yml  meta: version = max(package.json, new
                │        └─▶ dispatch docker.yml -f version   ─▶ ghcr :<version> :<major.minor>
                │        Windows leg: MSIX → msstore publish (if PARTNER_CENTER_* secrets)
                └──▶ extension.yml  same rule on extension-v* tags; manifest pinned inside the zip
-         └──▶ docker.yml     ghcr :latest
 ```
 
 ## Versions and tags
@@ -112,9 +109,8 @@ server image gets the same version tag (a tag made with `GITHUB_TOKEN`
 would not trigger `docker.yml` by itself).
 
 No push trigger: the app bundles the backend and the frontend, so a path
-filter released it on nearly every merge. It now runs only when dispatched
-(`release` skill). Re-adding a `push` trigger changes nothing else — the
-version logic is the same either way.
+filter would release it on nearly every merge. It runs only when dispatched
+(`release` skill).
 
 ## `extension.yml`
 
@@ -182,8 +178,9 @@ never paste secret values into chat or files.
 
 ## Adding or changing a workflow
 
-- One deliverable per workflow, a path filter that matches its inputs, and
-  the tag-derived version rule above for anything that publishes.
+- One deliverable per workflow, a `pull_request` path filter for checks
+  (release workflows are dispatch-only), and the tag-derived version rule
+  above for anything that publishes.
 - The Linux Electron steps need `xvfb-run`; the unpacked `linux-unpacked`
   dir needs `--no-sandbox` (the `.deb` postinst fixes that for installs).
 - Pin every action to a major that runs on the runner's current Node

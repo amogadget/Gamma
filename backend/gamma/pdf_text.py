@@ -7,6 +7,7 @@ Used by the AI context builder, metadata lookup, /pdf-text-status, and the
 search indexer, so extraction fixes land once.
 """
 
+import re
 import io
 import threading
 
@@ -96,6 +97,15 @@ def extract_text(src, char_limit: int, empty_page_cap: int = 50,
     return extract_text_pages(src, char_limit, empty_page_cap, start_page, label_pages)[0]
 
 
+
+PAGE_LABEL_RE = re.compile(r"(?m)^\[PDF page (\d+)\]\n")
+
+
+def page_label(page_no, continued: bool = False) -> str:
+    """The `[PDF page N]` line that heads a page's text in AI context (the
+    model cites these physical numbers, never printed ones)."""
+    return f"[PDF page {page_no}{'; continued' if continued else ''}]\n"
+
 def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
                        start_page: int = 1, label_pages: bool = False) -> tuple[str, int]:
     """extract_text plus how many PDF pages the text spans (counted from
@@ -108,7 +118,7 @@ def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
             if t.strip():
                 empties = 0
                 if label_pages:
-                    t = f"[PDF page {start_page + pages - 1}]\n{t}"
+                    t = page_label(start_page + pages - 1) + t
                 parts.append(t)
                 total += len(t)
                 if total >= char_limit:

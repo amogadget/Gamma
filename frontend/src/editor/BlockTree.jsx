@@ -180,7 +180,7 @@ function toggleTaskMarker(content, idx, checked) {
 }
 
 // The file chip (`[name](/api/uploads/<hash>.ext)`, what a dropped file
-// becomes) and the upload helpers live in fileChip.jsx.
+// becomes) and the upload helpers live in transfers/FileChip.jsx.
 
 // The files on a clipboard (a screenshot, files copied in the file manager):
 // what a paste uploads instead of inserting text.
@@ -241,7 +241,18 @@ function useMathUi() {
     if (typing) setMathAcIdx(0);
   }
 
-  return { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi };
+  // Accept an autocomplete entry into the editor `ta` and close the popup.
+  function acceptCompletion(ta, c) {
+    if (!ta || !mathUi?.ac) return;
+    const { start } = mathUi.ac;
+    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
+    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
+    setMathUi(null);
+    ta.focus();
+    updateMathUi(ta, false);
+  }
+
+  return { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi, acceptCompletion };
 }
 
 // ![[id]] transclusion: the referenced block's content rendered in a card.
@@ -255,7 +266,7 @@ function useMathUi() {
 // card is the jump link.
 function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEdit }) {
   const [draft, setDraft] = useState(null); // non-null while editing in place
-  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi } = useMathUi();
+  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi, acceptCompletion } = useMathUi();
   const editorRef = useRef(null);
   const editable = !!onEmbedEdit && refBlock?.content != null;
 
@@ -271,16 +282,7 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
     });
   };
 
-  function acceptLatexAc(c) {
-    const ta = editorRef.current;
-    if (!ta || !mathUi?.ac) return;
-    const { start } = mathUi.ac;
-    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
-    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
-    setMathUi(null);
-    ta.focus();
-    updateMathUi(ta, false);
-  }
+  function acceptLatexAc(c) { acceptCompletion(editorRef.current, c); }
 
   // Paste while editing: files upload and insert at the caret (images
   // inline, anything else — a PDF copied from the file manager — as a file
@@ -736,7 +738,7 @@ function BlockRow({
   const [refPopup, setRefPopup] = useState(null); // { query, rect }
   const [refSelectedIdx, setRefSelectedIdx] = useState(0);
   // Live LaTeX aids (preview + \command autocomplete) — the shared hook.
-  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi } = useMathUi();
+  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi, acceptCompletion } = useMathUi();
   // "/" command menu: { start, query, items, anchor }. Opened only by TYPING
   // the slash (caret moves just keep or close it), suppressed inside math.
   const [slashMenu, setSlashMenu] = useState(null);
@@ -791,16 +793,7 @@ function BlockRow({
     });
   }
 
-  function acceptLatexAc(c) {
-    const ta = ref.current;
-    if (!ta || !mathUi?.ac) return;
-    const { start } = mathUi.ac;
-    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
-    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
-    setMathUi(null);
-    ta.focus();
-    updateMathUi(ta, false);
-  }
+  function acceptLatexAc(c) { acceptCompletion(ref.current, c); }
 
   // "/" trigger: a slash starting a word, with the query typed so far after
   // it. Recomputed on edits (typing=true, may open) and caret moves

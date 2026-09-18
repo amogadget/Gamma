@@ -19,7 +19,7 @@ from gamma.db import SCHEMA_VERSION, SchemaOutdated, connect_users_db
 OLD = "2024-01-01T00:00:00.000000Z"
 
 
-def test_v6_adds_mcp_oauth_and_preserves_tokens(data_dir):
+def test_v7_adds_mcp_oauth_and_preserves_tokens(data_dir):
     connect_users_db().close()
     with sqlite3.connect(str(config.USERS_DB)) as conn:
         conn.execute("DROP TABLE mcp_oauth")
@@ -32,7 +32,7 @@ def test_v6_adds_mcp_oauth_and_preserves_tokens(data_dir):
     assert migrations.ensure_current()["applied"] == []
 
 
-def test_v5_adds_integration_tokens_and_is_repeatable(data_dir):
+def test_v6_adds_integration_tokens_and_is_repeatable(data_dir):
     connect_users_db().close()
     with closing(sqlite3.connect(str(data_dir / "users.db"))) as conn:
         conn.execute("DROP TABLE integration_tokens")
@@ -44,7 +44,7 @@ def test_v5_adds_integration_tokens_and_is_repeatable(data_dir):
     assert migrations.ensure_current()["applied"] == []
 
 
-def test_v4_adds_publisher_sessions_and_is_repeatable(data_dir):
+def test_v5_adds_publisher_sessions_and_is_repeatable(data_dir):
     connect_users_db().close()
     with closing(sqlite3.connect(str(data_dir / "users.db"))) as conn:
         conn.execute("DROP TABLE publisher_sessions")
