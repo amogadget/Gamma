@@ -6,14 +6,13 @@ import json
 import re
 from pathlib import Path
 
-from package_codex_plugin import build, write_archive
+from package_codex_plugin import build, validate_repo, write_archive
 
 
 def release(output: Path, version: str, repo: str = "tim4431/Gamma") -> list[Path]:
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?", version):
         raise ValueError("Release version must be X.Y.Z, optionally with a prerelease suffix.")
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
-        raise ValueError("GitHub repository must be owner/repo.")
+    validate_repo(repo)
     package = build(output / "gamma-marketplace")
     manifest_path = package / "plugins/gamma/.codex-plugin/plugin.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

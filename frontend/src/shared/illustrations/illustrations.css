@@ -29,5 +29,6 @@
 .transferFiles strong { font-weight: 500; color: var(--text-secondary); }
 .transferPreviewExtra { font-size: 10px; color: var(--text-muted); margin-top: 8px; }
 .appearancePdfPaper { fill: var(--pdf-paper, #fff); stroke: var(--border); }
+.appearancePdfPreview { color: #2e2c29; }
 .appearancePdfPreview.isDark { color: #efefef; }
 .appearancePdfPreview.isDark .appearancePdfPaper { fill: #101010; stroke: #383838; }

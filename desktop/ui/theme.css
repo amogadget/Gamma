@@ -67,13 +67,13 @@
   --bg-hover: #e7dfc9;
   --bg-active: #d9cfb5;
   --text-primary: #073642;
-  --text-secondary: #2b4b55;
+  --text-secondary: #365b64;
   --text-muted: #657b83;
-  --text-dim: #93a1a1;
+  --text-dim: #839496;
   --border: #e0d8c0;
-  --border-light: #d3caae;
-  --border-hover: #b9ae8f;
-  --ok: #6d7f00;
+  --border-light: #d3c9ad;
+  --border-hover: #bdb195;
+  --ok: #5f7519;
   --danger: #c1382b;
   --danger-bg: rgba(193, 56, 43, 0.1);
   --danger-border: rgba(193, 56, 43, 0.38);

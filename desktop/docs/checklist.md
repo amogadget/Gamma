@@ -79,7 +79,7 @@ or says it is a manual look (**manual**).
 
 | # | Check | How |
 |---|---|---|
-| 6.1 | Chrome follows Gamma's theme (dark/light/sepia/solarized/gray) live and persists it | auto: *theme mirror* |
+| 6.1 | Chrome follows Gamma's theme (dark/light/gamma-light/gamma-dark/sepia/solarized/gray) live and persists it | auto: *theme mirror* |
 | 6.2 | Windows: title-bar overlay controls recolor with the theme; the bar stops where they begin; the bar area drags the window | manual |
 | 6.3 | macOS: traffic lights sit in the bar (`hiddenInset`), bar padded past them | manual (build on a Mac) |
 | 6.4 | Launcher and bar use Gamma's tokens/controls/icons (no emoji, no bespoke colors) | manual: compare with Settings in Gamma |

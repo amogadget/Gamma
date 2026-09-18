@@ -65,6 +65,8 @@ export function normalizeChars(chars) {
 
 // Query → RegExp (null = empty/invalid). Non-regex queries are fuzzy: digits
 // tolerate grouping separators, spaces and hyphens are interchangeable.
+
+export const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 export function buildSearchRegex(q, { caseSensitive = false, wholeWord = false, regex = false } = {}) {
   let body;
   if (regex) {
@@ -79,7 +81,7 @@ export function buildSearchRegex(q, { caseSensitive = false, wholeWord = false, 
         parts.push(`[\\s${DASH_CLASS}]+`);
         while (i + 1 < q.length && sep.test(q[i + 1])) i++;
       } else {
-        parts.push(c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+        parts.push(escapeRegex(c));
         if (/\d/.test(c) && /\d/.test(q[i + 1] || "")) parts.push(`[${DIGIT_SEP_CLASS}\\s]?`);
       }
     }

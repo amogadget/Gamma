@@ -30,7 +30,7 @@ committed beyond `origin/main`, stop and say so.
    If a PR for the branch is already open, reuse it.
 
 4. **Wait for the check**: `gh pr checks <n> --watch --fail-fast`
-   (backend pytest, frontend build, extension zip; ~3 min). Red → report
+   (backend pytest, frontend unit tests + build, the browser suite, extension zip; ~4 min). Red → report
    the failing job (`gh run view <id> --log-failed`) and stop; fixing is
    normal work on the branch, then re-run this skill. Do not merge over a
    red check.

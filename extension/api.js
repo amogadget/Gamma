@@ -11,6 +11,7 @@ export const DEFAULTS = {
   labels: [],          // default labels
   allowOa: true,       // open-access fallback behind paywalls
   saveCopy: true,      // store the PDF server-side
+  autoRefreshSessions: true,  // re-import a connected publisher's cookies when its page is visited
 };
 
 export class ApiError extends Error {

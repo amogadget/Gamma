@@ -27,6 +27,7 @@ import {
   FileTextIcon,
   FolderIcon,
   GlobeIcon,
+  LinkIcon,
   HardDriveIcon,
   HighlightIcon,
   HomeIcon,
@@ -68,7 +69,7 @@ const AI_NAV = [
   ["assistant", "Assistant", MessageSquareIcon],
   ["ai-advanced", "Advanced", ActivityIcon],
   ["prompts", "Prompts", TypeIcon],
-  ["integrations", "External assistants", GlobeIcon],
+  ["integrations", "External assistants", LinkIcon],
 ];
 
 // --- Editor: notes + search + PDF viewer -----------------------------------

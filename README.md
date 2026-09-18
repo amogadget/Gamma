@@ -28,7 +28,7 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 
 ## ✨ Native agentic
 
-![Chat with a PDF, attach a paper with @, then watch the agent search and read the library, with close-ups of its tool calls and results](./docs/assets/demos/demo-native-agentic.webp)
+![Ask a complex question in PDF Chat, follow a citation to the source passage, then box-select a figure and ask a follow-up question](./docs/assets/demos/demo-native-agentic.webp)
 
 - **Chat with your papers** — ask about the open PDF, paste figures, dictate by voice, or attach the whole PDF so the model sees tables and plots. Use Anthropic or OpenAI models, or sign in with your ChatGPT subscription — no API key.
 - **Mention a paper** — type `@` to find and attach a library page. Its details and text stay in context for follow-up questions.
@@ -36,10 +36,11 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 
 ## ✍️ Take notes
 
-![Typing in a note: markdown renders as you go, a LaTeX equation previews live with command autocomplete, then renders in place](./docs/assets/demos/demo-notes.webp)
+![Type markdown and a live LaTeX equation, add a callout, then paste a picture and drag to resize it](./docs/assets/demos/demo-notes.webp)
 
 Highlights and free notes are the same kind of block, so a paper's notes and a plain page are edited the same way:
 
+- **Pictures** — paste an image into a note, then drag its edge to adjust the size.
 - **Outliner** — Enter for a new block, Tab / Shift+Tab to nest, drag to reorder, one undo history for the whole page.
 - **Live preview, Obsidian-style** — markdown, `$…$` / `$$…$$` math, code fences, callouts, and tables render in place while the block you're on stays raw. Math gets bracket-pair coloring, `\command` autocomplete, and Tab hops between `{}` arguments.
 - **Link and embed** — `[[page]]` mentions, `![[block]]` embeds that edit the source in place, and a "/" menu for everything else. Click a highlight block to jump the PDF to it (and back).

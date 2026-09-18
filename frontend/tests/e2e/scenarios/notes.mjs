@@ -157,6 +157,42 @@ export async function noteScenarios({ server, browser, alice, step, until, sleep
     return src;
   });
 
+  await step("notes: in the editor an untouched image shows the picture, the caret on it shows the source", async () => {
+    const up = await alice2.upload("/api/upload-image", PNG_1PX, "dot2.png", "image/png");
+    await editRow(page, "buy milk");
+    await page.keyboard.press("Enter"); // a line break; list continuation makes line 2 a new todo item
+    await page.keyboard.type(`![](${up.url})`);
+    const widgets = () => page.$$eval(".blockEditorCm .cmImgWidget img", (els) => els.map((e) => [e.getAttribute("src"), e.naturalWidth]));
+    // The caret sits at the end of the image it just typed: raw source.
+    assertEq((await widgets()).length, 0, "typed image stays raw under the caret");
+    await page.keyboard.press("Control+Home"); // line 1: the image is untouched now
+    await until(async () => {
+      const imgs = await widgets();
+      return imgs.length === 1 && imgs[0][0].includes(`ws=${second.id}`) && imgs[0][1] === 1;
+    }, { what: "image widget in the editor" });
+    await page.keyboard.press("Control+End"); // back onto the image: raw again
+    await until(async () => {
+      const raw = await page.$eval(".blockEditorCm .cm-content", (el) => el.textContent);
+      return (await widgets()).length === 0 && raw.includes("![](");
+    }, { what: "raw image source under the caret" });
+    await closeEditor(page);
+    await until(async () => JSON.stringify(await tree(alice2, pageId)).includes(`- [ ] ![](${up.url})`), { what: "image line saved" });
+    assertNoProblems(page);
+  });
+
+  await step("notes: one blank line is a paragraph break, a second one renders as an empty line", async () => {
+    await editRow(page, "third");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("after gap");
+    await closeEditor(page);
+    await until(async () => JSON.stringify(await tree(alice2, pageId)).includes("third\\n\\n\\nafter gap"), { what: "blank lines saved" });
+    const paras = await row(page, "after gap").locator(".blockRendered p").allTextContents();
+    assertEq(JSON.stringify(paras), JSON.stringify(["third", "\u00a0", "after gap"]), "an empty paragraph between the two");
+    assertNoProblems(page);
+  });
+
   await step("notes: Export… as an Obsidian vault downloads a zip", async () => {
     await page.click("button[aria-label='Settings']");
     await page.locator(".popoverItem", { hasText: "Export…" }).click();

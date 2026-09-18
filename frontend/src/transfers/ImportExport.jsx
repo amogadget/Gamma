@@ -2,7 +2,7 @@ import React from "react";
 import { HighlightIcon, PaperclipIcon, PenIcon, ScissorsIcon } from "../shared/ui/Icons";
 import { PictureChoices, Step, SubDialog, Toggle } from "../settings/SettingsKit";
 import { ExportPreview, ImportPreview, FormatIllustration } from "../shared/illustrations";
-import { resolveExport, resolveImport, exportSummary } from "./transferFormats";
+import { CATEGORIES, resolveExport, resolveImport, exportSummary } from "./transferFormats";
 
 const EXPORT_CONTROLS = {
   highlights: { icon: HighlightIcon, label: "Highlights" },
@@ -12,7 +12,7 @@ const EXPORT_CONTROLS = {
 
 function FormatChoices({ label, value, onChange, onConfirm, options }) {
   return <div className="transferFormats" role="group" aria-label={label}>
-    {["PDF", "Notes", "MD", "ZIP"].map((type) => {
+    {CATEGORIES.map((type) => {
       const group = options.filter((option) => option.category === type);
       if (!group.length) return null;
       return <section key={type} className={`transferFormatRow${group.length < 3 ? " transferFormatRowWide" : ""}`} aria-label={type}>
@@ -126,7 +126,7 @@ export function ImportDialog({ hasPdf, stripDefault, busy, onCancel, onImport })
     actionLabel={definition.actionLabel} action={() => onImport(payload)}>
     {step === 0 ? <>
       <p className="reportModalHint">Choose a source. Double-click to continue, or use the button below.</p>
-      <FormatChoices label="Import from" value={src} onChange={setSource} onConfirm={busy ? undefined : advance} options={formats} />
+      <FormatChoices label="Import from" value={src} onChange={setSource} onConfirm={advance} options={formats} />
       {!needsReview ? <p className="reportModalHint">{definition.instructions}</p> : null}
     </> : <>
       <div className="transferReview">

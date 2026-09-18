@@ -1,4 +1,4 @@
-// Who else is on the page (collab.js `peers`): the avatar stack in the page
+// Who else is on the page (collaboration/usePageCollab.js `peers`): the avatar stack in the page
 // header, and the small chips on the block a person is on. Colours are the
 // room's per-peer index (CSS --peer-N); an open editor shows as a full
 // avatar, a mere viewer as a faded one.

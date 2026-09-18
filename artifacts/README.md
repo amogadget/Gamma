@@ -12,8 +12,8 @@ This directory is ignored except for this guide. Keep executable source in
 - `debug/citation-regression/`: original PDF and extracted text for the citation
   regression already represented in `frontend/tests/fixtures/`.
 
-The previously tracked paper-mentions patch is preserved separately in
-[`docs/archive/`](../docs/archive/README.md), so it remains versioned.
+The paper-mentions patch is versioned in
+[`docs/archive/`](../docs/archive/README.md), not here.
 
 Recordings and exports can contain private workspace content. Do not commit
 them. Builds, browser profiles, logs, sessions, QA frames and lossless render

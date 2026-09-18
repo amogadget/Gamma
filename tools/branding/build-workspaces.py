@@ -1,11 +1,5 @@
-"""Regenerate the light/dark workspace illustrations after build-connections.py."""
-from pathlib import Path
-import re
-
-ROOT = Path(__file__).resolve().parents[2]
-ASSETS = ROOT / 'docs/assets/branding'
-source = (ASSETS / 'gamma-connections-light.svg').read_text(encoding='utf-8')
-mark = source[source.index('    <radialGradient'):source.index('    <filter')]
+"""Regenerate the light/dark workspace illustrations."""
+from branding import MARK, DARK_PALETTE, to_dark, write_svg
 
 svg = '''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
   <title id="title">Gamma PDF: your space, a shared place</title>
@@ -33,8 +27,7 @@ MARK
     <path d="M-60 920 C220 1160 590 1080 850 1010 S1510 970 1980 1100"/>
   </g>
   <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-    <use href="#gammaMark" transform="translate(120 132) scale(1.5)"/>
-    <text x="216" y="186" font-size="58" font-weight="700" letter-spacing="-1.5" fill="#1a1a18">Gamma<tspan dx="14" font-weight="400" fill="#e8a020">PDF</tspan></text>
+    <use href="#gammaLogo" transform="translate(120 132) scale(0.6)"/>
     <text x="120" y="332" font-size="80" font-weight="600" letter-spacing="-2" fill="#1a1a18">Your space.</text>
     <text x="120" y="424" font-size="80" font-weight="600" letter-spacing="-2" fill="#1a1a18">A shared place.</text>
     <text x="122" y="494" font-size="28" fill="#6b6a65">Keep personal libraries. Build knowledge together.</text>
@@ -127,17 +120,8 @@ MARK
     <text x="1335" y="984" text-anchor="middle" font-size="26" fill="#6b6a65">One library. Everyone on the same page.</text>
   </g>
 </svg>
-'''.replace('MARK', mark.rstrip())
+'''.replace('MARK', MARK)
 
-(ASSETS / 'gamma-workspaces-light.svg').write_text(svg, encoding='utf-8')
-palette = {
-    '#f6f4ef': '#1b1b1a', '#ffffff': '#272725', '#e3e0d8': '#45443f',
-    '#1a1a18': '#f0ede6', '#6b6a65': '#a9a69e', '#f2f0ea': '#32312e',
-    '#ecdfc4': '#493b23', '#5a4a24': '#f1cf88', '#9a6b18': '#e8b451',
-    '#e1f1e9': '#253e32', '#287956': '#6fc89f', '#e8e5f5': '#373044',
-    '#7562a9': '#b6a2e4', '#d8d4ca': '#4c4a43',
-}
-dark = re.sub(r'#[0-9a-f]{6}', lambda m: palette.get(m[0], m[0]), svg)
-# Cursor labels need dark text on the brighter dark-theme accent backgrounds.
-dark = dark.replace('flood-opacity="0.10"', 'flood-opacity="0.24"')
-(ASSETS / 'gamma-workspaces-dark.svg').write_text(dark, encoding='utf-8')
+write_svg('gamma-workspaces-light', svg)
+palette = {**DARK_PALETTE, '#e8e5f5': '#373044', '#7562a9': '#b6a2e4', '#d8d4ca': '#4c4a43'}
+write_svg('gamma-workspaces-dark', to_dark(svg, palette, '0.10'))

@@ -1,15 +1,12 @@
 """Regenerate the light/dark connections illustrations (Python standard library)."""
-from pathlib import Path
-import re
 import base64
 import xml.etree.ElementTree as ET
 
-ROOT = Path(__file__).resolve().parents[2]
+from branding import ROOT, MARK, write_svg
+
 obsidian = ET.parse(ROOT / 'frontend/src/shared/illustrations/brands/obsidian.svg').getroot()[1].attrib['d']
 notion = ET.parse(ROOT / 'frontend/src/shared/illustrations/brands/notion.svg').getroot()[1].attrib['d']
 zotero = base64.b64encode((ROOT / 'frontend/src/shared/illustrations/brands/zotero.png').read_bytes()).decode('ascii')
-hero = (ROOT / 'docs/assets/branding/gamma-hero-light.svg').read_text(encoding='utf-8')
-mark = re.search(r'<g transform="translate\(140 300\) scale\(2\)">(.*?)\n  </g>', hero, re.S).group(1)
 
 for theme in ('light', 'dark'):
     dark = theme == 'dark'
@@ -21,13 +18,7 @@ for theme in ('light', 'dark'):
   <title id="title">Gamma PDF: your research, connected</title>
   <desc id="desc">Save papers and web clips with Gamma Connector. Import and export Obsidian vaults and Zotero libraries, import Notion exports, and let Codex search and read your Gamma library with read-only access.</desc>
   <defs>
-    <radialGradient id="markGlow" cx="24" cy="18" r="22" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#e8a020" stop-opacity="0.3"/>
-      <stop offset="1" stop-color="#e8a020" stop-opacity="0"/>
-    </radialGradient>
-    <clipPath id="markClip"><rect width="48" height="48" rx="11"/></clipPath>
-    <g id="gammaMark">{mark}
-    </g>
+{MARK.replace('#1a1a18', ink)}
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
       <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="{'0.24' if dark else '0.10'}"/>
     </filter>
@@ -43,8 +34,7 @@ for theme in ('light', 'dark'):
   </g>
   <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
     <!-- Promise and browser capture, in the same editorial layout as the hero. -->
-    <use href="#gammaMark" transform="translate(140 132) scale(1.5)"/>
-    <text x="236" y="186" font-size="58" font-weight="700" letter-spacing="-1.5" fill="{ink}">Gamma<tspan dx="14" font-weight="400" fill="#e8a020">PDF</tspan></text>
+    <use href="#gammaLogo" transform="translate(140 132) scale(0.6)"/>
     <text x="140" y="328" font-size="80" font-weight="600" letter-spacing="-2" fill="{ink}">Your research.</text>
     <text x="140" y="420" font-size="80" font-weight="600" letter-spacing="-2" fill="{ink}">Connected.</text>
     <text x="142" y="492" font-size="28" fill="{muted}">Bring your notes. Take your highlights with you.</text>
@@ -114,7 +104,4 @@ for theme in ('light', 'dark'):
   </g>
 </svg>
 '''
-    target = ROOT / f'docs/assets/branding/gamma-connections-{theme}.svg'
-    target.write_text(svg, encoding='utf-8', newline='\n')
-    ET.parse(target)
-    print(target.relative_to(ROOT))
+    write_svg(f'gamma-connections-{theme}', svg)

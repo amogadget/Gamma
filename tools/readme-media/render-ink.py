@@ -3,9 +3,8 @@ import argparse
 import json
 from pathlib import Path
 
-from media_output import encode_webp, publish
+from media_output import ROOT, encode_webp, publish
 
-ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--scratch', type=Path, default=ROOT / 'artifacts/readme-media')
 parser.add_argument('--out', type=Path, default=ROOT / 'docs/assets/demos')

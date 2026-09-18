@@ -439,6 +439,7 @@ def delete_account_workspaces(username: str) -> list[str]:
                 deleted.append(ws)
         conn.execute("DELETE FROM workspace_members WHERE username = ?", (username,))
         conn.execute("DELETE FROM integration_tokens WHERE username = ?", (username,))
+        conn.execute("DELETE FROM publisher_sessions WHERE username = ?", (username,))
         for ws in deleted:
             _delete_rows(conn, ws)
         conn.execute("DELETE FROM user_prefs WHERE username = ?", (username,))

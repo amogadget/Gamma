@@ -1,0 +1,787 @@
+{
+  "inputs": {
+    "design/brand/compositions/hero-dark.svg": "1596cca982e3e3fed0993cfe95a6382763b4fa5d67fe1996edc4e95c394da171",
+    "design/brand/compositions/hero-light.svg": "79bfe8a876dc90d712aecf8801b0102c3e111b8a45826ef0122b1c6c5d1c578f",
+    "design/brand/compositions/logo.svg": "14872e644f9397c2ef2468d9e170b0910833931b4df92c88a2115cfe2393379a",
+    "design/brand/marks/favicon.svg": "aa87ab7a445627b7cb8ffa71b63b36ceb6848815549233a0c6f6d8bd48a2002b",
+    "design/brand/outputs.json": "0936243bdae03b54aac8d58bdd54c4eb6e599b8ab0d242e74a8d510858280e0f",
+    "design/brand/tokens.json": "8778598768aefb172e4dc17f43e060fff18f87717ffa00977b64494e341c397f",
+    "frontend/package-lock.json": "abe9fbcd79def8f77486d434b0699da29b27142ce726b32717172439e08cf1e2",
+    "frontend/src/shared/illustrations/brands/LICENSE.md": "9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5",
+    "frontend/src/shared/illustrations/brands/README.md": "ee8dc19658c043858d045cc120a2c3b40dcd326d33b3b67e849aafad62a949f1",
+    "frontend/src/shared/illustrations/brands/logseq.svg": "5888e86163ec7064fa77d4eb7825b1782ae26600888397f7fce25c7f26d6df1c",
+    "frontend/src/shared/illustrations/brands/notion.svg": "b17d2a2b592a06252efef522d5205f0c7a958f748d40df1011ed081417e42f85",
+    "frontend/src/shared/illustrations/brands/obsidian.svg": "ceee016a3e7afcfa931e19b3dfa9eb26685fc8a9b4f177ff921e358d628abb33",
+    "frontend/src/shared/illustrations/brands/zotero.png": "30c76a7a6441884df75567287db08ee40be6b763af7309f452a434800e069cd4",
+    "tools/branding/branding.py": "a9c56a490b3fd29c37707a07e1bf1407e3d41e2e8f0fe75d2af57be237464c4d",
+    "tools/branding/build-connections.py": "b3ceeb30085c4c4944ba87b755ce88db46a0312b436224b26ec20276565d77c0",
+    "tools/branding/build-library.py": "0d44cd6106c399eca96cf0a60a1b871ebb9302d9369d2e86ec73189ca6238bbb",
+    "tools/branding/build-workspaces.py": "2edf1b5344f995e1976dcb313dc77e11fb12e3a2cf01d27f6b549070c5801f98",
+    "tools/branding/build.mjs": "8f084fd8997238d8f8fa9038d5de5f5389b1c7d210ec3570c8b357e109b43395",
+    "tools/branding/check.test.mjs": "ceeaf77e8f668d8bb5f9ef9efcd3b3adb68b6974e35c433443cd1ec23e175d9c",
+    "tools/branding/logo.mjs": "43bf2a2afdcdc7723a48e65c60bb6f8ba1debb9a108565fd962952bda22195f4",
+    "tools/branding/mark.mjs": "d5e8ea7c2c313e3658d67a897cf5c3fb535b9c153d3cfbac963ec7aaf9fadf9b",
+    "tools/branding/render.mjs": "1a28eaead43ccd8ecf96e07b0b1b39b0c10b73c0ece25eba4476b5a93c5f2b92",
+    "tools/branding/runtime.mjs": "7c1ba52f4b42922a9384e860132311affe5887370430399423311d8bca975836",
+    "tools/branding/store-layouts.mjs": "5c8cb3841cbec2a5ee9a3c30a6a81a863fe16f0b64e88af99763aac516e9a915",
+    "tools/branding/svg-source.mjs": "5b4843f96d03859e4f79b7f1ad8489b9e0e89507ab4636fe25e9ce55aa9fc020"
+  },
+  "outputs": {
+    "frontend/public/media/icons/favicon.svg": {
+      "source": "marks/favicon.svg",
+      "variant": "copy",
+      "size": [
+        32,
+        32
+      ],
+      "sha256": "aa87ab7a445627b7cb8ffa71b63b36ceb6848815549233a0c6f6d8bd48a2002b"
+    },
+    "frontend/src/shared/illustrations/brands/gamma.svg": {
+      "source": "marks/favicon.svg",
+      "variant": "monochrome",
+      "size": [
+        32,
+        32
+      ],
+      "sha256": "c6aa58dba601bf626404c9be5284bc9099fd1c98da67936eb26f933950d7cb36"
+    },
+    "docs/assets/branding/gamma-hero-light.svg": {
+      "source": "compositions/hero-light.svg",
+      "variant": "hero",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "4e34a59241ed8348ab4581df51aa010c3a739b4c2f11902921ef3b8932cf4b4d"
+    },
+    "docs/assets/branding/gamma-hero-dark.svg": {
+      "source": "compositions/hero-dark.svg",
+      "variant": "hero",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "23881595e48efc540d3e0c95ed5211ca83e3a87e1739cdb5637ce27481d51314"
+    },
+    "docs/assets/branding/gamma-logo.svg": {
+      "source": "compositions/logo.svg",
+      "variant": "logo",
+      "size": [
+        680,
+        112
+      ],
+      "sha256": "7551405bf85fd44c561c3788c969373a33f6383033929471e7464f0127279df3"
+    },
+    "docs/assets/branding/gamma-connections-light.svg": {
+      "source": "tools/branding/build-connections.py",
+      "variant": "light",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "49b03de50c956349069e61eaaa3fdbf708cc398eafbf7d51ffcfc58e93b54024"
+    },
+    "docs/assets/branding/gamma-connections-dark.svg": {
+      "source": "tools/branding/build-connections.py",
+      "variant": "dark",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "2441941be366dd6700d2c5da3718484c34e35ddc180835f3a928c177dfdf41e5"
+    },
+    "docs/assets/branding/gamma-workspaces-light.svg": {
+      "source": "tools/branding/build-workspaces.py",
+      "variant": "light",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "7effe473989db72e130b039cbd77b69158000f57577875955b8df5ec7c08c89f"
+    },
+    "docs/assets/branding/gamma-workspaces-dark.svg": {
+      "source": "tools/branding/build-workspaces.py",
+      "variant": "dark",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "aadf421ec1a3a7d068f4495a6009d30083852a938e383516f3f8edbbd39a64a0"
+    },
+    "docs/assets/branding/gamma-library-light.svg": {
+      "source": "tools/branding/build-library.py",
+      "variant": "light",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "c156f70f25de8526cb2d0fcf7fbb6186d03b1c5dcaf857f1fa3568e288e6278d"
+    },
+    "docs/assets/branding/gamma-library-dark.svg": {
+      "source": "tools/branding/build-library.py",
+      "variant": "dark",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "f4b2c6750a7f1b50abf46ea5395a51ebb3a6a9bfd73e861171980b92163821f6"
+    },
+    "desktop/assets/icon.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon",
+      "size": [
+        512,
+        512
+      ],
+      "sha256": "96e63c9a3a02c32df03d680fa771459437c8b598c40a4d3380e4dcb4486355b2"
+    },
+    "backend/gamma/mcp_icon.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon",
+      "size": [
+        512,
+        512
+      ],
+      "sha256": "96e63c9a3a02c32df03d680fa771459437c8b598c40a4d3380e4dcb4486355b2"
+    },
+    "plugins/gamma/skills/gamma/assets/icon.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon",
+      "size": [
+        512,
+        512
+      ],
+      "sha256": "96e63c9a3a02c32df03d680fa771459437c8b598c40a4d3380e4dcb4486355b2"
+    },
+    "extension/assets/icons/icon128.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon",
+      "size": [
+        128,
+        128
+      ],
+      "sha256": "b8eac77d38386d8cf5787f4521b509fa276ca8aaf35c47b43c43f95cf1492e9e"
+    },
+    "extension/assets/icons/icon16-off.png": {
+      "source": "marks/favicon.svg",
+      "variant": "disabled",
+      "size": [
+        16,
+        16
+      ],
+      "sha256": "ed98409bd3e7b488b58695405fa70699f29fbd923ba19184d33e4edfa804ef3c"
+    },
+    "extension/assets/icons/icon16.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon",
+      "size": [
+        16,
+        16
+      ],
+      "sha256": "f6d64b3e6f965cd1eb8062490e8ca654bc368e8ec211109b37ab1c91d1928e6f"
+    },
+    "extension/assets/icons/icon32-off.png": {
+      "source": "marks/favicon.svg",
+      "variant": "disabled",
+      "size": [
+        32,
+        32
+      ],
+      "sha256": "63405a32bc6f317059507166df55ec4f3867f4831fcabbaef92ce48c138304de"
+    },
+    "extension/assets/icons/icon32.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon",
+      "size": [
+        32,
+        32
+      ],
+      "sha256": "b2ce63ce5436229e9b1be5e839a5a5968d42c49a64191db49233a7abe7b997ab"
+    },
+    "extension/assets/icons/icon48.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon",
+      "size": [
+        48,
+        48
+      ],
+      "sha256": "9aec153f069fba8af5bd261382da2dcc8a3cbc35c61cb3757680a4e3cbadfc91"
+    },
+    "desktop/assets/store/poster-720x1080.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "poster-720x1080",
+      "size": [
+        720,
+        1080
+      ],
+      "sha256": "a0be9043f5fa5b8a1cacc0b2c39e834368910392c1f7c670a367a7f6c4c6a31f"
+    },
+    "desktop/assets/store/poster-1440x2160.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "poster-1440x2160",
+      "size": [
+        1440,
+        2160
+      ],
+      "sha256": "4088d8e7dbc41d2fc96d5dd39e06e15d092f6d4219b13c917bb8a5998ec03ef9"
+    },
+    "desktop/assets/store/boxart-1080x1080.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "boxart-1080x1080",
+      "size": [
+        1080,
+        1080
+      ],
+      "sha256": "16cd42e1035ec695103f61791149897fbeb850d81188cc33be24c86fcb260962"
+    },
+    "desktop/assets/store/boxart-2160x2160.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "boxart-2160x2160",
+      "size": [
+        2160,
+        2160
+      ],
+      "sha256": "35789742e4b5653e81ca7813f245d6f036932f5e378c8009ea03eb0bafef7695"
+    },
+    "desktop/assets/store/tile-300x300.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "tile-300x300",
+      "size": [
+        300,
+        300
+      ],
+      "sha256": "32aeb0718c7724f3fd8857ad64410d127cf3ce0ab9dad8516dbb0c32ca3cb784"
+    },
+    "desktop/assets/store/tile-150x150.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "tile-150x150",
+      "size": [
+        150,
+        150
+      ],
+      "sha256": "ee48d8fb7df322125c451f63b9d22159d96c71c8d4c1001da08971e942de47ac"
+    },
+    "desktop/assets/store/tile-71x71.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "tile-71x71",
+      "size": [
+        71,
+        71
+      ],
+      "sha256": "66fa3536e1a18497b75097f98a45e23e4f55b1e65cd58d8f7579f8ea8fd6c69f"
+    },
+    "desktop/assets/appx/Square44x44Logo.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo",
+      "size": [
+        44,
+        44
+      ],
+      "sha256": "5db81dfdc50c19ddfe4429bc7d831edead6da101652e644142812f51d20824ca"
+    },
+    "desktop/assets/appx/Square44x44Logo.scale-125.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.scale-125",
+      "size": [
+        55,
+        55
+      ],
+      "sha256": "f552d2dffa19fd8f1e851b06a5d8a8a71eda984b85535031107fd32b66bbbb8e"
+    },
+    "desktop/assets/appx/Square44x44Logo.scale-150.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.scale-150",
+      "size": [
+        66,
+        66
+      ],
+      "sha256": "de994d20765bc2ab0db586955b37457881677d80926ef25541255ce5007af9c2"
+    },
+    "desktop/assets/appx/Square44x44Logo.scale-200.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.scale-200",
+      "size": [
+        88,
+        88
+      ],
+      "sha256": "e60a15740e825e1d58bc2cd5089fa1a3628f999e83670421ef9e663501fff30f"
+    },
+    "desktop/assets/appx/Square44x44Logo.scale-400.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.scale-400",
+      "size": [
+        176,
+        176
+      ],
+      "sha256": "d2c4ab77a1dd6aa703306fc30e382743160c6eb308aaa064d10a558d7a224e09"
+    },
+    "desktop/assets/appx/StoreLogo.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "StoreLogo",
+      "size": [
+        50,
+        50
+      ],
+      "sha256": "54d60bd3a3edfc0619d5ebeb7115835a52ceb2fcf8b6b85a581344d5cc19e30d"
+    },
+    "desktop/assets/appx/StoreLogo.scale-125.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "StoreLogo.scale-125",
+      "size": [
+        63,
+        63
+      ],
+      "sha256": "e39c796c9968b0f4d40580f7903e7a91b78baafb3ccb39acf4095dcf2026cca1"
+    },
+    "desktop/assets/appx/StoreLogo.scale-150.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "StoreLogo.scale-150",
+      "size": [
+        75,
+        75
+      ],
+      "sha256": "871a4b53bf17f53a94a9bb478c10a2ffadc3fe7a3c3a20a9a053b6db1516e394"
+    },
+    "desktop/assets/appx/StoreLogo.scale-200.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "StoreLogo.scale-200",
+      "size": [
+        100,
+        100
+      ],
+      "sha256": "9f977320b2a350a9608f9020c5a284e2d0880a6cb004fa942fcb64ae45f4dcfe"
+    },
+    "desktop/assets/appx/StoreLogo.scale-400.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "StoreLogo.scale-400",
+      "size": [
+        200,
+        200
+      ],
+      "sha256": "26b83f4dfee7fa1f2033af5d96f11682a3973d7b3bbae3bc170f874828e79b9c"
+    },
+    "desktop/assets/appx/SmallTile.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "SmallTile",
+      "size": [
+        71,
+        71
+      ],
+      "sha256": "36112777ed7b2f5552cbc0a3260aebc8f0933a0c87b7384203765731e94bc8b6"
+    },
+    "desktop/assets/appx/SmallTile.scale-125.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "SmallTile.scale-125",
+      "size": [
+        89,
+        89
+      ],
+      "sha256": "816e4294e7d255ee2042f7a434fdec53addebb888c5e4cb53595a9d10995dcf7"
+    },
+    "desktop/assets/appx/SmallTile.scale-150.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "SmallTile.scale-150",
+      "size": [
+        107,
+        107
+      ],
+      "sha256": "d32f4a510b692a63ef6a40a4756875812e162522be1b44184c2dd33e2476f49c"
+    },
+    "desktop/assets/appx/SmallTile.scale-200.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "SmallTile.scale-200",
+      "size": [
+        142,
+        142
+      ],
+      "sha256": "3064a966d43b1bd20412c756ac6aa5c086411172251d61236cb31990cf1b25fd"
+    },
+    "desktop/assets/appx/SmallTile.scale-400.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "SmallTile.scale-400",
+      "size": [
+        284,
+        284
+      ],
+      "sha256": "f2997be149e2514919bad5e463a8864c132dc0cbc47e20fbad322da14825083b"
+    },
+    "desktop/assets/appx/Square150x150Logo.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square150x150Logo",
+      "size": [
+        150,
+        150
+      ],
+      "sha256": "056da9d1bab0d778be5f578a2a8ce8d5ccd065fa03f7cee5f1b4f4e5fbfba77b"
+    },
+    "desktop/assets/appx/Square150x150Logo.scale-125.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square150x150Logo.scale-125",
+      "size": [
+        188,
+        188
+      ],
+      "sha256": "ccf39665533e64af96a06b4ba88ea9868219687bd9f0b4831ee6cf7d8ef37ac8"
+    },
+    "desktop/assets/appx/Square150x150Logo.scale-150.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square150x150Logo.scale-150",
+      "size": [
+        225,
+        225
+      ],
+      "sha256": "e0a58f35e3951455d6887b10265526506f099283ebac6d58cb87265c7e5c0b16"
+    },
+    "desktop/assets/appx/Square150x150Logo.scale-200.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square150x150Logo.scale-200",
+      "size": [
+        300,
+        300
+      ],
+      "sha256": "5464ff435d0b924bef2afa26a197b0a59df6cc25068bb47a4332093657a4afd2"
+    },
+    "desktop/assets/appx/Square150x150Logo.scale-400.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square150x150Logo.scale-400",
+      "size": [
+        600,
+        600
+      ],
+      "sha256": "7c6616298370c78a0426ca02178243a90d08da7ee70729e2a4d1b9b6ec0ac321"
+    },
+    "desktop/assets/appx/Wide310x150Logo.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Wide310x150Logo",
+      "size": [
+        310,
+        150
+      ],
+      "sha256": "af35c755069065db1a3e267dc842524845c5fb502e6c7640dd3ed55bd141a95c"
+    },
+    "desktop/assets/appx/Wide310x150Logo.scale-125.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Wide310x150Logo.scale-125",
+      "size": [
+        388,
+        188
+      ],
+      "sha256": "ca4f63d0deae151ab25f1483480334ba4ef9fe182cac18c1fbd0f43998acd050"
+    },
+    "desktop/assets/appx/Wide310x150Logo.scale-150.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Wide310x150Logo.scale-150",
+      "size": [
+        465,
+        225
+      ],
+      "sha256": "5d8ee25083ef71801183eede4e1461af841c0b1d3ac57ec4023e0ab52f446b49"
+    },
+    "desktop/assets/appx/Wide310x150Logo.scale-200.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Wide310x150Logo.scale-200",
+      "size": [
+        620,
+        300
+      ],
+      "sha256": "8ba92442a9ba5330ac5182f4ce285a1430c779060cd13200389092e568e40829"
+    },
+    "desktop/assets/appx/Wide310x150Logo.scale-400.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Wide310x150Logo.scale-400",
+      "size": [
+        1240,
+        600
+      ],
+      "sha256": "8a9cb3ece50f828cca6e97289df5a24c8f652da88876e7a73beaa0556cfc479b"
+    },
+    "desktop/assets/appx/LargeTile.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "LargeTile",
+      "size": [
+        310,
+        310
+      ],
+      "sha256": "e27c70ae725f78efe043ba1a48bbf36ca2b9ca3f6c685f83ee2804ab677d3279"
+    },
+    "desktop/assets/appx/LargeTile.scale-125.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "LargeTile.scale-125",
+      "size": [
+        388,
+        388
+      ],
+      "sha256": "e8c38a623566afcbb69416654d71c78d56194a0cad230f8eca5da1b6d0e1afc3"
+    },
+    "desktop/assets/appx/LargeTile.scale-150.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "LargeTile.scale-150",
+      "size": [
+        465,
+        465
+      ],
+      "sha256": "d603d162a8b7ad6f92e8ef9fd43808999a581739bef126d71004cca4912a185a"
+    },
+    "desktop/assets/appx/LargeTile.scale-200.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "LargeTile.scale-200",
+      "size": [
+        620,
+        620
+      ],
+      "sha256": "fbc098d1334e5968ffa1b9dd5238e7fc07b392bf8ad129440e833e11a2f0321c"
+    },
+    "desktop/assets/appx/LargeTile.scale-400.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "LargeTile.scale-400",
+      "size": [
+        1240,
+        1240
+      ],
+      "sha256": "9746c777a7ac6582239a8a48bd06e1aa785738c6384d1bba5cf22fec39246149"
+    },
+    "desktop/assets/appx/SplashScreen.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "SplashScreen",
+      "size": [
+        620,
+        300
+      ],
+      "sha256": "8ba92442a9ba5330ac5182f4ce285a1430c779060cd13200389092e568e40829"
+    },
+    "desktop/assets/appx/SplashScreen.scale-125.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "SplashScreen.scale-125",
+      "size": [
+        775,
+        375
+      ],
+      "sha256": "79d26d1999632f2d18f90405ff56301aa1aad59fd5849e25fd1de8af4e0656ab"
+    },
+    "desktop/assets/appx/SplashScreen.scale-150.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "SplashScreen.scale-150",
+      "size": [
+        930,
+        450
+      ],
+      "sha256": "7723a88bf786814e34b724e923de5cc529a576ff619c2e5d91adb88ddaf1b799"
+    },
+    "desktop/assets/appx/SplashScreen.scale-200.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "SplashScreen.scale-200",
+      "size": [
+        1240,
+        600
+      ],
+      "sha256": "8a9cb3ece50f828cca6e97289df5a24c8f652da88876e7a73beaa0556cfc479b"
+    },
+    "desktop/assets/appx/SplashScreen.scale-400.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "SplashScreen.scale-400",
+      "size": [
+        2480,
+        1200
+      ],
+      "sha256": "8666c1827944384dfced91e504e7701fe951d816c9201b95a5add5a9ab8c5656"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-16.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-16",
+      "size": [
+        16,
+        16
+      ],
+      "sha256": "f6d64b3e6f965cd1eb8062490e8ca654bc368e8ec211109b37ab1c91d1928e6f"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-16_altform-unplated.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-16_altform-unplated",
+      "size": [
+        16,
+        16
+      ],
+      "sha256": "921de3ab9a50a537b84490e127f5e74358f1f5a35d1f30e7137950cda5faa0e5"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-20.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-20",
+      "size": [
+        20,
+        20
+      ],
+      "sha256": "56a9aaee361e74528e5802050262fe1edb1d0c657da095dbdd59f24fb15bba70"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-20_altform-unplated.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-20_altform-unplated",
+      "size": [
+        20,
+        20
+      ],
+      "sha256": "e950547f568fbe615a330b0b0eed252263ba9817331b15bc61d8c329dce17158"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-24.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-24",
+      "size": [
+        24,
+        24
+      ],
+      "sha256": "fbbb4438a9d40ea41e0dfe3e19717e1a15f3131848cb90993fc1898cae6f3116"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-24_altform-unplated.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-24_altform-unplated",
+      "size": [
+        24,
+        24
+      ],
+      "sha256": "4adeac65b657ddd090bf1b0f91b1d5dcee700849b5836c1424523c13cbece367"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-30.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-30",
+      "size": [
+        30,
+        30
+      ],
+      "sha256": "fa896420d1952fa3026102245fdd9dd3b723f0167eb8f08e467f0a13c31c366a"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-30_altform-unplated.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-30_altform-unplated",
+      "size": [
+        30,
+        30
+      ],
+      "sha256": "023149d0fb6b834626ab30efd3b624ba8ffc2f30682f577ea9ebcc93f414c4cf"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-32.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-32",
+      "size": [
+        32,
+        32
+      ],
+      "sha256": "b2ce63ce5436229e9b1be5e839a5a5968d42c49a64191db49233a7abe7b997ab"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-32_altform-unplated.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-32_altform-unplated",
+      "size": [
+        32,
+        32
+      ],
+      "sha256": "3f33eac2413d25688795e001fe9112a0b6ab927bde5d7565951c03c78ce31992"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-36.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-36",
+      "size": [
+        36,
+        36
+      ],
+      "sha256": "ce853cff6e8688778085bfc0fa949145dbc0f7ec195282bab8c5513adf8f9368"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-36_altform-unplated.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-36_altform-unplated",
+      "size": [
+        36,
+        36
+      ],
+      "sha256": "1699ce307a483be6a03249529c4e5b8df3f6452de7974a226d011d189a232a9f"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-40.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-40",
+      "size": [
+        40,
+        40
+      ],
+      "sha256": "f6051b835c8410906a865cedbd90fcf56567efc81f507e87b11a88c831d2cce5"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-40_altform-unplated.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-40_altform-unplated",
+      "size": [
+        40,
+        40
+      ],
+      "sha256": "f5189db49ad561f1fbc19d168c66c1bc66fd2c264b65ff7722f5e0fb9c516080"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-48.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-48",
+      "size": [
+        48,
+        48
+      ],
+      "sha256": "9aec153f069fba8af5bd261382da2dcc8a3cbc35c61cb3757680a4e3cbadfc91"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-48_altform-unplated.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-48_altform-unplated",
+      "size": [
+        48,
+        48
+      ],
+      "sha256": "110b3ab91a647926e7bcfa99a5439cefabb64e16b722561e26d0845a78ffb894"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-64.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-64",
+      "size": [
+        64,
+        64
+      ],
+      "sha256": "16104632bd3321b07c89f357146c927afe644d0344f74b48089daa4c89248eb6"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-64_altform-unplated.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-64_altform-unplated",
+      "size": [
+        64,
+        64
+      ],
+      "sha256": "5fdc7ff9f9926c3ce169e9c5d2582220099b7f0e3b489da8eae9550168685cf0"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-256.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-256",
+      "size": [
+        256,
+        256
+      ],
+      "sha256": "d93fa9cc06cc8ac29c04115984147ab4ce2b731dfca532145fd1bd61e0b95f99"
+    },
+    "desktop/assets/appx/Square44x44Logo.targetsize-256_altform-unplated.png": {
+      "source": "tools/branding/store-layouts.mjs",
+      "variant": "Square44x44Logo.targetsize-256_altform-unplated",
+      "size": [
+        256,
+        256
+      ],
+      "sha256": "c25fe111e8da6099321c180c6d52a229e7f9be186424cef9d28b2ed25a7a1334"
+    },
+    "docs/assets/branding/gamma-hero-light.png": {
+      "source": "docs/assets/branding/gamma-hero-light.svg",
+      "variant": "light",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "4ffba8909ec5de392db0bf2fe128ac609227d49be1d0d5f7568b788021ebc08c"
+    },
+    "docs/assets/branding/gamma-hero-dark.png": {
+      "source": "docs/assets/branding/gamma-hero-dark.svg",
+      "variant": "dark",
+      "size": [
+        1920,
+        1080
+      ],
+      "sha256": "86a60cab8c4b911688e02ce4982f21fc3539248570558289d2b98359b3e5ef02"
+    }
+  }
+}

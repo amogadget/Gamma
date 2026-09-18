@@ -48,15 +48,21 @@ Edge and other Chromium browsers load it the same way. Firefox needs a
 ## Connect a publisher session
 
 Reload the extension after upgrading to 0.2.0. Open a publisher article or PDF
-over HTTPS and sign in there if needed. In the Connector, expand **Publisher
-sessions** and click **Connect publisher session**. Chrome asks for the optional
-cookie permission the first time. The displayed publisher host, Gamma server,
-and Gamma account identify exactly where the connection applies.
+over HTTPS and sign in there if needed. The cookie button in the Connector's
+footer turns blue on a supported journal; click it and then **Connect this
+journal**. Chrome asks for the optional cookie permission the first time. The
+card names the publisher host, and the text under it the Gamma server and
+account the cookies go to. While the snapshot uploads the cookie spins, and
+a green check confirms the connection.
 
 This explicitly transfers the publisher cookies to Gamma for later backend
-PDF downloads. Normal Save actions still transfer only the PDF. Use **Refresh
-publisher session** after signing in again, or **Disconnect** to delete the
-backend's copy. Connections can be disconnected from the popup on any tab.
+PDF downloads. Normal Save actions still transfer only the PDF. Connected
+journals are **refreshed automatically**: when you visit one and Gamma's copy
+of its cookies is over an hour old, the Connector sends a fresh copy (at most
+once every ten minutes per journal). Journals you never connected are never
+read. Turn this off with the switch in the drawer or on the options page;
+**Refresh now** re-sends by hand, and the × next to a host deletes the
+backend's copy. Connections can be managed from the popup on any tab.
 
 Requires a personal Gamma account and an HTTPS server (HTTP localhost is also
 supported). Guest and incognito sessions cannot connect. Only cookies applicable

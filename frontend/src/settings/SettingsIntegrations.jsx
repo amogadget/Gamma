@@ -30,7 +30,7 @@ export function IntegrationSettings({ workspaceId }) {
   const [method, setMethod] = React.useState("settings");
   const [platform, setPlatform] = React.useState(() => /Windows/i.test(navigator.userAgent) ? "windows" : "unix");
   const [loadError, setLoadError] = React.useState("");
-  const endpoint = `${API}/integrations/tokens?ws=${encodeURIComponent(workspaceId)}`;
+  const endpoint = `${API}/integrations/tokens`;
   const loadVersion = React.useRef(0);
   const refresh = React.useCallback(async (notice = "") => {
     const version = ++loadVersion.current;
@@ -70,7 +70,7 @@ export function IntegrationSettings({ workspaceId }) {
   const revoke = async ({ id, name: connectionName }) => {
     setBusy(true); setMessage("");
     try {
-      await apiJson(`${API}/integrations/tokens/${id}?ws=${encodeURIComponent(workspaceId)}`, { method: "DELETE" });
+      await apiJson(`${API}/integrations/tokens/${id}`, { method: "DELETE" });
       if (secret?.id === id) setSecret(null);
       // DELETE succeeded even if reloading the remaining connections fails.
       setData((value) => value ? { ...value, tokens: value.tokens.filter((item) => item.id !== id) } : value);

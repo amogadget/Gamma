@@ -81,23 +81,45 @@
       <div class="actions"><button id="save-anyway" class="uiBtn block">Save this URL anyway</button></div>
     </div>
 
-    <div id="clip-row" class="actions hidden" style="padding-top:0">
-      <button id="clip" class="uiBtn block">Clip selected text to Gamma</button>
+    <!-- Clipping a selection is a side feature — a quiet text link, not a button. -->
+    <div id="clip-row" class="minor hidden">
+      <button id="clip" class="linkBtn quiet" type="button"></button>
     </div>
-
-    <details id="publisher-sessions" class="form hidden">
-      <summary>Publisher sessions</summary>
-      <p class="s">Connect this publisher's cookies to your Gamma account for future downloads. Only connect to a server you trust. Browser checks may still require the Connector.</p>
-      <div id="publisher-target" class="s"></div>
-      <button id="publisher-connect" class="uiBtn block hidden" type="button">Connect publisher session</button>
-      <div id="publisher-list"></div>
-      <div id="publisher-msg" class="msg hidden" role="status"></div>
-    </details>
 
     <div id="progress" class="progress hidden"><span class="spinner"></span><span id="progress-text"></span></div>
     <div id="result" class="msg hidden"></div>
 
-    <div class="foot"><span class="footStatus"><span id="conn" class="connDot"></span><span id="foot"></span></span><button class="gearBtn" data-gear id="gear" title="Options"></button></div>
+    <!-- Publisher sessions: the footer's cookie button opens this drawer.
+         The current tab's journal host, then every connected host. -->
+    <div id="cookie-drawer" class="drawer hidden" role="dialog" aria-label="Publisher sessions">
+      <div class="drawerHead">
+        <span class="drawerIcon" id="drawer-icon"></span>
+        <span class="drawerTitle">Publisher sessions</span>
+        <button id="cookie-close" class="uiClose" type="button" title="Close">×</button>
+      </div>
+      <div class="pubCard" id="pub-card">
+        <div class="pubHost"><span id="pub-host"></span><span id="pub-state" class="chip muted"></span></div>
+        <div class="pubMeta" id="pub-meta"></div>
+        <button id="pub-connect" class="uiBtn primary block hidden" type="button"></button>
+      </div>
+      <div id="pub-list" class="pubList"></div>
+      <label class="settingRow">
+        <span class="settingText"><span class="settingLabel">Refresh automatically</span><span class="settingDesc">Re-import a connected journal's cookies when you visit it and the copy is over an hour old.</span></span>
+        <span class="switch"><input id="pub-auto" type="checkbox"><span class="switchTrack"></span></span>
+      </label>
+      <p class="pubNote">Cookies go only to your Gamma server, encrypted, for its own PDF downloads. Saving a paper never sends cookies.</p>
+      <div id="pub-msg" class="msg hidden" role="status"></div>
+    </div>
+
+    <div class="foot">
+      <span class="footStatus"><span id="conn" class="connDot"></span><span id="foot"></span></span>
+      <span class="footBtns">
+        <button id="cookie-btn" class="footBtn cookieBtn hidden" type="button" aria-haspopup="dialog" aria-expanded="false">
+          <span class="cookieGlyph" id="cookie-glyph"></span><span class="cookieRing"></span><span class="cookieBadge"></span>
+        </button>
+        <button class="gearBtn footBtn" data-gear id="gear" title="Options"></button>
+      </span>
+    </div>
   </div>
 
   <script type="module" src="popup.js"></script>

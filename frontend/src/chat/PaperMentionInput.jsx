@@ -47,7 +47,7 @@ export default function PaperMentionInput({ value, onChange, pages, openTabs, se
           const disabled = !selected.includes(page.id) && selected.length >= MAX_CHAT_REFERENCES;
           return <button type="button" role="option" id={`${listId}-${i}`} key={page.id} tabIndex={-1}
             title={[page.content || "Untitled", detail].filter(Boolean).join("\n")}
-            aria-selected={i === active} aria-disabled={disabled} className="chatMentionOption"
+            aria-selected={i === active} aria-disabled={disabled} className={`slashMenuItem chatMentionOption${i === active ? " selected" : ""}`}
             onPointerDown={(e) => e.preventDefault()} onMouseEnter={() => setActive(i)} onClick={() => choose(page)}>
             <BookIcon size={15} /><span><strong>{page.content || "Untitled"}</strong>{detail && <small>{detail}</small>}</span>
             {selected.includes(page.id) && <CheckIcon size={13} />}

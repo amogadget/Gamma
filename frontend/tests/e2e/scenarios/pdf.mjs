@@ -161,6 +161,76 @@ export async function pdfScenarios({ server, browser, alice, makePdf, step, unti
     assertNoProblems(page);
   });
 
+  await step("pdf: a citation stays clickable when a stream update arrives during a click", async () => {
+    await page.reload();
+    await waitForPdf(page);
+    // Deliver chunks on demand so the regression cannot depend on timing or an AI provider.
+    await page.evaluate(() => {
+      const originalFetch = window.fetch;
+      window.fetch = (input, init) => {
+        if (!String(input).endsWith("/api/ai/chat")) return originalFetch(input, init);
+        return Promise.resolve(new Response(new ReadableStream({
+          start(controller) {
+            window.citationStream = {
+              delta(text) { controller.enqueue(new TextEncoder().encode(JSON.stringify({ delta: text }) + "\n")); },
+              finish() { controller.close(); window.fetch = originalFetch; },
+            };
+          },
+        }), { headers: { "Content-Type": "application/x-ndjson" } }));
+      };
+    });
+    await page.locator("textarea.chatInputArea").fill("Show a citation while streaming");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await page.waitForFunction(() => !!window.citationStream);
+    const href = `/?page=${pageId}&pdf_page=2&quote=${encodeURIComponent("Page two says hello world")}`;
+    await page.evaluate(href => window.citationStream.delta(`See [streamed passage](${href}).\n\nContinuing`), href);
+    const link = page.locator("a.chatPageLink", { hasText: "streamed passage" });
+    await link.waitFor();
+    await link.scrollIntoViewIfNeeded();
+    const box = await link.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.evaluate(() => window.citationStream.delta(" the answer while the mouse is held."));
+    await page.getByText("Continuing the answer while the mouse is held.", { exact: true }).waitFor();
+    await page.mouse.up();
+    await page.locator('[data-page="2"] .pdfCitationMark').first().waitFor({ timeout: 5000 });
+    assertEq(await page.getByRole("button", { name: "Stop generating", exact: true }).count(), 1, "citation opens before the stream finishes");
+    await page.evaluate(() => window.citationStream.delta(" More text after opening the citation."));
+    await page.getByText(/More text after opening the citation\./).waitFor();
+    assert(await page.locator('[data-page="2"] .pdfCitationMark').count() > 0, "further chunks keep the passage highlighted");
+    await page.evaluate(() => window.citationStream.finish());
+    await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor({ state: "detached" });
+    assertNoProblems(page);
+  });
+
+  await step("pdf: chat paper recommendations and bare identifiers open clickable source links", async () => {
+    const doi = "https://doi.org/10.1103/PhysRevA.69.062320";
+    await account.api(`/api/chats/${pageId}`, { method: "PUT", body: { messages: [
+      { role: "ai", text: `[Cavity quantum electrodynamics](${doi})\n\nDOI: **10.1103/PhysRevA.69.062320**\n\narXiv:cond-mat/0402216` },
+    ] } });
+    await page.reload();
+    const title = page.locator("a.chatLinkCard", { hasText: "Cavity quantum electrodynamics" });
+    await title.waitFor();
+    assertEq(await title.getAttribute("href"), doi, "paper title links to the search result's DOI");
+    const identifier = page.locator("strong a.chatLinkCard", { hasText: "10.1103/PhysRevA.69.062320" });
+    assertEq(await identifier.getAttribute("href"), doi, "saved bare DOI is clickable");
+    assertEq(await page.locator("a.chatLinkCard", { hasText: "arXiv:cond-mat/0402216" }).getAttribute("href"),
+      "https://arxiv.org/abs/cond-mat/0402216", "legacy arXiv identifier is clickable");
+    // Verify actual navigation without contacting the publisher.
+    const chatUrl = page.url();
+    await ctx.route(doi, route => route.fulfill({ contentType: "text/html", body: "<p>Paper source</p>" }));
+    try {
+      const [source] = await Promise.all([page.waitForEvent("popup"), identifier.click()]);
+      await source.waitForLoadState();
+      assertEq(source.url(), doi, "source opens in a new tab");
+      assertEq(page.url(), chatUrl, "chat remains on the library page");
+      await source.close();
+    } finally {
+      await ctx.unroute(doi);
+    }
+    assertNoProblems(page);
+  });
+
   await step("pdf: citations open another document and report missing or ambiguous quotes", async () => {
     const quote = "A distinct source sentence in another document.";
     const uploaded = await account.upload("/api/uploads", makePdf([["Repeated source passage.", quote, "Repeated source passage."]]), "citation.pdf", "application/pdf");

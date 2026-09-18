@@ -72,7 +72,7 @@ Gamma server.
 | `activeTab`, `tabs` | Read the current tab's URL/title for detection and the badge. |
 | `scripting` | Reserved for re-running detection on demand. |
 | `notifications` | Result of a context-menu or keyboard-shortcut save when no popup is open. |
-| Optional `cookies` | Requested only when the user clicks Connect/Refresh publisher session. Reads applicable cookies for the selected publisher host and sends a snapshot to the displayed Gamma server/account for later PDF downloads. Normal saves do not read or transfer cookie values. |
+| Optional `cookies` | Requested only when the user clicks Connect / Refresh in the popup's publisher-session drawer. Reads applicable cookies for the selected publisher host and sends a snapshot to the displayed Gamma server/account for later PDF downloads. Once a host has been connected this way, the Connector re-sends that host's cookies when the user visits it and the server's copy is over an hour old (can be turned off in the options); hosts the user never connected are never read. Normal saves do not read or transfer cookie values. |
 
 **Data usage:** website content (page title, DOI/arXiv id, PDF URL, selected
 text, the PDF file when the user chooses to upload it) is transmitted only to

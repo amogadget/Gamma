@@ -2,7 +2,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { chromium, ROOT } from '../readme-media/runtime.mjs';
+import { chromium, ROOT } from './runtime.mjs';
+
+if (process.argv.includes('--publish-hero')) {
+  throw new Error('Publish through node tools/branding/build.mjs so the provenance check stays in sync.');
+}
 
 const output = path.join(ROOT, 'artifacts/branding');
 fs.mkdirSync(output, { recursive: true });
@@ -14,9 +18,7 @@ try {
       const stem = `gamma-${name}-${theme}`;
       await page.goto(pathToFileURL(path.join(ROOT, `docs/assets/branding/${stem}.svg`)).href);
       await page.evaluate(() => document.fonts.ready);
-      const destination = name === 'hero' && process.argv.includes('--publish-hero')
-        ? path.join(ROOT, `docs/assets/branding/${stem}.png`)
-        : path.join(output, `${stem}.png`);
+      const destination = path.join(output, `${stem}.png`);
       await page.screenshot({ path: destination });
       console.log(path.relative(ROOT, destination));
     }

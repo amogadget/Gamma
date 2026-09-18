@@ -1,5 +1,5 @@
-import { normalizeChars } from "../shared/lib/textnorm.js";
-import { fuzzyCitationRange } from "./fuzzyCitation.js";
+import { escapeRegex, normalizeChars } from "../shared/lib/textnorm.js";
+import { compoundHyphen, fuzzyCitationRange } from "./fuzzyCitation.js";
 
 // Citations carry text, never coordinates from a different PDF engine.
 export function parsePdfCitation(href, origin = "http://localhost") {
@@ -52,12 +52,21 @@ export function citationRuns(items, textDivs) {
 
 const fold = s => s.toLowerCase().replace(/[\u2018\u2019]/g, "'")
   .replace(/[\u201c\u201d]/g, '"').replace(/[\u2010-\u2014\u0002]/g, "-");
-const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-function compoundHyphen(text, i) {
-  const left = text.slice(0, i).match(/\p{L}+$/u)?.[0] || "";
-  const right = text.slice(i + 1).match(/^\s*(\p{L}+)/u)?.[1] || "";
-  return left && right && Math.max(left.length, right.length) > 1;
+// One entry per text-layer character, tagged with its run (`it`) and offset.
+// Runs are separated by their PDF line break (`it: -1`); with `fillSpaces`, a
+// synthetic space also separates runs that touch without one.
+export function runChars(runs, { fillSpaces = false } = {}) {
+  const chars = [];
+  runs.forEach((run, it) => {
+    const text = run.text || "";
+    for (let off = 0; off < text.length; off++) chars.push({ ch: text[off], it, off });
+    if (run.hasEOL) chars.push({ ch: "\n", it: -1, off: 0 });
+    else if (fillSpaces && text && !/\s$/.test(text) && runs[it + 1]?.text && !/^\s/.test(runs[it + 1].text)) {
+      chars.push({ ch: " ", it: -1, off: 0 });
+    }
+  });
+  return chars;
 }
 
 function normalizeCitationChars(chars) {
@@ -92,11 +101,7 @@ function quotePattern(target, compact, typography) {
 }
 
 export function matchCitation(runs, quote) {
-  const chars = [];
-  runs.forEach((run, it) => {
-    for (let off = 0; off < run.text.length; off++) chars.push({ ch: run.text[off], it, off });
-    if (run.hasEOL) chars.push({ ch: "\n", it: -1, off: 0 });
-  });
+  const chars = runChars(runs);
   const source = normalizeCitationChars(chars);
   const target = fold(normalizeCitationChars(quote.split("").map(ch => ({ ch }))).norm.join(""));
   if (target.replace(/\s/g, "").length < 8) return { status: "missing", spans: [] };

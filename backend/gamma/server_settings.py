@@ -17,6 +17,10 @@ What a workspace's uploads are checked against (`workspace_quota`):
   - a SHARED workspace: the server-wide per-file cap and the workspace's own
     `workspaces.quota_mb` (NULL = unlimited), which admins set.
 The databases are not metered.
+
+The module also owns the admin-confirmed public server URL (`settings` key
+`public_url`, or the `GAMMA_PUBLIC_URL` override) and the MCP host allowlist
+derived from it ([mcp.md](../../docs/dev/mcp.md)).
 """
 
 import os
@@ -72,6 +76,10 @@ def _set_raw(key: str, value: str) -> None:
         conn.commit()
 
 
+# Hosts that may use plain HTTP: the machine itself.
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
 def validate_public_url(value: str) -> str:
     value = value.strip()
     if not value:
@@ -80,7 +88,7 @@ def validate_public_url(value: str) -> str:
         url = urlsplit(value)
         host = url.hostname or ""
         port = url.port
-        local = host in {"localhost", "127.0.0.1", "::1"}
+        local = host in LOOPBACK_HOSTS
         if (len(value) > 2048 or re.search(r"[\s\\\x00-\x1f\x7f]", value)
                 or url.scheme not in {"http", "https"} or not host
                 or (url.scheme != "https" and not local)

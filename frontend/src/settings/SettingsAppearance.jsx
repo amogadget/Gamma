@@ -14,6 +14,7 @@ const THEMES = [
   ["solarized", "Solarized Light", "Warm paper, softer ink", "#eee8d5", "#fdf6e3", "#657b83", "#268bd2"],
   ["gray", "Gray", "Soft & neutral", "#e3e3e3", "#f4f4f4", "#2d2d2d", "#3a7bd5"],
 ];
+const DARK = THEMES.find((theme) => theme[0] === "dark");
 
 export function AppearanceSettings({ value, diagnostics }) {
   return (
@@ -22,14 +23,14 @@ export function AppearanceSettings({ value, diagnostics }) {
         A comfortable space to read and think. Changes apply as you choose.
       </PaneHead>
 
-      <Section title="Theme" action={<span className="appearanceScope">Your account</span>}>
+      <Section title="Theme" action={<span className="setScope">Your account</span>}>
         <p className="appearanceHint">Choose the colors around your work.</p>
         <PictureChoices label="Theme" value={value.theme} onChange={value.setTheme}
-          options={THEMES.map((theme) => ({ value: theme[0], label: theme[1], hint: theme[2], preview: <ThemePreview theme={theme} /> }))} />
+          options={THEMES.map((theme) => ({ value: theme[0], label: theme[1], hint: theme[2], preview: <ThemePreview theme={theme} dark={DARK} /> }))} />
         <p className="appearanceFootnote">Gamma themes also match PDF pages to the interface. Sepia, Solarized Light and Gray tint PDF pages and soften ink.</p>
       </Section>
 
-      <Section title="PDF pages" action={<span className="appearanceScope">Your account</span>}>
+      <Section title="PDF pages" action={<span className="setScope">Your account</span>}>
         <div className="appearancePdf">
           <PdfPreview dark={value.pdfDarkPage || value.theme === "gamma-dark"} />
           <div className="appearancePdfControls">
@@ -41,7 +42,7 @@ export function AppearanceSettings({ value, diagnostics }) {
         </div>
       </Section>
 
-      <Section title="Interface" action={<span className="appearanceScope">This browser</span>}>
+      <Section title="Interface" action={<span className="setScope">This browser</span>}>
         <div className="appearanceInterface">
           <Row icon={MaximizeIcon} label="Control size" hint="Make buttons, icons and switches smaller or larger.">
             <Stepper value={value.uiScale} onChange={value.setUiScale}

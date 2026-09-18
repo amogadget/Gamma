@@ -4,6 +4,7 @@
 // chrome.storage.session so it survives the worker being put to sleep.
 
 import { api, ApiError, getSettings, serverOrigin, whoAmI } from "./api.js";
+import { connectPublisher, publisherHost, publisherRoot, secureServer, shouldAutoRefresh } from "./publisherSessions.js";
 import "./doi.js"; // defines globalThis.gammaDoiFromPath
 
 const ICON_ON = { 16: "assets/icons/icon16.png", 32: "assets/icons/icon32.png" };
@@ -140,6 +141,63 @@ async function setDetection(tabId, candidate) {
     await setTabState(tabId, { preview: pv });
   }).catch(() => {});
   return next;
+}
+
+// ---------- publisher sessions ----------
+
+// GET /publisher-sessions (connection metadata, never cookie values), cached
+// briefly so a page load on a journal site costs no request most of the
+// time. `supported: false` = guest, or a server without the endpoint.
+const PUBLISHER_TTL = 5 * 60_000;
+const AUTO_KEY = "publisher:auto";         // last automatic refresh → {host, at, ok, error}
+const ATTEMPTS_KEY = "publisher:attempts"; // host → epoch seconds of the last automatic try
+let publisherCache = null;
+
+async function publisherStatus(force = false) {
+  const auth = await checkAuth();
+  if (!auth.configured || !auth.auth || auth.is_guest || auth.user === "guest") return { supported: false };
+  const fresh = publisherCache && Date.now() - publisherCache.at < PUBLISHER_TTL
+    && publisherCache.user === auth.user && publisherCache.origin === auth.origin;
+  if (!force && fresh) return publisherCache;
+  const base = { at: Date.now(), user: auth.user, origin: auth.origin, secure: secureServer(auth.origin) };
+  try {
+    const data = await api("/publisher-sessions", { expectedUser: auth.user, expectedOrigin: auth.origin });
+    publisherCache = { ...base, supported: true, roots: data.publisher_roots || [], sessions: data.sessions || [] };
+  } catch (err) {
+    if (err.status === 404) publisherCache = { ...base, supported: false };  // older server
+    else throw err;
+  }
+  return publisherCache;
+}
+
+// Called on every https tab load. Re-imports the cookies of a host the user
+// already connected, when the server's snapshot has gone stale
+// (publisherSessions.shouldAutoRefresh) — never a host that was not connected
+// by hand, never without the optional cookies permission, never a prompt.
+async function autoRefreshPublisher(tabId, url) {
+  const { autoRefreshSessions } = await getSettings();
+  if (!autoRefreshSessions) return;
+  if (!(await chrome.permissions.contains({ permissions: ["cookies"] }))) return;
+  // The roots list is stable: a page off every known publisher costs nothing.
+  if (publisherCache && publisherCache.roots && !publisherHost(url, publisherCache.roots)) return;
+  const status = await publisherStatus();
+  if (!status.supported || !status.secure) return;
+  const host = publisherHost(url, status.roots);
+  if (!host) return;
+  const session = status.sessions.find((s) => s.host === host);
+  const attempts = (await chrome.storage.session.get(ATTEMPTS_KEY))[ATTEMPTS_KEY] || {};
+  const now = Date.now() / 1000;
+  if (!shouldAutoRefresh({ session, attempts, now })) return;
+  attempts[host] = now;
+  await chrome.storage.session.set({ [ATTEMPTS_KEY]: attempts });
+  try {
+    const saved = await connectPublisher({ tabId, host, root: publisherRoot(host, status.roots), user: status.user, origin: status.origin });
+    publisherCache = { ...status, sessions: status.sessions.map((s) => (s.host === host ? { ...s, ...saved } : s)) };
+    await chrome.storage.session.set({ [AUTO_KEY]: { host, at: now, ok: true } });
+  } catch (err) {
+    console.warn(`[gamma] automatic publisher-session refresh for ${host} failed: ${err.message}`);
+    await chrome.storage.session.set({ [AUTO_KEY]: { host, at: now, ok: false, error: err.message } });
+  }
 }
 
 // ---------- the save pipeline ----------
@@ -328,6 +386,7 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
       const st = await getTabState(tabId);
       if (!st.candidate) setDetection(tabId, candidateFromUrl(tab.url, tab.title)).catch(() => {});
     }, 800);
+    if (!tab.incognito && /^https:/i.test(tab.url)) autoRefreshPublisher(tabId, tab.url).catch(() => {});
   }
 });
 
@@ -367,7 +426,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case "auth-changed":
         authCache.at = 0;
+        publisherCache = null;
         return checkAuth(true);
+      // The popup's cookie button: connection metadata + the last automatic
+      // refresh. `force` after the popup connected or disconnected a host.
+      case "publisher-status": {
+        const status = await publisherStatus(!!msg.force);
+        const auto = (await chrome.storage.session.get(AUTO_KEY))[AUTO_KEY] || null;
+        return { ...status, auto };
+      }
       case "open": {
         const origin = await serverOrigin();
         await chrome.tabs.create({ url: origin + (msg.path || "/") });
@@ -427,5 +494,5 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes.server) authCache.at = 0;
+  if (area === "sync" && changes.server) { authCache.at = 0; publisherCache = null; }
 });

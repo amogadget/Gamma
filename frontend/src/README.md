@@ -18,10 +18,10 @@ through barrel files. `main.jsx` remains the Vite entry point.
 | `settings/` | `SettingsDialog.jsx`, individual settings panes, shared pane controls (`SettingsKit.jsx`), navigation, integration setup, and `settings.css` |
 | `transfers/` | Import/export dialogs (`ImportExport.jsx`), format rules, and upload/file chips (`FileChip.jsx`) |
 | `shared/model/` | Block tree helpers (`blockModel.js`), block operations (`blockOps.js`), and highlight colors |
-| `shared/lib/` | Existing API/utilities module, search text normalization, and canvas sizing |
+| `shared/lib/` | API transport and helpers (`utils.js`), search text normalization, and canvas sizing |
 | `shared/ui/` | Reused widgets, menus, icons, and menu hover intent |
 | `shared/illustrations/` | Decorative settings/import previews and their local image assets |
-| `shared/styles/` | `app.css`: theme, base controls, and existing cross-application styles |
+| `shared/styles/` | `app.css`: theme, base controls, and cross-application styles |
 
 ## Placement and naming
 
@@ -31,7 +31,7 @@ through barrel files. `main.jsx` remains the Vite entry point.
 - Use PascalCase for React component modules and camelCase for JavaScript
   helpers. A hook-only module can use a `use` prefix, as in `usePageCollab.js`.
 - Import the owning module directly. `shared/model/blockModel.js` is the general
-  page/block model, formerly named `logseqPdfModel.js`; it is not an import adapter.
+  page/block model, not an import adapter.
 - Keep styles with their owner when already separate. `main.jsx` deliberately
   loads application, library, then settings CSS in that order to preserve the cascade.
 - Keep tests in `frontend/tests/`; run `npm test`, `npm run build`, and
@@ -40,7 +40,6 @@ through barrel files. `main.jsx` remains the Vite entry point.
 
 ## Remaining cleanup
 
-This is a file organization pass, not a completed application decomposition.
 `app/App.jsx` still owns several kinds of state; `shared/ui/Widgets.jsx` and
 `shared/lib/utils.js` still combine responsibilities. In particular, the shared
 Markdown renderer understands PDF citations, so these folders are ownership

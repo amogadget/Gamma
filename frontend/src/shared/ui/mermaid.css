@@ -1,0 +1,9 @@
+.mermaidDiagram { margin: 8px 0; min-width: 0; max-width: 100%; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--bg-surface); overflow: hidden; }
+.mermaidTools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.mermaidLabel { margin-right: auto; font-size: 12px; color: var(--text-muted); }
+.mermaidPreview { padding: 12px; overflow: auto; max-height: 600px; }
+.mermaidPreview > svg { display: block; max-width: 100%; height: auto; margin: auto; }
+.mermaidStatus, .mermaidError { padding: 8px 12px; color: var(--text-muted); font-size: 12px; }
+.mermaidError { color: var(--danger); }
+.mermaidDiagram pre.mermaidSource, .mermaidError pre { margin: 0; padding: 12px; overflow: auto; max-height: 400px; white-space: pre; font-size: 12px; }
+.mermaidError pre { padding: 6px 0; white-space: pre-wrap; }

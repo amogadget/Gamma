@@ -3,7 +3,7 @@
 // pasted figures, the "+" context picker, and the per-message PDF attach.
 // App provides context (open paper, library, selections) and the model/effort/
 // prompt preferences it also needs elsewhere.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { API, apiJson, copyText, isPdfFile, readNdjson } from "../shared/lib/utils";
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } from "../shared/ui/Widgets";
 import PaperMentionInput from "./PaperMentionInput";
@@ -105,6 +105,7 @@ function SelChip({ kind, label, labelTitle, text, title, onRemove, removeTitle }
 }
 
 export default function ChatDock({
+  session,
   readOnly = false,
   docId, pageAttach, focusedBlockId, homeBlocks, pageTitle, openTabs,
   pdfSelections, setPdfSelections,
@@ -132,19 +133,19 @@ export default function ChatDock({
   onOpenPage,
   onGrip, onGripDoubleClick, collapsed, onClose,
 }) {
-  const [chatMessages, setChatMessages] = useState([]);
+  const [loadedMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [loadError, setLoadError] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  // Tracks which block we've finished loading from the server, so the save
-  // effect doesn't fire (and clobber the stored chat) before the load lands.
-  const chatLoadedForRef = useRef("");
   // Chat history is per page; the home view buckets per folder ("home" at the
   // library root, "home:<path>" inside a folder) — switching folders switches
   // conversations, so the organizer never drags one folder's context into
   // another. App migrates the buckets on folder rename/move/delete
   // (POST /api/chats/folder-rename).
   const chatKey = focusedBlockId || (organizeFolder ? `home:${organizeFolder}` : "home");
+  const sessionState = useSyncExternalStore(session.subscribe, session.getSnapshot);
+  const chatMessages = sessionState.replies.get(chatKey)?.messages || loadedMessages;
+  const chatLoadingKey = sessionState.activeKey;
+  const chatLoading = !!chatLoadingKey;
   const folderChat = organizeFolder != null;
   // Which of the three chat kinds this is — each has its own tool permission
   // map in Settings → Assistant (prefs.js CHAT_KINDS): the folder chat, a
@@ -193,10 +194,6 @@ export default function ChatDock({
   const agentAsk = agentIntro ? (agentWrites ? `Ask, or organize ${agentScopeName}…` : `Ask across ${agentScopeName}…`) : null;
   const chatKeyRef = useRef(chatKey);
   chatKeyRef.current = chatKey;
-  // Which conversation the in-flight request belongs to (typing indicator
-  // shows there, and a reply landing after a page switch is saved there).
-  const [chatLoadingKey, setChatLoadingKey] = useState("");
-  const chatAbortRef = useRef(null); // in-flight chat request, so Stop can cancel it
   // chatImages (pasted/area-selection figures pending send) lives in App —
   // like pdfSelections — so the PDF viewer can attach into it.
   const [editingMsg, setEditingMsg] = useState(null); // {idx, text} — editing a sent user message
@@ -280,37 +277,30 @@ export default function ChatDock({
   // Load chat from backend whenever the chat bucket changes.
   useEffect(() => {
     let cancelled = false;
-    chatLoadedForRef.current = "";
     setChatDocs([]);
     setChatIncludeNotes(false);
     setChatInput("");
     setDocPicker(false);
-    setChatMessages([]);
+    const reply = session.getSnapshot().replies.get(chatKey);
+    const reloadSaved = session.isSaved(chatKey);
+    showLoaded(reply?.messages || [], reply?.title);
     setLoadError("");
     apiJson(`${API}/chats/${encodeURIComponent(chatKey)}`)
       .then(data => {
         if (cancelled) return;
-        showLoaded(data.messages || [], data.title);
-        chatLoadedForRef.current = chatKey;
+        const latest = session.getSnapshot().replies.get(chatKey);
+        // Once a reply was saved before this GET, the server is authoritative
+        // again (another tab or a folder rename may have changed the bucket).
+        if (reloadSaved && latest === reply && session.isSaved(chatKey)) {
+          showLoaded(data.messages || [], data.title);
+          session.forget(chatKey);
+        } else {
+          showLoaded(latest?.messages || data.messages || [], data.title);
+        }
       })
-      .catch((err) => { if (!cancelled) setLoadError(`Could not load chat: ${err.message}`); });
+      .catch((err) => { if (!cancelled && !session.getSnapshot().replies.has(chatKey)) setLoadError(`Could not load chat: ${err.message}`); });
     return () => { cancelled = true; };
-  }, [chatKey, docId, readOnly]);
-
-  // Save chat to backend (debounced) when chatMessages changes, but only
-  // after the load for the current chat bucket completed.
-  useEffect(() => {
-    if (readOnly || chatLoadedForRef.current !== chatKey) return;
-    const timer = setTimeout(() => {
-      fetch(`${API}/chats/${encodeURIComponent(chatKey)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ messages: chatMessages }),
-      }).catch(() => {});
-    }, 500);
-    return () => clearTimeout(timer);
-  }, [chatMessages, chatKey, readOnly]);
+  }, [chatKey, docId, readOnly, session]);
 
   // History: the bucket's earlier conversations (server `chat_history`).
   // "New chat" archives the current one there instead of deleting it, and
@@ -341,9 +331,18 @@ export default function ChatDock({
     : chatMessages;
   const currentPayload = () => ({ bucket: chatKey, messages: chatMessages, title: chatTitle });
 
-  function newChat() {
+  async function newChat() {
     if (busyHere) return;
     const payload = currentPayload();
+    try {
+      await session.flush(chatKey);
+      await apiJson(`${API}/chat-history/archive`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(payload) });
+    } catch (err) {
+      setStatus(`Couldn't keep the conversation in history: ${err.message}`);
+      return;
+    }
+    session.forget(chatKey);
+    if (chatKeyRef.current !== chatKey) return;
     setChatMessages([]);
     setChatDocs([]);
     setChatInput("");
@@ -352,15 +351,16 @@ export default function ChatDock({
     attachPdfManualRef.current = false;
     setAttachPdf(nativePdf); // new chat: first question carries the full PDF again (where the provider takes it)
     setHistory(null);
-    apiJson(`${API}/chat-history/archive`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(payload) })
-      .catch((err) => setStatus(`Couldn't keep the conversation in history: ${err.message}`));
   }
 
   async function openHistory(id) {
     if (busyHere) return;
     try {
+      await session.flush(chatKey);
       const data = await apiJson(`${API}/chat-history/${id}/open`,
         { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(currentPayload()) });
+      session.forget(chatKey);
+      if (chatKeyRef.current !== chatKey) return;
       showLoaded(data.messages || [], data.title);
       setHistory(null);
       setOpenPopover(null);
@@ -380,6 +380,7 @@ export default function ChatDock({
     try {
       if (edit.id === "") {
         setChatTitle(title);
+        await session.flush(chatKey);
         await apiJson(`${API}/chats/${encodeURIComponent(chatKey)}`,
           { method: "PUT", headers: JSON_HEADERS, body: JSON.stringify({ messages: chatMessages, title }) });
       } else {
@@ -556,28 +557,15 @@ export default function ChatDock({
     };
     const sendKey = chatKey; // reply belongs to THIS conversation, even if the user navigates away
     const showReply = (aiMsg, final) => {
-      if (chatKeyRef.current === sendKey) {
-        setChatMessages([...prevMessages, userMsg, aiMsg]);
-      } else if (final) {
-        // The user switched pages mid-request — save straight to the
-        // original conversation instead of the one on screen.
-        fetch(`${API}/chats/${encodeURIComponent(sendKey)}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ messages: [...prevMessages, userMsg, aiMsg] }),
-        }).catch(() => {});
-      }
+      const saved = session.update(sendKey, [...prevMessages, userMsg, aiMsg], final);
+      saved?.catch((err) => setStatus(`Couldn't save the conversation: ${err.message}`));
     };
     chatStickRef.current = true; // sending always snaps back to the bottom
-    setChatMessages([...prevMessages, userMsg]);
-    setChatLoading(true);
-    setChatLoadingKey(sendKey);
+    const ctrl = new AbortController();
+    if (!session.start(sendKey, [...prevMessages, userMsg], chatTitle, ctrl)) return;
     // One-shot semantics: the PDF went with this message; don't silently
     // re-upload (and re-bill) it on every follow-up.
     if (sendingPdf) setAttachPdf(false);
-    const ctrl = new AbortController();
-    chatAbortRef.current = ctrl;
     let acc = ""; // streamed reply so far — kept on Stop
     const actions = []; // organizer mutations streamed for this reply
     let coverage = null; // {"context": [...]} — what the model was given, per document
@@ -654,9 +642,7 @@ export default function ChatDock({
         ...(!stopped && !acc ? { error: true } : {}),
       }), true);
     } finally {
-      setChatLoading(false);
-      setChatLoadingKey("");
-      chatAbortRef.current = null;
+      session.finish();
       onAgentEvent?.({ type: "done" });
       // Agent tools changed the library — reload the home feed. Read-only
       // tool calls (list/read/search) render as chips but change nothing.
@@ -680,7 +666,7 @@ export default function ChatDock({
   }
 
   function stopChat() {
-    chatAbortRef.current?.abort();
+    session.stop();
   }
 
   async function startDictation() {
@@ -841,6 +827,13 @@ export default function ChatDock({
   // ⚙ chat settings (model, reasoning effort, context size — the same prefs
   // Settings / AI edits, in a popover), Tools, Find, New chat.
   const settingsOpen = openPopover === "chatsettings";
+  const findBtn = (
+    <button type="button" className={`ctlBtn ${chatFindOpen ? "modeActive" : ""}`}
+      onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}
+      title="Find in this conversation" aria-label="Find in this conversation">
+      <SearchIcon size={15} />
+    </button>
+  );
   const headerContent = (
     <>
       {aiInfo && !aiInfo.enabled && openAiKeysEditor ? (
@@ -924,11 +917,7 @@ export default function ChatDock({
         >
           <SlidersIcon size={15} />
         </button>
-        <button type="button" className={`ctlBtn ${chatFindOpen ? "modeActive" : ""}`}
-          onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}
-          title="Find in this conversation" aria-label="Find in this conversation">
-          <SearchIcon size={15} />
-        </button>
+        {findBtn}
         <span data-popover="chathistory" className="popoverAnchor">
           <button type="button" className={`ctlBtn ${historyOpen ? "modeActive" : ""}`}
             onClick={() => setOpenPopover((p) => (p === "chathistory" ? null : "chathistory"))}
@@ -1004,8 +993,7 @@ export default function ChatDock({
     <DockWindow title="Chat" onGrip={onGrip} onGripDoubleClick={onGripDoubleClick}
       collapsed={collapsed} onClose={onClose} headerContent={readOnly ? <>
         <span className="uiTag">Read only</span>
-        <button type="button" className="ctlBtn" title="Find in this conversation" aria-label="Find in this conversation"
-          onClick={() => { setChatFindOpen((v) => !v); setChatFind(""); }}><SearchIcon size={15} /></button>
+        {findBtn}
       </> : headerContent}>
     <div className="chatPanel chatWindow">
       {!readOnly && aiHealth && !aiHealth.ok ? (

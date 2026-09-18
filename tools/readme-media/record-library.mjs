@@ -5,46 +5,24 @@
 // folder chip that narrows the results, then open a library PDF hit: the paper
 // opens with every match marked and the active one outlined.
 //
-// Expects `session.txt` (the demo session cookie) in the cwd and writes the
-// webm path to `video_library.txt` plus time marks to `library_marks.json`
-// (m0 = first action, for trimming the loading pre-roll; mChip / mOpen / mMark
-// for an optional post-process camera zoom).
-//
-// Delivery: render-suite.py library (25 fps animated WebP).
-//
-// Content prerequisites on the target instance (an isolated clone of the demo
-// workspace): the atom-arrays paper carries notes + a highlight mentioning
-// "error correction", the QEC paper carries notes too, and they sit in
-// folders "Quantum/Neutral atoms" / "Quantum/Error correction" (the folder
-// name containing the query is what surfaces the "Tab adds a filter"
-// suggestion). Each paper should have been opened once so the recents strip
-// is populated. (The match jump cancels the paper's last-read restore, so a
-// stored read position can't scroll the match away.)
-// Search details are forced on (`gamma-search-details*` = "1"; the paper
-// view's default is the compact find bar).
-import { chromium, configureContext } from './runtime.mjs';
+// Prepared by `run-case.mjs library`: the atom-arrays and QEC papers sit in
+// "Quantum/Neutral atoms" / "Quantum/Error correction" (the folder name
+// containing the query is what surfaces the "Tab adds a filter" suggestion);
+// the recorder opens each paper once so the recents strip is populated. (The
+// match jump cancels the paper's last-read restore, so a stored read position
+// can't scroll the match away.) Writes the webm path to `video_library.txt`
+// and time marks to `library_marks.json` (m0 = first action, for trimming the
+// loading pre-roll). Search details are forced on (`gamma-search-details*` =
+// "1"; the paper view's default is the compact find bar).
+import { chromium, configureContext, addCursor, pointer, readSession, BASE, CURATED } from './runtime.mjs';
 import fs from 'fs';
 
 const SCRATCH = process.cwd();
-const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
-const QEC = process.env.QEC_ID || 'BHuT16WnxdQb';
+const SESSION = readSession(SCRATCH);
+const QEC = process.env.QEC_ID || CURATED.qec;
 const QUERY = 'error correction';
 const VW = 1440, VH = 900;
-const EXE = process.env.CHROME_PATH;
 const beat = (ms) => page.waitForTimeout(ms);
-
-let cx = VW / 2, cy = VH / 2;
-async function glide(x, y, steps = 28) {
-  await page.mouse.move(x, y, { steps });
-  cx = x; cy = y;
-  await beat(120);
-}
-async function glideTo(locator, dx = 0.5, dy = 0.5, steps = 28) {
-  const b = await locator.boundingBox();
-  await glide(b.x + b.width * dx, b.y + b.height * dy, steps);
-  return b;
-}
 // the "Searching…" hint stays until the slowest of the lookups has finished
 async function settled() {
   await page.waitForFunction(() => ![...document.querySelectorAll('.searchPopover .searchHint')].some(h => h.textContent.startsWith('Searching')), null, { timeout: 15000 }).catch(() => {});
@@ -56,7 +34,7 @@ async function resultsIn() {
   await settled();
 }
 
-const browser = await chromium.launch({ headless: true, slowMo: 0, executablePath: EXE });
+const browser = await chromium.launch({ headless: true, slowMo: 0 });
 const ctx = await browser.newContext({
   colorScheme: 'light',
   viewport: { width: VW, height: VH },
@@ -72,24 +50,10 @@ await ctx.addInitScript(() => {
   } catch (e) {}
 });
 
-// inject a visible cursor dot (Playwright videos have none)
-await ctx.addInitScript(() => {
-  window.addEventListener('DOMContentLoaded', () => {
-    const c = document.createElement('div');
-    c.id = '__fakecur';
-    c.style.cssText = 'position:fixed;z-index:2147483647;width:16px;height:16px;'
-      + 'border-radius:50%;background:rgba(20,20,20,.35);border:2px solid #fff;'
-      + 'box-shadow:0 1px 4px rgba(0,0,0,.4);pointer-events:none;left:0;top:0;'
-      + 'margin:-9px 0 0 -9px;transition:transform .05s linear';
-    document.body.appendChild(c);
-    const move = e => { c.style.transform = `translate(${e.clientX}px,${e.clientY}px)`; };
-    document.addEventListener('mousemove', move, true);
-    document.addEventListener('mousedown', () => { c.style.background = 'rgba(60,120,255,.6)'; }, true);
-    document.addEventListener('mouseup', () => { c.style.background = 'rgba(20,20,20,.35)'; }, true);
-  });
-});
+await addCursor(ctx);
 
 const page = await ctx.newPage();
+const { glide, glideTo, at } = pointer(page, VW / 2, VH / 2);
 page.on('console', m => { const t = m.text(); if (t.startsWith('SCRIPT:')) console.log(t); });
 const t0 = Date.now();
 const mark = () => (Date.now() - t0) / 1000;
@@ -110,7 +74,7 @@ await page.waitForSelector('[aria-label="Home"]', { timeout: 30000 });
 await beat(800);
 await page.click('[aria-label="Home"]');
 await page.waitForSelector('.recentsCarousel', { timeout: 30000 });
-await page.mouse.move(cx, cy);
+await page.mouse.move(at().x, at().y);
 await beat(2500);
 
 // 2. open the search panel from the topbar, type the query ------------------

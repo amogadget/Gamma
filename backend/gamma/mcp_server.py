@@ -48,19 +48,18 @@ class GammaMCP:
                          annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                                      openWorldHint=False))
                     for s in agent_tools("folder", allowed_tools=READ_TOOLS, can_write=False)]
-            for name, description, meta in [
-                ("show_paper_picker", "Open a searchable Gamma paper picker so the user can select a paper or notes page. "
+            for name, title, description, meta in [
+                ("show_paper_picker", "Choose a Gamma paper", "Open a searchable Gamma paper picker so the user can select a paper or notes page. "
                  "Use when asked to choose, attach, mention, or pick a Gamma paper. Wait for the selection; "
                  "show the text choices if the client cannot render the picker, but do not duplicate a working UI.",
                  {"ui": {"resourceUri": PICKER_URI}, "openai/outputTemplate": PICKER_URI,
                   "openai/toolInvocation/invoking": "Opening Gamma library",
                   "openai/toolInvocation/invoked": "Choose a Gamma paper",
                   "openai/widgetAccessible": True}),
-                ("search_paper_choices", "Search or paginate the Gamma paper picker within the connected workspace.",
+                ("search_paper_choices", "Search Gamma papers", "Search or paginate the Gamma paper picker within the connected workspace.",
                  {"ui": {"visibility": ["app"]}, "openai/widgetAccessible": True}),
             ]:
-                tools.append(Tool(name=name, title="Choose a Gamma paper" if name == "show_paper_picker" else "Search Gamma papers",
-                                  description=description, icons=ICONS, inputSchema=PICKER_SCHEMA,
+                tools.append(Tool(name=name, title=title, description=description, icons=ICONS, inputSchema=PICKER_SCHEMA,
                                   annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
                                   _meta=meta))
             return tools

@@ -1,0 +1,10 @@
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: https://get.microsoft.com; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://api.github.com; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+
+# Brand artwork and demos change rarely and are re-copied on every build.
+/media/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800

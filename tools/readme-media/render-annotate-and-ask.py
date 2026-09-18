@@ -5,12 +5,9 @@ Review the edit points against new captures when re-recording either source.
 """
 import json
 from pathlib import Path
-import subprocess
 
-from imageio_ffmpeg import get_ffmpeg_exe
-from media_output import encode_webp, publish
+from media_output import ROOT, FRAME, concat_segments, encode_webp, publish
 
-ROOT = Path(__file__).resolve().parents[2]
 SUITE = ROOT / 'artifacts/readme-media/suite'
 OUT = SUITE / 'annotate-and-ask/preview.webp'
 directory = SUITE / 'annotate-and-ask'
@@ -32,13 +29,10 @@ segments = [
 ]
 if any(end <= start for _, start, end in segments):
     raise ValueError('Capture timing changed; review the combined storyboard')
-parts = [f'[{source}:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[s{i}]'
-         for i, (source, start, end) in enumerate(segments)]
-graph = ';'.join(parts) + ';' + ''.join(f'[s{i}]' for i in range(len(parts)))
-graph += f'concat=n={len(parts)}:v=1:a=0,fps=25,pad=1488:948:24:24:color=0xe8edf5,setsar=1[v]'
+parts = [f'[{source}:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS'
+         for source, start, end in segments]
 master = directory / 'master.mkv'
-subprocess.run([get_ffmpeg_exe(), '-v', 'error', '-y', '-i', str(sources[0]), '-i', str(sources[1]),
-                '-filter_complex', graph, '-map', '[v]', '-an', '-c:v', 'ffv1', '-level', '3', str(master)], check=True)
+concat_segments(master, sources, parts, f'fps=25,{FRAME},setsar=1')
 output = directory / 'rendered.webp'
 report = {'name': 'annotate-and-ask', 'fps': 25, 'width': 1040, 'quality': 75, 'effort': 4,
           **encode_webp(master, output, 'fps=25,scale=1040:-2:flags=lanczos', quality=75, effort=4),

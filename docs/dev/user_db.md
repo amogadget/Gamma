@@ -30,7 +30,12 @@ All state is SQLite + files on disk under a data directory (env
     appearance, the active AI provider, the AI provider entries with their
     secrets), the workspace id for everything that names its pages (open
     tabs, recents, pinned folders, reading positions);
-  - `settings` — admin-tunable server settings (KV).
+  - `settings` — admin-tunable server settings (KV), including the
+    admin-confirmed `public_url`;
+  - `publisher_sessions` — encrypted publisher cookie snapshots per
+    `(username, host)`, imported by the Connector ([extension.md](extension.md));
+  - `integration_tokens` — hashed assistant tokens per account and workspace,
+    and `mcp_oauth` — the OAuth flow's expiring records ([mcp.md](mcp.md)).
 - `workspaces/<id>/pages.db` — the core data model: the `unified_blocks`
   table. Everything is a block (self-referential `parent_id`, fractional-index
   `position` strings like `a0`, `a0V` from the `fractional-indexing` package).

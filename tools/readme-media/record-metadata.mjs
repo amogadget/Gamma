@@ -1,4 +1,4 @@
-import { chromium, configureContext } from './runtime.mjs';
+import { chromium, configureContext, addCursor, pointer, readSession, BASE } from './runtime.mjs';
 import fs from 'fs';
 
 // README "Metadata & citations" demo: open a paper by URL, open the metadata
@@ -9,29 +9,16 @@ import fs from 'fs';
 // fixed detail crop of the right column (both popovers live there).
 
 const SCRATCH = process.cwd();
-const SESSION = fs.readFileSync(SCRATCH + '/session.txt', 'utf8').trim();
-const BASE = process.env.BASE_URL || 'http://127.0.0.1:9002';
+const SESSION = readSession(SCRATCH);
 // Bluvstein et al., "Logical quantum processor based on reconfigurable atom
-// arrays" (Nature 2024). Must NOT already be in the library, or no fetch runs:
-// DELETE the page + reset /api/prefs/open-tabs before each run.
+// arrays" (Nature 2024). `run-case.mjs metadata` removes it from the library
+// first, or no fetch runs on camera.
 const PAPER_URL = 'https://arxiv.org/abs/2312.03982';
 const VW = 1440, VH = 900;
 const INFO_XY = { x: 1387, y: 97 };     // where the info button lands once the page opens (Notes header)
 const beat = (ms) => page.waitForTimeout(ms);
 
-let cx = VW / 2, cy = VH / 2;
-async function glide(x, y, steps = 26) { await page.mouse.move(x, y, { steps }); cx = x; cy = y; await beat(120); }
-async function glideTo(sel, steps = 26, fx = 0.5, fy = 0.5) {
-  const b = await page.locator(sel).first().boundingBox();
-  if (!b) throw new Error('no box for ' + sel);
-  await glide(b.x + b.width * fx, b.y + b.height * fy, steps);
-  return b;
-}
-
-const browser = await chromium.launch({
-  headless: true, slowMo: 0,
-  executablePath: process.env.CHROME_PATH,
-});
+const browser = await chromium.launch({ headless: true, slowMo: 0 });
 const ctx = await browser.newContext({
   colorScheme: 'light', viewport: { width: VW, height: VH }, deviceScaleFactor: 2,
   recordVideo: { dir: SCRATCH + '/video-meta', size: { width: VW, height: VH } }, // CSS = video 1:1
@@ -39,20 +26,10 @@ const ctx = await browser.newContext({
 await configureContext(ctx);
 await ctx.addCookies([{ name: 'session', value: SESSION, url: BASE }]);
 await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE });
-await ctx.addInitScript(() => {
-  window.addEventListener('DOMContentLoaded', () => {
-    const c = document.createElement('div');
-    c.style.cssText = 'position:fixed;z-index:2147483647;width:16px;height:16px;border-radius:50%;'
-      + 'background:rgba(20,20,20,.35);border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);'
-      + 'pointer-events:none;left:0;top:0;margin:-9px 0 0 -9px;transition:transform .05s linear';
-    document.body.appendChild(c);
-    addEventListener('mousemove', e => c.style.transform = `translate(${e.clientX}px,${e.clientY}px)`, true);
-    addEventListener('mousedown', () => c.style.background = 'rgba(60,120,255,.6)', true);
-    addEventListener('mouseup', () => c.style.background = 'rgba(20,20,20,.35)', true);
-  });
-});
+await addCursor(ctx);
 
 const page = await ctx.newPage();
+const { glide, glideTo, at } = pointer(page, VW / 2, VH / 2);
 const T0 = Date.now();
 const mark = () => (Date.now() - T0) / 1000;
 const M = {};
@@ -60,12 +37,12 @@ page.on('console', m => { const t = m.text(); if (t.startsWith('SCRIPT:')) conso
 
 // --- home -> paste the arXiv URL into "+" -----------------------------------
 await page.goto(BASE + '/', { waitUntil: 'networkidle' });
-await page.mouse.move(cx, cy);
+await page.mouse.move(at().x, at().y);
 await beat(600);
-await glideTo('[aria-label="Add"]');
+await glideTo('[aria-label="Add"]', 0.5, 0.5, 26);
 await page.click('[aria-label="Add"]');
 await beat(400);
-await glideTo('.addPopover input.searchInput', 20, 0.1);
+await glideTo('.addPopover input.searchInput', 0.1, 0.5, 20);
 await page.click('.addPopover input.searchInput');
 await beat(250);
 await page.fill('.addPopover input.searchInput', PAPER_URL);
@@ -80,7 +57,7 @@ await page.waitForSelector('[data-page="1"] .textLayer span', { timeout: 60000 }
 const tPaint = mark();
 M.m0 = tPaint + 0.2;                     // demo start: the canvas paints ~0.4 s after the text layer
 await beat(350);
-const infoBtn = await glideTo('[aria-label="Paper metadata"]', 6);
+const infoBtn = await glideTo('[aria-label="Paper metadata"]', 0.5, 0.5, 6);
 await page.click('[aria-label="Paper metadata"]');
 await page.waitForSelector('.metaPopover', { timeout: 5000 });
 M.mMeta = mark();
@@ -91,7 +68,7 @@ console.log('SCRIPT: popover open', (M.mMeta - tPaint).toFixed(2), 's after pain
 if (already) {
   // fast network: the record landed before we got here -- re-fetch on camera
   await beat(900);
-  await glideTo('.metaPopover .popoverTitle button.searchToggle', 16);
+  await glideTo('.metaPopover .popoverTitle button.searchToggle', 0.5, 0.5, 16);
   await page.click('.metaPopover .popoverTitle button.searchToggle');
   M.mRefetch = mark();
   await page.waitForFunction(() => document.querySelector('[aria-label="Paper metadata"] .pillSpin'), null, { timeout: 4000 }).catch(() => {});
@@ -124,7 +101,7 @@ for (let i = 0; i < 100; i++) {
 }
 
 // --- share popover: Copy BibTeX, then the slide-ready citation ----------------
-await glideTo('[aria-label="Share"]', 30);
+await glideTo('[aria-label="Share"]', 0.5, 0.5, 30);
 await beat(200);
 await page.click('[aria-label="Share"]');
 await page.waitForSelector('.sharePopover', { timeout: 5000 });
@@ -135,13 +112,13 @@ const sharePop = await page.locator('.sharePopover').boundingBox();
 console.log('SCRIPT: share popover open');
 await beat(1100);
 
-await glideTo('[aria-label="Copy BibTeX"]', 24);
+await glideTo('[aria-label="Copy BibTeX"]', 0.5, 0.5, 24);
 await beat(200);
 await page.click('[aria-label="Copy BibTeX"]');
 console.log('SCRIPT: bibtex copied');
 await beat(1300);                        // tick shows for 1.5 s
 
-await glideTo('[aria-label="Copy slide citation"]', 18);
+await glideTo('[aria-label="Copy slide citation"]', 0.5, 0.5, 18);
 await beat(200);
 await page.click('[aria-label="Copy slide citation"]');
 console.log('SCRIPT: slide citation copied');

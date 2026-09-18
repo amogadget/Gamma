@@ -18,6 +18,7 @@ import { BlockTree, _dragState } from "../editor/BlockTree";
 import { FileChipContext, forgetDocPages, rememberDocPage, setUploadReporter, uploadFilesAsLines } from "../transfers/FileChip";
 import { CardLabels, KindToggle, ListFindBox, PageCard, ViewToggle } from "../library/FileBrowser";
 import ChatDock from "../chat/ChatDock";
+import { createChatSession } from "../chat/chatSession";
 import SearchPanel from "../search/SearchPanel";
 import { ContextMenu, MenuItem, MenuLabel, MenuSelect, SubMenuItem } from "../shared/ui/Menus";
 import {
@@ -330,6 +331,15 @@ function LibraryApp() {
 
   // Auth state: null=loading, false=logged out, {user, is_guest}=logged in
   const [authUser, setAuthUser] = useState(shareMode ? {user:"_public"} : null);
+  const chatSession = useMemo(() => createChatSession((key, messages) => {
+    if (getExpectedUser() !== authUser?.user || getCurrentWorkspace() !== wsId) {
+      throw new Error("The account or workspace changed.");
+    }
+    return apiJson(`${API}/chats/${encodeURIComponent(key)}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
+    });
+  }), [authUser?.user, wsId]);
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
@@ -2217,7 +2227,7 @@ function LibraryApp() {
   useEffect(() => {
     if (!openPopover) return;
     function onDown(e) {
-      // Dropdown menus (menus.jsx) portal to <body>: a pick inside a
+      // Dropdown menus (shared/ui/Menus.jsx) portal to <body>: a pick inside a
       // popover's own dropdown is not a click outside the popover.
       if (!(e.target.closest && e.target.closest("[data-popover], .ctxMenu"))) setOpenPopover(null);
     }
@@ -2234,7 +2244,7 @@ function LibraryApp() {
     ? `${window.location.origin}${window.location.pathname}?share=${shareSettings.token}`
     : "";
   const [shareCopied, flashShareCopied, resetShareCopied] = useCopied();
-  // Workspace search lives in search.jsx (SearchPanel); App only holds what
+  // Workspace search lives in search/SearchPanel.jsx (SearchPanel); App only holds what
   // the PDF viewer needs from it: the match highlights and the search hook.
   const [findMarks, setFindMarks] = useState([]); // [{page, rect, active}] painted by PdfViewer
   const [pdfDocNonce, setPdfDocNonce] = useState(0); // bumped when a document finishes rendering
@@ -2743,7 +2753,7 @@ function LibraryApp() {
     }
   }
 
-  // User management moved into Settings → Users (settings.jsx UsersSettings,
+  // User management moved into Settings → Users (settings/SettingsDialog.jsx UsersSettings,
   // admins only) — App just opens that pane and lends it the shared pieces
   // (confirm dialog, status pill, session re-key after a self-rename).
   // PDF passages the next chat question focuses on. Ctrl (additive) appends
@@ -3526,7 +3536,7 @@ function LibraryApp() {
     return () => { cancelled = true; };
   }, [focusedBlockId, shareMode]);
 
-  // The page's live session (collab.js): the tree's transitions become ops
+  // The page's live session (collaboration/usePageCollab.js): the tree's transitions become ops
   // sent in debounced batches, other clients' batches arrive over the page
   // socket and apply below, presence rides the same socket. A load (the
   // suppress flag) makes the tree the session's base instead of a change.
@@ -7624,6 +7634,7 @@ function LibraryApp() {
       return (
         <ChatDock
           {...common}
+          session={chatSession}
           readOnly={shareMode}
           onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} pageAttach={pageAttach} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pageTitle={pageTitle}

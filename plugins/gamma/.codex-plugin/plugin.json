@@ -1,6 +1,6 @@
 {
   "name": "gamma",
-  "version": "0.1.0+codex.20260917001608",
+  "version": "0.1.0",
   "description": "Search and read Gamma PDF libraries, pages, highlights, and notes.",
   "author": {
     "name": "Gamma",

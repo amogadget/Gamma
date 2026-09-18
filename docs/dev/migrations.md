@@ -50,6 +50,8 @@ workspace's files), `db.SCHEMA_VERSION`, `manage.py migrate` / `backups`.
 | 3 | `workspace_access` | `workspaces` gains `access` (private / public), `public_role` and `quota_mb` (a shared workspace's own cap); existing rows stay private with no quota. Nothing moves |
 | 4 | `workspace_kinds` | `workspaces` gains `kind`: every account's default workspace and every single-member workspace become `personal` (private, no workspace quota), the rest `shared`. Other members of a default workspace are dropped (personal workspaces have no other members) and named in the log |
 | 5 | `publisher_sessions` | Adds private, encrypted publisher cookie snapshots in `users.db`, keyed by account and publisher host. Existing content and account settings are unchanged |
+| 6 | `integration_tokens` | Adds the `integration_tokens` table in `users.db`: hashed assistant tokens per account and workspace ([mcp.md](mcp.md)) |
+| 7 | `mcp_oauth` | Adds the `mcp_oauth` table in `users.db`: OAuth client registrations, pending authorizations and access-token audiences, all expiring |
 
 ## Backups (`gamma/backups.py`)
 

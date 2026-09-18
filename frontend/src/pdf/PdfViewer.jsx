@@ -24,7 +24,7 @@ import { normalizeChars } from "../shared/lib/textnorm";
 import { apiJson, withShare, withWorkspace } from "../shared/lib/utils";
 import { ChatMarkdown } from "../shared/ui/Widgets";
 import { PdfCitationOverlay } from "./PdfCitationOverlay";
-import { citationRuns } from "./pdfCitation.js";
+import { citationRuns, runChars } from "./pdfCitation.js";
 import { COLORS } from "../shared/model/highlightColors.js";
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 // One worker for every document. pdf.js otherwise starts a fresh worker per
@@ -342,7 +342,7 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
   }
 }
 
-// Handwriting (inkLayer.jsx): inkBlocks are the page's ink groups (blocks
+// Handwriting (ink/InkLayer.jsx): inkBlocks are the page's ink groups (blocks
 // with properties.ink_url / pdf_page), inkTool the armed tool or null,
 // inkPenTool what a stylus draws with when nothing is armed, inkFlash
 // {id, nonce} outlines a group after a jump; strokes and erasures report
@@ -608,15 +608,7 @@ function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef,
         const items = tc.items;
         // Page string: runs joined by their PDF line break or a space,
         // each char tagged with its source run (-1 = synthetic filler).
-        const chars = [];
-        for (let ii = 0; ii < items.length; ii++) {
-          const str = items[ii].str || "";
-          for (let k = 0; k < str.length; k++) chars.push({ ch: str[k], it: ii, off: k });
-          if (items[ii].hasEOL) chars.push({ ch: "\n", it: -1, off: 0 });
-          else if (str && !/\s$/.test(str) && items[ii + 1]?.str && !/^\s/.test(items[ii + 1].str)) {
-            chars.push({ ch: " ", it: -1, off: 0 });
-          }
-        }
+        const chars = runChars(items.map((it) => ({ text: it.str, hasEOL: it.hasEOL })), { fillSpaces: true });
         const { norm, src } = normalizeChars(chars);
         const pageStr = norm.join("");
         const rx = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
@@ -2138,7 +2130,7 @@ const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scal
       <div ref={textRef} className="textLayer" style={{
         userSelect: readOnly || inkTool ? "none" : "text", WebkitUserSelect: readOnly || inkTool ? "none" : "text",
       }} />
-      <PdfCitationOverlay citation={citation} textRef={textRef} wrapRef={wrapRef}
+      <PdfCitationOverlay citation={citation} wrapRef={wrapRef}
         ready={textReady?.scale === scale && textReady?.pdfDoc === pdfDoc ? textReady : null} />
       {inkBlocks.length || onInkStroke ? (
         <InkLayer pageNumber={pageNumber} wrapRef={wrapRef}

@@ -1,12 +1,5 @@
 """Build the Link and organize story in Gamma's light/dark branding style."""
-from pathlib import Path
-import re
-import xml.etree.ElementTree as ET
-
-ROOT = Path(__file__).resolve().parents[2]
-ASSETS = ROOT / 'docs/assets/branding'
-source = (ASSETS / 'gamma-connections-light.svg').read_text(encoding='utf-8')
-mark = source[source.index('    <radialGradient'):source.index('    <filter')]
+from branding import MARK, DARK_PALETTE, to_dark, write_svg
 
 SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
   <title id="title">Gamma PDF: find your papers, follow your ideas</title>
@@ -38,8 +31,7 @@ MARK
     <path d="M-60 985 C240 1210 590 1110 920 1055 S1530 1010 1980 1150"/>
   </g>
   <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-    <use href="#gammaMark" transform="translate(100 92) scale(1.2)"/>
-    <text x="178" y="138" font-size="44" font-weight="700" letter-spacing="-1" fill="#1a1a18">Gamma<tspan dx="11" font-weight="400" fill="#e8a020">PDF</tspan></text>
+    <use href="#gammaLogo" transform="translate(100 92) scale(0.45)"/>
     <text x="100" y="255" font-size="76" font-weight="600" letter-spacing="-2" fill="#1a1a18">Find your papers. Follow your ideas.</text>
     <text x="103" y="313" font-size="29" fill="#6b6a65">From the first download to the next connection — without losing your place.</text>
 
@@ -135,22 +127,8 @@ MARK
     <text x="960" y="1013" text-anchor="middle" font-size="25" fill="#6b6a65">A library you can find your way around. A reading trail you can retrace.</text>
   </g>
 </svg>
-'''.replace('MARK', mark.rstrip())
+'''.replace('MARK', MARK)
 
-DARK = {
-    '#f6f4ef': '#1b1b1a', '#ffffff': '#272725', '#e3e0d8': '#45443f',
-    '#1a1a18': '#f0ede6', '#6b6a65': '#a9a69e', '#f2f0ea': '#32312e',
-    '#ecdfc4': '#493b23', '#5a4a24': '#f1cf88', '#9a6b18': '#e8b451',
-    '#e1f1e9': '#253e32', '#287956': '#6fc89f', '#d8d4ca': '#555248',
-    '#faf4e8': '#332d22', '#ffe4a0': '#5a4524',
-}
-
-for theme in ('light', 'dark'):
-    svg = SVG
-    if theme == 'dark':
-        svg = re.sub(r'#[0-9a-f]{6}', lambda m: DARK.get(m[0], m[0]), svg)
-        svg = svg.replace('flood-opacity="0.09"', 'flood-opacity="0.24"')
-    target = ASSETS / f'gamma-library-{theme}.svg'
-    target.write_text(svg, encoding='utf-8', newline='\n')
-    ET.parse(target)
-    print(target.relative_to(ROOT))
+write_svg('gamma-library-light', SVG)
+palette = {**DARK_PALETTE, '#d8d4ca': '#555248', '#faf4e8': '#332d22', '#ffe4a0': '#5a4524'}
+write_svg('gamma-library-dark', to_dark(SVG, palette, '0.09'))
