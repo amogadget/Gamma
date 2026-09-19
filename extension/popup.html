@@ -58,7 +58,9 @@
         <div class="row hidden" id="folder-new-row"><span class="lbl"></span><input id="folder-new" class="field" type="text" placeholder="new folder, e.g. reading/2026"></div>
         <div class="row"><label for="labels">Labels</label>
           <div class="selectWrap" id="labels-wrap">
-            <input id="labels" class="field" type="text" placeholder="comma-separated" autocomplete="off">
+            <div id="labels-box" class="field tagField">
+              <input id="labels" class="tagInput" type="text" placeholder="add label…" autocomplete="off">
+            </div>
             <div id="label-menu" class="ctxMenu hidden" role="menu"></div>
           </div>
         </div>
@@ -67,7 +69,7 @@
     </div>
 
     <div id="existing" class="hidden">
-      <div class="msg ok">Already in your library.</div>
+      <div class="msg ok">Already in your library<span id="existing-as"></span>.</div>
       <div class="actions">
         <button id="open-existing" class="uiBtn primary block">Open in Gamma</button>
         <button id="refile" class="linkBtn">Add to another folder…</button>
@@ -82,6 +84,15 @@
     <div id="clip-row" class="actions hidden" style="padding-top:0">
       <button id="clip" class="uiBtn block">Clip selected text to Gamma</button>
     </div>
+
+    <details id="publisher-sessions" class="form hidden">
+      <summary>Publisher sessions</summary>
+      <p class="s">Connect this publisher's cookies to your Gamma account for future downloads. Only connect to a server you trust. Browser checks may still require the Connector.</p>
+      <div id="publisher-target" class="s"></div>
+      <button id="publisher-connect" class="uiBtn block hidden" type="button">Connect publisher session</button>
+      <div id="publisher-list"></div>
+      <div id="publisher-msg" class="msg hidden" role="status"></div>
+    </details>
 
     <div id="progress" class="progress hidden"><span class="spinner"></span><span id="progress-text"></span></div>
     <div id="result" class="msg hidden"></div>

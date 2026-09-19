@@ -19,7 +19,7 @@ final class GammaOfflineQueueTests: XCTestCase {
     private func makeAPI() async throws -> GammaAPI {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [OfflineQueueURLProtocol.self]
-        let api = try GammaAPI(server: "https://offline.test", configuration: configuration)
+        let api = try GammaAPI(server: "https://offline.test", workspace: "ws-alpha", configuration: configuration)
         _ = try await api.login(username: "alice", password: "fake")
         return api
     }
@@ -56,7 +56,7 @@ final class GammaOfflineQueueTests: XCTestCase {
 
     func testEnqueueDeduplicatesAndDoesNotSwitchReader() async throws {
         let api = try await makeAPI(); defer { api.close() }
-        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice", workspace: "ws-alpha")
         let p = paper(); try validPDF(for: cache); try seed(cache, p)
         let workspace = GammaWorkspace(cache: cache, api: api)
         workspace.enqueueDownloads([p, p]); await waitFor { workspace.offlineEntries[p.id]?.state == .ready }
@@ -68,7 +68,7 @@ final class GammaOfflineQueueTests: XCTestCase {
 
     func testCancelActiveSubtreeSafelyLeavesCancelledAndNoReadyRecord() async throws {
         let api = try await makeAPI(); defer { api.close() }
-        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice", workspace: "ws-alpha")
         let p = paper(); try validPDF(for: cache); try seed(cache, p)
         OfflineQueueURLProtocol.delaySubtree = true
         let workspace = GammaWorkspace(cache: cache, api: api); workspace.enqueueDownloads([p])
@@ -82,7 +82,7 @@ final class GammaOfflineQueueTests: XCTestCase {
 
     func testFailedDownloadCanBeRetriedAfterServerTreeIsFixed() async throws {
         let api = try await makeAPI(); defer { api.close() }
-        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice", workspace: "ws-alpha")
         let p = paper(); try validPDF(for: cache); try seed(cache, p)
         OfflineQueueURLProtocol.badSubtree = true
         let workspace = GammaWorkspace(cache: cache, api: api); workspace.enqueueDownloads([p])
@@ -95,7 +95,7 @@ final class GammaOfflineQueueTests: XCTestCase {
 
     func testRestoreConvertsPersistedDownloadingToQueuedAndCompletes() async throws {
         let api = try await makeAPI(); defer { api.close() }
-        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice", workspace: "ws-alpha")
         let p = paper(); try validPDF(for: cache); try seed(cache, p)
         try cache.saveOfflineEntries([p.id: GammaOfflineEntry(pageID: p.id, paper: p, state: .downloading)])
         let workspace = GammaWorkspace(cache: cache, api: api); workspace.restoreOfflineQueue()
@@ -105,7 +105,7 @@ final class GammaOfflineQueueTests: XCTestCase {
 
     func testCorruptPDFAndMissingLocalAudioNeverBecomeReady() async throws {
         let api = try await makeAPI(); defer { api.close() }
-        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice", workspace: "ws-alpha")
         let p = paper(); try seed(cache, p); try Data("not pdf".utf8).write(to: cache.sourceURL(docID: "doc-1"))
         let workspace = GammaWorkspace(cache: cache, api: api); workspace.enqueueDownloads([p])
         await waitFor { workspace.offlineEntries[p.id]?.state == .failed }
@@ -118,7 +118,7 @@ final class GammaOfflineQueueTests: XCTestCase {
 
     func testLocalOnlyAudioIsReusedWithoutAssetRequest() async throws {
         let api = try await makeAPI(); defer { api.close() }
-        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice", workspace: "ws-alpha")
         let segment = GammaAudioSegment(id: UUID().uuidString.lowercased(), duration: 0.25, asset: nil)
         let recordingID = UUID().uuidString.lowercased()
         let p = paper(); try validPDF(for: cache); try seed(cache, p, audio: [segment], audioRecordingID: recordingID)
@@ -132,7 +132,7 @@ final class GammaOfflineQueueTests: XCTestCase {
 
     func testMismatchedAuthenticatedAPIIsRejectedWithoutNetworkWork() async throws {
         let api = try await makeAPI(); defer { api.close() }
-        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "bob")
+        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "bob", workspace: "ws-alpha")
         let workspace = GammaWorkspace(cache: cache, api: api)
         XCTAssertNil(workspace.api)
         XCTAssertTrue(workspace.isOffline)
@@ -142,7 +142,7 @@ final class GammaOfflineQueueTests: XCTestCase {
 
     func testAccountGenerationStopsAwaitedOldRequestWithoutMutatingEntry() async throws {
         let api = try await makeAPI(); defer { api.close() }
-        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "alice", workspace: "ws-alpha")
         let p = paper(); try validPDF(for: cache); try seed(cache, p); OfflineQueueURLProtocol.delaySubtree = true
         let workspace = GammaWorkspace(cache: cache, api: api); workspace.enqueueDownloads([p])
         await waitFor { workspace.activeDownloadID == p.id }

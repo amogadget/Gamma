@@ -3,30 +3,27 @@
 import os
 from pathlib import Path
 
-# Where all persistent state lives: users.db, users/<name>/{pages.db,data.db,uploads/}.
-# Defaults to a data/ folder at the repo root — the local mirror of Docker's /data
+# Where all persistent state lives: users.db (accounts, sessions, workspaces,
+# memberships, shares, personal prefs) and workspaces/<id>/{pages.db,data.db,
+# uploads/} — one directory per workspace (docs/dev/workspaces.md). Defaults
+# to a data/ folder at the repo root — the local mirror of Docker's /data
 # volume. Override with GAMMA_DATA_DIR (the Docker image sets it to /data).
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = Path(os.environ.get("GAMMA_DATA_DIR", "") or _REPO_ROOT / "data")
 USERS_DB = DATA_DIR / "users.db"
-USERS_DIR = DATA_DIR / "users"
+WORKSPACES_DIR = DATA_DIR / "workspaces"
+# The pre-workspace layout (users/<username>/...). Read ONLY by the schema
+# migration that moves it into WORKSPACES_DIR (gamma/migrations.py).
+LEGACY_USERS_DIR = DATA_DIR / "users"
+# Database snapshots the migration runner takes before changing the data
+# directory (gamma/migrations.py backup()).
+BACKUPS_DIR = DATA_DIR / "backups"
 
 # Built frontend (vite dist/). When set and the directory exists, the backend
 # serves it as an SPA — no separate static file server or reverse proxy needed.
 STATIC_DIR = os.environ.get("GAMMA_STATIC_DIR", "")
 
-MAX_UPLOAD_BYTES = 55 * 1024 * 1024  # 55 MB
-
-# --- desktop app --------------------------------------------------------------
-# Set by the double-clickable app's launcher (gamma/desktop_main.py), never by
-# the hosted deployment. Its only effect is to permit the loopback auto-session
-# in auth.py: one local account, no login screen, because there is nobody else
-# on the machine to authenticate against. The guard is deliberately three-part
-# (this flag AND a loopback peer AND no proxy headers) so that turning on
-# remote sharing later cannot silently publish an unauthenticated library —
-# see docs/dev/client-app.md.
-DESKTOP_MODE = os.environ.get("GAMMA_DESKTOP", "") == "1"
-DESKTOP_USER = os.environ.get("GAMMA_DESKTOP_USER", "") or "local"
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 
 # --- AI chat -----------------------------------------------------------------
 # AI configuration is per-user, not env: each user adds provider entries in the
@@ -45,14 +42,14 @@ _legacy_url = os.environ.get("GAMMA_AI_BASE_URL", "") or os.environ.get("ANTHROP
 AI_PROTOCOLS = {
     "anthropic": {
         "label": "Anthropic Messages API",
-        "base_url": (
-            os.environ.get("GAMMA_AI_ANTHROPIC_BASE_URL", "") or _legacy_url or "https://api.anthropic.com"
-        ).rstrip("/"),
+        "base_url": (os.environ.get("GAMMA_AI_ANTHROPIC_BASE_URL", "") or _legacy_url
+                     or "https://api.anthropic.com").rstrip("/"),
         "default_model": "claude-haiku-4-5-20251001",
     },
     "openai": {
         "label": "OpenAI Chat Completions API",
-        "base_url": (os.environ.get("GAMMA_AI_OPENAI_BASE_URL", "") or "https://api.openai.com").rstrip("/"),
+        "base_url": (os.environ.get("GAMMA_AI_OPENAI_BASE_URL", "")
+                     or "https://api.openai.com").rstrip("/"),
         "default_model": "gpt-4o-mini",
     },
     # No API key: the entry holds OAuth tokens from signing in with a ChatGPT
@@ -62,16 +59,9 @@ AI_PROTOCOLS = {
     # provider CRUD guards (default is "key").
     "chatgpt": {
         "label": "ChatGPT (subscription sign-in)",
-        "base_url": (os.environ.get("GAMMA_AI_CHATGPT_BASE_URL", "") or "https://chatgpt.com/backend-api/codex").rstrip(
-            "/"
-        ),
+        "base_url": (os.environ.get("GAMMA_AI_CHATGPT_BASE_URL", "")
+                     or "https://chatgpt.com/backend-api/codex").rstrip("/"),
         "default_model": "gpt-5.1",
         "auth": "oauth",
     },
 }
-
-# How long a provider's auto-fetched model catalog stays fresh before the
-# background watcher asks the provider again (hours; 24h default). The user's
-# hand-edited `models` list is never overwritten — the catalog is merged into
-# the chat selector as an extra set of choices.
-AI_MODEL_CATALOG_TTL = float(os.environ.get("GAMMA_AI_MODEL_CATALOG_TTL_HOURS", 24)) * 3600

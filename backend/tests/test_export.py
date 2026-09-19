@@ -16,14 +16,9 @@ def _put_children(guest, page_id, tree):
 
 def _highlight(hid, quote, note="", page=1, color="rgba(255, 226, 143, 0.65)", children=None):
     return {
-        "id": hid,
-        "content": note,
-        "children": children or [],
+        "id": hid, "content": note, "children": children or [],
         "properties": {
-            "highlight_id": hid,
-            "quote": quote,
-            "pdf_page": page,
-            "color": color,
+            "highlight_id": hid, "quote": quote, "pdf_page": page, "color": color,
             "pdf_position": {"pageNumber": page, "boundingRect": {}, "rects": []},
         },
     }
@@ -31,20 +26,11 @@ def _highlight(hid, quote, note="", page=1, color="rgba(255, 226, 143, 0.65)", c
 
 def test_readable_export_is_bare_md(guest):
     page = make_page(guest, "Readable page")
-    _put_children(
-        guest,
-        page["id"],
-        [
-            {
-                "id": "a",
-                "content": "top note",
-                "properties": {},
-                "children": [
-                    _highlight("h1", "an important quote", note="my comment", page=3),
-                ],
-            },
-        ],
-    )
+    _put_children(guest, page["id"], [
+        {"id": "a", "content": "top note", "properties": {}, "children": [
+            _highlight("h1", "an important quote", note="my comment", page=3),
+        ]},
+    ])
     r = guest.get(f"/api/pages/{page['id']}/export")
     assert r.status_code == 200, r.text
     assert r.headers["content-type"].startswith("text/markdown")
@@ -54,6 +40,19 @@ def test_readable_export_is_bare_md(guest):
     assert "> an important quote" in body
     assert "`p.3`" in body
     assert "my comment" in body
+
+
+def test_readable_export_writes_image_sizes_obsidian_style():
+    page = {"id": "p", "content": "Sized images", "properties": {}, "children": [
+        {"id": "im1", "content": "legacy: ![cap](/api/uploads/ab12.png){:width 240}",
+         "properties": {}, "children": []},
+        {"id": "im2", "content": "already new: ![cap2|180](/api/uploads/cd34.png)",
+         "properties": {}, "children": []},
+    ]}
+    md = render_readable(page)
+    assert "![cap|240](/api/uploads/ab12.png)" in md
+    assert "![cap2|180](/api/uploads/cd34.png)" in md
+    assert "{:width" not in md
 
 
 def test_export_with_asset_returns_zip(guest):
@@ -116,6 +115,70 @@ def test_export_switches_drop_highlights_or_notes(guest):
     assert "quoted passage" not in neither and "free-standing note" not in neither
 
 
+def test_folder_md_export_links_papers_inside_the_export(guest):
+    """[[refs]], ![[embeds]] and link regions whose target page is part of the
+    same export resolve to relative .md links, so the zip is self-contained."""
+    from urllib.parse import quote
+
+    target = make_page(guest, "Target paper", properties={"folder": "proj"})
+    _put_children(guest, target["id"], [
+        {"id": "tb1", "content": "a shared finding\nsecond line", "properties": {}, "children": []},
+        {"id": "tb2", "content": "see [[tb1]] again", "properties": {}, "children": []},
+    ])
+    src = make_page(guest, "Source notes", properties={"folder": "proj"})
+    link = _highlight("lk1", "linked region")
+    link["properties"]["link_page_id"] = target["id"]
+    _put_children(guest, src["id"], [
+        {"id": "sb1", "content": "see [[tb1]] and unknown [[nope404]]", "properties": {}, "children": []},
+        {"id": "sb2", "content": "synced: ![[tb1]]", "properties": {}, "children": []},
+        link,
+    ])
+
+    r = guest.get("/api/folders/export", params={"name": "proj"})
+    assert r.status_code == 200, r.text
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    target_file = f"{slugify('Target paper', target['id'])}.md"
+    src_file = f"{slugify('Source notes', src['id'])}.md"
+    assert {target_file, src_file} <= set(z.namelist())
+    href = quote(target_file)
+
+    md = z.read(src_file).decode()
+    # A mention links to the target's file, labelled by its first line.
+    assert f"[a shared finding]({href})" in md
+    # An unknown id stays as typed rather than guessing.
+    assert "[[nope404]]" in md
+    # An embed materializes the synced content, with a linked attribution.
+    assert "synced: a shared finding" in md
+    assert f"second line *(from [Target paper]({href}))*" in md
+    # The link region becomes a relative link, not a bare quote.
+    assert f"- [linked region]({href})" in md
+    assert "> linked region" not in md
+
+    # Inside the target page itself: same-page mention reads as plain text.
+    tmd = z.read(target_file).decode()
+    assert "see a shared finding again" in tmd
+    assert href not in tmd
+
+
+def test_single_page_md_export_materializes_embeds(guest):
+    """A synced block from a page outside the export keeps its content with a
+    plain (unlinked) attribution."""
+    origin = make_page(guest, "Origin")
+    _put_children(guest, origin["id"], [
+        {"id": "os1", "content": "the origin text", "properties": {}, "children": []},
+    ])
+    page = make_page(guest, "Uses embed")
+    _put_children(guest, page["id"], [
+        {"id": "ub1", "content": "![[os1]]", "properties": {}, "children": []},
+        {"id": "ub2", "content": "ref: [[os1]]", "properties": {}, "children": []},
+    ])
+    r = guest.get(f"/api/pages/{page['id']}/export")
+    assert r.status_code == 200, r.text
+    assert "the origin text *(from Origin)*" in r.text
+    assert "ref: the origin text" in r.text
+    assert "[[os1]]" not in r.text
+
+
 def test_folder_export_zips_matching_pages(guest):
     make_page(guest, "In folder A", properties={"folder": "research/optics"})
     make_page(guest, "In subfolder", properties={"folder": "research/optics/lasers"})
@@ -130,7 +193,6 @@ def test_folder_export_zips_matching_pages(guest):
 
 def _blank_pdf_bytes():
     from PyPDF2 import PdfWriter
-
     w = PdfWriter()
     w.add_blank_page(width=612, height=792)
     buf = io.BytesIO()
@@ -144,15 +206,10 @@ def _positioned(hid, quote, page=1, area=False, note=""):
     if area:
         pos["area"] = True
     return {
-        "id": hid,
-        "content": note,
-        "children": [],
+        "id": hid, "content": note, "children": [],
         "properties": {
-            "highlight_id": hid,
-            "quote": quote,
-            "pdf_page": page,
-            "color": "rgba(170, 235, 170, 0.65)",
-            "pdf_position": pos,
+            "highlight_id": hid, "quote": quote, "pdf_page": page,
+            "color": "rgba(170, 235, 170, 0.65)", "pdf_position": pos,
         },
     }
 
@@ -160,18 +217,13 @@ def _positioned(hid, quote, page=1, area=False, note=""):
 def test_logseq_graph_export(guest):
     up = guest.post("/api/uploads", files={"file": ("g.pdf", _blank_pdf_bytes(), "application/pdf")})
     assert up.status_code == 200, up.text
-    page = make_page(
-        guest, "Graph paper", properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]}
-    )
-    _put_children(
-        guest,
-        page["id"],
-        [
-            _positioned("th", "a text quote", note="my thought"),
-            _positioned("ah", "", area=True),
-            {"id": "free", "content": "a free note", "properties": {}, "children": []},
-        ],
-    )
+    page = make_page(guest, "Graph paper",
+                     properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]})
+    _put_children(guest, page["id"], [
+        _positioned("th", "a text quote", note="my thought"),
+        _positioned("ah", "", area=True),
+        {"id": "free", "content": "a free note", "properties": {}, "children": []},
+    ])
 
     r = guest.get(f"/api/pages/{page['id']}/export", params={"mode": "logseq-graph"})
     assert r.status_code == 200, r.text
@@ -181,13 +233,12 @@ def test_logseq_graph_export(guest):
 
     assert "logseq/config.edn" in names
     page_md_name = next(n for n in names if n.startswith("pages/") and "hls__" not in n)
-    stem = page_md_name[len("pages/") : -len(".md")]
+    stem = page_md_name[len("pages/"):-len(".md")]
     assert f"pages/hls__{stem}.md" in names
     assert f"assets/{stem}.pdf" in names
     assert f"assets/{stem}.edn" in names
 
     from gamma.logseq_graph_export import hl_uuid
-
     text_uuid, area_uuid = str(hl_uuid("th")), str(hl_uuid("ah"))
 
     page_md = z.read(page_md_name).decode()
@@ -215,7 +266,6 @@ def test_logseq_graph_export(guest):
 
     # Round-trip the Logseq EDN back through Gamma's own importer parser.
     from gamma.logseq_import import parse_edn
-
     parsed = parse_edn(edn)
     assert len(parsed["highlights"]) == 2
     assert parsed["highlights"][0]["position"]["bounding"]["x1"] == 50.0
@@ -241,7 +291,7 @@ def test_missing_page_404(guest):
 
 
 def test_slugify_and_rewrite_units():
-    assert slugify("a/b:c*?", "xyz123") == "abc-xyz123"
+    assert slugify('a/b:c*?', "xyz123") == "abc-xyz123"
     assert slugify("", "id") == "Untitled-id"
     md, assets = collect_and_rewrite("see /api/uploads/abc123.pdf here")
     assert "assets/abc123.pdf" in md and assets == {"abc123.pdf"}

@@ -14,4 +14,10 @@ xcodebuild -project GammaIPad.xcodeproj -scheme GammaIPad \
   CODE_SIGNING_ALLOWED=NO test
 ```
 
+The seed creates (or reuses by exact name) `Native QA second library` without changing the account default, and puts `Native QA second library PDF` in it. It also seeds `Disposable iPad integration PDF` in the default library. Duplicate workspace/page names are rejected rather than chosen arbitrarily; repeated seeding reuses the named page. The isolation test discovers workspace IDs from `/api/session`, never hardcodes them.
+
+`testNondefaultWorkspaceNativeSaveIsolation` saves a unique real PencilKit stroke through `GammaWorkspace`'s native outbox in the second library, then reopens with a fresh client and empty ink cache. It verifies scoped source bytes/block content and requires HTTP 404 in the default library for the page, ink block, source, PNG preview and replay asset. A successful default-library listing is the authentication control. Repeated test runs leave unique annotations only in the disposable second library.
+
+If an owner already supplies the backend/tunnel at Mac loopback `19091`, reuse it: do not start or stop another service. The owner must prepare the migrated backend and both named PDF seeds before running the tests; restarting this script creates a new disposable data directory, not a migration of the running server.
+
 The test-only URLProtocol forwards `gamma-integration.invalid` into that loopback service. Responses, authentication, storage and block logic come from the actual backend, not mocks. TLS certificate policy, public deployment, app UI gestures, process-relaunch outbox scheduling and physical Pencil behavior are outside this test's claims. Without the opt-in flag, the test is skipped. Stop both tunnel and disposable server afterward.

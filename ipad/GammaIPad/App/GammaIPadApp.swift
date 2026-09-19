@@ -17,18 +17,28 @@ struct GammaRootView: View {
     @State private var useWeb = true
     @State private var webReloadToken: UUID?
     @State private var showDownloads = false
+    @State private var nativeViewport: GammaReadingPosition?
+    @State private var nativeViewportPageID: String?
+    @State private var sessionBootstrapFinished = false
 
     var body: some View {
         Group {
-            if workspace.username == nil { signIn }
+            if (!sessionBootstrapFinished || workspace.restoringSession) && workspace.username == nil {
+                ProgressView("Opening Gamma…")
+            } else if workspace.username == nil { signIn }
             else {
                 ZStack {
                     if let session = workspace.webSession {
-                        GammaWebWorkspace(serverURL: session.serverURL, cookies: session.cookies,
+                        GammaWebWorkspace(serverURL: session.serverURL, workspace: session.workspace,
+                            cookies: session.cookies,
                             sessionID: session.id, reloadToken: webReloadToken,
                             onOpenPDF: { request, cookies in
                                 Task {
-                                    if await workspace.openFromWeb(request, cookies: cookies) { useWeb = false }
+                                    if await workspace.openFromWeb(request, cookies: cookies) {
+                                        nativeViewport = request.viewport
+                                        nativeViewportPageID = request.pageID
+                                        useWeb = false
+                                    }
                                     else { webReloadToken = UUID() }
                                 }
                             }, onError: { workspace.errorMessage = $0 })
@@ -42,15 +52,21 @@ struct GammaRootView: View {
                                     if await workspace.prepareWebWorkspace() { webReloadToken = UUID(); useWeb = true }
                                 } } label: { Label("Full Gamma", systemImage: "chevron.left") }
                                 .font(.caption).disabled(workspace.busy || workspace.syncing || workspace.isOffline)
+                                GammaWorkspaceMenu(workspace: workspace)
                                 Spacer()
-                                if workspace.isOffline {
+                                if workspace.requiresLogin {
                                     GammaReconnectButton(workspace: workspace)
+                                } else if workspace.isOffline {
+                                    Label("Offline · reconnecting", systemImage: "wifi.slash")
+                                        .font(.caption2).foregroundStyle(.secondary)
                                 } else if workspace.paper == nil {
                                     Text("Library").font(.caption2).foregroundStyle(.secondary)
                                 }
                             }.padding(.horizontal, 14).frame(height: 34).background(GammaTheme.surface)
                             if let paper = workspace.paper, let document = workspace.document {
-                                GammaReaderView(workspace: workspace, paper: paper, document: document)
+                                GammaReaderView(workspace: workspace, paper: paper, document: document,
+                                     initialViewport: nativeViewportPageID == paper.id ? nativeViewport : nil)
+                                     .id(paper.id)
                             } else { library }
                         }
                     }
@@ -77,8 +93,21 @@ struct GammaRootView: View {
         }
         .tint(GammaTheme.accent)
         .sheet(isPresented: $showDownloads) { GammaDownloadsView(workspace: workspace) }
-        .task { workspace.reloadOfflineAccounts() }
-        .onChange(of: workspace.webSession?.id) { _, id in if id != nil { useWeb = true } }
+        .task {
+            workspace.reloadOfflineAccounts()
+            await workspace.restoreSession()
+            sessionBootstrapFinished = true
+        }
+        .onChange(of: workspace.webSession?.id) { _, id in
+            if id != nil, workspace.paper == nil, !workspace.isOffline { useWeb = true }
+        }
+        .onChange(of: workspace.isOffline) { _, offline in
+            if offline { useWeb = false }
+            else if workspace.paper == nil, workspace.webSession != nil { useWeb = true }
+        }
+        .onChange(of: workspace.requiresLogin) { _, required in
+            if required { useWeb = false }
+        }
         .task(id: workspace.username) {
             guard workspace.username != nil else { return }
             while !Task.isCancelled {
@@ -87,7 +116,12 @@ struct GammaRootView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await workspace.sync() } }
+            if phase == .active {
+                workspace.sessionDidBecomeActive()
+                Task { await workspace.sync() }
+            } else if phase == .background {
+                workspace.sessionDidEnterBackground()
+            }
         }
     }
     private var signIn: some View {
@@ -116,28 +150,68 @@ struct GammaRootView: View {
             if !workspace.offlineAccounts.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Open files on this iPad").font(.headline)
-                    Text("No connection needed. Sign in to the same account later to sync edits.")
+                    Text("Each entry is one Gamma library. No connection needed; sign in to the same account later to sync edits.")
                         .font(.caption).foregroundStyle(.secondary)
                     ForEach(workspace.offlineAccounts) { account in
                         Button {
                             workspace.enterOffline(account); useWeb = false
                         } label: {
                             VStack(alignment: .leading) {
-                                Label(account.username, systemImage: "ipad")
-                                Text(account.server).font(.caption2).lineLimit(2)
+                                Label(account.displayName, systemImage: account.isLegacy ? "questionmark.folder" : "ipad")
+                                Text(account.isLegacy
+                                     ? "Saved before Gamma libraries existed — sign in online once to attach it. \(account.server)"
+                                     : account.server)
+                                    .font(.caption2).lineLimit(3)
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }.buttonStyle(.bordered).disabled(workspace.busy)
+                            .accessibilityIdentifier(account.isLegacy ? "offline-account-legacy" : "offline-account")
                     }
                 }
             }
             if let error = workspace.errorMessage { Text(error).font(.caption).foregroundStyle(.red) }
-            Text("Connect to your Gamma server. Credentials stay on this device only for the current session.")
+            Text("Connect to your Gamma server. Your session is saved securely on this iPad. Your password is not stored.")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
             Spacer(); Spacer()
         }.frame(maxWidth: 380).padding(28).frame(maxWidth: .infinity)
         }.frame(maxWidth: .infinity, maxHeight: .infinity).background(GammaTheme.canvas)
     }
     private var library: some View { GammaLibraryView(workspace: workspace) }
+}
+
+/// The library in use, and — when the account may write in more than one — an
+/// explicit switch. Switching is refused while anything is queued, because a
+/// queued change belongs to the workspace it was written in.
+struct GammaWorkspaceMenu: View {
+    @ObservedObject var workspace: GammaWorkspace
+
+    var body: some View {
+        if workspace.writableWorkspaces.count > 1 {
+            Menu {
+                Section("Gamma workspace") {
+                    ForEach(workspace.writableWorkspaces) { option in
+                        Button {
+                            Task { await workspace.switchWorkspace(to: option.id) }
+                        } label: {
+                            if option.id == workspace.workspaceID { Label(option.name, systemImage: "checkmark") }
+                            else { Text(option.name) }
+                        }
+                    }
+                }
+                if !workspace.canSwitchWorkspace {
+                    Text("Sync pending changes before switching workspaces")
+                }
+            } label: {
+                Label(workspace.workspaceDisplayName, systemImage: "books.vertical")
+                    .font(.caption).lineLimit(1)
+            }
+            .disabled(!workspace.canSwitchWorkspace)
+            .accessibilityIdentifier("workspace-menu")
+        } else {
+            Label(workspace.workspaceDisplayName, systemImage: "books.vertical")
+                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                .accessibilityIdentifier("workspace-label")
+        }
+    }
 }
 
 enum GammaTheme {

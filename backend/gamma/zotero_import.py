@@ -12,8 +12,8 @@ exported PDF copies, where the existing embedded-annotations importer
 (routers/imports.py) picks them up.
 
 Collections map onto Gamma's folder labels (both are trees, both allow an item
-in several places), Zotero tags onto flat labels. Segment cleaning mirrors
-cleanFolderSegment in frontend/src/libraryUtils.js.
+in several places), Zotero tags onto flat labels. Segment cleaning is the
+shared gamma/foldertags.py rule (the frontend's cleanFolderSegment).
 """
 
 import html as html_mod
@@ -21,6 +21,8 @@ import re
 import unicodedata
 import urllib.parse
 import xml.etree.ElementTree as ET
+
+from .foldertags import clean_segment
 
 _RDF = "{http://www.w3.org/1999/02/22-rdf-syntax-ns#}"
 _Z = "{http://www.zotero.org/namespaces/export#}"
@@ -31,19 +33,10 @@ _FOAF = "{http://xmlns.com/foaf/0.1/}"
 _LINK = "{http://purl.org/rss/1.0/modules/link/}"
 _PRISM = "{http://prismstandard.org/namespaces/1.2/basic/}"
 
+# Same id shape as routers/metadata.py's _ARXIV_URL_RE — keep the two in sync.
 _ARXIV_URL_RE = re.compile(r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5})", re.I)
 # Zotero records arXiv preprints with a DataCite DOI: 10.48550/arXiv.<id>
 _ARXIV_DOI_RE = re.compile(r"^10\.48550/arxiv\.([0-9]{4}\.[0-9]{4,5})$", re.I)
-
-
-def clean_folder_segment(name: str) -> str:
-    """"," is the tag separator and "/" the path separator, so neither may
-    survive inside a segment (same rule as the frontend's cleanFolderSegment)."""
-    return re.sub(r"\s+", " ", (name or "").replace(",", " ").replace("/", " ")).strip()
-
-
-def clean_folder_path(path: str) -> str:
-    return "/".join(filter(None, (clean_folder_segment(p) for p in (path or "").split("/"))))
 
 
 def html_note_text(html_text: str) -> str:
@@ -91,7 +84,7 @@ def _doi_from(idents: list[str]) -> str:
 
 def parse_zotero_rdf(text: str) -> list[dict]:
     """→ one dict per bibliographic item:
-    {key, title, item_type, meta, tags, folders, pdf_paths, notes, url}."""
+    {key, title, meta, tags, folders, pdf_paths, notes}."""
     root = ET.fromstring(text)
     attachments, memos, containers, collections = {}, {}, {}, {}
     raw_items = []
@@ -112,7 +105,7 @@ def parse_zotero_rdf(text: str) -> list[dict]:
         elif el.tag == f"{_BIB}Memo" or item_type == "note":
             memos[about] = el.findtext(f"{_RDF}value") or ""
         elif item_type:
-            raw_items.append((about, item_type, el))
+            raw_items.append((about, el))
         elif about:
             # standalone container records (bib:Journal …) referenced via isPartOf
             containers[about] = _container_fields(el)
@@ -128,7 +121,7 @@ def parse_zotero_rdf(text: str) -> list[dict]:
         parts, seen = [], set()
         while key in collections and key not in seen:
             seen.add(key)  # cycle guard — malformed exports shouldn't hang us
-            parts.append(clean_folder_segment(collections[key]["title"]) or "untitled")
+            parts.append(clean_segment(collections[key]["title"]) or "untitled")
             key = parent_of.get(key)
         return "/".join(reversed(parts))
 
@@ -140,7 +133,7 @@ def parse_zotero_rdf(text: str) -> list[dict]:
                 item_folders.setdefault(part, []).append(path)
 
     items = []
-    for about, item_type, el in raw_items:
+    for about, el in raw_items:
         authors = []
         for person in el.findall(f"{_BIB}authors//{_FOAF}Person"):
             name = " ".join(filter(None, [
@@ -220,13 +213,11 @@ def parse_zotero_rdf(text: str) -> list[dict]:
         items.append({
             "key": about,
             "title": title or "Untitled",
-            "item_type": item_type,
             "meta": meta,
             "tags": tags,
             "folders": item_folders.get(about, []),
             "pdf_paths": pdf_paths,
             "notes": notes,
-            "url": url,
         })
     return items
 
@@ -251,29 +242,15 @@ def zip_name_map(zf) -> dict:
     return out
 
 
-def _safe_relative_zip_path(path: str) -> bool:
-    """Reject absolute, drive-prefixed, and traversing attachment paths."""
-    normalized = (path or "").replace("\\", "/")
-    if not normalized or normalized.startswith("/"):
-        return False
-    if re.match(r"^[A-Za-z]:", normalized):
-        return False
-    return all(part not in {"", ".", ".."} for part in normalized.split("/"))
-
-
 def find_zip_entry(name_map: dict, base: str, path: str) -> str | None:
-    """Resolve a safe z:path relative to the RDF entry.
-
-    The path attribute is usually raw, but percent-decoded names also occur.
-    """
+    """Resolve a z:path (relative to the .rdf file) to a real zip entry name.
+    The path attribute is usually raw, but try percent-decoding too."""
     seen = []
     for cand in (path, urllib.parse.unquote(path)):
-        if cand in seen or not _safe_relative_zip_path(cand):
+        if cand in seen:
             continue
         seen.append(cand)
         full = (f"{base}/{cand}" if base else cand).replace("\\", "/")
-        if not _safe_relative_zip_path(full):
-            continue
         for form in ("NFC", "NFD"):
             real = name_map.get(unicodedata.normalize(form, full))
             if real:

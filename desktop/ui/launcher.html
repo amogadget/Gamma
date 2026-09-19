@@ -1,232 +1,473 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html>
 <head>
-<meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src data:;">
-<title>Gamma — Workspaces</title>
-<link rel="stylesheet" href="shell.css">
+<meta charset="utf-8" />
+<title>Gamma — Servers</title>
+<link rel="stylesheet" href="theme.css" />
 <style>
-  html, body { background: var(--bg-page); }
+  html, body { background: var(--bg-page); height: 100%; }
   body { overflow-y: auto; }
-  .wrap { max-width: 700px; margin: 0 auto; padding: 34px 28px 60px; }
-
-  .head { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
-  .head .mark { flex: none; }
-  .head .mark svg { width: 42px; height: 42px; }
-  h1 { margin: 0; font-size: 21px; letter-spacing: -0.01em; }
-  .sub { margin: 0 0 24px; color: var(--text-muted); }
-
-  .groupLabel {
-    margin: 24px 0 8px;
-    color: var(--text-muted);
-    font-size: 10.5px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
+  .wrap { max-width: 680px; margin: 0 auto; padding: 40px 28px 64px; }
+  .head { display: flex; align-items: center; gap: 14px; margin-bottom: 6px; }
+  .head svg { width: 40px; height: 40px; flex-shrink: 0; }
+  h1 { font-size: 21px; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--text-muted); margin: 0 0 26px; }
+  .sectionTitle { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin: 22px 0 8px; }
   .cards { display: flex; flex-direction: column; gap: 8px; }
   .card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 11px 12px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-surface);
+    padding: 12px 14px; display: flex; align-items: center; gap: 12px;
   }
   .card:hover { border-color: var(--border-light); }
-  .card .kind {
-    display: flex; align-items: center; justify-content: center;
-    flex: none; width: 34px; height: 34px;
-    border: 1px solid var(--border); border-radius: 9px;
-    background: var(--bg-elevated); color: var(--text-muted);
-  }
+  .card .kind { width: 34px; height: 34px; border-radius: 9px; background: var(--bg-elevated); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--text-muted); flex-shrink: 0; }
   .card .kind svg { width: 17px; height: 17px; }
   .card .info { flex: 1; min-width: 0; }
-  .card .name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; }
+  .card .name { font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 8px; }
   .card .name .text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .card .detail {
-    margin-top: 2px;
-    color: var(--text-muted);
-    font-size: 11.5px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
+  .badge { font-size: 10.5px; font-weight: 500; color: var(--text-muted); border: 1px solid var(--border); border-radius: 99px; padding: 1px 7px; flex-shrink: 0; }
+  .badge.last { color: var(--accent); border-color: var(--accent-bg); background: var(--accent-bg-light); }
+  .card .detail { color: var(--text-muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
   .card .detail .sep { margin: 0 6px; color: var(--text-dim); }
-  .card .actions { display: flex; align-items: center; gap: 2px; flex: none; }
-  .card .actions .btn { margin-right: 4px; }
-
-  .adders { display: flex; gap: 8px; margin-top: 14px; }
-
-  .status { margin-top: 14px; min-height: 20px; color: var(--text-muted); font-size: 12px; }
-  .status.error { color: var(--danger); white-space: pre-wrap; }
-
-  .empty {
-    padding: 28px 16px;
-    border: 1px dashed var(--border-light);
-    border-radius: 10px;
-    color: var(--text-muted);
-    text-align: center;
-  }
+  .card .actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+  .card .actions .uiBtn { margin-right: 6px; }
+  .adders { display: flex; gap: 8px; margin-top: 12px; }
+  .status { margin-top: 16px; color: var(--text-muted); min-height: 20px; font-size: 12px; }
+  .status.err { color: var(--danger); white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
+  .empty { color: var(--text-muted); text-align: center; padding: 30px 16px; border: 1px dashed var(--border-light); border-radius: var(--radius-surface); }
   .empty b { color: var(--text-secondary); }
 
-  .panel {
-    padding: 10px 12px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-  }
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 0; }
-  .row .label { font-size: 13px; }
-  .row .hint { margin-top: 1px; color: var(--text-muted); font-size: 11.5px; }
-
-  .switch {
-    position: relative; flex: none;
-    width: 34px; height: 20px;
-    border: 1px solid var(--border-light); border-radius: 99px;
-    background: var(--bg-active);
-    cursor: pointer;
-  }
-  .switch::after {
-    content: ""; position: absolute; top: 2px; left: 2px;
-    width: 14px; height: 14px; border-radius: 50%;
-    background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-    transition: left 0.15s;
-  }
-  .switch[aria-checked="true"] { background: var(--accent); border-color: var(--accent); }
-  .switch[aria-checked="true"]::after { left: 16px; }
-
   dialog {
-    width: 420px; max-width: 90vw; padding: 18px;
-    background: var(--bg-elevated); color: var(--text-primary);
-    border: 1px solid var(--border); border-radius: 12px;
+    background: var(--bg-elevated); color: var(--text-primary); border: 1px solid var(--border);
+    border-radius: var(--radius-surface); box-shadow: var(--shadow-surface); padding: 20px; width: 400px; max-width: 90vw;
   }
-  dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
-  dialog h2 { margin: 0 0 10px; font-size: 15px; }
-  dialog p { margin: 0 0 10px; color: var(--text-muted); font-size: 12px; }
-  dialog label { display: block; margin: 12px 0 4px; color: var(--text-muted); font-size: 11.5px; }
-  dialog .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-  dialog .err { color: var(--danger); font-size: 12px; min-height: 18px; }
-  pre.logView {
-    max-height: 46vh; margin: 0; padding: 10px;
-    overflow: auto;
-    background: var(--bg-deeper); border: 1px solid var(--border); border-radius: 8px;
-    color: var(--text-secondary);
-    font: 11.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    white-space: pre-wrap;
-    -webkit-user-select: text; user-select: text;
-  }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
+  dialog h3 { margin: 0 0 12px; font-size: 14px; }
+  dialog p { margin: 0 0 8px; color: var(--text-muted); font-size: 12px; }
+  dialog label { display: block; color: var(--text-muted); font-size: 11.5px; margin: 10px 0 4px; }
+  dialog .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  .creds { font: 12px/1.7 ui-monospace, Consolas, Menlo, monospace; background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius-control); padding: 8px 10px; -webkit-user-select: text; user-select: text; white-space: pre; }
 
-  .foot {
-    display: flex; justify-content: space-between; gap: 12px;
-    margin-top: 28px;
-    color: var(--text-dim); font-size: 11px;
-  }
+  .settings { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-surface); padding: 12px 14px; }
+  .setRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; }
+  .setRow .l { font-size: 13px; }
+  .setRow .d { color: var(--text-muted); font-size: 11.5px; margin-top: 1px; }
+  .setRow .d.path { font: 11.5px/1.4 ui-monospace, Consolas, Menlo, monospace; word-break: break-all; -webkit-user-select: text; user-select: text; }
+  .setRow .btns { display: flex; gap: 6px; flex-shrink: 0; }
+  .switch { position: relative; width: 34px; height: 20px; border-radius: 99px; background: var(--bg-active); border: 1px solid var(--border-light); cursor: pointer; flex-shrink: 0; transition: background 0.15s; }
+  .switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: left 0.15s; box-shadow: 0 1px 2px rgba(0,0,0,0.3); }
+  .switch.on { background: var(--accent); border-color: var(--accent); }
+  .switch.on::after { left: 16px; }
+  details { margin-top: 14px; color: var(--text-muted); }
+  details summary { cursor: pointer; font-size: 12px; }
+  details .settings { margin-top: 8px; }
+  details label { display: block; font-size: 11.5px; margin: 8px 0 3px; }
+  details .row { margin-top: 12px; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .foot { margin-top: 26px; color: var(--text-dim); font-size: 11px; display: flex; justify-content: space-between; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="head">
-    <span class="mark" id="mark"></span>
+    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="32" height="32" rx="7" fill="#1e1e1c"/>
+      <path d="M 6 16 C 9 10.5 13 10.5 16 16 C 19 21.5 23 21.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+      <path d="M 6 16 C 9 21.5 13 21.5 16 16 C 19 10.5 23 10.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+      <path d="M 6 4  Q 2 16 6 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+      <path d="M 26 4 Q 30 16 26 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+      <rect x="9" y="8" width="13" height="3" rx="0.8" fill="#eeebe4"/>
+      <rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/>
+    </svg>
     <div>
-      <h1>Workspaces</h1>
+      <h1>Servers</h1>
     </div>
   </div>
-  <p class="sub">
-    A workspace is a Gamma server — a library kept on this computer, or one you
-    run somewhere else. They are separate libraries with no syncing between
-    them; switch any time from the toolbar.
-  </p>
+  <p class="sub">A server keeps your libraries: one run on this computer, or a Gamma you host elsewhere. Inside a server, workspaces (your own and shared ones) are switched from the toolbar, together with the servers.</p>
 
-  <div id="groups"></div>
-
+  <div class="cards" id="cards"></div>
   <div class="adders">
-    <button class="btn primary" id="addLocal"></button>
-    <button class="btn" id="addRemote"></button>
+    <button class="uiBtn primary" id="btnAddLocal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>New local server</button>
+    <button class="uiBtn" id="btnAddRemote"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/></svg>Add remote server…</button>
   </div>
-  <div class="status" id="status" role="status"></div>
+  <div class="status" id="status"></div>
 
-  <div class="groupLabel">Settings</div>
-  <div class="panel">
-    <div class="row">
+  <div class="sectionTitle">Settings</div>
+  <div class="settings">
+    <div class="setRow">
       <div>
-        <div class="label">Reopen the last workspace at launch</div>
-        <div class="hint">Off: start on this page every time.</div>
+        <div class="l">Reopen the last server at launch</div>
+        <div class="d">Off: start on this page every time.</div>
       </div>
-      <div class="switch" id="openLast" role="switch" tabindex="0"></div>
+      <div class="switch" id="swOpenLast" role="switch"></div>
+    </div>
+    <div class="setRow">
+      <div>
+        <div class="l">Local server storage</div>
+        <div class="d path" id="dataRootText"></div>
+      </div>
+      <div class="btns">
+        <button class="uiBtn sm" id="btnDataRootReset" hidden>Use default</button>
+        <button class="uiBtn sm" id="btnDataRoot">Change…</button>
+      </div>
+    </div>
+    <div class="setRow">
+      <div>
+        <div class="l">Updates</div>
+        <div class="d" id="updText"></div>
+      </div>
+      <button class="uiBtn sm" id="btnUpdate"></button>
     </div>
   </div>
 
-  <div class="foot">
-    <span id="version"></span>
-    <span class="selectable mono" id="userDataDir"></span>
-  </div>
+  <details id="advanced">
+    <summary>Advanced: run local servers from a source checkout</summary>
+    <div class="settings">
+      <label>Python executable (blank = auto-detect)</label>
+      <input class="uiInput mono" id="setPython" spellcheck="false" />
+      <label>Backend directory</label>
+      <input class="uiInput mono" id="setBackend" spellcheck="false" />
+      <label>Frontend dist directory</label>
+      <input class="uiInput mono" id="setStatic" spellcheck="false" />
+      <div class="row">
+        <span id="detected" style="font-size:11px"></span>
+        <button class="uiBtn sm" id="btnSaveSettings">Save</button>
+      </div>
+    </div>
+  </details>
+
+  <div class="foot"><span id="version"></span><span id="userData" style="-webkit-user-select:text;user-select:text"></span></div>
 </div>
 
+<dialog id="dlgDataRoot">
+  <h3>Change storage folder</h3>
+  <p>New folder:</p>
+  <div class="creds" id="dataRootNew"></div>
+  <p id="dataRootMoveNote"></p>
+  <div class="row">
+    <button class="uiBtn" onclick="dlgDataRoot.close()">Cancel</button>
+    <button class="uiBtn" id="btnDataRootNewOnly">Only new servers</button>
+    <button class="uiBtn primary" id="btnDataRootMove">Move data</button>
+  </div>
+</dialog>
+
 <dialog id="dlgLocal">
-  <h2>New library on this computer</h2>
-  <p>A fresh, empty library. Nothing leaves this machine, and there is no
-     account to create — Gamma signs you in because the request comes from
-     here.</p>
-  <label for="localName">Name</label>
-  <input class="input" id="localName" placeholder="My library">
-  <div class="err" id="localErr"></div>
-  <div class="buttons">
-    <button class="btn" data-close="dlgLocal">Cancel</button>
-    <button class="btn primary" id="createLocal">Create</button>
+  <h3>New local server</h3>
+  <p>A Gamma of its own, stored on this computer. The shell runs it for you and signs you in; create workspaces inside it from Gamma's account menu.</p>
+  <label>Name</label>
+  <input class="uiInput" id="localName" placeholder="My library" />
+  <div class="row">
+    <button class="uiBtn" onclick="dlgLocal.close()">Cancel</button>
+    <button class="uiBtn primary" id="btnCreateLocal">Create</button>
   </div>
 </dialog>
 
 <dialog id="dlgRemote">
-  <h2>Connect to a server</h2>
-  <p>A Gamma you already run — a VPS, a NAS, another machine on your network.
-     You sign in with that server's own accounts.</p>
-  <label for="remoteUrl">Address</label>
-  <input class="input mono" id="remoteUrl" spellcheck="false"
-         placeholder="https://gamma.example.com   or   http://192.168.1.10:9001">
-  <label for="remoteName">Name (optional)</label>
-  <input class="input" id="remoteName" placeholder="Home server">
-  <div class="err" id="remoteErr"></div>
-  <div class="buttons">
-    <button class="btn" data-close="dlgRemote">Cancel</button>
-    <button class="btn primary" id="createRemote">Add</button>
+  <h3>Add remote server</h3>
+  <p>A Gamma you host elsewhere (NAS, VPS). You sign in with that server's accounts.</p>
+  <label>Server URL</label>
+  <input class="uiInput mono" id="remoteUrl" placeholder="https://gamma.example.com  or  http://192.168.1.10:9001" spellcheck="false" />
+  <label>Name (optional)</label>
+  <input class="uiInput" id="remoteName" placeholder="Home server" />
+  <div class="row">
+    <button class="uiBtn" onclick="dlgRemote.close()">Cancel</button>
+    <button class="uiBtn primary" id="btnCreateRemote">Add</button>
   </div>
 </dialog>
 
 <dialog id="dlgRename">
-  <h2>Rename workspace</h2>
-  <label for="renameName">Name</label>
-  <input class="input" id="renameName">
-  <div class="err" id="renameErr"></div>
-  <div class="buttons">
-    <button class="btn" data-close="dlgRename">Cancel</button>
-    <button class="btn primary" id="doRename">Rename</button>
+  <h3>Rename server</h3>
+  <input class="uiInput" id="renameName" />
+  <div class="row">
+    <button class="uiBtn" onclick="dlgRename.close()">Cancel</button>
+    <button class="uiBtn primary" id="btnRename">Rename</button>
   </div>
+</dialog>
+
+<dialog id="dlgCreds">
+  <h3>Local server credentials</h3>
+  <p>The shell created this admin account and signs you in automatically. You only need it to open the server from a browser, or to add more users in Gamma's settings.</p>
+  <div class="creds" id="credsText"></div>
+  <div class="row"><button class="uiBtn primary" onclick="dlgCreds.close()">Close</button></div>
 </dialog>
 
 <dialog id="dlgRemove">
-  <h2 id="removeTitle">Remove workspace</h2>
-  <p id="removeBody"></p>
-  <div class="err" id="removeErr"></div>
-  <div class="buttons">
-    <button class="btn" data-close="dlgRemove">Cancel</button>
-    <button class="btn" id="removeKeep">Remove, keep files</button>
-    <button class="btn danger" id="removeAll">Delete everything</button>
+  <h3 id="removeTitle">Remove server</h3>
+  <p id="removeText"></p>
+  <div class="row">
+    <button class="uiBtn" onclick="dlgRemove.close()">Cancel</button>
+    <button class="uiBtn" id="btnRemoveKeep">Remove, keep files</button>
+    <button class="uiBtn danger" id="btnRemoveWipe">Delete everything</button>
   </div>
 </dialog>
 
-<dialog id="dlgLog">
-  <h2>Server log</h2>
-  <p id="logPathLine" class="selectable mono"></p>
-  <pre class="logView" id="logText"></pre>
-  <div class="buttons">
-    <button class="btn" id="revealLog">Show the file</button>
-    <button class="btn primary" data-close="dlgLog">Close</button>
-  </div>
-</dialog>
+<script>
+  const ICONS = {
+    local: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>',
+    remote: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18"/></svg>',
+    key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>',
+    folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>',
+    log: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/></svg>',
+    pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>',
+    trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+  };
+  const $ = (id) => document.getElementById(id);
+  const statusEl = $('status');
+  let busy = false;
+  let state = null;
 
-<script src="icons.js"></script>
-<script src="launcher.js"></script>
+  function setStatus(text, isErr) {
+    statusEl.textContent = text || '';
+    statusEl.className = 'status' + (isErr ? ' err' : '');
+  }
+  function fmtBytes(n) {
+    if (!n) return '0 B';
+    const u = ['B', 'KB', 'MB', 'GB'];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i ? n.toFixed(n >= 10 ? 0 : 1) : n) + ' ' + u[i];
+  }
+  function iconBtn(icon, title, onClick, cls) {
+    const b = document.createElement('button');
+    b.className = 'ctlBtn' + (cls ? ' ' + cls : '');
+    b.title = title;
+    b.innerHTML = ICONS[icon];
+    b.onclick = onClick;
+    return b;
+  }
+
+  async function refresh() {
+    state = await gammaShell.list();
+    document.documentElement.setAttribute('data-theme', state.theme || 'dark');
+    const cards = $('cards');
+    cards.innerHTML = '';
+    if (!state.servers.length) {
+      cards.innerHTML = '<div class="empty"><b>No servers yet.</b><br>Create a local one to keep your libraries on this computer, or add the address of a Gamma you already run.</div>';
+    }
+    for (const ws of state.servers) {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.dataset.id = ws.id;
+      const kind = document.createElement('div');
+      kind.className = 'kind';
+      kind.innerHTML = ICONS[ws.type];
+      card.appendChild(kind);
+
+      const info = document.createElement('div');
+      info.className = 'info';
+      const name = document.createElement('div');
+      name.className = 'name';
+      const d = document.createElement('span');
+      if (ws.type === 'local') { d.className = 'dot' + (ws.running ? ' on' : ''); d.title = ws.running ? 'server running' : 'stopped'; }
+      else { d.className = 'dot' + (ws.reachable === true ? ' on' : ws.reachable === false ? ' off' : ''); d.title = ws.reachable === true ? 'server reachable' : ws.reachable === false ? 'server unreachable' : 'checking…'; }
+      name.appendChild(d);
+      const t = document.createElement('span'); t.className = 'text'; t.textContent = ws.name; name.appendChild(t);
+      const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = ws.type === 'local' ? 'local' : 'remote'; name.appendChild(badge);
+      if (state.lastOpened === ws.id) { const l = document.createElement('span'); l.className = 'badge last'; l.textContent = 'last opened'; name.appendChild(l); }
+      info.appendChild(name);
+      const detail = document.createElement('div');
+      detail.className = 'detail';
+      if (ws.type === 'local') {
+        detail.textContent = fmtBytes(ws.sizeBytes) + ' on disk';
+        const s = document.createElement('span'); s.className = 'sep'; s.textContent = '·'; detail.appendChild(s);
+        detail.appendChild(document.createTextNode(ws.dataDir));
+      } else {
+        detail.textContent = ws.url;
+      }
+      detail.title = ws.type === 'local' ? ws.dataDir : ws.url;
+      info.appendChild(detail);
+      card.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'actions';
+      const openBtn = document.createElement('button');
+      openBtn.className = 'uiBtn primary sm';
+      openBtn.textContent = 'Open';
+      openBtn.onclick = () => openWs(ws, openBtn);
+      actions.appendChild(openBtn);
+      actions.appendChild(iconBtn('pencil', 'Rename', () => {
+        $('renameName').value = ws.name;
+        $('btnRename').onclick = async () => {
+          try { await gammaShell.rename(ws.id, $('renameName').value); $('dlgRename').close(); refresh(); }
+          catch (e) { setStatus(cleanErr(e), true); }
+        };
+        $('dlgRename').showModal();
+        $('renameName').select();
+      }));
+      if (ws.type === 'local') {
+        actions.appendChild(iconBtn('key', 'Show credentials', () => {
+          $('credsText').textContent = `username: ${ws.adminUser}\npassword: ${ws.adminPassword}\nserver:   ${ws.url || '(starts when opened)'}`;
+          $('dlgCreds').showModal();
+        }));
+        actions.appendChild(iconBtn('folder', 'Open data folder', () => gammaShell.revealData(ws.id)));
+        actions.appendChild(iconBtn('log', 'Show server log', () => gammaShell.revealLog(ws.id)));
+      }
+      actions.appendChild(iconBtn('trash', 'Remove server', () => {
+        $('removeTitle').textContent = `Remove "${ws.name}"?`;
+        if (ws.type === 'local') {
+          $('removeText').textContent = `"Delete everything" also erases its data folder (${fmtBytes(ws.sizeBytes)}: every workspace, note and PDF in it). "Keep files" only forgets the server; the folder stays on disk.`;
+          $('btnRemoveKeep').hidden = false;
+          $('btnRemoveWipe').textContent = 'Delete everything';
+        } else {
+          $('removeText').textContent = 'The server itself is not touched; only the entry here is removed.';
+          $('btnRemoveKeep').hidden = true;
+          $('btnRemoveWipe').textContent = 'Remove';
+        }
+        $('btnRemoveKeep').onclick = async () => { $('dlgRemove').close(); await gammaShell.remove(ws.id, {}); refresh(); };
+        $('btnRemoveWipe').onclick = async () => { $('dlgRemove').close(); await gammaShell.remove(ws.id, { deleteData: ws.type === 'local' }); refresh(); };
+        $('dlgRemove').showModal();
+      }, 'danger'));
+      card.appendChild(actions);
+      cards.appendChild(card);
+    }
+
+    $('swOpenLast').classList.toggle('on', Boolean(state.settings.openLastOnLaunch));
+    renderUpdate(state.update || {});
+    $('setPython').value = state.settings.pythonPath || '';
+    $('setBackend').value = state.settings.backendDir || '';
+    $('setStatic').value = state.settings.staticDir || '';
+    $('setPython').placeholder = state.detected.pythonPath;
+    $('setBackend').placeholder = state.detected.backendDir;
+    $('setStatic').placeholder = state.detected.staticDir;
+    $('detected').textContent = state.packaged ? 'Packaged app: the bundled server is used unless a Python path is set.' : 'Dev mode: repo auto-detected.';
+    $('version').textContent = `Gamma desktop ${state.version}${state.packaged ? '' : ' (dev)'}`;
+    $('userData').textContent = state.userDataDir;
+    $('dataRootText').textContent = state.dataRoot;
+    $('btnDataRootReset').hidden = !state.settings.dataRoot;
+  }
+
+  // Storage root: pick a folder (or reset to the default), then choose
+  // whether the existing local workspaces move there too.
+  async function changeDataRoot(target) {
+    const movable = state.movable || [];
+    $('dataRootNew').textContent = target || state.defaultDataRoot;
+    $('dataRootMoveNote').textContent = movable.length
+      ? `"Move data" copies ${movable.length === 1 ? 'the server' : `these ${movable.length} servers`} (${movable.join(', ')}) into the new folder — they stop and start again the next time each is opened; the old copies are deleted once the move succeeds. "Only new servers" leaves them where they are.`
+      : 'No local servers to move; new ones will be created here.';
+    $('btnDataRootMove').hidden = !movable.length;
+    const run = async (move) => {
+      $('dlgDataRoot').close();
+      setStatus(move && movable.length ? 'Moving server data…' : '');
+      try {
+        const r = await gammaShell.setDataRoot(target, { move });
+        setStatus(r.moved.length ? `Moved ${r.moved.join(', ')} to ${r.root}.` : `New local servers go to ${r.root}.`);
+      } catch (e) {
+        setStatus(cleanErr(e), true);
+      }
+      refresh();
+    };
+    $('btnDataRootMove').onclick = () => run(true);
+    $('btnDataRootNewOnly').onclick = () => run(false);
+    $('dlgDataRoot').showModal();
+  }
+  $('btnDataRoot').onclick = async () => {
+    const dir = await gammaShell.pickFolder(state.dataRoot);
+    if (dir) changeDataRoot(dir);
+  };
+  $('btnDataRootReset').onclick = () => changeDataRoot('');
+
+  const cleanErr = (e) => String(e && e.message || e).replace(/^Error invoking remote method '[^']*': (Error: )?/, '');
+
+  // The Updates row mirrors lib/updater.js's state machine. Automatic checks
+  // stay silent; this row is where a user sees what happened and can act.
+  function renderUpdate(u) {
+    const text = $('updText');
+    const btn = $('btnUpdate');
+    btn.hidden = false;
+    btn.disabled = false;
+    btn.className = 'uiBtn sm';
+    btn.textContent = 'Check for updates';
+    btn.onclick = () => gammaShell.updateCheck();
+    switch (u.status) {
+      case 'unsupported':
+        text.textContent =
+          u.error === 'dev build' ? 'Development build: update from git.'
+          : u.error === 'store' ? 'Installed from the Microsoft Store: updates arrive through the Store.'
+          : 'Not available in this build.';
+        btn.hidden = true;
+        break;
+      case 'checking':
+        text.textContent = 'Checking…';
+        btn.disabled = true;
+        break;
+      case 'up-to-date':
+        text.textContent = `Up to date (${u.current}).`;
+        break;
+      case 'available':
+        text.textContent = `Gamma ${u.version} is available. This build cannot update itself; the download page opens in your browser.`;
+        btn.className = 'uiBtn sm primary';
+        btn.textContent = `Download ${u.version}`;
+        btn.onclick = () => gammaShell.updateInstall();
+        break;
+      case 'downloading':
+        text.textContent = `Downloading Gamma ${u.version}… ${u.percent || 0}%`;
+        btn.disabled = true;
+        break;
+      case 'downloaded':
+        text.textContent = `Gamma ${u.version} is ready; it installs when you restart.`;
+        btn.className = 'uiBtn sm primary';
+        btn.textContent = 'Restart to update';
+        btn.onclick = () => gammaShell.updateInstall();
+        break;
+      case 'error':
+        text.textContent = `Update check failed: ${u.error || 'unknown error'}`;
+        btn.textContent = 'Try again';
+        break;
+      default:
+        text.textContent = 'Checks automatically after launch and every few hours; updates install on restart.';
+    }
+  }
+
+  async function openWs(ws, btn) {
+    if (busy) return;
+    busy = true;
+    btn.disabled = true;
+    setStatus(ws.type === 'local' ? `Starting ${ws.name}…` : `Connecting to ${ws.name}…`);
+    try {
+      await gammaShell.open(ws.id);
+    } catch (e) {
+      setStatus(cleanErr(e), true);
+      busy = false;
+      btn.disabled = false;
+    }
+  }
+
+  $('btnAddLocal').onclick = () => { $('localName').value = ''; $('dlgLocal').showModal(); $('localName').focus(); };
+  $('btnCreateLocal').onclick = async () => {
+    $('dlgLocal').close();
+    await gammaShell.addLocal($('localName').value.trim());
+    refresh();
+  };
+  $('localName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnCreateLocal').click(); });
+  $('btnAddRemote').onclick = () => { $('remoteUrl').value = ''; $('remoteName').value = ''; $('dlgRemote').showModal(); $('remoteUrl').focus(); };
+  $('btnCreateRemote').onclick = async () => {
+    try {
+      await gammaShell.addRemote($('remoteName').value.trim(), $('remoteUrl').value.trim());
+      $('dlgRemote').close();
+      setStatus('');
+      refresh();
+    } catch (e) {
+      setStatus(cleanErr(e), true);
+    }
+  };
+  $('remoteUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnCreateRemote').click(); });
+  $('renameName').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btnRename').click(); });
+  $('swOpenLast').onclick = async () => {
+    await gammaShell.setSettings({ openLastOnLaunch: !state.settings.openLastOnLaunch });
+    refresh();
+  };
+  $('btnSaveSettings').onclick = async () => {
+    await gammaShell.setSettings({
+      pythonPath: $('setPython').value.trim(),
+      backendDir: $('setBackend').value.trim(),
+      staticDir: $('setStatic').value.trim(),
+    });
+    setStatus('Settings saved.');
+    refresh();
+  };
+
+  const err = new URLSearchParams(location.search).get('error');
+  if (err) setStatus(err, true);
+  gammaShell.onState(() => refresh());
+  refresh();
+</script>
 </body>
 </html>

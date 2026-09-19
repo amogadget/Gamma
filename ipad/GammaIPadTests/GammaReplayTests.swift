@@ -76,7 +76,7 @@ final class GammaReplayTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         var fail = false
-        let cache = try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "test", writeOverride: { data, url in
+        let cache = try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "test", workspace: "ws-alpha", writeOverride: { data, url in
             if fail { throw DiskError.full }; try data.write(to: url, options: .atomic)
         })
         let recordingID = UUID().uuidString.lowercased(), segmentID = UUID().uuidString.lowercased()

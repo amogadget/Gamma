@@ -3,7 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from conftest import login as _login, make_user as _make_user
+from conftest import workspace_of, login as _login, make_user as _make_user
 
 
 @pytest.fixture(scope="module")
@@ -44,22 +44,17 @@ def test_seed_password_is_random_and_works(tmp_path):
         "from gamma.db import connect_users_db\n"
         "user, pw = ensure_admin_seed()\n"
         "with connect_users_db() as c:\n"
-        '    h = c.execute("SELECT password_hash FROM users WHERE username = ?", (user,)).fetchone()[0]\n'
+        "    h = c.execute(\"SELECT password_hash FROM users WHERE username = ?\", (user,)).fetchone()[0]\n"
         "print('PW:' + pw)\n"
         "print('MATCH' if bcrypt.checkpw(pw.encode(), h.encode()) else 'MISMATCH')\n"
     )
     env = {**os.environ, "GAMMA_DATA_DIR": str(tmp_path)}
     env.pop("GAMMA_ADMIN_USER", None)
     env.pop("GAMMA_ADMIN_PASSWORD", None)
-    out = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        env=env,
-        cwd=str(Path(__file__).resolve().parent.parent),
-    ).stdout
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                         env=env, cwd=str(Path(__file__).resolve().parent.parent)).stdout
     assert "MATCH" in out, out
-    pw = next(line for line in out.splitlines() if line.startswith("PW:"))[3:]
+    pw = next(l for l in out.splitlines() if l.startswith("PW:"))[3:]
     assert len(pw) >= 12
     # ...and the console output actually shows it (that's the only place it exists)
     assert f"password: {pw}" in out
@@ -74,7 +69,6 @@ def test_non_admins_are_locked_out(client):
     # A guest session of its own (not the shared `guest` fixture — that would
     # log the session-scoped client in before test_auth asserts it is anonymous)
     from gamma.app import app
-
     g = TestClient(app)
     assert g.post("/api/login-guest").status_code == 200
     assert g.get("/api/admin/users").status_code == 403
@@ -97,7 +91,6 @@ def test_set_password(boss):
     r = boss.put("/api/admin/users/newbie", json={"password": "rotated"})
     assert r.status_code == 200
     from gamma.app import app
-
     c = TestClient(app)
     assert c.post("/api/login", json={"username": "newbie", "password": "npw"}).status_code == 401
     _login("newbie", "rotated")
@@ -114,9 +107,13 @@ def test_grant_and_revoke_admin(boss):
 
 
 def test_lockout_rails(boss):
-    # the startup-seeded 'admin' also holds the privilege — demote it so boss
-    # is the last admin, then the rails must hold
-    assert boss.put("/api/admin/users/admin", json={"is_admin": False}).status_code == 200
+    # the startup-seeded 'admin' holds the privilege too, and so may admins
+    # made by other test files sharing this worker's data dir — demote every
+    # one of them so boss is the last admin, then the rails must hold
+    users = boss.get("/api/admin/users").json()["users"]
+    for u in users:
+        if u["is_admin"] and u["username"] != "boss":
+            assert boss.put(f"/api/admin/users/{u['username']}", json={"is_admin": False}).status_code == 200
     assert boss.put("/api/admin/users/boss", json={"is_admin": False}).status_code == 400
     assert boss.delete("/api/admin/users/boss").status_code == 400  # also self-delete
     # guest is untouchable
@@ -127,15 +124,17 @@ def test_lockout_rails(boss):
 
 def test_rename_user_via_gui(boss):
     from gamma.app import app
-    from gamma.config import USERS_DIR
+    from gamma.db import ws_dir
 
     boss.post("/api/admin/users", json={"username": "rene", "password": "rpw"})
+    ws = workspace_of("rene")
+    assert (ws_dir(ws) / "pages.db").exists()
     r = boss.post("/api/admin/users/rene/rename", json={"new_username": "renata"})
     assert r.status_code == 200, r.text
     names = [u["username"] for u in r.json()["users"]]
     assert "renata" in names and "rene" not in names
-    assert (USERS_DIR / "renata" / "pages.db").exists()
-    assert not (USERS_DIR / "rene").exists()
+    # Workspace directories are named by id: nothing moves, the rows follow.
+    assert workspace_of("renata") == ws and (ws_dir(ws) / "pages.db").exists()
     c = TestClient(app)
     assert c.post("/api/login", json={"username": "rene", "password": "rpw"}).status_code == 401
     _login("renata", "rpw")
@@ -177,15 +176,14 @@ def test_seed_hints_but_never_backdoors_an_adminless_instance(boss):
 
 
 def test_delete_user_removes_account_and_data(boss):
-    from gamma.config import USERS_DIR
-
-    assert (USERS_DIR / "newbie" / "pages.db").exists()
+    from gamma.db import ws_dir
+    ws = workspace_of("newbie")
+    assert (ws_dir(ws) / "pages.db").exists()
     r = boss.delete("/api/admin/users/newbie")
     assert r.status_code == 200, r.text
     assert "newbie" not in [u["username"] for u in r.json()["users"]]
+    assert r.json()["deleted_workspaces"] == [ws]  # the personal workspace went with the account
     from gamma.app import app
-
     c = TestClient(app)
     assert c.post("/api/login", json={"username": "newbie", "password": "rotated"}).status_code == 401
-    if not r.json()["warning"]:  # Windows file locks may defer the dir removal
-        assert not (USERS_DIR / "newbie").exists()
+    assert not (ws_dir(ws) / "pages.db").exists()

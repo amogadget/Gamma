@@ -1,8 +1,10 @@
 """Storage limits: server-wide defaults, per-user quota overrides, enforcement."""
 
+import time
+
 import pytest
 
-from conftest import login as _login, make_user as _make_user
+from conftest import login as _login, make_user as _make_user, workspace_of
 
 
 def _pdf_of_mb(mb, filler=b"x"):
@@ -36,31 +38,34 @@ def sizeuser(client):
 
 @pytest.fixture(autouse=True)
 def restore_defaults():
-    """Each test starts from stock limits (the configured default upload cap,
-    no quota, no per-user overrides) and empty uploads dirs so order doesn't
-    matter."""
-    from gamma.db import connect_users_db, user_uploads_dir
-    from gamma.server_settings import (
-        DEFAULT_MAX_UPLOAD_MB,
-        DEFAULT_QUOTA_MB,
-        set_default_max_upload_mb,
-        set_default_quota_mb,
-    )
+    """Each test starts from stock limits (50 MB per file, no quota, no
+    per-user overrides) and empty uploads dirs so order doesn't matter."""
+    from gamma.db import connect_users_db, ws_uploads_dir
+    from gamma.server_settings import (DEFAULT_MAX_UPLOAD_MB, DEFAULT_QUOTA_MB,
+                                       set_default_max_upload_mb, set_default_quota_mb)
 
     def reset():
         set_default_max_upload_mb(DEFAULT_MAX_UPLOAD_MB)
         set_default_quota_mb(DEFAULT_QUOTA_MB)
         with connect_users_db() as conn:
-            conn.execute(
-                "UPDATE users SET max_upload_mb = NULL, quota_mb = NULL WHERE username IN ('sizeadmin', 'sizeuser')"
-            )
+            conn.execute("UPDATE users SET max_upload_mb = NULL, quota_mb = NULL "
+                         "WHERE username IN ('sizeadmin', 'sizeuser')")
             conn.commit()
         for username in ("sizeadmin", "sizeuser"):
-            uploads = user_uploads_dir(username)
+            uploads = ws_uploads_dir(workspace_of(username))
             if uploads.exists():
                 for f in uploads.iterdir():
-                    if f.is_file():
-                        f.unlink()
+                    if not f.is_file():
+                        continue
+                    # A stored PDF's manifest walk (pdf_meta.schedule) runs on
+                    # a background thread and may still hold the file open;
+                    # Windows refuses the unlink until it closes.
+                    for _ in range(40):
+                        try:
+                            f.unlink()
+                            break
+                        except PermissionError:
+                            time.sleep(0.05)
 
     reset()
     yield
@@ -68,15 +73,13 @@ def restore_defaults():
 
 
 def test_defaults_and_quota_endpoint(sizeadmin, sizeuser):
-    from gamma.server_settings import DEFAULT_MAX_UPLOAD_MB
-
     r = sizeadmin.get("/api/admin/settings")
     assert r.status_code == 200
-    assert r.json()["max_upload_mb"] == DEFAULT_MAX_UPLOAD_MB
+    assert r.json()["max_upload_mb"] == 50
     assert r.json()["quota_mb"] == 0  # unlimited
     # any logged-in user reads their effective limits + usage from /api/quota
     q = sizeuser.get("/api/quota").json()
-    assert q["max_upload_mb"] == DEFAULT_MAX_UPLOAD_MB and q["quota_mb"] == 0
+    assert q["max_upload_mb"] == 50 and q["quota_mb"] == 0
     assert isinstance(q["used_bytes"], int)
     # ...and /api/session no longer carries limits (identity only)
     assert "max_upload_mb" not in sizeuser.get("/api/session").json()
@@ -103,7 +106,7 @@ def test_default_upload_cap_enforced(sizeadmin, sizeuser):
 
 
 def test_per_user_override_beats_default(sizeadmin, sizeuser):
-    # tighten just sizeuser; the server default stays unchanged
+    # tighten just sizeuser; the server default stays 50
     r = sizeadmin.put("/api/admin/users/sizeuser", json={"max_upload_mb": 1})
     assert r.status_code == 200
     me = next(u for u in r.json()["users"] if u["username"] == "sizeuser")
@@ -151,14 +154,12 @@ def test_storage_quota_enforced_and_dedup_free(sizeadmin, sizeuser):
 
 
 def test_validation(sizeadmin):
-    from gamma.server_settings import DEFAULT_MAX_UPLOAD_MB
-
     for bad in ({"max_upload_mb": 0}, {"max_upload_mb": 4096}, {"quota_mb": -1}):
         assert sizeadmin.put("/api/admin/settings", json=bad).status_code == 400, bad
         assert sizeadmin.put("/api/admin/users/sizeuser", json=bad).status_code == 400, bad
     # empty update is a no-op, not an error
     r = sizeadmin.put("/api/admin/settings", json={})
-    assert r.status_code == 200 and r.json()["max_upload_mb"] == DEFAULT_MAX_UPLOAD_MB
+    assert r.status_code == 200 and r.json()["max_upload_mb"] == 50
 
 
 def test_guest_quota_settable_but_not_credentials(sizeadmin, guest_account):
@@ -174,16 +175,15 @@ def test_guest_quota_settable_but_not_credentials(sizeadmin, guest_account):
 @pytest.fixture()
 def guest_account():
     from gamma.seed import ensure_guest_user
-
     ensure_guest_user()
 
 
 def test_corrupt_values_fall_back_to_defaults():
     from gamma.db import connect_users_db
-    from gamma.server_settings import DEFAULT_MAX_UPLOAD_MB, user_limits
+    from gamma.server_settings import user_limits
 
     with connect_users_db() as conn:
         conn.execute("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('max_upload_mb', 'junk', '')")
         conn.commit()
     limits = user_limits("sizeuser")
-    assert limits["max_upload_mb"] == DEFAULT_MAX_UPLOAD_MB and limits["quota_mb"] == 0
+    assert limits["max_upload_mb"] == 50 and limits["quota_mb"] == 0

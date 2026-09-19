@@ -1,0 +1,30 @@
+{
+  "_": "Folder-label path rules shared by backend/gamma/foldertags.py and frontend/src/library/libraryUtils.js. Read by backend/tests/test_shared_fixtures.py and frontend/tests/libraryUtils.test.mjs.",
+  "parse_tags": [
+    {"input": "a, b ,,c", "output": ["a", "b", "c"]},
+    {"input": "readout/nondestructive, cooling", "output": ["readout/nondestructive", "cooling"]},
+    {"input": "  ", "output": []},
+    {"input": "", "output": []},
+    {"input": null, "output": []}
+  ],
+  "clean_segment": [
+    {"input": " a,b/c  d ", "output": "a b c d"},
+    {"input": "plain", "output": "plain"},
+    {"input": ",/", "output": ""},
+    {"input": null, "output": ""}
+  ],
+  "clean_path": [
+    {"input": "cs229/", "output": "cs229"},
+    {"input": " cs229 / hw ", "output": "cs229/hw"},
+    {"input": "a//b", "output": "a/b"},
+    {"input": "a,b/c", "output": "a b/c"},
+    {"input": "/", "output": ""},
+    {"input": "", "output": ""}
+  ],
+  "add_tag": [
+    {"note": "refining a folder drops the ancestor, keeps the others", "tags": ["readout", "cooling"], "path": "readout/nondestructive", "output": ["cooling", "readout/nondestructive"]},
+    {"note": "a descendant is not an ancestor", "tags": ["readout/x"], "path": "readout", "output": ["readout/x", "readout"]},
+    {"note": "adding an existing tag moves it last, once", "tags": ["a", "b"], "path": "a", "output": ["b", "a"]},
+    {"note": "a name that merely shares a prefix stays", "tags": ["read"], "path": "readout", "output": ["read", "readout"]}
+  ]
+}

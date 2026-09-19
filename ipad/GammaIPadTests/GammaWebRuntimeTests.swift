@@ -13,10 +13,19 @@ final class GammaWebRuntimeTests: XCTestCase {
     @MainActor
     func testDeployedGammaLoadsInActualWKWebView() async throws {
 #if GAMMA_DEPLOYMENT_SMOKE
-        let server = URL(string: "https://annotation.amogadgetlab.com")!
+        guard let configuredURL = ProcessInfo.processInfo.environment["GAMMA_DEPLOYMENT_URL"],
+              let server = URL(string: configuredURL),
+              server.scheme?.lowercased() == "https",
+              let host = server.host, !host.isEmpty,
+              server.user == nil, server.password == nil,
+              server.query == nil, server.fragment == nil,
+              server.path.isEmpty || server.path == "/" else {
+            throw XCTSkip("Set GAMMA_DEPLOYMENT_URL to an explicit HTTPS server origin")
+        }
         let configuration = WKWebViewConfiguration(); configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController.addUserScript(WKUserScript(source: "window.__GAMMA_IPAD__ = true;", injectionTime: .atDocumentStart, forMainFrameOnly: true))
-        let controller = GammaWebViewController(configuration: configuration, serverURL: server, cookies: [], reloadToken: nil,
+        let controller = GammaWebViewController(configuration: configuration, serverURL: server, workspace: "ws-live",
+                                               cookies: [], reloadToken: nil,
             onOpenPDF: { _, _ in XCTFail("No native handoff expected on the login page") }, onError: { XCTFail($0) })
         defer { controller.invalidate() }
         controller.loadViewIfNeeded()
@@ -43,7 +52,8 @@ final class GammaWebRuntimeTests: XCTestCase {
         let callback = expectation(description: "Native PDF handoff")
         callback.assertForOverFulfill = true
         var received: [GammaWebOpenRequest] = []
-        let controller = GammaWebViewController(configuration: config, serverURL: origin, cookies: [], reloadToken: nil,
+        let controller = GammaWebViewController(configuration: config, serverURL: origin, workspace: "ws-alpha",
+                                                cookies: [], reloadToken: nil,
             onOpenPDF: { request, _ in received.append(request); callback.fulfill() }, onError: { XCTFail($0) })
         defer { controller.invalidate() }
         controller.loadViewIfNeeded()
@@ -52,12 +62,16 @@ final class GammaWebRuntimeTests: XCTestCase {
         controller.webView.navigationDelegate = delegate
         controller.webView.loadHTMLString("<html><body><h1>Gamma editor fixture</h1><iframe srcdoc='<p>frame</p>'></iframe></body></html>", baseURL: origin)
         await fulfillment(of: [loaded], timeout: 15)
-        let json = #"{type:'openPDF',pageID:'page',docID:'doc',title:'Paper',user:'alice'}"#
+        // The handoff names the library too; a message without one is ignored.
+        let json = #"{type:'openPDF',pageID:'page',docID:'doc',title:'Paper',user:'alice',workspace:'ws-alpha'}"#
+        let withoutWorkspace = #"{type:'openPDF',pageID:'page',docID:'doc',title:'Paper',user:'alice'}"#
         _ = try await controller.webView.evaluateJavaScript("window.frames[0].webkit?.messageHandlers?.gammaNative?.postMessage(\(json)); true")
+        _ = try await controller.webView.evaluateJavaScript("window.webkit.messageHandlers.gammaNative.postMessage(\(withoutWorkspace)); true")
         _ = try await controller.webView.evaluateJavaScript("window.webkit.messageHandlers.gammaNative.postMessage(\(json)); true")
         await fulfillment(of: [callback], timeout: 10)
         XCTAssertEqual(received.count, 1)
         XCTAssertEqual(received.first?.pageID, "page")
+        XCTAssertEqual(received.first?.workspace, "ws-alpha")
         XCTAssertFalse(config.websiteDataStore.isPersistent)
     }
 }

@@ -24,10 +24,21 @@ and text selections. Server side: `gamma/routers/clip.py`. No build step
    *Clip selection to Gamma* (selection → a `> quote — [title](url)` block
    under the paper matching this tab, else under a "Web clips" note page).
    Results arrive as a notification whose click opens the page.
+   A page with no PDF at all still saves: it becomes a page of its own
+   carrying the tab as `web_url` (see the pipeline below).
 4. **Already in the library** — ✓ badge; the popup offers *Open in Gamma*
-   and *Add to another folder…* instead of a duplicate save.
-5. **Ctrl+Shift+S** saves the current page with the default folder.
-6. **Options**: server URL, sign in / out, default folder + labels, *prefer
+   and *Add to another folder…* instead of a duplicate save. When the
+   library page's title differs from the paper the tab resolved to, the
+   notice says "Already in your library as “…”", so a stale metadata record
+   on that page is visible rather than shown as this paper's title.
+5. **Preview before saving.** A PDF tab has no meta tags to read a title
+   from, so for every detected DOI / arXiv id the worker asks
+   `GET /api/library/preview` for the registry record. The popup head then
+   shows the paper's title plus authors · year · venue. The previewed title
+   also names the new page on save (`auto_title`, so the metadata lookup may
+   still replace it).
+6. **Ctrl+Shift+S** saves the current page with the default folder.
+7. **Options**: server URL, sign in / out, default folder + labels, *prefer
    open-access fallback* and *keep a PDF copy* (the app's `oaFallback` /
    `pdfSaveLocal` prefs, sent as `allow_oa` / `save_copy`).
 
@@ -40,8 +51,9 @@ syncing highlights back to the source page.
 browser tab ──detect.js──▶ worker.js ──fetch, cookies──▶ Gamma server
  meta tags, URL,            per-tab state + badge        POST /api/clip
  JSON-LD, DOI regex,        save pipeline                GET  /api/library/lookup
- selection                  context menus, command       GET  /api/library/folders
-                            popup.html · options.html    POST /api/clip/note
+ selection                  context menus, command       GET  /api/library/preview
+                            popup.html · options.html    GET  /api/library/folders
+                                                         POST /api/clip/note
                                                          POST /api/uploads · GET /api/session
 ```
 
@@ -54,10 +66,12 @@ helpers — never re-implement it in the extension.
 | File | Role |
 |---|---|
 | `manifest.json` | MV3: module service worker, `<all_urls>` content script, popup, options, `save-to-gamma` command. `host_permissions: ["<all_urls>"]` — the same install warning the content script already carries, and it makes cookie-carrying fetches to the (user-configured) server origin and the PDF-from-tab fetch work without runtime permission prompts |
-| `worker.js` | per-tab state in `chrome.storage.session` (`tab:<id>` → `{candidate, hit, auth, saving, error}`), badge/icon, `lookup`, the save pipeline, context menus, keyboard command, notifications, and the message API (`get-state`, `save`, `clip-selection`, `auth-changed`, `open`) |
+| `worker.js` | per-tab state in `chrome.storage.session` (`tab:<id>` → `{candidate, hit, preview, auth, saving, error}`), badge/icon, `lookup` + `preview`, the save pipeline, context menus, keyboard command, notifications, and the message API (`get-state`, `save`, `clip-selection`, `auth-changed`, `open`) |
+| `doi.js` | the DOI-in-a-URL-path rule (`gammaDoiFromPath`), one file loaded by the content script and imported by the worker |
 | `detect.js` | content script (`document_idle`): identifier extraction, re-run on SPA URL changes; answers `get-detection` / `get-selection` / `fetch-pdf` (downloads a PDF from inside the page and relays it base64 — publisher bot checks that 403 the worker's fetch accept the page's own same-origin request) |
 | `api.js` | settings (`chrome.storage.sync`: `server, folder, labels, allowOa, saveCopy`), `api()` fetch wrapper (`credentials: "include"`, JSON `detail` → `ApiError{status}`), `login/logout/whoAmI` |
-| `popup.html/js/css` | setup (no server) → offline (server unreachable, with Retry) → sign-in → main view; the footer shows a connection dot (green signed in / amber signed out / red unreachable) beside `host · user` and an options gear (the app's SettingsIcon). The folder picker and label suggestions are plain-JS menus mirroring the app's MenuSelect/ctxMenu recipes, and `popup.css` copies the app's theme tokens (light/dark via `prefers-color-scheme`) — keep it in step with `app.css` when the control recipes change. `?tab=<id>` targets a specific tab when opened as a page (tests) |
+| `publisherSessions.js` | Publisher-host validation and connection flow; requests optional cookie access, checks the active tab and account, then sends a snapshot to Gamma |
+| `popup.html/js/css` | setup (no server) → offline (server unreachable, with Retry) → sign-in → main view; the footer shows a connection dot (green signed in / amber signed out / red unreachable) beside `host · user` and an options gear (the app's SettingsIcon). The folder picker and label suggestions are plain-JS menus mirroring the app's MenuSelect/ctxMenu recipes; labels are the app's `categoryTag` chip input (comma/Enter commits a chip, Backspace removes, arrow keys + Enter pick a suggestion). Saving remembers the folder but not the labels — each popup prefills only the options-page default labels. `popup.css` copies the app's theme tokens (light/dark via `prefers-color-scheme`) — keep it in step with `shared/styles/app.css` when the control recipes change. `?tab=<id>` targets a specific tab when opened as a page (tests) |
 | `options.html/js` | server + host permission, account, saving defaults |
 | `icons/` | blue tile (paper detected) and grey tile (nothing) at 16/32/48/128, generated with Pillow |
 
@@ -73,7 +87,7 @@ helpers — never re-implement it in the extension.
 | Signal | Yields |
 |---|---|
 | `arxiv.org/abs|pdf/<id>` in the URL, `citation_arxiv_id` | `arxiv_id` (version stripped) |
-| `doi.org/<doi>`, `/doi/…/10.…` paths, `citation_doi`, `dc.identifier`, `prism.doi`, JSON-LD `*Article` identifiers | `doi` |
+| a DOI used as a path — `doi.org/<doi>`, `/doi/…/10.…` (Atypon, Wiley), publisher PDF paths built on it (APS `/prl/pdf/<doi>`, Springer `/content/pdf/<doi>.pdf`, IOP `/article/<doi>/pdf`; the view/file suffix stripped by `doi.js`, the same rule as the server's `norm_doi`) — then `citation_doi`, `dc.identifier`, `prism.doi`, JSON-LD `*Article` identifiers | `doi` |
 | `contentType === application/pdf` / `.pdf` URL, `citation_pdf_url`, `<link rel=alternate type=application/pdf>` | `pdf_url` |
 | `citation_title`, JSON-LD headline, `dc.title`, `og:title`, `document.title` | `title` |
 | DOI regex over the first 30 k chars of visible text (only when nothing else matched) | `kind: "maybe"` |
@@ -85,7 +99,16 @@ the content script's result; URL-looking tab titles are dropped there.
 
 Every detection triggers `GET /api/library/lookup` (skipped when signed out)
 and sets the badge: `PDF`/`arX`/`DOI` blue, `?` grey, `✓` green (in the
-library), `!` red (not signed in). State is cleared when the tab navigates.
+library), `!` red (not signed in). A detection with a DOI or arXiv id then
+fetches `GET /api/library/preview` off the badge's critical path (doi.org
+can take a second or two) and stores the record as `preview`. A popup that
+is already open re-renders its head from `storage.onChanged`. State is
+cleared when the tab navigates.
+
+The popup head shows the first of: the page's own title (meta tags), the
+previewed registry title, the library page's title, the host. The chip +
+identifier line says what the detection rests on, and the registry's
+authors · year · venue sit under it.
 
 ## The save pipeline
 
@@ -94,9 +117,10 @@ closing; progress is written to the tab state and the popup renders it):
 
 ```
 PDF tab?  fetch bytes in the browser → %PDF check → POST /api/uploads → doc_id   (best-effort)
-POST /api/clip { source_url, pdf_url, doi, arxiv_id, doc_id?, title, folder, labels, allow_oa, save_copy }
+POST /api/clip { source_url, pdf_url, doi, arxiv_id, doc_id?, title, selection?, folder, labels, allow_oa, save_copy }
   └─ 400 and no doc_id yet? → fetch bytes in the browser → POST /api/uploads → retry /api/clip with doc_id
 → { block_id, doc_id, title, existed, open_url, folder, labels, note? }
+   doc_id "" = no PDF: the clip became a page with properties.web_url
 ```
 
 Browser-side downloads are automatic, no checkbox: PDF tabs upload their bytes
@@ -115,39 +139,35 @@ direct fetch is the only (and working) path.
 Server side (`clip.py`, sync `def` — it downloads):
 
 1. **Dedup** — `find_page()` by DOI / arXiv id / URL against every root page:
-   `properties.meta.doi|arxiv_id` (from the metadata lookup), the identifiers a
-   previous clip recorded (`clip_doi` / `clip_arxiv_id`, see step 4),
-   `source_url`, `web_url`, and the proxy-cache hash
-   `sha256(url)[:DIGEST_CHARS]`. A hit returns `existed: true` and still *adds*
-   the folder/labels (soft link; an ancestor folder is refined away,
-   `foldertags.add_tag`).
+   `properties.meta.doi|arxiv_id` (from the metadata lookup), `source_url`,
+   `web_url`, and the proxy-cache hash `sha256(url)[:24]`. A hit returns
+   `existed: true` and still *adds* the folder/labels (soft link; an ancestor
+   folder is refined away, `foldertags.add_tag`).
 2. **Resolve** — `pdf.resolve_source()` (extracted from `/api/resolve-pdf`) on
    the best identifier: `pdf_url` > `arxiv_id` > `doi` > `source_url`. arXiv
    rewrite, `citation_pdf_url` sniff, Unpaywall when `allow_oa`.
 3. **Fetch + store** — `pdf.download_pdf()` through the SSRF guard with browser
-   headers; the file lands at `uploads/<sha256(url)[:DIGEST_CHARS]>.pdf`, the
-   same id `/api/pdf?save=1` would use, so the app's viewer finds it. Unlike the
-   streaming proxy this buffers the whole file for its caller, so it stops at
-   `MAX_UPLOAD_BYTES` (413) — enforced while reading, not just from
-   `Content-Length`, which the upstream server controls. A stored copy is
-   queued for MRC flattening exactly like an upload (`flatten_queue.schedule`),
-   or a scanned paper renders at about a second a page. Over the storage limit →
-   not stored, `note` says so, the page proxies on open. `save_copy: false` →
-   headers-only probe. A dead or HTML link is a 400 here and **no page is
-   created** (the `openPdf` invariant). With `doc_id` (uploaded bytes) this step
-   is skipped; the file must exist.
+   headers; the file lands at `uploads/<sha256(url)[:24]>.pdf`, the same id
+   `/api/pdf?save=1` would use, so the app's viewer finds it. Over the storage
+   limit → not stored, `note` says so, the page proxies on open. `save_copy:
+   false` → headers-only probe. A dead or HTML link never creates a page with
+   a broken attachment (the `openPdf` invariant) — instead the clip takes the
+   **web-page path** (`_clip_web_page`): a page titled from the tab (else the
+   URL's last segment / host) with `properties.web_url = source_url`, no
+   `doc_id`/`source_url`, the request's `selection` (if any) as its first
+   `> quote — [title](url)` block, folder/labels applied, `doc_id: ""` and a
+   `note` in the response. A request that names no PDF at all (no `pdf_url`,
+   DOI, arXiv id or uploaded bytes — *Save page to Gamma* on a blog post)
+   skips the resolver and goes there directly. Re-clipping the same URL finds
+   that page (`find_web_page`: `web_url` match on attachment-less pages) and
+   only files it / appends the new selection. Only a request with nothing at
+   all (no URL, title or selection) is a 400. With `doc_id` (uploaded bytes)
+   this step is skipped; the file must exist.
 4. **Page** — `blocks_store.get_or_create_doc_page()` (extracted from
    `POST /api/blocks/by-doc`) with `default_title = citation_title`, so
    `auto_title` is set and the metadata lookup may still replace it (never a
    user rename). The tab URL is kept as `properties.web_url` when it differs
-   from the PDF URL, and the identifiers this clip was handed are recorded as
-   `properties.clip_doi` / `clip_arxiv_id` — both feed later lookups. The
-   `clip_*` pair matters because the metadata lookup runs off-request and can
-   fail: without it, a paper saved from its PDF link is not recognised when the
-   same paper is later reached by its DOI, so it is saved twice and the popup
-   keeps offering to save it. They are deliberately NOT written into
-   `properties.meta`, which is the resolved-citation cache the metadata worker
-   owns.
+   from the PDF URL — it feeds later lookups.
 5. **Folder + labels** — `properties.folder` / `properties.category` comma
    lists, cleaned by `foldertags`.
 6. **Metadata** — `metadata.fetch_page_metadata()` (extracted from
@@ -155,14 +175,29 @@ Server side (`clip.py`, sync `def` — it downloads):
    ride along as trusted hints (they come from the publisher page's own meta
    tags, so the lookup resolves them directly instead of re-mining the PDF
    text); arXiv/DOI paths need no AI provider. Skipped when `meta` already
-   exists or `fetch_metadata: false`.
+   exists or `fetch_metadata: false`. A web-page clip starts it only when a
+   DOI/arXiv id was detected (the lookup needs no PDF for those — a note about
+   a paywalled paper still gets its citation).
 
-Companions: `GET /api/library/lookup?doi=&arxiv_id=&url=` (404 when absent;
-identifiers are also extracted from `url`), `GET /api/library/folders` →
-`{folders, labels}` (folder paths plus their ancestors), `POST /api/clip/note
-{text, source_url, title, page_id?}` (appends with `generate_key_between`;
-without `page_id` it uses/creates the root page flagged `properties.web_clips
-= 1`). All session-only (`require_user`).
+Companions:
+
+- `GET /api/library/lookup?doi=&arxiv_id=&url=` — 404 when absent.
+  Identifiers are also extracted from `url` (`norm_doi` drops a publisher
+  path suffix like `/pdf` or `.pdf` glued onto the DOI); web-clip pages
+  match by `web_url`.
+- `GET /api/library/preview?doi=&arxiv_id=&url=` — the registry record
+  `{title, authors, year, venue, doi, arxiv_id, source}` from
+  `metadata.registry_record` (arXiv, then doi.org; a small in-memory cache,
+  the data is public). 404 when neither registry answers.
+- `GET /api/library/folders` → `{folders, labels}` (folder paths plus their
+  ancestors).
+- `POST /api/clip/note {text, source_url, title,
+page_id?}` — the explicit "clip selection INTO a page" append path (with
+`generate_key_between`; without `page_id` it uses/creates the root page
+flagged `properties.web_clips = 1`), as opposed to `/api/clip`'s "make a page
+of this tab". All session-only, and — since the extension names no
+workspace — they land in the account's personal workspace
+([workspaces.md](workspaces.md)).
 
 ## Auth and permissions
 
@@ -183,33 +218,27 @@ without `page_id` it uses/creates the root page flagged `properties.web_clips
 ## Testing
 
 - `backend/tests/test_clip.py` — the endpoints with faked upstream fetches
-  (dedup + folder refinement, dead link → no page, `doc_id` path, `save_copy`,
-  lookup by arXiv version / DOI / web_url, folders, clip notes, 401s).
+  (dedup + folder refinement, no PDF / dead link → web-page path with
+  selection + re-clip dedup, `doc_id` path, `save_copy`, lookup by arXiv
+  version / DOI / web_url, the preview with faked registries + its cache,
+  `norm_doi` on publisher paths, folders, clip notes, 401s).
 - End-to-end recipe (not checked in): Playwright `launchPersistentContext`
-  with `--disable-extensions-except=extension --load-extension=extension`, a
-  throwaway backend (`GAMMA_DATA_DIR`, `GAMMA_STATIC_DIR=frontend/dist`), and
-  the extension driven from its own options page (`chrome.tabs.sendMessage`
-  for `get-detection`, `chrome.runtime.sendMessage` for `save` /
-  `clip-selection`).
-
-  Two things to know before writing one:
-
-  - **Headless Chromium loads no MV3 extension** — `ctx.serviceWorkers()` stays
-    empty and there is no id to address. Run headed under `xvfb-run`.
-  - `page.evaluate` in a content-script page runs in the page's main world,
-    where `chrome.*` does not exist. Talk to `detect.js` from an extension
-    page instead.
-
-  For the happy path the *server* must be able to fetch the test PDF, so serve
-  it from a real origin and relax the SSRF guard for that origin only — and
-  serve it on a port the browser never loads, or the server-side fetch contends
-  with Chromium's own connections and times out. Keep a run with the guard in
-  force too: it is what proves the extension is not a way around it.
+  with `--load-extension=extension --headless=new` on the cached ms-playwright
+  Chromium, a throwaway backend (`GAMMA_DATA_DIR`, `GAMMA_ADMIN_USER/PASSWORD`,
+  `GAMMA_STATIC_DIR=frontend/dist`), the service worker driven via
+  `context.serviceWorkers()[0].evaluate(...)` (set `server` in
+  `chrome.storage.sync`, read `chrome.storage.session`, `chrome.action.getBadgeText`),
+  the popup opened as `chrome-extension://<id>/popup.html?tab=<tabId>`. Covers
+  the real arXiv abs page → save → ✓ badge → clip selection → PDF tab upload
+  → background metadata.
 
 ## Not done yet
 
-- Firefox build (`background.scripts` + `webextension-polyfill`) and the Web
-  Store listing. The release zip is built by
-  `.github/workflows/extension-release.yml` on an `extension-v<version>` tag.
+- Firefox build (`background.scripts` + `webextension-polyfill`), Web Store
+  listing (the release zip is built and published by
+  `.github/workflows/extension.yml` on every push to main touching
+  `extension/`, as `extension-v<version>` with the version computed from
+  the tags; `manifest.json`'s version is only the floor for minor/major
+  bumps — [github_actions.md](github_actions.md)).
 - Detection is client-side only for the badge; `find_page` scans every root
   page per lookup (fine for personal libraries, index it if that changes).

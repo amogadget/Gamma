@@ -20,6 +20,10 @@
     try { return decodeURIComponent(m[0]).replace(/[.,;)\]]+$/, ""); } catch { return m[0]; }
   }
 
+  // A DOI used as a URL path: doi.js (loaded before this script) holds the
+  // rule, shared with the worker.
+  const doiFromPath = globalThis.gammaDoiFromPath;
+
   function arxivFrom(text) {
     const m = (text || "").match(ARXIV_URL_RE) || (text || "").match(ARXIV_TEXT_RE);
     return m ? m[1] : "";
@@ -54,10 +58,7 @@
     const ld = jsonLd();
 
     let arxivId = arxivFrom(href) || arxivFrom(meta("citation_arxiv_id")) || arxivFrom(meta("citation_pdf_url"));
-    let doi = "";
-    if (/(?:^|\.)doi\.org$/i.test(location.hostname) || /\/doi\/(?:abs|full|pdf)?\/?10\./i.test(location.pathname)) {
-      doi = cleanDoi(href);
-    }
+    let doi = doiFromPath(location.pathname);
     doi = doi || cleanDoi(meta("citation_doi")) || cleanDoi(meta("dc.identifier")) || cleanDoi(meta("dc.identifier.doi"))
       || cleanDoi(meta("prism.doi")) || ld.doi;
 

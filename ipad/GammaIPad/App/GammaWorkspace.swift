@@ -29,6 +29,13 @@ final class GammaWorkspace: ObservableObject {
     // A selected local cache never grants server permissions.
     @Published var isOffline = false
     @Published var accountServer = ""
+    /// The workspace every request, cache write and queued change is bound to.
+    /// Never inferred at request time: it is chosen once, from `/api/session`, and
+    /// only an explicit switch (with an empty outbox) may change it.
+    @Published var workspaceID = ""
+    @Published var workspaceName = ""
+    /// Every workspace `/api/session` reported for this account, with its role.
+    @Published var workspaceOptions: [GammaWorkspaceOption] = []
     @Published var offlineEntries: [String: GammaOfflineEntry] = [:]
     @Published var localUsageBytes: Int64 = 0
     @Published var localDocumentBytes: [String: Int64] = [:]
@@ -37,22 +44,37 @@ final class GammaWorkspace: ObservableObject {
     var offlineWorkerID = UUID()
     var activeDownloadID: String?
     var hydratingPages = Set<String>()
+    @Published var requiresLogin = false
+    @Published var restoringSession = false
+    let sessionStore: GammaSessionPersistence
+    let sessionLifecycle = GammaSessionLifecycle()
+    let sessionAPIFactory: (String) throws -> GammaAPI
+    let sessionCacheRoot: URL?
+    var savedSession: GammaSavedSession?
+    var didRestoreSession = false
 
     private let recordingClock: (() -> GammaAudioStamp?)?
     private var audioStamp: GammaAudioStamp? { recordingClock?() ?? recorder.recordingStamp }
-    init(cache: GammaCache? = nil, api: GammaAPI? = nil, recordingClock: (() -> GammaAudioStamp?)? = nil) {
+    init(cache: GammaCache? = nil, api: GammaAPI? = nil, recordingClock: (() -> GammaAudioStamp?)? = nil,
+         sessionStore: GammaSessionPersistence = GammaKeychainSessionStore(), sessionCacheRoot: URL? = nil,
+         sessionAPIFactory: @escaping (String) throws -> GammaAPI = { try GammaAPI(server: $0) }) {
+        self.sessionStore = sessionStore; self.sessionCacheRoot = sessionCacheRoot
+        self.sessionAPIFactory = sessionAPIFactory
         self.recordingClock = recordingClock
         self.cache = cache
         self.api = api
         self.username = api?.authenticatedUsername
         self.accountServer = api?.baseURL.absoluteString ?? ""
+        self.workspaceID = api?.workspace ?? cache?.workspace ?? ""
         if let cache, let identity = try? cache.accountIdentity() {
             self.username = identity.username; self.accountServer = identity.server; self.isOffline = api == nil
+            self.workspaceID = identity.workspace; self.workspaceName = identity.workspaceName
         }
         if let api, let cache, let identity = try? cache.accountIdentity(),
-           api.authenticatedUsername != identity.username || GammaCache.canonicalServer(api.baseURL) != identity.server {
+           api.authenticatedUsername != identity.username || GammaCache.canonicalServer(api.baseURL) != identity.server
+            || api.workspace != identity.workspace {
             self.api = nil; self.isOffline = true
-            self.errorMessage = "Authenticated session does not match this local account. Files remain isolated."
+            self.errorMessage = "Authenticated session does not match this local workspace. Files remain isolated."
         }
         reloadOfflineAccounts(); refreshOfflineStatus()
         recorder.canRollSegment = { [weak self] in self?.strokeBegins.isEmpty ?? true }
@@ -62,82 +84,267 @@ final class GammaWorkspace: ObservableObject {
     var selectedInkPage: Int? { selected?.isInk == true ? selected?.properties.pdfPage.map { $0 - 1 } : nil }
     var pendingCount: Int { page?.outbox.count ?? 0 }
 
+    /// Workspaces this account may actually write in — the only ones a native
+    /// editor, outbox or download may be bound to, because every native write
+    /// goes through a writer-role endpoint (`require_ws_writer`).
+    var writableWorkspaces: [GammaWorkspaceOption] { workspaceOptions.filter(\.canWrite) }
+    var currentWorkspaceOption: GammaWorkspaceOption? { workspaceOptions.first { $0.id == workspaceID } }
+    /// Shown in the native chrome so the library in use is never ambiguous.
+    var workspaceDisplayName: String {
+        if let option = currentWorkspaceOption { return option.name }
+        if !workspaceName.isEmpty { return workspaceName }
+        return workspaceID.isEmpty ? "No workspace" : workspaceID
+    }
+    /// A workspace switch changes which library receives uploads, so it is refused
+    /// while anything is queued, conflicted or recording.
+    var canSwitchWorkspace: Bool {
+        guard !isOffline, !requiresLogin, !busy, !syncing, !recorder.recording, !recorder.preparing, api != nil,
+              writableWorkspaces.count > 1 else { return false }
+        return (try? pendingOutbox().isEmpty) ?? false
+    }
+    func pendingOutbox() throws -> [GammaMutation] {
+        guard let cache else { return [] }
+        return try cache.pendingPages().flatMap(\.outbox)
+    }
+
+    /// The remembered workspace per account, so a relaunch reopens the same library
+    /// instead of whichever one the server happens to call default. The key
+    /// deliberately does NOT include the workspace — the value names it, and the
+    /// point of remembering it is to choose between the account's libraries.
+    static func preferenceKey(server: String, username: String) -> String {
+        "gamma.workspace." + GammaCache.key(GammaCache.canonicalServer(server) + "\n" + username)
+    }
+    private func rememberWorkspace(_ workspace: String, server: String, username: String) {
+        UserDefaults.standard.set(workspace, forKey: Self.preferenceKey(server: server, username: username))
+    }
+
+    /// Picks the workspace for a sign-in from the server's own answer.
+    ///
+    /// On a reconnect the remembered workspace must still be one this account may
+    /// write in; if the role dropped to viewer or the membership is gone, the
+    /// sign-in fails with an explanation rather than silently opening another
+    /// library, where the pending outbox would be uploaded to the wrong place.
+    func chooseWorkspace(_ info: GammaSessionInfo, server: String, username: String,
+                         reconnect: Bool, remembered: String?) throws -> GammaWorkspaceOption {
+        let writable = info.workspaces.filter(\.canWrite)
+        guard !writable.isEmpty else {
+            throw GammaAPI.APIError.message("This account cannot write in any Gamma workspace. Ask an owner for editor access, or use the Web editor.")
+        }
+        if reconnect {
+            let wanted = remembered.flatMap { remembered in writable.first { $0.id == remembered } }
+            guard let wanted else {
+                let named = info.workspaces.first { $0.id == remembered }?.name ?? remembered ?? "the selected workspace"
+                throw GammaAPI.APIError.message("“\(named)” is no longer writable for this account; nothing was synced. Local changes are preserved — choose a workspace while online.")
+            }
+            return wanted
+        }
+        if let remembered, let option = writable.first(where: { $0.id == remembered }) { return option }
+        if let fallback = writable.first(where: { $0.id == info.verifiedDefaultWorkspace }) { return fallback }
+        return writable[0]
+    }
+
     func login(server: String, username: String, password: String, reconnect: Bool = false) async {
         guard !busy, !syncing, recorder.pauseBeforeLeaving() else { return }
+        sessionLifecycle.cancel(); accountGeneration = UUID()
+        let loginGeneration = accountGeneration
         busy = true
         defer { busy = false }
         var candidate: GammaAPI?
         do {
-            let client = try GammaAPI(server: server); candidate = client
+            // Sign in unbound: the workspace is decided by the server's own answer,
+            // never by a local guess, and no data request is possible until then.
+            let client = try sessionAPIFactory(server); candidate = client
             let authenticatedUser = try await client.login(username: username, password: password)
+            let info = try await client.session()
+            try Task.checkCancellation()
+            guard loginGeneration == accountGeneration else { throw CancellationError() }
+            guard info.user == authenticatedUser else {
+                throw GammaAPI.APIError.message("The server reported a different account than the one that just signed in.")
+            }
             if reconnect {
                 guard authenticatedUser == self.username,
                       GammaCache.canonicalServer(client.baseURL) == GammaCache.canonicalServer(accountServer) else {
                     throw GammaAPI.APIError.message("Sign in to the same account. Your local workspace and edits were preserved.")
                 }
             }
-            let storage = try GammaCache.application(server: client.baseURL, username: authenticatedUser)
+            let remembered = reconnect ? workspaceID
+                : UserDefaults.standard.string(forKey: Self.preferenceKey(server: GammaCache.canonicalServer(client.baseURL),
+                                                                          username: authenticatedUser))
+            let chosen = try chooseWorkspace(info, server: GammaCache.canonicalServer(client.baseURL),
+                                             username: authenticatedUser, reconnect: reconnect, remembered: remembered)
+            try client.bind(workspace: chosen.id)
+            let root = try sessionCacheRoot ?? GammaCache.applicationSupportRoot()
+            // A pre-workspace cache is claimed ONLY by the account's verified
+            // default workspace; any other choice, or an unverifiable one, leaves
+            // it where it is.
+            var migrationNote: String?
+            if chosen.id == info.verifiedDefaultWorkspace {
+                let outcome = try GammaCache.migrateLegacyCache(rootURL: root,
+                                                               server: GammaCache.canonicalServer(client.baseURL),
+                                                               username: authenticatedUser,
+                                                               verifiedDefaultWorkspace: chosen.id,
+                                                               workspaceName: chosen.name)
+                if case .refused(let reason) = outcome { migrationNote = reason }
+            } else if (try GammaCache.discoverOfflineIdentities(rootURL: root)).contains(where: {
+                $0.username == authenticatedUser && $0.isLegacy
+                    && $0.server == GammaCache.canonicalServer(client.baseURL)
+            }) {
+                migrationNote = "Older local files were not opened: they can only be attached to this account's default workspace “\(info.workspaces.first { $0.isDefault }?.name ?? "default")”. Nothing was moved."
+            }
+            let storage = try GammaCache(rootURL: root, server: client.baseURL, username: authenticatedUser, workspace: chosen.id)
+            // The label is only knowable while online; the sign-in screen reads it
+            // back later instead of showing a bare id.
+            try storage.updateWorkspaceName(chosen.name)
             let library = try storage.library()
-            recentPageIDs = try storage.recentPageIDs()
+            let recent = try storage.recentPageIDs()
+            try persistVerifiedSession(client: client, user: authenticatedUser, option: chosen)
+            recentPageIDs = recent
             stopOfflineWorker(); api?.close(); if !reconnect { closeReader() }
             api = client; cache = storage; self.username = authenticatedUser
+            workspaceID = chosen.id; workspaceName = chosen.name; workspaceOptions = info.workspaces
             isOffline = false; accountServer = client.baseURL.absoluteString
-            accountGeneration = UUID(); papers = library; errorMessage = nil; syncUnavailable = false
+            accountGeneration = UUID(); papers = library; errorMessage = migrationNote; syncUnavailable = false
             reloadOfflineAccounts(); restoreOfflineQueue()
             UserDefaults.standard.set(client.baseURL.absoluteString, forKey: "gamma.server")
             UserDefaults.standard.set(authenticatedUser, forKey: "gamma.username")
+            rememberWorkspace(chosen.id, server: GammaCache.canonicalServer(client.baseURL), username: authenticatedUser)
             await refreshLibrary()
             busy = false
             await sync()
-            if !reconnect, (try? storage.pendingPages().flatMap(\.outbox).filter({ $0.kind != .inkPreview }).isEmpty) == true {
-                webSession = GammaWebSession(id: UUID(), serverURL: client.baseURL, cookies: client.sessionCookies())
+            sessionDidBecomeActive()
+            if !requiresLogin, !isOffline, !reconnect, (try? storage.pendingPages().flatMap(\.outbox).filter({ $0.kind != .inkPreview }).isEmpty) == true {
+                webSession = GammaWebSession(id: UUID(), serverURL: client.baseURL, workspace: chosen.id,
+                                             cookies: client.sessionCookies())
             }
-        } catch { candidate?.close(); errorMessage = error.localizedDescription }
+        } catch { candidate?.close(); errorMessage = error.localizedDescription; sessionDidBecomeActive() }
+    }
+    /// An explicit library switch. Refused unless the account is online, the target
+    /// role may write, and nothing is queued: a queued change carries the workspace
+    /// it was written in, and retargeting it would upload into the wrong library.
+    func switchWorkspace(to id: String) async {
+        guard !isOffline, !requiresLogin, !busy, !syncing, !recorder.recording, !recorder.preparing, recorder.pauseBeforeLeaving(), let api else {
+            errorMessage = "Finish the current operation before switching workspaces."; return
+        }
+        guard id != workspaceID else { return }
+        guard let option = writableWorkspaces.first(where: { $0.id == id }) else {
+            errorMessage = "This account cannot write in that workspace, so the native editor will not open it."
+            return
+        }
+        do {
+            let pending = try pendingOutbox().filter { $0.kind != .inkPreview }
+            guard pending.isEmpty else {
+                throw GammaAPI.APIError.message("Sync \(pending.count) pending change(s) before switching workspaces; they were written in “\(workspaceDisplayName)”.")
+            }
+        } catch {
+            errorMessage = error.localizedDescription; return
+        }
+        let server = api.baseURL
+        let username = self.username ?? ""
+        busy = true; defer { busy = false }
+        do {
+            // A fresh client for the target library; the cookie is account-wide, so no
+            // password is needed — but the role is re-checked before anything opens.
+            let client = try sessionAPIFactory(server.absoluteString)
+            var adopted = false
+            defer { if !adopted { client.close() } }
+            client.installSessionCookies(api.sessionCookies())
+            let info = try await client.session()
+            try client.bind(workspace: option.id)
+            guard info.user == username, info.option(option.id)?.canWrite == true else {
+                client.close()
+                throw GammaAPI.APIError.message("That workspace is no longer writable for this account. Nothing was switched.")
+            }
+            let storage = try GammaCache(rootURL: try GammaCache.applicationSupportRoot(), server: server,
+                                         username: username, workspace: option.id)
+            try storage.updateWorkspaceName(option.name)
+            let library = try storage.library(), recent = try storage.recentPageIDs()
+            let entries = try storage.loadOfflineEntries()
+            try persistVerifiedSession(client: client, user: username, option: option)
+            sessionLifecycle.cancel()
+            stopOfflineWorker(); closeReader()
+            self.api?.close(); self.api = client; cache = storage; adopted = true
+            workspaceID = option.id; workspaceName = option.name; workspaceOptions = info.workspaces
+            accountGeneration = UUID(); syncUnavailable = false
+            papers = library + entries.values.map(\.paper).filter { paper in !library.contains { $0.id == paper.id } }
+            recentPageIDs = recent; offlineEntries = entries
+            rememberWorkspace(option.id, server: GammaCache.canonicalServer(server), username: username)
+            errorMessage = nil; status = "Workspace “\(option.name)” · syncing"
+            reloadOfflineAccounts(); restoreOfflineQueue(); refreshOfflineStatus()
+            await refreshLibrary()
+            sessionDidBecomeActive()
+        } catch { errorMessage = error.localizedDescription }
     }
     func signOut() async {
         guard !syncing, !busy, recorder.pauseBeforeLeaving() else { return }
         busy = true; defer { busy = false }
+        do { try sessionStore.clear() }
+        catch { errorMessage = error.localizedDescription; return }
+        sessionLifecycle.cancel(); savedSession = nil; requiresLogin = false
         stopOfflineWorker(); accountGeneration = UUID()
-        await api?.logout(); api?.close(); api = nil; cache = nil
+        await api?.logout(); api?.clearSessionCookies(); api?.close(); api = nil; cache = nil
         webSession = nil; localUsageBytes = 0; reloadOfflineAccounts()
-        username = nil; papers = []; recentPageIDs = []; accountServer = ""; isOffline = false; offlineEntries = [:]; closeReader(); status = "Signed out. Cached data and pending changes are preserved for this account."
+        username = nil; papers = []; recentPageIDs = []; accountServer = ""; isOffline = false; offlineEntries = [:]
+        workspaceID = ""; workspaceName = ""; workspaceOptions = []
+        closeReader(); status = "Signed out. Cached data and pending changes are preserved for this account."
     }
     func prepareWebWorkspace() async -> Bool {
-        guard !busy, !syncing, recorder.pauseBeforeLeaving(), let api, let cache else { return false }
+        guard !isOffline, !requiresLogin, !busy, !syncing, recorder.pauseBeforeLeaving(), let api, let cache else { return false }
         await retrySync()
+        guard !requiresLogin, !isOffline, self.api === api else { return false }
         do {
             guard try cache.pendingPages().flatMap(\.outbox).filter({ $0.kind != .inkPreview }).isEmpty else {
                 errorMessage = "Sync or resolve pending native changes before returning to the Web editor, to avoid a stale tree overwriting them."
                 return false
             }
             closeReader()
-            if webSession == nil { webSession = GammaWebSession(id: UUID(), serverURL: api.baseURL, cookies: api.sessionCookies()) }
+            if webSession == nil {
+                webSession = GammaWebSession(id: UUID(), serverURL: api.baseURL, workspace: api.workspace,
+                                             cookies: api.sessionCookies())
+            }
             return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
     func openFromWeb(_ request: GammaWebOpenRequest, cookies: [HTTPCookie]) async -> Bool {
-        guard !busy, !syncing, recorder.pauseBeforeLeaving(), let server = webSession?.serverURL else { return false }
+        guard !busy, !syncing, recorder.pauseBeforeLeaving(), let session = webSession else { return false }
+        let server = session.serverURL
         busy = true
         var candidate: GammaAPI?
         do {
             if let cache, !(try cache.pendingPages().flatMap(\.outbox).filter({ $0.kind != .inkPreview }).isEmpty) {
                 throw GammaAPI.APIError.message("Pending native changes must sync before changing Web/native session.")
             }
+            // Adopt the Web cookies first: identity comes from the cookie, not the
+            // message, and the claimed workspace must be one this verified session
+            // may WRITE in — every native save is a writer-role request.
             let client = try GammaAPI(server: server.absoluteString); candidate = client
-            let user = try await client.adoptWebSession(cookies: cookies)
-            guard user == request.user else { throw GammaAPI.APIError.message("The Web account changed during handoff. Please try again.") }
-            let remote = try await client.subtree(request.pageID)
-            guard remote.id == request.pageID, remote.parentID == "root", remote.properties.docID == request.docID else {
-                throw GammaAPI.APIError.message("Gamma document identity changed. Reload it before opening Pencil mode.")
+            let info = try await client.adoptWebSession(cookies: cookies)
+            let user = try GammaWebHandoffCheck.account(request.user, session: info).get()
+            guard user == username else { throw GammaAPI.APIError.accountChanged }
+            let option = try GammaWebHandoffCheck.workspace(request.workspace, session: info).get()
+            try client.bind(workspace: option.id)
+            let remote = try GammaWebHandoffCheck.page(try await client.subtree(request.pageID),
+                                                       pageID: request.pageID, docID: request.docID).get()
+            let storage = try GammaCache(rootURL: try GammaCache.applicationSupportRoot(), server: server, username: user,
+                                         workspace: request.workspace)
+            if option.id == info.verifiedDefaultWorkspace {
+                _ = try GammaCache.migrateLegacyCache(rootURL: try GammaCache.applicationSupportRoot(), server: GammaCache.canonicalServer(server),
+                                                      username: user, verifiedDefaultWorkspace: request.workspace,
+                                                      workspaceName: option.name)
             }
-            let storage = try GammaCache.application(server: client.baseURL, username: user)
+            try storage.updateWorkspaceName(option.name)
             let library = try storage.library(), recent = try storage.recentPageIDs()
+            try persistVerifiedSession(client: client, user: user, option: option)
+            sessionLifecycle.cancel()
             stopOfflineWorker(); api?.close(); api = client; cache = storage; username = user
+            workspaceID = request.workspace; workspaceName = option.name
+            workspaceOptions = info.workspaces
             accountServer = GammaCache.canonicalServer(client.baseURL); isOffline = false
             accountGeneration = UUID(); papers = library; recentPageIDs = recent
+            rememberWorkspace(request.workspace, server: GammaCache.canonicalServer(server), username: user)
             restoreOfflineQueue()
             busy = false
             await open(remote)
+            sessionDidBecomeActive()
             return paper?.id == request.pageID && document != nil
         } catch { candidate?.close(); busy = false; errorMessage = error.localizedDescription; return false }
     }
@@ -210,7 +417,7 @@ final class GammaWorkspace: ObservableObject {
     func playRecording(_ id: String) async {
         guard !busy, !recorder.recording, let cache,
               let block = page?.blocks.first(where: { $0.id == id && $0.isAudio }) else { return }
-        let activeAPI = api
+        let activeAPI = isOffline || requiresLogin ? nil : api
         let generation = accountGeneration
         busy = true; defer { busy = false }
         do {
@@ -302,7 +509,7 @@ final class GammaWorkspace: ObservableObject {
     }
 
     func refreshLibrary() async {
-        guard let api, let cache else { return }
+        guard !isOffline, !requiresLogin, let api, let cache else { return }
         let generation = accountGeneration
         do {
             let remote = try await api.papers()
@@ -311,11 +518,14 @@ final class GammaWorkspace: ObservableObject {
             let library = remote + retained.filter { p in !remote.contains(where: { $0.id == p.id }) }
             try cache.saveLibrary(library); papers = library; refreshOfflineStatus()
         }
-        catch { guard generation == accountGeneration else { return }; errorMessage = error.localizedDescription; status = "Offline / session unavailable — showing cached Gamma library" }
+        catch {
+            guard generation == accountGeneration else { return }
+            if !handleSessionFailure(error) { errorMessage = error.localizedDescription }
+        }
     }
     func open(_ paper: GammaPaper) async {
         guard !busy, recorder.pauseBeforeLeaving(), let cache, let docID = paper.properties.docID else { return }
-        let activeAPI = api
+        let activeAPI = isOffline || requiresLogin ? nil : api
         let generation = accountGeneration
         busy = true; defer { busy = false }
         do {
@@ -340,14 +550,23 @@ final class GammaWorkspace: ObservableObject {
                     guard generation == accountGeneration else { throw CancellationError() }
                     try cache.savePage(snapshot); page = snapshot; contentRevision += 1
                     errorMessage = nil
-                } catch { errorMessage = error.localizedDescription; status = "Cached Gamma page — remote hydration incomplete; retry available" }
+                } catch {
+                    guard generation == accountGeneration else { return }
+                    if !handleSessionFailure(error) {
+                        errorMessage = error.localizedDescription; status = "Cached Gamma page — remote hydration incomplete; retry available"
+                    }
+                }
             } else {
                 status = "Offline Gamma workspace"
                 errorMessage = snapshot.blocks.contains(where: { $0.id == paper.id }) ? nil : "PDF is available, but notes have not been prepared. Sign in to download the current notes and recordings."
             }
+            reportTimInkErrors(snapshot)
             busy = false
             await sync()
-        } catch { errorMessage = error.localizedDescription }
+        } catch {
+            guard generation == accountGeneration else { return }
+            if !handleSessionFailure(error) { errorMessage = error.localizedDescription }
+        }
     }
     func closeReader() {
         guard recorder.pauseBeforeLeaving() else { errorMessage = "Save the current recording before leaving."; return }
@@ -360,7 +579,7 @@ final class GammaWorkspace: ObservableObject {
     /// A delayed canvas flush can never be redirected into the newly selected block.
     func drawing(blockID: String?, pdfPage: Int) throws -> PKDrawing {
         guard let blockID, let page,
-              let block = page.blocks.first(where: { $0.id == blockID }),
+              let block = page.blocks.first(where: { $0.id == blockID }), block.isInk,
               block.properties.pdfPage == pdfPage + 1 else { return PKDrawing() }
         guard let data = page.drawings[blockID] else {
             throw GammaAPI.APIError.message("Editable ink source is not downloaded. Retry hydration; drawing is disabled until available.")
@@ -454,6 +673,9 @@ final class GammaWorkspace: ObservableObject {
     func editContent(blockID: String, text: String) throws {
         if let current = page, let cache { page = try cache.loadPage(pageID: current.pageID, docID: current.docID) }
         guard var snapshot = page, let index = snapshot.blocks.firstIndex(where: { $0.id == blockID }) else { return }
+        guard !snapshot.blocks[index].isTimInk else {
+            throw GammaAPI.APIError.message("Browser handwriting and its caption are read-only in the native reader.")
+        }
         guard snapshot.blocks[index].content != text else { return }
         let wasEmpty = snapshot.blocks[index].content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         snapshot.blocks[index].content = text
@@ -485,6 +707,10 @@ final class GammaWorkspace: ObservableObject {
         snapshot.outbox.append(mutation); try persist(snapshot); select(mutation.blockID)
     }
     private func enqueue(_ mutation: GammaMutation, in snapshot: inout GammaPageCache) {
+        var mutation = mutation
+        // Stamp the workspace at queue time. The outbox is durable, so the record
+        // of which library a change belongs to must outlive the session that made it.
+        mutation.workspace = cache?.workspace ?? snapshot.workspace ?? mutation.workspace
         let previous = snapshot.outbox.first { $0.kind == mutation.kind && $0.blockID == mutation.blockID }
         var next = mutation; next.conflict = previous?.conflict ?? false
         snapshot.outbox.removeAll { $0.kind == mutation.kind && $0.blockID == mutation.blockID }
@@ -520,12 +746,17 @@ final class GammaWorkspace: ObservableObject {
             let data = try await api.asset(asset); _ = try PKDrawing(data: data)
             downloaded[block.id] = data
         }
+        var timSnapshot = original
+        timSnapshot.blocks = remote.flattened
+        timSnapshot = try await hydrateTimInk(timSnapshot, api: api, generation: generation)
         // Re-read after every await: disabling Pencil or leaving a page may have
         // synchronously flushed a canvas while remote hydration was in flight.
         try Task.checkCancellation()
         guard generation == accountGeneration else { throw CancellationError() }
         let local = try cache.loadPage(pageID: original.pageID, docID: original.docID)
         var result = local
+        result.timInkSources = timSnapshot.timInkSources
+        result.timInkErrors = timSnapshot.timInkErrors
         let dirty = Set(local.outbox.map(\.blockID))
         result.blocks = remote.flattened.map { block in
             if dirty.contains(block.id), let edited = local.blocks.first(where: { $0.id == block.id }) { return edited }
@@ -582,7 +813,7 @@ final class GammaWorkspace: ObservableObject {
                   result.replayPreviewSkippedSources?[block.id] != source,
                   !result.outbox.contains(where: { $0.blockID == block.id && ($0.kind == .ink || $0.kind == .inkPreview) }) else { continue }
             result.outbox.append(GammaMutation(kind: .inkPreview, blockID: block.id, parentID: original.pageID,
-                drawing: data, pdfPage: pdfPage, sourceAsset: source))
+                drawing: data, pdfPage: pdfPage, sourceAsset: source, workspace: cache.workspace))
         }
         return result
     }
@@ -619,8 +850,9 @@ final class GammaWorkspace: ObservableObject {
     func sync() async {
         guard !syncing, !busy, !syncUnavailable, !isOffline, hydratingPages.isEmpty, let api, let cache else { return }
         guard let identity = try? cache.accountIdentity(), identity.username == api.authenticatedUsername,
-              identity.server == GammaCache.canonicalServer(api.baseURL) else {
-            errorMessage = "Sign in to the same account before syncing its saved edits."; return
+              identity.server == GammaCache.canonicalServer(api.baseURL), identity.workspace == api.workspace,
+              cache.workspace == api.workspace else {
+            errorMessage = "Sign in to the same account and workspace before syncing its saved edits."; return
         }
         syncing = true; defer { syncing = false }
         let generation = accountGeneration
@@ -634,6 +866,21 @@ final class GammaWorkspace: ObservableObject {
                     guard generation == accountGeneration else { return }
                     snapshot = try latest(original, cache: cache)
                     guard let operation = snapshot.outbox.first(where: { $0.id == queued.id }), !operation.conflict else { continue }
+                    // A change stamped with another library is never sent here. It is
+                    // parked as a conflict so the user resolves it in the workspace it
+                    // was written in; the bytes stay untouched.
+                    if let recorded = operation.workspace, !recorded.isEmpty, recorded != api.workspace {
+                        for index in snapshot.outbox.indices where snapshot.outbox[index].id == operation.id {
+                            snapshot.outbox[index].conflict = true
+                        }
+                        try persist(snapshot)
+                        errorMessage = "A saved change belongs to another workspace; it was not uploaded here. Switch to that workspace to sync it."
+                        return
+                    }
+                    if snapshot.blocks.contains(where: { $0.id == operation.blockID && $0.isTimInk }) {
+                        errorMessage = "Browser handwriting is read-only. A pending native change was preserved but not uploaded."
+                        return
+                    }
                     do {
                         var returnedBlock: GammaBlock?
                         var previewUnsupported = false
@@ -705,6 +952,7 @@ final class GammaWorkspace: ObservableObject {
                             returnedBlock = try await api.putNote(id: operation.blockID, parent: operation.parentID,
                                                                   content: operation.content, revision: operation.revision)
                         }
+                        guard generation == accountGeneration else { return }
                         snapshot = try latest(original, cache: cache)
                         if let remote = returnedBlock {
                             if previewPending, let source = operation.drawing, let sourceAsset = remote.properties.inkAsset {
@@ -772,6 +1020,13 @@ final class GammaWorkspace: ObservableObject {
                         errorMessage = GammaAPI.APIError.serverUpgradeRequired(path).localizedDescription
                         status = "Server update required · saved on iPad"
                         return
+                    } catch GammaAPI.APIError.workspaceAccessDenied {
+                        // The role or membership changed under us. Stop the whole pass:
+                        // every remaining write would be refused the same way, and the
+                        // data stays queued for a workspace this account may write in.
+                        syncUnavailable = true
+                        handleSessionFailure(GammaAPI.APIError.workspaceAccessDenied)
+                        return
                     } catch GammaAPI.APIError.conflict {
                         snapshot = try latest(original, cache: cache)
                         if operation.kind == .inkPreview {
@@ -785,6 +1040,8 @@ final class GammaWorkspace: ObservableObject {
                         try persist(snapshot)
                         errorMessage = "Revision conflict: \(operation.blockID). Local changes are preserved; select the block to resolve."
                     } catch {
+                        guard generation == accountGeneration else { return }
+                        if handleSessionFailure(error) { return }
                         errorMessage = error.localizedDescription
                         status = "Not synced — pending changes preserved; retrying automatically"
                         return
@@ -883,6 +1140,7 @@ final class GammaWorkspace: ObservableObject {
             // UI disables editing while hydration is in flight.
             let snapshot = try await hydrated(original, api: api)
             try cache.savePage(snapshot); page = snapshot; contentRevision += 1; errorMessage = nil
+            reportTimInkErrors(snapshot)
         } catch { errorMessage = error.localizedDescription }
     }
 }

@@ -3,6 +3,21 @@ import PencilKit
 import SwiftUI
 import UIKit
 
+/// PDFKit performs the crop-origin and rotation conversion; no hand-coded
+/// unrotated y-flip or whole-document percentage is involved.
+@MainActor
+enum GammaPDFReadingPosition {
+    static func point(_ position: GammaReadingPosition, page: PDFPage, view: PDFView) -> CGPoint? {
+        let rect = view.convert(page.bounds(for: .cropBox), from: page).standardized
+        guard [rect.minX, rect.minY, rect.width, rect.height].allSatisfy({ $0.isFinite }),
+              rect.width > 0, rect.height > 0 else { return nil }
+        let anchor = CGPoint(x: rect.minX + rect.width * CGFloat(position.anchorX),
+                             y: rect.minY + rect.height * CGFloat(position.anchorY))
+        let point = view.convert(anchor, to: page)
+        return point.x.isFinite && point.y.isFinite ? point : nil
+    }
+}
+
 /// Native, immutable-PDF reader with page-local PencilKit sidecars.
 ///
 /// Callbacks run on the main thread. `loadDrawing` must throw on corrupt or
@@ -21,7 +36,9 @@ struct PDFInkView: UIViewRepresentable {
     var contentRevision: Int = 0
     var onPageChanged: (Int) -> Void = { _ in }
     var requestedPage: Int? = nil
+    var requestedViewport: GammaReadingPosition? = nil
     var highlights: (Int) -> [GammaPDFHighlight] = { _ in [] }
+    var timInk: (Int) -> [GammaTimInk] = { _ in [] }
     var inkHitTest: (Int, CGPoint, CGFloat) -> String? = { _, _, _ in nil }
     var onSelectInk: (String) -> Void = { _ in }
     var onInkBegan: (Int) -> Void = { _ in }
@@ -92,12 +109,15 @@ struct PDFInkView: UIViewRepresentable {
 
         private weak var view: InkPDFView?
         private var configuration: PDFInkView?
+        private var timInkScene: GammaTimInkScene?
         private var states: [Int: PageState] = [:]
         private var displayed: Set<Int> = []
         private let picker = PKToolPicker()
         private weak var activeCanvas: PKCanvasView?
         private var alive = true
         private var retryTimer: Timer?
+        private var pendingViewport: GammaReadingPosition?
+        private var viewportRestoreScheduled = false
         private var selectionTarget: String?
         private var replaySeekTarget: Double?
         private lazy var pencilSelectionTap: UITapGestureRecognizer = {
@@ -111,10 +131,17 @@ struct PDFInkView: UIViewRepresentable {
 
         func attach(_ view: InkPDFView) {
             self.view = view
+            // Match Full Gamma's continuous page surface: cross-page browser
+            // strokes must not be split by PDFKit's decorative gap/shadow.
+            view.displaysPageBreaks = false
+            view.pageBreakMargins = .zero
             view.pageOverlayViewProvider = self
             NotificationCenter.default.addObserver(self, selector: #selector(textSelectionChanged), name: .PDFViewSelectionChanged, object: view)
             view.addGestureRecognizer(pencilSelectionTap)
-            view.onLayout = { [weak self] in self?.updateGeometry() }
+            view.onLayout = { [weak self] in
+                self?.updateGeometry()
+                self?.scheduleViewportRestore()
+            }
             NotificationCenter.default.addObserver(self, selector: #selector(scaleChanged),
                                                   name: .PDFViewScaleChanged, object: view)
             NotificationCenter.default.addObserver(self, selector: #selector(pageChanged),
@@ -143,6 +170,18 @@ struct PDFInkView: UIViewRepresentable {
                     return
                 }
             }
+            if snapshotsChanged {
+                // Compile once per immutable snapshot, before PDFKit can ask
+                // for overlays during document assignment or prepare(). Foreign
+                // page ink must not depend on its source overlay being mounted.
+                timInkScene = GammaTimInkScene(document: value.document, ink: value.timInk)
+            }
+            if documentChanged || configuration?.requestedViewport != value.requestedViewport {
+                pendingViewport = value.requestedViewport
+            } else if navigationChanged {
+                // A subsequent explicit page/replay jump supersedes a pending restore.
+                pendingViewport = nil
+            }
             if documentChanged {
                 clearPages()
                 configuration = value
@@ -167,7 +206,7 @@ struct PDFInkView: UIViewRepresentable {
             for state in states.values {
                 state.overlay.acceptsInk = state.loaded && state.writable && value.isDrawing && !value.replayActive && !value.textSelectionEnabled
             }
-            if navigationChanged || value.replayActive, let index = value.requestedPage,
+            if pendingViewport == nil, navigationChanged || value.replayActive, let index = value.requestedPage,
                index >= 0, index < value.document.pageCount,
                let page = value.document.page(at: index), view.currentPage !== page {
                 view.go(to: page)
@@ -180,6 +219,31 @@ struct PDFInkView: UIViewRepresentable {
                 activateVisibleCanvas()
             }
             updateGeometry()
+            scheduleViewportRestore()
+        }
+
+        private func scheduleViewportRestore() {
+            guard pendingViewport != nil, !viewportRestoreScheduled, alive else { return }
+            viewportRestoreScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.viewportRestoreScheduled = false
+                guard self.alive, let position = self.pendingViewport, let view = self.view,
+                      view.window != nil, view.bounds.width > 0, view.bounds.height > 0,
+                      let document = view.document else { return }
+                guard let page = document.page(at: position.pageIndex) else {
+                    self.pendingViewport = nil
+                    self.notify("The handed-off PDF page is unavailable.")
+                    return
+                }
+                view.layoutDocumentView()
+                guard let point = GammaPDFReadingPosition.point(position, page: page, view: view) else { return }
+                // Clear before navigation/layout callbacks: content updates and
+                // later rotation must not snap a reader back to the handoff.
+                self.pendingViewport = nil
+                view.go(to: PDFDestination(page: page, at: point))
+                self.pageChanged()
+            }
         }
 
         func pdfView(_ view: PDFView, overlayViewFor page: PDFPage) -> UIView? {
@@ -236,6 +300,7 @@ struct PDFInkView: UIViewRepresentable {
             overlay.backgroundCanvas.drawing = background
             overlay.highlightLayer.highlights = configuration.highlights(index)
             overlay.highlightLayer.pageNumber = index + 1
+            overlay.timInkScene = timInkScene
             overlay.setNeedsLayout()
             overlay.canvas.delegate = self
             // A successful selection tap must not first leave a PencilKit dot
@@ -423,7 +488,7 @@ struct PDFInkView: UIViewRepresentable {
         }
 
         @objc private func pageChanged() {
-            guard let configuration, let page = view?.currentPage else { return }
+            guard pendingViewport == nil, let configuration, let page = view?.currentPage else { return }
             let index = configuration.document.index(for: page)
             guard index != NSNotFound else { return }
             let document = configuration.document
@@ -522,6 +587,7 @@ struct PDFInkView: UIViewRepresentable {
             selectionTarget = nil
             NotificationCenter.default.removeObserver(self)
             configuration = nil
+            timInkScene = nil
         }
     }
 }

@@ -2,11 +2,7 @@ archive/
 example/
 HANDOFF.md
 STATUS.md
-CLAUDE.md
-.claude/skills/
 node_modules/
-# the staged Python runtime for the desktop app (113 MB, rebuilt by `npm run stage`)
-desktop/build/
 venv/
 .venv/
 uploads-flat/
@@ -18,8 +14,6 @@ uploads/
 *.log
 .vite/
 dist/
-test-results/
-playwright-report/
 **/.backup/
 *.bak
 *.bak.*
@@ -29,16 +23,17 @@ HANDOFF.md.bak
 /data
 docker-compose.yml
 run-local.bat
-SCROLL-HANDOFF.md
-SESSION-20260806.md
-# Session/process notes — not part of the product (STATUS.md is above)
-docs/dev/backport-plan.md
-docs/dev/backport-handoff.md
-docs/sync.md
-# Local Xcode output and desktop-session build agent state.
-/GUIBuildDerivedData/
-/DeviceDerivedData/
-/LiveDerivedData/
-/DerivedData/
-/gui-build/
-*.xcresult/
+
+# Private workspace exports, media captures, and render intermediates
+/tmp
+
+# Machine-local deployment evidence (not upstream source)
+/DEPLOYMENT.md
+/MIGRATION.md
+/ipad/NEW_MAC_VALIDATION.md
+/ipad/CONTINUITY_VALIDATION.md
+/ipad/TIM_INK_VALIDATION.md
+/ipad/*.local.md
+/ipad/artifacts/
+
+CLAUDE.md

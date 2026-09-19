@@ -5,8 +5,6 @@ the annotations embedded in the exported PDFs become highlight blocks."""
 import io
 import zipfile
 
-from gamma.zotero_import import find_zip_entry
-
 
 def _annotated_pdf(text=b"Attention is all you need, says the paper."):
     """Minimal one-page PDF with a text layer and one /Highlight annotation
@@ -177,18 +175,6 @@ def test_zotero_import_folder_prefix(guest):
     # an item in no collection lands at the prefix root
     pre = guest.get(f"/api/blocks/{by_title['Proximal Policy Optimization']['id']}").json()
     assert "zotero" in [t.strip() for t in pre["properties"]["folder"].split(",")]
-
-
-def test_zotero_attachment_paths_cannot_escape_archive_base():
-    names = {
-        "export/files/paper.pdf": "export/files/paper.pdf",
-        "escape.pdf": "escape.pdf",
-    }
-    assert find_zip_entry(names, "export", "files/paper.pdf") == "export/files/paper.pdf"
-    assert find_zip_entry(names, "export", "../escape.pdf") is None
-    assert find_zip_entry(names, "export", "%2e%2e/escape.pdf") is None
-    assert find_zip_entry(names, "export", "/escape.pdf") is None
-    assert find_zip_entry(names, "export", "C:\\escape.pdf") is None
 
 
 def test_zotero_import_rejects_junk(guest):

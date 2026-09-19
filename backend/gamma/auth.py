@@ -1,4 +1,16 @@
-"""Session middleware and request→user resolution helpers."""
+"""Session middleware and request → identity / workspace resolution.
+
+Two questions every endpoint answers through this module:
+
+- WHO is asking — ``request.state.user`` from the session cookie
+  (``require_user`` for identity-only endpoints: session, AI keys, admin).
+- WHICH WORKSPACE the data comes from — ``require_ws`` (session member of
+  the workspace named by ``?ws=`` / ``X-Gamma-Workspace`` / the account's
+  default), ``resolve_ws`` (a ``?share=`` token's workspace, else
+  ``require_ws``) and ``require_ws_writer`` (an edit share, else a member
+  with the editor or owner role). The returned id is what every data helper
+  takes (``connect_pages_db``, ``ws_uploads_dir``, ...). docs/dev/workspaces.md.
+"""
 
 import secrets
 import sqlite3
@@ -8,15 +20,14 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from . import config
 from .config import USERS_DB
-from .desktop import PROXY_HEADERS, is_loopback
 from .db import page_now
 from .logbuf import log
 from .seed import reset_guest_data
 
 SESSION_COOKIE = "session"
 SESSION_MAX_AGE = 365 * 24 * 3600
+WORKSPACE_HEADER = "x-gamma-workspace"
 _AUTH_PATHS = {"/api/login", "/api/login-guest", "/api/logout", "/api/session"}
 
 
@@ -50,6 +61,24 @@ def _apply_security_headers(request: Request, response) -> None:
     h.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
     if _is_https(request):
         h.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    _apply_share_cors(request, response)
+
+
+def _apply_share_cors(request: Request, response) -> None:
+    """Share reads are readable cross-origin, so another Gamma's frontend can
+    pull a shared page straight into its library (Import → share link, the
+    share view's "Add to my library"): a GET carrying ?share= or resolving
+    /api/share/{token} answers ``Access-Control-Allow-Origin: *``. Nothing
+    leaks that the token alone doesn't already grant: ``*`` makes browsers
+    refuse credentialed responses, so a cross-origin fetch arrives without a
+    session and only ``anyone`` shares open (a signed-in-only share answers
+    401 as it would to any stranger). Writes and every other endpoint keep the
+    browser's same-origin default."""
+    if request.method != "GET":
+        return
+    path = request.url.path
+    if request.query_params.get("share") or path.startswith("/api/share/"):
+        response.headers["Access-Control-Allow-Origin"] = "*"
 
 
 def _finish_request_log(request: Request, response, started: float, expected: str | None, reason: str = ""):
@@ -98,8 +127,27 @@ def set_session_cookie(response, token: str, request: Request | None = None):
                         max_age=SESSION_MAX_AGE, secure=secure)
 
 
+_SESSION_SQL = ("SELECT u.username, u.is_guest, u.is_admin, u.default_workspace, s.guest_date, s.created_at "
+                "FROM sessions s JOIN users u ON s.username = u.username WHERE s.token = ?")
+
+
+def session_lookup(token: str | None):
+    """``(username, is_guest, is_admin, default_workspace)`` for a live
+    session token, else None. Read-only (no guest-day rollover) — what a
+    websocket handshake uses, since ``session_middleware`` only runs for
+    HTTP requests."""
+    if not token:
+        return None
+    with sqlite3.connect(str(USERS_DB)) as conn:
+        row = conn.execute(_SESSION_SQL, (token,)).fetchone()
+    if not row or _session_expired(row[5]):
+        return None
+    return row[0], bool(row[1]), bool(row[2]) and not row[1], row[3] or ""
+
+
 async def session_middleware(request: Request, call_next):
-    """Resolve the session cookie to request.state.user / is_guest.
+    """Resolve the session cookie to request.state.user / is_guest / is_admin
+    / default_ws.
 
     Guest sessions are date-stamped: on the first request of a new UTC day the
     guest workspace is wiped, re-seeded, and a fresh session is issued.
@@ -110,22 +158,19 @@ async def session_middleware(request: Request, call_next):
     request.state.user = None
     request.state.is_guest = False
     request.state.is_admin = False
+    request.state.default_ws = ""
     new_session_token = None
     if token:
         with sqlite3.connect(str(USERS_DB)) as conn:
-            row = conn.execute(
-                "SELECT u.username, u.is_guest, u.is_admin, s.guest_date, s.created_at FROM sessions s "
-                "JOIN users u ON s.username = u.username WHERE s.token = ?",
-                (token,),
-            ).fetchone()
-            if row and _session_expired(row[4]):
+            row = conn.execute(_SESSION_SQL, (token,)).fetchone()
+            if row and _session_expired(row[5]):
                 # Server-side expiry: a stolen token can't outlive its window
                 # even though the browser cookie's Max-Age is long.
                 conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
                 conn.commit()
                 row = None
             if row:
-                username, is_guest, is_admin, guest_date, _created = row
+                username, is_guest, is_admin, default_ws, guest_date, _created = row
                 if is_guest:
                     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                     if guest_date != today:
@@ -142,67 +187,43 @@ async def session_middleware(request: Request, call_next):
                 request.state.user = username
                 request.state.is_guest = bool(is_guest)
                 request.state.is_admin = bool(is_admin) and not is_guest
-    if not request.state.user:
-        # Desktop app: no login screen. A real session cookie above always
-        # wins, so signing in as someone else still works.
-        auto = desktop_auto_user(request)
-        if auto:
-            request.state.user = auto
-            request.state.is_guest = False
-            request.state.is_admin = True
+                request.state.default_ws = default_ws or ""
     # The session cookie is browser-wide, so logging in from a second tab
     # silently switches every other tab's identity. Tabs declare who they
     # think is signed in (X-Gamma-User); on mismatch refuse the request
     # instead of reading/writing the wrong account's data. Requests without
     # the header (share views, pdf.js range requests) behave as before.
     expected = request.headers.get("x-gamma-user")
-    if expected is not None and request.url.path.startswith("/api/") and expected != (request.state.user or ""):
+    if expected is not None and request.url.path.startswith("/api/") \
+            and expected != (request.state.user or ""):
         now_who = f'"{request.state.user}"' if request.state.user else "signed out"
         resp = JSONResponse(
-            {
-                "detail": f'This tab is signed in as "{expected}", but the browser '
-                f"session is now {now_who}. Reload the tab to continue."
-            },
+            {"detail": f'This tab is signed in as "{expected}", but the browser '
+                       f"session is now {now_who}. Reload the tab to continue."},
             status_code=409,
         )
         resp.headers["X-Gamma-Session-User"] = request.state.user or ""
         return _finish_request_log(request, resp, started, expected, "session-mismatch")
-    response = await call_next(request)
+    # Only interactive PDF operations may use the caller's publisher sessions.
+    # Public/share reads and guest accounts must never borrow credentials.
+    from .publisher_sessions import current_user
+    publisher_user = (request.state.user
+                      if request.url.path in ("/api/pdf", "/api/resolve-pdf", "/api/clip")
+                      and not request.state.is_guest and not request.query_params.get("share")
+                      else None)
+    publisher_token = current_user.set(publisher_user)
+    try:
+        response = await call_next(request)
+    finally:
+        current_user.reset(publisher_token)
     if new_session_token:
         set_session_cookie(response, new_session_token, request)
     return _finish_request_log(request, response, started, expected)
 
 
-def desktop_auto_user(request: Request) -> str | None:
-    """The desktop app's single local account, or None.
-
-    Three conditions, all required, because each covers a way the other two
-    can be wrong:
-
-    1. ``config.DESKTOP_MODE`` — set only by the desktop launcher. A hosted
-       deployment never sets it, so this code is inert there.
-    2. The peer address is loopback. Even in desktop mode, a request arriving
-       from the LAN (someone bound a real interface) gets no free session.
-    3. No proxy headers. Behind a reverse proxy every peer address *looks*
-       like loopback, which would turn condition 2 into a rubber stamp and
-       hand a session to anyone on the internet.
-
-    Together these are what make the planned remote-sharing feature safe to
-    add: it cannot quietly publish an unauthenticated library, because
-    publishing it necessarily violates 2 or 3.
-    """
-    if not config.DESKTOP_MODE:
-        return None
-    peer = (request.client.host if request.client else "") or ""
-    if not is_loopback(peer):
-        return None
-    if any(h in request.headers for h in PROXY_HEADERS):
-        return None
-    return config.DESKTOP_USER
-
-
 def require_user(request: Request) -> str:
-    """Return the session username or raise 401. Use for all write endpoints."""
+    """Return the session username or raise 401. Identity only — endpoints
+    that touch a workspace's data use require_ws / resolve_ws instead."""
     user = request.state.user
     if not user:
         raise HTTPException(status_code=401)
@@ -217,50 +238,205 @@ def require_admin(request: Request) -> str:
     return user
 
 
-def share_grant(request: Request):
-    """(owner_username, doc_id) if the request carries a valid ?share=<token>,
-    else None. Cached on request.state so repeat calls in one request are free.
+# --- workspaces --------------------------------------------------------------
 
-    This is the ONLY unauthenticated read path: a share token is minted per
-    document and names its owner, so access is scoped to that one document — the
-    old ?user= fallback trusted any username and leaked whole accounts.
+def requested_ws(carrier) -> str:
+    """The workspace a request names: ``?ws=`` (explicit — links, the
+    websocket), else the ``X-Gamma-Workspace`` header (the frontend's fetch
+    wrapper), else "" (the caller falls back to the account's default).
+    ``carrier`` is a Request or a WebSocket."""
+    return (carrier.query_params.get("ws") or carrier.headers.get(WORKSPACE_HEADER) or "").strip()
+
+
+def workspace_access(username: str, requested: str, default_ws: str) -> tuple[str, str | None]:
+    """``(workspace_id, role)`` for an account's request: the named
+    workspace, else the account's default (created on the spot if the
+    account somehow has none). role is None when not a member."""
+    from . import workspaces  # local: workspaces imports seed, which imports db
+
+    ws = requested or default_ws or workspaces.ensure_personal(username)
+    return ws, workspaces.role_of(ws, username)
+
+
+def require_ws(request: Request, write: bool = False) -> str:
+    """The workspace this session request works in (401 without a session,
+    403 when the account is not a member — or is only a viewer and ``write``
+    is set). Cached on request.state as ``ws`` / ``ws_role``."""
+    user = require_user(request)
+    ws = getattr(request.state, "ws", None)
+    if ws is None:
+        ws, role = workspace_access(user, requested_ws(request), request.state.default_ws)
+        request.state.ws, request.state.ws_role = ws, role
+    role = request.state.ws_role
+    if not role:
+        raise HTTPException(status_code=403, detail="you are not a member of this workspace")
+    if write and role == "viewer":
+        raise HTTPException(status_code=403, detail="you can only view this workspace")
+    return ws
+
+
+def ws_role(request: Request) -> str | None:
+    """The session's role in the request's workspace (None: not resolved or
+    not a member). Read after require_ws / resolve_ws."""
+    return getattr(request.state, "ws_role", None)
+
+
+# --- shares --------------------------------------------------------------------
+
+SHARE_AUDIENCES = ("anyone", "users", "list")
+SHARE_ROLES = ("view", "edit")
+
+
+def parse_share_users(raw: str) -> list[dict]:
+    """``allowed_users`` ("carol:edit,dave" — a missing role means view) →
+    [{"name", "role"}]."""
+    users = []
+    for item in (raw or "").split(","):
+        name, _, role = item.strip().partition(":")
+        if name:
+            users.append({"name": name, "role": role if role in SHARE_ROLES else "view"})
+    return users
+
+
+def serialize_share_users(users: list[dict]) -> str:
+    return ",".join(f"{u['name']}:{u['role']}" for u in users)
+
+
+def share_lookup(token: str) -> dict | None:
+    """The share row for a token as a dict ({token, workspace_id, page_id,
+    created_by, audience, role, users}), or None."""
+    if not token:
+        return None
+    with sqlite3.connect(str(USERS_DB)) as conn:
+        row = conn.execute(
+            "SELECT workspace_id, page_id, created_by, audience, role, allowed_users "
+            "FROM shares WHERE token = ?", (token,)
+        ).fetchone()
+    if not row:
+        return None
+    workspace_id, page_id, created_by, audience, role, allowed = row
+    if not page_id or not workspace_id:
+        return None
+    return {
+        "token": token, "workspace_id": workspace_id, "page_id": page_id, "created_by": created_by,
+        "audience": audience if audience in SHARE_AUDIENCES else "anyone",
+        "role": role if role in SHARE_ROLES else "view",
+        "users": parse_share_users(allowed),
+    }
+
+
+def share_access(share: dict, carrier):
+    """What this request's viewer may do with a share: ("edit" | "view", "")
+    when allowed, else (None, "login" | "forbidden").
+
+    Notion-style and additive: a member of the page's workspace keeps their
+    workspace role (editors and owners edit, viewers view — the share can
+    only add to that, never take away); a signed-in account the sharer
+    INVITED (``users``) gets its own per-person role regardless of general
+    access; everyone else goes through the general access gate — ``anyone``
+    needs no session (and is always view-only), ``users`` admits any
+    signed-in non-guest account with the share's role, ``list`` admits nobody
+    beyond the invited. Guests count as not signed in. ``carrier`` is a
+    Request or a WebSocket (its ``state`` carries user / is_guest).
+    """
+    from . import workspaces
+
+    viewer = carrier.state.user
+    signed_in = bool(viewer) and not carrier.state.is_guest
+    best = None
+    if signed_in:
+        role = workspaces.role_of(share["workspace_id"], viewer)
+        if role in ("editor", "owner"):
+            return "edit", ""
+        if role == "viewer":
+            best = "view"
+        for invited in share["users"]:
+            if invited["name"] == viewer:
+                return invited["role"], ""
+    audience = share["audience"]
+    if audience == "anyone":
+        return "view", ""
+    if not signed_in:
+        return None, "login"
+    if audience == "list":
+        return (best, "") if best else (None, "forbidden")
+    return share["role"], ""
+
+
+def share_grant(request: Request):
+    """(workspace_id, page_id, level) for a valid, permitted ?share=<token>
+    on this request, else None. Cached on request.state.
+
+    A share token is minted per page and names its workspace, so access is
+    scoped to that one page's subtree. When a token is present it takes
+    precedence over the session for choosing WHOSE data is read (a signed-in
+    visitor sees the shared page, not their own library), while the session
+    still decides whether the audience gate lets them in.
     """
     cached = getattr(request.state, "_share_grant", "unset")
     if cached != "unset":
         return cached
-    token = request.query_params.get("share")
     grant = None
+    token = request.query_params.get("share")
     if token:
-        with sqlite3.connect(str(USERS_DB)) as conn:
-            row = conn.execute(
-                "SELECT username, doc_id FROM shares WHERE token = ?", (token,)
-            ).fetchone()
-        if row:
-            grant = (row[0], row[1])
+        share = share_lookup(token)
+        if share:
+            level, _reason = share_access(share, request)
+            if level:
+                grant = (share["workspace_id"], share["page_id"], level)
     request.state._share_grant = grant
     return grant
 
 
-def share_scope_doc(request: Request):
-    """The doc id a read is confined to, or None for a full-access session user.
+def _share_denied(request: Request) -> HTTPException:
+    """The right status for a ?share= request that share_grant refused: 401
+    when signing in could help, 403 when the viewer is signed in but not
+    allowed (or the token is unknown — indistinguishable to outsiders)."""
+    if request.state.user and not request.state.is_guest:
+        return HTTPException(status_code=403, detail="not accessible via this share link")
+    return HTTPException(status_code=401)
 
-    Read endpoints pass this to blocks_store.assert_block_in_doc so a share
-    token can only reach its own document's subtree and assets.
+
+def share_scope_page(request: Request):
+    """The page id a request is confined to, or None for a full-access
+    workspace member. Any request carrying ?share= is scoped — even a
+    signed-in one.
+
+    Read endpoints pass this to blocks_store.assert_block_in_page so a share
+    token can only reach its own page's subtree and assets.
     """
-    if request.state.user:
+    if not request.query_params.get("share"):
         return None
     grant = share_grant(request)
-    return grant[1] if grant else None
+    if not grant:
+        raise _share_denied(request)
+    return grant[1]
 
 
-def resolve_user(request: Request) -> str:
-    """Return the user whose data to read: the session user, or the owner named
-    by a valid ?share=<token>. Read-only endpoints only; callers that can serve
-    a share view must also enforce share_scope_doc()."""
-    user = request.state.user
-    if user:
-        return user
-    grant = share_grant(request)
-    if grant:
+def resolve_ws(request: Request) -> str:
+    """The workspace whose data to READ: the one named by a ?share=<token>
+    when one is present (and permits this viewer), else the session's
+    workspace (any member role). Read-only endpoints only; callers that can
+    serve a share view must also enforce share_scope_page()."""
+    if request.query_params.get("share"):
+        grant = share_grant(request)
+        if grant:
+            return grant[0]
+        raise _share_denied(request)
+    return require_ws(request)
+
+
+def require_ws_writer(request: Request) -> str:
+    """The workspace whose data to WRITE: the shared page's workspace when
+    the request's ?share= token grants edit, else the session's workspace
+    with an editor or owner role. Endpoints that accept share editors must
+    additionally confine every touched block to share_scope_page() — the
+    token never reaches the rest of the workspace."""
+    if request.query_params.get("share"):
+        grant = share_grant(request)
+        if not grant:
+            raise _share_denied(request)
+        if grant[2] != "edit":
+            raise HTTPException(status_code=403, detail="this share link is view-only")
         return grant[0]
-    raise HTTPException(status_code=401)
+    return require_ws(request, write=True)

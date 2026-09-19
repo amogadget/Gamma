@@ -32,33 +32,36 @@ final class GammaAPITests: XCTestCase {
     }
 
     func testAccountMismatchIsNotAnInkRevisionConflict() throws {
-        let api = try GammaAPI(server: "https://example.com")
+        let api = try GammaAPI(server: "https://example.com", workspace: "ws-alpha")
         defer { api.close() }
         let url = URL(string: "https://example.com/api/blocks/ink/ink")!
         let mismatch = HTTPURLResponse(url: url, statusCode: 409, httpVersion: nil,
                                        headerFields: ["X-Gamma-Session-User": "other-user"])!
         XCTAssertThrowsError(try api.validate(mismatch)) { error in
-            guard case GammaAPI.APIError.message(let message) = error else {
+            guard case GammaAPI.APIError.accountChanged = error else {
                 return XCTFail("Account mismatch must not trigger ink conflict resolution")
             }
-            XCTAssertTrue(message.contains("account changed"))
+            XCTAssertTrue(error.localizedDescription.contains("account changed"))
         }
         let conflict = HTTPURLResponse(url: url, statusCode: 409, httpVersion: nil, headerFields: nil)!
         XCTAssertThrowsError(try api.validate(conflict)) { error in
             guard case GammaAPI.APIError.conflict = error else { return XCTFail("Expected ink conflict") }
         }
         for path in ["api/login", "api/session", "api/logout"] {
-            XCTAssertNil(api.makeRequest(path).value(forHTTPHeaderField: "X-Gamma-User"))
+            XCTAssertNil(try api.makeRequest(path).value(forHTTPHeaderField: "X-Gamma-User"))
+            // Session endpoints carry no workspace either: they answer "who am I",
+            // not "which library".
+            XCTAssertNil(try api.makeRequest(path).value(forHTTPHeaderField: "X-Gamma-Workspace"))
         }
     }
 
     func testAcceptsHTTPSAndDeploymentPrefix() throws {
-        let api = try GammaAPI(server: "https://example.com/gamma/")
+        let api = try GammaAPI(server: "https://example.com/gamma/", workspace: "ws-alpha")
         api.close()
     }
 
     func testRedirectPolicyRejectsOtherOriginAndDowngrade() throws {
-        let api = try GammaAPI(server: "https://example.com")
+        let api = try GammaAPI(server: "https://example.com", workspace: "ws-alpha")
         defer { api.close() }
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }

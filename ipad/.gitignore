@@ -6,3 +6,5 @@ DerivedData/
 coordinate-fixture.pdf
 __pycache__/
 project.local.yml
+# Local, bounded handoff for the next offline/cache implementation session.
+OFFLINE_HANDOFF.local.md

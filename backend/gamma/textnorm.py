@@ -11,7 +11,7 @@ import unicodedata
 
 # One bump forces every user's PDF index to be rebuilt lazily (extraction or
 # normalization changes make old rows stale).
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 
 _DASHES = "‐‑‒–—―"
 # Thousands separators PDFs use inside numbers: comma, nbsp, narrow nbsp, thin space
@@ -24,20 +24,23 @@ _WS_RE = re.compile(r"\s+")
 
 def normalize_text(s: str) -> str:
     """Canonical searchable form of extracted PDF text (and of queries):
-    NFKC (folds ligatures like ﬁ), soft hyphens dropped, words re-joined
-    across hyphenated line breaks, digit-group separators removed
-    ("3,000" → "3000"), whitespace collapsed. Case is left alone — FTS5's
-    tokenizer and regex flags handle that."""
+    digit-group separators removed ("3,000" → "3000" — before NFKC, which
+    would fold the no-break and thin spaces into plain ones), NFKC (folds
+    ligatures like ﬁ), soft hyphens dropped, words re-joined across
+    hyphenated line breaks, whitespace collapsed. Case is left alone — FTS5's
+    tokenizer and regex flags handle that. The shared cases in
+    tests/shared/textnorm.json pin these rules for the frontend mirrors too."""
     if not s:
         return ""
+    s = _DIGIT_SEP_RE.sub("", s)
     s = unicodedata.normalize("NFKC", s)
     s = s.replace("­", "")
     s = _HYPHEN_BREAK_RE.sub("", s)
-    s = _DIGIT_SEP_RE.sub("", s)
     return _WS_RE.sub(" ", s).strip()
 
 
-def fuzzy_pattern(q: str, case: bool = False, whole: bool = False, regex: bool = False) -> re.Pattern | None:
+def fuzzy_pattern(q: str, case: bool = False, whole: bool = False,
+                  regex: bool = False) -> re.Pattern | None:
     """Compile a search query into a regex (None = invalid/empty).
 
     regex=True compiles the query as-is (VSCode-style). Otherwise the match is

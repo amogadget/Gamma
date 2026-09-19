@@ -8,8 +8,8 @@ and emit the content-stream operators — so that machinery lives here once.
 A **span** is ``(kind, payload, level, style)``:
 
 * ``kind`` is ``TEXT`` (payload = a string) or ``MATH`` (payload = the
-  ``(ops, width, height, ascent)`` tuple ``vector_text`` returns for a typeset
-  expression or a CJK glyph);
+  ``(Drawing, width, height, ascent)`` tuple ``vector_text`` returns for a
+  typeset expression or a CJK glyph);
 * ``level`` is 0, ``SUP`` or ``SUB`` — a genuinely raised/lowered run;
 * ``style`` is a :class:`Style`: emphasis bits plus a link target. Notes drawn
   on a page are all one style (``PLAIN``); a document renders bold, italic,
@@ -20,11 +20,11 @@ visible top-left) — the frame the viewer stores highlight rects in. Callers ma
 it back to PDF user space with one ``cm``; text is drawn with a flipped text
 matrix so the glyphs still come out upright.
 
-Only fonts every PDF viewer has built in are used, so nothing is embedded:
-Helvetica in four styles (WinAnsi), Courier for code, Symbol for the Greek and
-math left over when the LaTeX renderer is unavailable, and a non-embedded
-STSong-Light CID font as the last resort for CJK (``vector_text`` draws
-outlines instead wherever a font is installed).
+Prose uses only fonts every PDF viewer has built in, so no font file is
+embedded: Helvetica in four styles (WinAnsi), Courier for code, Symbol for the
+Greek and math left over when the LaTeX renderer is unavailable, and a
+non-embedded STSong-Light CID font as the last resort for CJK. Math and CJK
+outlines go through ``pdf_glyphs`` as Type 3 fonts built per document.
 """
 
 from collections import namedtuple
@@ -400,20 +400,46 @@ def fill_rect(ops, x0, y0, x1, y1, color):
 
 
 def draw_spans(ops, x: float, base: float, spans, size: float,
-               color=TEXT_COLOR, fonts=None, links=None) -> float:
+               color=TEXT_COLOR, fonts=None, links=None, glyphs=None) -> float:
     """Draw one laid-out line in the y-down frame, its baseline at ``base``;
     returns the x it ended at. ``fonts`` collects the resource names actually
     used, ``links`` the ``(x0, y0, x1, y1, href)`` boxes of LINK spans so the
-    caller can turn them into /Link annotations."""
+    caller can turn them into /Link annotations, and ``glyphs`` (the
+    document's ``pdf_glyphs.GlyphFonts``) draws math and CJK as Type 3 text —
+    required whenever the spans hold MATH (plain-text callers — bullets,
+    footers — may omit it)."""
     ascent, height = line_metrics(spans, size)
+    # Glyph-only drawings that follow each other on the line (a run of CJK
+    # characters, each its own span so lines can break between them, or an
+    # inline symbol beside them) are emitted as ONE text run at absolute
+    # positions: extractors then see the string they are, and pdfium's
+    # page-level text-flow heuristic isn't fed a scatter of one-glyph objects.
+    pending = []
+
+    def flush():
+        if pending:
+            ops.append(b"q")
+            ops.append(glyphs.draw(vector_text.Drawing(b"", tuple(pending), 0.0, 0.0)))
+            ops.append(b"Q")
+            pending.clear()
+
     for kind, payload, level, style in spans:
         if kind == MATH:
-            math_ops, w, _h, asc = payload
+            drawing, w, _h, asc = payload
+            if not drawing.shapes:
+                top = base - asc
+                pending.extend(vector_text.Placed(
+                    g.glyph, g.char, x - drawing.vx + g.x, top - drawing.vy + g.y, g.size)
+                    for g in drawing.glyphs)
+                x += w
+                continue
+            flush()
             ops.append(b"q 1 0 0 1 %s %s cm" % (num(x), num(base - asc)))
-            ops.append(math_ops)
+            ops.append(glyphs.draw(drawing))
             ops.append(b"Q")
             x += w
             continue
+        flush()
         width = span_width(payload, size, level, style)
         bits, drawn = style.bits, bool(payload.strip())
         if drawn and bits & MARK:
@@ -443,4 +469,5 @@ def draw_spans(ops, x: float, base: float, spans, size: float,
         if drawn and bits & LINK and links is not None and style.href:
             links.append((x, base - ascent, x + width, base + height - ascent, style.href))
         x += width
+    flush()
     return x

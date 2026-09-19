@@ -17,46 +17,91 @@ struct GammaMutation: Codable, Identifiable, Equatable {
     var highlight: GammaSelectedText?
     var highlightColor: String?
     var sourceAsset: String?
+    /// The workspace this queued write belongs to, stamped when it is queued. A
+    /// mutation is never sent to a different workspace: `sync()` refuses instead.
+    /// Optional only so a snapshot written before workspaces existed still decodes.
+    var workspace: String? = nil
 }
 
 struct GammaPageCache: Codable {
     var pageID: String
     var docID: String
+    /// The workspace this snapshot was captured in. A snapshot whose recorded
+    /// workspace disagrees with its directory is refused, never uploaded.
+    /// Optional so a pre-workspace snapshot still decodes (and is stamped on save).
+    var workspace: String? = nil
     var blocks: [GammaBlock] = []
     var drawings: [String: Data] = [:]
     var outbox: [GammaMutation] = []
     var recordings: [String: GammaRecordingSession]?
     var replayPreviewSkippedSources: [String: String]?
+    /// Exact browser source bytes, never converted into PencilKit or queued for upload.
+    /// Optional for backward-compatible reads of pre-gamma-ink snapshots.
+    var timInkSources: [String: GammaTimInkSource]?
+    var timInkErrors: [String: String]?
 }
 
 /// Atomic snapshots include both editable source and its pending operation. A
 /// drawing is never acknowledged locally before both have reached the same file.
-/// Account directories use a hash of the canonical server and authenticated user;
-/// page/document/block identities inside the cache remain Gamma identities.
+///
+/// A cache directory is one (server, account, workspace) triple: `server +
+/// username` alone would let two libraries of the same account share pending
+/// handwriting, and a retry could then commit it into the wrong one. Deriving the
+/// directory name from all three makes that mistake unrepresentable, and every
+/// snapshot/manifest write re-asserts the triple it belongs to.
 final class GammaCache {
     let rootURL: URL
+    /// Canonical server, account and workspace this directory belongs to.
+    let server: String
+    let username: String
+    let workspace: String
     let writeOverride: ((Data, URL) throws -> Void)?
-    init(rootURL: URL, server: URL, username: String, writeOverride: ((Data, URL) throws -> Void)? = nil) throws {
+    init(rootURL: URL, server: URL, username: String, workspace: String,
+         writeOverride: ((Data, URL) throws -> Void)? = nil) throws {
         self.writeOverride = writeOverride
         let canonical = Self.canonicalServer(server.absoluteString)
-        let key = Self.key(canonical + "\n" + username)
-        self.rootURL = rootURL.appendingPathComponent(key, isDirectory: true)
+        let workspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard GammaAPI.isValidWorkspace(workspace) else {
+            throw GammaAPI.APIError.message("A Gamma workspace is required to open local files; nothing was read or changed.")
+        }
+        guard !username.isEmpty else {
+            throw GammaAPI.APIError.message("Signed-in account identity is required to open local files.")
+        }
+        self.server = canonical
+        self.username = username
+        self.workspace = workspace
+        self.rootURL = rootURL.appendingPathComponent(Self.directoryKey(server: canonical, username: username, workspace: workspace),
+                                                     isDirectory: true)
         try FileManager.default.createDirectory(at: self.rootURL, withIntermediateDirectories: true)
         // This metadata is intentionally non-secret and permits safe offline identity discovery.
-        try ensureAccountIdentity(GammaOfflineIdentity(server: canonical, username: username))
+        try ensureAccountIdentity(GammaOfflineIdentity(server: canonical, username: username, workspace: workspace))
     }
     static func canonicalServer(_ value: String) -> String {
         value.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
     static func canonicalServer(_ value: URL) -> String { canonicalServer(value.absoluteString) }
-    static func application(server: URL, username: String) throws -> GammaCache {
-        let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                               appropriateFor: nil, create: true)
-        return try GammaCache(rootURL: root.appendingPathComponent("GammaCache", isDirectory: true),
-                              server: server, username: username)
+    /// The one directory every workspace cache lives under. Migration and the
+    /// offline list both need it without a cache in hand, so it is not private.
+    static func applicationSupportRoot() throws -> URL {
+        try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                    appropriateFor: nil, create: true)
+            .appendingPathComponent("GammaCache", isDirectory: true)
+    }
+    static func application(server: URL, username: String, workspace: String) throws -> GammaCache {
+        try GammaCache(rootURL: try applicationSupportRoot(), server: server,
+                       username: username, workspace: workspace)
     }
     static func key(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    /// The workspace-explicit directory name.
+    static func directoryKey(server: String, username: String, workspace: String) -> String {
+        key(canonicalServer(server) + "\n" + username + "\n" + workspace)
+    }
+    /// The pre-workspace directory name (`server + username`). Still recognised so
+    /// an existing cache is found, then migrated — never silently reinterpreted.
+    static func legacyDirectoryKey(server: String, username: String) -> String {
+        key(canonicalServer(server) + "\n" + username)
     }
     func saveLibrary(_ papers: [GammaPaper]) throws { try write(papers, to: rootURL.appendingPathComponent("library.json")) }
     func library() throws -> [GammaPaper] {
@@ -76,15 +121,36 @@ final class GammaCache {
             guard snapshot.pageID == pageID, snapshot.docID == docID else {
                 throw GammaAPI.APIError.message("Cached Gamma page/document identity mismatch; data preserved.")
             }
+            try assertWorkspace(snapshot.workspace, what: "cached page")
             return snapshot
         }
-        return GammaPageCache(pageID: pageID, docID: docID)
+        return GammaPageCache(pageID: pageID, docID: docID, workspace: workspace)
     }
-    func savePage(_ page: GammaPageCache) throws { try write(page, to: pageURL(page.pageID)) }
+    func savePage(_ page: GammaPageCache) throws {
+        var page = page
+        try assertWorkspace(page.workspace, what: "page snapshot")
+        page.workspace = workspace
+        page.invalidateTimInkSources()
+        // A queued write without a stamp is only possible for data carried over from
+        // before workspaces existed; it is stamped with this verified directory.
+        for index in page.outbox.indices where page.outbox[index].workspace == nil { page.outbox[index].workspace = workspace }
+        try write(page, to: pageURL(page.pageID))
+    }
+    /// A file naming a different workspace than the directory it lives in was
+    /// moved, restored or copied incorrectly. Refusing keeps it from being
+    /// uploaded into the wrong library; nothing is deleted.
+    func assertWorkspace(_ recorded: String?, what: String) throws {
+        guard let recorded, !recorded.isEmpty, recorded != workspace else { return }
+        throw GammaAPI.APIError.message("This \(what) belongs to workspace “\(recorded)”, not “\(workspace)”. Nothing was uploaded or deleted; sign in to the matching workspace.")
+    }
     func pendingPages() throws -> [GammaPageCache] {
         try FileManager.default.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: nil)
             .filter { $0.lastPathComponent.hasPrefix("page-") && $0.pathExtension == "json" }
             .compactMap { try read(GammaPageCache.self, from: $0) }
+            .map { page in
+                try assertWorkspace(page.workspace, what: "cached page")
+                return page
+            }
             .filter { !$0.outbox.isEmpty }
     }
     func sourceURL(docID: String) -> URL { rootURL.appendingPathComponent("source-\(Self.key(docID)).pdf") }

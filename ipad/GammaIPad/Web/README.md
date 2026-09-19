@@ -1,26 +1,35 @@
 # GammaWebWorkspace
 
 `GammaWebWorkspace` is the reusable iPad web surface. It creates an isolated,
-non-persistent `WKWebsiteDataStore`, installs the caller's authenticated cookies
-before loading `serverURL`, and exposes the exact bridge `gammaNative`.
+non-persistent `WKWebsiteDataStore`, installs the caller's authenticated cookies,
+loads `serverURL?ws=<workspace>`, and exposes the exact bridge `gammaNative`.
 
 ```swift
-GammaWebWorkspace(serverURL: url, cookies: cookies, sessionID: accountID,
+GammaWebWorkspace(serverURL: url, workspace: workspaceID, cookies: cookies, sessionID: accountID,
   reloadToken: reloadID,
-  onOpenPDF: { request, currentCookies in /* verify server session, then switch */ },
+  onOpenPDF: { request, currentCookies in /* verify server session + workspace, then switch */ },
   onError: { message in /* present app error */ })
 ```
 
+The web view loads the server root with `?ws=`, which is how Gamma's own frontend
+names its library: it resolves `?ws=` once at boot and then sends
+`X-Gamma-Workspace` on every API call. The native side therefore pins the tab to
+the same library it holds, instead of a tab opening whichever workspace the
+account happens to have as default.
+
 The `openPDF` bridge accepts only a main-frame message from the configured
 scheme/host/effective port and deployment-path prefix. `pageID`, `docID`,
-`title`, and `user` are bounded strings. The `user` field is display metadata,
-not authentication: the parent must verify the server session using the returned
-current cookies before opening a native reader. `sessionID` is an identity token
-for the parent to use with SwiftUI `.id(sessionID)` when changing accounts;
-that recreates the isolated web session. When returning from native editing,
-flush the native outbox and change `reloadToken`; this reloads the existing web
-view without destroying its cookies or non-persistent storage, preventing a
-stale web subtree from deleting newly created native blocks.
+`title`, `user`, and `workspace` are bounded strings; a message without a
+workspace is ignored outright, because the native writer could not otherwise know
+which library to save into. The `user` and `workspace` fields are claims, not
+authentication: the parent verifies both against the live session (`/api/session`
+through the returned cookies) and refuses a workspace that is unlisted or
+read-only before opening a native reader (`GammaWebHandoffCheck`). `sessionID` is
+an identity token for the parent to use with SwiftUI `.id(sessionID)` when
+changing accounts; that recreates the isolated web session. When returning from
+native editing, flush the native outbox and change `reloadToken`; this reloads the
+existing web view without destroying its cookies or non-persistent storage,
+preventing a stale web subtree from deleting newly created native blocks.
 
 Same-origin navigation remains in the web view. Other HTTP(S) links open in the
 system browser; other schemes are rejected. Non-showable responses and web

@@ -13,6 +13,8 @@ struct GammaDownloadsView: View {
             List {
                 Section {
                     Text(workspace.username ?? "Gamma").font(.headline)
+                    Text("Library · \(workspace.workspaceDisplayName)").font(.subheadline)
+                        .accessibilityIdentifier("downloads-workspace")
                     Text(workspace.accountServer).font(.caption).textSelection(.enabled)
                     Text("Local files: \(ByteCountFormatter.string(fromByteCount: workspace.localUsageBytes, countStyle: .file))")
                     Text("Downloads stay on this iPad until you remove them. PDF, notes, handwriting and recordings are prepared together. Existing local recordings are reused.")

@@ -27,8 +27,7 @@ Audio assets use the existing private `/api/assets` system (`audio/mp4`, `.m4a`,
 - Backend targeted audio/ink tests: 18 passed; backend Ruff passed. Frontend: 48 tests passed and build succeeded.
 - A prior lint check found two small Python style errors; fixed before deployment.
 - Full AAC recovery scanning initially failed by reading beyond logical EOF. Bounded reads fixed it; `RecordingFinal-2.xcresult` passed all four production recording tests, including recovery and failed-write retry. Native AVAudioRecorder/Player callbacks hop explicitly to the main actor.
-- Live Gamma audio route was deployed after a consistent data backup at `/home/ubuntu/gamma-deployment-backups/before-audio-20260910T035558Z.tar.gz`; rollback image `gamma:before-audio-integration` retained. Public health returned 200 and OpenAPI includes the audio endpoint.
 
-The final GUI-session signed build exited 0. Verified the microphone usage string and code signature, installed on the connected physical iPad (installation sequence 1748), and launched successfully. This update also includes the previously pending Pencil-tap selection change. No live microphone recording was initiated by the agent.
+These are historical focused results; see [VALIDATION.md](VALIDATION.md) for portable acceptance instructions and the latest summarized regression. Simulator tests and successful builds do not establish physical microphone acceptance.
 
 **Not yet hardware-validated:** real microphone quality/permission dialogs, long recording/thermal behavior, actual phone-call interruptions, Bluetooth transitions, real disk-full events or rollover gaps. Synthetic audio/file tests do not establish those behaviors. No new GitHub release or source push was performed.

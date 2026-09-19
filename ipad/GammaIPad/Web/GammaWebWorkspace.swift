@@ -7,32 +7,42 @@ public struct GammaWebOpenRequest: Equatable, Sendable {
     public let docID: String
     public let title: String
     public let user: String
+    /// The library the Web tab was working in. Verified against the live session
+    /// before it is used; a handoff may not aim the native editor at another one.
+    public let workspace: String
+    public let viewport: GammaReadingPosition?
 
-    public init(pageID: String, docID: String, title: String, user: String) {
-        self.pageID = pageID; self.docID = docID; self.title = title; self.user = user
+    public init(pageID: String, docID: String, title: String, user: String, workspace: String,
+                viewport: GammaReadingPosition? = nil) {
+        self.pageID = pageID; self.docID = docID; self.title = title; self.user = user; self.workspace = workspace
+        self.viewport = viewport
     }
 }
 
 @MainActor
 public struct GammaWebWorkspace: UIViewControllerRepresentable {
+    /// Server root; `workspace` is appended as `?ws=` so the Web app boots into the
+    /// library the native side holds.
     public let serverURL: URL
+    public let workspace: String
     public let cookies: [HTTPCookie]
     public let sessionID: UUID
     public let reloadToken: UUID?
     public let onOpenPDF: (GammaWebOpenRequest, [HTTPCookie]) -> Void
     public let onError: (String) -> Void
 
-    public init(serverURL: URL, cookies: [HTTPCookie], sessionID: UUID, reloadToken: UUID? = nil,
+    public init(serverURL: URL, workspace: String, cookies: [HTTPCookie], sessionID: UUID, reloadToken: UUID? = nil,
                 onOpenPDF: @escaping (GammaWebOpenRequest, [HTTPCookie]) -> Void,
                 onError: @escaping (String) -> Void) {
-        self.serverURL = serverURL; self.cookies = cookies; self.sessionID = sessionID; self.reloadToken = reloadToken
+        self.serverURL = serverURL; self.workspace = workspace; self.cookies = cookies
+        self.sessionID = sessionID; self.reloadToken = reloadToken
         self.onOpenPDF = onOpenPDF; self.onError = onError
     }
 
     public func makeCoordinator() -> Coordinator { Coordinator(self) }
     public func makeUIViewController(context: Context) -> GammaWebViewController {
         GammaWebViewController(configuration: context.coordinator.configuration,
-                               serverURL: serverURL, cookies: cookies, reloadToken: reloadToken,
+                               serverURL: serverURL, workspace: workspace, cookies: cookies, reloadToken: reloadToken,
                                onOpenPDF: onOpenPDF, onError: onError)
     }
     public func updateUIViewController(_ controller: GammaWebViewController, context: Context) {
@@ -43,6 +53,11 @@ public struct GammaWebWorkspace: UIViewControllerRepresentable {
         controller.invalidate()
     }
 
+    /// Main-actor isolated, like the weak message handler below and like this
+    /// struct itself: `WKWebViewConfiguration`, its `websiteDataStore` and its
+    /// `userContentController` are all main-actor API, and building them from a
+    /// nonisolated `init` is exactly what Xcode 26 now warns about.
+    @MainActor
     public final class Coordinator: NSObject {
         fileprivate let configuration: WKWebViewConfiguration
         init(_ parent: GammaWebWorkspace) {
@@ -61,6 +76,7 @@ public final class GammaWebViewController: UIViewController, WKNavigationDelegat
                                             WKScriptMessageHandler, WKDownloadDelegate {
     let webView: WKWebView
     private let serverURL: URL
+    private let startURL: URL
     private let origin: GammaWebOrigin
     private let onOpenPDF: (GammaWebOpenRequest, [HTTPCookie]) -> Void
     private let onError: (String) -> Void
@@ -68,10 +84,14 @@ public final class GammaWebViewController: UIViewController, WKNavigationDelegat
     private var pendingDownloads: [ObjectIdentifier: URL] = [:]
     private var didStart = false
 
-    init(configuration: WKWebViewConfiguration, serverURL: URL, cookies: [HTTPCookie], reloadToken: UUID?,
+    init(configuration: WKWebViewConfiguration, serverURL: URL, workspace: String, cookies: [HTTPCookie], reloadToken: UUID?,
          onOpenPDF: @escaping (GammaWebOpenRequest, [HTTPCookie]) -> Void,
          onError: @escaping (String) -> Void) {
         self.serverURL = serverURL
+        // `?ws=` is how the Web app itself names its library (the fetch wrapper
+        // then sends X-Gamma-Workspace for it), so the tab and the native side are
+        // pinned to the same one from the first paint.
+        self.startURL = GammaWebSession.startURL(serverURL: serverURL, workspace: workspace)
         self.origin = GammaWebOrigin(url: serverURL)
         self.onOpenPDF = onOpenPDF; self.onError = onError
         self.reloadToken = reloadToken
@@ -97,6 +117,12 @@ public final class GammaWebViewController: UIViewController, WKNavigationDelegat
         webView.stopLoading()
         webView.navigationDelegate = nil; webView.uiDelegate = nil
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "gammaNative")
+        // Each controller owns a nonpersistent store. On logout/replacement,
+        // discard that controller's cookies without affecting the new session.
+        let store = webView.configuration.websiteDataStore.httpCookieStore
+        store.getAllCookies { cookies in
+            for cookie in cookies { store.delete(cookie) }
+        }
     }
 
     /// Reloads the existing web view only; its non-persistent store and cookies remain intact.
@@ -114,8 +140,10 @@ public final class GammaWebViewController: UIViewController, WKNavigationDelegat
         for cookie in cookies { group.enter(); store.setCookie(cookie) { group.leave() } }
         group.notify(queue: .main) { [weak self] in
             guard let self else { return }
-            guard self.origin.isValidURL(self.serverURL) else { self.onError("Invalid Gamma server URL."); return }
-            self.webView.load(URLRequest(url: self.serverURL))
+            guard self.origin.isValidURL(self.startURL), self.origin.isValidURL(self.serverURL) else {
+                self.onError("Invalid Gamma server URL."); return
+            }
+            self.webView.load(URLRequest(url: self.startURL))
         }
     }
 

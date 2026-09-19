@@ -20,7 +20,7 @@ final class GammaRecordingTests: XCTestCase {
     func testFinalizedAudioQueuesOneGammaBlockAndSurvivesCacheReopen() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice", workspace: "ws-alpha")
         let workspace = GammaWorkspace(cache: cache)
         workspace.page = GammaPageCache(pageID: "page", docID: "doc")
         var session = GammaRecordingSession.new(pageID: "page")

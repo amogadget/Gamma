@@ -6,6 +6,7 @@ struct GammaReaderView: View {
     @ObservedObject var workspace: GammaWorkspace
     let paper: GammaPaper
     let document: PDFDocument
+    let initialViewport: GammaReadingPosition?
     @State private var currentPage = 0
     @State private var requestedPage: Int?
     @State private var pencil = true
@@ -20,8 +21,12 @@ struct GammaReaderView: View {
     @State private var textSelection: [GammaSelectedText] = []
     @State private var selectionReset = 0
     @ObservedObject private var recorder: GammaRecordingController
-    init(workspace: GammaWorkspace, paper: GammaPaper, document: PDFDocument) {
+    init(workspace: GammaWorkspace, paper: GammaPaper, document: PDFDocument,
+         initialViewport: GammaReadingPosition? = nil) {
         self.workspace = workspace; self.paper = paper; self.document = document
+        self.initialViewport = initialViewport
+        self._requestedPage = State(initialValue: initialViewport?.pageIndex)
+        self._currentPage = State(initialValue: initialViewport?.pageIndex ?? 0)
         self.recorder = workspace.recorder
     }
     private var replaying: Bool { recorder.playbackRecordingID != nil }
@@ -31,6 +36,15 @@ struct GammaReaderView: View {
             let wide = geometry.size.width >= 900
             VStack(spacing: 0) {
                 header(wide: wide)
+                if let message = workspace.page?.timInkErrors?.sorted(by: { $0.key < $1.key }).first?.value {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                        Text("Browser handwriting unavailable: \(message)").font(.caption).lineLimit(3)
+                        Spacer()
+                        Button(workspace.isOffline ? "Connect to retry" : "Retry") { Task { await workspace.refreshPage() } }
+                            .font(.caption).disabled(workspace.busy || workspace.syncing || workspace.isOffline)
+                    }.foregroundStyle(.orange).padding(.horizontal, 14).padding(.vertical, 7)
+                }
                 if replaying { replayControls }
                 else if selectingText { selectionControls }
                 Rectangle().fill(GammaTheme.line).frame(height: 1)
@@ -75,6 +89,10 @@ struct GammaReaderView: View {
                 Text("\(replayTime(recorder.playbackTime)) / \(replayTime(recorder.playbackDuration))")
                     .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                 Button("Done") { recorder.stopPlayback() }.font(.caption)
+            }
+            if workspace.page?.blocks.contains(where: \.isTimInk) == true {
+                Text("Browser handwriting is static context; it has no audio timing.")
+                    .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
             }
             if (workspace.replaySession?.replayEvents ?? []).isEmpty {
                 Text("This older recording has no note timing; audio plays with static notes.")
@@ -165,6 +183,7 @@ struct GammaReaderView: View {
             backgroundDrawing: { try workspace.background(excluding: inkID, pdfPage: $0) },
             editablePage: workspace.selectedInkPage, contentRevision: workspace.contentRevision,
             onPageChanged: { currentPage = $0; workspace.pageNavigated($0 + 1) }, requestedPage: requestedPage,
+            requestedViewport: initialViewport,
             highlights: { index in
                 (workspace.page?.blocks ?? []).compactMap { block in
                     guard block.isHighlight, let position = block.properties.pdfPosition,
@@ -172,7 +191,7 @@ struct GammaReaderView: View {
                     return GammaPDFHighlight(id: block.id, position: position, color: block.properties.color,
                                              selected: workspace.selectedID == block.id)
                 }
-            }, inkHitTest: { index, point, tolerance in
+            }, timInk: { workspace.timInk(pdfPage: $0) }, inkHitTest: { index, point, tolerance in
                 guard !workspace.busy, localSaveError == nil, let page = workspace.page else { return nil }
                 let drawings: [(id: String, drawing: PKDrawing)] = page.blocks.compactMap { block in
                     guard block.isInk, block.properties.pdfPage == index + 1,
@@ -250,7 +269,7 @@ struct GammaReaderView: View {
                     HStack(spacing: 6) {
                         if block.isHighlight {
                             Circle().fill(Color(uiColor: GammaPDFHighlight.uiColor(block.properties.color).withAlphaComponent(0.7))).frame(width: 8, height: 8)
-                        } else if block.isInk { Image(systemName: "pencil.tip").font(.system(size: 10)).foregroundStyle(.secondary) }
+                        } else if block.isInk || block.isTimInk { Image(systemName: "pencil.tip").font(.system(size: 10)).foregroundStyle(.secondary) }
                         else if block.isAudio { Image(systemName: "waveform").font(.system(size: 10)).foregroundStyle(.secondary) }
                         if let page = block.pdfPage { Text("p.\(page)").font(.system(size: 10)).foregroundStyle(.secondary) }
                         Spacer(minLength: 0)
@@ -259,8 +278,8 @@ struct GammaReaderView: View {
                         Text(block.content).font(.system(size: 14)).foregroundStyle(.primary).multilineTextAlignment(.leading)
                     } else if block.isAudio {
                         Text("Recording").font(.system(size: 13)).foregroundStyle(.secondary)
-                    } else if block.isInk {
-                        Text("Handwriting").font(.system(size: 13)).foregroundStyle(.secondary)
+                    } else if block.isInk || block.isTimInk {
+                        Text(block.isTimInk ? "Browser handwriting (read-only)" : "Handwriting").font(.system(size: 13)).foregroundStyle(.secondary)
                     } else if !block.isHighlight {
                         Text("Empty note").font(.system(size: 13)).foregroundStyle(.tertiary)
                     }
@@ -290,11 +309,15 @@ struct GammaReaderView: View {
                         .disabled(workspace.busy || workspace.syncing)
                 }
             }.padding(.horizontal, 14)
+            if selected.isTimInk {
+                Text("Browser handwriting is read-only here. Edit its strokes and caption in the browser; use New ink to add native handwriting.")
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal, 14)
+            }
             TextEditor(text: Binding(get: {
                 workspace.page?.blocks.first(where: { $0.id == selected.id })?.content ?? ""
             }, set: { text in perform { try workspace.editContent(blockID: selected.id, text: text) } }))
                 .font(.system(size: 14)).scrollContentBackground(.hidden)
-                .frame(height: 110).padding(.horizontal, 10).disabled(workspace.busy || replaying)
+                .frame(height: 110).padding(.horizontal, 10).disabled(workspace.busy || replaying || selected.isTimInk)
                 .accessibilityIdentifier("block-content-editor")
             if workspace.page?.outbox.contains(where: { $0.blockID == selected.id && $0.conflict }) == true {
                 HStack {

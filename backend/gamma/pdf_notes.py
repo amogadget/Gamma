@@ -21,10 +21,11 @@ casing beyond that matrix.
 
 Notes are markdown with LaTeX and image refs, not plain text: ``note_markup``
 splits them into text spans (with super/subscript levels), inline math, display
-math and images. ``vector_text`` typesets the math as vector paths (inline
-expressions sit on the text baseline, ``$$…$$`` gets its own centred row),
-``pdf_image`` embeds the uploads as image XObjects, and a box that had to
-squeeze either one down loses to a wider candidate during placement.
+math and images. ``vector_text`` typesets the math and ``pdf_glyphs`` draws it
+as Type 3 text (inline expressions sit on the text baseline, ``$$…$$`` gets
+its own centred row), ``pdf_image`` embeds the uploads as image XObjects, and
+a box that had to squeeze either one down loses to a wider candidate during
+placement.
 
 Prose is drawn with three fonts, all built into every PDF viewer: Helvetica for
 WinAnsi, the Symbol font for the Greek and math left over when the math
@@ -49,6 +50,7 @@ from . import vector_text
 from .logbuf import log
 from .note_markup import TEXT, latex_spans, parse_note
 from .pdf_export import parse_css_color
+from .pdf_glyphs import GlyphFonts
 from .pdf_image import XObjectStore
 from .pdf_typeset import (
     CID,
@@ -90,7 +92,7 @@ _FONTS = (HELV, SYM, CID)
 def _measure(items, width: float, size: float, max_h: float, images):
     """Note items → (rows, natural width, height). A row is
     ``("text", indent, spans, ascent, height)``, ``("image", name, w, h)`` or
-    ``("math", ops, w, h)``. Content past ``max_h`` is dropped with an ellipsis
+    ``("math", (drawing, scale), w, h)``. Content past ``max_h`` is dropped with an ellipsis
     — the full text is still in the annotation popup."""
     rows, height, natural, cut, shrink = [], 2 * PAD, 0.0, False, 1.0
     for item in items:
@@ -100,7 +102,7 @@ def _measure(items, width: float, size: float, max_h: float, images):
         if item["kind"] == "math":
             math = vector_text.math(item["tex"], size * DISPLAY_MATH_SCALE)
             if math:
-                ops, w, h, _asc = math
+                drawing, w, h, _asc = math
                 scale = min(1.0, width / w) if w else 1.0
                 if h * scale > max_h - height - IMAGE_GAP:
                     scale = min(scale, max(0.0, max_h - height - IMAGE_GAP) / h)
@@ -108,7 +110,7 @@ def _measure(items, width: float, size: float, max_h: float, images):
                     cut = True
                     break
                 shrink = min(shrink, scale)
-                rows.append(("math", (ops, scale), w * scale, h * scale))
+                rows.append(("math", (drawing, scale), w * scale, h * scale))
                 height += h * scale + IMAGE_GAP
                 natural = max(natural, w * scale)
                 continue
@@ -244,8 +246,9 @@ def _place(space: _Space, anchor, box_w: float, box_h: float, width_penalty: flo
 
 # --- content stream ----------------------------------------------------------
 
-def _draw_note(ops: list, box, anchor, rows, size: float, color):
-    """Box + leader line + rows, all in display coordinates."""
+def _draw_note(ops: list, box, anchor, rows, size: float, color, glyphs):
+    """Box + leader line + rows, all in display coordinates; ``glyphs`` is the
+    document's GlyphFonts, which draws the math."""
     r, g, b, _a = color
     bx0, by0, bx1, by1 = box
     # Border: the highlight's hue darkened; fill: the same hue washed out, so
@@ -283,20 +286,22 @@ def _draw_note(ops: list, box, anchor, rows, size: float, color):
             y += h + IMAGE_GAP
             continue
         if row[0] == "math":                     # display math, centred
-            _kind, (math_ops, scale), w, h = row
+            _kind, (drawing, scale), w, h = row
             ops.append(b"q %s 0 0 %s %s %s cm" % (
                 _num(scale), _num(scale), _num(bx0 + PAD + max(0, (inner - w) / 2)), _num(y)))
-            ops.append(math_ops)
+            ops.append(glyphs.draw(drawing))
             ops.append(b"Q")
             y += h + IMAGE_GAP
             continue
         _kind, indent, spans, ascent, line_h = row
-        draw_spans(ops, bx0 + PAD + indent, y + ascent, spans, size)
+        draw_spans(ops, bx0 + PAD + indent, y + ascent, spans, size, glyphs=glyphs)
         y += line_h
 
 
-def _stamp(writer, page_index: int, matrix, ops: list, xobjects):
-    """Merge the drawing onto the page as an overlay content stream."""
+def _stamp(writer, page_index: int, matrix, ops: list, xobjects, glyph_fonts):
+    """Merge the drawing onto the page as an overlay content stream.
+    ``glyph_fonts`` is ``GlyphFonts.resources()`` — the Type 3 fonts the math
+    was drawn with, referenced now and filled in at ``finalize()``."""
     page = writer.pages[page_index]
     body = b"q %s cm\n" % b" ".join(_num(v) for v in matrix) + b"\n".join(ops) + b"\nQ"
 
@@ -313,7 +318,9 @@ def _stamp(writer, page_index: int, matrix, ops: list, xobjects):
     stream = DecodedStreamObject()
     stream.set_data(body)
     overlay[NameObject("/Contents")] = stream
-    resources = DictionaryObject({NameObject("/Font"): font_resources(_FONTS)})
+    fonts = font_resources(_FONTS)
+    fonts.update({NameObject("/" + name): ref for name, ref in glyph_fonts.items()})
+    resources = DictionaryObject({NameObject("/Font"): fonts})
     if xobjects:
         resources[NameObject("/XObject")] = DictionaryObject(
             {NameObject("/" + name): ref for name, ref in xobjects.items()})
@@ -371,11 +378,11 @@ def _page_occupancy(pdfium_page, to_display, disp_w, disp_h) -> _Space:
         # and nested objects' bounds are in the form's space, not the page's.
         for obj in pdfium_page.get_objects(max_depth=1):
             try:
-                left, bottom, right, top = obj.get_bounds()
+                l, b, r, t = obj.get_bounds()
             except Exception:
                 continue
-            x0, y0 = to_display(left, top)
-            x1, y1 = to_display(right, bottom)
+            x0, y0 = to_display(l, t)
+            x1, y1 = to_display(r, b)
             box = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
             if (box[2] - box[0]) * (box[3] - box[1]) > 0.6 * area:
                 continue        # page-sized background fill, not content
@@ -426,6 +433,7 @@ def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]
         doc = None
 
     images = XObjectStore(writer, uploads_dir)
+    glyphs = GlyphFonts(writer)
     drawn = 0
     try:
         for page_num, entries in sorted(by_page.items()):
@@ -490,18 +498,20 @@ def render_notes(pdf_bytes: bytes, notes, uploads_dir=None) -> tuple[bytes, int]
                              f"note box overlaps content")
                 space.placed.append((x - CLEARANCE, y - CLEARANCE,
                                      x + box_w + CLEARANCE, y + box_h + CLEARANCE))
-                _draw_note(ops, (x, y, x + box_w, y + box_h), anchor, rows, FONT_SIZE, color)
+                _draw_note(ops, (x, y, x + box_w, y + box_h), anchor, rows, FONT_SIZE,
+                           color, glyphs)
                 used.update({row[1]: images.refs[row[1]] for row in rows if row[0] == "image"})
                 drawn += 1
 
             if ops:
-                _stamp(writer, page_num - 1, matrix, ops, used)
+                _stamp(writer, page_num - 1, matrix, ops, used, glyphs.resources())
     finally:
         if doc is not None:
             doc.close()
 
     if not drawn:
         return pdf_bytes, 0
+    glyphs.finalize()
     out = io.BytesIO()
     writer.write(out)
     return out.getvalue(), drawn

@@ -12,6 +12,16 @@ final class InkPageOverlay: UIView {
     let replayCanvas = PKCanvasView()
     var isReplaying = false
     let highlightLayer = GammaHighlightLayer()
+    /// Browser gamma-ink is immutable visual context, never PencilKit save input.
+    let timInkLayer = GammaTimInkView()
+    let timCrossPageLayer = GammaTimInkProjectionView()
+    var timInkScene: GammaTimInkScene? {
+        didSet {
+            timCrossPageLayer.scene = timInkScene
+            timInkLayer.isHidden = timInkScene != nil
+            setNeedsLayout()
+        }
+    }
     weak var pdfView: PDFView?
     let page: PDFPage
     let cropBox: CGRect
@@ -26,11 +36,18 @@ final class InkPageOverlay: UIView {
         super.init(frame: .zero)
         backgroundColor = .clear
         isOpaque = false
-        clipsToBounds = true
+        // gamma-ink may legitimately cross the PDF page edge (the browser's
+        // SVG uses overflow: visible). PencilKit canvases retain their own
+        // scrolling/clipping; do not clip the independent browser ink layer.
+        clipsToBounds = false
         highlightLayer.backgroundColor = .clear
         highlightLayer.isOpaque = false
         highlightLayer.isUserInteractionEnabled = false
         addSubview(highlightLayer)
+        timInkLayer.cropBounds = cropBox
+        timInkLayer.rotation = page.rotation
+        addSubview(timInkLayer)
+        addSubview(timCrossPageLayer)
         for layer in [backgroundCanvas, canvas, replayCanvas] {
             layer.backgroundColor = .clear
             layer.isOpaque = false
@@ -96,6 +113,8 @@ final class InkPageOverlay: UIView {
             canvas.isHidden = true
             backgroundCanvas.isHidden = true
             replayCanvas.isHidden = true
+            timInkLayer.isHidden = true
+            timCrossPageLayer.isHidden = true
             onGeometryError?()
             return
         }
@@ -113,6 +132,17 @@ final class InkPageOverlay: UIView {
                                         c: c / zoom, d: d / zoom, tx: 0, ty: 0)
         let center = CGPoint(x: origin.x + (a * cropBox.width + c * cropBox.height) / 2,
                              y: origin.y + (b * cropBox.width + d * cropBox.height) / 2)
+        // The tim view draws vectors in unrotated crop-local points. PDFKit's
+        // public conversion supplies rotation AND nonzero crop-box translation.
+        // Keep it visible during replay; gamma-ink timestamps are not audio time.
+        timInkLayer.isHidden = timInkScene != nil
+        timCrossPageLayer.isHidden = timInkScene == nil
+        timCrossPageLayer.frame = bounds
+        timCrossPageLayer.update(pdfView: pdfView, destination: page)
+        timInkLayer.bounds = CGRect(origin: .zero, size: cropBox.size)
+        timInkLayer.transform = CGAffineTransform(a: a, b: b, c: c, d: d, tx: 0, ty: 0)
+        timInkLayer.center = center
+        timInkLayer.contentScaleFactor = (window?.screen.scale ?? 2) * zoom
         // Never set frame on a transformed view, or transform PKDrawing itself.
         for layer in [backgroundCanvas, canvas, replayCanvas] {
             if layer.bounds.size != size { layer.bounds = CGRect(origin: .zero, size: size) }

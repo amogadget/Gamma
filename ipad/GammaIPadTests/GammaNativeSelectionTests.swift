@@ -23,7 +23,7 @@ final class GammaNativeSelectionTests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(position.boundingRect?.width), 0)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice", workspace: "ws-alpha")
         let workspace = GammaWorkspace(cache: cache); workspace.document = pdf
         workspace.page = GammaPageCache(pageID: "page", docID: "doc")
         try workspace.createHighlights(selections, color: "#ffe28f")

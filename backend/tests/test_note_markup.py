@@ -1,9 +1,10 @@
 """Note markdown/LaTeX → drawable spans, and uploads → PDF image XObjects."""
 
+import io
 import zlib
 
-import pytest
 
+from conftest import require_math_renderer
 from gamma.note_markup import MATH, SUB, SUP, SYMBOLS, TEXT, latex_spans, parse_note
 from gamma.pdf_image import image_xobject
 from gamma.pdf_typeset import CID, font_of
@@ -142,33 +143,41 @@ def test_palette_survives_as_raw_bytes(tmp_path):
 def test_boxed_math_is_stroked_not_filled():
     """`\\boxed{}` is a stroked, unfilled rect. Painting it solid (ignoring the
     SVG's fill/stroke) turned every boxed equation into a black slab."""
-    from gamma.vector_text import _svg_ops, math
+    import xml.etree.ElementTree as ET
+
+    from gamma.vector_text import _shape_ops, math
 
     boxed = math(r"\boxed{w = \frac{a}{b}}", 8)
     plain = math(r"w = \frac{a}{b}", 8)
     if boxed is None or plain is None:
-        pytest.skip("ziamath not installed")
-    assert b"re\nS" in boxed[0], "the box outline must be stroked"
-    assert b"re\nS" not in plain[0], "…and only where there is a box"
-    assert b"re\nf" in plain[0], "the fraction bar stays a filled rect"
+        require_math_renderer()  # fails with the cause, never a silent skip
+    assert b"re\nS" in boxed[0].shapes, "the box outline must be stroked"
+    assert b"re\nS" not in plain[0].shapes, "…and only where there is a box"
+    assert b"re\nf" in plain[0].shapes, "the fraction bar stays a filled rect"
+    # The letters are glyph placements, never part of the shapes.
+    assert {p.char for p in plain[0].glyphs} == {"w", "=", "a", "b"}
 
     # The fill/stroke attributes drive it, not the element type.
     svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -8 10 10">'
            '<rect x="0" y="-8" width="10" height="10" fill="none" stroke="black"'
            ' stroke-width="0.5"/></svg>')
-    assert b"0.500 w" in _svg_ops(svg)[0]
+    assert b"0.5 w" in _shape_ops(ET.fromstring(svg))
 
 
 def test_vector_text_refuses_rescaled_svg():
     """A <symbol>/<use> or a group transform rescales what follows; drawing
     those children as-is is silently wrong (ziafont's default output makes
-    glyphs ~1.5x too big), so the converter must refuse them."""
-    from gamma.vector_text import _svg_ops
+    glyphs ~1.5x too big), so the shape converter must refuse them — as it
+    does an <ellipse>, which it can't draw."""
+    import xml.etree.ElementTree as ET
+
+    from gamma.vector_text import _shape_ops
 
     flat = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -8 10 10">'
             '<path d="M 0 0 L 5 0 L 5 -5 Z"/></svg>')
-    assert _svg_ops(flat) is not None
+    assert _shape_ops(ET.fromstring(flat)) is not None
     for bad in ('<symbol id="g" viewBox="0 -20 20 20"><path d="M 0 0 L 5 0 Z"/></symbol>',
-                '<g transform="scale(2)"><path d="M 0 0 L 5 0 Z"/></g>'):
+                '<g transform="scale(2)"><path d="M 0 0 L 5 0 Z"/></g>',
+                '<ellipse cx="1" cy="1" rx="2" ry="1"/>'):
         svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -8 10 10">{bad}</svg>'
-        assert _svg_ops(svg) is None
+        assert _shape_ops(ET.fromstring(svg)) is None

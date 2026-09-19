@@ -22,9 +22,21 @@ Intentional downloads remain until you remove them. **No cache budget or automat
 
 `GammaWorkspace` is the main-actor coordinator. Reader callbacks capture the configured annotation ID, not mutable selection; synchronous local snapshots persist before networking. Reader page indexes are zero-based; server `pdf_page` is one-based. A selection changes `contentRevision`, so the reader flushes old callbacks before reloading the selected annotation canvas.
 
-`Library/Application Support/GammaCache/<SHA256(server + authenticated username)>/` contains:
+**A request always names its library.** Upstream Gamma scopes every data path to a
+workspace, resolved from `?ws=`, the `X-Gamma-Workspace` header, or the account's
+default. This client never relies on the default: a workspace is chosen once from
+`/api/session`, bound to the API client (which starts *unbound* and can only log
+in), and sent on every request. The same workspace keys the local cache, stamps
+every queued change and appears in the Web handoff. Choosing a different library
+means building a new client, and it is refused while anything is pending — a
+queued change belongs to the library it was written in. Read
+[NATIVE_INTEGRATION.md](NATIVE_INTEGRATION.md) for the full model, the frontend
+bridge contract and the migration rules.
 
-- `identity.json`: non-secret canonical server and authenticated username for local account discovery.
+`Library/Application Support/GammaCache/<SHA256(server + authenticated username + workspace)>/` contains:
+
+- `identity.json`: non-secret canonical server, authenticated username and
+  workspace id (plus its display name) for local library discovery.
 - `offline.json`: persistent per-document preparation queue and component readiness.
 - `library.json`: cached Gamma page IDs and document metadata.
 - `source-<SHA256(doc_id)>.pdf`: immutable original PDF bytes.
@@ -32,15 +44,29 @@ Intentional downloads remain until you remove them. **No cache budget or automat
 
 Ink uploads preserve editable `.pkdrawing` source and a PNG preview via `POST /api/assets`, then update one permanent client-generated unified block ID with `PUT /api/blocks/{id}/ink`. The ID is an annotation ID on Gamma, not a separate local knowledge document. Annotation text and pre-existing ordinary notes use normal block content PUT. New child notes use canonical UUID `PUT /api/blocks/{id}/note` with `expected_revision`; exact retries are idempotent and divergent revisions conflict. Add Child is available on ink annotations and native-note descendants, not arbitrary unrelated blocks. Child note text changes use the same revision-checked endpoint.
 
-Pending edits never disappear merely because a network request fails. Snapshot corruption throws rather than silently creating a blank source. Account/server caches are isolated, sign-out preserves queued data, and retries only start after authenticating that same account. Credentials are never written into cache files. Atomic writes are not a guarantee against physical storage failure; keep backups. Cache files are private app data, not an export feature.
+Pending edits never disappear merely because a network request fails. Snapshot corruption throws rather than silently creating a blank source. Caches are isolated per server, account **and workspace**; sign-out preserves queued data, and retries only start after authenticating that same account and workspace. A cache file that names a different workspace than its directory is refused rather than uploaded. Credentials are never written into cache files. Atomic writes are not a guarantee against physical storage failure; keep backups. Cache files are private app data, not an export feature.
 
-**Legacy data is preserved:** `NoteStore` and its tests remain for older `Application Support/Notes/<UUID>` bundles. Those files are neither deleted nor automatically uploaded. The app does not expose the old import-only library. Existing `VALIDATION.md` results from the import-only app are historical, not validation of this new architecture.
+**Legacy data is preserved:** `NoteStore` and its tests remain for older `Application Support/Notes/<UUID>` bundles. Those files are neither deleted nor automatically uploaded. The app does not expose the old import-only library. See [VALIDATION.md](VALIDATION.md) for recorded regression results and the current acceptance boundaries.
+
+Caches written before Gamma workspaces existed are kept at their old
+`server + username` directory and listed on the sign-in screen as
+"Workspace unknown". They are **not** opened offline (a client without a server
+cannot prove which library they belong to) and are attached only to the account's
+server-verified default workspace, by a single rename that is refused if the
+target already exists or if re-stamping the identity fails. See
+[NATIVE_INTEGRATION.md](NATIVE_INTEGRATION.md).
 
 ## Deployment
 
 ### 1. Run a matching Gamma server
 
-Use the backend from **the same checkout** as this client. Older images may not have audio/replay endpoints; a 405 means the server needs updating, not that pending notes should be discarded.
+Use the backend from **the same checkout** as this client. The native routes
+(`/api/assets`, `/api/blocks/{id}/{ink,audio,note,highlight,replay-preview}`) come
+from the native integration, not from upstream `tim/main` alone; a 405, a 501, or
+an HTML body where JSON was expected means the server needs those routes — not that
+pending notes should be discarded. The account must be a member with **editor or
+owner** role in the workspace it opens: the native editor writes, and a viewer
+workspace is refused with an explanation rather than failing at upload time.
 
 ```sh
 # On your server, from the Gamma repository root:
@@ -133,13 +159,38 @@ xcodebuild -project GammaIPad.xcodeproj -scheme GammaIPad \
   CODE_SIGNING_ALLOWED=NO test
 ```
 
-The live-backend tests are opt-in; see `scripts/LIVE_TEST.md`. Other tests exercise cache isolation, persistence, replay, recovery and UI fixtures without opening a microphone. Test evidence and hardware caveats are in `VALIDATION.md`.
+The live-backend tests are opt-in; see `scripts/LIVE_TEST.md`. They discover the
+test account's workspace from `/api/session` and bind to it, so a disposable
+backend only has to have the account seeded. Other tests exercise cache isolation,
+persistence, replay, recovery and UI fixtures without opening a microphone. Test
+evidence and hardware caveats are in `VALIDATION.md`.
+
+On any machine — including Linux, where no Swift toolchain exists — the workspace
+identity invariants and the structural sanity of the Swift sources can be checked
+with:
+
+```sh
+python3 ipad/scripts/test_native_workspace_contract.py
+```
+
+See [VALIDATION.md](VALIDATION.md) for the latest recorded simulator regression,
+portable reproduction, opt-in test configuration and remaining physical-device
+acceptance boundaries. Simulator results do not guarantee Pencil/microphone
+behavior or migration against real device data.
 
 Login branding and the app icon use the existing `desktop/assets/icon.png`, not a generated gamma character. Checked-in asset catalogs work without image tooling. To regenerate them after updating that source, run `python3 ipad/scripts/generate-icons.py` from the root with Pillow installed (the backend virtualenv already includes it).
 
 ## Acceptance checks (not pre-marked passed)
 
 - Log in to two accounts/servers; libraries, original files, drawings, and outboxes must never cross accounts.
+- Log in to one account with two writable workspaces: the chrome names the library in
+  use, a switch is refused while anything is pending, and after switching, edits and
+  downloads land in the second library only.
+- Hand a PDF to Pencil mode from Web in a **non-default** workspace; the native
+  editor must open that same library (not the account default), and the returned
+  Web tab must still be in it.
+- Sign in with a workspace whose role is `viewer`; the app must refuse to open it
+  for native editing and say why, without discarding anything.
 - New Ink on page 2, draw several strokes, add an annotation note and child note: verify exactly one `pdf_ink` block under the existing Gamma page, with a normal child block.
 - Create another Ink on the same page; selecting either edits only that annotation, including after zoom/navigation, immediate Library exit, and reopen.
 - Reopen on a second client: hydrated editable source and PNG preview agree; original PDF bytes remain unchanged.

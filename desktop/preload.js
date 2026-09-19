@@ -1,65 +1,53 @@
-// Two jobs, decided by what the page is.
+// Runs in every page the shell's views load. Two very different jobs:
 //
-// On the shell's own pages (`file:` — the bar and the launcher) it exposes the
-// IPC bridge they need. On a Gamma page it exposes **nothing**: that view
-// loads the app's UI, remote servers in remote workspaces, and AI output, and
-// none of it has any business reaching the main process. All it does there is
-// report the page's theme so the chrome can match it.
-//
-// The main process re-checks the sender on every call rather than trusting
-// this file alone (see shellOnly in main.js). Two cheap checks, because the
-// consequence of getting it wrong is a remote page driving the shell.
+// - file: pages (the launcher + the shell bar — the shell's own chrome) get
+//   the `gammaShell` IPC bridge.
+// - http(s) pages (a server's Gamma frontend) get NOTHING exposed. The
+//   only thing that happens there is a read-only mirror: the page's
+//   `data-theme` attribute is reported to the main process so the shell
+//   chrome paints in the same theme. Gamma stays a black box.
 
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer } = require('electron');
 
-const isShellPage = location.protocol === "file:";
-
-if (isShellPage) {
-  contextBridge.exposeInMainWorld("gammaShell", {
+if (window.location.protocol === 'file:') {
+  contextBridge.exposeInMainWorld('gammaShell', {
     platform: process.platform,
-
-    // State the bar and launcher render.
-    state: () => ipcRenderer.invoke("shell:state"),
-    details: () => ipcRenderer.invoke("shell:details"),
-    onState: (fn) => {
-      const handler = (_event, state) => fn(state);
-      ipcRenderer.on("shell:state", handler);
-      return () => ipcRenderer.removeListener("shell:state", handler);
+    state: () => ipcRenderer.invoke('shell:state'),
+    list: () => ipcRenderer.invoke('shell:list'),
+    addLocal: (name) => ipcRenderer.invoke('shell:add-local', name),
+    addRemote: (name, url) => ipcRenderer.invoke('shell:add-remote', name, url),
+    rename: (id, name) => ipcRenderer.invoke('shell:rename', id, name),
+    remove: (id, opts) => ipcRenderer.invoke('shell:remove', id, opts),
+    open: (id) => ipcRenderer.invoke('shell:open', id),
+    openWorkspace: (id) => ipcRenderer.invoke('shell:open-workspace', id),
+    launcher: () => ipcRenderer.invoke('shell:launcher'),
+    reload: () => ipcRenderer.invoke('shell:reload'),
+    revealData: (id) => ipcRenderer.invoke('shell:reveal-data', id),
+    revealLog: (id) => ipcRenderer.invoke('shell:reveal-log', id),
+    setSettings: (patch) => ipcRenderer.invoke('shell:set-settings', patch),
+    pickFolder: (defaultPath) => ipcRenderer.invoke('shell:pick-folder', defaultPath),
+    setDataRoot: (dir, opts) => ipcRenderer.invoke('shell:set-data-root', dir, opts),
+    barExpand: (on) => ipcRenderer.invoke('shell:bar-expand', on),
+    updateCheck: () => ipcRenderer.invoke('shell:update-check'),
+    updateInstall: () => ipcRenderer.invoke('shell:update-install'),
+    onState: (cb) => {
+      const handler = (_e, state) => cb(state);
+      ipcRenderer.on('shell:state', handler);
+      return () => ipcRenderer.removeListener('shell:state', handler);
     },
-
-    // Workspaces.
-    open: (id) => ipcRenderer.invoke("shell:open", id),
-    addLocal: (name) => ipcRenderer.invoke("shell:add-local", name),
-    addRemote: (name, url) => ipcRenderer.invoke("shell:add-remote", name, url),
-    rename: (id, name) => ipcRenderer.invoke("shell:rename", id, name),
-    remove: (id, opts) => ipcRenderer.invoke("shell:remove", id, opts),
-    probe: (url) => ipcRenderer.invoke("shell:probe", url),
-
-    // Shell chrome and shortcuts.
-    launcher: () => ipcRenderer.invoke("shell:launcher"),
-    reload: () => ipcRenderer.invoke("shell:reload"),
-    expandBar: (on) => ipcRenderer.invoke("shell:bar-expand", on),
-    revealData: (id) => ipcRenderer.invoke("shell:reveal-data", id),
-    revealLog: (id) => ipcRenderer.invoke("shell:reveal-log", id),
-    readLog: (id) => ipcRenderer.invoke("shell:read-log", id),
-    setSettings: (patch) => ipcRenderer.invoke("shell:set-settings", patch),
   });
-} else {
-  // Mirror the app's theme into the shell's chrome. `data-theme` is absent for
-  // dark, which is Gamma's default.
+} else if (/^https?:$/.test(window.location.protocol)) {
   const report = () => {
-    ipcRenderer.send("shell:theme", document.documentElement.getAttribute("data-theme") || "");
+    const t = document.documentElement.getAttribute('data-theme') || '';
+    ipcRenderer.send('shell:theme', t);
   };
-  const observe = () => {
+  const start = () => {
     report();
     new MutationObserver(report).observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["data-theme"],
+      attributeFilter: ['data-theme'],
     });
   };
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", observe, { once: true });
-  } else {
-    observe();
-  }
+  if (document.documentElement) start();
+  else document.addEventListener('DOMContentLoaded', start, { once: true });
 }

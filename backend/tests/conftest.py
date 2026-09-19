@@ -2,30 +2,34 @@
 with AI providers unconfigured, using FastAPI's in-process TestClient (no
 network, no running server needed)."""
 
+import ipaddress
 import os
+import socket
 import sys
 import tempfile
 from pathlib import Path
 
 # Must happen BEFORE importing gamma — config reads the environment at import.
 os.environ["GAMMA_DATA_DIR"] = tempfile.mkdtemp(prefix="gamma-test-")
-for var in (
-    "GAMMA_STATIC_DIR",
-    "GAMMA_AI_ANTHROPIC_API_KEY",
-    "GAMMA_AI_OPENAI_API_KEY",
-    "GAMMA_AI_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "GAMMA_AI_MODELS",
-    "GAMMA_AI_MODEL",
-    "GAMMA_ADMIN_USER",
-    "GAMMA_ADMIN_PASSWORD",
-):
+for var in ("GAMMA_STATIC_DIR", "GAMMA_AI_ANTHROPIC_API_KEY", "GAMMA_AI_OPENAI_API_KEY",
+            "GAMMA_AI_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GAMMA_AI_MODELS", "GAMMA_AI_MODEL",
+            "GAMMA_ADMIN_USER", "GAMMA_ADMIN_PASSWORD"):
     os.environ.pop(var, None)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pytest  # noqa: E402  (must follow the env/sys.path setup above)
-from fastapi.testclient import TestClient  # noqa: E402
+import pytest
+from fastapi.testclient import TestClient
+
+
+@pytest.fixture(autouse=True)
+def _no_upload_grace(monkeypatch):
+    """Orphan cleanup skips files younger than storage.UPLOAD_GRACE_S (the
+    upload→attach window). Tests upload and delete within milliseconds, so
+    the suite runs with no grace; test_pages covers the grace itself."""
+    from gamma import storage
+    monkeypatch.setattr(storage, "UPLOAD_GRACE_S", 0)
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -38,12 +42,62 @@ def _reset_ratelimit():
     yield
 
 
+_LOOPBACK = {"localhost", "127.0.0.1", "::1", None, ""}
+_socket_connect = socket.socket.connect
+_getaddrinfo = socket.getaddrinfo
+
+
+def _host_is_local(host):
+    """Loopback names, and numeric addresses: the SSRF guard test hands
+    getaddrinfo IP literals such as 169.254.169.254, which resolve without
+    any network and are refused before a connect."""
+    if host in _LOOPBACK:
+        return True
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def _blocked_connect(self, addr):
+    host = addr[0] if isinstance(addr, tuple) else str(addr)
+    if host in _LOOPBACK or (isinstance(host, str) and host.startswith("127.")):
+        return _socket_connect(self, addr)
+    raise AssertionError(f"test tried to open a network connection to {addr!r} — stub the fetch")
+
+
+def _blocked_getaddrinfo(host, *args, **kwargs):
+    if _host_is_local(host):
+        return _getaddrinfo(host, *args, **kwargs)
+    raise AssertionError(f"test tried to resolve {host!r} — stub the fetch")
+
+
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """The suite is offline by construction: every metadata / PDF / AI fetch
+    is stubbed, and a test that forgets to is a failure here, not a slow
+    pass that depends on the network. TestClient talks to the app in-process,
+    so only loopback ever needs a real socket."""
+    monkeypatch.setattr(socket.socket, "connect", _blocked_connect)
+    monkeypatch.setattr(socket, "getaddrinfo", _blocked_getaddrinfo)
+    yield
+
+
 @pytest.fixture(scope="session")
 def client():
     from gamma.app import app
-
     with TestClient(app) as c:
         yield c
+
+
+@pytest.fixture
+def anon():
+    """A TestClient with no session at all — for "not signed in" checks.
+    (`client` is shared by the whole run and carries whatever cookie the
+    last login left, so it is never anonymous by the time most tests run.)"""
+    from gamma.app import app
+    return TestClient(app)
 
 
 @pytest.fixture(scope="session")
@@ -55,10 +109,11 @@ def guest(client):
 
 
 def make_user(username, password, is_admin=0):
-    """Create (idempotently) a password account plus its per-user DBs."""
+    """Create (idempotently) a password account plus its personal workspace.
+    Returns the workspace id."""
     import bcrypt
+    from gamma import workspaces
     from gamma.db import connect_users_db, page_now
-    from gamma.seed import create_user_dbs
 
     with connect_users_db() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE username = ?", (username,)).fetchone():
@@ -67,7 +122,13 @@ def make_user(username, password, is_admin=0):
                 (username, bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode(), is_admin, page_now()),
             )
             conn.commit()
-    create_user_dbs(username)
+    return workspaces.ensure_personal(username)
+
+
+def workspace_of(username):
+    """The account's personal workspace id."""
+    from gamma import workspaces
+    return workspaces.default_workspace(username)
 
 
 def login(username, password):

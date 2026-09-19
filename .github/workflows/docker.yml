@@ -1,71 +1,43 @@
+# Server image only. Runs on every push to main (`latest`) — the only
+# workflow a merge triggers; desktop.yml and extension.yml are dispatched by
+# the `release` skill. The desktop
+# release (desktop.yml) dispatches this workflow on its new `v<version>` tag
+# with the version as input, which adds the `<version>` and `<major.minor>`
+# image tags — a `push: tags` trigger would not do it, since tags created
+# with GITHUB_TOKEN never trigger workflows. Overview: docs/dev/github_actions.md.
 name: Build and publish Docker image
 
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Also tag the image <version> and <major.minor> (set by the desktop release)"
+        required: false
+        default: ""
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/gamma
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install backend dependencies
-        run: |
-          cd backend
-          pip install -r requirements.txt -r requirements-dev.txt
-
-      - name: Lint backend (Ruff)
-        run: |
-          cd backend
-          ruff check gamma tests manage.py app.py
-
-      - name: Backend tests
-        run: |
-          cd backend
-          python -m pytest tests -q
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Lint and test frontend
-        run: |
-          cd frontend
-          npm ci
-          npm run lint
-          npm test
-
   build-and-push:
-    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -73,17 +45,17 @@ jobs:
 
       - name: Extract metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=v${{ inputs.version }},enable=${{ inputs.version != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=v${{ inputs.version }},enable=${{ inputs.version != '' }}
             type=sha
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -92,18 +64,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Publish server release after image succeeds
-        uses: softprops/action-gh-release@v2
-        with:
-          name: Gamma ${{ github.ref_name }}
-          body_path: docs/releases/${{ github.ref_name }}.md
-          generate_release_notes: true

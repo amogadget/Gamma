@@ -22,7 +22,7 @@ final class GammaHighlightTests: XCTestCase {
         XCTAssertTrue(highlight.rectangles(in: CGRect(x: 0, y: 0, width: 100, height: 100), pageNumber: 3).isEmpty)
     }
     func test405ExplainsMissingServerCapabilityRatherThanRetryingForever() throws {
-        let api = try GammaAPI(server: "https://gamma.example")
+        let api = try GammaAPI(server: "https://gamma.example", workspace: "ws-alpha")
         defer { api.close() }
         let response = HTTPURLResponse(url: URL(string: "https://gamma.example/api/assets")!, statusCode: 405, httpVersion: nil, headerFields: nil)!
         XCTAssertThrowsError(try api.validate(response)) { error in

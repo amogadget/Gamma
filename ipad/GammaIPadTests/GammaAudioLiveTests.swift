@@ -11,12 +11,15 @@ final class GammaAudioLiveTests: XCTestCase {
         let api = try GammaAPI(server: "https://gamma-integration.invalid", configuration: config)
         defer { api.close() }
         _ = try await api.login(username: "ipad-integration", password: "disposable-test-password")
+        let liveSession = try await api.session()
+        try api.bind(workspace: try XCTUnwrap(liveSession.verifiedDefaultWorkspace
+                                              ?? liveSession.workspaces.first(where: { $0.canWrite })?.id))
         let papers = try await api.papers()
         let paper = try XCTUnwrap(papers.first)
         let docID = try XCTUnwrap(paper.properties.docID)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "ipad-integration")
+        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "ipad-integration", workspace: api.workspace)
         let workspace = GammaWorkspace(cache: cache, api: api)
         workspace.page = GammaPageCache(pageID: paper.id, docID: docID)
         var recording = GammaRecordingSession.new(pageID: paper.id)
@@ -58,7 +61,7 @@ final class GammaAudioLiveTests: XCTestCase {
         }
         let retried = try await api.putAudio(id: block.id, parent: paper.id, revision: 0, state: "stopped", segments: segments)
         XCTAssertEqual(retried.properties.audioRevision, 1)
-        let freshCache = try GammaCache(rootURL: root, server: api.baseURL, username: "ipad-integration")
+        let freshCache = try GammaCache(rootURL: root, server: api.baseURL, username: "ipad-integration", workspace: api.workspace)
         let reopened = try freshCache.loadPage(pageID: paper.id, docID: docID)
         XCTAssertEqual(reopened.recordings?[recording.id]?.segments.count, 2)
         XCTAssertEqual(reopened.recordings?[recording.id]?.revision, 1)

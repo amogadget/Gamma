@@ -13,7 +13,7 @@ private final class GammaWireProtocol: URLProtocol {
         if path.hasSuffix("/login") {
             body = #"{"ok":true,"username":"actual-user"}"#
         } else if path.hasSuffix("/session") {
-            body = #"{"user":"actual-user"}"#
+            body = #"{"user":"actual-user","default_workspace":"ws-alpha","workspaces":[{"id":"ws-alpha","name":"Personal","role":"owner","personal":true,"default":true}]}"#
         } else if path.hasSuffix("/note") {
             let id = request.url!.deletingLastPathComponent().lastPathComponent
             body = "{\"id\":\"\(id)\",\"parent_id\":\"ink-parent\",\"content\":\"Note\",\"properties\":{\"native_note\":true,\"note_revision\":1}}"
@@ -34,13 +34,17 @@ final class GammaWireTests: XCTestCase {
     func testWebCookieAdoptionRevalidatesIdentityAndExportsOwnCookies() async throws {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [GammaWireProtocol.self]
-        let api = try GammaAPI(server: "https://gamma.example", configuration: config)
+        let api = try GammaAPI(server: "https://gamma.example", workspace: "ws-alpha", configuration: config)
         defer { api.close() }
         let own = try XCTUnwrap(HTTPCookie(properties: [.domain: "gamma.example", .path: "/", .name: "session", .value: "test-only", .secure: "TRUE"]))
         let foreign = try XCTUnwrap(HTTPCookie(properties: [.domain: "other.example", .path: "/", .name: "foreign", .value: "never-copy"]))
-        let user = try await api.adoptWebSession(cookies: [own, foreign])
-        XCTAssertEqual(user, "actual-user")
-        XCTAssertEqual(api.makeRequest("api/blocks/root/children").value(forHTTPHeaderField: "X-Gamma-User"), "actual-user")
+        let info = try await api.adoptWebSession(cookies: [own, foreign])
+        XCTAssertEqual(info.user, "actual-user")
+        // The adopted session also reports the workspaces the handoff may name.
+        XCTAssertEqual(info.workspaces.map(\.id), ["ws-alpha"])
+        XCTAssertEqual(info.verifiedDefaultWorkspace, "ws-alpha")
+        XCTAssertEqual(try api.makeRequest("api/blocks/root/children").value(forHTTPHeaderField: "X-Gamma-User"), "actual-user")
+        XCTAssertEqual(try api.makeRequest("api/blocks/root/children").value(forHTTPHeaderField: "X-Gamma-Workspace"), "ws-alpha")
         XCTAssertEqual(api.sessionCookies().filter { $0.name == "session" }.count, 1)
         XCTAssertFalse(api.sessionCookies().contains { $0.name == "foreign" })
     }
@@ -48,7 +52,7 @@ final class GammaWireTests: XCTestCase {
         GammaWireProtocol.requests = []
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [GammaWireProtocol.self]
-        let api = try GammaAPI(server: "https://gamma.example/prefix", configuration: config)
+        let api = try GammaAPI(server: "https://gamma.example/prefix", workspace: "ws-alpha", configuration: config)
         defer { api.close() }
         let user = try await api.login(username: "typed-user", password: "test-only")
         XCTAssertEqual(user, "actual-user")
@@ -66,7 +70,10 @@ final class GammaWireTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "PUT")
             XCTAssertEqual(request.url?.path, "/prefix/api/blocks/\(id)/note")
             XCTAssertEqual(request.value(forHTTPHeaderField: "X-Gamma-User"), "actual-user")
+            // Every data request names its library, so a retry cannot land elsewhere.
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Gamma-Workspace"), "ws-alpha")
         }
-        XCTAssertNil(api.makeRequest("api/logout").value(forHTTPHeaderField: "X-Gamma-User"))
+        XCTAssertNil(try api.makeRequest("api/logout").value(forHTTPHeaderField: "X-Gamma-User"))
+        XCTAssertNil(try api.makeRequest("api/logout").value(forHTTPHeaderField: "X-Gamma-Workspace"))
     }
 }

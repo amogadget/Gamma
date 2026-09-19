@@ -3,7 +3,7 @@ annotation importer, note flattening, and the HTTP endpoint end to end."""
 
 import io
 
-from conftest import make_page, require_math_renderer
+from conftest import make_page, require_math_renderer, workspace_of
 
 from gamma.pdf_export import annotate_pdf, parse_css_color
 
@@ -67,25 +67,21 @@ def test_annotate_roundtrips_through_import_extractor():
 def test_annotate_multiline_and_skips_unusable():
     from PyPDF2 import PdfReader
 
-    multiline = _position(
-        extra_rects=[
-            {"x1": 50, "y1": 100, "x2": 500, "y2": 120, "width": PAGE_W, "height": PAGE_H, "pageNumber": 1},
-        ]
-    )
-    out, written = annotate_pdf(
-        _blank_pdf(pages=2),
-        [
-            {"position": multiline, "color": None, "note": ""},
-            {"position": _position(page=99), "color": None, "note": ""},  # page out of range
-            {"position": {"pageNumber": 1, "rects": []}, "note": ""},  # no rects
-        ],
-    )
+    multiline = _position(extra_rects=[
+        {"x1": 50, "y1": 100, "x2": 500, "y2": 120, "width": PAGE_W, "height": PAGE_H, "pageNumber": 1},
+    ])
+    out, written = annotate_pdf(_blank_pdf(pages=2), [
+        {"position": multiline, "color": None, "note": ""},
+        {"position": _position(page=99), "color": None, "note": ""},   # page out of range
+        {"position": {"pageNumber": 1, "rects": []}, "note": ""},       # no rects
+    ])
     assert written == 1
     annots = PdfReader(io.BytesIO(out)).pages[0]["/Annots"]
     obj = annots[0].get_object()
     assert str(obj["/Subtype"]) == "/Highlight"
     assert len(obj["/QuadPoints"]) == 16  # two quads, one per line rect
     assert "/Contents" not in obj  # empty note omitted
+    assert "/NM" not in obj  # highlights import into Zotero without an id
 
 
 def test_annotate_area_as_square():
@@ -112,8 +108,14 @@ def test_annotate_area_as_square():
     assert str(obj["/T"]) == "tester"
     assert float(obj["/CA"]) == 0.65
     assert int(obj["/BS"]["/W"]) == 2
+    # Zotero's pdf-worker imports a /Square (→ area/image annotation) ONLY if
+    # it carries an id: /NM shaped "Zotero-<8 chars of its key alphabet>".
+    # Deterministic from the block id so re-exports keep stable keys.
     from gamma.pdf_export import zotero_annot_key
-    assert str(obj["/NM"]) == f"Zotero-{zotero_annot_key('myarea1')}"
+    nm = str(obj["/NM"])
+    assert nm == f"Zotero-{zotero_annot_key('myarea1')}"
+    assert len(nm) == len("Zotero-") + 8
+    assert all(c in "23456789ABCDEFGHIJKLMNPQRSTUVWXZ" for c in nm[7:])
 
     # And it round-trips: the importer reads the /Square back as an area
     # highlight (position carries area: true) with the exact color.
@@ -135,13 +137,10 @@ def test_annotate_rotated_page():
     from PyPDF2 import PdfReader
 
     # Rendered size is swapped (H x W); a rect near the view's top-left.
-    pos = {
-        "pageNumber": 1,
-        "boundingRect": None,
-        "rects": [
-            {"x1": 79.2, "y1": 61.2, "x2": 158.4, "y2": 122.4, "width": PAGE_H, "height": PAGE_W, "pageNumber": 1},
-        ],
-    }
+    pos = {"pageNumber": 1, "boundingRect": None, "rects": [
+        {"x1": 79.2, "y1": 61.2, "x2": 158.4, "y2": 122.4,
+         "width": PAGE_H, "height": PAGE_W, "pageNumber": 1},
+    ]}
     out, written = annotate_pdf(_blank_pdf(rotate=90), [{"position": pos, "note": ""}])
     assert written == 1
     rect = [float(v) for v in PdfReader(io.BytesIO(out)).pages[0]["/Annots"][0].get_object()["/Rect"]]
@@ -161,41 +160,21 @@ def test_export_pdf_endpoint(guest):
 
     up = guest.post("/api/uploads", files={"file": ("p.pdf", _blank_pdf(), "application/pdf")})
     assert up.status_code == 200, up.text
-    page = make_page(
-        guest, "Annotated paper", properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]}
-    )
-    r = guest.put(
-        f"/api/blocks/{page['id']}/children",
-        json={
-            "blocks": [
-                {
-                    "id": "hl1",
-                    "content": "top comment",
-                    "properties": {
-                        "highlight_id": "hl1",
-                        "quote": "quoted text",
-                        "pdf_page": 1,
-                        "color": "rgba(155, 205, 255, 0.65)",
-                        "pdf_position": _position(),
-                    },
-                    "children": [
-                        {"id": "note1", "content": "nested note", "properties": {}, "children": []},
-                    ],
-                },
-                {"id": "free1", "content": "a free note (no highlight)", "properties": {}, "children": []},
-                {
-                    "id": "link1",
-                    "content": "",
-                    "properties": {
-                        "highlight_id": "link1",
-                        "link_url": "https://example.com",
-                        "pdf_position": _position(y1=300, y2=320),
-                    },
-                    "children": [],
-                },
-            ]
-        },
-    )
+    page = make_page(guest, "Annotated paper",
+                     properties={"doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"]})
+    r = guest.put(f"/api/blocks/{page['id']}/children", json={"blocks": [
+        {"id": "hl1", "content": "top comment", "properties": {
+            "highlight_id": "hl1", "quote": "quoted text", "pdf_page": 1,
+            "color": "rgba(155, 205, 255, 0.65)", "pdf_position": _position(),
+        }, "children": [
+            {"id": "note1", "content": "nested note", "properties": {}, "children": []},
+        ]},
+        {"id": "free1", "content": "a free note (no highlight)", "properties": {}, "children": []},
+        {"id": "link1", "content": "", "properties": {
+            "highlight_id": "link1", "link_url": "https://example.com",
+            "pdf_position": _position(y1=300, y2=320),
+        }, "children": []},
+    ]})
     assert r.status_code == 200, r.text
 
     r = guest.get(f"/api/pages/{page['id']}/export-pdf")
@@ -219,13 +198,10 @@ def test_import_annotations_strip_rewrites_pdf(guest):
 
     area_pos = _position(x1=50, y1=300, x2=250, y2=400)
     area_pos["area"] = True
-    annotated, written = annotate_pdf(
-        _blank_pdf(),
-        [
-            {"position": _position(), "color": "rgba(170, 235, 170, 0.65)", "note": "kept as block"},
-            {"position": area_pos, "color": "rgba(155, 205, 255, 0.65)", "note": "figure"},
-        ],
-    )
+    annotated, written = annotate_pdf(_blank_pdf(), [
+        {"position": _position(), "color": "rgba(170, 235, 170, 0.65)", "note": "kept as block"},
+        {"position": area_pos, "color": "rgba(155, 205, 255, 0.65)", "note": "figure"},
+    ])
     assert written == 2
 
     up = guest.post("/api/uploads", files={"file": ("a.pdf", annotated, "application/pdf")})
@@ -233,7 +209,8 @@ def test_import_annotations_strip_rewrites_pdf(guest):
     doc_id, source_url = up.json()["doc_id"], up.json()["source_url"]
     page = make_page(guest, "Strip me", properties={"doc_id": doc_id, "source_url": source_url})
 
-    r = guest.post("/api/import/pdf-annotations", json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
+    r = guest.post("/api/import/pdf-annotations",
+                   json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
     assert r.status_code == 200, r.text
     assert r.json() == {"ok": True, "found": 2, "imported": 2, "stripped": 2}
 
@@ -254,7 +231,8 @@ def test_import_annotations_strip_rewrites_pdf(guest):
     assert len(areas) == 1 and areas[0]["content"] == "figure"
 
     # Re-running finds nothing left to import or strip.
-    r = guest.post("/api/import/pdf-annotations", json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
+    r = guest.post("/api/import/pdf-annotations",
+                   json={"block_id": page["id"], "doc_id": doc_id, "strip": True})
     assert r.json() == {"ok": True, "found": 0, "imported": 0, "stripped": 0}
 
     # A fresh PDF export re-writes both annotations — without annot_stripped
@@ -262,7 +240,8 @@ def test_import_annotations_strip_rewrites_pdf(guest):
     r = guest.get(f"/api/pages/{page['id']}/export-pdf")
     assert r.status_code == 200, r.text
     assert r.headers["x-annotations-written"] == "2"
-    subtypes = sorted(str(a.get_object()["/Subtype"]) for a in PdfReader(io.BytesIO(r.content)).pages[0]["/Annots"])
+    subtypes = sorted(str(a.get_object()["/Subtype"])
+                      for a in PdfReader(io.BytesIO(r.content)).pages[0]["/Annots"])
     assert subtypes == ["/Highlight", "/Square"]
 
 
@@ -403,7 +382,7 @@ def test_render_notes_draws_math_and_images(guest):
     """A note is markdown with LaTeX and image refs, not plain text: the box
     typesets the math as vector paths and draws the picture, never the source."""
     import pypdfium2 as pdfium
-    from gamma.db import user_uploads_dir
+    from gamma.db import ws_uploads_dir
     from gamma.pdf_notes import render_notes
 
     png = _blank_png(24, 16)
@@ -414,7 +393,7 @@ def test_render_notes_draws_math_and_images(guest):
     out, drawn = render_notes(_blank_pdf(), [{
         "position": _position(x1=120, y1=300, x2=420, y2=320),
         "note": f"weight $\\phi_j$ over $$\\frac{{\\sum_i x^2}}{{n}}$$\n![shot]({src})",
-    }], uploads_dir=user_uploads_dir("guest"))
+    }], uploads_dir=ws_uploads_dir(workspace_of("guest")))
     assert drawn == 1
 
     doc = pdfium.PdfDocument(out)
@@ -427,10 +406,12 @@ def test_render_notes_draws_math_and_images(guest):
     assert "weight" in text and "over" in text
     assert "\\phi" not in text and "\\frac" not in text and src not in text
     assert 3 in kinds, "the note's image should be drawn as a page image"
-    # Glyph outlines, not text objects: the box chrome is 4 paths, the rest are
-    # the typeset α/∑/fraction bar.
+    # The glyphs are Type 3 text, so they extract as characters; the box
+    # chrome (4 paths) and the fraction bar are all that is drawn as paths.
     require_math_renderer()
-    assert kinds.count(2) >= 10, "math should be typeset as vector paths"
+    assert "ϕ" in text and "∑" in text, "math glyphs should extract as text"
+    assert b"/Type3" in out
+    assert kinds.count(2) <= 6
 
 
 def test_render_notes_draws_cjk_without_relying_on_the_viewer():
@@ -453,13 +434,12 @@ def test_render_notes_draws_cjk_without_relying_on_the_viewer():
     finally:
         doc.close()
     assert "Bayes" in text
-    has_cjk_text = any("一" <= c <= "鿿" for c in text)
+    assert any("一" <= c <= "鿿" for c in text), "the characters stay text either way"
     if vector_text.cjk_font() is not None:
-        # 4 paths of box chrome + one filled outline per character.
-        assert kinds.count(2) >= 4 + 3, "CJK should be drawn as glyph outlines"
-        assert not has_cjk_text, "outlines, so the glyphs are no longer text"
-    else:                      # no CJK font on this box: CID font fallback
-        assert has_cjk_text
+        # The outlines travel inside a Type 3 font: text, and no viewer font
+        # needed. Only the 4 paths of box chrome remain.
+        assert b"/Type3" in out
+        assert kinds.count(2) <= 4, "CJK glyphs should be text, not paths"
 
 
 def test_render_notes_falls_back_when_math_renderer_is_missing(monkeypatch):

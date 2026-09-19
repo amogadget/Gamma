@@ -9,14 +9,18 @@ final class GammaCacheTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     }
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: root) }
-    private func cache(user: String = "alice", server: String = "https://gamma.example") throws -> GammaCache {
-        try GammaCache(rootURL: root, server: URL(string: server)!, username: user)
+    private func cache(user: String = "alice", server: String = "https://gamma.example",
+                       workspace: String = "ws-alpha") throws -> GammaCache {
+        try GammaCache(rootURL: root, server: URL(string: server)!, username: user, workspace: workspace)
     }
     func testAccountAndServerIsolationAndTrailingSlashCanonicalization() throws {
         let a = try cache()
         XCTAssertEqual(a.rootURL, try cache(server: "https://gamma.example/").rootURL)
         XCTAssertNotEqual(a.rootURL, try cache(user: "bob").rootURL)
         XCTAssertNotEqual(a.rootURL, try cache(server: "https://other.example").rootURL)
+        // Two libraries of one account are two caches: a shared directory would let
+        // one workspace's pending handwriting be retried into the other.
+        XCTAssertNotEqual(a.rootURL, try cache(workspace: "ws-beta").rootURL)
         let page = GammaPageCache(pageID: "gamma-page", docID: "gamma-doc")
         try a.savePage(page)
         XCTAssertTrue(try cache(user: "bob").pendingPages().isEmpty)
@@ -32,7 +36,12 @@ final class GammaCacheTests: XCTestCase {
         let reopened = try cache().loadPage(pageID: page.pageID, docID: page.docID)
         XCTAssertEqual(reopened.pageID, "existing-server-page")
         XCTAssertEqual(reopened.drawings["annotation-id"], source)
-        XCTAssertEqual(reopened.outbox, page.outbox)
+        // The snapshot records which library the queued write belongs to, so a
+        // durable retry can never be aimed at another one.
+        XCTAssertEqual(reopened.outbox.first?.workspace, "ws-alpha")
+        var expected = page.outbox
+        for index in expected.indices { expected[index].workspace = "ws-alpha" }
+        XCTAssertEqual(reopened.outbox, expected)
         XCTAssertEqual(try store.pendingPages().count, 1)
         XCTAssertThrowsError(try store.loadPage(pageID: page.pageID, docID: "different-doc"))
     }
@@ -71,8 +80,12 @@ final class GammaCacheTests: XCTestCase {
         let paper = GammaPaper(id: "paper", parentID: nil, content: "Paper", properties: GammaProperties(docID: "doc"), children: nil, updatedAt: nil)
         let entry = GammaOfflineEntry(pageID: "paper", paper: paper, state: .ready, pdfReady: true, snapshotReady: true, audioReady: true, error: nil)
         try store.saveOfflineEntry(entry)
-        XCTAssertEqual(try store.loadOfflineEntry(pageID: "paper"), entry)
-        XCTAssertEqual(try GammaCache.discoverOfflineIdentities(rootURL: root), [GammaOfflineIdentity(server: "https://gamma.example", username: "alice")])
+        var expected = entry
+        expected.workspace = "ws-alpha"   // stamped with the directory's workspace
+        XCTAssertEqual(try store.loadOfflineEntry(pageID: "paper"), expected)
+        XCTAssertEqual(try GammaCache.discoverOfflineIdentities(rootURL: root),
+                       [GammaOfflineIdentity(server: "https://gamma.example", username: "alice",
+                                             workspace: "ws-alpha", workspaceName: "")])
     }
 
     @MainActor
@@ -129,9 +142,10 @@ final class GammaCacheTests: XCTestCase {
     func testExistingIdentityMismatchIsNotOverwritten() throws {
         let store = try cache()
         let identityURL = store.rootURL.appendingPathComponent("identity.json")
-        let wrong = GammaOfflineIdentity(server: "https://other.example", username: "alice")
+        let wrong = GammaOfflineIdentity(server: "https://other.example", username: "alice", workspace: "ws-alpha")
         try JSONEncoder().encode(wrong).write(to: identityURL)
-        XCTAssertThrowsError(try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice"))
+        XCTAssertThrowsError(try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!,
+                                            username: "alice", workspace: "ws-alpha"))
         XCTAssertEqual(try JSONDecoder().decode(GammaOfflineIdentity.self, from: Data(contentsOf: identityURL)), wrong)
     }
 }

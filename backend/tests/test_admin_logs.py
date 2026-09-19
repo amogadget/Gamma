@@ -47,9 +47,9 @@ def test_scrub_keeps_debuggable_ids():
     assert scrub(line) == line
 
 
-def test_logs_require_admin(client, plainuser):
-    assert client.get("/api/admin/logs").status_code == 401  # no session
-    assert plainuser.get("/api/admin/logs").status_code == 403  # non-admin
+def test_logs_require_admin(anon, plainuser):
+    assert anon.get("/api/admin/logs").status_code == 401         # no session
+    assert plainuser.get("/api/admin/logs").status_code == 403    # non-admin
 
 
 def test_logs_tail_cursor_and_endpoint_scrub(logadmin):

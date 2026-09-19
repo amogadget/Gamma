@@ -3,10 +3,11 @@ clients can show progress), saves a local copy only on a complete download,
 and rejects non-PDF upstreams. Upstream fetches are faked — no network."""
 
 import hashlib
+from conftest import workspace_of
 import io
 
 import gamma.routers.pdf as pdf_mod
-from gamma.db import user_uploads_dir
+from gamma.db import ws_uploads_dir
 
 PDF_BYTES = b"%PDF-1.4 fake pdf body\n" + b"x" * 200_000
 
@@ -71,7 +72,7 @@ def test_proxy_save_writes_complete_file_then_redirects(guest, monkeypatch):
     r = guest.get("/api/pdf", params={"source_url": url, "save": "1"})
     assert r.status_code == 200
     assert r.content == PDF_BYTES
-    saved = user_uploads_dir("guest") / f"{doc_id}.pdf"
+    saved = ws_uploads_dir(workspace_of("guest")) / f"{doc_id}.pdf"
     assert saved.read_bytes() == PDF_BYTES
     # Second request must not hit upstream at all: it redirects to the saved copy.
     monkeypatch.setattr(pdf_mod, "guarded_urlopen", None)
@@ -87,7 +88,8 @@ def test_proxy_save_writes_complete_file_then_redirects(guest, monkeypatch):
 def test_pdf_text_status_missing_doc(guest):
     r = guest.get("/api/pdf-text-status", params={"doc_id": "deadbeefdeadbeefdeadbeef"})
     assert r.status_code == 200
-    assert r.json() == {"found": False, "ok": False, "chars": 0, "indexed": False, "index_stale": False}
+    assert r.json() == {"found": False, "ok": False, "chars": 0,
+                        "indexed": False, "index_stale": False}
 
 
 def _text_pdf(text="Attention is all you need, and this line is long enough to count."):
@@ -168,3 +170,33 @@ def test_proxy_rejects_non_pdf(guest, monkeypatch):
     assert r.status_code == 400
     assert "not a PDF" in r.json()["detail"]
     assert made and made[0].closed
+
+
+def test_aps_doi_uses_publisher_pdf_route(guest, monkeypatch):
+    """APS metadata can point back to the abstract instead of the PDF."""
+    doi = "10.1103/PhysRevLett.130.123601"
+    article = f"https://journals.aps.org/prl/abstract/{doi}"
+    pdf = f"https://journals.aps.org/prl/pdf/{doi}"
+    calls = []
+
+    def fetch(req, timeout=30):
+        calls.append(req.full_url)
+        if req.full_url == f"https://doi.org/{doi}":
+            html = f'<meta name="citation_pdf_url" content="http://link.aps.org/pdf/{doi}">'.encode()
+            return FakeUpstream(article, data=html, ctype="text/html")
+        assert req.full_url == pdf
+        return FakeUpstream(pdf)
+
+    monkeypatch.setattr(pdf_mod, "guarded_urlopen", fetch)
+    response = guest.post("/api/resolve-pdf", json={"source_url": doi, "allow_oa": False})
+    assert response.status_code == 200, response.text
+    assert response.json()["source_url"] == pdf
+    assert calls == [f"https://doi.org/{doi}", pdf]
+
+
+def test_publisher_candidates_preserve_generic_metadata():
+    # A lookalike hostname must not synthesize an APS URL.
+    page = "https://journals.aps.org.example/prl/abstract/10.1103/test"
+    html = '<meta name="citation_pdf_url" content="/paper.pdf">'
+    assert pdf_mod._publisher_pdf_candidates(page, html) == [
+        "https://journals.aps.org.example/paper.pdf"]

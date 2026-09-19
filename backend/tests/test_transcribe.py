@@ -14,26 +14,25 @@ def bob(client):
     """A separate TestClient logged in as a real (non-guest) user."""
     from gamma.app import app
     from gamma.db import connect_users_db, page_now
-    from gamma.seed import create_user_dbs
+    from gamma import workspaces
 
     with connect_users_db() as conn:
-        if not conn.execute("SELECT 1 FROM users WHERE username = 'transcribe_user'").fetchone():
+        if not conn.execute("SELECT 1 FROM users WHERE username = 'bob'").fetchone():
             conn.execute(
                 "INSERT INTO users (username, password_hash, is_guest, created_at) VALUES (?, ?, 0, ?)",
-                ("transcribe_user", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode(), page_now()),
+                ("bob", bcrypt.hashpw(b"pw", bcrypt.gensalt()).decode(), page_now()),
             )
             conn.commit()
-    create_user_dbs("transcribe_user")
+    workspaces.ensure_personal("bob")
     c = TestClient(app)
-    r = c.post("/api/login", json={"username": "transcribe_user", "password": "pw"})
+    r = c.post("/api/login", json={"username": "bob", "password": "pw"})
     assert r.status_code == 200, r.text
     return c
 
 
 def _post_audio(client, **form):
-    return client.post(
-        "/api/ai/transcribe", data=form, files={"file": ("dictation.webm", b"\x1aE\xdf\xa3fake-opus", "audio/webm")}
-    )
+    return client.post("/api/ai/transcribe", data=form,
+                       files={"file": ("dictation.webm", b"\x1aE\xdf\xa3fake-opus", "audio/webm")})
 
 
 class _FakeResponse:
@@ -76,7 +75,6 @@ def test_transcribe_uses_the_openai_entry(bob, monkeypatch):
         return _FakeResponse({"text": " hello world "})
 
     from gamma.routers import ai
-
     monkeypatch.setattr(ai, "urlopen", fake_urlopen)
 
     r = _post_audio(bob)
@@ -94,13 +92,11 @@ def test_transcribe_falls_back_to_whisper(bob, monkeypatch):
     def fake_urlopen(req, timeout=0):
         calls.append(req.data)
         if len(calls) == 1:
-            raise urllib.error.HTTPError(
-                req.full_url, 404, "Not Found", None, io.BytesIO(b'{"error":{"message":"model not found"}}')
-            )
+            raise urllib.error.HTTPError(req.full_url, 404, "Not Found", None,
+                                         io.BytesIO(b'{"error":{"message":"model not found"}}'))
         return _FakeResponse({"text": "second try"})
 
     from gamma.routers import ai
-
     monkeypatch.setattr(ai, "urlopen", fake_urlopen)
 
     r = _post_audio(bob)
@@ -117,7 +113,6 @@ def test_transcribe_honors_the_model_override(bob, monkeypatch):
         return _FakeResponse({"text": "ok"})
 
     from gamma.routers import ai
-
     monkeypatch.setattr(ai, "urlopen", fake_urlopen)
 
     r = _post_audio(bob, model="gpt-4o-mini-transcribe", language="zh")
@@ -136,5 +131,6 @@ def test_transcribe_honors_the_model_override(bob, monkeypatch):
 
 
 def test_transcribe_rejects_empty_audio(bob):
-    r = bob.post("/api/ai/transcribe", files={"file": ("dictation.webm", b"", "audio/webm")})
+    r = bob.post("/api/ai/transcribe",
+                 files={"file": ("dictation.webm", b"", "audio/webm")})
     assert r.status_code == 400

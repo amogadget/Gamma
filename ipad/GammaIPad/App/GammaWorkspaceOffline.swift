@@ -5,31 +5,38 @@ import PencilKit
 extension GammaWorkspace {
     func reloadOfflineAccounts() {
         do {
-            let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                  appropriateFor: nil, create: true).appendingPathComponent("GammaCache")
-            // Migrate the identity remembered by older versions only if its cache already exists.
-            if let server = UserDefaults.standard.string(forKey: "gamma.server"),
-               let user = UserDefaults.standard.string(forKey: "gamma.username"), let url = URL(string: server) {
-                let directory = root.appendingPathComponent(GammaCache.key(GammaCache.canonicalServer(server) + "\n" + user))
-                if FileManager.default.fileExists(atPath: directory.path) {
-                    _ = try GammaCache(rootURL: root, server: url, username: user)
-                }
-            }
-            offlineAccounts = try GammaCache.discoverOfflineIdentities(rootURL: root)
+            offlineAccounts = try GammaCache.discoverOfflineIdentities(rootURL: try GammaCache.applicationSupportRoot())
         } catch { errorMessage = error.localizedDescription }
     }
+    /// Opening local files always requires the workspace they belong to. A cache
+    /// from before workspaces existed cannot prove one offline, so it is listed but
+    /// not opened until a verified sign-in attaches it to the default workspace.
     func enterOffline(_ account: GammaOfflineIdentity) {
         guard !busy, !syncing, recorder.pauseBeforeLeaving(), let server = URL(string: account.server) else { return }
+        guard !account.isLegacy else {
+            errorMessage = "These local files were saved before Gamma libraries existed. Sign in online once to attach them to your default workspace; nothing was changed."
+            return
+        }
         do {
-            let storage = try GammaCache.application(server: server, username: account.username)
+            let storage = try GammaCache(rootURL: try GammaCache.applicationSupportRoot(), server: server,
+                                         username: account.username, workspace: account.workspace)
             let library = try storage.library(), recents = try storage.recentPageIDs()
             let entries = try storage.loadOfflineEntries()
+            sessionLifecycle.cancel()
+            if savedSession?.username != account.username || savedSession?.server != account.server || savedSession?.workspace != account.workspace {
+                savedSession = nil
+            }
             stopOfflineWorker(); api?.close(); api = nil; webSession = nil; closeReader()
             accountGeneration = UUID(); cache = storage; accountServer = account.server
             username = account.username; isOffline = true
+            requiresLogin = requiresLogin || savedSession == nil
+            workspaceID = account.workspace; workspaceName = account.workspaceName
+            workspaceOptions = []
             papers = library + entries.values.map(\.paper).filter { p in !library.contains { $0.id == p.id } }
             recentPageIDs = recents; offlineEntries = entries
-            restoreOfflineQueue(); refreshOfflineStatus(); status = "On this iPad · sign in to the same account to sync"
+            restoreOfflineQueue(); refreshOfflineStatus()
+            status = "On this iPad · \(workspaceDisplayName) · sign in to the same account to sync"
+            sessionDidBecomeActive()
         } catch { errorMessage = error.localizedDescription }
     }
 
@@ -126,7 +133,10 @@ extension GammaWorkspace {
             let snapshot = try await hydrated(local, api: api)
             try checkDownload(id, cache: cache, generation: generation, workerID: workerID)
             try cache.savePage(snapshot)
-            if self.page?.pageID == id { self.page = snapshot; contentRevision += 1 }
+            if self.page?.pageID == id {
+                self.page = snapshot; contentRevision += 1
+                reportTimInkErrors(snapshot)
+            }
             entry.snapshotReady = true; try cache.saveOfflineEntry(entry); offlineEntries[id] = entry
             for (recordingID, segment) in try audioSegments(snapshot) {
                 try checkDownload(id, cache: cache, generation: generation, workerID: workerID)
@@ -155,6 +165,12 @@ extension GammaWorkspace {
                     entry.state = error is CancellationError ? .cancelled : .failed; entry.error = error.localizedDescription
                 }
                 try cache.saveOfflineEntry(entry); offlineEntries[id] = entry
+                if handleSessionFailure(error), !requiresLogin, !(error is CancellationError),
+                   (error as? URLError)?.code != .cancelled {
+                    entry.state = .queued; entry.error = nil
+                    try cache.saveOfflineEntry(entry); offlineEntries[id] = entry
+                    stopOfflineWorker()
+                }
             } catch { errorMessage = error.localizedDescription }
         }
     }
@@ -174,6 +190,9 @@ extension GammaWorkspace {
     private func validateSnapshot(_ snapshot: GammaPageCache) throws {
         guard snapshot.blocks.contains(where: { $0.id == snapshot.pageID && $0.properties.docID == snapshot.docID }) else {
             throw GammaAPI.APIError.message("Notes have not been prepared for offline use.")
+        }
+        for block in snapshot.blocks where block.isTimInk {
+            _ = try snapshot.decodedTimInk(for: block)
         }
         for block in snapshot.blocks where block.isInk {
             guard let data = snapshot.drawings[block.id] else { throw GammaAPI.APIError.message("Editable handwriting is missing from this iPad.") }

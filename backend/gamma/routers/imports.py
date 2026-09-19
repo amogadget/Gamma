@@ -2,13 +2,11 @@
 embedded in the PDF itself (e.g. saved by SumatraPDF/Acrobat/Zotero), and whole
 Zotero libraries (a zip of the "Zotero RDF" export)."""
 
-import hashlib
 import json
 import os
 import posixpath
 import re
 import secrets
-import sqlite3
 import tempfile
 import zipfile
 
@@ -16,14 +14,16 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 from fractional_indexing import generate_key_between, generate_n_keys_between
 
-from ..ai_tools import clean_path
-from ..auth import require_user
-from ..db import page_now, pdf_upload_path, user_db_path, user_uploads_dir
-from ..server_settings import check_upload_allowed
+from ..auth import require_user, require_ws
+from ..db import connect_pages_db, page_now, pdf_upload_path, ws_uploads_dir
 from ..blocks_store import last_child_position
+from ..foldertags import clean_path, parse_tags
 from ..logbuf import log
-from ..markdown_import import md_to_blocks, split_frontmatter
-from ..storage import DIGEST_CHARS, display_filename
+from ..ops import note_reload
+from ..markdown_import import MAX_MARKDOWN_BYTES, md_to_blocks
+from ..markdown_zip_import import import_markdown_zip, markdown_page
+from ..ink import InkError, dumps as ink_dumps, from_pdf_ink, parse_ink, pdf_position as ink_position
+from ..storage import content_digest, display_filename, is_pdf, store_file, store_pdf
 from ..logseq_import import (
     edn_highlight_position,
     edn_highlight_to_block,
@@ -32,56 +32,9 @@ from ..logseq_import import (
     parse_edn,
     parse_logseq_md,
 )
-from ..zotero_import import clean_folder_path, find_zip_entry, parse_zotero_rdf, zip_name_map
+from ..zotero_import import find_zip_entry, parse_zotero_rdf, zip_name_map
 
 router = APIRouter(prefix="/api", tags=["import"])
-
-_MAX_ZOTERO_MEMBERS = 20_000
-_MAX_ZOTERO_RDF_BYTES = 16 * 1024 * 1024
-_MAX_ZOTERO_PDF_BYTES = 2 * 1024 * 1024 * 1024
-_MAX_ZOTERO_COMPRESSION_RATIO = 1_000
-
-
-def _zotero_pdf_digest(zf: zipfile.ZipFile, name: str) -> tuple[str, int]:
-    """Hash and validate one PDF member without loading it into memory."""
-    info = zf.getinfo(name)
-    if info.file_size > _MAX_ZOTERO_PDF_BYTES:
-        raise ValueError("PDF archive member is too large")
-    if (
-        info.file_size > 10 * 1024 * 1024
-        and info.file_size > max(1, info.compress_size) * _MAX_ZOTERO_COMPRESSION_RATIO
-    ):
-        raise ValueError("suspicious PDF compression ratio")
-    digest = hashlib.sha256()
-    total = 0
-    first = b""
-    with zf.open(info) as source:
-        while chunk := source.read(1024 * 1024):
-            if not first:
-                first = chunk[:4]
-            total += len(chunk)
-            if total > _MAX_ZOTERO_PDF_BYTES:
-                raise ValueError("PDF archive member is too large")
-            digest.update(chunk)
-    if first != b"%PDF":
-        raise ValueError("not a PDF")
-    return digest.hexdigest()[:DIGEST_CHARS], total
-
-
-def _store_zotero_pdf(zf: zipfile.ZipFile, name: str, target) -> None:
-    """Stream an already-validated member into place atomically."""
-    fd, temporary = tempfile.mkstemp(suffix=".pdf", dir=str(target.parent))
-    try:
-        with zf.open(name) as source, os.fdopen(fd, "wb") as output:
-            while chunk := source.read(1024 * 1024):
-                output.write(chunk)
-        os.replace(temporary, target)
-    except Exception:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-        raise
 
 
 @router.post("/import/logseq")
@@ -92,18 +45,11 @@ async def import_logseq(
     md: UploadFile = File(None),
 ):
     # 1. Validate and store PDF
-    user = require_user(request)
-    uploads = user_uploads_dir(user)
-    uploads.mkdir(parents=True, exist_ok=True)
+    ws = require_ws(request, write=True)
     pdf_bytes = await pdf.read()
-    if len(pdf_bytes) < 4 or pdf_bytes[:4] != b"%PDF":
+    if not is_pdf(pdf_bytes):
         raise HTTPException(status_code=400, detail="not a valid PDF")
-    digest = hashlib.sha256(pdf_bytes).hexdigest()[:DIGEST_CHARS]
-    target = uploads / f"{digest}.pdf"
-    if not target.exists():
-        check_upload_allowed(user, len(pdf_bytes))
-        target.write_bytes(pdf_bytes)
-    source_url = f"/api/uploads/{digest}.pdf"
+    digest, source_url, _ = store_pdf(ws, pdf_bytes)
 
     # 2. Parse EDN → build quote→highlight lookup
     edn_text = (await edn.read()).decode("utf-8")
@@ -136,7 +82,8 @@ async def import_logseq(
         }
         import_blocks, used_quotes = md_to_ordered_blocks(md_blocks_parsed, edn_by_quote, edn_by_uuid)
         # Append EDN highlights not referenced in MD, sorted by page number
-        edn_only = [h for h in edn_highlights if (h.get("content") or {}).get("text", "").strip() not in used_quotes]
+        edn_only = [h for h in edn_highlights
+                    if (h.get("content") or {}).get("text", "").strip() not in used_quotes]
         edn_only.sort(key=lambda h: h.get("page") or (h.get("position") or {}).get("page") or 0)
         for h in edn_only:
             import_blocks.append(edn_highlight_to_block(h))
@@ -146,7 +93,7 @@ async def import_logseq(
     # 4. Get or create unified_block for this doc
     title = (pdf.filename or digest).removesuffix(".pdf")
     now = page_now()
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         row = conn.execute(
             "SELECT id FROM unified_blocks WHERE json_extract(properties,'$.doc_id') = ?",
             (digest,),
@@ -166,8 +113,7 @@ async def import_logseq(
 
         # 5. Append blocks, skip already-imported quotes
         existing_quotes = {
-            r[0]
-            for r in conn.execute(
+            r[0] for r in conn.execute(
                 "SELECT json_extract(properties,'$.quote') FROM unified_blocks WHERE parent_id=?",
                 (block_id,),
             ).fetchall()
@@ -184,29 +130,23 @@ async def import_logseq(
             conn.execute(
                 "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
                 "VALUES (?,?,?,?,?,?,?)",
-                (
-                    b["id"],
-                    block_id,
-                    pos_key,
-                    b.get("content", ""),
-                    b["properties"] if isinstance(b["properties"], str) else json.dumps(b.get("properties", {})),
-                    now,
-                    now,
-                ),
+                (b["id"], block_id, pos_key,
+                 b.get("content", ""),
+                 b["properties"] if isinstance(b["properties"], str) else json.dumps(b.get("properties", {})),
+                 now, now),
             )
             if quote:
                 existing_quotes.add(quote)
             inserted += 1
         conn.execute("UPDATE unified_blocks SET updated_at=? WHERE id=?", (now, block_id))
         conn.commit()
+        if row and inserted:
+            note_reload(ws, conn, block_id, actor)
 
     return {"ok": True, "block_id": block_id, "doc_id": digest, "source_url": source_url, "imported": inserted}
 
 
 # --- Plain Markdown note import -----------------------------------------------
-
-MAX_MARKDOWN_BYTES = 5 * 1024 * 1024
-
 
 @router.post("/import/markdown")
 async def import_markdown(request: Request, file: UploadFile = File(...),
@@ -216,76 +156,47 @@ async def import_markdown(request: Request, file: UploadFile = File(...),
     Markdown is data, not an uploaded web asset: the parsed blocks are stored in
     pages.db and no original file is served back. This also makes folder and
     single-file uploads share exactly the same import path.
-
-    Re-importing the same bytes returns the page created the first time rather
-    than duplicating it — the content digest is the identity, so a folder
-    upload replayed after a partial failure converges instead of piling up.
     """
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     raw = await file.read(MAX_MARKDOWN_BYTES + 1)
-    if len(raw) > MAX_MARKDOWN_BYTES:
-        raise HTTPException(status_code=413, detail="Markdown file exceeds 5 MB")
-    try:
-        text = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="Markdown file must be UTF-8")
-
     original = display_filename(file.filename, "note.md")
-    frontmatter_title, body = split_frontmatter(text)
-    fallback = re.sub(r"\.(?:md|markdown)$", "", original, flags=re.I).strip() or "Untitled note"
-    title = (frontmatter_title or fallback).strip()[:500]
-    tree = md_to_blocks(body)
-    clean_folder = clean_path(folder)
-    digest = hashlib.sha256(raw).hexdigest()[:DIGEST_CHARS]
-    props = {"original_filename": original, "markdown_import": digest}
-    if clean_folder:
-        props["folder"] = clean_folder
+    with connect_pages_db(ws) as conn:
+        result = markdown_page(conn, raw, original, folder)
+    return {"ok": True, **result}
 
-    now = page_now()
-    page_id = secrets.token_urlsafe(9)
-    imported = 0
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
-        # Idempotency: the same file imported twice is the same page. Serialize
-        # the check with the insert so two concurrent uploads of one file can't
-        # both decide they are the first.
-        conn.execute("BEGIN IMMEDIATE")
-        existing = conn.execute(
-            "SELECT id, content FROM unified_blocks WHERE parent_id = 'root' "
-            "AND json_extract(properties, '$.markdown_import') = ?",
-            (digest,),
-        ).fetchone()
-        if existing:
-            conn.commit()
-            return {"ok": True, "block_id": existing[0], "title": existing[1],
-                    "original_filename": original, "imported": 0,
-                    "folder": clean_folder, "duplicate": True}
-        pos = generate_key_between(last_child_position(conn, "root"), None)
-        conn.execute(
-            "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
-            "VALUES (?,'root',?,?,?,?,?)",
-            (page_id, pos, title, json.dumps(props), now, now),
-        )
-        pending = [(page_id, tree)]
-        while pending:
-            parent_id, nodes = pending.pop()
-            if not nodes:
-                continue
-            positions = generate_n_keys_between(None, None, n=len(nodes))
-            for node, child_pos in zip(nodes, positions):
-                child_id = secrets.token_urlsafe(9)
-                conn.execute(
-                    "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
-                    "VALUES (?,?,?,?,?,?,?)",
-                    (child_id, parent_id, child_pos, node.get("content", ""), "{}", now, now),
-                )
-                imported += 1
-                if node.get("children"):
-                    pending.append((child_id, node["children"]))
+
+@router.post("/import/markdown-zip")
+def import_markdown_zip_endpoint(request: Request, file: UploadFile = File(...),
+                                 folder: str = Form("")):
+    """A zip of Markdown notes → one page per .md (see markdown_zip_import):
+    an Obsidian vault, Notion's Markdown & CSV export, a Gamma Markdown or
+    vault export, or any zipped folder of notes. ``folder`` prefixes every
+    page's folder label."""
+    ws = require_ws(request, write=True)
+    try:
+        zf = zipfile.ZipFile(file.file)
+    except zipfile.BadZipFile:
+        raise HTTPException(status_code=400, detail="not a zip file")
+    with zf, connect_pages_db(ws) as conn:
+        report = import_markdown_zip(ws, zf, conn, folder, page_now())
         conn.commit()
+    return {"ok": True, **report}
 
-    return {"ok": True, "block_id": page_id, "title": title,
-            "original_filename": original, "imported": imported,
-            "folder": clean_folder, "duplicate": False}
+
+class MarkdownBlocksRequest(BaseModel):
+    text: str
+
+
+@router.post("/markdown-blocks")
+async def markdown_blocks(payload: MarkdownBlocksRequest, request: Request):
+    """Parse markdown text into a ``{content, children}`` block tree — the
+    editor's "paste as blocks" helper, same parser as the .md file import.
+    Nothing is stored; the client inserts the tree through its normal
+    tree-edit/autosave path."""
+    require_user(request)
+    if len(payload.text.encode("utf-8", errors="ignore")) > MAX_MARKDOWN_BYTES:
+        raise HTTPException(status_code=413, detail="text exceeds 5 MB")
+    return {"blocks": md_to_blocks(payload.text)}
 
 
 # --- Annotations embedded in the PDF file itself ------------------------------
@@ -297,7 +208,47 @@ _NOTE_TYPES = {"/Text", "/FreeText"}
 # Rectangle/ellipse drawings → area highlights (position carries area: true),
 # the inverse of what pdf_export.py writes for Gamma's own area notes.
 _AREA_TYPES = {"/Square", "/Circle"}
-_IMPORT_TYPES = _MARKUP_TYPES | _NOTE_TYPES | _AREA_TYPES
+# Freehand drawings → handwriting groups (gamma/ink.py), the inverse of the
+# /Ink annotations pdf_export.py writes.
+_INK_TYPES = {"/Ink"}
+_IMPORT_TYPES = _MARKUP_TYPES | _NOTE_TYPES | _AREA_TYPES | _INK_TYPES
+
+
+def _ink_from_annotation(obj, pnum: int, pw: float, ph: float, contents: str):
+    """One /Ink annotation → an importer record carrying the parsed ink file
+    (``kind: "ink"``). A Gamma export's ``/GammaInk`` private key restores
+    pressure and time; foreign ink is polylines at the annotation's width."""
+    ink_list = [[float(_resolve(v)) for v in (_resolve(path) or [])]
+                for path in (_resolve(obj.get("/InkList")) or [])]
+    bs = _resolve(obj.get("/BS")) or {}
+    try:
+        width = float(_resolve(bs.get("/W", 1)))
+    except (TypeError, ValueError):
+        width = 1.0
+    color = "#1f1f1f"
+    c = _resolve(obj.get("/C"))
+    try:
+        if c is not None and len(c) == 3:
+            color = "#%02x%02x%02x" % tuple(min(255, max(0, int(round(float(_resolve(v)) * 255)))) for v in c)
+    except (TypeError, ValueError):
+        pass
+    try:
+        alpha = min(max(float(_resolve(obj.get("/CA"))), 0.05), 1.0)
+    except (TypeError, ValueError):
+        alpha = 1.0
+    private = _resolve(obj.get("/GammaInk"))
+    try:
+        ink = parse_ink(from_pdf_ink(ink_list, width, color, alpha, pnum, pw, ph,
+                                     str(private) if private else None))
+    except InkError as e:
+        log.warning(f"[pdf-annots] skipping unreadable ink on p.{pnum}: {e}")
+        return None
+    if not ink.strokes:
+        return None
+    first = ink_list[0][:2] if ink_list and len(ink_list[0]) >= 2 else (0, 0)
+    key = f"{pnum}:/Ink:{round(first[0])}:{round(first[1])}:{len(ink.strokes)}"
+    return {"key": key, "page": pnum, "content": contents, "quote": "", "color": color,
+            "position": ink_position(ink), "kind": "ink", "ink": ink}
 
 
 def _page_text_chunks(page):
@@ -341,6 +292,11 @@ def _extract_pdf_annotations(reader):
                 if subtype not in _IMPORT_TYPES:
                     continue
                 contents = str(_resolve(obj.get("/Contents")) or "").strip()
+                if subtype in _INK_TYPES:
+                    record = _ink_from_annotation(obj, pnum, pw, ph, contents)
+                    if record:
+                        found.append(record)
+                    continue
                 # Quad rects in PDF space (origin bottom-left)
                 quads = []
                 qp = _resolve(obj.get("/QuadPoints"))
@@ -348,7 +304,7 @@ def _extract_pdf_annotations(reader):
                 if qp:
                     nums = [float(_resolve(v)) for v in qp]
                     for i in range(0, len(nums) - 7, 8):
-                        xs, ys = nums[i : i + 8 : 2], nums[i + 1 : i + 8 : 2]
+                        xs, ys = nums[i:i + 8:2], nums[i + 1:i + 8:2]
                         quads.append((min(xs), min(ys), max(xs), max(ys)))
                 elif rect:
                     r = [float(_resolve(v)) for v in rect]
@@ -359,33 +315,17 @@ def _extract_pdf_annotations(reader):
                 if subtype in _MARKUP_TYPES:
                     if chunks is None:
                         chunks = _page_text_chunks(page)
-                    picked = [
-                        t
-                        for (x, y, t) in chunks
-                        if any(qx1 - 2 <= x <= qx2 + 2 and qy1 - 3 <= y <= qy2 + 3 for (qx1, qy1, qx2, qy2) in quads)
-                    ]
+                    picked = [t for (x, y, t) in chunks
+                              if any(qx1 - 2 <= x <= qx2 + 2 and qy1 - 3 <= y <= qy2 + 3
+                                     for (qx1, qy1, qx2, qy2) in quads)]
                     quote = re.sub(r"\s+", " ", " ".join(picked)).strip()[:1000]
                 # Flip to top-left origin (what the viewer stores)
-                rects = [
-                    {
-                        "x1": q[0],
-                        "y1": ph - q[3],
-                        "x2": q[2],
-                        "y2": ph - q[1],
-                        "width": pw,
-                        "height": ph,
-                        "pageNumber": pnum,
-                    }
-                    for q in quads
-                ]
+                rects = [{"x1": q[0], "y1": ph - q[3], "x2": q[2], "y2": ph - q[1],
+                          "width": pw, "height": ph, "pageNumber": pnum} for q in quads]
                 bounding = {
-                    "x1": min(r["x1"] for r in rects),
-                    "y1": min(r["y1"] for r in rects),
-                    "x2": max(r["x2"] for r in rects),
-                    "y2": max(r["y2"] for r in rects),
-                    "width": pw,
-                    "height": ph,
-                    "pageNumber": pnum,
+                    "x1": min(r["x1"] for r in rects), "y1": min(r["y1"] for r in rects),
+                    "x2": max(r["x2"] for r in rects), "y2": max(r["y2"] for r in rects),
+                    "width": pw, "height": ph, "pageNumber": pnum,
                 }
                 color = "rgba(255, 226, 143, 0.65)"
                 c = _resolve(obj.get("/C"))
@@ -397,26 +337,18 @@ def _extract_pdf_annotations(reader):
                     if ca is not None:
                         alpha = min(max(float(ca), 0.05), 1.0)
                     if c is not None and len(c) == 3:
-                        color = (
-                            f"rgba({int(float(_resolve(c[0])) * 255)}, {int(float(_resolve(c[1])) * 255)}, "
-                            f"{int(float(_resolve(c[2])) * 255)}, {round(alpha, 3)})"
-                        )
+                        color = (f"rgba({int(float(_resolve(c[0])) * 255)}, {int(float(_resolve(c[1])) * 255)}, "
+                                 f"{int(float(_resolve(c[2])) * 255)}, {round(alpha, 3)})")
                 except Exception:
                     pass
                 key = f"{pnum}:{subtype}:{round(quads[0][0])}:{round(quads[0][1])}:{round(quads[0][2])}"
                 position = {"pageNumber": pnum, "boundingRect": bounding, "rects": rects}
                 if subtype in _AREA_TYPES:
                     position["area"] = True
-                found.append(
-                    {
-                        "key": key,
-                        "page": pnum,
-                        "content": contents,
-                        "quote": quote,
-                        "color": color,
-                        "position": position,
-                    }
-                )
+                found.append({
+                    "key": key, "page": pnum, "content": contents, "quote": quote, "color": color,
+                    "position": position,
+                })
             except Exception as e:
                 log.warning(f"[pdf-annots] skipping annotation on p.{pnum}: {e}")
     return found
@@ -478,7 +410,7 @@ class PdfAnnotsRequest(BaseModel):
     strip: bool = False
 
 
-def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool) -> dict:
+def import_embedded_annotations(ws: str, block_id: str, pdf_path, strip: bool, actor: str = "") -> dict:
     """Extract the annotations embedded in the stored PDF and add the missing
     ones as highlight blocks under ``block_id`` (idempotent via the stable
     ``imported_annot`` key), then optionally strip the originals from the file.
@@ -491,7 +423,7 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
 
     now = page_now()
     inserted = 0
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    with connect_pages_db(ws) as conn:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id=?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="page block not found")
         # Idempotent: each embedded annotation carries a stable key
@@ -503,14 +435,20 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
             positions = generate_n_keys_between(last_child_position(conn, block_id), None, n=len(todo))
             for f, pos in zip(todo, positions):
                 bid = secrets.token_urlsafe(9)
-                props = {
-                    "highlight_id": bid,
-                    "color": f["color"],
-                    "quote": f["quote"],
-                    "pdf_page": f["page"],
-                    "pdf_position": f["position"],
-                    "imported_annot": f["key"],
-                }
+                if f.get("kind") == "ink":
+                    # The strokes live in an .ink upload like any drawn group.
+                    filename, _ = store_file(ws, ink_dumps(f["ink"]), ".ink")
+                    props = {
+                        "ink_url": f"/api/uploads/{filename}", "pdf_page": f["page"],
+                        "pdf_position": f["position"], "ink_strokes": len(f["ink"].strokes),
+                        "color": f["color"], "imported_annot": f["key"],
+                    }
+                else:
+                    props = {
+                        "highlight_id": bid, "color": f["color"], "quote": f["quote"],
+                        "pdf_page": f["page"], "pdf_position": f["position"],
+                        "imported_annot": f["key"],
+                    }
                 conn.execute(
                     "INSERT INTO unified_blocks (id,parent_id,position,content,properties,created_at,updated_at) "
                     "VALUES (?,?,?,?,?,?,?)",
@@ -519,6 +457,7 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
                 inserted += 1
             conn.execute("UPDATE unified_blocks SET updated_at=? WHERE id=?", (now, block_id))
             conn.commit()
+            note_reload(ws, conn, block_id, actor)
 
     # Strip AFTER the blocks are committed: if the rewrite fails the file is
     # untouched and the import still stands; a re-run can strip again.
@@ -532,7 +471,7 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
             # The embedded originals are gone from the file, so PDF export must
             # start writing these blocks again (it skips imported ones only
             # while the original annotation still lives in the PDF).
-            with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+            with connect_pages_db(ws) as conn:
                 rows = conn.execute(
                     "SELECT id, properties FROM unified_blocks WHERE parent_id=? "
                     "AND json_extract(properties,'$.imported_annot') IS NOT NULL",
@@ -540,7 +479,8 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
                 for bid, props_json in rows:
                     props = json.loads(props_json or "{}")
                     props["annot_stripped"] = True
-                    conn.execute("UPDATE unified_blocks SET properties=? WHERE id=?", (json.dumps(props), bid))
+                    conn.execute("UPDATE unified_blocks SET properties=? WHERE id=?",
+                                 (json.dumps(props), bid))
                 conn.commit()
     return {"found": len(found), "imported": inserted, "stripped": stripped}
 
@@ -548,15 +488,16 @@ def import_embedded_annotations(user: str, block_id: str, pdf_path, strip: bool)
 # Sync endpoint: PyPDF2 parsing is CPU-bound; the threadpool keeps the loop free.
 @router.post("/import/pdf-annotations")
 def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     try:
-        pdf_path = pdf_upload_path(user, payload.doc_id)
+        pdf_path = pdf_upload_path(ws, payload.doc_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="invalid document id")
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF not stored on the server")
     try:
-        result = import_embedded_annotations(user, payload.block_id, pdf_path, payload.strip)
+        result = import_embedded_annotations(ws, payload.block_id, pdf_path, payload.strip,
+                                             request.state.user or "")
     except HTTPException:
         raise
     except Exception as e:
@@ -574,37 +515,30 @@ def import_pdf_annotations(payload: PdfAnnotsRequest, request: Request):
 # Zotero re-embeds annotations — so the item key is what survives a re-export).
 
 
-def _split_tags(raw: str) -> list[str]:
-    """Mirror of frontend parseFolderTags: comma-separated folder/label lists."""
-    return [t.strip() for t in (raw or "").split(",") if t.strip()]
-
-
 def _merge_tags(existing_raw: str, new_tags: list[str]) -> str:
-    merged = _split_tags(existing_raw)
+    merged = parse_tags(existing_raw)
     for t in new_tags:
         if t not in merged:
             merged.append(t)
     return ", ".join(merged)
 
 
-def _zotero_item_page(conn, user, uploads, zf, names, base, item, prefix, now, report):
+def _zotero_item_page(conn, ws, uploads, zf, names, base, item, prefix, now, report):
     """Store the item's PDF (if any), find-or-create its page, merge metadata,
     labels and notes. Returns (block_id, pdf_path) when embedded annotations
     should be imported afterwards, else None."""
-    pdf_member = digest = None
-    pdf_size = 0
+    pdf_bytes = digest = None
     for path in item["pdf_paths"]:
         real = find_zip_entry(names, base, path)
         if not real:
             report["warnings"].append({"title": item["title"], "reason": f"file not in zip: {path}"})
             continue
-        try:
-            digest, pdf_size = _zotero_pdf_digest(zf, real)
-        except ValueError as error:
-            report["warnings"].append({"title": item["title"], "reason": f"{error}: {path}"})
+        data = zf.read(real)
+        if not is_pdf(data):
+            report["warnings"].append({"title": item["title"], "reason": f"not a PDF: {path}"})
             continue
         # First stored PDF becomes the page's file; extra attachments are left out.
-        pdf_member = real
+        pdf_bytes, digest = data, content_digest(data)
         if len(item["pdf_paths"]) > 1:
             report["warnings"].append({"title": item["title"],
                                        "reason": f"only the first of {len(item['pdf_paths'])} PDFs imported"})
@@ -631,14 +565,11 @@ def _zotero_item_page(conn, user, uploads, zf, names, base, item, prefix, now, r
     # Attach the file only when the page doesn't already have one — a page
     # found by zotero_key keeps its existing PDF (and the highlights tied to it).
     if digest and not props.get("doc_id"):
-        target = pdf_upload_path(user, digest)
-        if not target.exists():
-            # Dedup first: limits only gate genuinely new persistent bytes.
-            check_upload_allowed(user, pdf_size)
-            _store_zotero_pdf(zf, pdf_member, target)
+        _, source_url, already_existed = store_pdf(ws, pdf_bytes)
+        if not already_existed:
             report["pdfs_stored"] += 1
         props["doc_id"] = digest
-        props["source_url"] = f"/api/uploads/{digest}.pdf"
+        props["source_url"] = source_url
 
     if item["meta"]["title"] and not props.get("meta"):
         props["meta"] = item["meta"]
@@ -685,16 +616,9 @@ def _zotero_item_page(conn, user, uploads, zf, names, base, item, prefix, now, r
 
     doc_id = props.get("doc_id")
     if doc_id:
-        try:
-            stored_pdf = pdf_upload_path(user, doc_id)
-        except ValueError:
-            report["warnings"].append({
-                "title": item["title"],
-                "reason": "invalid stored document id",
-            })
-        else:
-            if stored_pdf.exists():
-                return block_id, stored_pdf
+        pdf_path = uploads / f"{doc_id}.pdf"
+        if pdf_path.exists():
+            return block_id, pdf_path
     return None
 
 
@@ -702,47 +626,41 @@ def _zotero_item_page(conn, user, uploads, zf, names, base, item, prefix, now, r
 @router.post("/import/zotero")
 def import_zotero(request: Request, file: UploadFile = File(...),
                   strip: bool = Form(False), folder: str = Form("")):
-    user = require_user(request)
+    ws = require_ws(request, write=True)
     try:
         zf = zipfile.ZipFile(file.file)
     except zipfile.BadZipFile:
         raise HTTPException(status_code=400,
                             detail="not a zip file — zip the exported folder and upload that")
     with zf:
-        members = zf.infolist()
-        if len(members) > _MAX_ZOTERO_MEMBERS:
-            raise HTTPException(status_code=400, detail="zip contains too many entries")
-        rdf_names = [entry.filename for entry in members if entry.filename.lower().endswith(".rdf")]
+        rdf_names = [n for n in zf.namelist() if n.lower().endswith(".rdf")]
         if not rdf_names:
             raise HTTPException(status_code=400,
                                 detail='no .rdf file in the zip — export from Zotero as "Zotero RDF" with "Export Files"')
         # The shallowest .rdf is the export manifest; z:path values resolve
         # relative to it (users zip either the folder or its contents).
         rdf_name = min(rdf_names, key=lambda n: (n.replace("\\", "/").count("/"), len(n)))
-        rdf_info = zf.getinfo(rdf_name)
-        if rdf_info.file_size > _MAX_ZOTERO_RDF_BYTES:
-            raise HTTPException(status_code=400, detail="Zotero RDF is too large")
         base = posixpath.dirname(rdf_name.replace("\\", "/"))
         try:
-            items = parse_zotero_rdf(zf.read(rdf_info).decode("utf-8"))
+            items = parse_zotero_rdf(zf.read(rdf_name).decode("utf-8"))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"could not parse the Zotero RDF: {e}")
         if not items:
             raise HTTPException(status_code=400, detail="no importable items in the export")
 
         names = zip_name_map(zf)
-        prefix = clean_folder_path(folder)
-        uploads = user_uploads_dir(user)
+        prefix = clean_path(folder)
+        uploads = ws_uploads_dir(ws)
         uploads.mkdir(parents=True, exist_ok=True)
         now = page_now()
         report = {"items": len(items), "pages_created": 0, "pages_merged": 0,
                   "pdfs_stored": 0, "annotations_imported": 0, "notes_imported": 0,
                   "pages": [], "skipped": [], "warnings": []}
         annot_jobs = []
-        with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+        with connect_pages_db(ws) as conn:
             for item in items:
                 try:
-                    job = _zotero_item_page(conn, user, uploads, zf, names, base,
+                    job = _zotero_item_page(conn, ws, uploads, zf, names, base,
                                             item, prefix, now, report)
                     if job:
                         annot_jobs.append(job)
@@ -757,7 +675,7 @@ def import_zotero(request: Request, file: UploadFile = File(...),
     # import_embedded_annotations opens its own connections.
     for block_id, pdf_path in annot_jobs:
         try:
-            result = import_embedded_annotations(user, block_id, pdf_path, strip)
+            result = import_embedded_annotations(ws, block_id, pdf_path, strip, request.state.user or "")
             report["annotations_imported"] += result["imported"]
         except Exception as e:
             log.warning(f"[zotero] annotations for {pdf_path.name} failed: {e}")

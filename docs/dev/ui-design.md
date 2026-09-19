@@ -11,13 +11,52 @@ already exists. Bespoke CSS classes are for **layout only**.
 | Class / component | Use for |
 |---|---|
 | `uiBtn` (+ `sm`, `on`, `primary`, `danger`, `iconSq`) | every button; `sm` is the shared 28 px compact size, `on` = toggled state, `iconSq` = square icon-only (combine with `sm` for compact toolbars) |
-| `ctlBtn` / `ctlBtnRow` / `pdfCtlBox` | the flat 22 px icon buttons of the PDF zoom column: `pdfCtlBox` = the elevated vertical box, `ctlBtnRow` = the same buttons laid flat with no box (chat header), `modeActive` = on |
+| `ctlBtn` / `ctlBtnRow` / `pdfCtlBox` | the flat 22 px icon buttons of the PDF zoom column: `pdfCtlBox` = the elevated vertical box, `ctlBtnRow` = the same buttons laid flat with no box (chat header), `modeActive` = on. **`ctlBtn` (frameless) is the DEFAULT style for any icon button** — new icon toolbars (e.g. the image hover tools) use it, not bespoke button styles |
 | `uiClose` (+ `uiCloseSm`/`uiCloseLg`) | every × close button |
 | `aiKeyInput` | every text/number/password input in dialogs and settings |
 | `switch` / `switchTrack` | every on/off toggle |
-| `MenuSelect` / `ActionMenu` ([menus.jsx](../../frontend/src/menus.jsx)) | every dropdown: Codex-style pill trigger + checkmarked `ContextMenu`. No native `<select>` anywhere |
-| `MenuItem` / `MenuLabel` / `SubMenuItem` ([menus.jsx](../../frontend/src/menus.jsx)) | every row inside a menu: icon column + ellipsizing label (+ `danger`, `trailing`). `SubMenuItem` is the nested flyout — hover-opened, safe-triangle guarded |
+| `MenuSelect` / `ActionMenu` ([Menus.jsx](../../frontend/src/shared/ui/Menus.jsx)) | every dropdown: Codex-style pill trigger + checkmarked `ContextMenu`. No native `<select>` anywhere |
+| `MenuItem` / `MenuLabel` / `SubMenuItem` ([Menus.jsx](../../frontend/src/shared/ui/Menus.jsx)) | every row inside a menu: icon column + ellipsizing label (+ `danger`, `trailing`). `SubMenuItem` is the nested flyout — hover-opened, safe-triangle guarded |
 | `categoryTag`, `uiTag` | chips and small badges |
+| `popoverAnchor` | the `position: relative; inline-flex` wrapper every popover trigger sits in (`data-popover="…"` on the same element) — never inline that style |
+
+### Control size and text size
+
+Two separate size levers, deliberately not one "zoom":
+
+- **Control size** (Settings / Appearance, `gamma-ui-scale`, a `Stepper` over
+  the `UI_SCALE` range in `app/prefs.js`, 70–160 % in 10 % steps) is a CSS
+  `zoom` on every button and toggle —
+  `:where(button, .uiBtn, .ctlBtn, .uiClose, .switch)` in `shared/styles/app.css` reads
+  `--ui-scale` off the root element. Zoom scales the box, its text and its
+  SVG icon as one unit, so rows and toolbars just grow to fit; a second rule
+  resets the zoom on a control nested in another so it never compounds.
+  `index.html` applies the stored value before first paint (like the theme),
+  App.jsx keeps the property in sync afterwards. Content — notes, PDF, chat
+  text — is untouched.
+- **Text size** is per panel and per session: Ctrl/⌘+scroll over the notes
+  list or the chat transcript. `useTextScale` (`shared/ui/Widgets.jsx`) owns it. It is
+  a native non-passive wheel listener, because React's `onWheel` can't
+  `preventDefault` and the browser would zoom the page. Each ~40 px of
+  accumulated delta is one ×1.1 step (mouse notches and trackpad pinches
+  both land on whole steps), clamped 0.6–2.5 and snapping back onto 100 %.
+  The scale goes on the panel as the `--text-scale` custom property, which
+  the base font sizes multiply in:
+  `.blockRendered`, `.blockEditor`, `.blockEditorCm .cm-scroller`, `.chatBubble`.
+  A transient `.textScaleBadge` pill (the panel's first child, sticky, zero
+  height) reads out the percentage. Nothing is stored: reload resets it. On
+  the home library the gesture is left to the browser.
+
+### Fullscreen on touch devices
+
+The fullscreen button asks for native fullscreen first. App fullscreen
+(`.app.pseudoFullscreen` + `html.appFocusFullscreen`) is the fallback when
+the Fullscreen API is missing (iOS Safari) or rejects the request: it hides
+the app bars, confines overscroll, and exits through the same button or
+Escape. The browser's own bars may stay visible. The button handles a
+stationary touch release itself, because a mobile browser may omit the
+compatibility click after a scroll; the click that does follow is consumed
+so one tap cannot toggle twice. Mouse and keyboard keep the plain click path.
 
 ### Menus and submenus
 
@@ -30,14 +69,14 @@ the parent would dismiss itself before a click on a flyout row could land),
 flips to the other side and clamps vertically when the viewport is tight.
 
 Submenus open on hover, and the hover-switching is guarded by
-[menuAim.js](../../frontend/src/menuAim.js): while a flyout is open, a
+[menuAim.js](../../frontend/src/shared/ui/menuAim.js): while a flyout is open, a
 pointer move that stays inside the triangle from the cursor's recent position
 to the flyout's near edge counts as "aiming at the flyout", and the hover
 change it would cause is held until the aim breaks or the cursor stops. That
 is what lets a diagonal move into the flyout pass over the rows below the
 trigger without closing it. The module is plain geometry plus a `useMenuAim`
 hook (`setTarget` / `guard` / `keep`) — any other menu surface can adopt it
-without going through `menus.jsx`.
+without going through `shared/ui/Menus.jsx`.
 
 ### Dialogs
 
@@ -53,66 +92,132 @@ Destructive affordances all read from one set of tokens — `--danger`,
 secondary, `.uiBtn.danger` and a menu's `danger` row are the same red in both
 themes. Never hardcode a red.
 
+### The share popover
+
+`.sharePopover` (App.jsx, the topbar link button) is the one place a page is
+published, shaped like Notion's share sheet but built only from the shared
+controls: an invite row (`aiKeyInput` + `uiBtn sm primary`), people entries
+(`.shareEntry`: `.shareAvatar` initial · name + one-line sub · a `MenuSelect`
+for Can view / Can edit · `uiClose` remove), a "General access" entry whose
+avatar is the audience glyph and whose `MenuSelect` picks Anyone with the
+link / Signed-in users / Only people invited, and a `.shareFooter` with Stop
+sharing (`uiBtn sm danger`) left and Copy link right. The `.share*` classes
+are layout only. The read-only view shows the counterpart `.shareBadge`
+("Can edit · shared by …") in its top bar.
+
 ## Settings primitives
 
-Settings panes are built only from
-[settingsKit.jsx](../../frontend/src/settingsKit.jsx):
+### Show the result while editing
 
-- `PaneHead` › `Section` › `Row` / `Toggle` — a pane is a stack of sections,
-  a section a stack of rows: icon · label · one short hint · control. Nothing
-  expands inline between rows; the long explanation lives in the row's
-  `title` attribute (hover only).
+A setting that changes a visible surface shows one live example of that
+surface with its controls beside it. Each control adds, removes or updates
+the matching element at once. Reuse the real product component so the
+preview stays accurate, and keep its shared styling and states (hover,
+shadow, focus). Bespoke CSS around it is layout only. On small screens the
+controls go below the preview.
+
+Library Display is the model: one `PageCard` with independent Thumbnails,
+Folders and Labels switches. Mutually exclusive palettes (themes) use a set
+of miniature cards instead.
+
+Import and Export open on format/source cards grouped by file type.
+Export uses PDF, Notes and ZIP rows; Import uses PDF, MD and ZIP rows.
+Both use app logos for app formats, the shared PDF, notes and Markdown icons
+for document formats, all monochrome at one size. A review step with a live
+illustrative page follows only when the format has editable options. Fixed
+contents get no switches (Gamma exports directly, Logseq offers only file
+bundling), and import sources without options open the file picker
+directly, with their instructions on the selection page. Double-click does
+what the footer button does. The previous step is a `crumbBtn` breadcrumb,
+as in the library, and returning keeps the chosen format and options. The
+`SubDialog` header carries the standard `uiClose` ×; the footer holds only
+Next or the final action. Card names stay short because the row names the
+file type. The rules live in `transfers/transferFormats.js`; the previews are
+hand-coded React and CSS in `shared/illustrations/TransferPreview.jsx` and
+`shared/illustrations/illustrations.css`, examples of the output rather than
+renders of the current document.
+
+UI illustrations live in [illustrations/](../../frontend/src/shared/illustrations/README.md),
+one file per subject: React components for drawings that change with
+controls, SVG files for fixed ones, and one shared stylesheet. They reuse
+existing icons and widgets; control logic and layout stay with their owners.
+
+Settings panes are built only from
+[SettingsKit.jsx](../../frontend/src/settings/SettingsKit.jsx):
+
+- `PaneHead` / `Section` / `Row` / `Toggle`: small icon, readable label, short
+  hint and shared control. Rows use the shared hover background without a drop
+  shadow. Important effects stay visible; supplementary help uses a hover
+  tooltip, without an explicit Details toggle.
+- Larger areas (AI, workspace management and administration) get second-level
+  navigation with Back to settings. Short pages keep the main sidebar. Search
+  opens the relevant page and focuses the matching setting.
+- Appearance uses `PictureChoices` theme cards (`uiBtn` + `on`) with small
+  decorative SVG palette sketches beside the labels (stacked on narrow
+  screens). Its rows are not interactive surfaces, so they suppress the
+  shared hover fill; grouped rows use straight dividers. A PDF sample
+  reflects the current tint and dark-page switch. Account and browser scopes
+  sit beside section headings; the controls are the shared `Row`, `Toggle`
+  and `Stepper`.
 - Editor dialogs: `SubDialog` › `.settingsForm` › `Step` (numbered wizard
   stages) or `Field` (caption + hint + one control), closed by a
-  `.reportModalBtns` footer.
+  `.reportModalBtns` footer. Pass the draft to `SubDialog` so unsaved edits are
+  protected on Cancel, Escape and backdrop clicks.
 - Shared controls: `Segmented` (joined pills for exclusive choices),
+  `PictureChoices` (illustrated cards for one exclusive choice: the theme
+  cards, the import/export format cards; `onConfirm` fires on double-click),
+  `ToggleGroup` (its multi-select counterpart: a wrapping row of small
+  icon + short-name chips, each an independent on/off — `uiBtn sm` with the
+  shared `on` state; the agent's per-tool permissions in Settings and in the
+  chat's ⚙ popover are one of these, never a column of checkboxes),
   `UnitInput` (number + unit suffix — units never live in labels),
+  `Stepper` (−/+ around a readout for a small numeric range; the readout
+  is followed by the shared Reset button),
+  `PasswordInput` (a password box with a show/hide eye — a `ctlBtn` over the
+  input's right edge, outside the Tab order; it wraps the input's own class,
+  so the login page uses it with `loginInput` and every secret field in
+  Settings — account passwords, API keys — with `aiKeyInput`),
   `CharSlider` (log-scaled character budget), `Stat`, `Empty`, `QuotaMeter`.
 
 ## Theme
 
-Five states: System (default, tracks `prefers-color-scheme` live) or pinned
-Light/Dark/Sepia/Gray — `gamma-theme` in localStorage (valid values are `THEMES`
-in `prefs.js`), applied as `data-theme` on the root element. The choice (plus
+Six states: System (default, tracks `prefers-color-scheme` live) or pinned
+Light/Dark/Sepia/Solarized Light/Gray — `gamma-theme` in localStorage (valid values are `THEMES`
+in `app/prefs.js`), applied as `data-theme` on the root element. The choice (plus
 "Flip page colors") also follows the account through `/api/prefs/appearance` —
 server wins on login and on window focus, changes push back; localStorage
-stays the instant-paint cache the `index.html` script reads. An inline script
-in `index.html` applies a pinned theme before
+stays the instant-paint cache the `index.html` script reads. An inline script in `index.html` applies a pinned theme before
 first paint; `color-scheme` follows so native controls match. Scrollbars are
 themed rather than left to the OS: a global `scrollbar-width: thin` +
 `scrollbar-color: var(--scrollbar-thumb) transparent` (with a
-`::-webkit-scrollbar` fallback for older WebKit/Blink) in `app.css`.
+`::-webkit-scrollbar` fallback for older WebKit/Blink) in `shared/styles/app.css`.
 "Flip page colors" (`gamma-pdf-dark`) is separate and display-only: it
 inverts the PDF canvas (`.pdfDark`), swaps highlight blending from multiply
 to screen, and darkens the scroller surround.
 
-**Sepia** and **Gray** are the eye-comfort modes and the themes that reach
-the PDF page as well as the chrome. Sepia's tokens are Solarized Light (warm cream ground
-`#fdf6e3`, charcoal-teal text, Solarized accents darkened where a token is
-used as text — the stock accents sit near 3:1 on cream), and
+**Sepia**, **Solarized Light**, and **Gray** are the eye-comfort modes and the themes that reach
+the PDF page as well as the chrome. Sepia: warm beige surfaces and dark teal
+text (`#073642`). Solarized Light (`solarized`) follows
+[VS Code's Solarized Light](https://github.com/microsoft/vscode/blob/main/extensions/theme-solarized-light/themes/solarized-light-color-theme.json):
+cream content surfaces (`#fdf6e3`), `#eee8d5` chrome, blue-gray text
+(`#657b83`), the stock Solarized accents and Solarized `.hljs-*` token
+colors; the desktop shell (`desktop/ui/theme.css`, `desktop/main.js`) and the
+`index.html` first-paint background carry the same palette. All three tint
+the PDF page the same way:
 `[data-theme="sepia"] .pdfViewer:not(.pdfDark)` tints the page by giving the
 page wrapper the `--pdf-paper` ground and letting the canvas `multiply` onto
 it. Multiply, not a `sepia()`/`hue-rotate` filter: white paper lands exactly
-on the ground color while figures only warm slightly. The canvas also carries
-`opacity: var(--pdf-ink-alpha)` (0.82): under multiply that leaves the paper
-invariant and lifts only the ink, black → `(1−α)·paper` ≈ `#2e2c29` (measured
-12.9:1 against the ground, against a 7:1 AAA bar), the softened charcoal the
-eye-strain guidance recommends over pure black; colour washes ~18%. The
-translated view's text is a DOM layer that never passes through the blend, so
-it sets that ink colour directly.
-
-**Gray** is the neutral counterpart — the same machinery driven by different
-tokens (`--pdf-paper: #f4f4f4`, a `#2d2d2d` text ladder, Light's role colours)
-for users who want the glare cut without a colour cast. The PDF rules select
-`:is([data-theme="sepia"], [data-theme="gray"])`, so a new tinted theme needs
-only a token block — including its own `--pdf-ink-alpha`, since the shared
-canvas rule falls back to `1` (no softening) when a theme omits it — plus
-membership in those lists.
-
-The tint needs no prop — `data-theme` is global, so it is pure CSS — and
-"Flip page colors" wins when both are on. Light-ground rules that were
-`[data-theme="light"] …` are now
-`:is([data-theme="light"], [data-theme="sepia"], [data-theme="gray"])`;
+on the ground color while figures only warm slightly. The canvas also gets
+`opacity: 0.82` — under multiply that leaves the paper invariant and lifts
+only the ink, black → `(1−α)·paper` ≈ `#2e2c29` (~12.6:1), the softened
+charcoal the eye-strain guidance recommends over pure black. **Gray** is the
+neutral counterpart — the same machinery driven by different tokens
+(`--pdf-paper: #f4f4f4`, `#2d2d2d` text ladder, Light's role colors) for
+users who want the glare cut without a color cast; the PDF rules select
+`:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`, so a new tinted theme only
+needs a token block plus membership in those lists. The tint needs no prop — `data-theme` is global, so it is pure CSS
+— and "Flip page colors" wins when both are on. Light-ground rules select
+`:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`;
 extend that list, don't add another copy.
 
 ## Layout
@@ -124,68 +229,35 @@ extend that list, don't add another copy.
 - View modes come from the URL query, no router lib: `/` home,
   `/?page=<id>` paper, `/?share=<token>` read-only, `/?block=<id>`
   jump-to-block.
-- Icons are hand-rolled SVGs in [icons.jsx](../../frontend/src/icons.jsx) —
+- Icons are hand-rolled SVGs in [Icons.jsx](../../frontend/src/shared/ui/Icons.jsx) —
   add there, keep the stroke style.
-
-## The home library
-
-Folders and files render as ONE merged sorted listing (list and grid): date
-sorts rank a folder by its most recent contained page, Title A–Z intermixes by
-name. A `KindToggle` picks what the listing shows — folders + files, folders
-only, files only, or **labels**.
-
-Sort and kind are both per-VIEW — localStorage `gamma-home-sort-map` /
-`gamma-home-kinds-map`, keyed by folder path with `""` = root and `"#<label>"`
-for a label view, seeded from the older global `gamma-home-sort` /
-`gamma-home-kinds` keys. A view without an entry of its own inherits from its
-nearest ancestor folder; labels are flat, so a label view inherits the root's.
-
-**The label view** is the flat mirror of the folder view, not a separate
-surface: the toggle's Labels mode lists the labels carried by the pages in
-scope (`labelMeta`, the label twin of `folderMeta` — count plus latest
-modified/added/viewed, so labels sort by the same clock), drawn with the same
-rows and cards folders use. Click selects, double-click opens, a paper dropped
-on one gets that label, right-click is the existing label rename/delete menu.
-Opening a label KEEPS the folder scope — `?folder=…` and `?category=…` can both
-be in the URL (`homeUrlFor`) — so a label opened inside a folder reads as "this
-folder, narrowed to that label". Its browse bar is the same back row and
-breadcrumb, ending in a label crumb, and dropping a paper on that back row
-takes the label off. Inside a label there are only papers, so the KindToggle
-hides.
-
-A search box sits left of the sort pill (`ListFindBox`, live as you type, per
-view, not persisted). It never drops anything: matching items float to the top
-of the current sort and the rest stay in place dimmed (`.homeDim`). A page
-matches on its title plus its folder/label chips; matching is
-case/diacritic-folded and every whitespace-separated term must appear.
-
-New folder is the FIRST item of the listing itself, not a toolbar button (a
-`folderNewBtn` row / `pageCardAdd` tile that becomes its own name input in
-place — Enter or blur commits, Escape cancels); it hides when the listing is
-filtered to files-only or labels, and inside a label view. Toolbar order:
-search box → sort → kind → list/grid.
-
-One shared card (`PageCard`) renders every home surface — the "Recently viewed"
-strip, the pinned strip, and the grid listing's files, folders AND labels. Only
-the recents strip shows snapshot covers; library cards always use the glyph.
 
 ## File map (frontend/src)
 
 | File | Owns |
 |---|---|
-| `App.jsx` | routing, block-tree editor state, docks, autosave, AI chat glue (decomposition in progress) |
-| `prefs.js` | every localStorage preference (`useAppPrefs`) |
-| `settings.jsx` + `settingsKit/Ai/Users.jsx` | the Settings dialog |
-| `chatDock.jsx` | the AI chat panel (incl. agent wiring); header = a `.ctlBtnRow` of `.ctlBtn` icon buttons (the PDF zoom column's buttons laid flat) with the ⚙ settings popover |
-| `pdfViewer.jsx` | the custom pdf.js viewer |
-| `search.jsx` | workspace search (Ctrl+F) |
-| `blockTree.jsx`, `logseqPdfModel.js` | outliner rendering / pure tree ops |
-| `blockCmEditor.jsx` | the CodeMirror 6 block editor (textarea-compatible facade) with live in-place rendering of closed `$…$`/`$$…$$` spans, ``` ``` ``` fences (highlight.js cards), `[[ref]]`/`![[embed]]` chips, and markdown (headings, `**`/`*`/`` ` ``/`~~`/`==`, links + bare URLs, clickable `- [ ]` checkboxes, `- ` bullets, `---` rules, quote lines and full `> [!type]` callout boxes) — the construct the caret touches stays raw source (line-level touch for heading/quote prefixes, marker-only touch for list markers so a todo's checkbox survives editing its text). Raw math gets VSCode-style bracket-pair colorization (depth-cycled `--bracket-*` colors, enclosing pair boxed). Decorations come from a `StateField`, not a ViewPlugin — plugin decorations may not replace line breaks (multi-line fences/`$$` would throw) |
-| `slashMenu.jsx` | the "/" command catalog + popup (link, embed, equations, highlight, headings, to-do, lists, quote, callout, code, divider, table, image, date) and the "Paste as" chooser shown after a URL paste (gamma block link → mention/synced block/URL, other URLs → URL/titled link); blockTree owns trigger detection and key handling |
-| `callouts.js` | remark plugin for `> [!note] Title` callouts (type aliases → note/tip/warning/danger/important/quote; colors in app.css) |
-| `codeHighlight.js` | fenced ``` ``` ``` code helpers shared by editor + renderer: `scanFences` (region scanner, mirrored in mdPreprocess exclusions and blockTree's Enter/Tab-in-fence handling), `fenceInnerAt`, and the highlight.js (`lib/common`) wrapper; token colors are theme-aware `.hljs-*` rules in app.css |
-| `latexEditor.jsx` | LaTeX aids while editing: caret-anchored live preview, `\command` autocomplete, `renderKatex`/`useCaretAnchored` shared helpers |
-| `libraryUtils.js` | folder-tag semantics (mirrored by `backend/gamma/ai_tools.py`) |
-| `fileBrowser.jsx` | home-listing pieces: the shared `PageCard`, the view/kind toggles, the listing search box, card chips |
-| `widgets.jsx`, `menus.jsx`, `icons.jsx` | shared components |
-| `menuAim.js` | pointer-trajectory ("safe triangle") hover intent for hierarchical menus — UI-agnostic, consumed by `menus.jsx` |
+| `app/App.jsx` | routing, block-tree editor state, docks, the page's live session glue, AI chat glue (decomposition in progress) |
+| `collaboration/usePageCollab.js`, `shared/model/blockOps.js`, `collaboration/Presence.jsx` | the live session (ops out, ops + presence in), the pure tree diff/apply, the avatar stack / row chips ([collab.md](collab.md)) |
+| `app/prefs.js` | every localStorage preference (`useAppPrefs`) |
+| `settings/SettingsDialog.jsx` + the `settings/Settings*.jsx` panes | the Settings dialog (`SettingsKit.jsx` holds the shared primitives incl. `AccountPicker`, the search-box-over-account-rows people picker, and `LogBox`) |
+| `settings/SettingsAppearance.jsx`, `settings/SettingsLibraryDisplay.jsx` | the Appearance pane (theme cards + PDF sample) and Library › Display (a live `PageCard` beside its switches) ([settings.md](settings.md)) |
+| `transfers/ImportExport.jsx`, `transfers/transferFormats.js`, `shared/illustrations/` | the Import/Export dialogs, their format/source rules (`resolveExport` / `resolveImport`) and the decorative previews ([import_export.md](import_export.md)) |
+| `pdf/pdfCitation.js`, `pdf/PdfCitationOverlay.jsx` | an AI reply's citation link → the quoted passage highlighted on the cited PDF page ([pdf_citations.md](pdf_citations.md)) |
+| `shared/lib/canvasSize.js`, `pdf/verticalScrollSnap.js` | the canvas backing-store cap and the one-finger vertical scroll alignment ([pdf_loading.md](pdf_loading.md)) |
+| `chat/ChatDock.jsx` | the AI chat panel (incl. agent wiring); header = a `.ctlBtnRow` of `.ctlBtn` icon buttons (the PDF zoom column's buttons laid flat) with the ⚙ settings popover |
+| `pdf/PdfViewer.jsx` | the custom pdf.js viewer |
+| `ink/ink.js`, `ink/inkStore.js`, `ink/inkInput.js`, `ink/InkLayer.jsx` | handwriting ([handwriting.md](handwriting.md)): the stroke codec + geometry (pure), the files/drafts store, pointer sampling, and the page layer + selection menu + notes card + tool strip (`.pdfInkBar`: `ctlBtn`s and `colorBtn` swatches) |
+| `search/SearchPanel.jsx`, `library/librarySearch.js` | workspace search (Ctrl+F) and the title scorer shared with chat |
+| `chat/PaperMentionInput.jsx`, `chat/paperMentions.js` | chat mention picker, mention text edits and `MAX_CHAT_REFERENCES` (six attached pages plus the current page) |
+| `editor/BlockTree.jsx`, `shared/model/blockModel.js` | outliner rendering / pure tree ops |
+| `transfers/FileChip.jsx` | the file chip an upload link renders as — a small card (kind icon in a tinted square, name, download arrow), inline so it sits in a sentence, identical for every type; a PDF or markdown chip whose page exists gets an accent "open page" button before the arrow; a `ContextMenu` on right-click with "Open page" / "Add to library" (fed by `FileChipContext` from App and one batched `POST /pages/by-docs` per render) and download; also the shared `postFile` / `uploadFilesAsLines` upload helpers |
+| `editor/MdTools.jsx` | in-place tools on rendered notes: `MdImage` (hover toolbar of `ctlBtn` icons — zoom lightbox, caption via alt text, download, delete — plus a drag grip writing the Obsidian `![alt|300]` size; legacy Logseq `{:width N}` reads and normalizes on edit) and `MdTableWrap` (hover "+" strips, column/row handle menus — insert, align, delete — and click-a-cell in-place editing: an input over the cell, Tab/Shift-Tab hop cells across the commit remount via a module-level session map, Enter commits, Esc cancels; tables are never edited as raw markdown — a cell mousedown stops the block row's edit-on-mousedown), backed by pure source transforms (`scanImages`/`scanTables` locate the nth rendered construct; `applyImageEdit`/`applyTableEdit` rewrite it, tables re-serialized pretty-printed; `formatTables` also runs when a block's raw editor closes) and `htmlTableToMarkdown` for the spreadsheet-paste path |
+| `editor/BlockCmEditor.jsx` | the CodeMirror 6 block editor (textarea-compatible facade) with live in-place rendering of closed `$…$`/`$$…$$` spans, ``` ``` ``` fences (highlight.js cards), `[[ref]]`/`![[embed]]` chips, and markdown (headings, `**`/`*`/`` ` ``/`~~`/`==`, links + bare URLs, clickable `- [ ]` checkboxes, `- ` bullets, `---` rules, quote lines and full `> [!type]` callout boxes) — the construct the caret touches stays raw source (line-level touch for heading/quote prefixes, marker-only touch for list markers so a todo's checkbox survives editing its text). Raw math gets VSCode-style bracket-pair colorization (depth-cycled `--bracket-*` colors, enclosing pair boxed). Decorations come from a `StateField`, not a ViewPlugin — plugin decorations may not replace line breaks (multi-line fences/`$$` would throw). Formatting hotkeys: Ctrl/Cmd+B/I/E, Ctrl+Shift+X/H toggle `**`/`*`/`` ` ``/`~~`/`==` Obsidian-style, Ctrl+K inserts `[sel](url)` (clipboard URL fills the slot); swallowed inside math/fences/inline code |
+| `editor/mdMarks.js` | the inline-mark table (regex + class per marker) shared by the live renderer and the hotkeys, plus the pure `toggleMark`/`insertLink` transforms (wrap / unwrap / empty pair / per-line for multi-line selections). `scanMarks` allows proper nesting (`**a *b* c**`, `*a **b** c*`; nothing inside inline code) and treats `***x***` as one bold+italic span with two `layers`, so Ctrl+B and Ctrl+I each peel off their own delimiters |
+| `editor/SlashMenu.jsx` | the "/" command catalog + popup (link, embed, equations, highlight, headings, to-do, lists, quote, callout, code, divider, table, image, date) and the "Paste as" chooser shown after a URL paste (gamma block link → mention/synced block/URL, other URLs → URL/titled link); blockTree owns trigger detection and key handling |
+| `editor/callouts.js` | remark plugin for `> [!note] Title` callouts (type aliases → note/tip/warning/danger/important/quote; colors in app.css) |
+| `editor/codeHighlight.js` | fenced ``` ``` ``` code helpers shared by editor + renderer: `scanFences` (region scanner, mirrored in mdPreprocess exclusions and blockTree's Enter/Tab-in-fence handling), `fenceInnerAt`, and the highlight.js (`lib/common`) wrapper; token colors are theme-aware `.hljs-*` rules in app.css |
+| `editor/LatexEditor.jsx` | LaTeX aids while editing: viewport-bounded, scrollable live preview, `\command` snippets, argument/Tab-out navigation, `renderKatex`/`useCaretAnchored` shared helpers; `editor/latexInput.js` supplies scalable delimiter pairing. See [LaTeX editing](latex_editing.md) for shortcuts and browser checks |
+| `library/libraryUtils.js` | folder-tag semantics (mirrored by `backend/gamma/foldertags.py`) |
+| `shared/ui/Widgets.jsx`, `shared/ui/Menus.jsx`, `shared/ui/Icons.jsx` | shared components |
+| `shared/ui/menuAim.js` | pointer-trajectory ("safe triangle") hover intent for hierarchical menus — UI-agnostic, consumed by `shared/ui/Menus.jsx` |

@@ -1,13 +1,26 @@
 # AI context for long papers
 
-How the AI chat gets a paper's content, why that used to fail on long papers,
+How the AI chat gets a page's content, why that used to fail on long papers,
 and the measurements behind the current design. Code: `gamma/ai_context.py`
 (context assembly), `gamma/ai_tools.py` (agent tools), `gamma/pdf_text.py`
-(extraction), `gamma/routers/search.py` (FTS index).
+(extraction), `gamma/pdf_index.py` + `gamma/block_index.py` (FTS indexes;
+`gamma/routers/search.py` extracts PDFs into the former).
+
+## What a page contributes
+
+Context is framed as *pages from the user's knowledge base*
+(`ai_context.CONTEXT_INTRO` precedes it in the user turn). Each page section
+(`page_report_section`) is: `### title`, a properties line (folders, labels,
+cached metadata, web source, attachment), and the user's notes tree with
+highlights; a page that carries a PDF adds the document's text — for the
+chat, the labelled head excerpt / selection windows below; for `read_page`,
+a `pdf_chars` window. A page without an attachment is its notes, always
+included; `include_notes` only decides whether PDF pages also show theirs.
+Everything below is about the PDF part of a page and applies unchanged.
 
 ## The problem
 
-A paper chat injects the first `context_char_limit` chars of the PDF's
+A page chat injects the first `context_char_limit` chars of the PDF's
 extracted text (default 60,000 since 2026-08-28 — Settings → Assistant →
 "Single paper"; the eval below ran at the old 8,000). A 50-page paper is
 ~280,000 chars, so at 8k the model saw under 3% of it — and nothing used to
@@ -15,7 +28,8 @@ tell it that. Asked for a detail deeper in
 the paper, it answered from its memory of similar papers: confident, specific,
 and wrong (a camera model that isn't in the paper, n=70 where the paper says
 n=53, fidelities off by tenths of a percent). The page-scope agent tools
-(`read_page`, `search_pdfs`) mostly fix this, but four things still lost facts:
+(`read_page`, `search_library` — then `search_pdfs`) mostly fix this, but
+four things still lost facts:
 the model didn't know the excerpt was an excerpt, it guessed page numbers, an
 over-specific search query returned zero hits (read as "the paper is silent"),
 and every page past 400 was silently invisible.
@@ -44,26 +58,37 @@ message, and it doesn't stop fabrication — the tools are the better lever.
 
 - **Grounding prompt** (`_SYSTEM_PROMPT` in `routers/ai.py`, plus the
   mechanical tool-guidance lines `agent_system()` appends in `ai_tools.py`):
-  anything stated as being *in this paper* must come from text actually read;
-  look it up first, say "not in this document" otherwise. Scoped to claims
-  about the paper — general background stays answerable, which is what keeps
-  the "normal questions" column at 100% (an unscoped version refused to explain
-  what a transversal gate is). With tools off, this converts fabricated answers
-  into honest "the excerpt doesn't say" (recall drops to 17% — those were
-  memory, not reading).
-- **Excerpt label** (`extract_pdf_context`): the injected head is prefixed with
-  `[EXCERPT — the first 8,000 characters of this 51-page PDF …]` whenever the
-  document didn't fit. Unlabelled, "Here is the PDF text:" reads as the whole
-  paper.
-- **Document map** (`document_map`): for page-scope agent chats, a ~2.4k-char
+  anything stated as being *in these pages or their documents* must come from
+  text actually read; look it up first, say "not in their pages" otherwise —
+  and say whether a fact comes from a PDF (with its page number) or from the
+  user's notes. Scoped to claims about the pages — general background stays
+  answerable, which is what keeps the "normal questions" column at 100% (an
+  unscoped version refused to explain what a transversal gate is). With tools
+  off, this converts fabricated answers into honest "the excerpt doesn't say"
+  (recall drops to 17% — those were memory, not reading).
+- **Excerpt label** (`head_context` / `extract_pdf_context`): the injected
+  head is prefixed with `[EXCERPT — the first 8,000 characters of this
+  51-page PDF …]` whenever the document didn't fit; `CONTEXT_INTRO` likewise
+  says a page's document text "is often an excerpt (see its label)".
+  Unlabelled, "here is the text" reads as the whole paper.
+- **Page labels** (`extract_text(..., label_pages=True)` in `pdf_text.py`):
+  every non-empty physical page is prefixed `[PDF page N]`, counted from
+  `start_page` with blank pages included; a `read_page` continuation that
+  starts mid-page repeats it as `[PDF page N; continued]` outside the offset
+  window (`pdf_excerpt`), and each context section carries
+  `Gamma page ID: <id>`. Both feed the clickable citations
+  ([pdf_citations.md](pdf_citations.md)).
+- **Document map** (`document_map`): for page/folder agent chats, a ~2.4k-char
   outline — one line per PDF page (sampled for big documents), taken from the
-  FTS index so it costs a query, not a re-parse. The model jumps to the right
+  FTS index so it costs a query, not a re-parse. Each attached paper gets its
+  own map labelled with its Gamma page ID. The model jumps to the right
   page instead of guessing; on one question this cut 6 tool calls to 1.
-- **Search relaxation** (`_run_search_pdfs`): the FTS query ANDs every term,
-  and agents write 6–9-word natural queries — one word the page doesn't use
-  meant zero hits and a wrong "the paper doesn't discuss this". A miss now
+- **Search relaxation** (`_run_search_library`): the FTS query ANDs every
+  term, and agents write 6–9-word natural queries — one word the page doesn't
+  use meant zero hits and a wrong "the paper doesn't discuss this". A miss now
   retries with only the longest words and labels the result as approximate; a
-  true miss says explicitly "do not answer from your own knowledge".
+  true miss says explicitly "do not answer from your own knowledge". (The
+  same relaxation covers the notes index the tool searches since Stage 2.)
 - **Page cap raised** (`pdf_text.MAX_PAGES`, 400 → 5000): the old cap made a
   484-page book end at page 400 *everywhere* — not in the search index, not
   reachable by `read_page`, indistinguishable from the document ending. Worst
@@ -83,12 +108,12 @@ message, and it doesn't stop fabrication — the tools are the better lever.
   does this review report for X?") can still elicit the remembered number,
   now hedged rather than asserted — the model searches, finds nothing, and
   names the value while admitting it didn't find it in the text.
-- The map and index only exist once the paper is indexed. Every paper chat
-  request (`gather_inputs` → `ensure_indexed`) kicks background indexing for
-  an un-indexed or stale paper, so the first message on a fresh paper works
-  without map/search and the next one has both. (Before, only a `search_pdfs`
-  call kicked it — a chat that only ever used `read_page`, or ran with tools
-  off, never got its paper indexed.)
+- The map and index only exist once the paper is indexed. Every single-page
+  chat request on a page with a PDF (`gather_inputs` → `ensure_indexed`)
+  kicks background indexing for an un-indexed or stale paper, so the first
+  message on a fresh paper works without map/search and the next one has
+  both. (Before, only a search call kicked it — a chat that only ever used
+  `read_page`, or ran with tools off, never got its paper indexed.)
 - With tools off the model sees only the labelled head excerpt; nothing else
   in a plain chat can reach the rest of the paper (native PDF attachment is
   refused by the ChatGPT-OAuth backend and falls back to that same excerpt).
@@ -101,33 +126,3 @@ message, and it doesn't stop fabrication — the tools are the better lever.
   as a "Model saw pages 1–9 of 22" chip on the reply ([ai.md](ai.md)).
 - Grading is substring matching on de-markdowned/de-LaTeXed answers; the
   harness lives outside the repo (session scratchpad, `eval/`).
-
-## What the model actually saw
-
-Whatever went to the model is reported back to the client, so a truncated paper
-is visible in the UI and not only in the prompt label: the chat stream's first
-line is `{"context": [...]}` (non-stream: a `context` field in the body) with
-one entry per document — `title`, `doc_id`, `native` (the PDF file itself was
-sent), `native_requested`, `partial`, `chars`, `pages`, `pages_shown`. Uploaded
-`files` are reported the same way and get the single-paper budget when they
-fall back to text.
-
-`gather_inputs` builds it; `head_context` / `pdf_text_cover_from_b64` are the
-excerpt helpers that also return coverage, and `pdf_text.extract_text_pages`
-is `extract_text` plus the page span the report needs.
-
-The chat saves the report on the reply and shows a chip only when it matters:
-"Model saw pages 1–9 of 22" for a truncated paper, "PDF file not accepted —
-sent as text" when the file was requested but the provider took text instead.
-`/api/ai/models` marks each model `native_pdf` (false for ChatGPT sign-in
-entries: their wire is the Codex backend, which refuses `input_file` parts), so
-the chat's PDF button doesn't default on for such a model; switching it on by
-hand shows a warning pill, and pending uploaded PDFs get the same warning.
-
-`ensure_indexed` kicks the background search indexer for a paper the index
-doesn't hold at the current version. A paper chat needs the index for its
-document map and `search_pdfs`, but previously only a `search_pdfs` call
-started indexing — so a fresh paper whose chat used only `read_page` (or ran
-with tools off) never got indexed and the map never appeared. The metadata
-fetch calls it too: the paper is being set up, so search and library-wide
-Ctrl+F shouldn't wait for the first search to discover it.

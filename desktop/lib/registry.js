@@ -1,241 +1,263 @@
-// The workspace registry: the shell's only persistent state.
+// Server registry: the shell's only persistent state, a JSON file in the
+// Electron userData dir. A server is a name plus either a URL (remote) or a
+// data directory the shell runs a local Gamma over (local). Gamma's own
+// workspaces (the libraries inside a server, with members and roles) live in
+// that server's data — the shell only lists them in its switcher.
 //
-// A *workspace* is a Gamma server. Two kinds:
+// Local servers also remember the admin credentials the shell generated on
+// first run — the server's one-time password print would otherwise be lost
+// in the hidden sidecar console.
 //
-//   local  — a library directory on this machine, served by a backend the
-//            shell starts for it
-//   remote — a Gamma someone already runs, reached by URL, with its own login
+// Besides the list the file keeps a little shell UX state: the server opened
+// last (reopened at launch when `openLastOnLaunch`), the theme the Gamma
+// page last reported (so the launcher/shell bar paint in it before any page
+// is loaded), and the window bounds.
 //
-// They are independent servers with no synchronisation between them; moving
-// notes across is Gamma's own export/import. Several local workspaces means
-// several libraries and one server process each.
-//
-// Everything lives in one JSON file in Electron's userData directory. It is
-// written rename-over-tmp, and anything unreadable is treated as "no
-// workspaces yet" rather than a reason to refuse to start.
-//
-// Deliberately *not* stored here: passwords. A local workspace needs none —
-// the backend signs the user in when the request comes from this machine (see
-// gamma/auth.py, desktop_auto_user), which is three checks in code rather than
-// an admin credential sitting in plaintext next to the library.
+// Local server data dirs live under ONE root, `<root>/<server id>`:
+// `settings.dataRoot` when set, else `<userData>/workspaces` (the folder
+// name predates the rename and stays so existing installs need no move).
+// `setDataRoot` switches the root and, on request, moves the existing dirs
+// there (copy, verify, re-point the registry, then delete the originals —
+// safe across drives; callers stop the sidecars first).
 
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const path = require("node:path");
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
-const FILE = "workspaces.json";
-const LOCAL = "local";
-const REMOTE = "remote";
+const FILE = 'servers.json';
+const LEGACY_FILE = 'workspaces.json'; // the registry's name before servers had that name
 
-const DEFAULT_SETTINGS = {
-  // Reopen the workspace that was open last, instead of the launcher.
-  openLastOnLaunch: true,
-  // The last data-theme the Gamma page reported, so the chrome is already
-  // right before any page has loaded. "" means never seen → dark.
-  lastTheme: "",
+const DEFAULTS = {
+  settings: {
+    // Overrides for dev mode; empty strings mean "auto-detect the repo layout".
+    pythonPath: '',
+    backendDir: '',
+    staticDir: '',
+    // Reopen the last server at launch instead of showing the launcher.
+    openLastOnLaunch: true,
+    // Last data-theme the Gamma page reported ('' = never seen → dark).
+    lastTheme: '',
+    // Folder new local servers are created in ('' = <userData>/workspaces).
+    dataRoot: '',
+  },
+  servers: [],
+  lastOpened: null,
+  windowBounds: null,
 };
 
-let root = null;
+let userDataDir = null;
 
-function init(userDataDir) {
-  root = userDataDir;
-  fs.mkdirSync(root, { recursive: true });
-  return root;
+function init(dir) {
+  userDataDir = dir;
+  fs.mkdirSync(dir, { recursive: true });
+  // One-time rename of the registry file; the old copy stays for a rollback.
+  const legacy = path.join(dir, LEGACY_FILE);
+  if (!fs.existsSync(filePath()) && fs.existsSync(legacy)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(legacy, 'utf8'));
+      save({ ...raw, servers: raw.servers || raw.workspaces || [] });
+    } catch {}
+  }
 }
 
-function dir() {
-  if (!root) throw new Error("registry.init() has not been called");
-  return root;
-}
-
-function file() {
-  return path.join(dir(), FILE);
-}
-
-/** Where a new local workspace's library goes. */
-function workspacesDir() {
-  return path.join(dir(), "workspaces");
-}
-
-function logPath(id) {
-  return path.join(dir(), "logs", `${id}.log`);
-}
-
-function blank() {
-  return { settings: { ...DEFAULT_SETTINGS }, workspaces: [], lastOpened: null, windowBounds: null };
+function filePath() {
+  return path.join(userDataDir, FILE);
 }
 
 function load() {
-  let raw;
   try {
-    raw = JSON.parse(fs.readFileSync(file(), "utf8"));
+    const raw = JSON.parse(fs.readFileSync(filePath(), 'utf8'));
+    const list = Array.isArray(raw.servers) ? raw.servers : Array.isArray(raw.workspaces) ? raw.workspaces : [];
+    return {
+      settings: { ...DEFAULTS.settings, ...(raw.settings || {}) },
+      servers: list,
+      lastOpened: raw.lastOpened || null,
+      windowBounds: raw.windowBounds || null,
+    };
   } catch {
-    return blank();
+    return JSON.parse(JSON.stringify(DEFAULTS));
   }
-  if (!raw || typeof raw !== "object") return blank();
-  return {
-    settings: { ...DEFAULT_SETTINGS, ...(raw.settings || {}) },
-    workspaces: (Array.isArray(raw.workspaces) ? raw.workspaces : []).filter(valid),
-    lastOpened: raw.lastOpened || null,
-    windowBounds: raw.windowBounds || null,
-  };
-}
-
-/** A workspace we can actually act on. Anything else is dropped on read. */
-function valid(ws) {
-  if (!ws || typeof ws !== "object" || !ws.id || !ws.name) return false;
-  if (ws.type === LOCAL) return typeof ws.dataDir === "string" && ws.dataDir.length > 0;
-  if (ws.type === REMOTE) return typeof ws.url === "string" && ws.url.length > 0;
-  return false;
 }
 
 function save(state) {
-  fs.mkdirSync(dir(), { recursive: true });
-  const tmp = `${file()}.tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
-  // Rename over: a power cut leaves the old file, not a truncated one.
-  fs.renameSync(tmp, file());
-  return state;
+  fs.mkdirSync(userDataDir, { recursive: true });
+  const { workspaces, ...rest } = state; // never write the old key back
+  fs.writeFileSync(filePath(), JSON.stringify(rest, null, 2));
+}
+
+function defaultDataRoot() {
+  return path.join(userDataDir, 'workspaces');
+}
+
+// Where local servers are created now.
+function dataRoot(state = load()) {
+  return path.resolve(state.settings.dataRoot || defaultDataRoot());
+}
+
+function isUnder(dir, root) {
+  const norm = (s) => (process.platform === 'win32' ? path.resolve(s).toLowerCase() : path.resolve(s));
+  return norm(dir).startsWith(norm(root) + path.sep);
+}
+
+// The local servers whose data dir sits under the current root — the ones a
+// root change moves.
+function localsUnderRoot(state = load()) {
+  const root = dataRoot(state);
+  return state.servers.filter((s) => s.type === 'local' && s.dataDir && isUnder(s.dataDir, root));
+}
+
+// Change the storage root. `newRoot` '' resets to the default. With `move`
+// every local server under the old root is copied to `<newRoot>/<id>`; only
+// after ALL copies succeed does the registry switch over and the old copies
+// get deleted, so a failure (disk full, permissions) leaves everything as it
+// was. Returns { root, moved: [names] }.
+function setDataRoot(newRoot, { move = true } = {}) {
+  const state = load();
+  const oldRoot = dataRoot(state);
+  const target = newRoot ? path.resolve(newRoot) : '';
+  const targetRoot = target || path.resolve(defaultDataRoot());
+  if (targetRoot === oldRoot) return { root: targetRoot, moved: [] };
+  if (isUnder(targetRoot, oldRoot) || isUnder(oldRoot, targetRoot)) {
+    throw new Error('The new folder must not be inside the current one (or contain it).');
+  }
+  fs.mkdirSync(targetRoot, { recursive: true });
+  const moved = [];
+  if (move) {
+    for (const srv of localsUnderRoot(state)) {
+      const dest = path.join(targetRoot, path.basename(srv.dataDir));
+      try {
+        if (fs.existsSync(dest)) throw new Error('already exists');
+        fs.cpSync(srv.dataDir, dest, { recursive: true }); // throws on any failed file
+      } catch (e) {
+        for (const m of moved) fs.rmSync(m.dest, { recursive: true, force: true });
+        fs.rmSync(dest, { recursive: true, force: true });
+        throw new Error(`Could not move "${srv.name}" to ${dest}: ${e.message}`);
+      }
+      moved.push({ srv, from: srv.dataDir, dest });
+    }
+    for (const m of moved) m.srv.dataDir = m.dest;
+  }
+  state.settings.dataRoot = target;
+  save(state);
+  for (const m of moved) {
+    try {
+      fs.rmSync(m.from, { recursive: true, force: true });
+    } catch {}
+  }
+  return { root: targetRoot, moved: moved.map((m) => m.srv.name) };
 }
 
 function newId() {
-  return crypto.randomBytes(6).toString("hex");
+  return crypto.randomBytes(6).toString('hex');
 }
 
-/** Trim, add a scheme if the user typed a bare host, drop trailing slashes. */
-function normalizeUrl(raw) {
-  let s = String(raw || "").trim();
-  if (!s) return "";
-  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(s);
-  if (scheme) {
-    // Reject any other scheme rather than prefixing https:// onto it — that
-    // turns "file:///etc/passwd" into parseable nonsense.
-    if (!/^https?$/i.test(scheme[1])) return "";
-  } else {
-    s = `https://${s}`;
-  }
-  let u;
-  try {
-    u = new URL(s);
-  } catch {
-    return "";
-  }
-  if (!u.hostname) return "";
-  // A path prefix is kept (Gamma may be hosted under a subpath); a query or
-  // fragment is not part of an address to point a window at.
-  return `${u.protocol}//${u.host}${u.pathname}`.replace(/\/+$/, "");
+function newPassword() {
+  return crypto.randomBytes(9).toString('base64url'); // 12 chars, like the server's own seed
 }
 
-function addLocal(name, { dataDir } = {}) {
+function addLocal(name) {
   const state = load();
   const id = newId();
-  const ws = {
+  const srv = {
     id,
-    type: LOCAL,
-    name: String(name || "").trim() || "My library",
-    dataDir: dataDir || path.join(workspacesDir(), id),
+    name: (name || '').trim() || 'Local',
+    type: 'local',
+    dataDir: path.join(dataRoot(state), id),
+    adminUser: 'admin',
+    adminPassword: newPassword(),
     createdAt: new Date().toISOString(),
   };
-  fs.mkdirSync(ws.dataDir, { recursive: true });
-  state.workspaces.push(ws);
+  fs.mkdirSync(srv.dataDir, { recursive: true });
+  state.servers.push(srv);
   save(state);
-  return ws;
+  return srv;
 }
 
 function addRemote(name, url) {
-  const clean = normalizeUrl(url);
-  if (!clean) throw new Error("That doesn't look like a web address.");
-  const state = load();
-  if (state.workspaces.some((w) => w.type === REMOTE && w.url === clean)) {
-    throw new Error(`${clean} is already a workspace.`);
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('Invalid URL');
   }
-  const ws = {
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Server URL must be http:// or https://');
+  }
+  const state = load();
+  if (state.servers.some((s) => s.type === 'remote' && s.url === parsed.origin)) {
+    throw new Error(`${parsed.origin} is already listed`);
+  }
+  const srv = {
     id: newId(),
-    type: REMOTE,
-    name: String(name || "").trim() || new URL(clean).host,
-    url: clean,
+    name: (name || '').trim() || parsed.host,
+    type: 'remote',
+    url: parsed.origin,
     createdAt: new Date().toISOString(),
   };
-  state.workspaces.push(ws);
+  state.servers.push(srv);
   save(state);
-  return ws;
+  return srv;
 }
 
 function get(id) {
-  return load().workspaces.find((w) => w.id === id) || null;
+  return load().servers.find((s) => s.id === id) || null;
 }
 
 function rename(id, name) {
-  const clean = String(name || "").trim();
-  if (!clean) throw new Error("A workspace needs a name.");
   const state = load();
-  const ws = state.workspaces.find((w) => w.id === id);
-  if (!ws) throw new Error("That workspace is gone.");
-  ws.name = clean;
+  const srv = state.servers.find((s) => s.id === id);
+  if (!srv) throw new Error('Unknown server');
+  const clean = (name || '').trim();
+  if (!clean) throw new Error('Name cannot be empty');
+  srv.name = clean;
   save(state);
-  return ws;
+  return srv;
 }
 
-/**
- * Forget a workspace, and optionally delete its library.
- *
- * `deleteData` only ever removes a directory the shell itself created under
- * userData/workspaces. A workspace adopted from elsewhere — the library the
- * pre-workspaces app used, say — is forgotten but never deleted, because the
- * user did not put it there and may well have it in a backup set.
- */
 function remove(id, { deleteData = false } = {}) {
   const state = load();
-  const ws = state.workspaces.find((w) => w.id === id);
-  if (!ws) return { removed: false, deleted: false };
-  state.workspaces = state.workspaces.filter((w) => w.id !== id);
+  const srv = state.servers.find((s) => s.id === id);
+  if (!srv) return;
+  state.servers = state.servers.filter((s) => s.id !== id);
   if (state.lastOpened === id) state.lastOpened = null;
   save(state);
-
-  let deleted = false;
-  if (deleteData && ws.type === LOCAL) {
-    const owned = path.resolve(workspacesDir()) + path.sep;
-    const target = path.resolve(ws.dataDir);
-    if (target.startsWith(owned)) {
-      fs.rmSync(target, { recursive: true, force: true });
-      deleted = true;
+  if (deleteData && srv.type === 'local' && srv.dataDir) {
+    // Guard: only ever delete directories we created — under the default
+    // root or the configured one — never an arbitrary folder.
+    const resolved = path.resolve(srv.dataDir);
+    if (isUnder(resolved, defaultDataRoot()) || isUnder(resolved, dataRoot(state))) {
+      fs.rmSync(resolved, { recursive: true, force: true });
     }
   }
-  try {
-    fs.unlinkSync(logPath(id));
-  } catch {
-    /* no log yet */
-  }
-  return { removed: true, deleted };
 }
 
+// Remember which server is open (reopened at next launch).
 function markOpened(id) {
   const state = load();
-  const ws = state.workspaces.find((w) => w.id === id);
-  if (!ws) return null;
-  ws.lastOpenedAt = new Date().toISOString();
+  const srv = state.servers.find((s) => s.id === id);
+  if (!srv) return;
+  srv.lastOpenedAt = new Date().toISOString();
   state.lastOpened = id;
   save(state);
-  return ws;
 }
 
-function lastOpened() {
+function getLastOpened() {
   const state = load();
-  return state.workspaces.find((w) => w.id === state.lastOpened) || null;
+  return state.servers.find((s) => s.id === state.lastOpened) || null;
 }
 
-function settings() {
+function getSettings() {
   return load().settings;
 }
 
 function setSettings(patch) {
   const state = load();
-  state.settings = { ...state.settings, ...(patch || {}) };
+  state.settings = { ...state.settings, ...patch };
   save(state);
   return state.settings;
 }
 
-function windowBounds() {
+function getWindowBounds() {
   return load().windowBounds;
 }
 
@@ -245,8 +267,9 @@ function setWindowBounds(bounds) {
   save(state);
 }
 
-/** Bytes under a library directory. Synchronous; libraries are small trees. */
-function dirSize(target) {
+// Bytes on disk under a local server's data dir (SQLite files + uploads).
+// Synchronous walk; libraries are at most a few thousand files.
+function dirSize(dir) {
   let total = 0;
   const walk = (d) => {
     let entries;
@@ -255,71 +278,22 @@ function dirSize(target) {
     } catch {
       return;
     }
-    for (const entry of entries) {
-      const p = path.join(d, entry.name);
-      if (entry.isDirectory()) walk(p);
-      else if (entry.isFile()) {
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile()) {
         try {
           total += fs.statSync(p).size;
-        } catch {
-          /* vanished mid-walk */
-        }
+        } catch {}
       }
     }
   };
-  walk(target);
+  walk(dir);
   return total;
 }
 
-/**
- * Carry over the single-mode configuration the shell used before workspaces
- * existed (`settings.json`: `{mode, serverUrl, recentServers}`).
- *
- * The important part is the local library. That version kept it in the
- * platform's application-support directory, *not* under userData/workspaces —
- * so the migrated workspace points at the old path and is never a candidate
- * for "delete everything". Losing someone's notes to a refactor is not a
- * recoverable mistake.
- *
- * Returns the id to open, or null when there was nothing to migrate.
- */
-function migrateFromSingleMode({ defaultDataDir }) {
-  const legacyFile = path.join(dir(), "settings.json");
-  let legacy;
-  try {
-    legacy = JSON.parse(fs.readFileSync(legacyFile, "utf8"));
-  } catch {
-    return null;
-  }
-  const state = load();
-  if (state.workspaces.length) return null; // already migrated
-
-  let openId = null;
-  if (legacy.mode === LOCAL && defaultDataDir) {
-    const ws = addLocal("My library", { dataDir: defaultDataDir });
-    openId = ws.id;
-  }
-  const urls = [legacy.serverUrl, ...(legacy.recentServers || [])]
-    .map(normalizeUrl)
-    .filter(Boolean);
-  for (const url of [...new Set(urls)]) {
-    try {
-      const ws = addRemote("", url);
-      if (legacy.mode === REMOTE && normalizeUrl(legacy.serverUrl) === url) openId = ws.id;
-    } catch {
-      /* duplicate or unusable — skip it */
-    }
-  }
-  if (openId) markOpened(openId);
-  // Keep the old file: it costs nothing and makes the migration reversible by
-  // hand if it got something wrong.
-  fs.renameSync(legacyFile, `${legacyFile}.migrated`);
-  return openId;
-}
-
 module.exports = {
-  init, load, save, get, addLocal, addRemote, rename, remove,
-  markOpened, lastOpened, settings, setSettings, windowBounds, setWindowBounds,
-  dirSize, normalizeUrl, migrateFromSingleMode,
-  workspacesDir, logPath, LOCAL, REMOTE, FILE, DEFAULT_SETTINGS,
+  init, load, get, addLocal, addRemote, rename, remove, markOpened, getLastOpened,
+  getSettings, setSettings, getWindowBounds, setWindowBounds, dirSize,
+  defaultDataRoot, dataRoot, localsUnderRoot, setDataRoot,
 };

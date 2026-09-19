@@ -1,309 +1,395 @@
-// Gamma Desktop — the shell.
+// Gamma desktop shell. The app itself is untouched Gamma: a server is a
+// local sidecar or a remote URL, and opening one navigates the content view
+// to it — the frontend always loads from the server it talks to, so there is
+// no version skew and no API-base plumbing. Gamma's own workspaces (the
+// libraries inside a server) are switched from the same shell-bar menu: the
+// shell reads them off `/api/session` with the page's cookies and navigates
+// to `?ws=<id>`.
 //
-// A *workspace* is a Gamma server: a library on this machine that the shell
-// serves, or a Gamma you already run, reached by URL. Opening one points the
-// content view at it, so the frontend always comes from the server it talks
-// to — no API-base plumbing and no version skew.
+// Window layout (Electron BaseWindow + two WebContentsViews):
 //
-//   ┌──────────────────────────────────────────────┐
-//   │ ⌈γ⌉ My library ▾   Starting Notes…      ⟳    │  bar view (file://),
-//   ├──────────────────────────────────────────────┤  doubles as the title bar
-//   │  the launcher (file://), or the workspace's   │
-//   │  own Gamma frontend (http://…)               │  content view
-//   └──────────────────────────────────────────────┘
+//   ┌──────────────────────────────────────────────────┐
+//   │ shell bar (ui/bar.html, 38px, doubles as the     │  ← shell chrome:
+//   │ title bar: workspace switcher + status)           │    file:// page
+//   ├──────────────────────────────────────────────────┤
+//   │ content view: the launcher (file://) or the       │  ← Gamma, black box
+//   │ workspace's own Gamma frontend (http://…)         │
+//   └──────────────────────────────────────────────────┘
 //
-// The shell owns its chrome, the workspace registry and the servers it starts.
-// The only thing it reads out of a Gamma page is `data-theme`, so the chrome
-// can paint in the same theme.
-//
-// Two lifecycle rules, both learned the hard way:
-//   * A window appears only once there is something real in it. A window that
-//     loads nothing is a white rectangle with no explanation.
-//   * Quitting *waits* for every server to be gone. An orphan keeps its
-//     library's advisory lock and the next launch refuses to start.
+// The shell owns only its chrome (bar + launcher), the server registry and
+// sidecar lifecycles. It reads two things off Gamma: the `data-theme`
+// attribute the preload mirrors so the chrome paints in the same theme, and
+// `/api/session` (public HTTP API) for the workspace list.
 
-const {
-  app, BaseWindow, WebContentsView, Menu, ipcMain, shell,
-} = require("electron");
-const fs = require("node:fs");
-const path = require("node:path");
-const { pathToFileURL } = require("node:url");
+const { app, BaseWindow, WebContentsView, Menu, shell, ipcMain, net, dialog } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { pathToFileURL } = require('url');
 
-const registry = require("./lib/registry");
-const { Sidecars } = require("./lib/sidecar");
+const registry = require('./lib/registry');
+const sidecar = require('./lib/sidecar');
+const updater = require('./lib/updater');
 
+const SMOKE = process.argv.includes('--smoke');
 const BAR_H = 38;
-const ICON = path.join(__dirname, "assets", "icon.png");
 
-// Tests point the shell at a throwaway profile, so a run can neither read nor
-// damage a real installation.
-if (process.env.GAMMA_SHELL_USER_DATA) {
-  app.setPath("userData", process.env.GAMMA_SHELL_USER_DATA);
-}
+// Tests point the shell at a throwaway profile so the real registry, cookies
+// and sidecars are never touched.
+if (process.env.GAMMA_SHELL_USER_DATA) app.setPath('userData', process.env.GAMMA_SHELL_USER_DATA);
 
-// Window-chrome colours per Gamma theme, mirroring app.css's --bg-surface and
-// --text-secondary. "" = the page never reported one → Gamma's default, dark.
-const CHROME = {
-  "": { bg: "#1a1a1a", symbol: "#dddddd" },
-  dark: { bg: "#1a1a1a", symbol: "#dddddd" },
-  light: { bg: "#ffffff", symbol: "#333333" },
-  sepia: { bg: "#f4ecd8", symbol: "#433422" },
-  gray: { bg: "#e8e8e8", symbol: "#2d2d2d" },
+// Title-bar palette per Gamma theme (mirrors app.css --bg-surface/--text-*).
+// '' = the page never reported a theme → Gamma's default, dark.
+const THEMES = {
+  '': { bg: '#1a1a1a', symbol: '#dddddd' },
+  dark: { bg: '#1a1a1a', symbol: '#dddddd' },
+  light: { bg: '#ffffff', symbol: '#333333' },
+  sepia: { bg: '#fdf6e3', symbol: '#073642' },
+  solarized: { bg: '#eee8d5', symbol: '#657b83' },
+  gray: { bg: '#f4f4f4', symbol: '#2d2d2d' },
 };
 
 let win = null;
-let bar = null;
-let content = null;
-/** The open workspace, or null while the launcher is showing. */
-let current = null;
-/** Status text while something is starting. */
-let busy = null;
-let theme = "";
+let bar = null; // shell bar view
+let content = null; // Gamma / launcher view
+let current = null; // { id, name, type, url } while a server is open
+let busy = null; // status text while a server is starting
+// Gamma's workspaces on the open server: { list, current, user } or null.
+let gamma = null;
+let gammaFetch = null; // in-flight /api/session read
+let theme = ''; // last data-theme the content page reported
 let barExpanded = false;
-/** Origins the content view may navigate to. Everything else is outbound. */
+// Origins the content view may navigate to (registered servers). Anything
+// else is handed to the system browser.
 const allowedOrigins = new Set();
-let sidecars = null;
-let quitting = false;
+// Test hook: records what would have opened externally.
+const externalOpens = [];
 
-// --- helpers -----------------------------------------------------------------
+// Remote reachability: a cached `/api/health` probe per remote server so
+// the launcher and the bar menu can show a dot like the local running one
+// (Gamma's health endpoint is public, no session needed). Probes run on
+// demand — launcher refresh, bar menu open — behind a short TTL, and their
+// results land asynchronously through pushState.
+const remoteHealth = new Map(); // id -> { ok: boolean, at: ms }
+const remoteProbes = new Map(); // id -> in-flight promise
+const HEALTH_TTL_MS = 20_000;
+const HEALTH_TIMEOUT_MS = 5_000;
 
-function chrome() {
-  return CHROME[theme || registry.settings().lastTheme || ""] || CHROME[""];
+function probeRemotes(force) {
+  for (const ws of registry.load().servers) {
+    if (ws.type !== 'remote' || remoteProbes.has(ws.id)) continue;
+    const cached = remoteHealth.get(ws.id);
+    if (!force && cached && Date.now() - cached.at < HEALTH_TTL_MS) continue;
+    let target;
+    try {
+      target = new URL('/api/health', ws.url).href;
+    } catch {
+      continue;
+    }
+    const p = net
+      .fetch(target, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS), cache: 'no-store' })
+      .then((r) => r.ok, () => false)
+      .then((ok) => remoteHealth.set(ws.id, { ok, at: Date.now() }))
+      .finally(() => {
+        remoteProbes.delete(ws.id);
+        pushState();
+      });
+    remoteProbes.set(ws.id, p);
+  }
 }
 
-function isShellSender(event) {
-  const url = event.senderFrame ? event.senderFrame.url : "";
-  return url.startsWith("file:");
+// true / false once probed, null while unknown, undefined for local ones.
+function remoteReachable(ws) {
+  if (ws.type !== 'remote') return undefined;
+  const h = remoteHealth.get(ws.id);
+  return h ? h.ok : null;
 }
 
-/** Wrap an IPC handler so only the shell's own pages can call it. */
-function shellOnly(handler) {
-  return (event, ...args) => {
-    if (!isShellSender(event)) throw new Error("not available to this page");
-    return handler(...args);
+function appInfo() {
+  return {
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    userDataDir: app.getPath('userData'),
   };
 }
 
-// --- window ------------------------------------------------------------------
+function currentTheme() {
+  return theme || registry.getSettings().lastTheme || '';
+}
+
+function palette() {
+  return THEMES[currentTheme()] || THEMES[''];
+}
+
+// ---------------------------------------------------------------- window ----
 
 function layout() {
   if (!win) return;
   const [w, h] = win.getContentSize();
-  // The switcher menu needs room below the strip, and a 38px view cannot show
-  // it: while the menu is open the bar view grows over the content. Its page
-  // is transparent outside the strip and the menu, and a click there closes.
-  const barH = barExpanded ? Math.min(h, BAR_H + 460) : BAR_H;
+  // The bar's dropdown needs room below the strip: while a menu is open the
+  // bar view grows over the content (its page is transparent outside the
+  // strip and the menu, and a click there closes the menu).
+  const barH = barExpanded ? Math.min(h, BAR_H + 420) : BAR_H;
   bar.setBounds({ x: 0, y: 0, width: w, height: barH });
   content.setBounds({ x: 0, y: BAR_H, width: w, height: Math.max(0, h - BAR_H) });
 }
 
-function applyChrome() {
+function applyTheme() {
   if (!win) return;
-  const c = chrome();
-  win.setBackgroundColor(c.bg);
-  if (process.platform !== "darwin") {
+  const p = palette();
+  win.setBackgroundColor(p.bg);
+  if (process.platform !== 'darwin') {
     try {
-      win.setTitleBarOverlay({ color: c.bg, symbolColor: c.symbol, height: BAR_H });
-    } catch {
-      /* only where an overlay exists */
-    }
+      win.setTitleBarOverlay({ color: p.bg, symbolColor: p.symbol, height: BAR_H });
+    } catch {}
   }
 }
 
 function createWindow() {
-  const saved = registry.windowBounds();
-  const c = chrome();
+  const saved = registry.getWindowBounds();
+  const p = palette();
   win = new BaseWindow({
-    width: 1400,
+    width: 1360,
     height: 900,
-    minWidth: 860,
-    minHeight: 560,
-    ...(saved && saved.width > 500 && saved.height > 360
-      ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height }
-      : {}),
-    title: "Gamma",
-    icon: ICON,
-    backgroundColor: c.bg,
-    show: false,
-    // The bar is the title bar: frameless, with the OS controls overlaid on
-    // Windows and Linux and the traffic lights inset on macOS.
-    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
-    ...(process.platform === "darwin"
+    minWidth: 720,
+    minHeight: 480,
+    ...(saved && saved.width > 400 && saved.height > 300 ? saved : {}),
+    title: 'Gamma',
+    icon: path.join(__dirname, 'assets', 'icon.png'),
+    backgroundColor: p.bg,
+    // The shell bar is the title bar: frameless with the OS window controls
+    // overlaid (Windows/Linux) or the traffic lights inset (macOS).
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    ...(process.platform === 'darwin'
       ? { trafficLightPosition: { x: 12, y: 11 } }
-      : { titleBarOverlay: { color: c.bg, symbolColor: c.symbol, height: BAR_H } }),
+      : { titleBarOverlay: { color: p.bg, symbolColor: p.symbol, height: BAR_H } }),
+    // Native menu stays for its accelerators; Alt reveals it on Windows.
     autoHideMenuBar: true,
   });
   if (saved && saved.maximized) win.maximize();
 
   const webPreferences = {
-    preload: path.join(__dirname, "preload.js"),
+    preload: path.join(__dirname, 'preload.js'),
     contextIsolation: true,
     nodeIntegration: false,
-    spellcheck: true,
   };
-
   bar = new WebContentsView({ webPreferences });
-  bar.setBackgroundColor("#00000000");
+  bar.setBackgroundColor('#00000000');
   content = new WebContentsView({ webPreferences });
-  content.setBackgroundColor(c.bg);
+  content.setBackgroundColor(p.bg);
   win.contentView.addChildView(content);
-  win.contentView.addChildView(bar); // above, so the open menu overlays
+  win.contentView.addChildView(bar); // on top, so the expanded menu overlays
   layout();
+  win.on('resize', layout);
+  win.on('maximize', layout);
+  win.on('unmaximize', layout);
 
-  for (const event of ["resize", "maximize", "unmaximize", "enter-full-screen", "leave-full-screen"]) {
-    win.on(event, layout);
-  }
+  bar.webContents.loadFile(path.join(__dirname, 'ui', 'bar.html'));
+  bar.webContents.on('did-finish-load', pushState);
 
-  bar.webContents.loadFile(path.join(__dirname, "ui", "bar.html"));
-  bar.webContents.on("did-finish-load", pushState);
-
-  const wc = content.webContents;
-
-  // Notes carry outbound links (DOIs, arXiv, link chips, a paper's source
-  // URL). In a browser those open a tab; here they go to the real browser,
-  // never navigating the app away from itself.
+  const cwc = content.webContents;
   const guard = (event, url) => {
-    if (url.startsWith("file:")) return;
     let origin = null;
     try {
       origin = new URL(url).origin;
-    } catch {
-      /* not a URL we can reason about */
-    }
-    if (origin && allowedOrigins.has(origin)) return;
+    } catch {}
+    if (url.startsWith('file:') || (origin && allowedOrigins.has(origin))) return;
     event.preventDefault();
-    if (origin && /^https?:$/.test(new URL(url).protocol)) openExternal(url);
+    if (origin) openExternal(url);
   };
-  wc.on("will-navigate", guard);
-  wc.on("will-redirect", guard);
-  wc.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url)) openExternal(url);
-    return { action: "deny" };
+  cwc.on('will-navigate', guard);
+  cwc.on('will-redirect', guard);
+  // target=_blank (external link chips, share links, papers opened in a new
+  // tab) goes to the system browser.
+  cwc.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/.test(url)) openExternal(url);
+    return { action: 'deny' };
+  });
+  cwc.on('page-title-updated', (_e, title) => {
+    if (win) win.setTitle(title || 'Gamma');
+  });
+  cwc.on('did-navigate', () => { pushState(); refreshGamma(); });
+  cwc.on('did-navigate-in-page', () => { pushState(); refreshGamma(); });
+  cwc.on('did-finish-load', refreshGamma);
+  cwc.on('focus', () => {
+    if (barExpanded) setBarExpanded(false);
   });
 
-  wc.on("page-title-updated", (_event, title) => {
-    if (!win) return;
-    const suffix = current && current.type === registry.REMOTE ? ` — ${current.name}` : "";
-    win.setTitle(`${title || "Gamma"}${suffix}`);
-  });
-  wc.on("did-navigate", pushState);
-  wc.on("did-navigate-in-page", pushState);
-  wc.on("focus", () => setBarExpanded(false));
-
-  // Exports and backups download through the normal save dialog; tests take
-  // them without one.
-  wc.session.on("will-download", (_event, item) => {
+  // Downloads (backup zips, exports) go through the normal save dialog;
+  // tests get them saved straight into a folder.
+  cwc.session.on('will-download', (_e, item) => {
     const dir = process.env.GAMMA_SHELL_DOWNLOAD_DIR;
     if (dir) item.setSavePath(path.join(dir, item.getFilename()));
   });
 
-  win.on("close", () => {
+  win.on('close', () => {
     try {
       registry.setWindowBounds({ ...win.getNormalBounds(), maximized: win.isMaximized() });
-    } catch {
-      /* a close mid-move; the old bounds are fine */
-    }
+    } catch {}
   });
-  win.on("closed", () => {
+  win.on('closed', () => {
     win = null;
     bar = null;
     content = null;
   });
-  return win;
 }
 
 function openExternal(url) {
   externalOpens.push(url);
   if (!process.env.GAMMA_SHELL_TEST) shell.openExternal(url);
 }
-const externalOpens = []; // test hook; see the bottom of this file
 
 function setBarExpanded(on) {
-  const next = Boolean(on);
-  if (next === barExpanded) return;
-  barExpanded = next;
+  barExpanded = Boolean(on);
   layout();
 }
 
-function showWindow() {
-  if (win && !win.isVisible()) win.show();
-}
-
-/** Show the launcher, optionally with an error to explain why. */
 function loadLauncher(error) {
-  if (!win) createWindow();
+  if (!win) return;
   current = null;
+  gamma = null;
   busy = null;
-  const query = error ? `?error=${encodeURIComponent(String(error))}` : "";
-  content.webContents.loadURL(
-    pathToFileURL(path.join(__dirname, "ui", "launcher.html")).href + query,
-  );
-  win.setTitle("Gamma");
-  showWindow();
+  const q = error ? '?error=' + encodeURIComponent(String(error)) : '';
+  content.webContents.loadURL(pathToFileURL(path.join(__dirname, 'ui', 'launcher.html')).href + q);
+  win.setTitle('Gamma');
   pushState();
-  buildMenu();
 }
 
-// --- state pushed to the shell's pages ---------------------------------------
+// -------------------------------------------------------------- state --------
 
+// The workspace id the content view is showing (its URL's ?ws=), or ''.
+function currentWsId() {
+  try {
+    return new URL(content.webContents.getURL()).searchParams.get('ws') || '';
+  } catch {
+    return '';
+  }
+}
+
+// Gamma's workspaces on the open server, read from `/api/session` with the
+// content session's cookies (a public API call, nothing injected into the
+// page). Anonymous (not signed in) → null. Lands asynchronously via pushState.
+function refreshGamma() {
+  if (!current || !content || content.webContents.isDestroyed()) return;
+  const url = content.webContents.getURL();
+  let origin;
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    return;
+  }
+  if (origin !== new URL(current.url).origin) return;
+  if (gammaFetch) return;
+  const ses = content.webContents.session;
+  gammaFetch = ses
+    .fetch(origin + '/api/session', { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(5000) })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      gamma = j && j.user
+        ? { user: j.user, current: currentWsId() || j.default_workspace || '', list: j.workspaces || [] }
+        : null;
+    })
+    .catch(() => { gamma = null; })
+    .finally(() => {
+      gammaFetch = null;
+      pushState();
+    });
+}
+
+// Navigate the open server to one of its Gamma workspaces.
+function openGammaWorkspace(id) {
+  if (!current || !content) throw new Error('No server open');
+  const target = new URL(current.url);
+  target.search = '?ws=' + encodeURIComponent(String(id || ''));
+  return content.webContents.loadURL(target.href);
+}
+
+// What the shell bar (and the launcher, for the switcher part) renders.
 function barState() {
   const state = registry.load();
   return {
     platform: process.platform,
     version: app.getVersion(),
-    theme: theme || state.settings.lastTheme || "",
+    packaged: app.isPackaged,
+    theme: currentTheme(),
     current,
     busy,
-    workspaces: state.workspaces.map((ws) => ({
+    update: updater.state(),
+    // Gamma's workspaces on the open server (null until known / signed in),
+    // with the one the content view shows.
+    gamma: gamma ? { ...gamma, current: currentWsId() || gamma.current } : null,
+    servers: state.servers.map((ws) => ({
       id: ws.id,
       name: ws.name,
       type: ws.type,
-      running: ws.type === registry.LOCAL ? Boolean(sidecars.status(ws.id)) : undefined,
+      url: ws.type === 'remote' ? ws.url : (sidecar.status(ws.id) || {}).url,
+      running: ws.type === 'local' ? Boolean(sidecar.status(ws.id)) : undefined,
+      reachable: remoteReachable(ws),
     })),
   };
 }
 
-/** The launcher's fuller view: paths, sizes, settings. */
-function detailState() {
+// The launcher's fuller view: credentials, data dirs, sizes, settings.
+function fullState() {
   const state = registry.load();
   return {
     ...barState(),
-    userDataDir: app.getPath("userData"),
+    servers: state.servers.map((ws) => ({
+      ...ws,
+      running: ws.type === 'local' ? Boolean(sidecar.status(ws.id)) : undefined,
+      reachable: remoteReachable(ws),
+      sizeBytes: ws.type === 'local' ? registry.dirSize(ws.dataDir) : undefined,
+      logPath: ws.type === 'local' ? path.join(app.getPath('userData'), 'logs', `${ws.id}.log`) : undefined,
+    })),
     settings: state.settings,
     lastOpened: state.lastOpened,
-    workspaces: state.workspaces.map((ws) => ({
-      ...ws,
-      running: ws.type === registry.LOCAL ? Boolean(sidecars.status(ws.id)) : undefined,
-      url: ws.type === registry.REMOTE ? ws.url : (sidecars.status(ws.id) || {}).url,
-      sizeBytes: ws.type === registry.LOCAL ? registry.dirSize(ws.dataDir) : undefined,
-      logPath: ws.type === registry.LOCAL ? registry.logPath(ws.id) : undefined,
-      // A library the shell did not create is never a candidate for deletion.
-      owned:
-        ws.type === registry.LOCAL &&
-        path.resolve(ws.dataDir).startsWith(path.resolve(registry.workspacesDir()) + path.sep),
-    })),
+    detected: sidecar.detectDev(state.settings),
+    userDataDir: app.getPath('userData'),
+    dataRoot: registry.dataRoot(state),
+    defaultDataRoot: registry.defaultDataRoot(),
+    // Names of the local servers a root change would move.
+    movable: registry.localsUnderRoot(state).map((w) => w.name),
   };
 }
 
 function pushState() {
-  const state = barState();
-  for (const view of [bar, content]) {
-    const wc = view && view.webContents;
-    if (!wc || wc.isDestroyed()) continue;
-    // Only the shell's own pages get shell state.
-    if (view === content && !wc.getURL().startsWith("file:")) continue;
-    wc.send("shell:state", state);
+  if (!bar || bar.webContents.isDestroyed() || bar.webContents.isLoading()) return;
+  bar.webContents.send('shell:state', barState());
+  if (content && !content.webContents.isDestroyed() && content.webContents.getURL().startsWith('file:')) {
+    content.webContents.send('shell:state', barState());
   }
 }
 
-// --- opening a workspace -----------------------------------------------------
+// ----------------------------------------------------------- auto-login -----
 
-let opening = null;
+// Local servers log in silently with the credentials the shell seeded.
+// Runs in the page after load: if /api/session says anonymous, POST the
+// stored credentials and reload. Harmless when already logged in.
+function autoLoginScript(username, password) {
+  return `(async () => {
+    try {
+      const s = await fetch('/api/session', { credentials: 'same-origin' });
+      if (s.ok) {
+        const j = await s.json().catch(() => null);
+        if (j && j.user) return 'already:' + j.user;
+      }
+      const r = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ username: ${JSON.stringify(username)}, password: ${JSON.stringify(password)} }),
+      });
+      if (r.ok) { location.reload(); return 'logged-in'; }
+      return 'login-failed:' + r.status;
+    } catch (e) { return 'error:' + e; }
+  })()`;
+}
 
-/** Serialised: a second click while one open is in flight waits for it. */
-async function openWorkspace(id) {
+let opening = null; // serialize opens: a second click while one is in flight waits
+
+async function openServer(id) {
   if (opening) await opening.catch(() => {});
-  opening = openWorkspaceNow(id);
+  opening = openServerNow(id);
   try {
     return await opening;
   } finally {
@@ -311,320 +397,323 @@ async function openWorkspace(id) {
   }
 }
 
-async function openWorkspaceNow(id) {
+async function openServerNow(id) {
   const ws = registry.get(id);
-  if (!ws) throw new Error("That workspace is gone.");
+  if (!ws) throw new Error('Unknown server');
   if (!win) createWindow();
-  if (current && current.id === id) {
-    showWindow();
-    return { url: current.url };
-  }
-
-  busy = ws.type === registry.LOCAL ? `Starting ${ws.name}…` : `Connecting to ${ws.name}…`;
-  setBarExpanded(false);
+  if (current && current.id === id) return { url: current.url, autoLogin: 'already-open' };
+  busy = ws.type === 'local' ? `Starting ${ws.name}…` : `Connecting to ${ws.name}…`;
   pushState();
   try {
     let url;
-    if (ws.type === registry.REMOTE) {
-      // Check before pointing a window at it: a browser error page tells the
-      // user nothing they can act on.
-      const probe = await probeServer(ws.url);
-      if (!probe.ok) throw new Error(probe.error);
-      url = probe.url;
+    let creds = null;
+    if (ws.type === 'remote') {
+      url = ws.url;
     } else {
-      url = (await sidecars.start(ws)).url;
+      const entry = await sidecar.start(ws, registry.getSettings(), appInfo());
+      url = entry.url;
+      if (ws.adminUser) creds = { username: ws.adminUser, password: ws.adminPassword };
     }
     allowedOrigins.add(new URL(url).origin);
     await content.webContents.loadURL(url);
+    if (ws.type === 'remote') remoteHealth.set(ws.id, { ok: true, at: Date.now() });
     current = { id: ws.id, name: ws.name, type: ws.type, url };
+    gamma = null;
     registry.markOpened(ws.id);
     content.webContents.focus();
-    showWindow();
+    if (creds) {
+      const result = await content.webContents
+        .executeJavaScript(autoLoginScript(creds.username, creds.password))
+        .catch((e) => 'exec-error:' + e);
+      refreshGamma();
+      return { url, autoLogin: String(result) };
+    }
     return { url };
-  } catch (err) {
+  } catch (e) {
     current = null;
-    throw err;
+    if (ws.type === 'remote') remoteHealth.set(ws.id, { ok: false, at: Date.now() });
+    throw e;
   } finally {
     busy = null;
     pushState();
-    buildMenu();
   }
 }
 
-/** Is there a Gamma at this address, and if not, which way did it fail? */
-async function probeServer(raw) {
-  const url = registry.normalizeUrl(raw);
-  if (!url) return { ok: false, error: "That doesn't look like a web address." };
-  let res;
-  try {
-    res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(8000) });
-  } catch (err) {
-    return {
-      ok: false,
-      error:
-        err && err.name === "TimeoutError"
-          ? "No answer from that address."
-          : `Couldn't reach that address (${(err && err.message) || "network error"}).`,
-    };
+// Help → Check for Updates…: the only update flow that answers with a
+// dialog; the automatic checks stay silent (bar pill / launcher row).
+async function checkForUpdatesInteractive() {
+  const st = await updater.check();
+  const opts = { title: 'Gamma', message: '', buttons: ['OK'] };
+  if (st.status === 'unsupported') {
+    opts.message = 'Updates are not available in this build.';
+    opts.detail =
+      st.error === 'dev build' ? 'Development build: update from git.'
+      : st.error === 'store' ? 'Installed from the Microsoft Store: updates arrive through the Store.'
+      : String(st.error || '');
+  } else if (st.status === 'downloaded') {
+    opts.message = `Gamma ${st.version} is ready to install.`;
+    opts.detail = 'It installs when you restart.';
+    opts.buttons = ['Restart to update', 'Later'];
+  } else if (st.status === 'downloading') {
+    opts.message = `Downloading Gamma ${st.version}…`;
+    opts.detail = 'You will be offered a restart when it is ready.';
+  } else if (st.status === 'available') {
+    opts.message = `Gamma ${st.version} is available.`;
+    opts.detail = 'This build cannot update itself; the download page opens in your browser.';
+    opts.buttons = ['Download', 'Later'];
+  } else if (st.status === 'error') {
+    opts.message = 'Could not check for updates.';
+    opts.detail = String(st.error || '');
+  } else {
+    opts.message = `You are on the latest version (${st.current}).`;
   }
-  if (!res.ok) {
-    return { ok: false, error: `That address answered with ${res.status}. Is it a Gamma server?` };
-  }
-  try {
-    const body = await res.json();
-    if (!body || body.ok !== true) throw new Error("unexpected body");
-  } catch {
-    return { ok: false, error: "Something answered there, but it isn't Gamma." };
-  }
-  return { ok: true, url };
+  const r = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts);
+  if (r.response === 0 && opts.buttons.length > 1) updater.install();
 }
 
-// --- menu --------------------------------------------------------------------
+// ----------------------------------------------------------------- menu -----
 
 function buildMenu() {
-  const { workspaces } = registry.load();
+  const { servers } = registry.load();
   const wc = () => (content ? content.webContents : null);
-  const isMac = process.platform === "darwin";
-
-  // Deliberately thin: every accelerator here takes a keystroke away from the
-  // page, and Gamma binds a lot of them.
   const template = [
-    ...(isMac ? [{ role: "appMenu" }] : []),
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' }] : []),
     {
-      label: "Workspace",
+      label: 'Server',
       submenu: [
-        {
-          label: "All Workspaces…",
-          accelerator: "CmdOrCtrl+Shift+L",
-          click: () => loadLauncher(),
-        },
-        { type: "separator" },
-        ...workspaces.map((ws) => ({
-          label: ws.name + (ws.type === registry.REMOTE ? "  (remote)" : ""),
-          type: "checkbox",
+        { label: 'All Servers…', accelerator: 'CmdOrCtrl+Shift+L', click: () => loadLauncher() },
+        { type: 'separator' },
+        ...servers.map((ws) => ({
+          label: `${ws.name}${ws.type === 'remote' ? '  (remote)' : ''}`,
+          type: 'checkbox',
           checked: Boolean(current && current.id === ws.id),
-          click: () => openWorkspace(ws.id).catch((e) => loadLauncher(e.message || e)),
+          click: () => openServer(ws.id).catch((e) => loadLauncher(e.message || e)),
         })),
-        { type: "separator" },
-        isMac ? { role: "close" } : { role: "quit" },
+        { type: 'separator' },
+        process.platform === 'darwin' ? { role: 'close' } : { role: 'quit' },
       ],
     },
-    { role: "editMenu" },
+    { role: 'editMenu' },
     {
-      label: "View",
+      label: 'View',
       submenu: [
-        {
-          // Not role:"reload" — after a server restart the workspace may be on
-          // a different port, so reloading has to go through the shell.
-          label: "Reload",
-          accelerator: "CmdOrCtrl+R",
-          click: () => reloadContent(),
-        },
-        { label: "Toggle Developer Tools", accelerator: isMac ? "Alt+Cmd+I" : "Ctrl+Shift+I",
-          click: () => wc() && wc().toggleDevTools() },
-        { type: "separator" },
-        { label: "Actual Size", accelerator: "CmdOrCtrl+0", click: () => wc() && wc().setZoomLevel(0) },
-        { label: "Zoom In", accelerator: "CmdOrCtrl+=",
-          click: () => wc() && wc().setZoomLevel(wc().getZoomLevel() + 0.5) },
-        { label: "Zoom Out", accelerator: "CmdOrCtrl+-",
-          click: () => wc() && wc().setZoomLevel(wc().getZoomLevel() - 0.5) },
-        { type: "separator" },
-        { role: "togglefullscreen" },
+        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => wc() && wc().reload() },
+        { label: 'Toggle Developer Tools', accelerator: process.platform === 'darwin' ? 'Alt+Cmd+I' : 'Ctrl+Shift+I', click: () => wc() && wc().toggleDevTools() },
+        { type: 'separator' },
+        { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: () => wc() && wc().setZoomLevel(0) },
+        { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => wc() && wc().setZoomLevel(wc().getZoomLevel() + 0.5) },
+        { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => wc() && wc().setZoomLevel(wc().getZoomLevel() - 0.5) },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
       ],
     },
-    { role: "windowMenu" },
+    { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        { label: 'Check for Updates…', click: () => checkForUpdatesInteractive().catch(() => {}) },
+        { label: 'Gamma on GitHub', click: () => openExternal('https://github.com/tim4431/Gamma') },
+      ],
+    },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function reloadContent() {
-  if (!content) return;
-  if (current && current.url) content.webContents.loadURL(current.url);
-  else content.webContents.reload();
-}
+// ------------------------------------------------------------------ IPC -----
+// The shell's own pages (file://: launcher + bar) are the only surface these
+// are exposed to — the preload bridges them only on file: URLs, and the
+// sender is re-checked here.
 
-// --- ipc ---------------------------------------------------------------------
-
-function registerIpc() {
-  ipcMain.handle("shell:state", shellOnly(() => barState()));
-  ipcMain.handle("shell:details", shellOnly(() => detailState()));
-
-  ipcMain.handle("shell:open", shellOnly(async (id) => {
-    try {
-      return await openWorkspace(id);
-    } catch (err) {
-      // The launcher shows the reason; the caller gets it too.
-      loadLauncher(err.message || err);
-      throw err;
-    }
-  }));
-
-  ipcMain.handle("shell:add-local", shellOnly((name) => {
-    const ws = registry.addLocal(name);
-    pushState();
-    buildMenu();
-    return ws;
-  }));
-
-  ipcMain.handle("shell:add-remote", shellOnly(async (name, url) => {
-    const probe = await probeServer(url);
-    if (!probe.ok) throw new Error(probe.error);
-    const ws = registry.addRemote(name, probe.url);
-    pushState();
-    buildMenu();
-    return ws;
-  }));
-
-  ipcMain.handle("shell:probe", shellOnly((url) => probeServer(url)));
-
-  ipcMain.handle("shell:rename", shellOnly((id, name) => {
-    const ws = registry.rename(id, name);
-    if (current && current.id === id) current = { ...current, name: ws.name };
-    pushState();
-    buildMenu();
-    return ws;
-  }));
-
-  ipcMain.handle("shell:remove", shellOnly(async (id, opts) => {
-    const wasCurrent = Boolean(current && current.id === id);
-    await sidecars.stop(id);
-    const result = registry.remove(id, opts || {});
-    if (wasCurrent) loadLauncher();
-    else {
-      pushState();
-      buildMenu();
-    }
-    return result;
-  }));
-
-  ipcMain.handle("shell:launcher", shellOnly(() => loadLauncher()));
-  ipcMain.handle("shell:reload", shellOnly(() => reloadContent()));
-  ipcMain.handle("shell:bar-expand", shellOnly((on) => setBarExpanded(on)));
-
-  ipcMain.handle("shell:reveal-data", shellOnly((id) => {
-    const ws = registry.get(id);
-    if (ws && ws.type === registry.LOCAL) shell.openPath(ws.dataDir);
-  }));
-
-  ipcMain.handle("shell:reveal-log", shellOnly((id) => {
-    const p = registry.logPath(id);
-    if (fs.existsSync(p)) shell.showItemInFolder(p);
-  }));
-
-  ipcMain.handle("shell:read-log", shellOnly((id) => {
-    try {
-      const text = fs.readFileSync(registry.logPath(id), "utf8");
-      return text.split(/\r?\n/).slice(-400).join("\n");
-    } catch {
-      return "(nothing logged yet)";
-    }
-  }));
-
-  ipcMain.handle("shell:set-settings", shellOnly((patch) => registry.setSettings(patch)));
-
-  // The theme mirror is the one channel a Gamma page may use, and all it can
-  // do is name a theme.
-  ipcMain.on("shell:theme", (event, value) => {
-    if (!content || event.sender !== content.webContents) return;
-    const clean = typeof value === "string" && CHROME[value] ? value : "";
-    if (clean === theme) return;
-    theme = clean;
-    registry.setSettings({ lastTheme: clean });
-    applyChrome();
-    pushState();
-  });
-}
-
-// --- lifecycle ---------------------------------------------------------------
-
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
-  app.on("second-instance", () => {
-    if (!win) return;
-    if (win.isMinimized()) win.restore();
-    win.focus();
-  });
-
-  app.whenReady().then(async () => {
-    registry.init(app.getPath("userData"));
-    sidecars = new Sidecars({
-      logDir: path.join(app.getPath("userData"), "logs"),
-      onState: pushState,
-      onRespawn: (id, info) => {
-        // Back on a (possibly different) port: point the window at it.
-        if (!current || current.id !== id) return;
-        allowedOrigins.add(new URL(info.url).origin);
-        current = { ...current, url: info.url };
-        content.webContents.loadURL(info.url);
-      },
-      onGaveUp: (id, message, tail) => {
-        if (current && current.id === id) loadLauncher(`${message}\n\n${tail}`);
-        else pushState();
-      },
-    });
-
-    registerIpc();
-    buildMenu();
-    createWindow();
-
-    // Carry over the pre-workspaces configuration, pointing at the library it
-    // used rather than a fresh one.
-    let openId = null;
-    try {
-      const { defaultDataDir } = require("./lib/legacy");
-      openId = registry.migrateFromSingleMode({ defaultDataDir: defaultDataDir() });
-    } catch (err) {
-      console.error("migration skipped:", err && err.message);
-    }
-
-    const settings = registry.settings();
-    const last = openId ? registry.get(openId) : settings.openLastOnLaunch ? registry.lastOpened() : null;
-    if (last) {
-      openWorkspace(last.id).catch((err) => loadLauncher(err.message || err));
-    } else {
-      loadLauncher();
-    }
-
-    app.on("activate", () => {
-      if (win) {
-        showWindow();
-        return;
-      }
-      createWindow();
-      if (current && current.url) content.webContents.loadURL(current.url);
-      else loadLauncher();
-    });
-  });
-
-  app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") app.quit();
-  });
-
-  // Quit means quit: every server must be gone before the process exits.
-  app.on("before-quit", (event) => {
-    if (quitting || !sidecars) return;
-    event.preventDefault();
-    quitting = true;
-    sidecars.stopAll().finally(() => app.quit());
-  });
-}
-
-// Test hook. Only with GAMMA_SHELL_TEST, and only reachable from the main
-// process, so the suite can assert on shell internals instead of scraping the
-// UI for them.
-if (process.env.GAMMA_SHELL_TEST) {
-  global.__gammaShell = {
-    registry,
-    sidecars: () => sidecars,
-    current: () => current,
-    theme: () => theme,
-    externalOpens,
-    barExpanded: () => barExpanded,
-    bounds: () => ({ bar: bar && bar.getBounds(), content: content && content.getBounds() }),
-    openWorkspace,
-    loadLauncher,
+function shellOnly(handler) {
+  return (event, ...args) => {
+    const url = event.senderFrame ? event.senderFrame.url : '';
+    if (!url.startsWith('file:')) throw new Error('Not allowed');
+    return handler(...args);
   };
 }
 
-module.exports = { probeServer };
+function registerIpc() {
+  ipcMain.handle('shell:state', shellOnly(() => { probeRemotes(); refreshGamma(); return barState(); }));
+  ipcMain.handle('shell:list', shellOnly(() => { probeRemotes(); return fullState(); }));
+  ipcMain.handle('shell:update-check', shellOnly(() => updater.check()));
+  ipcMain.handle('shell:update-install', shellOnly(() => updater.install()));
+  ipcMain.handle('shell:add-local', shellOnly((name) => { const ws = registry.addLocal(name); buildMenu(); pushState(); return ws; }));
+  ipcMain.handle('shell:add-remote', shellOnly((name, url) => { const ws = registry.addRemote(name, url); buildMenu(); pushState(); return ws; }));
+  ipcMain.handle('shell:rename', shellOnly((id, name) => {
+    const ws = registry.rename(id, name);
+    if (current && current.id === id) current = { ...current, name: ws.name };
+    buildMenu();
+    pushState();
+    return ws;
+  }));
+  ipcMain.handle('shell:remove', shellOnly((id, opts) => {
+    if (current && current.id === id) loadLauncher();
+    sidecar.stop(id);
+    registry.remove(id, opts || {});
+    buildMenu();
+    pushState();
+  }));
+  ipcMain.handle('shell:open-workspace', shellOnly(async (id) => {
+    setBarExpanded(false);
+    await openGammaWorkspace(id);
+  }));
+  ipcMain.handle('shell:open', shellOnly(async (id) => {
+    setBarExpanded(false);
+    try {
+      const r = await openServer(id);
+      buildMenu();
+      return r;
+    } catch (e) {
+      loadLauncher(e.message || e);
+      throw e;
+    }
+  }));
+  ipcMain.handle('shell:launcher', shellOnly(() => { setBarExpanded(false); loadLauncher(); }));
+  ipcMain.handle('shell:reload', shellOnly(() => content && content.webContents.reload()));
+  ipcMain.handle('shell:reveal-data', shellOnly((id) => {
+    const ws = registry.get(id);
+    if (ws && ws.type === 'local') shell.openPath(ws.dataDir);
+  }));
+  ipcMain.handle('shell:reveal-log', shellOnly((id) => {
+    const p = path.join(app.getPath('userData'), 'logs', `${id}.log`);
+    if (fs.existsSync(p)) shell.showItemInFolder(p);
+  }));
+  ipcMain.handle('shell:set-settings', shellOnly((patch) => registry.setSettings(patch)));
+  ipcMain.handle('shell:pick-folder', shellOnly(async (defaultPath) => {
+    const opts = { properties: ['openDirectory', 'createDirectory'], defaultPath: defaultPath || undefined };
+    const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+    return r.canceled ? null : r.filePaths[0] || null;
+  }));
+  // Storage root for local servers ('' = default). Moving needs the SQLite
+  // files closed, so every sidecar under the old root is stopped first; they
+  // restart on the next open. A local server that is open goes back to the
+  // launcher (its process is about to be killed).
+  ipcMain.handle('shell:set-data-root', shellOnly((dir, { move = true } = {}) => {
+    if (move) {
+      const moving = new Set(registry.localsUnderRoot().map((w) => w.id));
+      if (current && moving.has(current.id)) loadLauncher();
+      for (const id of moving) sidecar.stop(id);
+    }
+    const r = registry.setDataRoot(dir, { move });
+    buildMenu();
+    pushState();
+    return r;
+  }));
+  ipcMain.handle('shell:bar-expand', shellOnly((on) => setBarExpanded(on)));
+
+  // Theme mirror: the preload on http(s) pages reports data-theme changes.
+  ipcMain.on('shell:theme', (event, t) => {
+    if (!content || event.sender !== content.webContents) return;
+    const clean = typeof t === 'string' && THEMES[t] ? t : '';
+    if (clean === theme) return;
+    theme = clean;
+    registry.setSettings({ lastTheme: clean });
+    applyTheme();
+    pushState();
+  });
+}
+
+// ---------------------------------------------------------------- smoke -----
+// `electron . --smoke`: headless-ish end-to-end check used by dev + CI.
+// Spins up a throwaway local server, waits for health, loads it, verifies
+// the auto-login lands, prints one JSON line, exits 0/1.
+
+async function runSmoke() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gamma-smoke-'));
+  const ws = {
+    id: 'smoke',
+    name: 'smoke',
+    type: 'local',
+    dataDir: tmp,
+    adminUser: 'admin',
+    adminPassword: 'smoke-test-pass',
+  };
+  const out = { ok: false };
+  try {
+    const entry = await sidecar.start(ws, registry.getSettings(), appInfo());
+    out.url = entry.url;
+    allowedOrigins.add(new URL(entry.url).origin);
+    createWindow();
+    await content.webContents.loadURL(entry.url);
+    const login = await content.webContents.executeJavaScript(
+      autoLoginScript(ws.adminUser, ws.adminPassword)
+    );
+    out.firstLogin = String(login);
+    if (String(login) === 'logged-in') {
+      await new Promise((r) => setTimeout(r, 1500)); // let the reload settle
+      const who = await content.webContents.executeJavaScript(
+        `fetch('/api/session',{credentials:'same-origin'}).then(r=>r.json()).then(j=>j.user||'')`
+      );
+      out.session = String(who);
+      out.ok = who === 'admin';
+    } else {
+      out.ok = String(login).startsWith('already:');
+    }
+    out.dataDir = fs.readdirSync(tmp).sort();
+  } catch (e) {
+    out.error = String(e && e.message ? e.message : e);
+  } finally {
+    sidecar.stopAll();
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    } catch {}
+  }
+  process.stdout.write('SMOKE ' + JSON.stringify(out) + '\n');
+  app.exit(out.ok ? 0 : 1);
+}
+
+// ----------------------------------------------------------------- boot -----
+
+app.whenReady().then(async () => {
+  registry.init(app.getPath('userData'));
+  if (SMOKE) {
+    runSmoke();
+    return;
+  }
+  registerIpc();
+  updater.init({ onChange: () => pushState(), openExternal });
+  buildMenu();
+  createWindow();
+  // Reopen where the user left off; the launcher is one click away in the bar.
+  const last = registry.getSettings().openLastOnLaunch ? registry.getLastOpened() : null;
+  if (last) {
+    openServer(last.id).then(buildMenu).catch((e) => loadLauncher(e.message || e));
+  } else {
+    loadLauncher();
+  }
+
+  app.on('activate', () => {
+    if (!win) {
+      createWindow();
+      loadLauncher();
+    }
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => sidecar.stopAll());
+process.on('exit', () => sidecar.stopAll());
+
+// Test hook (only with GAMMA_SHELL_TEST): lets the e2e driver reach shell
+// internals from the main process.
+if (process.env.GAMMA_SHELL_TEST) {
+  global.__gammaShell = {
+    registry,
+    sidecar,
+    openServer,
+    openGammaWorkspace,
+    loadLauncher,
+    current: () => current,
+    gamma: () => gamma,
+    theme: () => currentTheme(),
+    externalOpens,
+    update: () => updater.state(),
+    remoteHealth,
+    probeRemotes,
+    barExpanded: () => barExpanded,
+    bounds: () => ({ bar: bar && bar.getBounds(), content: content && content.getBounds() }),
+  };
+}

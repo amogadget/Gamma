@@ -1,112 +1,27 @@
 {
   "name": "gamma-desktop",
-  "productName": "Gamma",
-  "version": "0.1.7",
-  "description": "Gamma \u2014 a local PDF annotator with an outliner and an AI chat.",
-  "private": true,
+  "version": "0.2.1",
+  "description": "Gamma desktop shell: opens local and remote Gamma servers",
+  "homepage": "https://github.com/tim4431/Gamma",
+  "author": "Tim <tim4431@users.noreply.github.com>",
   "main": "main.js",
+  "private": true,
   "scripts": {
+    "store-art": "node scripts/store-art.js",
     "start": "electron .",
-    "test": "node --test --test-concurrency=1 test/*.test.mjs test/smoke.mjs",
-    "test:unit": "node --test test/*.test.mjs",
-    "lint": "eslint .",
-    "stage": "node scripts/stage-runtime.mjs",
+    "smoke": "node test/smoke.js",
+    "smoke:packaged": "node test/smoke.js --packaged",
+    "e2e": "node test/e2e.js",
+    "e2e:packaged": "node test/e2e.js --packaged",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder --publish never",
-    "icon": "electron scripts/render-icon.cjs",
-    "sync-theme": "node scripts/sync-theme.mjs"
+    "dist": "electron-builder"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "electron": "^44.1.1",
-    "electron-builder": "^26.15.3",
-    "eslint": "^10.9.1",
-    "globals": "^17.12.0",
-    "playwright": "^1.62.1"
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12",
+    "playwright-core": "^1.55.0"
   },
-  "build": {
-    "appId": "com.amogadgetlab.gamma",
-    "productName": "Gamma",
-    "directories": {
-      "output": "dist",
-      "buildResources": "assets"
-    },
-    "files": [
-      "main.js",
-      "preload.js",
-      "lib/**/*",
-      "ui/**/*",
-      "assets/icon.png",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "build/resources",
-        "to": ".",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "mac": {
-      "category": "public.app-category.productivity",
-      "target": [
-        {
-          "target": "dmg"
-        },
-        {
-          "target": "zip"
-        }
-      ],
-      "darkModeSupport": true,
-      "extendInfo": {
-        "NSHumanReadableCopyright": "",
-        "LSApplicationCategoryType": "public.app-category.productivity"
-      },
-      "identity": null,
-      "icon": "assets/icon.png"
-    },
-    "dmg": {
-      "title": "Gamma ${version}"
-    },
-    "linux": {
-      "target": [
-        {
-          "target": "deb"
-        },
-        {
-          "target": "AppImage"
-        }
-      ],
-      "category": "Office",
-      "synopsis": "PDF annotator with an outliner and an AI chat",
-      "icon": "assets/icon.png",
-      "syncDesktopName": true
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis"
-        }
-      ],
-      "icon": "assets/icon.png"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true
-    },
-    "asar": true,
-    "compression": "normal",
-    "removePackageScripts": true,
-    "npmRebuild": false,
-    "publish": null,
-    "afterPack": "scripts/afterPack.cjs"
-  },
-  "homepage": "https://github.com/amogadget/Gamma",
-  "author": {
-    "name": "amogadget",
-    "email": "amogadget@users.noreply.github.com"
-  },
-  "desktopName": "gamma-desktop.desktop"
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
 }

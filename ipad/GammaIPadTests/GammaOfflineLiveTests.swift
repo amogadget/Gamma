@@ -12,13 +12,16 @@ final class GammaOfflineLiveTests: XCTestCase {
         let api = try GammaAPI(server: "https://gamma-integration.invalid", configuration: config)
         defer { api.close() }
         _ = try await api.login(username: "ipad-integration", password: "disposable-test-password")
+        let liveSession = try await api.session()
+        try api.bind(workspace: try XCTUnwrap(liveSession.verifiedDefaultWorkspace
+                                              ?? liveSession.workspaces.first(where: { $0.canWrite })?.id))
         let papers = try await api.papers()
         let paper = try XCTUnwrap(papers.first)
         let docID = try XCTUnwrap(paper.properties.docID)
 
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "ipad-integration")
+        let cache = try GammaCache(rootURL: root, server: api.baseURL, username: "ipad-integration", workspace: api.workspace)
         try cache.saveLibrary([paper])
 
         // URLSession download tasks are intentionally not claimed by the loopback
@@ -27,7 +30,7 @@ final class GammaOfflineLiveTests: XCTestCase {
         pdfConfig.protocolClasses = [LoopbackGammaProtocol.self]
         let pdfSession = URLSession(configuration: pdfConfig)
         defer { pdfSession.invalidateAndCancel() }
-        let (pdfData, pdfResponse) = try await pdfSession.data(for: api.makeRequest("api/uploads/\(docID).pdf"))
+        let (pdfData, pdfResponse) = try await pdfSession.data(for: try api.makeRequest("api/uploads/\(docID).pdf"))
         XCTAssertEqual((pdfResponse as? HTTPURLResponse)?.statusCode, 200)
         let pdfFixture = root.appendingPathComponent("source.pdf")
         try pdfData.write(to: pdfFixture)

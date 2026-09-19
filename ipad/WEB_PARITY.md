@@ -4,7 +4,7 @@
 
 After native sign-in, the app opens the actual Gamma Web application in an isolated WKWebView—not a rewrite of individual tools. It receives the native session cookies through WebKit's HTTP cookie store. The server therefore supplies the same React editor, Markdown/math renderer, search, AI, settings and transfer UI as browsers/Desktop.
 
-On an open Web PDF, **Pencil & Audio** flushes queued Web block edits and waits for active saves before handing off the Gamma page/document IDs. The native side checks main-frame origin and deployment path, revalidates the current cookie's user with `/api/session`, and fetches the page to verify its identity. It then opens the existing PDFKit/PencilKit/recording/Replay workspace.
+On an open Web PDF, **Pencil & Audio** flushes queued Web block edits and waits for active saves before handing off the Gamma page/document IDs **and the workspace the tab is in**. The native side checks main-frame origin and deployment path, adopts the current cookies, revalidates the user with `/api/session`, requires the named workspace to be one that session may *write* in, and fetches the page to verify its identity. It then opens the existing PDFKit/PencilKit/recording/Replay workspace **in that same library**. The Web view itself loads the server with `?ws=<workspace>`, so the tab and the native editor are pinned to one library from first paint; a handoff naming another library, an unlisted one, or a viewer-role one is refused.
 
 **Full Gamma** returns to the existing Web session after the native outbox drains. It reloads the Web document to avoid saving an old subtree over newly created native blocks. A pending/conflicted native queue blocks return to the Web editor until resolved. Web input is frozen after its final handoff save and unfreezes through reload on return/failure. No cross-platform library duplication or password persistence is introduced.
 
@@ -29,12 +29,12 @@ This is broad code reuse, not a claim that every browser API and gesture has bee
 
 ## Security
 
-The WK datastore is nonpersistent and recreated per native login session. The native message handler accepts only the configured HTTPS origin, matching effective port/deployment path and main frame. External HTTP(S) navigation opens the system browser; arbitrary file/javascript navigation is blocked. Popup dialogs are handled natively. The message handler uses a weak proxy and is removed on teardown. Native session validation, not the message's `user` string, determines account identity.
+The WK datastore is nonpersistent and recreated per native login session. The native message handler accepts only the configured HTTPS origin, matching effective port/deployment path and main frame. A message that does not name a workspace is ignored, and the named workspace is checked against the live session (`listed`, and `owner`/`editor` role) before any native writer opens. External HTTP(S) navigation opens the system browser; arbitrary file/javascript navigation is blocked. Popup dialogs are handled natively. The message handler uses a weak proxy and is removed on teardown. Native session and workspace validation, not the message's `user` or `workspace` strings, determine what the native editor may touch — and every subsequent request carries that workspace as `X-Gamma-Workspace`, so a write cannot drift into another library.
 
 ## Testing
 
-- Real WebKit fixture test exercises script message receipt, rejects embedded-frame handoff and confirms the datastore is nonpersistent.
-- Pure origin/payload tests cover origin/port/path boundaries, bounded fields and invalid messages.
+- Real WebKit fixture test exercises script message receipt, rejects embedded-frame and workspace-less handoff, and confirms the datastore is nonpersistent.
+- Pure origin/payload tests cover origin/port/path boundaries, bounded fields, invalid messages, a missing workspace, and the handoff checks (account, listed/writable workspace, root-page identity).
 - PDFKit selection test converts a real text selection into page-relative Web highlight coordinates and persists a stable UUID block/outbox entry.
 - Backend highlight tests cover idempotent creation, ordinary block compatibility, preservation of later Web edits, invalid geometry and authentication.
 - Frontend native handoff tests cover identity and bounded Unicode titles; existing frontend builds/tests continue to run.

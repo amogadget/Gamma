@@ -10,16 +10,17 @@ copy-paste.
 
 1. Register at <https://chrome.google.com/webstore/devconsole> (pay the fee,
    verify the account e-mail).
-2. Build the zip: push a tag `extension-vX.Y.Z` (X.Y.Z = `manifest.json`'s
-   `version`) — the `Release the browser extension` workflow attaches
-   `gamma-connector-X.Y.Z.zip` to a GitHub release. Or locally:
+2. Build the zip: run the `release` GitHub workflow (Actions tab → release
+   → Run workflow) — it attaches `gamma-connector-X.Y.Z.zip` (X.Y.Z =
+   `manifest.json`'s `version`) to the GitHub Release next to the desktop
+   installers. Or locally:
    `cd extension && zip -r ../gamma-connector.zip . -x STORE.md README.md`.
 3. Dashboard → **New item** → upload the zip.
 4. Fill in the listing (below), upload screenshots (1280×800 or 640×400:
    the popup on an arXiv page, the popup on a PDF tab, the options page),
    pick category **Productivity**, language English.
 5. **Privacy** tab: single purpose + permission justifications (below),
-   "does not collect user data" for everything except *website content*
+   disclose *website content* and optional *authentication information*
    → "not sold, not used for unrelated purposes". Link the privacy policy
    (a page on your Gamma domain or the repo README section).
 6. Distribution: **Public**, or **Unlisted** if this stays a personal tool —
@@ -53,7 +54,7 @@ metadata (title, authors, venue, DOI) is resolved automatically.
   (a quoted block with its source link).
 - Ctrl+Shift+S saves the current page.
 
-You need your own Gamma server (github.com/amogadget/Gamma). The extension
+You need your own Gamma server (github.com/tim4431/gamma). The extension
 talks only to the server address you enter; nothing is sent anywhere else.
 
 ## Privacy tab
@@ -71,12 +72,16 @@ Gamma server.
 | `activeTab`, `tabs` | Read the current tab's URL/title for detection and the badge. |
 | `scripting` | Reserved for re-running detection on demand. |
 | `notifications` | Result of a context-menu or keyboard-shortcut save when no popup is open. |
+| Optional `cookies` | Requested only when the user clicks Connect/Refresh publisher session. Reads applicable cookies for the selected publisher host and sends a snapshot to the displayed Gamma server/account for later PDF downloads. Normal saves do not read or transfer cookie values. |
 
 **Data usage:** website content (page title, DOI/arXiv id, PDF URL, selected
 text, the PDF file when the user chooses to upload it) is transmitted only to
 the Gamma server the user configured, only on the user's explicit action, and
 is not sold, shared, or used for any other purpose. No analytics, no third
-parties.
+parties. If the user explicitly connects a publisher session, authentication
+cookies for that publisher host are also transferred to their configured server
+over HTTPS (or localhost), encrypted there, and reused only for that account's
+PDF requests. The user can refresh or disconnect the session in the popup.
 
 **Remote code:** none — all code ships in the package.
 
@@ -87,5 +92,10 @@ extension storage. When you click Save or Clip, it sends the current page's
 title, identifiers (DOI / arXiv id), PDF link or PDF file, and any text you
 selected to the Gamma server address you configured, and nowhere else. It
 does not collect analytics, does not use third-party services, and does not
-transmit anything without your action. You can remove all stored data by
-removing the extension.
+transmit anything without your action. Removing the extension deletes its local
+settings. Publisher cookie snapshots explicitly connected to
+Gamma remain on that server until disconnected or expired; uninstalling the
+extension does not revoke them. Session cookies expire within 24 hours and
+persistent cookies within 30 days or their original expiry, whichever is sooner.
+Use Publisher sessions → Disconnect to remove a live server snapshot. Full server
+backups may retain encrypted older snapshots until those backups are removed.

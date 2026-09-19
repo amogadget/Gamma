@@ -31,8 +31,7 @@ Ink coordinates stay unchanged. Playback uses a separate read-only canvas, with 
 - `ReplayLive-1.xcresult`: 15 tests passed, including real-backend audio timeline round-trip/cache reopen, phase-5A erased-stroke semantics, progressive stroke geometry, segment offsets/page navigation, actual AAC segment seeks, stable IDs through PencilKit serialization, and read-only replay layer isolation.
 - `ReplayRetry-1.xcresult`: 12 focused tests passed after final fixes, including simulated failed writes, retained original stroke time and preservation of intervening page events.
 - Backend audio/ink suite: 19 passed; Ruff passed. Replay validation/idempotency/omitted-field preservation has dedicated backend coverage.
-- Production API deployed after backup `/home/ubuntu/gamma-deployment-backups/before-note-replay-20260910T045509Z.tar.gz`; rollback image `gamma:before-note-replay` retained. Public health 200 and OpenAPI replay_events field verified.
 
-The final GUI-session build exited 0, strict signature verification passed, and the app was installed and launched on the connected iPad (installation sequence 1756).
+These are historical focused results, not a guarantee for a deployed server or physical device. See [VALIDATION.md](VALIDATION.md) for portable acceptance instructions and the latest summarized regression.
 
 These tests use framework-generated strokes/audio and deterministic gesture callbacks, not physical Pencil touch synthesis. Long real recording-plus-handwriting sessions, touch arbitration and actual on-device performance still need user acceptance. No Phase 5B exact edit-history replay is included. Browser Note Replay has subsequently been implemented using per-stroke display assets; see `../docs/dev/note-replay.md`. Updating iPad and opening a document backfills existing ink previews without changing ink revisions or fabricating old audio timing.

@@ -4,12 +4,21 @@ import PDFKit
 @testable import GammaIPad
 
 final class GammaWorkspaceOfflineTests: XCTestCase {
-    func testOfflineIdentityIsDistinctPerServerAndUser() {
-        let a = GammaOfflineIdentity(server: "https://one.example", username: "alice")
-        let b = GammaOfflineIdentity(server: "https://two.example", username: "alice")
-        let c = GammaOfflineIdentity(server: "https://one.example", username: "bob")
+    func testOfflineIdentityIsDistinctPerServerUserAndWorkspace() {
+        let a = GammaOfflineIdentity(server: "https://one.example", username: "alice", workspace: "ws-1")
+        let b = GammaOfflineIdentity(server: "https://two.example", username: "alice", workspace: "ws-1")
+        let c = GammaOfflineIdentity(server: "https://one.example", username: "bob", workspace: "ws-1")
         XCTAssertNotEqual(a.id, b.id)
         XCTAssertNotEqual(a.id, c.id)
+        // Two libraries of one account are two local identities, never one cache.
+        let otherLibrary = GammaOfflineIdentity(server: "https://one.example", username: "alice", workspace: "ws-2")
+        XCTAssertNotEqual(a.id, otherLibrary.id)
+        XCTAssertNotEqual(a.id, GammaOfflineIdentity(server: "https://one.example", username: "alice").id,
+                          "a workspaceless cache has its own legacy identity")
+        XCTAssertTrue(GammaOfflineIdentity(server: "https://one.example", username: "alice").isLegacy)
+        XCTAssertEqual(a.displayName, "ws-1 · alice")
+        XCTAssertEqual(GammaOfflineIdentity(server: "https://one.example", username: "alice",
+                                            workspace: "ws-1", workspaceName: "Personal").displayName, "Personal · alice")
     }
 
     func testOfflineEntryRequiresAllAssetsForReadyState() {
@@ -23,7 +32,7 @@ final class GammaWorkspaceOfflineTests: XCTestCase {
     func testColdLocalEntryOpensPDFAndPlaysLocalUnuploadedAudio() async throws {
         let user = "offline-fixture-" + UUID().uuidString.lowercased()
         let server = URL(string: "https://offline-entry.invalid")!
-        let cache = try GammaCache.application(server: server, username: user)
+        let cache = try GammaCache.application(server: server, username: user, workspace: "ws-1")
         defer { try? FileManager.default.removeItem(at: cache.rootURL) }
         let paper = GammaPaper(id: "page", parentID: "root", content: "Local PDF", properties: GammaProperties(docID: "doc"))
         try cache.saveLibrary([paper])
@@ -42,7 +51,7 @@ final class GammaWorkspaceOfflineTests: XCTestCase {
         snapshot.outbox = [GammaMutation(kind: .audio, blockID: recording.id, parentID: paper.id, audioSession: recording)]
         try cache.savePage(snapshot)
         let workspace = GammaWorkspace()
-        workspace.enterOffline(GammaOfflineIdentity(server: server.absoluteString, username: user))
+        workspace.enterOffline(GammaOfflineIdentity(server: server.absoluteString, username: user, workspace: "ws-1"))
         XCTAssertTrue(workspace.isOffline); XCTAssertNil(workspace.api); XCTAssertNil(workspace.webSession)
         XCTAssertEqual(workspace.papers.map(\.id), [paper.id])
         await workspace.open(paper)
@@ -59,7 +68,7 @@ final class GammaWorkspaceOfflineTests: XCTestCase {
     func testCorruptSnapshotInvalidatesVisibleReadinessWithoutOverwritingBytes() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try GammaCache(rootURL: root, server: URL(string: "https://offline.test")!, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: URL(string: "https://offline.test")!, username: "alice", workspace: "ws-1")
         let paper = GammaPaper(id: "page", parentID: "root", content: "PDF", properties: GammaProperties(docID: "doc"))
         try cache.savePage(GammaPageCache(pageID: paper.id, docID: "doc", blocks: [paper]))
         let entry = GammaOfflineEntry(pageID: paper.id, paper: paper, state: .ready, pdfReady: true, snapshotReady: true, audioReady: true)

@@ -10,6 +10,7 @@ final class GammaOfflineUITests: XCTestCase {
         for size in [CGSize(width: 1194, height: 834), CGSize(width: 834, height: 1194)] {
             let workspace = GammaWorkspace()
             workspace.username = "Offline test reader"; workspace.accountServer = "https://offline-test.invalid"
+            workspace.workspaceID = "ws-alpha"; workspace.workspaceName = "Personal"
             workspace.isOffline = true; workspace.localUsageBytes = 12_000_000
             workspace.papers = (0..<4).map { index in
                 GammaPaper(id: "page-\(index)", parentID: "root", content: "Offline document \(index + 1)", properties: GammaProperties(docID: "doc-\(index)"))
@@ -37,6 +38,8 @@ final class GammaOfflineUITests: XCTestCase {
             attachment.name = size.width > size.height ? "Gamma-offline-landscape" : "Gamma-offline-portrait"
             attachment.lifetime = .keepAlways; add(attachment)
             XCTAssertNil(workspace.webSession)
+            // The manager always names the library its files belong to.
+            XCTAssertEqual(workspace.workspaceDisplayName, "Personal")
             XCTAssertEqual(workspace.offlineEntries.count, 4)
             XCTAssertEqual(workspace.paper?.id, current.id)
             XCTAssertEqual(workspace.selectedID, "keep-current-selection")
@@ -48,6 +51,7 @@ final class GammaOfflineUITests: XCTestCase {
         let workspace = GammaWorkspace()
         workspace.username = "Offline test reader"
         workspace.accountServer = "https://offline-test.invalid"
+        workspace.workspaceID = "ws-alpha"; workspace.workspaceName = "Personal"
         workspace.isOffline = true
         let paper = GammaPaper(id: "current", parentID: "root", content: "Current PDF", properties: GammaProperties(docID: "doc"))
         workspace.paper = paper
@@ -66,6 +70,7 @@ final class GammaOfflineUITests: XCTestCase {
         attachment.lifetime = .keepAlways; add(attachment)
         XCTAssertTrue(workspace.isOffline); XCTAssertEqual(workspace.paper?.id, paper.id)
         XCTAssertNil(workspace.api)
+        XCTAssertEqual(workspace.workspaceDisplayName, "Personal")
     }
 
 }

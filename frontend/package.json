@@ -6,19 +6,22 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/*.test.js",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
-    "lint": "eslint src",
-    "format": "prettier --write src",
-    "format:check": "prettier --check src"
+    "test": "node --test tests/*.test.mjs",
+    "e2e": "node tests/e2e/run.mjs",
+    "e2e:native": "node tests/e2e/nativeHandoff.mjs",
+    "e2e:notereplay": "node tests/e2e/noteReplay.mjs",
+    "e2e:blankpdf": "node tests/e2e/blankPdf.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
     "@codemirror/state": "^6.7.1",
     "@codemirror/view": "^6.43.9",
+    "fractional-indexing": "^3.4.0",
     "highlight.js": "^11.12.0",
     "katex": "^0.16.45",
     "pdfjs-dist": "4.4.168",
+    "perfect-freehand": "^1.2.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
@@ -30,14 +33,8 @@
     "remark-math": "^6.0.0"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.62.1",
     "@vitejs/plugin-react": "^4.3.1",
-    "eslint": "^10.8.1",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "globals": "^17.11.0",
-    "prettier": "^3.9.6",
+    "playwright": "^1.63.0",
     "vite": "^5.4.10"
   }
 }

@@ -28,6 +28,17 @@ SUP, SUB = 1, -1
 # of an inline expression that pdf_notes typesets as vector paths.
 TEXT, MATH = "t", "m"
 
+# Image sizes are stored in the Obsidian dialect ``![alt|N](url)``. The legacy
+# Logseq ``![alt](url){:width N}`` suffix is normalized away by the one-time
+# normalization pass (gamma/normalize.py) and on export; this is the ONE place that
+# knows the old syntax.
+LEGACY_WIDTH_RE = re.compile(r"(!\[[^\]]*)(\]\([^)]+\))\{:width\s+(\d+)\}")
+
+
+def obsidian_image_sizes(md: str) -> str:
+    """``![a](u){:width N}`` → ``![a|N](u)`` (text without the suffix is returned unchanged)."""
+    return LEGACY_WIDTH_RE.sub(lambda m: f"{m.group(1)}|{m.group(3)}{m.group(2)}", md or "")
+
 # LaTeX command → unicode. Every value here is either WinAnsi- or Symbol-font
 # encodable (see pdf_typeset.font_of), so it can actually be drawn.
 SYMBOLS = {
@@ -72,7 +83,11 @@ _TRANSPARENT = {"text", "textrm", "textbf", "textit", "mathrm", "mathbf",
                 "boldsymbol", "operatorname", "mbox", "hbox", "bm", "pmb",
                 "overline", "underline", "tilde", "hat", "bar", "vec", "dot"}
 
-_IMG_RE = re.compile(r"!\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)")
+# The optional size — Obsidian's ``![alt|300](url)`` pipe or the legacy
+# Logseq ``{:width N}`` suffix — is consumed so it never leaks into the note
+# text (boxes size images to fit themselves; the hint is display-only).
+_IMG_RE = re.compile(r"!\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)(?:\{:width\s+\d+\})?")
+_ALT_WIDTH_RE = re.compile(r"\|\d+(?:x\d+)?$")
 _LINK_RE = re.compile(r"\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)")
 _MATH_RE = re.compile(
     r"\$\$(.+?)\$\$"          # display $$ … $$
@@ -257,7 +272,8 @@ def parse_note(text: str):
             for m in _IMG_RE.finditer(raw):
                 add_spans([(TEXT, _plain(raw[pos:m.start()]), 0)])
                 flush()
-                items.append({"kind": "image", "src": m.group(2), "alt": m.group(1)})
+                items.append({"kind": "image", "src": m.group(2),
+                              "alt": _ALT_WIDTH_RE.sub("", m.group(1))})
                 pos = m.end()
             add_spans([(TEXT, _plain(raw[pos:]), 0)])
 

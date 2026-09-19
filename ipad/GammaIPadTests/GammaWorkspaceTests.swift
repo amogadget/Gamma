@@ -9,7 +9,7 @@ final class GammaWorkspaceTests: XCTestCase {
     private func withWorkspace(_ test: (GammaWorkspace, GammaCache) throws -> Void) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice", workspace: "ws-alpha")
         let workspace = GammaWorkspace(cache: cache)
         let image = UIGraphicsImageRenderer(size: CGSize(width: 300, height: 400)).image { context in
             UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 300, height: 400))

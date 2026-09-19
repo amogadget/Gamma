@@ -12,7 +12,7 @@ final class GammaOfflineSafetyTests: XCTestCase {
     override func tearDownWithError() throws { try? FileManager.default.removeItem(at: root) }
 
     private func cache() throws -> GammaCache {
-        try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice")
+        try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice", workspace: "ws-alpha")
     }
 
     private func source(_ cache: GammaCache, docID: String = "doc") throws {
@@ -75,8 +75,9 @@ final class GammaOfflineSafetyTests: XCTestCase {
 
     func testFailingInitialIdentityWriteIsReportedWithoutWritingIdentity() throws {
         enum DiskFailure: Error { case full }
-        XCTAssertThrowsError(try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice", writeOverride: { _, _ in throw DiskFailure.full }))
-        let account = root.appendingPathComponent(GammaCache.key("https://gamma.example\nalice"), isDirectory: true)
+        XCTAssertThrowsError(try GammaCache(rootURL: root, server: URL(string: "https://gamma.example")!, username: "alice", workspace: "ws-alpha", writeOverride: { _, _ in throw DiskFailure.full }))
+        let account = root.appendingPathComponent(GammaCache.directoryKey(server: "https://gamma.example", username: "alice",
+                                                                     workspace: "ws-alpha"), isDirectory: true)
         XCTAssertFalse(FileManager.default.fileExists(atPath: account.appendingPathComponent("identity.json").path))
     }
 }

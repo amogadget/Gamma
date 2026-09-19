@@ -5,16 +5,18 @@
     <!-- No browser zoom: the app has its own pinch-zoom on the PDF, and a
          zoomed-in page puts the toolbars out of reach. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <link rel="icon" type="image/x-icon" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/media/icons/favicon.svg" />
     <title>Gamma — Annotate PDFs, Share Your Thinking</title>
-    <link rel="preload" href="/pdf.worker.min.mjs" as="worker" crossorigin="anonymous">
     <!-- A pinned theme (Settings → General) must win before the bundle loads,
-         or the splash flashes the OS color. App.jsx keeps the attribute in
-         sync (and handles "system") once React is up. -->
+         or the splash flashes the OS color; the control size likewise, or the
+         buttons jump once the bundle applies it. App.jsx keeps both in sync
+         (and handles "system") once React is up. -->
     <script>
       try {
         var t = localStorage.getItem("gamma-theme");
-        if (t === "light" || t === "dark" || t === "sepia" || t === "gray") document.documentElement.setAttribute("data-theme", t);
+        if (t === "light" || t === "dark" || t === "sepia" || t === "solarized" || t === "gray") document.documentElement.setAttribute("data-theme", t);
+        var s = parseFloat(localStorage.getItem("gamma-ui-scale"));
+        if (s >= 0.7 && s <= 1.6) document.documentElement.style.setProperty("--ui-scale", s); // UI_SCALE in prefs.js
       } catch (e) {}
     </script>
     <style>
@@ -30,6 +32,8 @@
       html[data-theme="dark"] { color-scheme: dark; }
       html[data-theme="sepia"], html[data-theme="sepia"] body, html[data-theme="sepia"] #root { background: #f0e9d6; }
       html[data-theme="sepia"] { color-scheme: light; }
+      html[data-theme="solarized"], html[data-theme="solarized"] body, html[data-theme="solarized"] #root { background: #eee8d5; }
+      html[data-theme="solarized"] { color-scheme: light; }
       html[data-theme="gray"], html[data-theme="gray"] body, html[data-theme="gray"] #root { background: #e9e9e9; }
       html[data-theme="gray"] { color-scheme: light; }
       /* First-load splash: index.html is tiny and paints immediately, while

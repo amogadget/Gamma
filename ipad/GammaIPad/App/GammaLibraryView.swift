@@ -76,6 +76,21 @@ struct GammaLibraryView: View {
                 }
             Menu {
                 Text(workspace.username ?? "Gamma")
+                Text("Library · \(workspace.workspaceDisplayName)")
+                if workspace.writableWorkspaces.count > 1 {
+                    Divider()
+                    Menu("Switch workspace") {
+                        ForEach(workspace.writableWorkspaces) { option in
+                            Button {
+                                Task { await workspace.switchWorkspace(to: option.id) }
+                            } label: {
+                                if option.id == workspace.workspaceID { Label(option.name, systemImage: "checkmark") }
+                                else { Text(option.name) }
+                            }
+                        }
+                    }.disabled(!workspace.canSwitchWorkspace)
+                }
+                Divider()
                 Button("Sign out", role: .destructive) { Task { await workspace.signOut() } }
             } label: {
                 Image(systemName: "person.crop.circle").font(.system(size: 17)).foregroundStyle(.secondary).frame(width: 30, height: 32)

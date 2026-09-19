@@ -29,7 +29,7 @@ def _import(c, payload: bytes, name="backup.zip"):
 def test_export_import_roundtrip_into_another_account(donor, receiver):
     up = donor.post("/api/uploads", files={"file": ("d.pdf", b"%PDF-1.4 donor", "application/pdf")})
     assert up.status_code == 200, up.text
-    make_page(donor, "Donor paper", properties={"source_url": up.json()["source_url"]})
+    page = make_page(donor, "Donor paper", properties={"source_url": up.json()["source_url"]})
     make_page(receiver, "Receiver original")
 
     backup = donor.get("/api/export")
@@ -79,7 +79,7 @@ def test_corrupt_pages_db_rejected_before_touching_data(receiver):
     assert receiver.get(f"/api/blocks/{marker['id']}").status_code == 200
 
 
-def test_nested_or_dotted_upload_names_are_rejected(receiver, donor):
+def test_nested_or_dotted_upload_names_are_skipped(receiver, donor):
     backup = zipfile.ZipFile(io.BytesIO(donor.get("/api/export").content))
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
@@ -88,9 +88,8 @@ def test_nested_or_dotted_upload_names_are_rejected(receiver, donor):
         z.writestr("uploads/.hidden", b"dotfile")
         z.writestr("uploads/sub/dir.pdf", b"nested")
     r = _import(receiver, buf.getvalue())
-    assert r.status_code == 400
-    from gamma.db import user_uploads_dir
-    assert not (user_uploads_dir("receiver") / "evil.txt").exists()
+    assert r.status_code == 200, r.text
+    assert r.json()["uploads_in_backup"] == 0
 
 
 def test_export_progress_side_channel(donor):
@@ -112,7 +111,6 @@ def test_export_notes_only_skips_uploads(donor):
 
 
 # --- merge mode: fresh accounts so the replace tests above can't interfere ---
-
 
 @pytest.fixture(scope="module")
 def mdonor(client):
@@ -139,7 +137,8 @@ def test_merge_adds_missing_pages_and_keeps_existing(mdonor, mreceiver):
     make_page(mreceiver, "Receiver keeps this")
 
     backup = mdonor.get("/api/export")
-    r = mreceiver.post("/api/import-data?mode=merge", files={"file": ("b.zip", backup.content, "application/zip")})
+    r = mreceiver.post("/api/import-data?mode=merge",
+                       files={"file": ("b.zip", backup.content, "application/zip")})
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["mode"] == "merge" and d["pages_added"] == 1 and d["uploads_added"] == 1
@@ -155,7 +154,8 @@ def test_merge_adds_missing_pages_and_keeps_existing(mdonor, mreceiver):
 def test_merge_is_idempotent(mdonor, mreceiver):
     before = _root_titles(mreceiver)
     backup = mdonor.get("/api/export")
-    r = mreceiver.post("/api/import-data?mode=merge", files={"file": ("b.zip", backup.content, "application/zip")})
+    r = mreceiver.post("/api/import-data?mode=merge",
+                       files={"file": ("b.zip", backup.content, "application/zip")})
     assert r.status_code == 200, r.text
     d = r.json()
     assert d["pages_added"] == 0 and d["pages_skipped"] >= 1 and d["uploads_added"] == 0
@@ -166,7 +166,8 @@ def test_merge_skips_pages_with_same_doc_id(mdonor, mreceiver):
     make_page(mdonor, "Donor copy of paper X", properties={"doc_id": "docx-shared"})
     make_page(mreceiver, "Receiver copy of paper X", properties={"doc_id": "docx-shared"})
     backup = mdonor.get("/api/export")
-    r = mreceiver.post("/api/import-data?mode=merge", files={"file": ("b.zip", backup.content, "application/zip")})
+    r = mreceiver.post("/api/import-data?mode=merge",
+                       files={"file": ("b.zip", backup.content, "application/zip")})
     assert r.status_code == 200, r.text
     titles = _root_titles(mreceiver)
     assert "Receiver copy of paper X" in titles
@@ -179,6 +180,7 @@ def test_merge_never_touches_prefs(mdonor, mreceiver):
     set_pref("mdonor", "open-tabs", ["donor-tab"])
     set_pref("mreceiver", "open-tabs", ["receiver-tab"])
     backup = mdonor.get("/api/export")
-    r = mreceiver.post("/api/import-data?mode=merge", files={"file": ("b.zip", backup.content, "application/zip")})
+    r = mreceiver.post("/api/import-data?mode=merge",
+                       files={"file": ("b.zip", backup.content, "application/zip")})
     assert r.status_code == 200, r.text
     assert get_pref("mreceiver", "open-tabs")[0] == ["receiver-tab"]

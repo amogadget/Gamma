@@ -120,7 +120,11 @@ def _anthropic_messages(messages) -> list:
 
 
 def _anthropic_extract(data) -> str:
-    text = "".join(item.get("text", "") for item in data.get("content", []) if item.get("type") == "text")
+    text = "".join(
+        item.get("text", "")
+        for item in data.get("content", [])
+        if item.get("type") == "text"
+    )
     if not text.strip():
         raise RuntimeError(f"empty response (stop_reason={data.get('stop_reason', 'unknown')})")
     return text
@@ -414,27 +418,13 @@ def read_reply(response, provider_protocol) -> str:
 
 
 def call_ai(
-    messages,
-    system,
-    entry,
-    runtime,
-    pdf_b64s=None,
-    effort="",
-    max_tokens=8192,
-    timeout=60,
-    images=None,
+    messages, system, entry, runtime, pdf_b64s=None, effort="",
+    max_tokens=8192, timeout=60, images=None,
 ):
     """Send a chat and return its complete reply text."""
     with open_ai(
-        messages,
-        system,
-        entry,
-        runtime,
-        pdf_b64s,
-        effort,
-        max_tokens,
-        timeout,
-        images,
+        messages, system, entry, runtime, pdf_b64s,
+        effort, max_tokens, timeout, images,
     ) as response:
         return read_reply(response, protocol(runtime, entry))
 
@@ -454,14 +444,174 @@ def _parse_tool_args(raw) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _partial_json_string(raw: str):
+    """Decode the *unterminated* JSON string body ``raw`` (everything after
+    its opening quote) as far as it goes: a trailing lone backslash or a
+    half-written ``\\uXXXX`` is dropped rather than failing."""
+    s = raw
+    # Trim an incomplete escape at the very end (backslash run of odd length,
+    # or \u with fewer than 4 hex digits after it).
+    m = re.search(r'(\\+)$', s)
+    if m and len(m.group(1)) % 2 == 1:
+        s = s[:-1]
+    m = re.search(r'(?<!\\)((?:\\\\)*)\\u([0-9a-fA-F]{0,3})$', s)
+    if m:
+        s = s[:m.start(2) - 2]
+    try:
+        return json.loads('"' + s + '"')
+    except ValueError:
+        return None
+
+
+def _scan_json_string(s: str, i: int):
+    """``s[i]`` is an opening quote: return ``(end_index_exclusive, complete)``
+    — the index just past the closing quote, or ``len(s)`` when the string is
+    still open."""
+    j = i + 1
+    n = len(s)
+    while j < n:
+        ch = s[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == '"':
+            return j + 1, True
+        j += 1
+    return n, False
+
+
+def partial_json_object(raw: str) -> dict:
+    """Best-effort read of a JSON object that is still being streamed: every
+    top-level key whose STRING value is complete, plus the one string value
+    currently being written (decoded as far as it goes). Non-string values
+    (numbers, lists, nested objects) are skipped — the tool argument the UI
+    previews live (a block's markdown) is a string, and ids are strings.
+    Never raises; ``{}`` when nothing is readable yet."""
+    out = {}
+    s = raw or ""
+    i = s.find("{")
+    if i < 0:
+        return out
+    i += 1
+    n = len(s)
+    while i < n:
+        # key
+        q = s.find('"', i)
+        if q < 0:
+            break
+        end, complete = _scan_json_string(s, q)
+        if not complete:
+            break
+        try:
+            key = json.loads(s[q:end])
+        except ValueError:
+            break
+        i = end
+        while i < n and s[i] in " \t\r\n":
+            i += 1
+        if i >= n or s[i] != ":":
+            break
+        i += 1
+        while i < n and s[i] in " \t\r\n":
+            i += 1
+        if i >= n:
+            break
+        if s[i] == '"':
+            end, complete = _scan_json_string(s, i)
+            if complete:
+                try:
+                    out[key] = json.loads(s[i:end])
+                except ValueError:
+                    break
+                i = end
+            else:
+                value = _partial_json_string(s[i + 1:])
+                if value is not None:
+                    out[key] = value
+                break
+        else:
+            # Skip a non-string value: scan to the next top-level comma or the
+            # closing brace, honouring nesting and strings.
+            depth = 0
+            j = i
+            while j < n:
+                ch = s[j]
+                if ch == '"':
+                    j, complete = _scan_json_string(s, j)
+                    if not complete:
+                        return out
+                    continue
+                if ch in "[{":
+                    depth += 1
+                elif ch in "]}":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif ch == "," and depth == 0:
+                    break
+                j += 1
+            if j >= n:
+                break
+            i = j
+        # after a value: "," → next key, "}" → done
+        while i < n and s[i] in " \t\r\n":
+            i += 1
+        if i >= n or s[i] == "}":
+            break
+        if s[i] == ",":
+            i += 1
+    return out
+
+
+def partial_json_strings(raw: str) -> list:
+    """Best-effort read of a JSON array of strings still being streamed (the
+    translation reply): the complete elements plus the one being written,
+    decoded as far as it goes. Prose or a code fence before the ``[`` is
+    skipped. Never raises; ``[]`` when nothing is readable yet."""
+    out = []
+    s = raw or ""
+    i = s.find("[")
+    if i < 0:
+        return out
+    i += 1
+    n = len(s)
+    while i < n:
+        while i < n and s[i] in " \t\r\n,":
+            i += 1
+        if i >= n or s[i] == "]":
+            break
+        if s[i] != '"':
+            # null or some other non-string element: stop previewing here.
+            break
+        end, complete = _scan_json_string(s, i)
+        if complete:
+            try:
+                out.append(json.loads(s[i:end]))
+            except ValueError:
+                break
+            i = end
+        else:
+            value = _partial_json_string(s[i + 1:])
+            if value is not None:
+                out.append(value)
+            break
+    return out
+
+
 def sse_events(response, provider_protocol):
-    """Yield ``("text", delta)`` and ``("tool", {id, name, arguments})`` events
-    from a provider's SSE response. Raises on a fully empty response (neither
-    text nor tool calls) with the stop reason attached."""
+    """Yield ``("text", delta)``, ``("tool", {id, name, arguments})`` and
+    ``("tool_delta", {id, name, json})`` events from a provider's SSE
+    response. A ``tool_delta`` carries the tool call's arguments as streamed
+    SO FAR (raw, possibly truncated JSON — see ``partial_json_object``) so a
+    consumer can preview a long argument while the model is still writing
+    it; the ``tool`` event with the parsed arguments always follows. Raises
+    on a fully empty response (neither text nor tool calls) with the stop
+    reason attached."""
     got = False
     stop = ""
     tool = None    # anthropic: {id, name, json} tool_use block being accumulated
     pending = {}   # openai: index -> {id, name, args} accumulated across deltas
+    items = {}     # responses: item id -> {id (call_id), name, args} being streamed
     for raw in response:
         line = raw.decode("utf-8", "replace").strip()
         if not line.startswith("data:"):
@@ -483,6 +633,7 @@ def sse_events(response, provider_protocol):
                 delta = event.get("delta") or {}
                 if delta.get("type") == "input_json_delta" and tool is not None:
                     tool["json"] += delta.get("partial_json") or ""
+                    yield ("tool_delta", dict(tool))
                 else:
                     text = delta.get("text") or ""
                     if text:
@@ -505,17 +656,33 @@ def sse_events(response, provider_protocol):
                 if text:
                     got = True
                     yield ("text", text)
+            elif kind == "response.output_item.added":
+                item = event.get("item") or {}
+                if item.get("type") == "function_call":
+                    items[item.get("id") or ""] = {
+                        "id": item.get("call_id") or item.get("id") or "",
+                        "name": item.get("name") or "", "json": ""}
+            elif kind == "response.function_call_arguments.delta":
+                slot = items.get(event.get("item_id") or "")
+                if slot is not None:
+                    slot["json"] += event.get("delta") or ""
+                    yield ("tool_delta", dict(slot))
             elif kind == "response.output_item.done":
                 item = event.get("item") or {}
                 if item.get("type") == "function_call":
                     got = True
+                    items.pop(item.get("id") or "", None)
                     yield ("tool", {"id": item.get("call_id") or item.get("id") or "",
                                     "name": item.get("name") or "",
                                     "arguments": _parse_tool_args(item.get("arguments"))})
             elif kind == "response.completed":
                 stop = (event.get("response") or {}).get("status") or "completed"
             elif kind in ("response.failed", "error"):
-                error = (event.get("response") or {}).get("error") or {} if kind == "response.failed" else event
+                error = (
+                    (event.get("response") or {}).get("error") or {}
+                    if kind == "response.failed"
+                    else event
+                )
                 raise RuntimeError(error.get("message") or "stream error")
         else:
             if event.get("error"):
@@ -533,7 +700,10 @@ def sse_events(response, provider_protocol):
                 fn = tc.get("function") or {}
                 if fn.get("name"):
                     slot["name"] = fn["name"]
-                slot["args"] += fn.get("arguments") or ""
+                if fn.get("arguments"):
+                    slot["args"] += fn["arguments"]
+                    yield ("tool_delta", {"id": slot["id"], "name": slot["name"],
+                                          "json": slot["args"]})
             stop = choice.get("finish_reason") or stop
     # OpenAI announces tool calls piecewise; emit them once the stream ends.
     for _, slot in sorted(pending.items()):

@@ -6,8 +6,13 @@ struct GammaReconnectButton: View {
     @State private var showingSignIn = false
 
     var body: some View {
-        Button { showingSignIn = true } label: {
-            Label("Sign in to sync", systemImage: "person.crop.circle.badge.checkmark")
+        Button {
+            if workspace.savedSession != nil && !workspace.requiresLogin {
+                Task { await workspace.reconnectSession() }
+            } else { showingSignIn = true }
+        } label: {
+            Label(workspace.savedSession != nil && !workspace.requiresLogin ? "Reconnect" : "Sign in to sync",
+                  systemImage: "person.crop.circle.badge.checkmark")
         }
         .buttonStyle(.borderedProminent).controlSize(.small)
         .accessibilityIdentifier("offline-sign-in")
@@ -28,6 +33,7 @@ struct GammaReconnectView: View {
             Form {
                 Section("Current account") {
                     Text(workspace.username ?? "")
+                    Text("Library · \(workspace.workspaceDisplayName)").accessibilityIdentifier("reconnect-workspace")
                     Text(workspace.accountServer).font(.caption).textSelection(.enabled)
                 }
                 Section {

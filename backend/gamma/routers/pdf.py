@@ -4,8 +4,8 @@ Resolution handles the common academic-link shapes: bare arXiv ids and DOIs
 pasted without a URL are promoted to one first, arXiv abstract URLs are
 rewritten to their PDF, DOI links that land on paywalled/bot-blocking publisher
 pages fall back to an open-access copy via the Unpaywall API, and failures come
-back as human-readable messages (publishers like APS return 403 to any
-server-side fetch — that's their bot protection, not a bug here).
+back as human-readable messages. Institutional access depends on the backend's
+network; publisher bot challenges may still require a browser.
 """
 
 import hashlib
@@ -20,14 +20,13 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 
-from .. import flatten_queue
-from ..auth import require_user, resolve_user, share_scope_doc
-from ..config import MAX_UPLOAD_BYTES
-from ..db import user_db_path, user_uploads_dir
+from ..auth import require_user, resolve_ws, share_scope_page
+from ..db import connect_pages_db, ws_uploads_dir
+from .. import pdf_meta
 from ..logbuf import log
 from ..net_guard import guarded_urlopen
-from ..storage import DIGEST_CHARS
 from ..server_settings import can_store
+from ..storage import DIGEST_CHARS
 
 router = APIRouter(prefix="/api", tags=["pdf"])
 
@@ -39,7 +38,7 @@ CONTACT_EMAIL = "gamma-pdf-annotator@users.noreply.github.com"
 # Realistic browser headers get past simple UA filters (many hosts 403 bare bots)
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                  "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
     "Accept": "application/pdf,text/html;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
 }
@@ -78,18 +77,38 @@ def _meta_content(html: str, name: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+def _publisher_pdf_candidates(page_url: str, html: str) -> list[str]:
+    """Prefer APS's PDF route over its legacy link.aps.org metadata URL,
+    which can redirect back to the abstract even with institutional access.
+    Other publishers use their advertised PDF link.
+    """
+    candidates = []
+    page = urllib.parse.urlsplit(page_url)
+    if page.hostname == "journals.aps.org":
+        match = re.fullmatch(r"/([a-z0-9]+)/(?:abstract|article)/(10\.1103/[^?#]+)", page.path, re.I)
+        if match:
+            candidates.append(f"https://journals.aps.org/{match[1]}/pdf/{match[2]}")
+    advertised = _meta_content(html, "citation_pdf_url")
+    if advertised:
+        advertised = urllib.parse.urljoin(page_url, advertised)
+        if advertised not in candidates:
+            candidates.append(advertised)
+    return candidates
+
+
 def _open_access_pdf_for_doi(doi: str) -> tuple[str, str]:
     """(pdf_url, version) of the best legal open-access copy for a DOI, via
     Unpaywall. Prefers the published PDF over accepted manuscripts over
     preprints — repositories often only hold the submitted version."""
     try:
-        url = f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}?email={urllib.parse.quote(CONTACT_EMAIL)}"
+        url = (f"https://api.unpaywall.org/v2/{urllib.parse.quote(doi)}"
+               f"?email={urllib.parse.quote(CONTACT_EMAIL)}")
         req = URLRequest(url, headers={"User-Agent": "gamma-pdf-annotator/1.0"})
         with guarded_urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
-        locs = [loc for loc in (data.get("oa_locations") or []) if loc.get("url_for_pdf")]
+        locs = [l for l in (data.get("oa_locations") or []) if l.get("url_for_pdf")]
         order = {"publishedVersion": 0, "acceptedVersion": 1, "submittedVersion": 2}
-        locs.sort(key=lambda loc: order.get(loc.get("version"), 3))
+        locs.sort(key=lambda l: order.get(l.get("version"), 3))
         if not locs:
             return "", ""
         return locs[0]["url_for_pdf"], locs[0].get("version") or ""
@@ -152,19 +171,16 @@ def resolve_source(source_url: str, allow_oa: bool = True) -> dict:
     # pages, …). Publishers advertise the "Download PDF" target in the
     # citation_pdf_url meta tag — the same tag Google Scholar reads.
     html = body.decode("utf-8", "replace") if body else ""
-    if html:
-        pdf_url = _meta_content(html, "citation_pdf_url")
-        if pdf_url:
-            pdf_url = urllib.parse.urljoin(final_url, pdf_url)
-            try:
-                _, ct2, _ = try_resolve(pdf_url)
-                if "application/pdf" in ct2:
-                    # Return the canonical URL, not the redirect target — hosts
-                    # like nature.com append one-time tokens on redirect, and the
-                    # doc id is a hash of this URL, so it must stay stable.
-                    return {"source_url": pdf_url}
-            except Exception as e:
-                log.warning(f"[resolve-pdf] citation_pdf_url fetch failed: {e}")
+    for pdf_url in _publisher_pdf_candidates(final_url, html):
+        try:
+            _, ct2, _ = try_resolve(pdf_url)
+            if "application/pdf" in ct2:
+                # Return the canonical URL, not the redirect target — hosts
+                # like nature.com append one-time tokens on redirect, and the
+                # doc id is a hash of this URL, so it must stay stable.
+                return {"source_url": pdf_url}
+        except Exception as e:
+            log.warning(f"[resolve-pdf] publisher PDF fetch failed: {e}")
 
     # For DOI links (or pages that state their DOI), the publisher PDF is
     # usually paywalled or bot-blocked — look for a legal open-access copy.
@@ -179,23 +195,19 @@ def resolve_source(source_url: str, allow_oa: bool = True) -> dict:
         if not allow_oa:
             raise HTTPException(
                 status_code=400,
-                detail="The publisher's PDF isn't accessible server-side (usually a paywall). "
-                "Open-access fallback is disabled in your settings — download the PDF in "
-                "your browser and drop it onto Gamma.",
+                detail="The publisher's PDF isn't accessible server-side (access restriction or browser check). "
+                       "Open-access fallback is disabled in your settings — download the PDF in "
+                       "your browser and drop it onto Gamma.",
             )
         oa_url, oa_version = _open_access_pdf_for_doi(doi)
         if oa_url:
             note = ""
             if oa_version and oa_version != "publishedVersion":
-                pretty = {
-                    "acceptedVersion": "accepted manuscript",
-                    "submittedVersion": "preprint (submitted version)",
-                }.get(oa_version, oa_version)
-                note = (
-                    f"The publisher's PDF is paywalled — loaded the open-access {pretty} instead. "
-                    "For the published version, download it in your browser and replace the "
-                    "source file via the page's source button."
-                )
+                pretty = {"acceptedVersion": "accepted manuscript",
+                          "submittedVersion": "preprint (submitted version)"}.get(oa_version, oa_version)
+                note = (f"The publisher's PDF couldn't be fetched — loaded the open-access {pretty} instead. "
+                        "For the published version, download it in your browser and replace the "
+                        "source file via the page's source button.")
             try:
                 final_url, content_type, _ = try_resolve(oa_url)
                 if "application/pdf" in content_type:
@@ -206,23 +218,19 @@ def resolve_source(source_url: str, allow_oa: bool = True) -> dict:
         raise HTTPException(
             status_code=400,
             detail="This leads to a publisher page whose PDF isn't accessible server-side "
-            "(usually a paywall), and no open-access copy was found. Open the link in your "
-            "browser instead — if you can download the PDF there, drop the file onto Gamma.",
+                   "(access restriction or browser check), and no open-access copy was found. Open the link in your "
+                   "browser instead — if you can download the PDF there, drop the file onto Gamma.",
         )
     if blocked:
         raise HTTPException(
             status_code=400,
-            detail="This site blocks server-side fetching. Download the PDF in your browser and drop it onto the page.",
+            detail="This site blocks server-side fetching. Download the PDF in your browser "
+                   "and drop it onto the page.",
         )
     raise HTTPException(
         status_code=400,
         detail=f"Couldn't find a PDF behind this link (got {content_type or 'no content type'}, "
-        "and the page doesn't advertise a PDF). Download it in your browser and drop it onto Gamma.",
-    )
-
-
-_TOO_LARGE = (f"that PDF is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit — "
-              "download it in your browser and drop it onto Gamma")
+               "and the page doesn't advertise a PDF). Download it in your browser and drop it onto Gamma.")
 
 
 def download_pdf(source_url: str, want_bytes: bool = True) -> tuple[str, bytes]:
@@ -251,23 +259,13 @@ def download_pdf(source_url: str, want_bytes: bool = True) -> tuple[str, bytes]:
         if "application/pdf" not in content_type:
             raise HTTPException(status_code=400, detail=f"final URL is not a PDF: {content_type}")
         final_url = resp.geturl()
-        # Unlike the streaming proxy, this buffers the whole file in memory
-        # for its caller, so it needs the ceiling a direct upload has — and
-        # enforced while reading, not just from Content-Length, which the
-        # upstream server controls and can understate.
-        declared = resp.headers.get("Content-Length") or ""
-        if declared.isdigit() and int(declared) > MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail=_TOO_LARGE)
         data = b""
         if want_bytes:
-            chunks, total = [], 0
+            chunks = []
             while True:
                 chunk = resp.read(65536)
                 if not chunk:
                     break
-                total += len(chunk)
-                if total > MAX_UPLOAD_BYTES:
-                    raise HTTPException(status_code=413, detail=_TOO_LARGE)
                 chunks.append(chunk)
             data = b"".join(chunks)
         return final_url, data
@@ -275,26 +273,26 @@ def download_pdf(source_url: str, want_bytes: bool = True) -> tuple[str, bytes]:
         resp.close()
 
 
-def _share_allows_source(user: str, scope_doc_id: str, source_url: str) -> bool:
+def _share_allows_source(ws: str, scope_page_id: str, source_url: str) -> bool:
     """A share link may only proxy the exact source URL recorded on its own
-    document's page block."""
-    with sqlite3.connect(user_db_path(user, "pages.db")) as conn:
+    page block."""
+    with connect_pages_db(ws) as conn:
         row = conn.execute(
-            "SELECT json_extract(properties, '$.source_url'), "
-            "json_extract(properties, '$.sourceUrl') FROM unified_blocks "
-            "WHERE json_extract(properties, '$.doc_id') = ?",
-            (scope_doc_id,),
+            "SELECT json_extract(properties, '$.source_url') FROM unified_blocks WHERE id = ?",
+            (scope_page_id,),
         ).fetchone()
-    return bool(row) and source_url in {v for v in row if v}
+    return bool(row and row[0]) and source_url == row[0]
 
 
 @router.get("/pdf")
 def proxy_pdf(source_url: str, request: Request):
-    user = resolve_user(request)
-    scope = share_scope_doc(request)
-    if scope is not None and not _share_allows_source(user, scope, source_url):
+    ws = resolve_ws(request)
+    scope = share_scope_page(request)
+    if scope is not None and not _share_allows_source(ws, scope, source_url):
         raise HTTPException(status_code=403, detail="not accessible via this share link")
-    uploads = user_uploads_dir(user)
+    uploads = ws_uploads_dir(ws)
+    # Proxy cache ids hash the URL (the bytes aren't known yet), same length
+    # as the content-hash upload names.
     pdf_doc_id = hashlib.sha256(source_url.encode()).hexdigest()[:DIGEST_CHARS]
     local_path = uploads / f"{pdf_doc_id}.pdf"
     want_save = request.query_params.get("save") == "1"
@@ -350,16 +348,14 @@ def proxy_pdf(source_url: str, request: Request):
                 data = b"".join(chunks)
                 # best-effort cache: over the user's storage limits, just skip
                 # the save — the PDF still streamed through fine
-                if can_store(user, len(data)):
+                if can_store(ws, len(data)):
                     uploads.mkdir(parents=True, exist_ok=True)
                     local_path.write_bytes(data)
-                    # Same treatment as a direct upload: MRC scans fetched from
-                    # the web get a flattened copy in the background.
-                    flatten_queue.schedule(user, local_path.stem)
+                    pdf_meta.schedule(ws, pdf_doc_id)
                 else:
                     log.info(f"[pdf] not caching {pdf_doc_id} ({len(data)} bytes): over storage limits")
 
-    headers = {"Cache-Control": "public, max-age=3600", "X-Source-Url": final_url}
+    headers = {"Cache-Control": "private, no-store", "X-Source-Url": final_url}
     if length.isdigit():
         headers["Content-Length"] = length
     return StreamingResponse(stream(), media_type="application/pdf", headers=headers)

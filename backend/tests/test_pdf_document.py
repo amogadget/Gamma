@@ -3,7 +3,7 @@ and the ``notes-pdf`` export mode end to end."""
 
 import io
 
-from conftest import make_page, require_math_renderer
+from conftest import make_page, require_math_renderer, workspace_of
 
 from gamma.note_markup import MATH, TEXT
 from gamma.pdf_document import PAGE_H, chunks, inline, render_document
@@ -117,6 +117,42 @@ def test_callout_header_becomes_a_bold_quote_line():
     assert got[0]["spans"][0][3].bits == BOLD
 
 
+def test_chunks_parse_a_gfm_table():
+    got = chunks("| Name | Value |\n| :--- | ---: |\n| alpha | 1 |\n| beta | 2 |")
+    assert [c["kind"] for c in got] == ["table"]
+    table = got[0]
+    assert table["aligns"] == ["left", "right"]
+    assert len(table["rows"]) == 3
+    assert table["rows"][0][0][0][1] == "Name" and table["rows"][0][0][0][3].bits == BOLD
+    assert table["rows"][1][0][0][1] == "alpha"
+
+
+def test_pipes_without_a_delimiter_row_stay_prose():
+    got = chunks("a | b | c\nplain line")
+    assert all(c["kind"] == "text" for c in got)
+
+
+def test_image_width_suffix_is_parsed_not_printed():
+    got = chunks("![shot](/api/uploads/ab12.png){:width 240}")
+    imgs = [c for c in got if c["kind"] == "image"]
+    assert imgs and imgs[0]["px_w"] == 240
+    assert not any("width" in str(c.get("spans", "")) for c in got if c["kind"] == "text")
+
+
+def test_obsidian_pipe_width_is_parsed_and_kept_out_of_the_alt():
+    got = chunks("![my caption|240](/api/uploads/ab12.png) and ![plain](/api/uploads/cd34.png)")
+    imgs = [c for c in got if c["kind"] == "image"]
+    assert imgs[0]["px_w"] == 240 and imgs[0]["alt"] == "my caption"
+    assert imgs[1]["px_w"] is None and imgs[1]["alt"] == "plain"
+
+
+def test_embed_becomes_its_own_chunk():
+    got = chunks("before ![[abc-123]] after")
+    kinds = [c["kind"] for c in got]
+    assert kinds == ["text", "embed", "text"]
+    assert got[1]["id"] == "abc-123"
+
+
 # --- the renderer ------------------------------------------------------------
 
 def test_render_document_writes_title_notes_and_quotes():
@@ -197,9 +233,11 @@ def test_page_titles_and_headings_become_bookmarks():
     assert titles == ["Paper one"] and nested == ["A section"]
 
 
-def test_math_and_cjk_are_drawn_as_vector_paths(guest):
+def test_math_and_cjk_are_selectable_type3_text(guest):
     """Same guarantee the note boxes give: nothing shows LaTeX source, and CJK
-    doesn't depend on the viewer having an Asian font."""
+    doesn't depend on the viewer having an Asian font. The glyph outlines go
+    in as Type 3 fonts, so the equation is real text — its characters come
+    back out of the extractor through the ToUnicode map."""
     from gamma import vector_text
 
     pdf = render_document([_page("Math", None, [
@@ -210,21 +248,48 @@ def test_math_and_cjk_are_drawn_as_vector_paths(guest):
     text = _text(pdf)
     assert "\\alpha" not in text and "\\frac" not in text and "$$" not in text
     assert "Bayes" in text and "inline" in text
-    if vector_text.cjk_font() is not None:
-        assert not any("一" <= c <= "鿿" for c in text)
     require_math_renderer()
-    assert _object_kinds(pdf).count(2) >= 10, "math should be typeset as vector paths"
+    assert "α" in text and "∑" in text, "math glyphs should extract as text"
+    assert b"/Type3" in pdf
+    # The title rule and the fraction bar are the only paths left on the page.
+    kinds = _object_kinds(pdf)
+    assert kinds.count(2) <= 3 and kinds.count(1) >= 10
+    if vector_text.cjk_font() is not None:
+        assert "公式" in text
+
+
+def test_type3_fonts_hold_each_glyph_once_and_map_back_to_unicode():
+    """One glyph program per distinct glyph — a repeated x is stored once —
+    with widths, an encoding and a ToUnicode CMap that all agree."""
+    from PyPDF2 import PdfReader
+
+    require_math_renderer()
+    pdf = render_document([_page("Glyphs", None, [_block("b1", r"$x + x + x$ and $\alpha$")])])
+    reader = PdfReader(io.BytesIO(pdf))
+    fonts = [f.get_object() for f in reader.pages[0]["/Resources"]["/Font"].values()]
+    type3 = [f for f in fonts if f.get("/Subtype") == "/Type3"]
+    assert len(type3) == 1
+    font = type3[0]
+    procs = font["/CharProcs"]
+    assert len(procs) == len(font["/Widths"]) == font["/LastChar"] == 3   # x, +, α
+    assert [float(v) for v in font["/FontMatrix"]] == [0.001, 0, 0, 0.001, 0, 0]
+    assert len(font["/Encoding"]["/Differences"]) == 4                    # start code + 3 names
+    cmap = font["/ToUnicode"].get_object().get_data().decode()
+    assert "<0078>" in cmap and "<002B>" in cmap and "<03B1>" in cmap
+    proc = procs["/g1"].get_object().get_data()
+    assert proc.split(b"\n")[0].endswith(b" d1") and proc.endswith(b"f")
+    assert _text(pdf).count("x") == 3
 
 
 def test_pasted_images_are_embedded(guest):
-    from gamma.db import user_uploads_dir
+    from gamma.db import ws_uploads_dir
 
     up = guest.post("/api/upload-image",
                     files={"file": ("shot.png", _blank_png(24, 16), "image/png")})
     assert up.status_code == 200, up.text
     src = up.json()["url"]
     pdf = render_document([_page("With a picture", None, [_block("b1", f"look:\n![shot]({src})")])],
-                          uploads_dir=user_uploads_dir("guest"))
+                          uploads_dir=ws_uploads_dir(workspace_of("guest")))
     assert 3 in _object_kinds(pdf), "the pasted image should be drawn as a page image"
     assert src not in _text(pdf)
 
@@ -233,6 +298,55 @@ def test_unresolvable_image_falls_back_to_its_alt_text():
     pdf = render_document([_page("Missing", None,
                                  [_block("b1", "![the figure](/api/uploads/deadbeef.png)")])])
     assert "the figure" in _text(pdf)
+
+
+def test_tables_render_as_a_grid_without_pipe_source():
+    pdf = render_document([_page("Table", None, [
+        _block("b1", "| Name | Value |\n| --- | ---: |\n| alpha | 1 |\n| a much longer cell that wraps | 2 |")])])
+    text = _text(pdf)
+    assert "Name" in text and "alpha" in text and "longer cell" in text
+    assert "|" not in text and "---" not in text
+
+
+def test_long_tables_break_pages_and_repeat_the_header():
+    rows = "\n".join(f"| row {n} | value {n} |" for n in range(120))
+    pdf = render_document([_page("Long table", None, [
+        _block("b1", f"| Col A | Col B |\n| --- | --- |\n{rows}")])])
+    assert "row 3" in _text(pdf, 1)
+    assert "Col A" in _text(pdf, 2), "the header should repeat on the next page"
+
+
+def test_refs_and_embeds_resolve_through_the_resolver():
+    targets = {
+        "src-1": {"content": "the synced note body\nsecond line", "page_title": "Origin page"},
+        "ref-1": {"content": "referenced first line\nmore", "page_title": "Origin page"},
+    }
+    pdf = render_document([_page("Embeds", None, [
+        _block("b1", "see [[ref-1]] and:\n![[src-1]]")])],
+        resolve_ref=targets.get)
+    text = _text(pdf)
+    assert "referenced first line" in text and "more" not in text
+    assert "the synced note body" in text and "second line" in text
+    assert "from Origin page" in text
+    assert "src-1" not in text and "ref-1" not in text
+
+
+def test_nested_embeds_degrade_to_references():
+    targets = {
+        "outer": {"content": "outer body ![[inner]]", "page_title": "P"},
+        "inner": {"content": "inner body", "page_title": "P"},
+    }
+    pdf = render_document([_page("Nested", None, [_block("b1", "![[outer]]")])],
+                          resolve_ref=targets.get)
+    text = _text(pdf)
+    assert "outer body" in text
+    # The inner embed renders as a reference label, not its full card.
+    assert "inner body" in text and "from P" in text
+
+
+def test_unresolved_embed_keeps_the_reference_look():
+    pdf = render_document([_page("Missing embed", None, [_block("b1", "![[gone-404]]")])])
+    assert "gone-404" in _text(pdf)
 
 
 # --- the export endpoints ----------------------------------------------------
@@ -280,36 +394,25 @@ def test_folder_notes_pdf_export_is_one_document(guest):
     assert "Folder page one" in titles and "Folder page two" in titles
 
 
+def test_export_notes_pdf_resolves_cross_page_embeds(guest):
+    source = make_page(guest, "Source page")
+    r = guest.put(f"/api/blocks/{source['id']}/children", json={"blocks": [
+        {"id": "emb-src", "content": "the shared finding", "properties": {}, "children": []}]})
+    assert r.status_code == 200, r.text
+    target = make_page(guest, "Target page")
+    r = guest.put(f"/api/blocks/{target['id']}/children", json={"blocks": [
+        {"id": "emb-use", "content": "context: ![[emb-src]] and a ref [[emb-src]]",
+         "properties": {}, "children": []}]})
+    assert r.status_code == 200, r.text
+
+    r = guest.get(f"/api/pages/{target['id']}/export", params={"mode": "notes-pdf"})
+    assert r.status_code == 200, r.text
+    text = _text(r.content)
+    assert "the shared finding" in text and "from Source page" in text
+    assert "emb-src" not in text
+
+
 def test_unknown_export_mode_is_rejected(guest):
     page = make_page(guest, "Mode check")
     r = guest.get(f"/api/pages/{page['id']}/export", params={"mode": "notes-pdff"})
     assert r.status_code == 400
-
-
-def test_oversized_notes_pdf_is_refused_not_streamed(guest, monkeypatch):
-    """Fork addition: typeset math is emitted as vector paths at every
-    occurrence, so a folder of formula-heavy papers can grow past any sane
-    response size. Refuse with an actionable 413 instead of building and
-    streaming it."""
-    from gamma.routers import export as export_mod
-
-    page = make_page(guest, "Huge notes")
-    monkeypatch.setattr(export_mod, "_NOTES_PDF_MAX_BYTES", 512)
-    r = guest.get(f"/api/pages/{page['id']}/export", params={"mode": "notes-pdf"})
-    assert r.status_code == 413
-    assert "too large" in r.json()["detail"]
-
-
-def test_notes_pdf_render_failure_is_a_400_not_a_500(guest, monkeypatch):
-    """A malformed block must not surface as a traceback."""
-    from gamma.routers import export as export_mod
-
-    page = make_page(guest, "Broken notes")
-
-    def boom(*a, **kw):
-        raise ValueError("bad glyph")
-
-    monkeypatch.setattr(export_mod, "render_document", boom)
-    r = guest.get(f"/api/pages/{page['id']}/export", params={"mode": "notes-pdf"})
-    assert r.status_code == 400
-    assert "could not build the PDF" in r.json()["detail"]

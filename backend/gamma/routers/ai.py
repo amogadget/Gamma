@@ -10,19 +10,20 @@ import time
 import urllib.error
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 from urllib.request import Request as URLRequest, urlopen
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .. import chatgpt_oauth, ratelimit
+from .. import chatgpt_oauth
 from ..ai_client import (
     UpstreamError,
     call_ai as _call_ai,
-    chatgpt_request as _chatgpt_request,  # noqa: F401  (re-exported for tests)
+    chatgpt_request as _chatgpt_request,
     open_ai as _open_ai,
+    partial_json_object as _partial_json_object,
+    partial_json_strings as _partial_json_strings,
     protocol as _protocol,
     read_reply as _read_reply,
     sse_deltas as _sse_deltas,
@@ -43,8 +44,11 @@ from ..ai_tools import (
 )
 from ..ai_context import (
     build_messages as _build_messages,
+    canonical_tool as _canonical_tool,
+    extract_pdf_context as _extract_pdf_context,
+    MAX_CONTEXT_BLOCKS,
     gather_inputs as _gather_inputs,
-    parse_files as _parse_files,  # noqa: F401  (re-exported for tests)
+    parse_files as _parse_files,
     parse_images as _parse_images,
     pdf_path as _pdf_path,
 )
@@ -61,14 +65,18 @@ from ..ai_settings import (
     new_provider_id,
     require_ai_runtime,
     save_provider_entries,
-    set_entry_catalog,
 )
-from ..auth import require_user
-from ..config import AI_MODEL_CATALOG_TTL, AI_PROTOCOLS, USERS_DIR
-from ..db import page_now, user_db_path
+from ..auth import require_user, require_ws, ws_role
+from ..config import AI_PROTOCOLS
+from ..db import page_now, ws_db_path
 from ..logbuf import log
 from ..pdf_text import extract_text
 from ..textnorm import INDEX_VERSION
+
+# Note editors whose in-flight arguments the chat streams as "progress"
+# events: the notes panel types the markdown into the block as the model
+# writes it (see agent_events).
+_PREVIEW_TOOLS = {"edit_block", "create_block"}
 
 router = APIRouter(prefix="/api", tags=["ai"])
 
@@ -80,23 +88,40 @@ EFFORT_LEVELS = {"minimal", "low", "medium", "high", "xhigh", "max"}
 
 class AIChatRequest(BaseModel):
     prompt: str
+    # Context is PAGES from the user's knowledge base: `pages` (several — a
+    # report across pages) or, when empty, the one page of `page_id` (the
+    # open page; its PDF attachment, if any, is derived server-side via
+    # blocks_store.page_attachment). `doc_id` is the compatibility input:
+    # it resolves to the page carrying that PDF (blocks_store.page_for_doc)
+    # and does nothing when no page does — send `page_id`; nothing new may
+    # depend on `doc_id`.
     doc_id: str = ""
     history: list = Field(default_factory=list)  # [{role: "user"|"ai", text: str}, ...]
-    model: str = ""  # model registry id ("provider:model"), must be in AI_MODELS
-    selection: str = ""  # text the user selected in the PDF — focus the answer on it
+    model: str = ""       # model registry id ("provider:model"), must be in AI_MODELS
+    selection: str = ""   # text the user selected in the PDF — focus the answer on it
+    # What the user pointed the message at inside the NOTES: the block their
+    # cursor is on (the agent's "this block"), blocks they attached as chips
+    # (ids — resolved server-side to id-labelled text so the agent can edit
+    # them), and note text they selected with Ctrl held (verbatim passages).
+    focus_block_id: str = ""
+    context_blocks: list = Field(default_factory=list)
+    note_passages: list = Field(default_factory=list)
     attach_pdf: bool = False  # send the PDF itself instead of extracted text
-    effort: str = ""  # reasoning effort; empty = provider default (param omitted)
-    system: str = ""  # custom system prompt; empty = built-in default
-    pages: list = Field(default_factory=list)  # page block ids for multi-PDF chat / reports
-    include_notes: bool = False  # also include the user's highlights + notes for those pages
+    effort: str = ""      # reasoning effort; empty = provider default (param omitted)
+    system: str = ""      # custom system prompt; empty = built-in default
+    pages: list[str] = Field(default_factory=list, max_length=7)  # open page + up to six references
+    # Also include the user's highlights + notes for pages that carry a PDF
+    # (a page without one is its notes — they always go).
+    include_notes: bool = False
     images: list = Field(default_factory=list)  # pasted figures as data URLs
     files: list = Field(default_factory=list)  # uploaded PDFs as {name, data} data URLs
     stream: bool = False  # NDJSON stream of {"delta": …} lines instead of one JSON body
     # Agent chat (gamma/ai_tools.py): agent_scope declares what this chat's
     # tools reach — "folder" (the home/folder view; `folder` is the path,
-    # "" = library root) or "page" (the per-paper chat; `page_id` is the
-    # focused page — read tools only). "" = plain chat. Every tool call comes
-    # back as an {"action": …} NDJSON line alongside the text deltas.
+    # "" = library root) or "page" (the per-page chat; `page_id` is the
+    # focused page — read tools + note editors). "" = plain chat (page_id
+    # still names the context page). Every tool call comes back as an
+    # {"action": …} NDJSON line alongside the text deltas.
     # `permissions` is the Settings → Assistant per-tool map ({list, read,
     # search, rename, move}; missing key = allowed) — everything off degrades
     # to a plain chat. agent_system overrides the base agent prompt (the
@@ -128,15 +153,18 @@ def _resolve_effort(requested: str) -> str:
     return requested if requested in EFFORT_LEVELS else ""
 
 
-def _search_index_status(user: str, doc_id: str) -> dict:
+def _search_index_status(ws: str, doc_id: str) -> dict:
     """Whether the search index covers this doc — same rules as
     /api/metadata/status (ver mismatch = stale, re-indexed lazily)."""
     try:
-        with sqlite3.connect(user_db_path(user, "data.db")) as conn:
-            row = conn.execute("SELECT ver FROM pdf_fts_docs WHERE doc_id = ?", (doc_id,)).fetchone()
+        with sqlite3.connect(ws_db_path(ws, "data.db")) as conn:
+            row = conn.execute(
+                "SELECT ver FROM pdf_fts_docs WHERE doc_id = ?", (doc_id,)
+            ).fetchone()
     except sqlite3.OperationalError:
         row = None  # index tables don't exist yet — search has never run
-    return {"indexed": bool(row and row[0] == INDEX_VERSION), "index_stale": bool(row and row[0] != INDEX_VERSION)}
+    return {"indexed": bool(row and row[0] == INDEX_VERSION),
+            "index_stale": bool(row and row[0] != INDEX_VERSION)}
 
 
 # Sync def: extraction runs in the threadpool (pdfium stops at the sample cap).
@@ -147,10 +175,10 @@ def pdf_text_status(doc_id: str, request: Request, preview: int = 0):
     scanned/image-only PDF is why AI answers blind and metadata lookups come
     up empty. `preview` > 0 additionally returns that many characters of the
     text itself (capped)."""
-    user = require_user(request)
+    ws = require_ws(request)
     preview = min(max(preview, 0), 20000)
-    index = _search_index_status(user, doc_id)
-    pdf_path = _pdf_path(user, doc_id)
+    index = _search_index_status(ws, doc_id)
+    pdf_path = _pdf_path(ws, doc_id)
     if not pdf_path:
         return {"found": False, "ok": False, "chars": 0, **index}
     try:
@@ -165,22 +193,27 @@ def pdf_text_status(doc_id: str, request: Request, preview: int = 0):
         return {"found": True, "ok": False, "chars": 0, **index}
 
 
-# The grounding clause is deliberate: the document text below this prompt is
+# The grounding clause is deliberate: a PDF's text below this prompt is
 # usually a small head excerpt of a long paper, and without being told so the
 # model answers detail questions from its memory of similar papers — inventing
 # plausible, wrong numbers and attributing them to the user's paper. Scoped to
-# claims ABOUT the paper, so background explanations still work.
+# claims ABOUT the pages and their documents, so background explanations
+# still work.
 _SYSTEM_PROMPT = (
-    "You are a research assistant helping the user understand a PDF they are reading. "
-    "The document text you are given is usually an EXCERPT, not the whole paper. "
-    "Anything you state as being in THIS paper — a number, a parameter, a method, a "
-    "result — must come from text you have actually read here. Never fill such a gap "
-    "from your knowledge of similar papers: a value you half-remember from elsewhere "
-    "is worse than no answer. If the text you have does not contain it, say so plainly "
-    "(and look it up first if you have tools). General background the user asks you to "
-    "explain is fine to answer from your own knowledge — just make clear it is "
-    "background, not something this paper states. Be concise, and cite the PDF page "
-    "for specific values you attribute to the paper.")
+    "You are a research assistant working inside the user's knowledge base in Gamma: "
+    "pages of nested notes, some of which carry a PDF attachment (a paper, a book, "
+    "lecture notes). The context you are given is one or more of those pages — each "
+    "with its title, properties, the user's own notes and highlights, and, for a page "
+    "with a PDF, the document's extracted text, which is usually an EXCERPT, not the "
+    "whole document. Anything you state as being in THESE pages or their documents — "
+    "a number, a parameter, a method, a result — must come from text you have actually "
+    "read here. Never fill such a gap from your knowledge of similar papers: a value "
+    "you half-remember from elsewhere is worse than no answer. If the text you have "
+    "does not contain it, say so plainly (and look it up first if you have tools). "
+    "General background the user asks you to explain is fine to answer from your own "
+    "knowledge — just make clear it is background, not something these pages state. "
+    "Be concise; when you cite a specific value from a PDF, give its PDF page number, "
+    "and say when something comes from the user's notes rather than the document.")
 
 # Default prompt for AI-based metadata extraction (used when neither an arXiv id
 # nor a DOI identifies the paper). Editable per-user in the frontend prompt editor.
@@ -188,12 +221,14 @@ METADATA_PROMPT = (
     "You extract bibliographic metadata from the first pages of an academic document. "
     "Reply with ONLY a JSON object (no code fences, no commentary) with these keys: "
     'title (string), authors (list of "First Last" strings, in order), year (string), '
-    'venue (journal or conference name; "arXiv" for preprints), volume (string), '
-    'pages (string, e.g. "173-179"), doi (string), arxiv_id (string, e.g. "1810.11086"), '
+    "venue (journal or conference name; \"arXiv\" for preprints), volume (string), "
+    "pages (string, e.g. \"173-179\"), doi (string), arxiv_id (string, e.g. \"1810.11086\"), "
+    "publisher (string; books only), isbn (string; books only, as printed), "
     'kind (string: "paper" for journal/conference articles and preprints; otherwise '
     '"notes", "slides", "thesis", "book", "report", or "other" — lecture notes, course '
-    'materials and problem sets are "notes"). '
-    "Use empty strings/lists for anything not stated in the text. Never invent a DOI or arXiv id."
+    "materials and problem sets are \"notes\"; a textbook or monograph, however old, is \"book\"). "
+    "For a book, title is the book's main title (no subtitle) and year the edition's copyright year. "
+    "Use empty strings/lists for anything not stated in the text. Never invent a DOI, arXiv id or ISBN."
 )
 
 # Default prompt for the minimal slide-deck citation. Editable in the frontend.
@@ -203,10 +238,13 @@ CITE_PROMPT = (
     "labeling italic and bold with markdown syntax correctly. Follow these examples exactly:\n"
     "Guo _et al._ arXiv **1810.11086** (2018).\n"
     "Schine _et al._, Nature **565**, 173–179 (2019)\n"
+    "Siegman, _Lasers_ (University Science Books, 1986)\n"
     "Use the journal name (abbreviated if long), bold volume, page range, and year in parentheses. "
-    "For preprints use the arXiv number in bold. If there is exactly one author, use their surname "
-    'without _et al._; for two authors use "Surname & Surname".'
+    "For preprints use the arXiv number in bold. For a book (@book) use the italic title, then the "
+    "publisher and year in parentheses. If there is exactly one author, use their surname "
+    "without _et al._; for two authors use \"Surname & Surname\"."
 )
+
 
 
 @router.get("/ai/models")
@@ -215,14 +253,13 @@ async def ai_models(request: Request):
     rt = ai_runtime(user)
     return {
         "enabled": rt["enabled"],
-        "models": rt["models"],  # [{id: "<pid>:<model>", provider, provider_name, model}, ...]
+        "models": rt["models"],             # [{id: "<pid>:<model>", provider, provider_name, model}, ...]
         "default": rt["default"]["id"] if rt["default"] else "",
         "efforts": ["low", "medium", "high"],  # offered in the UI; omitted unless picked
-        "refreshed_at": _max_catalog_at(user),  # newest auto-fetched catalog time, "" = never
-        "default_prompt": _SYSTEM_PROMPT,  # shown in the prompt editor
+        "default_prompt": _SYSTEM_PROMPT,   # shown in the prompt editor
         "metadata_prompt": METADATA_PROMPT,  # AI metadata-extraction fallback
-        "cite_prompt": CITE_PROMPT,  # PPT-style citation generator
-        "agent_prompt": AGENT_PROMPT,  # library-agent base role prompt
+        "cite_prompt": CITE_PROMPT,          # PPT-style citation generator
+        "agent_prompt": AGENT_PROMPT,        # library-agent base role prompt
     }
 
 
@@ -232,41 +269,33 @@ async def ai_models(request: Request):
 # Stored under the reserved `ai-settings` prefs key in the user's data.db —
 # see gamma/ai_settings.py for the security rationale.
 
-
 def _masked_settings(user: str, is_guest: bool) -> dict:
     out = []
     for e in load_provider_entries(user):
         key = (e.get("api_key") or "").strip()
         oauth = e.get("oauth") if isinstance(e.get("oauth"), dict) else {}
-        out.append(
-            {
-                "id": e.get("id") or "",
-                "name": (e.get("name") or "").strip(),
-                "protocol": e.get("protocol") or "",
-                # Enough to recognize the key, never enough to use it.
-                "key_hint": f"…{key[-4:]}" if len(key) >= 12 else ("set" if key else ""),
-                "base_url": (e.get("base_url") or "").strip(),
-                "models": (e.get("models") or "").strip(),
-                "test_model": (e.get("test_model") or "").strip(),
-                "created_at": e.get("created_at") or "",
-                # ChatGPT sign-in entries: connection status + account label only,
-                # never the tokens themselves.
-                "oauth_connected": bool(oauth.get("access_token")),
-                "account": oauth.get("email") or "",
-            }
-        )
+        out.append({
+            "id": e.get("id") or "",
+            "name": (e.get("name") or "").strip(),
+            "protocol": e.get("protocol") or "",
+            # Enough to recognize the key, never enough to use it.
+            "key_hint": f"…{key[-4:]}" if len(key) >= 12 else ("set" if key else ""),
+            "base_url": (e.get("base_url") or "").strip(),
+            "models": (e.get("models") or "").strip(),
+            "test_model": (e.get("test_model") or "").strip(),
+            "created_at": e.get("created_at") or "",
+            # ChatGPT sign-in entries: connection status + account label only,
+            # never the tokens themselves.
+            "oauth_connected": bool(oauth.get("access_token")),
+            "account": oauth.get("email") or "",
+        })
     return {
         "providers": out,
         # Feeds the "Add provider" dropdown and the form placeholders.
         # auth "oauth" = sign-in entries (no API key field in the form).
         "protocols": [
-            {
-                "id": pid,
-                "label": conf["label"],
-                "default_base_url": conf["base_url"],
-                "default_model": conf["default_model"],
-                "auth": conf.get("auth", "key"),
-            }
+            {"id": pid, "label": conf["label"], "default_base_url": conf["base_url"],
+             "default_model": conf["default_model"], "auth": conf.get("auth", "key")}
             for pid, conf in AI_PROTOCOLS.items()
         ],
         "can_edit": not is_guest,
@@ -283,26 +312,22 @@ def _require_editor(request: Request) -> str:
 
 
 class AIProviderRequest(BaseModel):
-    protocol: str = ""  # "anthropic" | "openai" (required on add)
-    name: str | None = None  # display label; "" = protocol label
-    api_key: str | None = None  # required on add; omitted/empty on edit = keep
+    protocol: str = ""      # "anthropic" | "openai" (required on add)
+    name: str | None = None      # display label; "" = protocol label
+    api_key: str | None = None   # required on add; omitted/empty on edit = keep
     base_url: str | None = None  # "" = protocol default
-    models: str | None = None  # comma-separated model names; "" = protocol default
+    models: str | None = None    # comma-separated model names; "" = protocol default
     test_model: str | None = None  # model probes use (Test button / login check); "" = first model
-
-
-def _is_oauth_entry(entry: dict) -> bool:
-    return AI_PROTOCOLS.get(entry.get("protocol"), {}).get("auth") == "oauth"
 
 
 def _apply_provider_fields(entry: dict, payload: AIProviderRequest):
     """Validate + copy the editable fields of a provider entry in place."""
-    oauth_entry = _is_oauth_entry(entry)
+    oauth_entry = AI_PROTOCOLS.get(entry.get("protocol"), {}).get("auth") == "oauth"
     if payload.name is not None:
         entry["name"] = str(payload.name).strip()[:MAX_NAME_LEN]
-    # OAuth secrets and endpoints are owned by the sign-in flow. In particular,
-    # accepting an arbitrary base URL here would let a crafted API request
-    # redirect the bearer token on the next model, usage or chat call.
+    # OAuth secrets and endpoints are owned by the sign-in flow. In
+    # particular, accepting an arbitrary base URL here would let a crafted API
+    # request redirect the bearer token on the next model or usage call.
     if payload.api_key and not oauth_entry:  # never clears; delete the entry to drop a key
         key = str(payload.api_key).strip()
         if not key or len(key) > MAX_KEY_LEN or any(c.isspace() for c in key):
@@ -338,22 +363,15 @@ async def ai_provider_add(payload: AIProviderRequest, request: Request):
     if len(entries) >= MAX_PROVIDERS:
         raise HTTPException(status_code=400, detail="too many providers")
     if AI_PROTOCOLS.get(payload.protocol, {}).get("auth") == "oauth":
-        raise HTTPException(
-            status_code=400, detail="ChatGPT entries are created by signing in — use the Connect button"
-        )
+        raise HTTPException(status_code=400,
+                            detail="ChatGPT entries are created by signing in — use the Connect button")
     if payload.protocol not in AI_PROTOCOLS:
         raise HTTPException(status_code=400, detail="protocol must be 'anthropic' or 'openai'")
     if not (payload.api_key or "").strip():
         raise HTTPException(status_code=400, detail="API key required")
-    entry = {
-        "id": new_provider_id(),
-        "protocol": payload.protocol,
-        "name": "",
-        "api_key": "",
-        "base_url": "",
-        "models": "",
-        "created_at": page_now(),
-    }
+    entry = {"id": new_provider_id(), "protocol": payload.protocol,
+             "name": "", "api_key": "", "base_url": "", "models": "",
+             "created_at": page_now()}
     _apply_provider_fields(entry, payload)
     entries.append(entry)
     save_provider_entries(user, entries)
@@ -369,11 +387,9 @@ async def ai_provider_update(provider_id: str, payload: AIProviderRequest, reque
         raise HTTPException(status_code=404, detail="provider not found")
     # Protocol edits never cross the key/OAuth boundary — a sign-in entry stays
     # a sign-in entry (name/models remain editable through this endpoint).
-    if (
-        payload.protocol
-        and payload.protocol in AI_PROTOCOLS
-        and AI_PROTOCOLS[payload.protocol].get("auth") == AI_PROTOCOLS.get(entry.get("protocol"), {}).get("auth")
-    ):
+    if (payload.protocol and payload.protocol in AI_PROTOCOLS
+            and AI_PROTOCOLS[payload.protocol].get("auth")
+                == AI_PROTOCOLS.get(entry.get("protocol"), {}).get("auth")):
         entry["protocol"] = payload.protocol
     _apply_provider_fields(entry, payload)
     save_provider_entries(user, entries)
@@ -386,6 +402,10 @@ async def ai_provider_delete(provider_id: str, request: Request):
     entries = [e for e in load_provider_entries(user) if e.get("id") != provider_id]
     save_provider_entries(user, entries)
     return _masked_settings(user, request.state.is_guest)
+
+
+def _is_oauth_entry(entry: dict) -> bool:
+    return AI_PROTOCOLS.get(entry.get("protocol"), {}).get("auth") == "oauth"
 
 
 def _no_credential(entry: dict) -> dict:
@@ -439,52 +459,18 @@ class AIProviderTestRequest(BaseModel):
 
 # Sync def: the probe call runs in the threadpool.
 @router.post("/ai/providers/{provider_id}/test")
-def ai_provider_test(provider_id: str, request: Request,
-                     payload: AIProviderTestRequest | None = None):
-    """The settings list's Test button: probe one saved entry. A failed probe is
-    a successful test, so the result comes back in-body, not as an HTTP error."""
+def ai_provider_test(provider_id: str, request: Request, payload: AIProviderTestRequest | None = None):
+    """Live probe of one saved entry, for the settings list's Test button.
+    The probe result comes back in-body — a failed probe is a successful test,
+    not an HTTP error."""
     user = _require_editor(request)
-    entries = load_provider_entries(user)
-    entry = next((e for e in entries if e.get("id") == provider_id), None)
+    entry = next((e for e in load_provider_entries(user) if e.get("id") == provider_id), None)
     if not entry:
         raise HTTPException(status_code=404, detail="provider not found")
     return _probe_entry(user, entry, payload.model if payload else "")
 
 
-# --- Subscription usage (ChatGPT OAuth only) ----------------------------------
-# The provider's usage API is undocumented and unstable, so this is treated as
-# best-effort decoration for the Providers pane: any failure degrades to
-# "unavailable" and must never break settings. Results are cached briefly so
-# reopening the pane doesn't re-hit the account endpoint on every render.
-_USAGE_TTL = 60          # seconds
-_USAGE_CACHE_CAP = 64    # (user, provider) entries
-_USAGE_CACHE: "OrderedDict[tuple, tuple]" = OrderedDict()  # key -> (fetched_at, payload)
-_USAGE_LOCK = threading.Lock()
-
-
-def _usage_cached(key: tuple) -> dict | None:
-    with _USAGE_LOCK:
-        hit = _USAGE_CACHE.get(key)
-        if not hit:
-            return None
-        fetched_at, payload = hit
-        if time.time() - fetched_at > _USAGE_TTL:
-            _USAGE_CACHE.pop(key, None)
-            return None
-        _USAGE_CACHE.move_to_end(key)
-        return payload
-
-
-def _usage_store(key: tuple, payload: dict) -> None:
-    with _USAGE_LOCK:
-        _USAGE_CACHE[key] = (time.time(), payload)
-        _USAGE_CACHE.move_to_end(key)
-        while len(_USAGE_CACHE) > _USAGE_CACHE_CAP:
-            _USAGE_CACHE.popitem(last=False)
-
-
 def _usage_window(raw: dict | None, name: str = "") -> dict | None:
-    """One rate-limit window from the provider's reply, or None if unusable."""
     if not isinstance(raw, dict):
         return None
     try:
@@ -551,11 +537,6 @@ def ai_provider_usage(provider_id: str, request: Request):
         return {"available": False,
                 "reason": "This API-key provider does not expose a standard remaining-usage percentage."}
 
-    cache_key = (user, provider_id)
-    cached = _usage_cached(cache_key)
-    if cached is not None:
-        return {**cached, "cached": True}
-
     clear_refresh_backoff(user, provider_id)
     rt = ai_runtime(user)
     conf = rt["providers"].get(provider_id)
@@ -570,18 +551,10 @@ def ai_provider_usage(provider_id: str, request: Request):
             # report it in-body so the UI can say "reconnect".
             return {"available": False, "auth": True,
                     "reason": "ChatGPT sign-in expired — sign in again in this entry's edit form."}
-        # Only an HTTPError carries .code/.reason; _upstream_detail would raise
-        # AttributeError on anything else and turn a degraded provider into a
-        # 500 traceback.
         raise HTTPException(status_code=502,
                             detail=f"usage inquiry failed: {_upstream_detail(e, 200)}")
     except Exception as e:
-        # URLError, socket timeout, malformed JSON — the provider API is
-        # undocumented and unstable, so anything here is "unavailable", never a
-        # server error. The exception text is not echoed: it can carry the
-        # request URL and we keep the surface minimal.
-        log.warning(f"[ai_usage] {type(e).__name__}: {e}")
-        raise HTTPException(status_code=502, detail="usage inquiry failed: provider unreachable")
+        raise HTTPException(status_code=502, detail=f"usage inquiry failed: {e}")
     if not isinstance(data, dict):
         raise HTTPException(status_code=502, detail="usage inquiry returned invalid data")
 
@@ -599,26 +572,20 @@ def ai_provider_usage(provider_id: str, request: Request):
                                str(extra.get("limit_name") or "Additional limit"))
         if window:
             windows.append(window)
-    payload = {
+    return {
         "available": bool(windows),
         "plan_type": str(data.get("plan_type") or ""),
         "windows": windows,
         "credits": data.get("credits") if isinstance(data.get("credits"), dict) else None,
         "reason": "" if windows else "The provider returned no usage windows.",
     }
-    _usage_store(cache_key, payload)
-    return {**payload, "cached": False}
 
 
 # Fallback when the live listing fails on a connected entry (offline, backend
 # hiccup): models the ChatGPT backend has been known to serve.
 _CHATGPT_MODEL_FALLBACK = [
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
+    "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+    "gpt-5.5", "gpt-5.4", "gpt-5.4-mini",
 ]
 # GET {base}/models gates its answer on the caller's version — keep in rough
 # sync with a current Codex CLI release so new models show up.
@@ -650,24 +617,19 @@ def _models_list_request(protocol: str, key: str, base: str) -> URLRequest:
     })
 
 
-def _chatgpt_model_catalog(user: str, provider_id: str = "", with_fallback: bool = True) -> list:
+def _chatgpt_model_catalog(user: str, provider_id: str = "") -> list:
     """Live model list from the ChatGPT (codex) backend, Codex CLI's own
     listing call: GET {base}/models?client_version=… with the OAuth bearer.
     Needs a connected entry — the list is account-gated; falls back to the
     known-good list only when the fetch itself fails."""
     providers = ai_runtime(user)["providers"]
-    conf = providers.get(provider_id) if provider_id else None
+    conf = providers.get(provider_id)
     if not conf or conf.get("protocol") != "chatgpt":
-        if provider_id:
-            # Background refresh / saved-entry listing: the named entry is not
-            # connected — never silently list a different account's models.
-            raise ModelListError("ChatGPT entry is not connected — sign in again")
         # Pre-connect "Add key" form has no entry yet — any connected one will do.
         conf = next((c for c in providers.values() if c.get("protocol") == "chatgpt"), None)
     if not conf:
-        raise HTTPException(
-            status_code=400, detail="sign in with ChatGPT first — the model list comes from your account"
-        )
+        raise HTTPException(status_code=400,
+                            detail="sign in with ChatGPT first — the model list comes from your account")
     try:
         req = URLRequest(
             f"{conf['base_url']}/models?client_version={_CHATGPT_CLIENT_VERSION}",
@@ -675,8 +637,7 @@ def _chatgpt_model_catalog(user: str, provider_id: str = "", with_fallback: bool
                 "Authorization": f"Bearer {conf['api_key']}",
                 "chatgpt-account-id": conf.get("account_id", ""),
                 "originator": "codex_cli_rs",
-            },
-        )
+            })
         data = _model_catalog_json(req)
         listed, hidden = [], []
         for m in data.get("models") or []:
@@ -688,15 +649,9 @@ def _chatgpt_model_catalog(user: str, provider_id: str = "", with_fallback: bool
         # `hide` marks picker-hidden but usable slugs — offer them after the
         # listed ones rather than dropping them.
         models = list(dict.fromkeys(listed + hidden))
-        if not models:
-            raise ModelListError("the account returned an empty model list")
-        return models
-    except ModelListError:
-        raise
+        return models or _CHATGPT_MODEL_FALLBACK
     except Exception as e:
         log.warning(f"[ai] chatgpt model listing failed, using fallback: {e}")
-        if not with_fallback:
-            raise ModelListError(f"model list failed: {e}") from e
         return _CHATGPT_MODEL_FALLBACK
 
 
@@ -705,57 +660,6 @@ class ModelCatalogRequest(BaseModel):
     protocol: str = ""
     api_key: str = ""
     base_url: str = ""
-
-
-class ModelListError(Exception):
-    """A provider refused or failed a model-list request; carries a UI message."""
-
-
-def _filter_chat_models(ids: list, require_chat_prefix: bool = True) -> list:
-    """Drop the non-conversational families from an account listing (OpenAI's
-    includes embeddings/audio/image models the chat endpoint can't use).
-    Anthropic-wire gateways (DeepSeek, …) may serve models without a gpt-*/o*
-    prefix, so the prefix whitelist is only applied to OpenAI listings."""
-    out = []
-    for i in ids:
-        if re.search(r"embed|whisper|tts|audio|image|dall-e|moderation|transcribe|realtime|search", i, re.I):
-            continue
-        if require_chat_prefix and not re.match(r"^(gpt-|o\d|chatgpt-)", i):
-            continue
-        out.append(i)
-    return out
-
-
-def _fetch_key_protocol_models(protocol: str, base: str, api_key: str) -> list:
-    """Live model names for a key-based protocol entry. Tries the provider's
-    listing endpoint in wire order and raises ModelListError when none
-    answers. Anthropic-wire gateways that don't list under the anthropic path
-    (DeepSeek's /anthropic base is one) usually answer their OpenAI-compatible
-    listing with the same key, so the parent base is tried as a fallback."""
-    # Each candidate is the standard listing request (_models_list_request) plus
-    # whether that listing needs the OpenAI chat-prefix filter.
-    candidates = []
-    if protocol == "openai":
-        candidates.append((_models_list_request("openai", api_key, base), True))
-    else:  # anthropic
-        candidates.append((_models_list_request("anthropic", api_key, base), False))
-        parent = base[: -len("/anthropic")] if base.endswith("/anthropic") else base
-        if parent != base:
-            candidates.append((_models_list_request("openai", api_key, parent), False))
-        candidates.append((_models_list_request("openai", api_key, base), False))
-    last = None
-    for req, chat_prefix in candidates:
-        try:
-            data = _model_catalog_json(req)
-            ids = [str(m.get("id") or "") for m in (data.get("data") or []) if m.get("id")]
-            ids = _filter_chat_models(ids, chat_prefix)
-            if ids:
-                return sorted(set(ids))
-        except urllib.error.HTTPError as e:
-            last = _upstream_detail(e, 200)
-        except Exception as e:
-            last = str(e)
-    raise ModelListError(f"model list failed: {last or 'no listing endpoint'}")
 
 
 # Sync def: the upstream /v1/models fetch runs in the threadpool.
@@ -772,23 +676,28 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
         entry = next((e for e in load_provider_entries(user) if e.get("id") == payload.provider_id), None) or {}
         protocol = entry.get("protocol") or protocol
     if protocol == "chatgpt":
-        try:
-            return {"models": _chatgpt_model_catalog(user, payload.provider_id)}
-        except ModelListError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        return {"models": _chatgpt_model_catalog(user, payload.provider_id)}
     if protocol not in AI_PROTOCOLS:
         raise HTTPException(status_code=400, detail="unknown protocol")
     key = (payload.api_key or "").strip() or (entry.get("api_key") or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="enter the API key first, then load the model list")
-    base = (
-        (payload.base_url or "").strip() or (entry.get("base_url") or "").strip() or AI_PROTOCOLS[protocol]["base_url"]
-    ).rstrip("/")
+    base = ((payload.base_url or "").strip() or (entry.get("base_url") or "").strip()
+            or AI_PROTOCOLS[protocol]["base_url"]).rstrip("/")
     try:
-        models = _fetch_key_protocol_models(protocol, base, key)
-    except ModelListError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return {"models": models}
+        data = _model_catalog_json(_models_list_request(protocol, key, base))
+    except urllib.error.HTTPError as e:
+        raise HTTPException(status_code=400, detail=f"model list failed: {_upstream_detail(e, 200)}")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"model list failed: {e}")
+    ids = [str(m.get("id") or "") for m in (data.get("data") or []) if m.get("id")]
+    if protocol == "openai":
+        # The account listing includes embeddings/audio/image models the chat
+        # endpoint can't use — keep the conversational families.
+        ids = [i for i in ids
+               if re.match(r"^(gpt-|o\d|chatgpt-)", i)
+               and not re.search(r"embed|whisper|tts|audio|image|dall-e|moderation|transcribe|realtime|search", i)]
+    return {"models": sorted(set(ids))}
 
 
 class AIHealthRequest(BaseModel):
@@ -841,18 +750,14 @@ def ai_health(payload: AIHealthRequest, request: Request):
 
 # --- PDF translation ----------------------------------------------------------
 # Backs the viewer's translated view: the frontend segments a page into
-# paragraph blocks (frontend/src/pdfTranslate.js) and sends their TEXT here;
+# paragraph blocks (frontend/src/pdf/pdfTranslate.js) and sends their TEXT here;
 # geometry never leaves the client. Translations are cached per (user, target
 # language, model, source text) — IN MEMORY only, deliberately: nothing is
 # persisted to disk, the cache just makes retries, re-shows and halted-job
 # resumes free until the server restarts.
-#
-# The selected paragraphs are sent to the user's own configured AI provider —
-# the same disclosure that applies to chat. Nothing translates unless the user
-# asks for it, and share/read-only views never expose the endpoint.
 
 # Allowlisted target languages (code → name spliced into the prompt). Mirrored
-# in frontend/src/prefs.js TRANSLATE_LANGS — keep the two in sync.
+# in frontend/src/app/prefs.js TRANSLATE_LANGS — keep the two in sync.
 TRANSLATE_LANGS = {
     "en": "English", "zh-CN": "Simplified Chinese", "zh-TW": "Traditional Chinese",
     "ja": "Japanese", "ko": "Korean", "de": "German", "fr": "French",
@@ -873,11 +778,7 @@ _TRANSLATE_PROMPT = (
 
 _TRANSLATE_MAX_TEXTS = 200      # paragraphs per request (a page is ~10–50)
 _TRANSLATE_MAX_CHARS = 60000    # total source chars per request
-# Per-user request ceiling. The viewer caps itself at 8 parallel requests and
-# chunks a page into ~6-paragraph calls, so a whole-document job on a long book
-# stays well inside this; it exists to bound cost/abuse, not normal reading.
-_TRANSLATE_RATE_MAX = 240
-_TRANSLATE_RATE_WINDOW = 60
+_TRANSLATE_STREAM_INTERVAL = 0.05  # min seconds between streamed partial lines (~20 paints/s)
 # In-memory LRU: key (see _translate_key) → translated text. Process-wide,
 # never written to disk; a restart simply starts cold. The lock matters:
 # requests run in FastAPI's threadpool and the viewer fires several in
@@ -885,9 +786,25 @@ _TRANSLATE_RATE_WINDOW = 60
 _TRANSLATE_CACHE: "OrderedDict[str, str]" = OrderedDict()
 _TRANSLATE_CACHE_CAP = 5000     # cached paragraphs kept in memory (LRU)
 _TRANSLATE_LOCK = threading.Lock()
-# Concurrent single-paragraph retries when a batch reply is miscounted. Bounded
-# so one malformed 200-paragraph batch cannot fan out into 200 provider calls.
-_TRANSLATE_SALVAGE_WORKERS = 4
+
+
+def _cache_get(keys: list) -> dict:
+    """LRU-touching lookup: {key: translation} for every key already cached."""
+    with _TRANSLATE_LOCK:
+        hits = {}
+        for k in keys:
+            if k in _TRANSLATE_CACHE:
+                _TRANSLATE_CACHE.move_to_end(k)
+                hits[k] = _TRANSLATE_CACHE[k]
+        return hits
+
+
+def _cache_put(key: str, text: str):
+    with _TRANSLATE_LOCK:
+        _TRANSLATE_CACHE[key] = text
+        _TRANSLATE_CACHE.move_to_end(key)
+        while len(_TRANSLATE_CACHE) > _TRANSLATE_CACHE_CAP:
+            _TRANSLATE_CACHE.popitem(last=False)
 
 
 class AITranslateRequest(BaseModel):
@@ -895,6 +812,10 @@ class AITranslateRequest(BaseModel):
     lang: str = "zh-CN"   # target language code (TRANSLATE_LANGS key)
     model: str = ""       # model registry id; "" = the user's default
     effort: str = ""      # reasoning effort; "" = provider default (param omitted)
+    # NDJSON stream: {"i": [indices], "text": partial} lines as the model
+    # writes each paragraph (the viewer types them into the page), then the
+    # same final {"translations", "model", "cached"} object as the plain reply.
+    stream: bool = False
 
 
 def _translate_key(user: str, lang: str, model: str, text: str) -> str:
@@ -903,26 +824,6 @@ def _translate_key(user: str, lang: str, model: str, text: str) -> str:
     # translation shouldn't die with it. The username scopes the shared
     # in-memory dict per account.
     return hashlib.sha256(f"{user}\x00{lang}\x00{model}\x00{text}".encode()).hexdigest()
-
-
-def _translate_cache_get(keys: list) -> dict:
-    """LRU-touching lookup: {key: translation} for every key already cached."""
-    with _TRANSLATE_LOCK:
-        hits = {}
-        for k in keys:
-            if k in _TRANSLATE_CACHE:
-                _TRANSLATE_CACHE.move_to_end(k)  # LRU touch
-                hits[k] = _TRANSLATE_CACHE[k]
-        return hits
-
-
-def _translate_cache_put(key: str, text: str) -> None:
-    """Store one translation and trim to the cap, under the shared lock."""
-    with _TRANSLATE_LOCK:
-        _TRANSLATE_CACHE[key] = text
-        _TRANSLATE_CACHE.move_to_end(key)
-        while len(_TRANSLATE_CACHE) > _TRANSLATE_CACHE_CAP:
-            _TRANSLATE_CACHE.popitem(last=False)
 
 
 def _parse_translation_array(reply: str, n: int) -> list:
@@ -952,7 +853,6 @@ def ai_translate(payload: AITranslateRequest, request: Request):
         raise HTTPException(status_code=400, detail="texts must be strings")
     if sum(len(t) for t in texts) > _TRANSLATE_MAX_CHARS:
         raise HTTPException(status_code=413, detail="too much text in one request")
-    ratelimit.check(f"ai-translate:{user}", _TRANSLATE_RATE_MAX, _TRANSLATE_RATE_WINDOW)
 
     rt = require_ai_runtime(user)
     entry = _resolve_model(rt, payload.model)
@@ -963,35 +863,57 @@ def ai_translate(payload: AITranslateRequest, request: Request):
     # Filled from the cache now and from the provider reply below; the final
     # response reads texts the map doesn't cover (whitespace-only paragraphs)
     # verbatim.
-    hits = _translate_cache_get(keys)
+    hits = _cache_get(keys)
 
     # Whitespace-only paragraphs never reach the model; every other cache miss
-    # goes upstream in ONE call (duplicates collapsed — running headers and
-    # repeated captions are common), as a JSON array both ways.
+    # goes upstream in ONE call (duplicates collapsed), as a JSON array both ways.
     miss, queued = [], set()
     for i, t in enumerate(texts):
         if keys[i] not in hits and keys[i] not in queued and t.strip():
             queued.add(keys[i])
             miss.append(i)
-    if miss:
-        miss_texts = [texts[i] for i in miss]
-        system = _TRANSLATE_PROMPT.format(lang=TRANSLATE_LANGS[lang])
-        effort = _resolve_effort(payload.effort)
+    if not miss:
+        out = [hits.get(k, texts[i]) for i, k in enumerate(keys)]
+        final = {"translations": out, "model": entry["id"], "cached": True}
+        if not payload.stream:
+            return final
+        return StreamingResponse(iter([json.dumps(final) + "\n"]),
+                                 media_type="application/x-ndjson")
 
-        def call(batch):
-            # Output roughly tracks input length (CJK ≈ 1 token/char); the
-            # generous floor covers JSON overhead and reasoning models whose
-            # thinking spends from the same budget.
-            max_tokens = min(30000, 8000 + 2 * sum(len(t) for t in batch))
-            return _call_ai(
-                [{"role": "user", "content": json.dumps(batch, ensure_ascii=False)}],
-                system, entry, rt, effort=effort, max_tokens=max_tokens, timeout=180)
+    miss_texts = [texts[i] for i in miss]
+    system = _TRANSLATE_PROMPT.format(lang=TRANSLATE_LANGS[lang])
+    effort = _resolve_effort(payload.effort)
 
+    def user_turn(batch):
+        return [{"role": "user", "content": json.dumps(batch, ensure_ascii=False)}]
+
+    def budget(batch):
+        # Output roughly tracks input length (CJK ≈ 1 token/char); the
+        # generous floor covers JSON overhead and reasoning models whose
+        # thinking spends from the same budget.
+        return min(30000, 8000 + 2 * sum(len(t) for t in batch))
+
+    def call(batch):
+        return _call_ai(user_turn(batch), system, entry, rt, effort=effort,
+                        max_tokens=budget(batch), timeout=180)
+
+    def stream_call(batch):
+        """The same call, streamed: yields ("partial", text-so-far) as the
+        reply arrives, then ("reply", full text)."""
+        resp = _open_ai(user_turn(batch), system, entry, rt, effort=effort,
+                        max_tokens=budget(batch), timeout=180, stream=True)
+        acc = ""
         try:
-            reply = call(miss_texts)
-        except Exception as e:
-            log.warning(f"[ai_translate] {e}")
-            raise HTTPException(status_code=502, detail=f"translation failed: {e}")
+            for text in _sse_deltas(resp, _protocol(rt, entry)):
+                acc += text
+                yield ("partial", acc)
+        finally:
+            resp.close()
+        yield ("reply", acc)
+
+    def finish(reply):
+        """Parse the batch reply (salvaging a miscounted array paragraph by
+        paragraph), fill the cache, and build the final response object."""
         try:
             translated = _parse_translation_array(reply, len(miss_texts))
         except ValueError as e:
@@ -1000,10 +922,8 @@ def ai_translate(payload: AITranslateRequest, request: Request):
             # 1-element array can't misalign) instead of failing the chunk;
             # a paragraph that still won't translate comes back VERBATIM, so
             # the viewer shows the original there instead of erroring. The
-            # single-paragraph calls run concurrently — sequential salvage of a
-            # 6-paragraph chunk would take 6 model round-trips — but the worker
-            # count is capped so a malformed batch can't multiply provider
-            # calls without bound.
+            # single-paragraph calls run concurrently — sequential salvage of
+            # a 6-paragraph chunk would take 6 model round-trips.
             log.warning(f"[ai_translate] {e} — salvaging per paragraph")
 
             def salvage(t):
@@ -1013,147 +933,55 @@ def ai_translate(payload: AITranslateRequest, request: Request):
                     log.warning(f"[ai_translate] paragraph salvage failed: {e2}")
                     return t
 
-            workers = min(_TRANSLATE_SALVAGE_WORKERS, len(miss_texts))
-            with ThreadPoolExecutor(max_workers=workers) as pool:
+            with ThreadPoolExecutor(max_workers=min(4, len(miss_texts))) as pool:
                 translated = list(pool.map(salvage, miss_texts))
         for i, t in zip(miss, translated):
             hits[keys[i]] = t
             if t and t != texts[i]:  # identity fallbacks stay uncached so a retry can improve them
-                _translate_cache_put(keys[i], t)
-    # Duplicates resolve through the shared key map, so a repeated paragraph
-    # gets the one translation that was fetched for it.
-    out = [hits.get(k, texts[i]) for i, k in enumerate(keys)]
-    return {"translations": out, "model": entry["id"], "cached": not miss}
+                _cache_put(keys[i], t)
+        out = [hits.get(k, texts[i]) for i, k in enumerate(keys)]
+        return {"translations": out, "model": entry["id"], "cached": False}
 
-
-# --- Periodic model-catalog refresh ------------------------------------------
-# Each provider entry caches the live model list from its account
-# (`catalog_models` + `catalog_at`, managed in gamma/ai_settings.py);
-# ai_runtime() merges it after the user's hand-edited `models`, so newly
-# released models appear in the chat selector without touching what the user
-# pinned. The daemon thread below refreshes stale catalogs in the background;
-# POST /api/ai/models/refresh (the chat header's ↻) forces it immediately.
-CATALOG_CHECK_SECONDS = 600
-_catalog_watcher_started = False
-
-
-def _max_catalog_at(user: str) -> str:
-    """Newest catalog_at across the user's entries ("" when none yet)."""
-    ats = [e.get("catalog_at") or "" for e in load_provider_entries(user) if e.get("catalog_at")]
-    return max(ats) if ats else ""
-
-
-def _catalog_age_seconds(entry: dict) -> float:
-    at = entry.get("catalog_at") or ""
-    try:
-        parsed = datetime.fromisoformat(at.replace("Z", "+00:00"))
-        return time.time() - parsed.timestamp()
-    except Exception:
-        return float("inf")
-
-
-def _live_models_for_entry(user: str, entry: dict) -> list:
-    """Live model names for one provider entry; raises ModelListError on
-    failure so callers keep the previous cached catalog."""
-    protocol = entry.get("protocol")
-    if protocol == "chatgpt":
-        # No fallback list here: a failed refetch must keep the previous
-        # catalog, never cache the hardcoded fallback as if it were live.
-        return _chatgpt_model_catalog(user, str(entry.get("id") or ""), with_fallback=False)
-    if protocol not in AI_PROTOCOLS:
-        raise ModelListError(f"unknown protocol: {protocol}")
-    api_key = (entry.get("api_key") or "").strip()
-    if not api_key:
-        raise ModelListError("no API key stored")
-    base = ((entry.get("base_url") or "").strip() or AI_PROTOCOLS[protocol]["base_url"]).rstrip("/")
-    return _fetch_key_protocol_models(protocol, base, api_key)
-
-
-def refresh_entry_catalog(user: str, provider_id: str, force: bool = False) -> bool:
-    """Fetch one entry's live model list and cache it. True when a fresh
-    catalog was stored; stale-yet-fresh entries and failed fetches leave the
-    previous catalog untouched and return False."""
-    entries = load_provider_entries(user)
-    entry = next((e for e in entries if e.get("id") == provider_id), None)
-    if not entry:
-        return False
-    if not force and _catalog_age_seconds(entry) < AI_MODEL_CATALOG_TTL:
-        return False
-    try:
-        models = _live_models_for_entry(user, entry)
-    except Exception as e:
-        log.warning(f"[ai] model catalog refresh failed for {user}/{entry.get('name') or entry.get('protocol')}: {e}")
-        return False
-    if not models:
-        return False
-    set_entry_catalog(entry, models, page_now())
-    save_provider_entries(user, entries)
-    log.info(
-        f"[ai] refreshed model catalog for {user} '{entry.get('name') or entry.get('protocol')}': {len(models)} models"
-    )
-    return True
-
-
-def refresh_all_catalogs(force: bool = False) -> dict:
-    """Refresh stale catalogs for every user's provider entries. Used by the
-    background watcher; returns a summary for logging."""
-    users = [d.name for d in USERS_DIR.iterdir() if d.is_dir() and (d / "data.db").exists()]
-    refreshed = 0
-    for user in users:
-        for entry in load_provider_entries(user):
-            if refresh_entry_catalog(user, str(entry.get("id") or ""), force):
-                refreshed += 1
-    return {"users": len(users), "refreshed": refreshed}
-
-
-@router.post("/ai/models/refresh")
-def ai_models_refresh(request: Request):
-    """Force a live refresh of every provider's cached catalog now (bounded by
-    the per-provider listing timeout) and return the fresh /ai/models payload.
-    This powers the chat header's ↻; the background watcher does the same once
-    a day on its own."""
-    user = _require_editor(request)
-    refreshed = 0
-    for entry in load_provider_entries(user):
-        if refresh_entry_catalog(user, str(entry.get("id") or ""), force=True):
-            refreshed += 1
-    rt = ai_runtime(user)
-    return {
-        "refreshed": refreshed,
-        "enabled": rt["enabled"],
-        "models": rt["models"],
-        "default": rt["default"]["id"] if rt["default"] else "",
-        "efforts": ["low", "medium", "high"],
-        "refreshed_at": _max_catalog_at(user),
-        "default_prompt": _SYSTEM_PROMPT,
-        "metadata_prompt": METADATA_PROMPT,
-        "cite_prompt": CITE_PROMPT,
-    }
-
-
-def _catalog_watcher_loop():
-    """Daemon loop: check every 10 minutes, refresh entries whose cached
-    catalog is older than the TTL (fetches are the exception, not the rule)."""
-    time.sleep(60)  # let startup settle before the first sweep
-    while True:
+    if not payload.stream:
         try:
-            summary = refresh_all_catalogs()
-            if summary["refreshed"]:
-                log.info(f"[ai] model catalog sweep: {summary}")
+            reply = call(miss_texts)
         except Exception as e:
-            log.warning(f"[ai] model catalog sweep failed: {e}")
-        time.sleep(CATALOG_CHECK_SECONDS)
+            log.warning(f"[ai_translate] {e}")
+            raise HTTPException(status_code=502, detail=f"translation failed: {e}")
+        return finish(reply)
 
+    # Streamed: element j of the batch reply belongs to every request index
+    # sharing its key (duplicates were collapsed into one upstream element).
+    slots = {}
+    for i, k in enumerate(keys):
+        if k in queued:
+            slots.setdefault(k, []).append(i)
+    targets = [slots[keys[i]] for i in miss]
 
-def start_model_catalog_watcher():
-    """Idempotent. Called from app assembly; one daemon thread per process
-    (uvicorn --workers spawns one app instance per worker, each with its own
-    thread — fine, refresh_entry_catalog is guarded by the TTL)."""
-    global _catalog_watcher_started
-    if _catalog_watcher_started:
-        return
-    _catalog_watcher_started = True
-    threading.Thread(target=_catalog_watcher_loop, name="model-catalog-watcher", daemon=True).start()
+    def ndjson():
+        shown = {}  # j -> partial text already sent
+        last = 0.0
+        reply = ""
+        try:
+            for kind, data in stream_call(miss_texts):
+                if kind == "reply":
+                    reply = data
+                    break
+                now = time.monotonic()
+                if now - last < _TRANSLATE_STREAM_INTERVAL:
+                    continue
+                last = now
+                parts = _partial_json_strings(data)
+                for j, t in enumerate(parts[:len(miss_texts)]):
+                    if t and shown.get(j) != t:
+                        shown[j] = t
+                        yield json.dumps({"i": targets[j], "text": t}, ensure_ascii=False) + "\n"
+            yield json.dumps(finish(reply), ensure_ascii=False) + "\n"
+        except Exception as e:
+            log.warning(f"[ai_translate] {e}")
+            yield json.dumps({"error": f"translation failed: {e}"}) + "\n"
+
+    return StreamingResponse(ndjson(), media_type="application/x-ndjson")
 
 
 # --- Voice dictation ----------------------------------------------------------
@@ -1174,9 +1002,7 @@ def _multipart_body(fields: dict, filename: str, content_type: str, data: bytes)
         parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
     parts.append(
         f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-        f"Content-Type: {content_type}\r\n\r\n".encode()
-        + data
-        + b"\r\n"
+        f"Content-Type: {content_type}\r\n\r\n".encode() + data + b"\r\n"
     )
     parts.append(f"--{boundary}--\r\n".encode())
     return b"".join(parts), f"multipart/form-data; boundary={boundary}"
@@ -1184,13 +1010,8 @@ def _multipart_body(fields: dict, filename: str, content_type: str, data: bytes)
 
 # Sync def: the provider upload runs in the threadpool.
 @router.post("/ai/transcribe")
-def ai_transcribe(
-    request: Request,
-    file: UploadFile = File(...),
-    model_hint: str = Form(""),
-    model: str = Form(""),
-    language: str = Form(""),
-):
+def ai_transcribe(request: Request, file: UploadFile = File(...),
+                  model_hint: str = Form(""), model: str = Form(""), language: str = Form("")):
     """Speech-to-text for the chat composer's mic button. Audio goes to the
     OpenAI transcriptions API with the user's own key — `model_hint` is the
     chat's current model-registry id, so dictation billing follows the chat's
@@ -1199,17 +1020,12 @@ def ai_transcribe(
     user = require_user(request)
     rt = require_ai_runtime(user)
     hinted = rt["providers"].get((model_hint or "").split(":", 1)[0])
-    conf = (
-        hinted
-        if hinted and hinted["protocol"] == "openai"
-        else next((c for c in rt["providers"].values() if c["protocol"] == "openai"), None)
-    )
+    conf = hinted if hinted and hinted["protocol"] == "openai" else next(
+        (c for c in rt["providers"].values() if c["protocol"] == "openai"), None)
     if not conf:
-        raise HTTPException(
-            status_code=503,
-            detail="Voice input needs an OpenAI API-key provider (Settings → AI providers) — "
-            "Anthropic and ChatGPT sign-in entries don't offer transcription.",
-        )
+        raise HTTPException(status_code=503,
+                            detail="Voice input needs an OpenAI API-key provider (Settings → AI providers) — "
+                                   "Anthropic and ChatGPT sign-in entries don't offer transcription.")
     audio = file.file.read(_TRANSCRIBE_MAX_BYTES + 1)
     if not audio:
         raise HTTPException(status_code=400, detail="empty recording")
@@ -1228,15 +1044,12 @@ def ai_transcribe(
     detail = ""
     for model in candidates:
         fields = {"model": model, **({"language": language} if language else {})}
-        body, content_type = _multipart_body(fields, filename, file.content_type or "application/octet-stream", audio)
-        req = URLRequest(
-            f"{conf['base_url']}/v1/audio/transcriptions",
-            data=body,
-            headers={
-                "Authorization": f"Bearer {conf['api_key']}",
-                "Content-Type": content_type,
-            },
-        )
+        body, content_type = _multipart_body(
+            fields, filename, file.content_type or "application/octet-stream", audio)
+        req = URLRequest(f"{conf['base_url']}/v1/audio/transcriptions", data=body, headers={
+            "Authorization": f"Bearer {conf['api_key']}",
+            "Content-Type": content_type,
+        })
         try:
             with urlopen(req, timeout=120) as resp:
                 data = json.loads(resp.read())
@@ -1283,8 +1096,8 @@ async def chatgpt_auth_start(request: Request):
 
 class ChatGPTAuthComplete(BaseModel):
     state: str = ""
-    callback: str = ""  # pasted redirect URL (or a bare authorization code)
-    provider_id: str = ""  # existing entry to reconnect; "" creates a new one
+    callback: str = ""      # pasted redirect URL (or a bare authorization code)
+    provider_id: str = ""   # existing entry to reconnect; "" creates a new one
     name: str = ""
     models: str = ""
 
@@ -1294,7 +1107,8 @@ async def chatgpt_auth_complete(payload: ChatGPTAuthComplete, request: Request):
     user = _require_editor(request)
     st = _OAUTH_STATES.pop(payload.state, None)
     if not st or time.time() - st["at"] > _OAUTH_STATE_TTL:
-        raise HTTPException(status_code=400, detail="sign-in session expired — hit 'Open ChatGPT sign-in' again")
+        raise HTTPException(status_code=400,
+                            detail="sign-in session expired — hit 'Open ChatGPT sign-in' again")
     try:
         code = chatgpt_oauth.parse_callback(payload.callback, payload.state)
         oauth = chatgpt_oauth.exchange_code(code, st["verifier"])
@@ -1333,15 +1147,14 @@ async def chatgpt_auth_complete(payload: ChatGPTAuthComplete, request: Request):
             # the listing call reads them back through ai_runtime.
             save_provider_entries(user, entries)
             try:
-                live = _chatgpt_model_catalog(user, entry["id"], with_fallback=False)
-                entry["models"] = ", ".join(live[:2])[:MAX_MODELS_LEN] or _CHATGPT_DEFAULT_MODELS
-                # The live list doubles as the entry's auto-refreshed catalog —
-                # no need for the background watcher to re-fetch immediately.
-                set_entry_catalog(entry, live, page_now())
+                live = _chatgpt_model_catalog(user, entry["id"])
             except Exception:
-                entry["models"] = _CHATGPT_DEFAULT_MODELS
+                live = []
+            entry["models"] = ", ".join(live[:2])[:MAX_MODELS_LEN] or _CHATGPT_DEFAULT_MODELS
     save_provider_entries(user, entries)
     return _masked_settings(user, request.state.is_guest)
+
+
 
 
 # Providers whose backend refused native input_file parts — skip the wasted
@@ -1354,6 +1167,9 @@ _NATIVE_PDF_REJECTED: set = set()
 @router.post("/ai/chat")
 def ai_chat(payload: AIChatRequest, request: Request):
     user = require_user(request)
+    # The chat reads (and its tools edit) the request's workspace; the AI
+    # providers are the account's own. A viewer gets no mutating tools.
+    ws = require_ws(request)
     rt = require_ai_runtime(user)
 
     entry = _resolve_model(rt, payload.model)
@@ -1363,7 +1179,13 @@ def ai_chat(payload: AIChatRequest, request: Request):
     # The scope decides which tools exist; the permission toggles pick the
     # armed subset — an empty result (or no scope) is a plain chat.
     scope = {"type": payload.agent_scope, "folder": payload.folder,
-             "page_id": payload.page_id, "read_chars": payload.read_char_limit}
+             "page_id": payload.page_id, "read_chars": payload.read_char_limit,
+             "context_pages": list(dict.fromkeys(payload.pages)),
+             # The agent prompt names the cursor block / attached chips so
+             # "this block" resolves without a read_block round-trip.
+             "focus_block_id": (payload.focus_block_id or "").strip()[:64],
+             "context_blocks": [str(b)[:64] for b in payload.context_blocks[:MAX_CONTEXT_BLOCKS]],
+             "actor": user, "can_write": ws_role(request) != "viewer"}
     valid_scope = payload.agent_scope in ("folder", "page") and (
         payload.agent_scope != "page" or payload.page_id)
     tools = (agent_tools(payload.agent_scope, payload.permissions,
@@ -1372,13 +1194,26 @@ def ai_chat(payload: AIChatRequest, request: Request):
     state = {}
 
     def prepared(allow_native):
-        pdf_b64s, context, coverage = _gather_inputs(user, payload, allow_native)
+        pdf_b64s, context, coverage = _gather_inputs(ws, payload, allow_native)
         state["coverage"] = coverage
         # Agent chats replay each saved reply's tool calls/results so the
         # model keeps what it already listed/read/changed across turns.
         messages = _build_messages(payload, context, with_tools=bool(tools))
         # A custom prompt always applies; the built-in one only when there's a document
         system = custom_system or (_SYSTEM_PROMPT if (context or pdf_b64s) else "")
+        if context or pdf_b64s:
+            system += (
+                "\n\nWhen citing a passage from a library PDF, provide a clickable citation "
+                "as [p. N](/?page=PAGE_ID&pdf_page=N&quote=URL_ENCODED_QUOTE). "
+                "Use the Gamma page ID supplied in context or tool results, the 1-based physical "
+                "PDF page number from [PDF page N] labels (not printed page numbers), and a "
+                "verbatim, distinctive quote of 8-2000 characters contained on that page, preferably one sentence. "
+                "Percent-encode the quote, including spaces, ampersands and parentheses. "
+                "These links only navigate and visually highlight text; they never create notes. "
+                "Never invent quotes, IDs or page numbers. If the location is unknown, read the "
+                "page first when tools are available, otherwise use an ordinary page link. "
+                "Do not use these links for external or uploaded files without a Gamma page ID."
+            )
         if tools:
             system = ((system + "\n\n" if system else "")
                       + agent_system(scope, payload.permissions,
@@ -1402,14 +1237,19 @@ def ai_chat(payload: AIChatRequest, request: Request):
                 state.update(messages=messages, system=system, pdf_b64s=pdf_b64s)
                 return resp
             except UpstreamError as e:
-                if not (native and pdf_b64s and _protocol(rt, entry) == "chatgpt" and 400 <= e.status < 500):
+                if not (native and pdf_b64s and _protocol(rt, entry) == "chatgpt"
+                        and 400 <= e.status < 500):
                     raise
                 log.warning(f"[ai_chat] chatgpt rejected native PDF parts, retrying as text: {e}")
 
     def agent_events(first_resp):
-        """Organizer tool loop: yield ("delta", text) / ("action", dict) events.
-        Each round streams one provider turn; tool calls are executed here and
-        their results appended before the next round re-opens the provider."""
+        """Organizer tool loop: yield ("delta", text) / ("action", dict) /
+        ("progress", dict) events. Each round streams one provider turn; tool
+        calls are executed here and their results appended before the next
+        round re-opens the provider. A "progress" event previews a note
+        edit while the model is still writing it: the block being edited (or
+        the parent/sibling of the block being created) plus the markdown
+        streamed so far — the notes panel types it into the block live."""
         proto = _wire_protocol(rt, entry, tools)  # tools may reroute openai → /v1/responses
         messages, system, pdf_b64s = state["messages"], state["system"], state["pdf_b64s"]
         armed = {t["name"] for t in tools}  # only armed tools execute
@@ -1418,12 +1258,39 @@ def ai_chat(payload: AIChatRequest, request: Request):
         max_rounds = payload.tool_rounds or MAX_TOOL_ROUNDS
         for round_no in range(max_rounds):
             calls, text_parts = [], []
+            last_preview = {}  # call id -> content previewed so far (dedup)
             try:
                 for kind, data in _sse_events(resp, proto):
                     if kind == "text":
                         text_parts.append(data)
                         yield ("delta", data)
-                    else:
+                    elif kind == "tool_delta":
+                        name = _canonical_tool(data.get("name") or "")
+                        if name not in _PREVIEW_TOOLS or name not in armed:
+                            continue
+                        args = _partial_json_object(data.get("json") or "")
+                        target = args.get("block_id" if name == "edit_block" else "parent_id")
+                        content = args.get("content")
+                        if not target or content is None:
+                            continue  # nothing to point at (or say) yet
+                        if last_preview.get(data.get("id")) == content:
+                            continue
+                        last_preview[data.get("id")] = content
+                        progress = {"tool": name, "id": data.get("id") or "",
+                                    "content": content}
+                        if name == "edit_block":
+                            progress["block_id"] = target
+                            # append/prepend: the preview keeps the stored text
+                            # and types the addition in at the right end.
+                            mode = str(args.get("mode") or "replace").lower()
+                            if mode in ("append", "prepend"):
+                                progress["mode"] = mode
+                        else:
+                            progress["parent_id"] = target
+                            if args.get("after_id"):
+                                progress["after_id"] = args["after_id"]
+                        yield ("progress", progress)
+                    elif kind == "tool":
                         calls.append(data)
             finally:
                 resp.close()
@@ -1432,22 +1299,20 @@ def ai_chat(payload: AIChatRequest, request: Request):
             messages.append({"role": "assistant", "content": "".join(text_parts),
                              "tool_calls": calls})
             for call in calls:
-                if call["name"] not in armed:
-                    result = ("error: tool not enabled — the user's permission "
-                              "settings do not allow it")
-                    action = tool_action("error", f'{call["name"]} — blocked by permissions',
-                                         call["name"], call["arguments"], result, error=True)
-                elif call["name"] in MUTATING_TOOLS and actions >= MAX_TOOL_ACTIONS:
+                # A model copying a renamed tool out of replayed history still
+                # names the current one here (ai_context.DEPRECATED_TOOLS).
+                name = _canonical_tool(call["name"])
+                if name in armed and name in MUTATING_TOOLS and actions >= MAX_TOOL_ACTIONS:
                     result = ("error: change limit for one message reached — "
                               "stop and tell the user")
-                    action = tool_action("error", f'{call["name"]} — change limit reached',
-                                         call["name"], call["arguments"], result, error=True)
+                    action = tool_action("error", f'{name} — change limit reached',
+                                         name, call["arguments"], result, error=True)
                 else:
-                    result, action = run_agent_tool(user, scope,
-                                                    call["name"], call["arguments"])
+                    result, action = run_agent_tool(ws, scope, name, call["arguments"],
+                                                    permissions=payload.permissions, allowed_tools=armed)
                 # Reads and failures render as chips too, but only applied
                 # mutations count against the change budget.
-                if call["name"] in MUTATING_TOOLS and not action.get("error"):
+                if name in MUTATING_TOOLS and not action.get("error"):
                     actions += 1
                 yield ("action", action)
                 messages.append({"role": "tool", "call_id": call["id"], "content": result})
@@ -1475,7 +1340,7 @@ def ai_chat(payload: AIChatRequest, request: Request):
                         if head:
                             yield head
                         for kind, data in agent_events(resp):
-                            yield json.dumps({"delta" if kind == "delta" else "action": data}) + "\n"
+                            yield json.dumps({kind: data}) + "\n"
                     except Exception as e:
                         log.warning(f"[ai_chat] agent stream error: {e}")
                         yield json.dumps({"error": f"AI call failed: {e}"}) + "\n"
@@ -1500,7 +1365,11 @@ def ai_chat(payload: AIChatRequest, request: Request):
             # non-stream callers and return the actions alongside the text.
             parts, actions = [], []
             for kind, data in agent_events(open_with_fallback(True)):
-                (parts if kind == "delta" else actions).append(data)
+                if kind == "delta":
+                    parts.append(data)
+                elif kind == "action":
+                    actions.append(data)
+                # "progress" previews only matter to a live UI
             return {"response": "".join(parts), "actions": actions,
                     "context": state.get("coverage") or []}
         with open_with_fallback(False) as resp2:

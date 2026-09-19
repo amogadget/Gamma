@@ -11,7 +11,6 @@ import io
 import threading
 
 from .logbuf import log
-from .pdfium_lock import PDFIUM_LOCK
 
 # Sentinel the AI context builder hands to the model when extraction raised.
 # Compare against the constant, never a rewritten literal.
@@ -34,58 +33,51 @@ MAX_PAGES = 5000
 _lock = threading.RLock()
 
 
-def iter_page_texts(src, max_pages: int = MAX_PAGES, start_page: int = 1):
-    """Yield page text from ``start_page`` (1-based), capped by ``max_pages``.
-
-    PDFium access is serialized by the fork-wide lock and converted to plain
-    strings before yielding, so callers never hold the native library open.
-    """
+def _open(src):
+    """Open a PDF as ``("pdfium", doc)``, or ``("pypdf2", reader)`` when
+    pdfium can't open the file at all. src is a path str or PDF bytes."""
     try:
         import pypdfium2 as pdfium
-    except Exception as error:
-        log.warning(f"[pdf-text] pypdfium2 import failed ({error}), falling back to PyPDF2")
-        pdfium = None
-    if pdfium is not None:
-        texts = None
-        with PDFIUM_LOCK:
+        return "pdfium", pdfium.PdfDocument(src)
+    except Exception as e:
+        log.warning(f"[pdf-text] pypdfium2 open failed ({e}), falling back to PyPDF2")
+        from PyPDF2 import PdfReader
+        return "pypdf2", PdfReader(io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else str(src))
+
+
+def _warn_truncated(total: int, max_pages: int):
+    if total > max_pages:
+        log.warning(f"[pdf-text] {total}-page PDF truncated to {max_pages} pages")
+
+
+def iter_page_texts(src, max_pages: int = MAX_PAGES, start_page: int = 1):
+    """Yield per-page text for pages ``start_page``..``max_pages`` (1-based).
+    src is a path str or PDF bytes. Hold ``_lock`` while consuming this."""
+    kind, pdf = _open(src)
+    if kind == "pypdf2":
+        _warn_truncated(len(pdf.pages), max_pages)
+        for i, pg in enumerate(pdf.pages):
+            if i >= max_pages:
+                return
+            if i + 1 < start_page:
+                continue
             try:
-                pdf = pdfium.PdfDocument(src)
-            except Exception as error:
-                log.warning(f"[pdf-text] pypdfium2 open failed ({error}), falling back to PyPDF2")
-                pdf = None
-            if pdf is not None:
-                texts = []
-                try:
-                    if len(pdf) > max_pages:
-                        log.warning(f"[pdf-text] {len(pdf)}-page PDF truncated to {max_pages} pages")
-                    for i in range(max(0, start_page - 1), min(len(pdf), max_pages)):
-                        page = pdf[i]
-                        text_page = page.get_textpage()
-                        try:
-                            texts.append(text_page.get_text_bounded() or "")
-                        finally:
-                            text_page.close()
-                            page.close()
-                finally:
-                    pdf.close()
-        if texts is not None:
-            yield from texts
-            return
-
-    from PyPDF2 import PdfReader
-
-    reader = PdfReader(io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else str(src))
-    if len(reader.pages) > max_pages:
-        log.warning(f"[pdf-text] {len(reader.pages)}-page PDF truncated to {max_pages} pages")
-    for i, page in enumerate(reader.pages):
-        if i >= max_pages:
-            return
-        if i + 1 < start_page:
-            continue
-        try:
-            yield page.extract_text() or ""
-        except Exception:
-            yield ""
+                yield pg.extract_text() or ""
+            except Exception:
+                yield ""
+        return
+    try:
+        _warn_truncated(len(pdf), max_pages)
+        for i in range(max(0, start_page - 1), min(len(pdf), max_pages)):
+            page = pdf[i]
+            tp = page.get_textpage()
+            try:
+                yield tp.get_text_bounded() or ""
+            finally:
+                tp.close()
+                page.close()
+    finally:
+        pdf.close()
 
 
 def extract_pages(src, max_pages: int = MAX_PAGES) -> list[str]:
@@ -95,17 +87,17 @@ def extract_pages(src, max_pages: int = MAX_PAGES) -> list[str]:
 
 
 def extract_text(src, char_limit: int, empty_page_cap: int = 50,
-                 start_page: int = 1) -> str:
+                 start_page: int = 1, label_pages: bool = False) -> str:
     """Concatenated text for AI context. Stops early once char_limit is
     gathered, or after empty_page_cap consecutive textless pages — a scanned
     book shouldn't cost a full parse just to learn it has no text.
     start_page (1-based) skips the pages before it, so a read can jump
     straight to where a search hit landed."""
-    return extract_text_pages(src, char_limit, empty_page_cap, start_page)[0]
+    return extract_text_pages(src, char_limit, empty_page_cap, start_page, label_pages)[0]
 
 
 def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
-                       start_page: int = 1) -> tuple[str, int]:
+                       start_page: int = 1, label_pages: bool = False) -> tuple[str, int]:
     """extract_text plus how many PDF pages the text spans (counted from
     start_page, empty pages included) — what the chat's coverage report
     tells the user: "pages 1–9 of 22"."""
@@ -115,6 +107,8 @@ def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
             pages += 1
             if t.strip():
                 empties = 0
+                if label_pages:
+                    t = f"[PDF page {start_page + pages - 1}]\n{t}"
                 parts.append(t)
                 total += len(t)
                 if total >= char_limit:
@@ -126,22 +120,43 @@ def extract_text_pages(src, char_limit: int, empty_page_cap: int = 50,
     return "\n\n".join(parts), pages
 
 
+def page_sizes(src) -> list[tuple[float, float]]:
+    """``(width, height)`` in PDF points of every page, rotation applied — the
+    same box pdf.js measures its scale-1 viewport from, so a layout built
+    from these is exact. Empty when the file is unreadable. No text
+    extraction; holds the pdfium lock like every other walk."""
+    with _lock:
+        try:
+            kind, pdf = _open(src)
+            if kind == "pypdf2":
+                out = []
+                for pg in pdf.pages:
+                    box = pg.mediabox
+                    w, h = float(box.width), float(box.height)
+                    if (int(pg.get("/Rotate") or 0) // 90) % 2:
+                        w, h = h, w
+                    out.append((w, h))
+                return out
+            try:
+                return [tuple(pdf[i].get_size()) for i in range(len(pdf))]
+            finally:
+                pdf.close()
+        except Exception as e:
+            log.warning(f"[pdf-text] page sizes failed: {e}")
+            return []
+
+
 def page_count(src) -> int:
     """How many pages a PDF has (0 = unreadable). No text extraction."""
     with _lock:
         try:
-            import pypdfium2 as pdfium
-            with PDFIUM_LOCK:
-                pdf = pdfium.PdfDocument(src)
-                try:
-                    return len(pdf)
-                finally:
-                    pdf.close()
-        except Exception:
+            kind, pdf = _open(src)
+            if kind == "pypdf2":
+                return len(pdf.pages)
             try:
-                from PyPDF2 import PdfReader
-                return len(PdfReader(
-                    io.BytesIO(src) if isinstance(src, (bytes, bytearray)) else str(src)).pages)
-            except Exception as e:
-                log.warning(f"[pdf-text] page count failed: {e}")
-                return 0
+                return len(pdf)
+            finally:
+                pdf.close()
+        except Exception as e:
+            log.warning(f"[pdf-text] page count failed: {e}")
+            return 0

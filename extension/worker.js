@@ -4,12 +4,12 @@
 // chrome.storage.session so it survives the worker being put to sleep.
 
 import { api, ApiError, getSettings, serverOrigin, whoAmI } from "./api.js";
+import "./doi.js"; // defines globalThis.gammaDoiFromPath
 
-const ICON_ON = { 16: "icons/icon16.png", 32: "icons/icon32.png" };
-const ICON_OFF = { 16: "icons/icon16-off.png", 32: "icons/icon32-off.png" };
+const ICON_ON = { 16: "assets/icons/icon16.png", 32: "assets/icons/icon32.png" };
+const ICON_OFF = { 16: "assets/icons/icon16-off.png", 32: "assets/icons/icon32-off.png" };
 const COLORS = { accent: "#3a7bd5", ok: "#2e8b5e", danger: "#c94a4a", muted: "#7a828e" };
 
-const DOI_RE = /10\.\d{4,9}\/[^\s"'<>?#]+/;
 const ARXIV_RE = /arxiv\.org\/(?:abs|pdf)\/([0-9]{4}\.[0-9]{4,5})(?:v\d+)?/i;
 
 // ---------- per-tab state ----------
@@ -44,17 +44,18 @@ async function updateBadge(tabId, st) {
   } catch {}
 }
 
+// A DOI used as a URL path (the rule lives in doi.js, shared with detect.js).
+function doiFromUrl(url) {
+  try { return globalThis.gammaDoiFromPath(new URL(url).pathname); } catch { return ""; }
+}
+
 // Tabs without a content script (Chrome's PDF viewer, restricted pages):
 // what the URL alone tells us.
 function candidateFromUrl(url, title) {
   if (!url || !/^https?:/i.test(url)) return { kind: "none", source_url: url || "" };
   const isPdf = /\.pdf($|[?#])/i.test(url.split("?")[0]);
   const ax = url.match(ARXIV_RE);
-  let doi = "";
-  if (/https?:\/\/(?:dx\.)?doi\.org\//i.test(url) || /\/doi\/(?:abs|full|pdf)?\/?10\./i.test(url)) {
-    const m = url.match(DOI_RE);
-    if (m) { try { doi = decodeURIComponent(m[0]).replace(/[.,;)\]]+$/, ""); } catch { doi = m[0]; } }
-  }
+  const doi = doiFromUrl(url);
   const arxivId = ax ? ax[1] : "";
   const isArxivPdf = /arxiv\.org\/pdf\//i.test(url);
   const pdfUrl = isPdf || isArxivPdf ? url : "";
@@ -113,14 +114,32 @@ async function lookup(candidate) {
   }
 }
 
+// The registry record (title, authors, year, venue) behind a detected
+// identifier — a PDF tab has no meta tags, so this is where its title comes
+// from before the paper is saved. Public data, so the server caches it.
+async function preview(candidate) {
+  if (!candidate || !(candidate.doi || candidate.arxiv_id)) return null;
+  try { return await api("/library/preview", { params: { doi: candidate.doi, arxiv_id: candidate.arxiv_id } }); }
+  catch { return null; }
+}
+
 async function setDetection(tabId, candidate) {
-  const st = await setTabState(tabId, { candidate, hit: null, looked: false });
+  const st = await setTabState(tabId, { candidate, hit: null, preview: null, looked: false });
   const auth = await checkAuth();
   if (!auth.configured) return st;
   if (auth.auth === false) return setTabState(tabId, { auth: false });
   const res = await lookup(candidate);
   if (res.auth === false) { authCache.at = 0; return setTabState(tabId, { auth: false, looked: true }); }
-  return setTabState(tabId, { hit: res.hit, auth: true, looked: true });
+  const next = await setTabState(tabId, { hit: res.hit, auth: true, looked: true });
+  // Off the badge's critical path: doi.org can take a second or two. The
+  // popup re-renders its head when the record lands (storage.onChanged).
+  preview(candidate).then(async (pv) => {
+    if (!pv) return;
+    const cur = await getTabState(tabId);
+    if (cur.candidate === undefined || cur.candidate.source_url !== candidate.source_url) return;  // tab moved on
+    await setTabState(tabId, { preview: pv });
+  }).catch(() => {});
+  return next;
 }
 
 // ---------- the save pipeline ----------
@@ -200,10 +219,15 @@ async function uploadBlob(tabId, blob, url) {
 async function savePaper({ tabId, candidate, folder, labels, title, source_url }) {
   const settings = await getSettings();
   const cand = candidate || { kind: "none", source_url: source_url || "" };
+  // A PDF tab has no title of its own; the registry record previewed for the
+  // popup names the page right away (auto_title — the metadata lookup may
+  // still replace it, a user rename never is).
+  const st = tabId != null ? await getTabState(tabId) : {};
+  const previewTitle = st.preview && st.preview.title || "";
   const payload = {
     source_url: cand.source_url || source_url || "",
     pdf_url: cand.pdf_url || "", doi: cand.doi || "", arxiv_id: cand.arxiv_id || "",
-    title: title != null ? title : (cand.title || ""),
+    title: title != null ? title : (cand.title || previewTitle),
     folder: folder != null ? folder : settings.folder,
     labels: labels != null ? labels : settings.labels,
     allow_oa: settings.allowOa, save_copy: settings.saveCopy,
@@ -263,7 +287,7 @@ async function notify(message, openUrl) {
   const id = `gamma-${Date.now()}`;
   if (openUrl) notifyTargets.set(id, openUrl);
   try {
-    await chrome.notifications.create(id, { type: "basic", iconUrl: "icons/icon128.png", title: "Gamma", message: String(message).slice(0, 300) });
+    await chrome.notifications.create(id, { type: "basic", iconUrl: "assets/icons/icon128.png", title: "Gamma", message: String(message).slice(0, 300) });
   } catch {}
 }
 

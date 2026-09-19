@@ -26,6 +26,7 @@ final class GammaReaderUITests: XCTestCase {
             properties: GammaProperties(pdfPage: 1, highlightID: "h1", quote: "Sign-changing interactions are at the heart of frustrated systems.", color: "rgba(255,226,143,0.65)", pdfPosition: position))
         let paper = GammaBlock(id: "paper", parentID: "root", content: title, properties: GammaProperties(docID: "preview"))
         let workspace = GammaWorkspace()
+        workspace.workspaceID = "ws-alpha"; workspace.workspaceName = "Personal"
         workspace.paper = paper; workspace.document = pdf
         workspace.page = GammaPageCache(pageID: paper.id, docID: "preview", blocks: [highlight,
             GammaBlock(id: "note", parentID: highlight.id, content: "Compare with the phonon-mediated approach.", properties: GammaProperties())])

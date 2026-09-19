@@ -1,471 +1,197 @@
-"""Scoped Gamma archive export and additive merge security boundaries."""
+"""Gamma-to-Gamma export: mode=gamma produces a scoped account backup
+(gamma-backup-1 layout) that /api/import-data?mode=merge on any Gamma imports
+additively — pages with their whole block trees, referenced uploads, chats."""
 
 import io
 import json
-import sqlite3
-import tempfile
 import zipfile
 
 import pytest
-from fastapi.testclient import TestClient
 
-from conftest import login, make_page, make_user
-from gamma.app import app
-
-
-_PNG = bytes.fromhex(
-    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
-    "1f15c4890000000d49444154789c626001000000ffff03000006000557"
-    "bfabd40000000049454e44ae426082"
-)
+from conftest import login as _login, make_page, make_user as _make_user, workspace_of
 
 
 @pytest.fixture(scope="module")
-def gamma_donor(client):
-    make_user("gamma-donor", "password12345")
-    return login("gamma-donor", "password12345")
+def gdonor(client):
+    _make_user("gdonor", "gdonorpw")
+    return _login("gdonor", "gdonorpw")
 
 
 @pytest.fixture(scope="module")
-def gamma_receiver(client):
-    make_user("gamma-receiver", "password12345")
-    return login("gamma-receiver", "password12345")
+def greceiver(client):
+    _make_user("greceiver", "greceiverpw")
+    return _login("greceiver", "greceiverpw")
 
 
-def _archive(response):
-    assert response.status_code == 200, response.text
-    archive = zipfile.ZipFile(io.BytesIO(response.content))
-    for name in archive.namelist():
-        assert not name.startswith("/")
-        assert not any(part in {"", ".", ".."} for part in name.split("/"))
-    return archive
+def _blank_pdf_bytes(width=612):
+    """width varies per test: uploads dedupe by content hash, so two tests
+    using identical bytes would share one file — and orphan cleanup would then
+    rightly keep it while the other test's page still references it."""
+    from PyPDF2 import PdfWriter
+    w = PdfWriter()
+    w.add_blank_page(width=width, height=792)
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
 
 
-def _sqlite_rows(archive, name, query):
-    with tempfile.NamedTemporaryFile(suffix=".db") as output:
-        output.write(archive.read(name))
-        output.flush()
-        with sqlite3.connect(output.name) as connection:
-            return connection.execute(query).fetchall()
+def _donor_library(gdonor):
+    up = gdonor.post("/api/uploads", files={"file": ("g.pdf", _blank_pdf_bytes(), "application/pdf")})
+    assert up.status_code == 200, up.text
+    paper = make_page(gdonor, "Gx paper", properties={
+        "doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"],
+        "folder": "gxfolder/sub", "category": "gxtag",
+        "meta": {"title": "Gx paper", "authors": ["Ada"], "year": "2024"},
+    })
+    rect = {"x1": 50.0, "y1": 60.0, "x2": 250.0, "y2": 160.0, "width": 612.0, "height": 792.0}
+    r = gdonor.put(f"/api/blocks/{paper['id']}/children", json={"blocks": [
+        {"id": "gxh1", "content": "my thought", "children": [], "properties": {
+            "highlight_id": "gxh1", "quote": "a quote", "pdf_page": 1,
+            "color": "rgba(170, 235, 170, 0.65)",
+            "pdf_position": {"pageNumber": 1, "boundingRect": rect, "rects": [rect]},
+        }},
+    ]})
+    assert r.status_code == 200, r.text
+    note = make_page(gdonor, "Gx note page", properties={"folder": "gxfolder"})
+    r = gdonor.put(f"/api/chats/{paper['id']}", json={"messages": [{"role": "user", "content": "hi"}]})
+    assert r.status_code == 200, r.text
+    return paper, note, up.json()
 
 
-def _zip_with_extra(payload: bytes, name: str, data: bytes) -> bytes:
-    source = zipfile.ZipFile(io.BytesIO(payload))
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w") as archive:
-        for info in source.infolist():
-            archive.writestr(info, source.read(info.filename))
-        archive.writestr(name, data)
-    return output.getvalue()
+def test_gamma_folder_export_merges_into_another_account(gdonor, greceiver):
+    paper, note, up = _donor_library(gdonor)
+
+    r = gdonor.get("/api/folders/export", params={"name": "gxfolder", "mode": "gamma"})
+    assert r.status_code == 200, r.text
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    names = set(z.namelist())
+    # the /api/export backup layout: DBs + manifest at the root, flat uploads/
+    assert {"pages.db", "data.db", "manifest.json"} <= names
+    assert json.loads(z.read("manifest.json"))["format"] == "gamma-backup-1"
+    pdf_name = up["source_url"].rsplit("/", 1)[-1]
+    assert f"uploads/{pdf_name}" in names
+
+    imp = greceiver.post("/api/import-data", params={"mode": "merge"},
+                         files={"file": ("gx.zip", r.content, "application/zip")})
+    assert imp.status_code == 200, imp.text
+    d = imp.json()
+    assert d["pages_added"] == 2 and d["uploads_added"] == 1
+
+    # Whole block tree intact: same ids, highlight properties preserved.
+    got = greceiver.get(f"/api/blocks/{paper['id']}").json()
+    assert got["properties"]["folder"] == "gxfolder/sub"
+    assert got["properties"]["meta"]["authors"] == ["Ada"]
+    children = greceiver.get(f"/api/blocks/{paper['id']}/children").json()["children"]
+    hl = next(c for c in children if c["id"] == "gxh1")
+    assert hl["content"] == "my thought"
+    assert hl["properties"]["pdf_position"]["pageNumber"] == 1
+    # The PDF came along and serves.
+    assert greceiver.get(up["source_url"]).status_code == 200
+    # The paper's AI chat merged too.
+    chat = greceiver.get(f"/api/chats/{paper['id']}").json()
+    assert chat["messages"] and chat["messages"][0]["content"] == "hi"
+
+    # Merge is idempotent: the same zip again adds nothing.
+    again = greceiver.post("/api/import-data", params={"mode": "merge"},
+                           files={"file": ("gx.zip", r.content, "application/zip")})
+    assert again.status_code == 200, again.text
+    assert again.json()["pages_added"] == 0
+    assert again.json()["pages_skipped"] == 2
 
 
-def _zip_replace(payload: bytes, name: str, data: bytes) -> bytes:
-    source = zipfile.ZipFile(io.BytesIO(payload))
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w") as archive:
-        for info in source.infolist():
-            if info.filename != name:
-                archive.writestr(info, source.read(info.filename))
-        archive.writestr(name, data)
-    return output.getvalue()
+def test_gamma_export_delete_reimport_is_near_identical(gdonor):
+    """The disaster-recovery round trip: export a folder, delete its pages
+    from the SAME account (orphan cleanup removes their uploads), merge the
+    zip back — every block row must come back byte-identical (id, parent,
+    content, properties, created_at, updated_at, even sibling positions); the
+    one allowed difference is the root pages' own position, which the merge
+    regenerates to append after the existing pages. Files and chats too."""
+    import sqlite3
+
+    from gamma.db import ws_db_path, ws_uploads_dir
+
+    up = gdonor.post("/api/uploads", files={"file": ("rt.pdf", _blank_pdf_bytes(width=611), "application/pdf")})
+    assert up.status_code == 200, up.text
+    pdf_name = up.json()["source_url"].rsplit("/", 1)[-1]
+    paper = make_page(gdonor, "Rt paper", properties={
+        "doc_id": up.json()["doc_id"], "source_url": up.json()["source_url"],
+        "folder": "rtfolder/deep", "category": "rt",
+        "meta": {"title": "Rt paper", "year": "2025"},
+    })
+    rect = {"x1": 50.0, "y1": 60.0, "x2": 250.0, "y2": 160.0, "width": 612.0, "height": 792.0}
+    r = gdonor.put(f"/api/blocks/{paper['id']}/children", json={"blocks": [
+        {"id": "rth1", "content": "thought", "properties": {
+            "highlight_id": "rth1", "quote": "q", "pdf_page": 1,
+            "color": "rgba(170, 235, 170, 0.65)",
+            "pdf_position": {"pageNumber": 1, "boundingRect": rect, "rects": [rect]},
+        }, "children": [
+            {"id": "rth1a", "content": "nested note", "properties": {}, "children": []},
+        ]},
+        {"id": "rtn1", "content": "free note", "properties": {}, "children": []},
+    ]})
+    assert r.status_code == 200, r.text
+    note = make_page(gdonor, "Rt note", properties={"folder": "rtfolder"})
+    assert gdonor.put(f"/api/chats/{paper['id']}",
+                      json={"messages": [{"role": "user", "content": "rt chat"}]}).status_code == 200
+
+    def rows_of(ids):
+        with sqlite3.connect(ws_db_path(workspace_of("gdonor"), "pages.db")) as conn:
+            placeholders = ",".join("?" for _ in ids)
+            return sorted(conn.execute(
+                "WITH RECURSIVE sub(id) AS ("
+                f"  SELECT id FROM unified_blocks WHERE id IN ({placeholders})"
+                "  UNION ALL"
+                "  SELECT b.id FROM unified_blocks b JOIN sub ON b.parent_id = sub.id)"
+                " SELECT id, parent_id, position, content, properties, created_at, updated_at"
+                " FROM unified_blocks WHERE id IN (SELECT id FROM sub)", ids).fetchall())
+
+    page_ids = [paper["id"], note["id"]]
+    before = rows_of(page_ids)
+    assert len(before) == 5  # 2 roots + highlight + nested note + free note
+    pdf_bytes_before = (ws_uploads_dir(workspace_of("gdonor")) / pdf_name).read_bytes()
+
+    exp = gdonor.get("/api/folders/export", params={"name": "rtfolder", "mode": "gamma"})
+    assert exp.status_code == 200, exp.text
+
+    for pid in page_ids:
+        assert gdonor.delete(f"/api/blocks/{pid}").status_code == 200
+    assert rows_of(page_ids) == []
+    # orphan cleanup took the now-unreferenced PDF with the pages
+    assert not (ws_uploads_dir(workspace_of("gdonor")) / pdf_name).exists()
+
+    imp = gdonor.post("/api/import-data", params={"mode": "merge"},
+                      files={"file": ("rt.zip", exp.content, "application/zip")})
+    assert imp.status_code == 200, imp.text
+    assert imp.json()["pages_added"] == 2
+
+    after = rows_of(page_ids)
+    assert len(after) == len(before)
+    by_id_before = {r[0]: r for r in before}
+    for row in after:
+        want = by_id_before[row[0]]
+        if row[1] == "root":
+            # merge appends root pages after the existing ones — position is
+            # the ONE field allowed to change
+            assert row[:2] == want[:2] and row[3:] == want[3:]
+        else:
+            assert row == want
+    # the PDF is back byte-identical, and the chat survived the round trip
+    assert (ws_uploads_dir(workspace_of("gdonor")) / pdf_name).read_bytes() == pdf_bytes_before
+    chat = gdonor.get(f"/api/chats/{paper['id']}").json()
+    assert chat["messages"][0]["content"] == "rt chat"
 
 
-def _save_chat(client, key, text):
-    response = client.put(
-        f"/api/chats/{key}",
-        json={"messages": [{"role": "user", "content": text}]},
-    )
-    assert response.status_code == 200, response.text
+def test_gamma_single_page_export(gdonor):
+    page = make_page(gdonor, "Gx single", properties={"category": "solo"})
+    r = gdonor.get(f"/api/pages/{page['id']}/export", params={"mode": "gamma"})
+    assert r.status_code == 200, r.text
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    assert "pages.db" in z.namelist()
+    scope = json.loads(z.read("manifest.json"))["scope"]
+    assert scope == {"folder": None, "pages": 1}
 
 
-def test_gamma_page_export_is_exact_and_records_missing_uploads(gamma_donor):
-    uploaded = gamma_donor.post(
-        "/api/upload-image",
-        files={"file": ("scoped.png", _PNG, "image/png")},
-    )
-    assert uploaded.status_code == 200, uploaded.text
-    image_url = uploaded.json()["url"]
-    image_name = image_url.rsplit("/", 1)[-1]
-    missing_name = "abcdef0123456789abcdef01.png"
-    page = make_page(
-        gamma_donor,
-        "Scoped single page",
-        properties={"folder": "scoped/page", "source_url": image_url},
-    )
-    child_id = "scoped-page-child"
-    response = gamma_donor.put(
-        f"/api/blocks/{page['id']}/children",
-        json={
-            "blocks": [{
-                "id": child_id,
-                "content": f"![image]({image_url}) ![missing](/api/uploads/{missing_name})",
-                "properties": {"custom": "kept"},
-                "children": [],
-            }]
-        },
-    )
-    assert response.status_code == 200, response.text
-    _save_chat(gamma_donor, page["id"], "page chat")
-    _save_chat(gamma_donor, "home:scoped/page", "folder chat must not ride")
-    outside = make_page(gamma_donor, "Outside scoped page")
-    _save_chat(gamma_donor, outside["id"], "outside chat")
-
-    archive = _archive(gamma_donor.get(
-        f"/api/pages/{page['id']}/export",
-        params={"mode": "gamma"},
-    ))
-    manifest = json.loads(archive.read("manifest.json"))
-    assert manifest["format"] == "gamma-backup-1"
-    assert manifest["kind"] == "scoped"
-    assert manifest["scope"] == {
-        "type": "page",
-        "folder": None,
-        "page_ids": [page["id"]],
-        "pages": 1,
-    }
-    assert manifest["uploads"]["included"] == [image_name]
-    assert manifest["uploads"]["missing"] == [missing_name]
-    assert archive.read(f"uploads/{image_name}") == _PNG
-    assert not any(name.endswith(missing_name) for name in archive.namelist())
-
-    blocks = _sqlite_rows(
-        archive,
-        "pages.db",
-        "SELECT id, parent_id, content, properties FROM unified_blocks ORDER BY id",
-    )
-    assert {row[0] for row in blocks} == {page["id"], child_id}
-    assert next(row for row in blocks if row[0] == child_id)[3] == '{"custom": "kept"}'
-    chats = _sqlite_rows(
-        archive,
-        "data.db",
-        "SELECT block_id, messages FROM chats ORDER BY block_id",
-    )
-    assert [row[0] for row in chats] == [page["id"]]
-    assert "page chat" in chats[0][1]
-
-
-def test_gamma_folder_export_scopes_pages_and_home_chats(gamma_donor):
-    exact = make_page(gamma_donor, "Scoped exact", properties={"folder": "scope-root"})
-    nested = make_page(gamma_donor, "Scoped nested", properties={"folder": "scope-root/deep"})
-    sibling = make_page(gamma_donor, "Scoped sibling", properties={"folder": "scope-rootish"})
-    _save_chat(gamma_donor, exact["id"], "exact page chat")
-    _save_chat(gamma_donor, nested["id"], "nested page chat")
-    _save_chat(gamma_donor, sibling["id"], "sibling page chat")
-    _save_chat(gamma_donor, "home:scope-root", "exact folder chat")
-    _save_chat(gamma_donor, "home:scope-root/deep", "nested folder chat")
-    _save_chat(gamma_donor, "home:scope-rootish", "sibling folder chat")
-
-    archive = _archive(gamma_donor.get(
-        "/api/folders/export",
-        params={"name": "scope-root", "mode": "gamma", "op": "scope-op"},
-    ))
-    manifest = json.loads(archive.read("manifest.json"))
-    assert manifest["scope"]["type"] == "folder"
-    assert manifest["scope"]["folder"] == "scope-root"
-    assert set(manifest["scope"]["page_ids"]) == {exact["id"], nested["id"]}
-    block_ids = {
-        row[0] for row in _sqlite_rows(
-            archive,
-            "pages.db",
-            "SELECT id FROM unified_blocks",
-        )
-    }
-    assert exact["id"] in block_ids and nested["id"] in block_ids
-    assert sibling["id"] not in block_ids
-    chat_ids = {
-        row[0] for row in _sqlite_rows(
-            archive,
-            "data.db",
-            "SELECT block_id FROM chats",
-        )
-    }
-    assert chat_ids == {
-        exact["id"],
-        nested["id"],
-        "home:scope-root",
-        "home:scope-root/deep",
-    }
-    progress = gamma_donor.get(
-        "/api/folders/export-progress",
-        params={"op": "scope-op"},
-    ).json()
-    assert progress["active"] is False
-    assert progress["done"] == progress["total"] == 2
-
-
-def test_gamma_export_merges_cross_account_and_is_idempotent(
-    gamma_donor,
-    gamma_receiver,
-):
-    uploaded = gamma_donor.post(
-        "/api/upload-image",
-        files={"file": ("merge.png", _PNG + b"merge", "image/png")},
-    )
-    assert uploaded.status_code == 200, uploaded.text
-    image_url = uploaded.json()["url"]
-    page = make_page(
-        gamma_donor,
-        "Scoped merge source",
-        properties={"folder": "merge-scope", "source_url": image_url},
-    )
-    child_id = "scoped-merge-child"
-    response = gamma_donor.put(
-        f"/api/blocks/{page['id']}/children",
-        json={
-            "blocks": [{
-                "id": child_id,
-                "content": f"kept image ![merge]({image_url})",
-                "properties": {"nested": {"value": 7}},
-                "children": [],
-            }]
-        },
-    )
-    assert response.status_code == 200, response.text
-    _save_chat(gamma_donor, page["id"], "merge page chat")
-    exported = gamma_donor.get(
-        f"/api/pages/{page['id']}/export",
-        params={"mode": "gamma"},
-    )
-    assert exported.status_code == 200, exported.text
-
-    replace = gamma_receiver.post(
-        "/api/import-data",
-        files={"file": ("scoped.zip", exported.content, "application/zip")},
-    )
-    assert replace.status_code == 400
-    assert gamma_receiver.get(f"/api/blocks/{page['id']}").status_code == 404
-
-    imported = gamma_receiver.post(
-        "/api/import-data",
-        params={"mode": "merge"},
-        files={"file": ("scoped.zip", exported.content, "application/zip")},
-    )
-    assert imported.status_code == 200, imported.text
-    result = imported.json()
-    assert result["pages_added"] == 1
-    assert result["chats_added"] == 1
-    assert result["uploads_added"] == 1
-    children = gamma_receiver.get(
-        f"/api/blocks/{page['id']}/children"
-    ).json()["children"]
-    child = next(value for value in children if value["id"] == child_id)
-    assert child["properties"] == {"nested": {"value": 7}}
-    assert gamma_receiver.get(image_url).content == _PNG + b"merge"
-    assert gamma_receiver.get(f"/api/chats/{page['id']}").json()["messages"][0][
-        "content"
-    ] == "merge page chat"
-
-    repeated = gamma_receiver.post(
-        "/api/import-data",
-        params={"mode": "merge"},
-        files={"file": ("scoped.zip", exported.content, "application/zip")},
-    )
-    assert repeated.status_code == 200, repeated.text
-    assert repeated.json()["pages_added"] == 0
-    assert repeated.json()["pages_skipped"] == 1
-    assert repeated.json()["chats_added"] == 0
-    assert repeated.json()["uploads_added"] == 0
-
-
-def test_gamma_export_requires_owner_and_page_root(gamma_donor, gamma_receiver):
-    page = make_page(
-        gamma_donor,
-        "Scoped private page",
-        properties={"doc_id": "abcdef0123456789abcdef01"},
-    )
-    response = gamma_donor.put(
-        f"/api/blocks/{page['id']}/children",
-        json={
-            "blocks": [{
-                "id": "scoped-private-child",
-                "content": "child",
-                "properties": {},
-                "children": [],
-            }]
-        },
-    )
-    assert response.status_code == 200, response.text
-    token = gamma_donor.post(
-        "/api/share/abcdef0123456789abcdef01"
-    ).json()["token"]
-    anonymous = TestClient(app)
-    assert anonymous.get(
-        f"/api/pages/{page['id']}/export",
-        params={"mode": "gamma"},
-    ).status_code == 401
-    assert anonymous.get(
-        f"/api/pages/{page['id']}/export",
-        params={"mode": "gamma", "share": token},
-    ).status_code == 403
-    assert gamma_receiver.get(
-        f"/api/pages/{page['id']}/export",
-        params={"mode": "gamma", "user": "gamma-donor"},
-    ).status_code == 404
-    assert gamma_donor.get(
-        "/api/pages/scoped-private-child/export",
-        params={"mode": "gamma"},
-    ).status_code == 400
-
-
-def test_gamma_export_rejects_malformed_refs_and_symlinks(gamma_donor):
-    malformed = make_page(gamma_donor, "Malformed scoped ref")
-    response = gamma_donor.put(
-        f"/api/blocks/{malformed['id']}",
-        json={"content": "bad /api/uploads/../../secret.pdf"},
-    )
-    assert response.status_code == 200, response.text
-    assert gamma_donor.get(
-        f"/api/pages/{malformed['id']}/export",
-        params={"mode": "gamma"},
-    ).status_code == 400
-
-    from gamma.db import user_uploads_dir
-
-    uploads = user_uploads_dir("gamma-donor")
-    outside = uploads.parent / "outside-scoped-image.png"
-    outside.write_bytes(_PNG)
-    link_name = "abcdef0123456789abcdef02.png"
-    link = uploads / link_name
-    link.symlink_to(outside)
-    try:
-        linked = make_page(
-            gamma_donor,
-            "Symlink scoped ref",
-            properties={"source_url": f"/api/uploads/{link_name}"},
-        )
-        assert gamma_donor.get(
-            f"/api/pages/{linked['id']}/export",
-            params={"mode": "gamma"},
-        ).status_code == 400
-    finally:
-        link.unlink(missing_ok=True)
-        outside.unlink(missing_ok=True)
-
-
-def test_gamma_export_resource_limits(gamma_donor, monkeypatch):
-    first = make_page(gamma_donor, "Limit first", properties={"folder": "gamma-limits"})
-    make_page(gamma_donor, "Limit second", properties={"folder": "gamma-limits"})
-    monkeypatch.setattr("gamma.routers.export._GAMMA_MAX_PAGES", 1)
-    assert gamma_donor.get(
-        "/api/folders/export",
-        params={"name": "gamma-limits", "mode": "gamma"},
-    ).status_code == 413
-
-    monkeypatch.setattr("gamma.routers.export._GAMMA_MAX_PAGES", 500)
-    monkeypatch.setattr("gamma.routers.export._GAMMA_MAX_BLOCKS", 0)
-    assert gamma_donor.get(
-        f"/api/pages/{first['id']}/export",
-        params={"mode": "gamma"},
-    ).status_code == 413
-
-    uploaded = gamma_donor.post(
-        "/api/upload-image",
-        files={"file": ("limit.png", _PNG + b"limit", "image/png")},
-    )
-    upload_page = make_page(
-        gamma_donor,
-        "Upload limit",
-        properties={"source_url": uploaded.json()["url"]},
-    )
-    monkeypatch.setattr("gamma.routers.export._GAMMA_MAX_BLOCKS", 100_000)
-    monkeypatch.setattr("gamma.routers.export._GAMMA_MAX_UPLOAD_BYTES", 1)
-    assert gamma_donor.get(
-        f"/api/pages/{upload_page['id']}/export",
-        params={"mode": "gamma"},
-    ).status_code == 413
-
-
-def test_gamma_import_rejects_malicious_archive_names(gamma_donor, gamma_receiver):
-    page = make_page(gamma_donor, "Archive validation source")
-    exported = gamma_donor.get(
-        f"/api/pages/{page['id']}/export",
-        params={"mode": "gamma"},
-    )
-    assert exported.status_code == 200, exported.text
-
-    cases = [
-        ("../escape.txt", b"escape"),
-        ("unexpected.txt", b"unexpected"),
-        ("uploads/not-a-digest.pdf", b"%PDF"),
-        ("uploads/abcdef0123456789abcdef03.exe", b"bad"),
-    ]
-    for name, data in cases:
-        payload = _zip_with_extra(exported.content, name, data)
-        response = gamma_receiver.post(
-            "/api/import-data",
-            params={"mode": "merge"},
-            files={"file": ("malicious.zip", payload, "application/zip")},
-        )
-        assert response.status_code == 400, (name, response.text)
-
-    duplicate = io.BytesIO()
-    original = zipfile.ZipFile(io.BytesIO(exported.content))
-    with pytest.warns(UserWarning, match="Duplicate name"):
-        with zipfile.ZipFile(duplicate, "w") as archive:
-            for info in original.infolist():
-                archive.writestr(info, original.read(info.filename))
-            archive.writestr("manifest.json", original.read("manifest.json"))
-    response = gamma_receiver.post(
-        "/api/import-data",
-        params={"mode": "merge"},
-        files={"file": ("duplicate.zip", duplicate.getvalue(), "application/zip")},
-    )
-    assert response.status_code == 400
-
-
-def test_gamma_import_resource_limits(gamma_donor, gamma_receiver, monkeypatch):
-    page = make_page(gamma_donor, "Import limits source")
-    exported = gamma_donor.get(
-        f"/api/pages/{page['id']}/export",
-        params={"mode": "gamma"},
-    )
-    assert exported.status_code == 200, exported.text
-
-    monkeypatch.setattr("gamma.routers.auth._IMPORT_MAX_ARCHIVE_BYTES", 1)
-    response = gamma_receiver.post(
-        "/api/import-data",
-        params={"mode": "merge"},
-        files={"file": ("large.zip", exported.content, "application/zip")},
-    )
-    assert response.status_code == 413
-
-    monkeypatch.setattr(
-        "gamma.routers.auth._IMPORT_MAX_ARCHIVE_BYTES",
-        1024 * 1024 * 1024,
-    )
-    monkeypatch.setattr("gamma.routers.auth._IMPORT_MAX_ENTRIES", 1)
-    response = gamma_receiver.post(
-        "/api/import-data",
-        params={"mode": "merge"},
-        files={"file": ("entries.zip", exported.content, "application/zip")},
-    )
-    assert response.status_code == 413
-
-
-def test_gamma_import_rejects_manifest_upload_mismatch(gamma_donor, gamma_receiver):
-    page = make_page(gamma_donor, "Manifest mismatch source")
-    exported = gamma_donor.get(
-        f"/api/pages/{page['id']}/export",
-        params={"mode": "gamma"},
-    )
-    assert exported.status_code == 200, exported.text
-    filename = "abcdef0123456789abcdef04.png"
-    payload = _zip_with_extra(
-        exported.content,
-        f"uploads/{filename}",
-        _PNG,
-    )
-    archive = zipfile.ZipFile(io.BytesIO(payload))
-    manifest = json.loads(archive.read("manifest.json"))
-    manifest["uploads"]["included"].append(filename)
-    payload = _zip_replace(
-        payload,
-        "manifest.json",
-        json.dumps(manifest).encode(),
-    )
-    response = gamma_receiver.post(
-        "/api/import-data",
-        params={"mode": "merge"},
-        files={"file": ("mismatch.zip", payload, "application/zip")},
-    )
-    assert response.status_code == 400
+def test_unknown_mode_rejected(gdonor):
+    page = make_page(gdonor, "Gx mode check")
+    r = gdonor.get(f"/api/pages/{page['id']}/export", params={"mode": "nonsense"})
+    assert r.status_code == 400

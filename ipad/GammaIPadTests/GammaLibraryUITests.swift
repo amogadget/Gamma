@@ -7,6 +7,9 @@ final class GammaLibraryUITests: XCTestCase {
     private func fixture() -> GammaWorkspace {
         let workspace = GammaWorkspace()
         workspace.username = "Reader"
+        workspace.workspaceID = "ws-alpha"; workspace.workspaceName = "Personal"
+        workspace.workspaceOptions = [GammaWorkspaceOption(id: "ws-alpha", name: "Personal", role: "owner", isDefault: true),
+                                      GammaWorkspaceOption(id: "ws-team", name: "Team", role: "editor")]
         let entries = [
             ("Sign-changing photon-mediated atom interactions in multimode cavity QED", "Cavity QED"),
             ("Probing many-body dynamics on a 51-atom quantum simulator", "Atom arrays"),
@@ -58,10 +61,10 @@ final class GammaLibraryUITests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = URL(string: "https://gamma.example")!
-        let cache = try GammaCache(rootURL: root, server: url, username: "alice")
+        let cache = try GammaCache(rootURL: root, server: url, username: "alice", workspace: "ws-alpha")
         _ = try cache.recordRecent("page-a"); _ = try cache.recordRecent("page-b")
         XCTAssertEqual(try cache.recordRecent("page-a"), ["page-a", "page-b"])
-        XCTAssertEqual(try GammaCache(rootURL: root, server: url, username: "alice").recentPageIDs(), ["page-a", "page-b"])
-        XCTAssertTrue(try GammaCache(rootURL: root, server: url, username: "bob").recentPageIDs().isEmpty)
+        XCTAssertEqual(try GammaCache(rootURL: root, server: url, username: "alice", workspace: "ws-alpha").recentPageIDs(), ["page-a", "page-b"])
+        XCTAssertTrue(try GammaCache(rootURL: root, server: url, username: "bob", workspace: "ws-alpha").recentPageIDs().isEmpty)
     }
 }

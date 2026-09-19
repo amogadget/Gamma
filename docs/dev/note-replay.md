@@ -1,49 +1,80 @@
-# Browser Note Replay (Phase 5A)
+# Native recording and browser Note Replay
 
-## Use
+This is the workspace-aware integration on the upstream-based branch. The old
+fork's implementation notes are archived in `docs/legacy-native/note-replay.md`;
+recorded verification results and boundaries are in [iPad validation](../../ipad/VALIDATION.md).
 
-1. Install the updated iPad client and open the Gamma PDF in its **Pencil & Audio** workspace. New ink uploads include browser stroke previews. Existing ink without previews is automatically queued for metadata-only backfill when hydrated.
-2. Let sync finish, then refresh the document in Gamma Web/Desktop. A recording must already contain `replay_events`; old audio without timestamps cannot acquire synchronization retroactively.
-3. In Notes, find the audio block and choose **Open Note Replay**, then **Play** in the new top bar.
-4. Pause, seek/drag the timeline, use ±10 seconds, or click a visible timed stroke (two-second lead-in). Playback restores recorded PDF pages and progressively reveals final surviving ink.
-5. **Done** stops playback and returns the normal static PDF handwriting layer.
+## User flow
 
-If a timed block has no valid browser preview, Play is gated with an explicit message. Update/open/sync it on iPad and refresh Web, or explicitly choose audio with static fallback notes. A missing/corrupt/stale preview is not passed off as synchronized ink.
+1. Open a Gamma PDF in the iPad client. PencilKit retains editable `.pkdrawing`
+   sources; recording produces finalized AAC `.m4a` segments.
+2. Native ink and recording blocks synchronize through workspace-scoped APIs.
+   The browser shows the handwriting on the PDF and in the notes, plus an audio
+   card. **Open Note Replay** opens the synchronized player.
+3. The audio element's clock drives stroke reveal and page following. Seeking
+   crosses segment boundaries; clicking a visible timed stroke seeks to its
+   lead-in. **Done** restores the complete static ink layer.
+4. Missing or stale stroke previews are explicit. The user may select static
+   fallback notes; no historical timing or strokes are fabricated.
 
-## Sidebar handwriting navigation
+## Data and boundaries
 
-Handwriting blocks have a rounded-square pen marker, distinct from highlight dots. Clicking the marker, card or handwriting preview opens the PDF if hidden and jumps to that block's bounds, including horizontal adjustment when zoomed. A brief outline identifies the target. Editing fields and links keep their existing behavior. Positions use the same crop/rotation affine transform as the ink renderer; missing geometry falls back to the page.
+- Native ink: `type: pdf_ink`, `ink_asset`, `preview_asset`, optional
+  `replay_asset`, `pdf_page`, crop-local geometry and `ink_revision`.
+- Native audio: `type: audio`, finalized `segments`, server-derived offsets and
+  total duration, `replay_events`, and `audio_revision`.
+- `.inkjson` (`gamma-ink-replay-v1`) contains final surviving stroke PNGs and
+  reveal paths, linked by `source_sha256` to the current editable source. It is
+  a display derivative, not a browser-editable substitute for PencilKit.
+- Replay events use recording segment time, not wall-clock time. This is not
+  historical reconstruction of erased strokes, undo operations or every prior
+  drawing state. Old untimed ink stays static.
+- Upstream browser `.ink` strokes remain a separate representation. Their
+  sample timestamps are not automatically associated with a native recording.
+- Store canonical `/api/assets/<sha256>.<ext>` references in properties. Add
+  workspace/share context when requesting media; never persist the active
+  account's query parameters in a block's payload.
+- Rendering uses original PDF bytes without modifying them. Native PDF exports
+  use readable raster pictures, not invented editable vector strokes. Audio
+  links in exported notes PDFs require the reader's own Gamma access.
 
-## One editable source, one display representation
+## Implementation map
 
-PKDrawing remains the editable source of truth. Static PDF handwriting and Notes thumbnails now reuse the complete high-resolution per-stroke images—the same images as Replay at its final frame. The original lower-resolution whole-block PNG is only a fallback when the stroke preview is missing, invalid or exceeds loading budgets. The document-scoped loader is shared across static/replay modes, avoiding a refetch when starting or exiting Replay. A content-addressed private `.inkjson` asset adds:
+- `frontend/src/native/NoteReplayPlayer.jsx`: segmented media, playback clock,
+  seek and preview loading; failed/stalled media cannot masquerade as playback.
+- `frontend/src/native/noteReplay.js`: timeline and strict derivative checks.
+- `frontend/src/native/ReplayInkLayer.jsx`: complete static strokes and partial
+  reveal masks. Placement helpers: `inkBlock.js` and `inkNavigation.js`.
+- `frontend/src/shared/lib/assetUrl.js`: scoped browser-issued media URLs.
+- `backend/gamma/routers/native_ink.py`: uploads and conditional native saves;
+  preview backfill checks the source digest and does not advance ink revision.
+- `backend/gamma/ops.py`: live collaboration and protected native payloads.
+- `ipad/GammaIPad/`: native recording/recovery, durable outbox and cache. See
+  `ipad/NATIVE_INTEGRATION.md` for account/workspace identity and migration.
 
-- Format `gamma-ink-replay-v1`, source PKDrawing SHA-256 and canonical page size.
-- Final surviving strokes with the same IDs used by recording events.
-- Each stroke's bounded transparent PNG, generated by PencilKit (including final masks/transforms), plus numeric path samples/time offsets and conservative reveal radii.
-
-The browser does not decode PKDrawing or execute uploaded SVG. It constructs an SVG image/mask layer from validated numeric data and PNGs. Final stroke appearance comes from the native raster. The in-progress reveal is approximate, especially where a stroke overlaps itself; it is not a pixel-identical PencilKit animation.
-
-Deleted strokes never reappear. Untimed ink is static context. Text comments retain final text; this is not keystroke history. Exact erased/undo/redo reconstruction remains Phase 5B, not part of this player.
-
-## Clock and rendering
-
-A single audio element plays the AAC segments sequentially. Cumulative positions use finalized segment durations, excluding recording pause gaps. The audio element's clock drives rendering at up to 30 frames/sec. Segment-local events are clamped at segment boundaries; seek works across segment files. Recorded page events drive pdf.js page jumps. Stroke placement uses the same canonical-crop-to-pdf.js affine conversion as static handwriting, including cropped/rotated pages.
-
-Preview loading uses three workers and aborts when the session closes/changes. Limits: 32 MiB per asset, 2000 strokes/200000 points per asset, 4096 maximum PNG dimension, 24 million decoded pixels per asset; browser document budget 64 MiB/48 million pixels. Unsupported export limits never discard editable ink. Optional preview failures can remain pending without blocking return to Full Gamma.
-
-## Server safety and compatibility
-
-- `.inkjson` is authenticated, content-addressed JSON, with strict schema, finite geometry, monotonic points, verified PNG/base64 and resource limits. It participates in quota, private asset aliasing, cleanup, backup and exports.
-- Ink upserts can include `replay_asset`. Missing field preserves the old asset only when the source is unchanged; changed sources drop stale references.
-- `PUT /api/blocks/{id}/replay-preview` validates the expected current source hash and updates only replay metadata, without changing the ink revision, content or children. This is how old ink is backfilled safely.
-- Web subtree saves preserve existing native ink/audio manifest fields, preventing stale text edits from overwriting native replay metadata or recording timelines. This does not turn general subtree replacement into a full collaborative merge protocol.
+Native assets are conservatively retained, including old unreferenced sources;
+there is no automatic native garbage collection. Generic duplicate/cross-page
+moves of native-containing trees are refused instead of guessing new recording
+identities. Same-page ink/audio nesting is supported; native child notes retain
+their direct-parent contract. Web delete/undo uses server-recorded provenance
+within the bounded page-op history, not an unlimited recycle bin.
 
 ## Verification
 
-- Native exporter tests exercise actual PencilKit rasters, source-byte hashes, IDs and budgets.
-- Real Gamma native live integration exercises new-source upload, old-source preview backfill, revision/comment preservation, raw source-byte preservation, cache reopen, and existing audio timeline round-trip.
-- Chrome tests use PNGs/JSON and AAC generated by the native tests: `frontend/tests/e2e/note-replay.mjs` covers progressive masks, rotated/cropped page seek, audio-clock advancement and click-to-seek/resume. `note-replay-app.mjs` covers the complete Gamma Notes-button → player → PDF ink → Done flow.
-- Some bundled Linux Chromium builds cannot decode AAC. Use an AAC-capable Chrome executable via `GAMMA_CHROME_PATH`; do not interpret a moving synthetic clock as audio verification.
+From `frontend/` after `npm ci` and `npm run build`:
 
-To reproduce browser tests, export XCTest attachments from `GammaWebInkExportTests/testExportRealBrowserFixtures` with `xcresulttool export attachments`; point `GAMMA_REPLAY_FIXTURE_DIR` at that directory (including manifest.json). Start the frontend test host on localhost:5193 or set `GAMMA_TEST_URL`, then run the two Node E2E scripts. Test fixtures are synthetic, not private user notes or microphone recordings.
+```sh
+npm test
+GAMMA_E2E_PYTHON=/path/to/backend/python npm run e2e
+CHROME_PATH=/path/to/aac-capable/chrome GAMMA_E2E_REQUIRE_AAC=1 \
+  GAMMA_E2E_PYTHON=/path/to/backend/python npm run e2e
+CHROME_PATH=/path/to/aac-capable/chrome npm run e2e:notereplay -- --require-aac
+npm run e2e:native
+```
+
+Fixtures use valid visible PNG pixels and real ffmpeg-generated AAC. Browser
+checks cover visible full/partial ink, audio-clock progression, segment changes,
+seek, pause, native save/preview backfill, undo, workspace scoping and handoff.
+Stock Chromium may lack AAC; its seek-only result is not playback evidence.
+Physical Pencil/microphone, Bluetooth/interruption and app-relaunch acceptance
+remain separate from browser and simulator tests.

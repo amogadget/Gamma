@@ -4,7 +4,7 @@ quoting, image validation, PDF annotation extraction."""
 import io
 
 from gamma.routers.metadata import _find_doi_candidates, _build_bibtex
-from gamma.routers.search import _fts_query
+from gamma.block_index import fts_query
 from gamma.routers.ai import _parse_images
 
 
@@ -23,49 +23,41 @@ def test_doi_candidates_keep_uppercase_suffixes():
 
 
 def test_build_bibtex_arxiv():
-    bib = _build_bibtex(
-        {
-            "title": "A Paper",
-            "authors": ["Ada Lovelace", "Alan Turing"],
-            "year": "2019",
-            "venue": "",
-            "arxiv_id": "1810.11086",
-            "doi": "",
-        }
-    )
+    bib = _build_bibtex({
+        "title": "A Paper", "authors": ["Ada Lovelace", "Alan Turing"],
+        "year": "2019", "venue": "", "arxiv_id": "1810.11086", "doi": "",
+    })
     assert bib.startswith("@article{lovelace2019,")
     assert "eprint = {1810.11086}" in bib
     assert "Ada Lovelace and Alan Turing" in bib
 
 
 def test_fts_query_quotes_and_prefixes():
-    assert _fts_query("atom imaging") == '"atom" "imaging"*'
-    assert _fts_query('say "hi"') == '"say" """hi"""*'  # embedded quotes doubled
-    assert _fts_query("  ") == ""
+    assert fts_query("atom imaging") == '"atom" "imaging"*'
+    assert fts_query('say "hi"') == '"say" """hi"""*'  # embedded quotes doubled
+    assert fts_query("  ") == ""
     # Queries are normalized like the index: "3,000" and "3000" are the same
-    assert _fts_query("3,000") == _fts_query("3000") == '"3000"*'
+    assert fts_query("3,000") == fts_query("3000") == '"3000"*'
 
 
 def test_normalize_text():
     from gamma.textnorm import normalize_text
-
     assert normalize_text("a 3,000-qubit array") == "a 3000-qubit array"
     assert normalize_text("the sys-\ntem works") == "the system works"  # line-break hyphenation
-    assert normalize_text("eﬃcient  ﬁne") == "efficient fine"  # ligatures fold
-    assert normalize_text("well-known") == "well-known"  # real hyphens survive
+    assert normalize_text("eﬃcient  ﬁne") == "efficient fine"          # ligatures fold
+    assert normalize_text("well-known") == "well-known"                 # real hyphens survive
     assert normalize_text("") == ""
 
 
 def test_fuzzy_pattern_separator_tolerance():
     from gamma.textnorm import fuzzy_pattern
-
     assert fuzzy_pattern("3000").search("a coherent 3,000-qubit system")
-    assert fuzzy_pattern("3000 qubit").search("a 3,000-qubit system")  # space matches hyphen
-    assert fuzzy_pattern("3,000-qubit").search("3000 qubit")  # and the other way
-    assert fuzzy_pattern("Qubit").search("QUBIT")  # case-insensitive default
+    assert fuzzy_pattern("3000 qubit").search("a 3,000-qubit system")   # space matches hyphen
+    assert fuzzy_pattern("3,000-qubit").search("3000 qubit")            # and the other way
+    assert fuzzy_pattern("Qubit").search("QUBIT")                       # case-insensitive default
     assert not fuzzy_pattern("qubit", case=True).search("QUBIT")
     assert not fuzzy_pattern("fine", whole=True).search("refined")
-    assert fuzzy_pattern("(", regex=True) is None  # invalid regex reported
+    assert fuzzy_pattern("(", regex=True) is None                       # invalid regex reported
     assert fuzzy_pattern("   ") is None
 
 
@@ -78,7 +70,6 @@ def test_parse_images_validates():
 
 def test_parse_files_validates():
     from gamma.routers.ai import _parse_files
-
     good = {"name": "paper.pdf", "data": "data:application/pdf;base64,JVBERi0="}
     junk = [
         {"name": "x.png", "data": "data:image/png;base64,iVBORw0KGgo="},  # wrong type
@@ -91,21 +82,20 @@ def test_parse_files_validates():
 
 def test_extract_pdf_annotations_resolves_indirects():
     from PyPDF2 import PdfWriter, PdfReader
-    from PyPDF2.generic import ArrayObject, DictionaryObject, FloatObject, NameObject, TextStringObject
+    from PyPDF2.generic import (ArrayObject, DictionaryObject, FloatObject,
+                                NameObject, TextStringObject)
     from gamma.routers.imports import _extract_pdf_annotations
 
     w = PdfWriter()
     w.add_blank_page(width=612, height=792)
-    annot = DictionaryObject(
-        {
-            NameObject("/Type"): NameObject("/Annot"),
-            NameObject("/Subtype"): NameObject("/Highlight"),
-            NameObject("/Rect"): ArrayObject([FloatObject(v) for v in (100, 700, 300, 720)]),
-            NameObject("/QuadPoints"): ArrayObject([FloatObject(v) for v in (100, 720, 300, 720, 100, 700, 300, 700)]),
-            NameObject("/Contents"): TextStringObject("a note"),
-            NameObject("/C"): ArrayObject([FloatObject(1), FloatObject(0.9), FloatObject(0.3)]),
-        }
-    )
+    annot = DictionaryObject({
+        NameObject("/Type"): NameObject("/Annot"),
+        NameObject("/Subtype"): NameObject("/Highlight"),
+        NameObject("/Rect"): ArrayObject([FloatObject(v) for v in (100, 700, 300, 720)]),
+        NameObject("/QuadPoints"): ArrayObject([FloatObject(v) for v in (100, 720, 300, 720, 100, 700, 300, 700)]),
+        NameObject("/Contents"): TextStringObject("a note"),
+        NameObject("/C"): ArrayObject([FloatObject(1), FloatObject(0.9), FloatObject(0.3)]),
+    })
     w.add_annotation(page_number=0, annotation=annot)
     buf = io.BytesIO()
     w.write(buf)
@@ -121,35 +111,7 @@ def test_extract_pdf_annotations_resolves_indirects():
     assert a["color"].startswith("rgba(255, 229,")
 
 
-# --- AI PDF context (gamma/ai_context.py) ------------------------------------
-
-def test_extract_pdf_context_labels_incomplete_excerpt(monkeypatch):
-    from gamma import ai_context
-
-    # pdf_excerpt gained with_pages (the page span the coverage report needs).
-    monkeypatch.setattr(ai_context, "pdf_excerpt",
-                        lambda u, d, limit, **kw: ("head", limit, limit + 1, 9))
-    monkeypatch.setattr(ai_context, "pdf_path", lambda u, d: "fake.pdf")
-    monkeypatch.setattr(ai_context, "page_count", lambda src: 12)
-
-    context = ai_context.extract_pdf_context("u", "d" * 24, 100)
-    assert "EXCERPT" in context and "12-page PDF" in context
-    assert context.endswith("head\n…[truncated]")
-
-    # head_context reports the same excerpt plus what the user is told about it.
-    text, cover = ai_context.head_context("u", "d" * 24, 100)
-    assert text == context
-    # chars is the document text the model got ("head"), not the caveat wrapper.
-    assert cover == {"partial": True, "chars": 4, "pages": 12, "pages_shown": 9}
-
-    monkeypatch.setattr(ai_context, "pdf_excerpt",
-                        lambda u, d, limit, **kw: ("whole", None, 5, 3))
-    assert ai_context.extract_pdf_context("u", "d" * 24, 100) == "whole"
-    text, cover = ai_context.head_context("u", "d" * 24, 100)
-    assert text == "whole"
-    # Nothing truncated: no caveat, and the span is what was actually read.
-    assert cover == {"partial": False, "chars": 5, "pages": 3, "pages_shown": 3}
-
+# --- selection-centered chat context (gamma/ai_context.py) -------------------
 
 def test_selection_context_centers_on_the_selected_page(monkeypatch):
     from gamma import ai_context
