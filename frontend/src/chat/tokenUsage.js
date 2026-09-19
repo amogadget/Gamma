@@ -23,6 +23,23 @@ export function fmtTokens(n) {
   return `${(v / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
 }
 
+// While a reply streams the provider has not counted yet: a rough running
+// figure from the characters received so far (about four per token for
+// English prose; CJK and code run denser). Shown with a "~" and replaced
+// by the provider's own report as each turn completes.
+export function estimateTokens(chars) {
+  return Math.round(Math.max(0, Number(chars) || 0) / 4);
+}
+
+// The live line of a streaming reply: the rounds already reported (exact)
+// plus the estimate for the text still arriving.
+export function liveUsage(usage, pendingChars) {
+  const pending = estimateTokens(pendingChars);
+  if (!usage && !pending) return null;
+  return { ...addUsage(null, usage || { input: 0, output: 0, cache_read: 0, cache_write: 0 }),
+    output: (usage?.output || 0) + pending, estimate: pending > 0 };
+}
+
 // The share of the prompt the provider served from its cache, 0–100.
 export function cachedPercent(usage) {
   if (!usage?.input) return 0;

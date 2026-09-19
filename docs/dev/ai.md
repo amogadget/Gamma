@@ -454,7 +454,12 @@ show what a week cost. Code: `gamma/ai_usage.py`, `ai_client.normalize_usage`,
   The panel shows a dim line under each reply (↑ input, ↓ output, "N%
   cached" when the provider served part of the prompt from its cache) and
   the conversation total in the chat-settings popover and the button's
-  tooltip. Replies saved before this carry no counts and show nothing.
+  tooltip. While a reply streams the same line ticks up inside the
+  "Thinking / Responding" pill, Claude Code style: exact counts for the
+  rounds already reported plus a `~` estimate for the one still arriving
+  (`estimateTokens`: characters received / 4, text deltas and previewed
+  tool arguments alike; reset when that round's report lands). Replies
+  saved before this carry no counts and show nothing.
 - **Stored.** `ai_usage.record` writes one row per call to `ai_usage` in
   `users.db` (account, time, kind, provider id + name, model, the four
   counts); `ai_usage.recorder(kind, entry, rt)` is the `on_usage` callback the

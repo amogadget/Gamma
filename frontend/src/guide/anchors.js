@@ -16,6 +16,9 @@ export const ANCHORS = {
   "header.share": { view: "page", description: "The page's Share button" },
   "header.account": { view: "any", description: "Account & settings menu" },
   "account.tour": { view: "any", open: ["header.account"], description: "Take the tour, in the account menu" },
+  "add.urlInput": { view: "any", open: ["header.add"], description: "The Add popover's URL / arXiv / DOI box" },
+  "pdf.viewer": { view: "pdf", description: "The PDF viewer" },
+  "dock.notes": { view: "page", description: "The Notes window" },
 };
 
 export const ATTR = "data-guide";

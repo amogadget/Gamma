@@ -74,6 +74,30 @@
   color: var(--accent);
 }
 .guideRoot.done .guideRing { animation: none; stroke-opacity: 1; }
+.guideBusy, .guideFailed {
+  margin-left: 8px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.guideFailed { color: var(--danger); text-transform: none; letter-spacing: 0; font-size: 11px; }
+/* While a demo acts, the whole sheet swallows clicks (the hole included) so
+   a stray click can't derail it; the card stays usable for Skip / leave. */
+.guideShield { position: absolute; inset: 0; pointer-events: auto; }
+.guideCardCorner { right: 16px; bottom: 16px; width: 300px; }
+/* The demo's pointer glides between targets; a press shrinks it briefly. */
+.guideCursor {
+  position: fixed;
+  top: -4px;
+  left: -3px;
+  pointer-events: none;
+  transition: transform 520ms cubic-bezier(0.22, 0.61, 0.36, 1);
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+  z-index: 1;
+}
+.guideCursor.pressed svg { transform: scale(0.85); transform-origin: 4px 4px; transition: transform 90ms; }
 .guideTitle {
   font-size: 14px;
   font-weight: 600;

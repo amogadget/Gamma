@@ -5357,6 +5357,7 @@ function LibraryApp() {
     setBlocks(nextBlocks);
     // autosave effect will persist
     setStatus("Highlight saved.");
+    guideEvents.emit("highlight.created", { id: withId.id });
   }
 
   // --- Handwriting ----------------------------------------------------------
@@ -5825,6 +5826,7 @@ function LibraryApp() {
     onStepChange: () => setOpenPopover(null),
   });
   useEffect(() => { if (openPopover) guideEvents.emit("popover.opened", { name: openPopover }); }, [openPopover]);
+  useEffect(() => { if (focusedBlockId) guideEvents.emit("page.opened", { id: focusedBlockId }); }, [focusedBlockId]);
   // The props a folder card shares between the pinned strip and the library
   // grid: glyph, title, count, selection/drag/drop behaviour and the context
   // menu. Each site adds its own className, tip, time and extras.
@@ -7666,7 +7668,7 @@ function LibraryApp() {
     };
     if (id === "notes") {
       return (
-        <DockWindow title="Notes" {...common} onClose={() => (isPhone ? setPhonePanel(null) : setNotesVisible(false))}>
+        <DockWindow title="Notes" guide="dock.notes" {...common} onClose={() => (isPhone ? setPhonePanel(null) : setNotesVisible(false))}>
           {notesWindow}
         </DockWindow>
       );
@@ -7918,6 +7920,7 @@ function LibraryApp() {
             <input
               autoFocus
               className="searchInput"
+              data-guide="add.urlInput"
               value={addUrl}
               onChange={(e) => setAddUrl(e.target.value)}
               placeholder="PDF URL, arXiv id, DOI, or a Gamma share link — press Enter"
@@ -8511,7 +8514,6 @@ function LibraryApp() {
                 if ("size" in patch) setInkEraserSize(patch.size);
               }}
               onLasso={setInkLassoMode}
-              onNewGroup={() => { inkActiveRef.current = null; setStatus("Next strokes start a new handwriting note."); }}
               onClose={() => setInkUi((s) => ({ ...s, open: false, tool: null, options: false }))}
             />
           ) : null}

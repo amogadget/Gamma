@@ -8,7 +8,7 @@ import { API, apiJson, copyText, isPdfFile, readNdjson } from "../shared/lib/uti
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } from "../shared/ui/Widgets";
 import PaperMentionInput from "./PaperMentionInput";
 import { MAX_CHAT_REFERENCES } from "./paperMentions";
-import { addUsage, cachedPercent, conversationUsage, fmtTokens, usageDetail } from "./tokenUsage";
+import { addUsage, cachedPercent, conversationUsage, fmtTokens, liveUsage, usageDetail } from "./tokenUsage";
 import { createTitleScorer } from "../library/librarySearch";
 import { pageAttachment } from "../library/libraryUtils";
 import { MenuSelect } from "../shared/ui/Menus";
@@ -86,15 +86,18 @@ function ContextCoverage({ items }) {
 // and the share of the prompt the provider served from its cache. Every
 // count comes from the provider's own report ({"usage"} lines of the chat
 // stream, summed over an agent reply's rounds); a reply without one shows
-// nothing.
+// nothing. While the reply streams the same line ticks up next to the
+// "Responding" pill: exact counts for the rounds already reported, a "~"
+// estimate from the characters received for the one still arriving.
 function UsageLine({ usage, className = "chatMsgUsage" }) {
   if (!usage || !(usage.input || usage.output)) return null;
   const cached = cachedPercent(usage);
+  const live = !!usage.estimate;
   return (
-    <span className={className} title={usageDetail(usage)}>
-      <span className="chatMsgUsagePart"><ArrowUpIcon size={9} />{fmtTokens(usage.input)}</span>
-      <span className="chatMsgUsagePart"><ArrowDownIcon size={9} />{fmtTokens(usage.output)}</span>
-      {cached ? <span className="chatMsgUsagePart">{cached}% cached</span> : null}
+    <span className={className} title={live ? "Counting while the reply streams — the provider's own count replaces the estimate when it finishes" : usageDetail(usage)}>
+      {usage.input ? <span className="chatMsgUsagePart"><ArrowUpIcon size={9} />{fmtTokens(usage.input)}</span> : null}
+      <span className="chatMsgUsagePart"><ArrowDownIcon size={9} />{live ? "~" : ""}{fmtTokens(usage.output)}</span>
+      {cached && !live ? <span className="chatMsgUsagePart">{cached}% cached</span> : null}
     </span>
   );
 }
@@ -588,6 +591,8 @@ export default function ChatDock({
     const actions = []; // organizer mutations streamed for this reply
     let coverage = null; // {"context": [...]} — what the model was given, per document
     let usage = null; // the provider's token report, summed over the reply's rounds
+    let liveChars = 0; // characters received since the last report — the running estimate
+    const liveArgs = new Map(); // tool call id -> argument chars previewed so far (cumulative)
     const aiMsg = (extra = {}) => ({
       role: "ai", text: acc,
       ...(actions.length ? { actions: [...actions] } : {}),
@@ -640,15 +645,22 @@ export default function ChatDock({
           } else if (ev.progress) {
             // The agent is still writing a note edit — the block types it in.
             onAgentEvent?.({ type: "progress", ...ev.progress });
+            const seen = liveArgs.get(ev.progress.id) || 0;
+            const now = (ev.progress.content || "").length;
+            if (now > seen) { liveChars += now - seen; liveArgs.set(ev.progress.id, now); }
           } else if (ev.context) {
             coverage = ev.context;
           } else if (ev.usage) {
+            // The round is counted for real now; the estimate starts over.
             usage = addUsage(usage, ev.usage);
+            liveChars = 0;
+            liveArgs.clear();
           } else {
             acc += ev.delta || "";
+            liveChars += (ev.delta || "").length;
           }
         }
-        if (acc || actions.length) showReply(aiMsg({ partial: true }));
+        if (acc || actions.length || usage) showReply(aiMsg({ partial: true, live: liveChars }));
       });
       showReply(aiMsg({ text: acc || (actions.length ? "" : "(no response)") }), true);
     } catch (err) {
@@ -1208,6 +1220,7 @@ export default function ChatDock({
                       <div className="chatThinking" role="status" aria-label={m.text ? "AI is responding" : "AI is thinking"}>
                         <span aria-hidden="true">{m.text ? "Responding" : "Thinking"}</span>
                         <span className="chatTyping" aria-hidden="true"><span /><span /><span /></span>
+                        <UsageLine usage={liveUsage(m.usage, m.live)} className="chatMsgUsage live" />
                       </div>
                     ) : null}
                   </div>

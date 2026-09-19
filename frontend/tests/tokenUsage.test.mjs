@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addUsage, cachedPercent, conversationUsage, fmtTokens, usageDetail } from "../src/chat/tokenUsage.js";
+import { addUsage, cachedPercent, conversationUsage, estimateTokens, fmtTokens, liveUsage, usageDetail } from "../src/chat/tokenUsage.js";
+
+test("the live line estimates the streaming round and keeps reported rounds exact", () => {
+  assert.equal(estimateTokens(0), 0);
+  assert.equal(estimateTokens(4000), 1000);
+  assert.equal(liveUsage(null, 0), null);
+  assert.deepEqual(liveUsage(null, 400), { input: 0, output: 100, cache_read: 0, cache_write: 0, estimate: true });
+  const done = { input: 1000, output: 30, cache_read: 600, cache_write: 0 };
+  assert.deepEqual(liveUsage(done, 0), { ...done, estimate: false });
+  assert.deepEqual(liveUsage(done, 200), { ...done, output: 80, estimate: true });
+});
 
 test("fmtTokens is compact but comparable", () => {
   assert.equal(fmtTokens(0), "0");

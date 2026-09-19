@@ -61,6 +61,11 @@ export async function chatNavigationScenarios(env) {
             await page.getByRole("button", { name: "Settings", exact: true }).click();
             await until(async () => (await page.locator(".chatPanel").innerText()).includes("Continued with the panel closed."));
             await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
+            // Text after the last report counts as a "~" estimate next to the Responding pill.
+            const live = page.locator(".chatThinking .chatMsgUsage");
+            await live.waitFor();
+            assert((await live.innerText()).includes("~"), "the streaming round shows an estimate");
+            assert((await live.innerText()).includes("1.2k"), "reported rounds stay exact while streaming");
             await page.evaluate(() => { window.chatStream.push({ delta: " Finished after returning." }); window.chatStream.finish(); });
           }
           await until(async () => !(await page.getByRole("button", { name: "Stop generating", exact: true }).count()));

@@ -35,9 +35,9 @@ test("tours reference registered anchors and catalogued events", () => {
 test("every data-guide attribute in the source is registered", () => {
   const used = new Set();
   for (const file of walk(new URL("../src", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"))) {
-    for (const m of readFileSync(file, "utf8").matchAll(/data-guide="([^"]+)"/g)) used.add(m[1]);
+    for (const m of readFileSync(file, "utf8").matchAll(/\bguide="([^"]+)"/g)) used.add(m[1]);
   }
-  for (const id of used) assert.ok(ANCHORS[id], `data-guide="${id}" is not in guide/anchors.js`);
+  for (const id of used) assert.ok(ANCHORS[id], `data-guide="${id}" is not in guide/anchors.js`); // DockWindow passes it as guide="…"
   for (const id of Object.keys(ANCHORS)) assert.ok(used.has(id), `anchor ${id} is registered but no element carries it`);
 });
 

@@ -6,15 +6,46 @@ and hints are still design.** What exists: `frontend/src/guide/` (registry,
 event bus, `useGuide`, `GuideOverlay`, `tours/firstRun.js`), six `data-guide`
 anchors in the topbar, one `popover.opened` emit point in App, the node test
 `tests/guide.test.mjs` and the e2e step `scenarios/guide.mjs`. A tour starts
-from `/?guide=first-run` or the account menu's **Take the tour**; progress is a localStorage key
+from `/?guide=first-run` or the account menu's **Take the tour**; the first
+tour is a welcome card, the add-a-paper demo, then the user's own highlight
+on that paper, the notes window, Share and a closing card; progress is a localStorage key
 (`gamma-guide:<tourId>`), not yet the synced pref. The seeded welcome page in
 `gamma/seed.py` is unchanged (guest workspaces only, hard-coded block tuples).
 
-Two behaviours the build settled that the design below did not spell out:
+Three behaviours the build settled that the design below did not spell out:
 a step whose event fires is marked **done** (a check in the card, the primary
 button turns from Skip into Next) rather than jumping on, so whatever the user
-just opened stays open until they move on; and the app closes any open
-popover on every step change (`onStepChange` from `useGuide`).
+just opened stays open until they move on; the app closes any open popover on
+every step change (`onStepChange` from `useGuide`); and **demo steps** exist
+(next section), which the design had not planned.
+
+## Demo steps
+
+A step with `do: [...]` acts on the UI itself instead of asking the user to.
+The first tour's second step clicks Add, types the arXiv link of *Attention
+Is All You Need*, presses Enter, waits for the page to open and moves on; the
+user's first task is then a highlight on a real paper rather than a menu.
+
+- Actions: `{click: anchor}`, `{type: anchor, text, speed?}`,
+  `{press: "Enter", on?: anchor}`, `{waitFor: {event, match?}, timeout?}`,
+  `{wait: ms}`. Click and type move the spotlight and a drawn pointer to the
+  element first, pause a beat, then act; typing goes through the native value
+  setter plus an `input` event so React-controlled inputs see it; keys are
+  dispatched as `KeyboardEvent`s (the engine's own hotkeys ignore untrusted
+  events). Events that fire during the step are buffered, so a `waitFor` after
+  a fast action still catches its result.
+- `{name}` in typed text is filled from the tour's `vars`, which the
+  localStorage key `gamma-guide-vars` overrides — how the browser suite points
+  the demo at an uploaded PDF instead of the network.
+- While actions run the sheet swallows every click (a stray click can't
+  derail the demo), the card shows "watch" and only Skip; Back is hidden.
+  After the actions, a step without `advanceOn` advances by itself, one with
+  it hands over to the user. A failed action (anchor never appeared, event
+  timed out) leaves the card up with "couldn't finish" and Skip; the tour is
+  never stuck.
+- `placement` on a step names the card's preferred side so it does not cover
+  what the demo is about to open (the Add step sits to the left of the
+  button; its popover opens below).
 
 The survey behind these choices is [docs/research/onboarding.md](../research/onboarding.md).
 

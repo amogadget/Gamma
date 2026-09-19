@@ -1893,6 +1893,13 @@ body {
 .statusPill.fading { opacity: 0; }
 .statusPill.error { color: #e07a6a; border-color: rgba(224, 122, 106, 0.5); }
 .statusPill.interactive { pointer-events: auto; } /* has a Retry button */
+/* Keep feedback away from the handwriting strip, including expanded options. */
+.main:has(.pdfInkBar) > .statusPill {
+  top: auto;
+  bottom: 12px;
+  max-width: min(calc(100% - 120px), 520px);
+}
+.main:has(.pdfInkBar) > .statusPill .pillText { min-width: 0; overflow-wrap: anywhere; }
 .pillSpin {
   flex: none;
   width: 12px;
@@ -3741,6 +3748,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   cursor: default;
 }
 .chatMsgUsage.inline { padding: 0; font-size: 12px; color: var(--text-muted); }
+.chatMsgUsage.live { padding: 0 0 0 4px; border-left: 1px solid var(--border-subtle); }
 .chatMsgUsagePart { display: inline-flex; align-items: center; gap: 2px; }
 .chatMsgUsagePart svg { opacity: 0.8; }
 .chatUsageTotal { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 4px; }
@@ -4990,8 +4998,8 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 @keyframes inkFlashFade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
 
 /* The tool strip: top-centre of the viewer, the control-box surface laid
-   flat. Row one is the tools (presets, eraser, lasso, hand, new group,
-   close); the options row of the armed tool opens under it. */
+   flat. Row one is the tools (presets, eraser, lasso, hand, close,
+   undo/redo); the options row of the armed tool opens under it. */
 .pdfInkBar {
   position: absolute;
   z-index: 21;
@@ -5019,6 +5027,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   padding: 3px 5px;
 }
 .pdfInkSub { border-top: 1px solid var(--border); padding: 4px 6px; }
+.pdfInkHistory { display: flex; flex: none; gap: 2px; margin-left: auto; }
 .pdfInkSep { width: 1px; height: 16px; background: var(--border); margin: 0 3px; }
 /* A preset: the icon with its colour bar underneath (the bar's height follows the width). */
 .pdfInkBar .inkToolBtn { position: relative; width: 26px; height: 28px; padding-bottom: 6px; }

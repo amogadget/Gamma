@@ -161,8 +161,10 @@ The scenarios live in `tests/e2e/scenarios/`:
   ink` runs both files.
 - `guide.mjs`: the first-run guide ([onboarding.md](onboarding.md)) — `?guide=`
   starts a tour and is consumed from the URL, every registered home-view anchor
-  is present once, a click through the spotlight checks the step off, Next
-  closes what the step opened, Esc leaves and records the dismissal.
+  is present once, the demo step adds a paper by itself (pointed at an
+  uploaded PDF through `gamma-guide-vars`, so no network), the user's
+  highlight checks the next step off, Esc leaves and records the dismissal,
+  the account menu's "Take the tour" restarts it.
 - `ipad.mjs`: the installed web app ([ipad.md](ipad.md)) — the manifest
   and its icons, `theme-color` following the theme, the standalone-mode
   block in the bundled stylesheet (`display-mode` cannot be emulated in

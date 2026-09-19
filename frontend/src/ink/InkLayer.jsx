@@ -12,7 +12,7 @@ import { createPortal } from "react-dom";
 import { ContextMenu } from "../shared/ui/Menus";
 import { getStroke } from "perfect-freehand";
 import {
-  CopyIcon, ErasePartialIcon, EraserIcon, EraseStrokeIcon, HandIcon, HighlightIcon, LassoIcon, PenIcon, PlusIcon,
+  CopyIcon, ErasePartialIcon, EraserIcon, EraseStrokeIcon, HandIcon, HighlightIcon, LassoIcon, PenIcon,
   FileTextIcon, LineWidthIcon, PaletteIcon, RectSelectIcon, RedoIcon, ResizeIcon, TrashIcon, UndoIcon, XIcon,
 } from "../shared/ui/Icons";
 import {
@@ -687,7 +687,7 @@ export function InkCard({ block, onJump }) {
 // `tools`: the presets; `active`: a preset id, "eraser", "select" or null
 // (the hand); `options`: whether the row is open.
 export function InkToolbar({ tools, active, options, eraserMode, eraserSize, lassoMode,
-  onPick, onToggleOptions, onChangeTools, onEraser, onLasso, onNewGroup, onClose, onUndo, onRedo, canUndo, canRedo }) {
+  onPick, onToggleOptions, onChangeTools, onEraser, onLasso, onClose, onUndo, onRedo, canUndo, canRedo }) {
   const preset = tools.find((t) => t.id === active) || null;
   const tap = (id) => (id === active ? onToggleOptions() : onPick(id));
   const btn = (id, label, icon, extra) => (
@@ -715,8 +715,6 @@ export function InkToolbar({ tools, active, options, eraserMode, eraserSize, las
   return (
     <InkTooltips className="pdfInkBar" role="toolbar" aria-label="Handwriting tools">
       <div className="pdfInkRow">
-        <button type="button" className="ctlBtn" aria-label="Undo ink" title="Undo handwriting" disabled={!canUndo} onClick={onUndo}><UndoIcon aria-hidden="true" /></button>
-        <button type="button" className="ctlBtn" aria-label="Redo ink" title="Redo handwriting" disabled={!canRedo} onClick={onRedo}><RedoIcon aria-hidden="true" /></button>
         {tools.map((t, i) => {
           const hl = t.kind === "highlighter";
           const sizes = sizesFor(t.kind), k = Math.max(0, sizes.indexOf(t.size));
@@ -732,9 +730,11 @@ export function InkToolbar({ tools, active, options, eraserMode, eraserSize, las
           onClick={() => onPick(null)} title="Hand (V): scroll and select text; a stylus still writes" aria-label="Hand"
           aria-pressed={active === null}><HandIcon size={15} /></button>
         <span className="pdfInkSep" />
-        <button type="button" className="ctlBtn" onClick={onNewGroup}
-          title="Start a new handwriting note: the next strokes make their own block instead of joining the last one"><PlusIcon size={15} /></button>
         <button type="button" className="ctlBtn" onClick={onClose} title="Close the handwriting tools (Esc)"><XIcon size={15} /></button>
+        <span className="pdfInkHistory">
+          <button type="button" className="ctlBtn" aria-label="Undo ink" title="Undo handwriting" disabled={!canUndo} onClick={onUndo}><UndoIcon aria-hidden="true" /></button>
+          <button type="button" className="ctlBtn" aria-label="Redo ink" title="Redo handwriting" disabled={!canRedo} onClick={onRedo}><RedoIcon aria-hidden="true" /></button>
+        </span>
       </div>
       {options && preset ? (
         <div className="pdfInkSub" data-ink-options="tool">
