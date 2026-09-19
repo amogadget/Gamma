@@ -494,7 +494,12 @@ export async function nativeScenarios({ server, browser, alice, bob, makePdf, st
     assert(!call.workspace.includes("=") && !call.workspace.includes("/"), `workspace must be a bare id, got ${call.workspace}`);
     assertEq(call.user, account.name, "user");
     assertEq(call.title, "Native paper", "title");
-    assertEq(Object.keys(call).sort().join(","), "docID,pageID,title,type,user,workspace", "exactly the agreed fields");
+    assertEq(Object.keys(call).sort().join(","), "docID,pageID,title,type,user,viewport,workspace", "exactly the position-aware handoff fields");
+    assertEq(call.viewport.pageIndex, 0, "the fixture's visible PDF page is carried to native");
+    for (const key of ["anchorX", "anchorY"]) {
+      assert(Number.isFinite(call.viewport[key]) && call.viewport[key] >= 0 && call.viewport[key] <= 1,
+        `viewport ${key} must be a bounded page-local anchor`);
+    }
     assertEq(await handoffPage.evaluate(() => document.getElementById("root").inert), true, "the tree is frozen for native");
     // The typed edit reached the server BEFORE the handoff was posted.
     const tree = await account.api(`/api/blocks/${pageId}/subtree`);
