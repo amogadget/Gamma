@@ -40,12 +40,19 @@ function ContextMenu({ x, y, onClose, className = "", anchorRight = false, ignor
     const el = ref.current;
     if (!el) return;
     const pad = VIEWPORT_PAD;
-    const { width, height } = el.getBoundingClientRect();
-    let left = anchorRight ? x - width : x, top = y;
-    if (left + width > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - width - pad);
-    if (left < pad) left = pad;
-    if (top + height > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - height - pad);
-    setPos({ left, top });
+    const place = () => {
+      const { width, height } = el.getBoundingClientRect();
+      let left = anchorRight ? x - width : x, top = y;
+      if (left + width > window.innerWidth - pad) left = Math.max(pad, window.innerWidth - width - pad);
+      if (left < pad) left = pad;
+      if (top + height > window.innerHeight - pad) top = Math.max(pad, window.innerHeight - height - pad);
+      setPos((old) => old.left === left && old.top === top ? old : { left, top });
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(el);
+    window.addEventListener("resize", place);
+    return () => { observer.disconnect(); window.removeEventListener("resize", place); };
   }, [x, y, anchorRight]);
 
   useEffect(() => {
@@ -218,7 +225,7 @@ function MenuSelect({ value, onChange, options, label, block, icon: TriggerIcon,
         {!iconOnly ? <ChevronDownIcon size={13} className="uiSelectChev" /> : null}
       </button>
       {menu ? (
-        <ContextMenu x={menu.x} y={menu.y} anchorRight onClose={close} ignoreRef={triggerRef}>
+        <ContextMenu x={menu.x} y={menu.y} anchorRight onClose={close} ignoreRef={triggerRef} className="uiSelectMenu">
           {options.map(([val, lab, OptIcon]) => (
             <button key={val} className="ctxMenuItem ctxMenuItemIconed"
               onClick={() => { close(); onChange(val); }}>

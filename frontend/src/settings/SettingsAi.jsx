@@ -4,6 +4,7 @@
 import React from "react";
 import { parseFolderTags } from "../library/libraryUtils";
 import { MenuSelect } from "../shared/ui/Menus";
+import { ModelPicker } from "./ModelPicker";
 import { Section, SubDialog, Step, Field, Empty, PercentMeter, Row, PasswordInput } from "./SettingsKit";
 import { GlobeIcon, KeyIcon, MicIcon, PaperIcon, RefreshIcon, SparklesIcon, Trash2Icon } from "../shared/ui/Icons";
 
@@ -136,7 +137,6 @@ function ProviderForm({ value, onCancel }) {
                 placeholder="sk-…"
                 value={aiKeysForm.api_key}
                 onChange={(event) => setAiKeysForm((form) => ({ ...form, api_key: event.target.value }))}
-                onBlur={() => { if (aiKeysForm.api_key?.trim()) loadModelCatalog(); }}
               />
             </Field>
             {service === "custom" ? <Field label="Base URL" hint={`optional — default ${protocol?.default_base_url || ""}`}>
@@ -176,39 +176,8 @@ function ProviderForm({ value, onCancel }) {
           </div>
         ) : null}
         <div className="aiProvPwForm">
-          <input
-            className="aiKeyInput"
-            type="text"
-            spellCheck={false}
-            list="aiModelSuggestions"
-            placeholder={aiModelCatalog?.loading
-              ? "Add a model — loading the provider list…"
-              : availModels.length
-                ? `Add a model — type or pick (${availModels.length} available), Enter to add`
-                : "Add a model — Enter to add"}
-            value={customModel}
-            onChange={(event) => {
-              const next = event.target.value;
-              const inputType = event.nativeEvent?.inputType;
-              if ((!inputType || inputType === "insertReplacementText") && availModels.includes(next)) {
-                addCatalogModel(next);
-                setCustomModel("");
-              } else {
-                setCustomModel(next);
-              }
-            }}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter") return;
-              event.preventDefault();
-              if (customModel.trim()) {
-                addCatalogModel(customModel.trim());
-                setCustomModel("");
-              }
-            }}
-          />
-          <datalist id="aiModelSuggestions">
-            {availModels.map((model) => <option key={model} value={model} />)}
-          </datalist>
+          <ModelPicker models={availModels} value={customModel}
+            onChange={setCustomModel} onAdd={addCatalogModel} loading={aiModelCatalog?.loading} />
           <button
             className="uiBtn sm"
             disabled={!!aiModelCatalog?.loading || formOauthPending}

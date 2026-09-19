@@ -3348,6 +3348,11 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 }
 .aiProvPwForm { display: flex; gap: 6px; align-items: center; margin-top: 6px; }
 .aiProvPwForm .aiKeyInput { margin-bottom: 0; width: auto; flex: 1; }
+.aiModelMenu { width: min(440px, calc(100vw - 16px)); }
+.aiModelOptions { max-height: min(280px, calc(100dvh - 24px)); overflow-y: auto; overscroll-behavior: contain; }
+.aiModelOptions .ctxMenuItem { overflow-wrap: anywhere; }
+.aiModelOptions .ctxMenuItem[aria-selected="true"] { background: var(--bg-hover); }
+.ctxMenu.uiSelectMenu { max-height: min(360px, calc(100dvh - 16px)); max-width: calc(100vw - 16px); overflow-y: auto; overscroll-behavior: contain; }
 /* small badge chips (admin / guest / you) */
 .uiTag {
   display: inline-block;

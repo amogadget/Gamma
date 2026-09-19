@@ -32,6 +32,100 @@ export async function settingsScenarios(env) {
     await row(page, label).waitFor({ state: "visible" });
   }
 
+  await step("settings: model discovery updates automatically and long lists scroll", async () => {
+    const { ctx, page } = await setup({ width: 800, height: 650 });
+    try {
+      const calls = [];
+      let oldResponseSent = false;
+      const models = Array.from({ length: 100 }, (_, i) => `gpt-test-${String(i).padStart(3, "0")}`);
+      await page.route("**/api/ai/model-catalog", async (route) => {
+        const body = route.request().postDataJSON();
+        calls.push(body);
+        if (body.api_key === "old-key") await new Promise((resolve) => setTimeout(resolve, 1500));
+        await route.fulfill({ json: { models: body.api_key === "old-key" ? ["stale-model"] : models } });
+        if (body.api_key === "old-key") oldResponseSent = true;
+      });
+      await openSettings(page);
+      await nav(page, "AI").click();
+      await page.getByRole("button", { name: "+ Add provider", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Add key", exact: true });
+      await dialog.getByRole("button", { name: "AI service", exact: true }).click();
+      await page.getByText("OpenAI API", { exact: true }).click();
+      const key = dialog.locator('input[autocomplete="new-password"]');
+      await key.fill("old-key");
+      await until(() => calls.length === 1);
+      await key.fill("new-key");
+      await until(() => calls.length === 2);
+      await dialog.getByRole("button", { name: "100 usable" }).waitFor();
+      const input = dialog.getByRole("combobox", { name: "Add a model" });
+      await input.click();
+      const list = page.getByRole("listbox", { name: "Available models" });
+      assertEq(await list.getByRole("option").count(), 100);
+      const bounds = await list.boundingBox();
+      assert(bounds.y >= 0 && bounds.y + bounds.height <= 650, "model list fits the viewport");
+      assert(await list.evaluate((el) => el.scrollHeight > el.clientHeight), "long list is scrollable");
+      await list.hover();
+      await page.mouse.wheel(0, 1600);
+      await until(() => list.evaluate((el) => el.scrollTop > 0));
+      await input.fill("099");
+      await list.getByRole("option", { name: "gpt-test-099", exact: true }).click();
+      await dialog.getByRole("button", { name: "Remove gpt-test-099", exact: true }).waitFor();
+      await input.click();
+      await input.press("ArrowUp");
+      await input.press("Enter");
+      await dialog.getByRole("button", { name: "Remove gpt-test-098", exact: true }).waitFor();
+      await input.fill("my-custom-model");
+      await input.press("Enter");
+      await dialog.getByRole("button", { name: "Remove my-custom-model", exact: true }).waitFor();
+      // Let the older response land; it must not replace the new catalog.
+      await until(() => oldResponseSent);
+      await until(() => page.getByRole("button", { name: "100 usable" }).isVisible());
+      await input.click();
+      await input.press("Escape");
+      assertEq(await list.count(), 0);
+      assert(await dialog.isVisible(), "Escape dismisses the list without closing the dialog");
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
+
+  await step("settings: manual OAuth connection automatically fetches models", async () => {
+    const { ctx, page } = await setup();
+    try {
+      await page.evaluate(() => {
+        window.open = (url) => { window.testSignInUrl = url; return null; };
+      });
+      await page.route("**/api/ai/oauth/chatgpt/complete", async (route) => {
+        const info = await user.api("/api/ai/settings");
+        info.providers.push({ id: "oauth-test", protocol: "chatgpt", name: "Test sign-in", models: "gpt-test", oauth_connected: true });
+        await route.fulfill({ json: info });
+      });
+      let catalogCalls = 0;
+      await page.route("**/api/ai/model-catalog", async (route) => {
+        catalogCalls++;
+        await route.fulfill({ json: { models: ["gpt-test", "gpt-new-model"] } });
+      });
+      await openSettings(page);
+      await nav(page, "AI").click();
+      await page.getByRole("button", { name: "+ Add provider", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "Add key", exact: true });
+      await dialog.getByRole("button", { name: "AI service", exact: true }).click();
+      await page.getByText("ChatGPT subscription", { exact: true }).click();
+      await dialog.getByRole("button", { name: "Open ChatGPT sign-in", exact: true }).click();
+      await until(() => page.evaluate(() => !!window.testSignInUrl));
+      const state = await page.evaluate(() => new URL(window.testSignInUrl).searchParams.get("state"));
+      const callback = dialog.getByRole("textbox", { name: /Callback URL/ });
+      assertEq(await callback.inputValue(), "", "callback remains a manual input");
+      await callback.fill(`http://localhost:1455/auth/callback?code=test&state=${state}`);
+      await dialog.getByRole("button", { name: "Connect", exact: true }).click();
+      const edit = page.getByRole("dialog", { name: "Edit key", exact: true });
+      await edit.getByRole("button", { name: "2 usable" }).waitFor();
+      assertEq(catalogCalls, 1);
+      await edit.getByRole("combobox", { name: "Add a model" }).click();
+      await page.getByRole("option", { name: "gpt-new-model", exact: true }).waitFor();
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
+
   await step("settings: external assistant token creation, hiding, and revocation", async () => {
     const { ctx, page } = await setup();
     try {

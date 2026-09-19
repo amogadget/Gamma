@@ -679,7 +679,7 @@ class ModelCatalogRequest(BaseModel):
     provider_id: str = ""  # saved entry to use the stored key of; "" = use the fields below
     protocol: str = ""
     api_key: str = ""
-    base_url: str = ""
+    base_url: str | None = None
 
 
 # Sync def: the upstream /v1/models fetch runs in the threadpool.
@@ -694,7 +694,7 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     protocol = payload.protocol
     if payload.provider_id:
         entry = next((e for e in load_provider_entries(user) if e.get("id") == payload.provider_id), None) or {}
-        protocol = entry.get("protocol") or protocol
+        protocol = protocol or entry.get("protocol")
     if protocol == "chatgpt":
         return {"models": _chatgpt_model_catalog(user, payload.provider_id)}
     if protocol not in AI_PROTOCOLS:
@@ -702,7 +702,7 @@ def ai_model_catalog(payload: ModelCatalogRequest, request: Request):
     key = (payload.api_key or "").strip() or (entry.get("api_key") or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="enter the API key first, then load the model list")
-    base = ((payload.base_url or "").strip() or (entry.get("base_url") or "").strip()
+    base = ((payload.base_url if payload.base_url is not None else entry.get("base_url") or "").strip()
             or AI_PROTOCOLS[protocol]["base_url"]).rstrip("/")
     try:
         data = _model_catalog_json(_models_list_request(protocol, key, base))

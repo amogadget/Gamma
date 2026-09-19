@@ -2628,9 +2628,15 @@ function LibraryApp() {
   // ChatGPT (OAuth) is listed live from the codex backend via the entry's
   // sign-in token (known-good fallback list before connecting).
   const [aiModelCatalog, setAiModelCatalog] = useState(null); // null | {loading} | {models} | {error}
+  const catalogRequest = useRef(0);
+  const catalogTarget = JSON.stringify([aiKeysForm?.id, aiKeysForm?.protocol, aiKeysForm?.api_key, aiKeysForm?.base_url, aiKeysForm?.oauthConnectedAt]);
+  const catalogTargetRef = useRef(catalogTarget);
+  catalogTargetRef.current = catalogTarget;
   async function loadModelCatalog() {
     const f = aiKeysForm;
     if (!f) return;
+    const request = ++catalogRequest.current;
+    const target = catalogTarget;
     setAiModelCatalog({ loading: true });
     try {
       const d = await apiJson(`${API}/ai/model-catalog`, {
@@ -2641,9 +2647,9 @@ function LibraryApp() {
           api_key: f.api_key.trim(), base_url: f.base_url.trim(),
         }),
       });
-      setAiModelCatalog({ models: d.models || [] });
+      if (request === catalogRequest.current && target === catalogTargetRef.current) setAiModelCatalog({ models: d.models || [] });
     } catch (err) {
-      setAiModelCatalog({ error: friendlyApiError(err) });
+      if (request === catalogRequest.current && target === catalogTargetRef.current) setAiModelCatalog({ error: friendlyApiError(err) });
     }
   }
   function addCatalogModel(m) {
@@ -2665,18 +2671,18 @@ function LibraryApp() {
   const formStoredEntry = aiKeysForm?.id ? aiKeysInfo?.providers?.find((p) => p.id === aiKeysForm.id) : null;
   const formOauthPending = !!aiKeysForm && isOauthProto(aiKeysForm.protocol) && !formStoredEntry?.oauth_connected;
 
-  // Reset the picker whenever the form target changes, then load the catalog
-  // as soon as it's possible without extra typing: entries with a stored
-  // credential (API key or completed sign-in). A freshly typed key triggers
-  // the load on blur instead; a fresh OAuth entry after Connect.
+  // Debounce credential edits, and discard responses for an older endpoint/key.
   useEffect(() => {
     setAiModelCatalog(null);
-    setCustomModel("");
     const f = aiKeysForm;
     if (!f) return;
     const stored = f.id ? aiKeysInfo?.providers?.find((p) => p.id === f.id) : null;
-    if (stored?.oauth_connected || stored?.key_hint) loadModelCatalog();
-  }, [aiKeysForm?.id, aiKeysForm?.protocol]);
+    const ready = isOauthProto(f.protocol) ? stored?.oauth_connected : f.api_key?.trim() || stored?.key_hint;
+    if (!ready) return;
+    const timer = setTimeout(loadModelCatalog, 500);
+    return () => { clearTimeout(timer); catalogRequest.current++; };
+  }, [catalogTarget, formStoredEntry?.oauth_connected]);
+  useEffect(() => { setCustomModel(""); }, [aiKeysForm?.id, aiKeysForm?.protocol]);
 
   // "Sign in with ChatGPT": opens the OAuth page in a new tab. Its redirect
   // (localhost:1455) fails to load — the user pastes that URL back into the
@@ -2710,11 +2716,21 @@ function LibraryApp() {
           body: { protocol: f.protocol, name: f.name.trim(), base_url: f.base_url.trim(), models: f.models.trim(),
                   test_model: (f.test_model || "").trim(),
                   ...(f.api_key.trim() ? { api_key: f.api_key.trim() } : {}) } };
-    await runAiKeysRequest(() => apiJson(req.url, {
-      method: req.method,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(req.body),
-    }), true);
+    await runAiKeysRequest(async () => {
+      const info = await apiJson(req.url, {
+        method: req.method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req.body),
+      });
+      if (oauthCb) {
+        const connected = info.providers.find((p) => f.id ? p.id === f.id : !aiKeysInfo.providers.some((old) => old.id === p.id));
+        if (connected) {
+          setAiKeysForm((current) => current?.oauthState === f.oauthState
+            ? { ...current, id: connected.id, models: connected.models || "", oauthState: "", oauthCallback: "", oauthConnectedAt: Date.now() } : current);
+        }
+      }
+      return info;
+    }, !oauthCb);
   }
 
   function deleteAiProvider(p) {
