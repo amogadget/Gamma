@@ -34,8 +34,13 @@ All state is SQLite + files on disk under a data directory (env
     admin-confirmed `public_url`;
   - `publisher_sessions` — encrypted publisher cookie snapshots per
     `(username, host)`, imported by the Connector ([extension.md](extension.md));
-  - `integration_tokens` — hashed assistant tokens per account and workspace,
-    and `mcp_oauth` — the OAuth flow's expiring records ([mcp.md](mcp.md)).
+  - `integration_tokens` — hashed assistant tokens per account and workspace
+    (with a `scope`, read or write), and `mcp_oauth` — the OAuth flow's
+    expiring records ([mcp.md](mcp.md));
+  - `mirrors` — the offline copies of remote workspaces: the local workspace,
+    the remote's address and workspace, the write token (Fernet-encrypted
+    with the data directory's key), the feed cursors and the last round's
+    status ([mirror.md](mirror.md)).
 - `workspaces/<id>/pages.db` — the core data model: the `unified_blocks`
   table. Everything is a block (self-referential `parent_id`, fractional-index
   `position` strings like `a0`, `a0V` from the `fractional-indexing` package).
@@ -49,7 +54,9 @@ All state is SQLite + files on disk under a data directory (env
   (`page_id`, `deleted_at`, `actor`; written by `ops.delete_page`, which also
   drops the page's log rows, cleared when a page is created under the same
   id — so a copy of the workspace can tell a deleted page from one it never
-  had). Open it ONLY through `db.connect_pages_db(ws)`:
+  had), and `sync_pages` / `sync_conflicts` — a mirror's per-page base tree
+  and the merges it decided on its own ([mirror.md](mirror.md); empty in a
+  workspace that mirrors nothing). Open it ONLY through `db.connect_pages_db(ws)`:
   WAL journal mode (readers never wait on a writer — several browsers,
   several members), a 10 s busy timeout, and the schema statements (so a
   restored backup gains `page_ops` and `deleted_pages`). Backups copy it with

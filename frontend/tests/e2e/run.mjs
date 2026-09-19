@@ -22,6 +22,7 @@ import { collabScenarios } from "./scenarios/collab.mjs";
 import { shareScenarios } from "./scenarios/share.mjs";
 import { settingsScenarios } from "./scenarios/settings.mjs";
 import { mcpScenarios } from "./scenarios/mcp.mjs";
+import { mirrorScenarios } from "./scenarios/mirror.mjs";
 import { mentionScenarios } from "./scenarios/mentions.mjs";
 import { chatNavigationScenarios } from "./scenarios/chatNavigation.mjs";
 import { transferScenarios } from "./scenarios/transfers.mjs";
@@ -86,6 +87,7 @@ try {
 
   await settingsScenarios(env);
   await mcpScenarios(env);
+  await mirrorScenarios(env);
   await mentionScenarios(env);
   await chatNavigationScenarios(env);
   await transferScenarios(env);

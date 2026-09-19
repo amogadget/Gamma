@@ -20,6 +20,7 @@ if (window.location.protocol === 'file:') {
     remove: (id, opts) => ipcRenderer.invoke('shell:remove', id, opts),
     open: (id) => ipcRenderer.invoke('shell:open', id),
     openWorkspace: (id) => ipcRenderer.invoke('shell:open-workspace', id),
+    keepOffline: (id) => ipcRenderer.invoke('shell:keep-offline', id),
     launcher: () => ipcRenderer.invoke('shell:launcher'),
     reload: () => ipcRenderer.invoke('shell:reload'),
     revealData: (id) => ipcRenderer.invoke('shell:reveal-data', id),

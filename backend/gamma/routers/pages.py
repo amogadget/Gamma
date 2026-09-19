@@ -38,9 +38,14 @@ router = APIRouter(prefix="/api", tags=["pages"])
 ATTACHMENT_KEYS = ("doc_id", "source_url", "original_filename")
 
 
+PAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
 class PageCreate(BaseModel):
     title: str = ""
     folder: str = ""
+    id: str = ""              # a mirror bringing a page over keeps its id (409 when taken)
+    properties: dict = {}     # ...and its page properties
 
 
 class AttachRequest(BaseModel):
@@ -65,12 +70,16 @@ async def create_page_endpoint(payload: PageCreate, request: Request):
     Title defaults to "Untitled"; ``folder`` (a path like ``a/b``) becomes
     ``properties.folder``."""
     ws = require_ws(request, write=True)
-    props = {}
+    props = dict(payload.properties or {})
     folder = clean_path(payload.folder or "")
     if folder:
         props["folder"] = folder
+    if payload.id and not PAGE_ID_RE.match(payload.id):
+        raise HTTPException(status_code=400, detail="invalid page id")
     with connect_pages_db(ws) as conn:
-        return create_page(conn, payload.title, props)
+        if payload.id and conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (payload.id,)).fetchone():
+            raise HTTPException(status_code=409, detail="a block with that id exists")
+        return create_page(conn, payload.title, props, block_id=payload.id)
 
 
 class DocsLookup(BaseModel):

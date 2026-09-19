@@ -117,7 +117,7 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/workspaces` | create a personal one (`{name}`; guests 403); admins may add `kind: "shared"`, `owner`, `access`, `public_role`, `quota_mb` |
-| GET | `/workspaces/mine` | Settings → Workspaces: every workspace I can open with its `used_bytes`, plus `account` (my limits and the usage of all my personal workspaces) |
+| GET | `/workspaces/mine` | Settings → Workspaces: every workspace I can open with its `used_bytes` (and `mirror_of`, the remote workspace's name when it is an offline copy — [mirror.md](mirror.md)), plus `account` (my limits and the usage of all my personal workspaces) |
 | GET/PUT/DELETE | `/workspaces/{id}` | kind + members + quota + `personal_of` + `default` (any member; admins) / rename `{name}` (owner), `default: true` (a personal workspace's owner), kind, access + public role, workspace quota (admin) / delete (owner; not an account's last personal one) |
 | GET/POST | `/workspaces/{id}/backups` | the workspace's server-kept snapshots (any member) / take one now `{label?, uploads?}` (owner; at most `ws_backup.MAX_PER_WORKSPACE`) |
 | GET | `/workspaces/{id}/backups/{name}/download` | the snapshot as a zip — the same zip `/export` gives (any member) |
@@ -156,12 +156,14 @@ the tree reflects (the live session catches up from it).
 |---|---|---|
 | POST | `/pages/{id}/ops` | apply a batch of block ops `{client, ops: [set / insert / move / delete], cursor?: {block, anchor, head}}` (a `set` may carry `base`, the text its `content` was edited from: when the block changed meanwhile the edit is applied as a patch onto the current text — a three-way merge, `gamma/textmerge.py` — and the echoed op carries the merged text) (`cursor`: the writer's caret in the text after the batch, fanned out with it and stored as the writer's presence) in one transaction → `{seq, at, ops (as applied — re-keyed positions carry their final value), removed_uploads}`; a workspace editor or an edit share (confined to the shared page; the page root's properties stay the workspace's); a bad op fails the whole batch (400/403/404/413) |
 | GET | `/pages/{id}/ops?since=` | the op log after a seq → `{seq, batches: [{seq, actor, client, at, ops}]}`; 410 when pruned past `since` (reload the tree) |
+| GET | `/sync/whoami` | who the credential is on this server: `{user, workspace: {id, name}, role, scope}` — `scope` is an integration token's (`read` / `write`), `session` for a browser; what a mirror checks before it is created and at the start of every round |
+| GET | `/sync/changes?since=&limit=` | the workspace change feed (`gamma/routers/sync.py`): pages whose root was stamped after the cursor (`pages: [{id, created_at, updated_at, seq}]`, `seq` the page's latest op) and pages deleted after it (`deleted: [{id, deleted_at, actor}]`, from `deleted_pages`), one time-ordered stream of at most `limit` (≤ 2000) entries → `{since, cursor, more, pages, deleted}`. `since=""` lists everything. The cursor is `<time>|<id>` while `more`, else the server time minus a 60 s grace, so the last minute is re-listed on every poll — the feed is a hint for a copy of the workspace (a mirror, a merge) to know which pages to look at; the page's own `seq` / `GET /pages/{id}/ops` is the truth, and the consumer must be idempotent. Any member (viewers too); no share tokens |
 | WS | `/ws/page/{id}[?ws=&share=&client=]` | the page's live channel: `hello` / `join` / `leave` / `cursor` presence, every applied `ops` batch (with the writer's `cursor` when the batch carried one), `reload`; the client only ever sends `cursor`. Auth like HTTP (session cookie + `?ws=` (else the default workspace) or share token, resolved in the handler — the middleware doesn't run for websockets); viewers join too |
 
 ### Pages (`pages.py`) — page first, PDF as an action on it
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/pages` | create a text-only root page: body `{title?, folder?}` (title defaults to `Untitled`, `folder` → `properties.folder`) → the block dict |
+| POST | `/pages` | create a text-only root page: body `{title?, folder?, id?, properties?}` (title defaults to `Untitled`, `folder` → `properties.folder`; `id` keeps a page's id when a mirror brings it over — 400 when malformed, 409 when taken; `properties` seeds the page's own) → the block dict |
 | POST | `/pages/by-docs` | which pages these stored files became: body `{doc_ids: [<hash>, ...]}` (≤500) → `{pages: {hash: {id, title}}}` — a hash matches the page carrying it as its PDF (`doc_id`) or the note page imported from it (a markdown upload's `markdown_import`); hashes with no page absent; any member. The file chips ask once per page render for their "open page" button and the menu's "Open page" / "Add to library" |
 | POST | `/pages/from-file` | "Add to library" on a markdown file chip: body `{filename: "<hash>.md", original?, folder?}` → `{page, created, imported?}` — the stored upload becomes a note page through the `/import/markdown` importer (title from front matter, else `original` minus its extension), filed in `folder`; idempotent (a page whose `markdown_import` is the hash is returned with `created: false`); the file is untouched, the page is a copy. 400 for anything but a stored markdown name, 404 when the file is not in the workspace; workspace editors |
 | POST | `/pages/{page_id}/attachment` | attach a PDF to a page that has none: body `{doc_id?, source_url?, original_filename?}` (at least one of `doc_id`/`source_url`; `doc_id` is shape-validated only — a URL-opened PDF's id is the URL hash and the proxy fetches it lazily, like `by-doc`; `source_url` defaults to `/api/uploads/<doc_id>.pdf`). While the title is still automatic (`Untitled`/empty) it becomes the file name / URL tail and is marked `auto_title`. → the updated block. 400 bad input / not a root page, 404 unknown page, 409 `{"detail": "page already has an attachment"}`, 409 `{"detail": "attachment belongs to another page", "page_id"}` |
@@ -306,8 +308,24 @@ archived conversation browsing remains session-only.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/integrations/tokens` | the current workspace's assistant connections (manual tokens and OAuth grants: id, name, dates), the MCP URL and whether browser sign-in is available; session only, never a guest |
-| POST | `/integrations/tokens` | mint a manual token `{name}` (shown once); at most 20 unexpired per account |
+| POST | `/integrations/tokens` | mint a manual token `{name, scope?: read \| write, expires_in_days?}` (shown once); at most 20 unexpired per account; `write` (a mirror's push credential, [mirror.md](mirror.md)) is refused to a viewer |
 | DELETE | `/integrations/tokens/{id}` | revoke a connection |
+
+A manual token (`gamma_…`, not an OAuth one) is also accepted on every `/api/*` route as `Authorization: Bearer` (`auth.py`): the request runs as the account behind it, in the token's workspace only (`?ws=` / the header may only repeat it — 403 otherwise), writes only with the `write` scope (403 "this token is read-only"), never as an admin, and never as a session that manages tokens or accounts (`require_personal_user` refuses it with 403).
+
+### Mirrors (`routers/mirrors.py`, prefix `/api/mirrors`) — see [mirror.md](mirror.md)
+
+| method | path | what |
+|---|---|---|
+| GET | `/mirrors` | the caller's offline copies with their sync status |
+| POST | `/mirrors` | `{remote_url, token, name?, mode?: two-way \| pull}` → the mirror: a new personal workspace that follows the remote workspace the token belongs to (validated against the remote's `/sync/whoami` first; a read token or a viewer's role gives `pull`); the first fill runs in the background |
+| GET | `/mirrors/{ws}` | one mirror |
+| POST | `/mirrors/{ws}/sync[?wait=1]` | a sync round now (`wait=1` answers with the round's status) |
+| DELETE | `/mirrors/{ws}` | stop mirroring; the workspace stays |
+| GET | `/mirrors/{ws}/conflicts[?resolved=1]` | the merges the engine decided on its own |
+| POST | `/mirrors/{ws}/conflicts/{id}` | `{choice: keep \| mine \| theirs}` |
+
+Session only, the mirror's owner, never a guest.
 | GET | `/integrations/oauth/request?request_id=` | the pending consent (client name, the account's workspaces) for the consent screen |
 | POST | `/integrations/oauth/consent` | approve or deny a pending sign-in for one workspace |
 | GET | `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource` | OAuth discovery for MCP clients (no `/api` prefix) |

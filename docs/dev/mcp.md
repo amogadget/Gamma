@@ -172,7 +172,7 @@ manual tokens in **Integrations**, where users can revoke them.
 
 ## Permissions and credentials
 
-- Integration tokens grant reading access to exactly one workspace. Tool arguments,
+- Integration tokens grant access to exactly one workspace: `read` (the default; the MCP endpoint and the HTTP API's reads) or `write` (a mirror's push credential, [mirror.md](mirror.md); refused to viewers). On the HTTP API a manual token is a bearer credential — the account behind it, confined to its workspace, never an admin ([api.md](api.md) "Integrations"). Tool arguments,
   `?ws=`, and `X-Gamma-Workspace` cannot select another workspace.
 - Only token SHA-256 hashes are stored in `users.db`. Tokens contain 256 random bits.
 - Tokens expire after 90 days by default (API range: 1–365 days); accounts may

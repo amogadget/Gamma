@@ -299,6 +299,64 @@ function refreshGamma() {
     });
 }
 
+// "Keep an offline copy": a mirror of the open REMOTE server's workspace
+// on a local server (docs/dev/mirror.md). Everything happens through
+// Gamma's public API with the content session's cookies — nothing is
+// injected into any page: a write-scope integration token is minted on
+// the remote for that workspace, the local server is started (made, when
+// there is none) and signed into with its seeded credentials, the mirror
+// is created there, and the window moves to it. The first fill runs on the
+// local server in the background.
+async function keepOffline(wsId) {
+  if (!current || current.type !== 'remote' || !content) throw new Error('Open a remote server first');
+  const g = gamma;
+  const ws = g && g.list.find((w) => w.id === wsId);
+  if (!ws) throw new Error('Unknown workspace');
+  const remoteOrigin = new URL(current.url).origin;
+  const ses = content.webContents.session;
+  const api = async (origin, path, init) => {
+    const r = await ses.fetch(origin + path, { credentials: 'include', cache: 'no-store', ...init });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.detail || `${path}: HTTP ${r.status}`);
+    return body;
+  };
+  busy = `Keeping ${ws.name} offline…`;
+  pushState();
+  try {
+    const token = await api(remoteOrigin, '/api/integrations/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Gamma-Workspace': wsId },
+      body: JSON.stringify({ name: 'Gamma desktop offline copy', scope: 'write', expires_in_days: 365 }),
+    });
+    let local = registry.load().servers.find((s) => s.type === 'local');
+    if (!local) local = registry.addLocal('Local');
+    const entry = await sidecar.start(local, registry.getSettings(), appInfo());
+    const localOrigin = new URL(entry.url).origin;
+    allowedOrigins.add(localOrigin);
+    const session = await api(localOrigin, '/api/session');
+    if (!session.user) {
+      await api(localOrigin, '/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: local.adminUser, password: local.adminPassword }),
+      });
+    }
+    const mirror = await api(localOrigin, '/api/mirrors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remote_url: remoteOrigin, token: token.token, name: `${ws.name} (offline copy)` }),
+    });
+    busy = null;
+    await openServer(local.id);
+    await openGammaWorkspace(mirror.workspace_id);
+    buildMenu();
+    return { workspace: mirror.workspace_id, server: local.id };
+  } finally {
+    busy = null;
+    pushState();
+  }
+}
+
 // Navigate the open server to one of its Gamma workspaces.
 function openGammaWorkspace(id) {
   if (!current || !content) throw new Error('No server open');
@@ -559,6 +617,16 @@ function registerIpc() {
   ipcMain.handle('shell:open-workspace', shellOnly(async (id) => {
     setBarExpanded(false);
     await openGammaWorkspace(id);
+  }));
+  ipcMain.handle('shell:keep-offline', shellOnly(async (id) => {
+    setBarExpanded(false);
+    try {
+      return await keepOffline(id);
+    } catch (e) {
+      dialog.showMessageBox(win, { type: 'error', title: 'Gamma', message: 'Could not make an offline copy.',
+        detail: String(e && e.message || e), buttons: ['OK'] }).catch(() => {});
+      throw e;
+    }
   }));
   ipcMain.handle('shell:open', shellOnly(async (id) => {
     setBarExpanded(false);

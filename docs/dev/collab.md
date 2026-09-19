@@ -84,6 +84,32 @@ returns the batches after a seq (410 when the log no longer reaches back: the
 client reloads the tree); `GET /blocks/{id}/subtree` on a page carries the
 `seq` its tree reflects.
 
+## The change feed (`gamma/routers/sync.py`)
+
+`GET /api/sync/changes?since=&limit=` is the workspace-wide view the
+per-page log lacks: the pages whose root block was stamped after a cursor,
+each with its latest `seq`, and the `deleted_pages` tombstones written after
+it, as one time-ordered stream. It exists for anything that keeps a copy of
+a workspace in step — the planned desktop mirror, a backup merge — so it
+can find out *which* pages to look at without walking the library; what
+actually changed on a page is still its op log (`seq`,
+`GET /pages/{id}/ops?since=`), and a page whose log no longer reaches back
+is refetched whole.
+
+It is a hint, not a ledger, and the consumer must be idempotent: while a
+walk is paginating the cursor is `<time>|<id>` and strict (nothing repeats),
+but a caught-up answer's cursor is the server time minus a 60 s grace, so
+the last minute is re-listed on every poll. That covers writers whose
+timestamp predates their commit (an import holds one `now` for its whole
+run; `create_page` stamps before its insert) without a workspace-wide
+sequence that every writer would have to append to. Every writer stamps the
+page root once per batch — `apply_ops`, `record_ops` (a cross-page move's
+source), `log_reload` (a subtree replace, an import into an existing page),
+the raw import paths — so a page never changes without the feed noticing.
+Deleting a page (`ops.delete_page`) drops its log rows and leaves the
+tombstone the feed reports; the tombstone goes when the id is created
+again.
+
 ## Rooms and the socket (`gamma/collab.py`, `routers/collab.py`)
 
 One in-memory room per `(workspace, page_id)` — Gamma is one uvicorn process
@@ -286,6 +312,10 @@ state in App instead of the tree.
 - The op log has `actor` and `at` per batch but nothing reads them yet: an
   activity view ("who changed what") and a page version history are both
   derivable from it.
+- A mirror of a workspace (a desktop copy that syncs) is built on the
+  change feed and the tombstones: [mirror.md](mirror.md). It works from
+  trees, not from replaying this log, so a copy that was away longer than
+  `KEEP_OPS` batches needs no fallback.
 
 The survey behind this design (OT vs record-level LWW vs CRDT, why the old
 snapshot autosave could not be patched) is in

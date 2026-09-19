@@ -20,6 +20,7 @@ import {
   CheckIcon, DatabaseIcon, ExportIcon, GlobeIcon, HardDriveIcon, ImportIcon, LogOutIcon, PenIcon,
   PlusIcon, ShieldIcon, Trash2Icon, UserIcon, UsersIcon,
 } from "../shared/ui/Icons";
+import { MirrorsSection, useMirrors } from "./SettingsMirrors";
 
 // Workspace roles as the UI words them (docs/dev/workspaces.md); the account
 // menu's switcher in App.jsx reads the same table.
@@ -29,6 +30,7 @@ const ROLE_TEXT = { owner: "own it", editor: "can edit", viewer: "can view" };
 // One line under a switcher entry / workspace row: what kind it is and, for
 // a shared one, your role.
 export function workspaceMeta(w) {
+  if (w.mirror_of) return `offline copy of ${w.mirror_of}`;
   if (w.personal) return w.default ? "personal · default" : "personal";
   return `${w.access === "public" ? "public · " : ""}${ROLE_LABEL[w.role] || w.role}`;
 }
@@ -488,14 +490,16 @@ export function WorkspacesSettings({ value, onServer }) {
   const [busy, setBusy] = React.useState(false);
   const accounts = useAccounts();
   const currentId = workspace?.id;
+  const [mirrors, refreshMirrors] = useMirrors(!!me && me !== "guest");
 
   const refresh = React.useCallback(() => {
     apiJson(`${API}/workspaces/mine`).then(setData).catch((err) => setError(err.message));
-  }, []);
+    refreshMirrors();
+  }, [refreshMirrors]);
   React.useEffect(() => { refresh(); }, [refresh]);
 
   const all = data?.workspaces || [];
-  const personal = all.filter((w) => w.personal);
+  const personal = all.filter((w) => w.personal && !w.mirror_of);  // mirrors have their own section
   const shared = all.filter((w) => !w.personal);
 
   async function submitCreate(name) {
@@ -602,6 +606,10 @@ export function WorkspacesSettings({ value, onServer }) {
           >
             {personal.map(row)}
           </Section>
+          {!me || me === "guest" ? null : (
+            <MirrorsSection mirrors={mirrors} refresh={refresh} workspaces={all} currentId={currentId}
+              switchWorkspace={switchWorkspace} closeSettings={closeSettings} confirm={confirm} setStatus={setStatus} />
+          )}
           <Section title="Shared">
             {shared.length ? shared.map(row) : (
               <Empty icon={UsersIcon}>

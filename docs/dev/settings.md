@@ -65,7 +65,9 @@ AI:
 - **Prompts**: the accordion with one Cancel / Save pair.
 - **Integrations** ([SettingsIntegrations.jsx](../../frontend/src/settings/SettingsIntegrations.jsx)):
   the workspace's assistant connections, the MCP URL, the Codex setup
-  command and the manual-token fallback ([mcp.md](mcp.md)).
+  command and the manual-token fallback ([mcp.md](mcp.md)) — a token's
+  scope is a `Segmented` (read-only for assistants, read and write for an
+  offline copy on another Gamma, [mirror.md](mirror.md)).
 
 Manage:
 
@@ -73,7 +75,14 @@ Manage:
   Open, a Data menu with export and import, Manage — an inline detail page;
   rename and invite are small editor dialogs), New workspace, Export all.
   The empty Shared section offers admins "New shared workspace" (a jump to
-  Server). The account popover's "Workspaces…" opens this pane.
+  Server). The account popover's "Workspaces…" opens this pane. Between
+  Personal and Shared, **Offline copies**
+  ([SettingsMirrors.jsx](../../frontend/src/settings/SettingsMirrors.jsx)):
+  the account's mirrors of remote workspaces (each row: status line, Open,
+  Sync now, Merges — an inline list of the decisions the sync took on its
+  own with Keep / Use mine / Use theirs —, Stop) and "Mirror a remote
+  workspace" (a `SubDialog`: server address, write token, name, direction)
+  — [mirror.md](mirror.md).
 - **Backups**: server-kept snapshots per workspace.
 - **Library maintenance**: workspace storage, search-index rebuilding and
   the per-paper metadata / text / index health table.

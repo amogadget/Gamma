@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, Response
 
 from . import config, migrations
-from . import version
+from . import sync_engine, version
 from .auth import session_middleware
 from .db import connect_data_db, connect_pages_db, connect_users_db
 from .logbuf import log, setup_logging
@@ -28,12 +28,14 @@ from .routers import (
     ink,
     links,
     metadata,
+    mirrors,
     pages,
     pdf,
     prefs,
     publisher_sessions,
     search,
     shares,
+    sync,
     uploads,
     workspaces,
     ws_backups,
@@ -137,6 +139,8 @@ def create_app() -> FastAPI:
     app.include_router(links.router)
     app.include_router(clip.router)
     app.include_router(collab.router)
+    app.include_router(sync.router)
+    app.include_router(mirrors.router)
 
     # Serve the built frontend (SPA) when GAMMA_STATIC_DIR is set.
     # Registered last so all /api routes take precedence.
@@ -176,6 +180,8 @@ def create_app() -> FastAPI:
             return revalidating(index_html, request)
 
     _startup_maintenance()
+
+    sync_engine.start_loop()
     return app
 
 

@@ -425,9 +425,12 @@ def note_reload(ws: str, conn, page_id: str, actor: str) -> int:
 
 def log_reload(conn, page_id: str, actor: str) -> int:
     """Log a change ops can't express (a subtree replace, an import into an
-    existing page) so a catching-up client knows to refetch. Caller commits
-    and publishes (``collab.publish_reload``)."""
-    return _log(conn, page_id, actor, "", page_now(), [{"op": "reload"}])
+    existing page) so a catching-up client knows to refetch, and stamp the
+    page root like any batch (the home feed and the change feed read it).
+    Caller commits and publishes (``collab.publish_reload``)."""
+    now = page_now()
+    conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?", (now, page_id))
+    return _log(conn, page_id, actor, "", now, [{"op": "reload"}])
 
 
 def latest_seq(conn, page_id: str) -> int:

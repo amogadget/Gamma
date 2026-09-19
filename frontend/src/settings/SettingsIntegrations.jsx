@@ -24,6 +24,7 @@ function CopyField({ label, value, action, rows = 2 }) {
 export function IntegrationSettings({ workspaceId }) {
   const [data, setData] = React.useState(null);
   const [name, setName] = React.useState("Codex");
+  const [scope, setScope] = React.useState("read");
   const [secret, setSecret] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState("");
@@ -61,7 +62,7 @@ export function IntegrationSettings({ workspaceId }) {
     setBusy(true); setMessage("");
     try {
       const value = await apiJson(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim() }) });
+        body: JSON.stringify({ name: name.trim(), scope }) });
       setSecret(value);
       await refresh();
     } catch (err) { setMessage(err.message); }
@@ -119,7 +120,7 @@ export function IntegrationSettings({ workspaceId }) {
     <Section title="Workspace access" action={<button className="uiBtn sm" onClick={() => refresh()}>Refresh connections</button>}>
       {data ? data.tokens.length ? data.tokens.map((item) =>
         <Row key={item.id} label={item.name}
-          hint={`${item.expires_at * 1000 <= Date.now() ? "Expired" : "Read-only · Expires"} ${new Date(item.expires_at * 1000).toLocaleDateString()}`}>
+          hint={`${item.expires_at * 1000 <= Date.now() ? "Expired" : `${item.scope === "write" ? "Read and write" : "Read-only"} · Expires`} ${new Date(item.expires_at * 1000).toLocaleDateString()}`}>
           <button className="uiBtn" disabled={busy} onClick={() => revoke(item)}>Disconnect</button>
         </Row>) : <div className="integrationDetails"><p>No assistants have access to this workspace yet.</p>
           </div> : null}
@@ -129,12 +130,17 @@ export function IntegrationSettings({ workspaceId }) {
       <summary>Manual setup (advanced)</summary>
       <div className="integrationDetails"><p>Use a token if your assistant does not support browser sign-in.</p></div>
       <Section title="Create a token">
-      <Row label="Connection name" hint="Read-only access to the current workspace. Expires after 90 days.">
+      <Row label="Connection name" hint="Access to the current workspace. Expires after 90 days.">
         <div className="integrationCreateControls">
           <input className="aiKeyInput" aria-label="Connection name" value={name} maxLength={80}
             onChange={(event) => setName(event.target.value)} />
           <button className="uiBtn" disabled={busy || !data || !name.trim() || !!secret} onClick={create}>Create token</button>
         </div>
+      </Row>
+      <Row label="Scope" hint={scope === "write"
+        ? "Read and write: what an offline copy on another Gamma (Settings → Workspaces → Offline copies there) signs in with. Assistants only need read."
+        : "Read-only: assistants. Choose “Read and write” for an offline copy of this workspace on another Gamma."}>
+        <Segmented value={scope} onChange={setScope} options={[["read", "Read-only"], ["write", "Read and write"]]} />
       </Row>
       {secret ? <div className="integrationDetails">
         <p>Copy this token now. Gamma will not show it again. Keep it private.</p>

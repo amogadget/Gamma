@@ -59,6 +59,22 @@ Opening a remote server also records the outcome (success → reachable,
 failure → unreachable). Green = reachable, red = unreachable, dim = not
 probed yet.
 
+### Offline copies
+
+A remote server's open workspace can be kept as a **mirror** on a local
+server: bar menu → *Keep an offline copy…* (`keepOffline` in `main.js`,
+`shell:keep-offline`). Everything goes through Gamma's public API with the
+content session's cookies — nothing is injected into any page: a
+write-scope integration token is minted on the remote for that workspace
+(`POST /api/integrations/tokens`), the first local server is started (made,
+when there is none) and signed into with its seeded admin credentials
+(`POST /api/login` through `session.fetch`, so the cookie lands in the same
+profile the content view uses), the mirror is created there (`POST
+/api/mirrors`) and the window moves to it. From then on the local server
+syncs on its own ([docs/dev/mirror.md](../../docs/dev/mirror.md)); the
+switcher marks such a workspace *offline copy* (`mirror_of` on the session's
+workspace list). The shell keeps no sync state and no token.
+
 ## Window
 
 ```

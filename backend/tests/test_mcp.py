@@ -217,7 +217,8 @@ def test_token_management_requires_owner_session(anon, connection):
     c, ws, item = connection
     assert anon.get("/api/integrations/tokens").status_code == 401
     assert anon.post("/api/integrations/tokens", json={}).status_code == 401
-    assert anon.get("/api/integrations/tokens", headers={"Authorization": "Bearer " + item["token"]}).status_code == 401
+    # a token is an identity on the HTTP API (auth.py) but never a session that manages tokens
+    assert anon.get("/api/integrations/tokens", headers={"Authorization": "Bearer " + item["token"]}).status_code == 403
     anon.post("/api/login-guest")
     assert anon.post("/api/integrations/tokens", json={}).status_code == 403
     assert c.post("/api/integrations/tokens", json={}, headers={"Origin": "https://attacker.example"}).status_code == 403

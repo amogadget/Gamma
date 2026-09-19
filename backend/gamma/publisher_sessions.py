@@ -48,7 +48,10 @@ def valid_host(host: str) -> str:
     return host
 
 
-def _cipher() -> Fernet:
+def cipher() -> Fernet:
+    """The data directory's Fernet key (``GAMMA_PUBLISHER_SESSION_KEY`` or
+    ``publisher-sessions.key`` next to users.db) — shared with the mirror
+    tokens (gamma/sync_engine.py)."""
     configured = config.publisher_session_key()
     if configured:
         return Fernet(configured.encode("ascii"))
@@ -117,7 +120,7 @@ def save(username: str, host: str, cookies: list) -> dict:
     host = valid_host(host)
     cookies = normalize_cookies(host, cookies)
     payload = json.dumps({"user": username, "host": host, "cookies": cookies}).encode()
-    encrypted = _cipher().encrypt(payload).decode("ascii")
+    encrypted = cipher().encrypt(payload).decode("ascii")
     updated = page_now()
     expires = max(c["expires"] for c in cookies)
     with connect_users_db() as conn:
@@ -169,12 +172,12 @@ def cookie_jar() -> CookieJar:
     if not rows:
         return jar
     try:
-        cipher = _cipher()
+        box = cipher()
     except (OSError, ValueError):
         return jar  # Missing/replaced key: user can reconnect; no plaintext fallback.
     for host, encrypted in rows:
         try:
-            payload = json.loads(cipher.decrypt(encrypted.encode("ascii")))
+            payload = json.loads(box.decrypt(encrypted.encode("ascii")))
             if payload["user"] != username or payload["host"] != host:
                 continue
             # Narrow parent-domain cookies to the connected host. If narrowing

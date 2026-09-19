@@ -186,12 +186,24 @@
         const b = document.createElement('button');
         b.className = 'item wsItem' + (isCur ? ' current' : '');
         b.dataset.ws = w.id;
-        b.title = w.personal ? 'Your personal workspace' : `Shared · ${w.members} member${w.members === 1 ? '' : 's'} · you ${ROLE[w.role] || w.role}`;
-        b.innerHTML = `<span class="badge"></span><span class="label"></span><span class="sub">${w.personal ? 'personal' : (ROLE[w.role] || w.role)}</span><span class="check">${isCur ? ICONS.check : ''}</span>`;
+        b.title = w.mirror_of ? `Offline copy of ${w.mirror_of} — synced with the remote when it is reachable`
+          : w.personal ? 'Your personal workspace' : `Shared · ${w.members} member${w.members === 1 ? '' : 's'} · you ${ROLE[w.role] || w.role}`;
+        b.innerHTML = `<span class="badge"></span><span class="label"></span><span class="sub">${w.mirror_of ? 'offline copy' : w.personal ? 'personal' : (ROLE[w.role] || w.role)}</span><span class="check">${isCur ? ICONS.check : ''}</span>`;
         b.querySelector('.badge').textContent = (w.name || '?').charAt(0).toUpperCase();
         b.querySelector('.label').textContent = w.name;
         b.onclick = () => { closeMenu(); if (!isCur) gammaShell.openWorkspace(w.id).catch(() => {}); };
         menu.appendChild(b);
+      }
+      // A remote server's open workspace can be kept as a copy on a local one.
+      const cur = g.list.find((w) => w.id === g.current);
+      if (state.current.type === 'remote' && cur && !cur.mirror_of) {
+        const k = document.createElement('button');
+        k.className = 'item';
+        k.id = 'menuKeepOffline';
+        k.title = 'Make a copy of this workspace on a local server, kept in step both ways, that opens without a connection';
+        k.innerHTML = `<span class="ico">${ICONS.local || ''}</span><span class="label">Keep an offline copy…</span>`;
+        k.onclick = () => { closeMenu(); gammaShell.keepOffline(cur.id).catch(() => {}); };
+        menu.appendChild(k);
       }
       const sep = document.createElement('div'); sep.className = 'sep'; menu.appendChild(sep);
     }

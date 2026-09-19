@@ -162,7 +162,23 @@ async def session_middleware(request: Request, call_next):
     request.state.is_guest = False
     request.state.is_admin = False
     request.state.default_ws = ""
+    request.state.auth = "session"
+    request.state.token_ws = ""
+    request.state.token_scope = ""
     new_session_token = None
+    bearer = _api_bearer(request) if not token else None
+    if bearer:
+        # An integration token on the HTTP API (a mirror syncing, a script):
+        # the account behind it, confined to the token's workspace by
+        # require_ws, never an admin, never a session to manage tokens or
+        # accounts with (require_personal_user refuses it).
+        from .integrations import resolve_token_scope  # local: integrations imports workspaces
+        found = resolve_token_scope(bearer)
+        if not found:
+            resp = JSONResponse({"detail": "invalid or expired token"}, status_code=401)
+            return _finish_request_log(request, resp, started, None, "bad-token")
+        request.state.user, request.state.token_ws, request.state.token_scope = found
+        request.state.auth = "token"
     if token:
         with sqlite3.connect(str(USERS_DB)) as conn:
             row = conn.execute(_SESSION_SQL, (token,)).fetchone()
@@ -223,6 +239,19 @@ async def session_middleware(request: Request, call_next):
     return _finish_request_log(request, response, started, expected)
 
 
+def _api_bearer(request: Request) -> str:
+    """The ``Authorization: Bearer gamma_…`` token of an /api request, else
+    "". The MCP endpoint resolves its own (audience-bound OAuth tokens
+    included); the HTTP API takes manual tokens only."""
+    if not request.url.path.startswith("/api/"):
+        return ""
+    scheme, _, value = request.headers.get("authorization", "").partition(" ")
+    value = value.strip()
+    if scheme.lower() != "bearer" or not value.startswith("gamma_") or value.startswith("gamma_oauth_"):
+        return ""
+    return value
+
+
 def require_user(request: Request) -> str:
     """Return the session username or raise 401. Identity only — endpoints
     that touch a workspace's data use require_ws / resolve_ws instead."""
@@ -237,6 +266,8 @@ def require_personal_user(request: Request, detail: str) -> str:
     username = require_user(request)
     if request.state.is_guest:
         raise HTTPException(403, detail)
+    if getattr(request.state, "auth", "session") == "token":
+        raise HTTPException(403, "an integration token cannot do this — sign in")
     return username
 
 
@@ -287,13 +318,22 @@ def require_ws(request: Request, write: bool = False) -> str:
     user = require_user(request)
     ws = getattr(request.state, "ws", None)
     if ws is None:
-        ws, role = workspace_access(user, requested_ws(request), request.state.default_ws)
+        if getattr(request.state, "auth", "session") == "token":
+            # A token names its workspace; a request may only repeat it.
+            wanted = requested_ws(request)
+            if wanted and wanted != request.state.token_ws:
+                raise HTTPException(status_code=403, detail="this token belongs to another workspace")
+            ws, role = workspace_access(user, request.state.token_ws, "")
+        else:
+            ws, role = workspace_access(user, requested_ws(request), request.state.default_ws)
         request.state.ws, request.state.ws_role = ws, role
     role = request.state.ws_role
     if not role:
         raise HTTPException(status_code=403, detail="you are not a member of this workspace")
     if write and role == "viewer":
         raise HTTPException(status_code=403, detail="you can only view this workspace")
+    if write and getattr(request.state, "auth", "session") == "token" and request.state.token_scope != "write":
+        raise HTTPException(status_code=403, detail="this token is read-only")
     return ws
 
 

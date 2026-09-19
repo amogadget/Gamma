@@ -377,6 +377,16 @@ def _v9_upload_path_titles(conn: sqlite3.Connection) -> None:
             normalize_pages_db(pdb)
 
 
+def _v10_mirrors(conn: sqlite3.Connection) -> None:
+    """``integration_tokens`` gains ``scope`` (read, the old meaning, or
+    write — a token a mirror pushes with) and users.db gains ``mirrors``
+    (local workspaces that are offline copies of a remote one)."""
+    if "scope" not in _columns(conn, "integration_tokens"):
+        conn.execute("ALTER TABLE integration_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'read'")
+    conn.execute(next(s for s in USERS_SCHEMA if "CREATE TABLE IF NOT EXISTS mirrors" in s))
+    conn.commit()
+
+
 STEPS = [
     (1, "baseline", _v1_baseline),
     (2, "workspaces", _v2_workspaces),
@@ -387,4 +397,5 @@ STEPS = [
     (7, "mcp_oauth", _v7_mcp_oauth),
     (8, "ai_usage", _v8_ai_usage),
     (9, "upload_path_titles", _v9_upload_path_titles),
+    (10, "mirrors", _v10_mirrors),
 ]

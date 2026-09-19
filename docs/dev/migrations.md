@@ -54,6 +54,7 @@ workspace's files), `db.SCHEMA_VERSION`, `manage.py migrate` / `backups`.
 | 7 | `mcp_oauth` | Adds the `mcp_oauth` table in `users.db`: OAuth client registrations, pending authorizations and access-token audiences, all expiring |
 | 8 | `ai_usage` | Adds the `ai_usage` table in `users.db`: per-account token counts of AI calls ([ai.md](ai.md)) |
 | 9 | `upload_path_titles` | Runs the content normalizers over every workspace's `pages.db` once more for the new `upload_path_titles` step: a directory path that a browser leaked into `original_filename` (and into the generated title, while it still equals it) becomes the leaf. This used to be repaired on every library listing with raw SQL outside the op log; reads now write nothing |
+| 10 | `mirrors` | `integration_tokens` gains `scope` (`read`, the old meaning, or `write`); users.db gains `mirrors`, the offline copies of remote workspaces ([mirror.md](mirror.md)). Per-workspace `pages.db` files gain `sync_pages` / `sync_conflicts` on connect (additive `CREATE TABLE IF NOT EXISTS`, like `page_ops`) |
 
 ## Backups (`gamma/backups.py`)
 
