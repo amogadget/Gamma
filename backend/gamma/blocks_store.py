@@ -240,11 +240,13 @@ def attachment_props(doc_id: str, source_url: str = "", original_filename: str =
     return props, original or url_filename(source_url) or doc_id
 
 
-def create_page(conn, title: str, props: dict | None = None) -> dict:
+def create_page(conn, title: str, props: dict | None = None, block_id: str | None = None) -> dict:
     """Insert a new root page (last in the library) and return its block
     dict. Commits. The one code path that mints pages: POST /api/pages and
-    get_or_create_doc_page both go through it."""
-    block_id = secrets.token_urlsafe(9)
+    get_or_create_doc_page both go through it — as does the blank-notebook
+    endpoint, which supplies the canonical UUID its client minted
+    (``block_id``) so a retry can recognize the page it already created."""
+    block_id = block_id or secrets.token_urlsafe(9)
     title = (title or "").strip() or "Untitled"
     props = dict(props or {})
     now = page_now()

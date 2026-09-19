@@ -31,6 +31,16 @@ release skill ─┬──▶ desktop.yml  meta: version = max(package.json, new
          └──▶ docker.yml     ghcr :latest
 ```
 
+## Native integration checks
+
+The `check` backend job also runs the read-only migration inventory tests in
+`tools/test_audit_native_migration.py`, the iPad workspace source-contract
+checks and coordinate-fixture checks. They protect upload hashes, native
+manifests and account/workspace assignment during migration. The iPad Python
+checks are **not** a Swift compiler or hardware test; Xcode simulator/build
+results and remaining physical-device acceptance boundaries are summarized in
+[iPad validation](../../ipad/VALIDATION.md). Nothing here publishes or installs the iPad app.
+
 ## Versions and tags
 
 The **newest tag is the source of truth**; the files hold a floor.

@@ -152,7 +152,7 @@ Frontend (all cleared 2026-09-02 except the search panel)
 Already generalized (build on these): `?block=` deep link, `[[ref]]`,
 `![[embed]]`, backlinks, `link_page_id`, page-keyed shares/chats/snapshots/
 tabs, markdown-import and web-clip pages, notes-as-PDF export,
-`/block-search`, orphan cleanup by textual `/api/uploads/` reference.
+`/block-search`, upload references recognized under `/api/uploads/` and native `/api/assets/` (native retention policy is described in [api.md](api.md)).
 
 ## One-time cleanup of old data shapes
 
@@ -258,7 +258,7 @@ read-position map as `{page: 0, block}`.)*
   attach. — **done (backend)**: `POST /api/upload-file` (allowlist in
   `storage.FILE_MEDIA_TYPES` + images + pdf), `GET /uploads/{name}` serves
   them (inline only pdf/images/txt/md, the rest as attachments, html
-  sandboxed); share reads and orphan cleanup already match textually.
+  sandboxed); share reads and cleanup recognize textual `/api/uploads/` and native `/api/assets/` references. Native source retention is deliberately conservative; see [api.md](api.md).
 - Cards and row badges describe attachments ("PDF" glyph badge when the page
   has one) instead of PDF/Note kinds; recents covers for text-only pages are
   a text preview (first lines) rendered by `PageCard`, no screenshot. —

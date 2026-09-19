@@ -101,8 +101,37 @@ open and every property change is an op-log row and a socket message
 carrying the full value; a paper's handwriting is hundreds of kB. As an
 upload it behaves like a pasted image — the tree carries a URL, the viewer
 fetches files per page, and orphan cleanup, share-scoped serving, quota,
-the export bundlers and backups already understand `/api/uploads/`
-references in properties.
+the export bundlers and backups understand `/api/uploads/` references in
+properties, as well as the native `/api/assets/` family described below.
+
+## Native handwriting blocks and audio replay
+
+The iPad integration is a second representation, not a replacement for the
+browser's `gamma-ink` codec or tools. A native `properties.type: "pdf_ink"`
+block names a full-SHA256 `.pkdrawing` editable source (`ink_asset`), a PNG
+preview (`preview_asset`), and optionally an `.inkjson` per-stroke replay
+rendering (`replay_asset`). The source remains Apple's PencilKit data; the
+browser does not pretend to edit that binary or convert its preview back
+into a drawing. Native geometry uses **unrotated crop-local top-left PDF
+points**, unlike the rotation-applied pdf.js viewport used by `gamma-ink`.
+`frontend/src/native/inkBlock.js` supplies the placement transform.
+
+Native recordings are `type: "audio"` blocks with finalized M4A segments,
+segment-relative stroke/page/note events, and a revision. The audio player's
+clock drives replay; stroke sample timestamps in an upstream `.ink` file
+are not an audio synchronization timeline. A replay derivative is accepted
+only when its `source_sha256` matches the current PencilKit source. Missing
+or stale replay data must remain explicit rather than inventing timing.
+
+The native modules live in `frontend/src/native/`, `gamma/native_ink.py`,
+`gamma/routers/native_ink.py` and `ipad/`. Browser-issued media URLs carry
+`?ws=` (and share context where applicable); server paths and permissions
+are workspace-scoped. Native mutations preserve revision/idempotency
+checks and enter the upstream page-ops log. Ordinary block writers may
+edit text but cannot replace reserved recording/ink manifests. See
+[api.md](api.md) for endpoints and retention, [collab.md](collab.md) for
+write protection, and `ipad/NATIVE_INTEGRATION.md` for cache and bridge
+identity. Recorded verification results and boundaries are in [iPad validation](../../ipad/VALIDATION.md).
 
 ## The stroke file (`gamma-ink` v1)
 

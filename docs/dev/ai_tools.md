@@ -179,7 +179,10 @@ block edits its note text, never the anchored passage.
 under a page or block, after the sibling named by `after_id` (default: last).
 `move_block` re-parents/reorders a block with its subtree — cycle-checked, and
 cross-page moves (allowed when both pages are in scope) refuse subtrees
-containing highlight blocks, whose PDF anchors are tied to their own paper.
+containing highlight blocks or native ink/audio/note blocks, whose PDF anchors
+and replay identities are tied to their own paper. This includes moving an
+ordinary ancestor whose descendants contain native annotations; same-page
+ink/audio nesting and reordering remain supported.
 All three go through the op path (`ops.apply_ops`, [collab.md](collab.md)):
 logged, fanned out to anyone on the page, and the page root's `updated_at`
 stamped so the home feed reorders. Their UI actions carry `page_id` (moves across

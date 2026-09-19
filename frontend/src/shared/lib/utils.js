@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { makeBlockId } from "../model/blockModel";
+import { assetUrlInScope } from "./assetUrl";
 
 const API = "/api";
 
@@ -43,15 +44,17 @@ function withWorkspace(url) {
   return `${url}${url.includes("?") ? "&" : "?"}ws=${encodeURIComponent(currentWorkspace)}`;
 }
 
-// A same-origin upload URL (`/api/uploads/<hash>.ext`) for a browser-issued
-// request — an <img> src, a download link — which bypasses the fetch wrapper
-// and so carries neither the workspace header nor the share token. Block
-// content stores the bare URL; every RENDER site passes it through here so the
-// server looks in the right library (a non-default workspace's image would
-// otherwise 404) and a share viewer is admitted.
+// A same-origin asset URL — an upload (`/api/uploads/<hash>.ext`) or a native
+// asset (`/api/assets/<sha256>.<ext>`, the iPad's drawings, previews, audio
+// segments and replay derivatives) — for a browser-issued request: an <img>
+// src, an <audio> src, a download link, the replay loader. Those bypass the
+// fetch wrapper and so carry neither the workspace header nor the share token.
+// Block content stores the bare URL; every RENDER site passes it through here
+// so the server looks in the right library (a non-default workspace's image
+// would otherwise 404) and a share viewer is admitted. The rule itself lives in
+// assetUrl.js (pure, unit-tested); this is the window-aware call.
 function assetUrl(url) {
-  if (typeof url !== "string" || !url.startsWith(`${API}/uploads/`)) return url;
-  return withShare(withWorkspace(url));
+  return assetUrlInScope(url, { workspace: currentWorkspace, share: SHARE_TOKEN });
 }
 
 // For the rare non-fetch transport (the backup-import XHR) that must carry

@@ -16,6 +16,7 @@ from .routers import (
     admin,
     ai,
     auth as auth_router,
+    blank_pdf,
     blocks,
     chats,
     clip,
@@ -26,6 +27,8 @@ from .routers import (
     ink,
     links,
     metadata,
+    native_highlights,
+    native_ink,
     pages,
     pdf,
     prefs,
@@ -124,9 +127,14 @@ def create_app() -> FastAPI:
     app.include_router(search.router)
     app.include_router(shares.router)
     app.include_router(pdf.router)
+    app.include_router(blank_pdf.router)
     app.include_router(publisher_sessions.router)
     app.include_router(uploads.router)
+    # Upstream handwriting (POST /api/upload-ink, properties.ink_url), then the
+    # native client's own routes: /api/assets and the ink/audio/note writers.
     app.include_router(ink.router)
+    app.include_router(native_ink.router)
+    app.include_router(native_highlights.router)
     app.include_router(blocks.router)
     app.include_router(pages.router)
     app.include_router(imports.router)

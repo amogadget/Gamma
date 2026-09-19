@@ -490,6 +490,10 @@ def _run_create_block(conn, ws: str, scope: dict, args: dict):
 
 
 def _run_move_block(conn, ws: str, scope: dict, args: dict):
+    # The cross-page path writes directly, so scope/subtree checks must share
+    # its write transaction (not race a concurrent native child insertion).
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     loaded, error = _load_scoped_block(conn, scope, args.get("block_id"))
     if error:
         return error, None
@@ -507,6 +511,9 @@ def _run_move_block(conn, ws: str, scope: dict, args: dict):
         # Highlight blocks anchor to a PDF region of their own paper; on
         # another page that anchor points into the wrong document.
         rows = fetch_subtree(conn, block["id"])
+        from .native_ink import native_kind
+        if any(native_kind(json.loads(row[4] or "{}")) is not None for row in rows):
+            return "error: native annotations and recordings must stay in their PDF page", None
         if any("highlight_id" in (row[4] or "") for row in rows):
             return ("error: highlight blocks are anchored to their paper — "
                     "they can only move within the same page"), None

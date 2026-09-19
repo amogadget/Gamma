@@ -17,6 +17,7 @@ import {
 import { BlockTree, _dragState } from "../editor/BlockTree";
 import { FileChipContext, forgetDocPages, rememberDocPage, setUploadReporter, uploadFilesAsLines } from "../transfers/FileChip";
 import { CardLabels, KindToggle, ListFindBox, PageCard, ViewToggle } from "../library/FileBrowser";
+import BlankPDFDialog from "../library/BlankPDFDialog";
 import ChatDock from "../chat/ChatDock";
 import SearchPanel from "../search/SearchPanel";
 import { ContextMenu, MenuItem, MenuLabel, MenuSelect, SubMenuItem } from "../shared/ui/Menus";
@@ -68,6 +69,10 @@ import { InkToolbar } from "../ink/InkLayer";
 import { MAX_STROKES, appendStroke, duplicateStrokes, eraseAt, newInk, removeStrokes, restyleStrokes, toolStyle, transformStrokes, translateStrokes } from "../ink/ink";
 import * as inkStore from "../ink/inkStore";
 import { usePageCollab } from "../collaboration/usePageCollab";
+import { blocksToPdfInk } from "../native/inkBlock.js";
+import { isNativeClaim, nativeClaimKind } from "../native/nativeClaim.js";
+import { nativePDFRequest } from "../native/nativeBridge.js";
+import NoteReplayPlayer, { useReplayAssets } from "../native/NoteReplayPlayer.jsx";
 import { applyOps, applyPatch, keepUiFlags } from "../shared/model/blockOps";
 import { PresenceBar } from "../collaboration/Presence";
 import SettingsDialog from "../settings/SettingsDialog";
@@ -1026,6 +1031,15 @@ function LibraryApp() {
   async function duplicatePage(pageId) {
     const data = await apiJson(`${API}/blocks/${pageId}/subtree`);
     const src = data.block || {};
+    // A page copy clones its children through the bulk children writer, which
+    // is a generic insert: the server refuses native ink/audio manifests there
+    // (`guard_generic_insert`), so a page carrying iPad annotations is refused
+    // UP FRONT — before the copy page is created, and rather than half-copying
+    // it into an empty page plus an error.
+    const nativeChild = (list) => (list || []).find((b) => isNativeClaim(b.properties) || nativeChild(b.children));
+    if (nativeChild(src.children)) {
+      throw new Error("This page has iPad annotations; copying it would need a native copy the server does not accept.");
+    }
     const created = await apiJson(`${API}/blocks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3136,7 +3150,9 @@ function LibraryApp() {
     }
     setPageMeta(null);
     setPageBibtex("");
-    if (!metaAutoFetch) return; // manual via ↻ only
+    // A blank notebook has no scholarly identity to look up — the automatic
+    // lookup is skipped (the ↻ button still asks explicitly).
+    if (!metaAutoFetch || b.properties.pdf_kind === "blank") return; // manual via ↻ only
     if (b.properties.meta_error) return; // a past lookup failed — retry only via ↻
     if (attemptedMetaRef.current.has(b.id)) return;
     attemptedMetaRef.current.add(b.id);
@@ -3401,6 +3417,8 @@ function LibraryApp() {
   const inkActiveRef = useRef(null);
   const inkTimerRef = useRef(0);
   const prevInkRef = useRef({ json: "", value: [] });
+  // Same identity-stable list, for the native `pdf_ink` blocks.
+  const prevNativeInkRef = useRef({ json: "", value: [] });
   // Stroke-level history for the strip's Ctrl+Z and Undo/Redo buttons
   // (entries: {changes: [{id, page, before, after}], label} per action;
   // inkHistoryState mirrors the lengths for the buttons) and the lasso
@@ -3588,6 +3606,74 @@ function LibraryApp() {
   };
   // Send queued edits NOW — before anything replaces the block tree.
   function flushPendingSave() { collabRef.current.flush(); }
+  // Web → Pencil & Audio (docs/dev/handwriting.md "Native handoff").
+  //
+  // Upstream has no whole-tree autosave: the page is a live collab session
+  // whose edits leave as debounced op batches. So the source flow's
+  // "flush the pending autosave, then wait for the in-flight saves" becomes
+  // exactly two collab primitives — `flush()` (awaits the queued batch AND any
+  // batch that started while it waited) and `hasPending()` — re-checked on both
+  // sides of the round trip. The tree is then frozen, because the native
+  // workspace owns the document until it returns through a reload.
+  const nativeViewportRef = useRef(null);
+  const nativeIdentityRef = useRef(null);
+  nativeIdentityRef.current = { pageID: focusedBlockId, docID: docId, workspaceID: getCurrentWorkspace() || workspace?.id || "" };
+  const nativeHandoffPendingRef = useRef(false);
+  async function openInNativeReader() {
+    const bridge = window.webkit?.messageHandlers?.gammaNative;
+    const workspaceID = getCurrentWorkspace() || workspace?.id || "";
+    if (!bridge || readOnly || !docId || !focusedBlockId || !workspaceID || nativeHandoffPendingRef.current) return;
+    nativeHandoffPendingRef.current = true;
+    try {
+      const pageID = focusedBlockId;
+      const navigationToken = restoreTokenRef.current;
+      const sameDocument = () => nativeIdentityRef.current?.pageID === pageID &&
+        nativeIdentityRef.current?.docID === docId && nativeIdentityRef.current?.workspaceID === workspaceID &&
+        restoreTokenRef.current === navigationToken;
+      // Capture before any await or UI freeze. A loading/previous document is
+      // not a reading position for this page; never silently open page one.
+      const viewport = pdfRenderedUrlRef.current === pdfUrl && !restoringForRef.current
+        ? nativeViewportRef.current?.() : null;
+      if (!viewport) throw new Error("Wait for the PDF reading position to finish loading before opening Pencil.");
+      setStatus("Saving notes before opening Pencil…");
+      await collabRef.current.flush();
+      if (collabRef.current.hasPending() || !sameDocument()) {
+        throw new Error("Notes changed or are not saved yet. Wait for sync and try again.");
+      }
+      // Then re-declare the account AND the library, and let the server confirm
+      // both: the payload is a claim the native side independently verifies,
+      // never a grant. The workspace must still be one this account may WRITE
+      // (owner or editor) — the iPad will write annotations into it, and a
+      // viewer role or a membership that changed since this tab booted must not
+      // hand off a document the native side could only fail on.
+      const session = await apiJson(`${API}/session`);
+      if (!session.user || session.user !== sessionUser) throw new Error("The Gamma account changed. Reload before opening Pencil.");
+      const membership = (session.workspaces || []).find((w) => w.id === workspaceID);
+      if (!membership) throw new Error("This library is no longer available to this account. Reload before opening Pencil.");
+      if (!["owner", "editor"].includes(membership.role)) {
+        throw new Error(`Your role in this library is ${membership.role || "unknown"} — Pencil needs editing access.`);
+      }
+      if (collabRef.current.hasPending() || !sameDocument()) {
+        throw new Error("Notes changed during handoff. Please try again after saving.");
+      }
+      const request = nativePDFRequest({ pageID, docID: docId, title: pageTitle, user: session.user, workspace: workspaceID, viewport });
+      if (!request) throw new Error("Invalid Gamma document identity.");
+      const root = document.getElementById("root");
+      if (root) root.inert = true;
+      window.__GAMMA_NATIVE_ACTIVE__ = true;
+      setReplayBlockID(null);
+      bridge.postMessage(request);
+      setStatus("Opened in Pencil workspace");
+    } catch (error) {
+      // A refused or failed handoff must leave a usable page behind.
+      const root = document.getElementById("root");
+      if (root) root.inert = false;
+      window.__GAMMA_NATIVE_ACTIVE__ = false;
+      setStatus(error.message);
+    } finally {
+      nativeHandoffPendingRef.current = false;
+    }
+  }
   useEffect(() => {
     if (!focusedBlockId) return;
     if (suppressAutosaveRef.current) {
@@ -3599,6 +3685,11 @@ function LibraryApp() {
       return;
     }
     if (readOnly) return;
+    // The native workspace owns the document while the handoff is active. The
+    // tree is inert, so there should be no new edits — this is the belt to
+    // that braces: a state change from any other source must not enqueue an op
+    // that would race the iPad's own writes. Native returns through a reload.
+    if (window.__GAMMA_NATIVE_ACTIVE__) return;
     const ops = collab.commit(blocks, { now: saveNowRef.current });
     saveNowRef.current = false;
     const seed = seedBlockIdRef.current;
@@ -4241,6 +4332,45 @@ function LibraryApp() {
     } catch (err) {
       setStatus(`Create failed: ${err.message || err}`);
     }
+  }
+
+  // The parent block id of `id` in `tree` (the page block itself for a
+  // top-level row), or null when it is not in the tree.
+  function parentBlockIdOf(tree, id) {
+    const ctx = findBlockContext(tree, id);
+    if (!ctx) return null;
+    return ctx.depth === 0 ? focusedBlockId : ctx.ancestors[ctx.depth - 1] || null;
+  }
+
+  // Ink/audio writers anchor to the containing PDF page and preserve their
+  // actual outliner parent. Same-page indent/outdent/drop is therefore safe.
+  // Native notes instead bind to their exact parent: do not broaden that contract.
+  function nativeParentingBlocked(id) {
+    const block = findBlock(blocksRef.current, id);
+    if (!isNativeClaim(block?.properties) || ["ink", "audio"].includes(nativeClaimKind(block?.properties))) return false;
+    setStatus("Native notes keep their parent — this block cannot be re-parented here.");
+    return true;
+  }
+
+  // Copy and cross-page move guards include native descendants, not just the
+  // selected row; nesting must not create a back door around payload ownership.
+  function hasNativeSubtree(block) {
+    return !!block && (isNativeClaim(block.properties) || (block.children || []).some(hasNativeSubtree));
+  }
+
+  // A blank PDF notebook (BlankPDFDialog): an ordinary library page with its own
+  // immutable document, created under the caller's own id so the dialog's retry
+  // is idempotent. Nothing here inserts pages into an existing PDF.
+  const [blankPDFOpen, setBlankPDFOpen] = useState(false);
+  async function createBlankPDF(id, body) {
+    const created = await apiJson(`${API}/blank-pdfs/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await fetchHomeBlocks();
+    await openBlock(created.id, { pushNav: true });
+    setBlankPDFOpen(false);
   }
 
   // Attach a PDF to the open page (one that carries none): the same ingest
@@ -5358,6 +5488,75 @@ function LibraryApp() {
     prevInkRef.current = { json, value: next };
     return next;
   }, [blocks]);
+
+  // ---- Native (iPad) handwriting, audio and Note Replay -------------------
+  // `pdf_ink` and `audio` blocks written by the iPad app (docs/dev/handwriting.md
+  // "Native handwriting blocks"). The web renders them; the editable PKDrawing
+  // source and the recording stay on iPad and are never rewritten here.
+  //
+  // Identity-stable like `inkBlocks`: a keystroke elsewhere must not rebuild
+  // the viewer's per-page layer input.
+  const nativeInkBlocks = useMemo(() => {
+    const next = blocksToPdfInk(blocks);
+    const json = JSON.stringify(next);
+    if (json === prevNativeInkRef.current.json) return prevNativeInkRef.current.value;
+    prevNativeInkRef.current = { json, value: next };
+    return next;
+  }, [blocks]);
+  const [replayBlockID, setReplayBlockID] = useState(null);
+  const [replayFrame, setReplayFrame] = useState(null);
+  const [replaySeekRequest, setReplaySeekRequest] = useState(null);
+  const [nativeInkJumpRequest, setNativeInkJumpRequest] = useState(null);
+  // Jump to a native ink block: show the PDF, open its page, and ask the
+  // viewer for the strokes themselves (canonical-space bounds, so this lands
+  // on the handwriting rather than on the page).
+  const jumpToNativeInk = useCallback((id) => {
+    setFocusedId(id);
+    setPdfHidden(false);
+    if (!pdfUrl && docId) setPdfUrl(`${API}/uploads/${encodeURIComponent(docId)}.pdf`);
+    setNativeInkJumpRequest({ id, nonce: performance.now() });
+  }, [pdfUrl, docId]);
+  const replayBlock = useMemo(
+    () => flattenBlocks(blocks).find((b) => b.id === replayBlockID && b.properties?.type === "audio") ?? null,
+    [blocks, replayBlockID],
+  );
+  // The derivative loader is scoped to account + workspace + document: a
+  // workspace switch must not leave another library's stroke images loaded,
+  // and the workspace is also what the asset URLs are scoped by.
+  const replayAssets = useReplayAssets(nativeInkBlocks,
+    !readOnly && focusedBlockId && sessionUser ? `${sessionUser}:${workspace?.id || getCurrentWorkspace()}:${focusedBlockId}` : null);
+  const replay = replayBlock && replayFrame?.recordingID === replayBlock.id ? { ...replayFrame, assets: replayAssets } : null;
+  const updateReplayFrame = useCallback((frame) => setReplayFrame(frame), []);
+  const seekReplay = useCallback(
+    (time) => setReplaySeekRequest({ recordingID: replayBlockID, time, nonce: performance.now() }),
+    [replayBlockID],
+  );
+  useEffect(() => {
+    // The notes pane asks for the player by event, so the bar can live at the
+    // app root (one player at a time, next to the PDF it drives).
+    const start = (event) => {
+      if (readOnly || !docId) return;
+      const block = flattenBlocks(blocksRef.current).find((b) => b.id === event.detail?.blockID && b.properties?.type === "audio");
+      if (!block || block.id === replayBlockID) return;
+      // A plain audio player elsewhere on the page must not keep playing under
+      // the replay's own audio.
+      document.querySelectorAll("audio").forEach((audio) => audio.pause());
+      setReplayFrame(null);
+      setReplaySeekRequest(null);
+      setReplayBlockID(block.id);
+      setPdfHidden(false);
+      if (!pdfUrl) setPdfUrl(`${API}/uploads/${encodeURIComponent(docId)}.pdf`);
+    };
+    window.addEventListener("gamma-start-replay", start);
+    return () => window.removeEventListener("gamma-start-replay", start);
+  }, [readOnly, docId, pdfUrl, replayBlockID]);
+  // Leaving the page or switching account/workspace ends the session: media and
+  // the frame loop stop with it rather than staying half-active.
+  useEffect(() => {
+    setReplayBlockID(null);
+    setReplayFrame(null);
+    setNativeInkJumpRequest(null);
+  }, [focusedBlockId, sessionUser, workspace?.id]);
 
   const flushInk = useCallback(async () => {
     clearTimeout(inkTimerRef.current);
@@ -7377,6 +7576,12 @@ function LibraryApp() {
                   rootId: focusedBlockId,
                   onJump: jumpToHighlightId,
                   onInkJump: showInkOnPage,
+                  // Native `pdf_ink` blocks: their own jump (canonical-space
+                  // bounds) and the shared per-stroke derivative set, so the
+                  // Notes picture is the same high-resolution ink the PDF and
+                  // Replay draw.
+                  onNativeInkJump: jumpToNativeInk,
+                  nativeInkPreviews: replayAssets,
                   onEnterAttachMode: readOnly ? null : setAttachModeBlockId,
                   onUnlinkHighlight: readOnly ? null : unlinkHighlightFromBlock,
                   onOpenLinkTarget: (b) => {
@@ -7467,13 +7672,18 @@ function LibraryApp() {
                     setBlocks(next);
                     setFocusedId(newId);
                   },
+                  // Indent/outdent stays within this page: native ink/audio
+                  // preserve their actual parent on later iPad saves. Native
+                  // notes still use the narrower exact-parent contract.
                   onIndent: (id) => {
                     if (readOnly) return;
+                    if (nativeParentingBlocked(id)) return;
                     setBlocks(indentBlock(blocks, id));
                     setFocusedId(id);
                   },
                   onOutdent: (id) => {
                     if (readOnly) return;
+                    if (nativeParentingBlocked(id)) return;
                     setBlocks(outdentBlock(blocks, id));
                     setFocusedId(id);
                   },
@@ -7493,6 +7703,14 @@ function LibraryApp() {
                     if (readOnly) return;
                     const src = findBlock(blocks, id);
                     if (!src) return;
+                    // The row menu disables this for native blocks; keep the
+                    // guard so another caller cannot queue an insert the server
+                    // refuses (guard_generic_insert) and lose the action to the
+                    // resync that follows a rejected batch.
+                    if (hasNativeSubtree(src)) {
+                      setStatus("iPad annotations are copied on the iPad — the server refuses a web copy.");
+                      return;
+                    }
                     // Fresh ids all the way down; PDF anchoring stays with the
                     // original — a copy with the same highlight_id/position
                     // would draw a duplicate highlight on the page (same rule
@@ -7508,6 +7726,14 @@ function LibraryApp() {
                   },
                   onMoveToPage: async (id) => {
                     if (readOnly) return;
+                    // An annotation belongs to its page's document, and it is the
+                    // PAGE that the native writer validates against; moving it
+                    // elsewhere would leave it attached to another document.
+                    const moving = findBlock(blocksRef.current, id);
+                    if (hasNativeSubtree(moving)) {
+                      setStatus("iPad annotations stay on their page — moving one elsewhere is not supported.");
+                      return;
+                    }
                     try {
                       const d = await apiJson(`${API}/blocks/root/children`);
                       const pages = (d.children || []).filter((p) => p.id !== focusedBlockId);
@@ -7578,6 +7804,13 @@ function LibraryApp() {
                       if (!ancestorId) return;
                       next = insertSibling(remaining, ancestorId, sourceBlock, !dt.above);
                     } else { return; }
+                    // Drops stay within this page. Only native notes (and unknown
+                    // native claims) still require their exact parent.
+                    if (next && parentBlockIdOf(next, sourceId) !== parentBlockIdOf(blocks, sourceId) &&
+                        nativeParentingBlocked(sourceId)) {
+                      _dragState.draggingId = null;
+                      return;
+                    }
                     if (next) setBlocks(next);
                     _dragState.draggingId = null;
                   },
@@ -7841,6 +8074,7 @@ function LibraryApp() {
               />
             </label>
             <button className="popoverItem" onClick={() => createPage()}>New page</button>
+            <button className="popoverItem" onClick={() => { setOpenPopover(null); setBlankPDFOpen(true); }}>New blank PDF</button>
           </div>
         ) : null}
       </span>
@@ -8405,6 +8639,14 @@ function LibraryApp() {
         </ContextMenu>
       )}
 
+      {/* Note Replay's own bar, one at a time, above the work area: it drives
+          the PDF's ink layers through `replay`/`onReplaySeek` and is closed by
+          Done (the recording stays playable from its block). */}
+      {replayBlock ? (
+        <NoteReplayPlayer key={replayBlock.id} block={replayBlock} inkBlocks={nativeInkBlocks} assets={replayAssets}
+          onFrame={updateReplayFrame}
+          onClose={() => { setReplayBlockID(null); setReplayFrame(null); }} seekRequest={replaySeekRequest} />
+      ) : null}
       <div className="workArea">
       <PanelGroup direction="horizontal" autoSaveId="gamma-work-h" ref={(h) => { panelGroupRefs.current["work-h"] = h; }}>
       {slotWins("left").length ? (
@@ -8550,6 +8792,25 @@ function LibraryApp() {
           ) : null}
           {pdfUrl ? (
             <PdfViewer url={pdfUrl} highlights={highlights}
+              // The native handoff lives in the viewer's own top-right control
+              // row (PdfViewer's headerAction) so it can never overlap the page
+              // widget on a portrait or narrow viewport.
+              headerAction={!pdfHidden && !readOnly && window.__GAMMA_IPAD__ ? (
+                <div className="pdfCtlBox pdfNativeAction">
+                  <button
+                    onClick={openInNativeReader}
+                    aria-label="Open Pencil, recording and Replay"
+                    title="Open this Gamma PDF in the native Pencil workspace"
+                  >
+                    Pencil &amp; Audio
+                  </button>
+                </div>
+              ) : null}
+              nativeInkBlocks={nativeInkBlocks}
+              nativeInkPreviews={replayAssets}
+              replay={replay}
+              inkJumpRequest={nativeInkJumpRequest}
+              onReplaySeek={seekReplay}
               citation={pdfCitation?.pageId === focusedBlockId ? pdfCitation : null}
               hideEmbeddedAnnots={embAnnots === "hide"}
               darkPage={pdfDarkPage}
@@ -8576,7 +8837,7 @@ function LibraryApp() {
               onInkAction={readOnly ? undefined : handleInkAction}
               onInkMoveSelection={readOnly ? undefined : handleInkMoveSelection}
               onInkJump={showInkInNotes}
-              pdfScaleValue={pdfScale} scrollRef={scrollToRef}
+              pdfScaleValue={pdfScale} scrollRef={scrollToRef} viewportRef={nativeViewportRef}
               searchRef={pdfSearchRef}
               captureRef={pdfCaptureRef}
               findMarks={findMarks}
@@ -8750,6 +9011,10 @@ function LibraryApp() {
             </div>
           </div>
         </div>
+      ) : null}
+      {blankPDFOpen && !readOnly ? (
+        <BlankPDFDialog folder={folderFilter || ""} onCreate={createBlankPDF}
+          onClose={() => { setBlankPDFOpen(false); fetchHomeBlocks(); }} />
       ) : null}
       {labelRenaming ? (
         <div className="reportOverlay" onClick={() => setLabelRenaming(null)}>

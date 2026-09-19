@@ -105,6 +105,25 @@ compares one (at 20 Mbps, 0.6 to 0.85 s of every open — the research note has
 the measurement). The static route in `gamma/app.py` compares the ETag
 itself, so the unhashed files (`index.html`, favicons) get a real 304.
 
+## Native reading-position handoff
+
+Pencil & Audio captures the actual `.pdfPageWrap` intersecting the PDF scroller's
+visible top before awaiting note flush/session verification. The additive bridge
+`viewport: {pageIndex, anchorX, anchorY}` uses a zero-based page index and finite
+0…1 coordinates within the displayed (rotation-applied crop) page, not a fraction
+of the entire document or the debounced reading-page preference. A loading or
+pending-restore viewer refuses handoff rather than silently defaulting to page 1.
+The page/document/workspace and navigation generation are checked again after
+asynchronous work; existing account/role checks remain mandatory.
+
+On iPad, `GammaReadingPosition` strictly validates optional geometry (including
+rejecting booleans as numbers). `PDFInkView.requestedViewport` is consumed after
+PDFKit layout/window readiness, converting the displayed crop anchor back through
+`PDFView.convert` and navigating with `PDFDestination`. It is not reapplied for
+ink/content rerenders. The optional field leaves old six-field callers compatible.
+`nativeViewport.test.mjs`, `tests/e2e/nativeHandoff.mjs`, and
+`GammaReadingPositionTests.swift` cover the contract and crop/rotation conversion.
+
 ## High zoom and touch scrolling
 
 `shared/lib/canvasSize.js` bounds every PDF and live-ink backing store to 8 Mi pixels

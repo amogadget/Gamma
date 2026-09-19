@@ -106,6 +106,24 @@ def upload_extension(name: str) -> str:
 # (long enough that collisions stay theoretical, short enough to read in logs).
 DIGEST_CHARS = 24
 
+# Native (iPad) assets — ink drawings, previews, replay timelines, recordings —
+# share the workspace uploads directory (so quota, backups and exports cover
+# them for free) but keep their FULL sha256 name: a replay document names its
+# source drawing by digest, and the native client computes that digest itself
+# (gamma/native_ink.py). The 64-hex stem cannot collide with the 24-hex names
+# every other upload route mints, which is what lets /api/uploads and
+# /api/assets be interchangeable for these files.
+NATIVE_ASSET_NAME_RE = re.compile(r"^[0-9a-f]{64}\.(?:pkdrawing|png|m4a|inkjson)$")
+# A native asset is uploaded BEFORE the block that references it exists (the
+# client persists the payload, then uploads, then saves the block), and a
+# recording's replay timeline can be generated long after. There is no finite
+# age that proves all offline clients have finished referencing these bytes.
+# Native assets are therefore excluded from automatic garbage collection,
+# including old unreferenced sources; they still count toward storage quotas.
+# In-flight atomic writes. Sweeping one would break a concurrent store, so the
+# prefix is reserved and never cleaned up here.
+NATIVE_ASSET_TEMP_PREFIX = ".ink-"
+
 
 def display_filename(name: str, fallback: str = "") -> str:
     """A browser-supplied upload name reduced to one display-only leaf.
@@ -192,23 +210,32 @@ def cleanup_orphan_uploads(conn, uploads_dir: Path):
     """Delete files in uploads_dir that are no longer referenced by any block
     in conn. Extension-agnostic: a file survives when its stem is some page's
     ``doc_id`` (the PDF attachment) or any block's content/properties mention
-    ``/api/uploads/<filename>`` (images, generic file chips).
+    ``/api/uploads/<filename>`` or ``/api/assets/<filename>`` (images, generic
+    file chips, native ink/audio assets — both URL forms are checked because
+    native assets are reachable under either prefix).
 
-    Files younger than ``UPLOAD_GRACE_S`` are left alone: an upload is stored
-    BEFORE the block/page that references it is written (upload → attach, or
-    upload → insert chip), and an autosave of some other page landing in that
-    window used to delete the freshly stored file."""
+    Ordinary files younger than ``UPLOAD_GRACE_S`` are staged (upload then
+    attach). Native assets (``NATIVE_ASSET_NAME_RE``) are NEVER auto-deleted:
+    an unreferenced file may belong to an offline outbox or retained source
+    version, and age cannot prove that it is disposable. Reclamation requires
+    a separate explicit administrative action, not startup or a block edit.
+    This conservative policy may increase storage usage; quota still applies.
+    Atomic-write temporaries (``NATIVE_ASSET_TEMP_PREFIX``) are never swept.
+    """
     if not uploads_dir.exists():
         return []
     removed = []
     now = time.time()
     for f in uploads_dir.iterdir():
-        if not f.is_file():
+        if not f.is_file() or f.name.startswith(NATIVE_ASSET_TEMP_PREFIX):
             continue
         try:
-            if now - f.stat().st_mtime < UPLOAD_GRACE_S:
-                continue
+            age = now - f.stat().st_mtime
         except OSError:
+            continue
+        if age < UPLOAD_GRACE_S:
+            continue
+        if NATIVE_ASSET_NAME_RE.fullmatch(f.name):
             continue
         filename = f.name
         stem = f.stem
@@ -217,8 +244,11 @@ def cleanup_orphan_uploads(conn, uploads_dir: Path):
             "WHERE json_extract(properties, '$.doc_id') = ? "
             "   OR content LIKE ? "
             "   OR properties LIKE ? "
+            "   OR content LIKE ? "
+            "   OR properties LIKE ? "
             "LIMIT 1",
-            (stem, f"%/api/uploads/{filename}%", f"%/api/uploads/{filename}%"),
+            (stem, f"%/api/uploads/{filename}%", f"%/api/uploads/{filename}%",
+             f"%/api/assets/{filename}%", f"%/api/assets/{filename}%"),
         ).fetchone()
         if not ref:
             try:

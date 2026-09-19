@@ -3,9 +3,10 @@ highlights as blockquotes with a page marker, page title as an H1, scalar
 metadata as YAML front-matter and the cached BibTeX as a fenced block. Lossy
 but portable. (Logseq-app export lives in ``logseq_graph_export``.)
 
-Upload references (``/api/uploads/<sha>.<ext>``) are collected and rewritten to
-relative ``assets/<sha>.<ext>`` paths as a post-processing pass over the rendered
-text, so the renderers themselves stay ignorant of bundling.
+Upload references (``/api/uploads/<sha>.<ext>``, and the native assets that also
+answer to ``/api/assets/<sha>.<ext>``) are collected and rewritten to relative
+``assets/<sha>.<ext>`` paths as a post-processing pass over the rendered text,
+so the renderers themselves stay ignorant of bundling.
 """
 
 import re
@@ -13,6 +14,7 @@ import re
 from urllib.parse import quote as urlquote
 
 from .blocks_store import block_to_dict
+from .native_ink import AUDIO_REF_RE, DRAWING_REF_RE, PREVIEW_REF_RE, REPLAY_REF_RE
 from .note_markup import obsidian_image_sizes
 
 # rgba → Logseq colour name, the inverse of logseq_import._LOGSEQ_COLORS (using
@@ -25,8 +27,11 @@ _RGBA_TO_NAME = {
     "rgba(230, 180, 255, 0.65)": "purple",
 }
 
-# /api/uploads/<hexsha>.<ext> — content-addressed, so the filename is a stable key.
-UPLOAD_RE = re.compile(r"/api/uploads/([0-9a-fA-F]+\.[A-Za-z0-9]+)")
+# /api/uploads/<hexsha>.<ext> — content-addressed, so the filename is a stable
+# key. Native annotation assets (gamma/native_ink.py) live in the same directory
+# and answer to /api/assets/<hexsha>.<ext> as well, so both forms name the same
+# file and both are collected/rewritten.
+UPLOAD_RE = re.compile(r"/api/(?:uploads|assets)/([0-9a-fA-F]+\.[A-Za-z0-9]+)")
 
 _INVALID_FILENAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -52,6 +57,13 @@ def build_tree(rows, root_id):
 
 def _is_highlight(props):
     return bool(props.get("highlight_id"))
+
+
+def _asset_ref(props, key):
+    """A stored asset URL as text. Never None and never a non-string, so a
+    corrupt property can only fail the pattern check, not raise in a renderer."""
+    value = (props or {}).get(key)
+    return value if isinstance(value, str) else ""
 
 
 # --- readable rendering ------------------------------------------------------
@@ -165,8 +177,11 @@ def _render_readable_block(node, depth, lines, highlights=True, notes=True,
     content = resolve_block_links(content, resolve_ref, page_file, page_id)
     # The two export switches. A highlight block carries both a PDF region and
     # (often) writing of your own, so dropping highlights keeps its text as a
-    # plain bullet rather than losing the note with the quote.
-    if not highlights and (props.get("highlight_id") or props.get("link_url") or props.get("ink_url")):
+    # plain bullet rather than losing the note with the quote. A native ink
+    # annotation is the same kind of thing (a PDF region plus its caption), so
+    # the highlights switch governs it too.
+    if not highlights and (props.get("highlight_id") or props.get("link_url")
+                           or props.get("ink_url") or props.get("type") == "pdf_ink"):
         props = {}
     if not notes:
         content = ""
@@ -215,6 +230,37 @@ def _render_readable_block(node, depth, lines, highlights=True, notes=True,
         for c in content.split("\n") if content else []:
             lines.append(f"{indent}  {c}")
         emitted = True
+    elif props.get("type") == "pdf_ink":
+        # A native PencilKit annotation: the preview picture, the editable
+        # drawing and (once one exists) the replay timeline. All three are
+        # bundled like any other asset, so the zip keeps the annotation
+        # restorable rather than only visible.
+        preview = _asset_ref(props, "preview_asset")
+        if PREVIEW_REF_RE.fullmatch(preview):
+            lines.append(f"{indent}- ![Ink annotation]({preview})")
+            emitted = True
+        drawing = _asset_ref(props, "ink_asset")
+        if DRAWING_REF_RE.fullmatch(drawing):
+            lines.append(f"{indent}  [Editable PencilKit drawing]({drawing})")
+            emitted = True
+        replay = _asset_ref(props, "replay_asset")
+        if REPLAY_REF_RE.fullmatch(replay):
+            lines.append(f"{indent}  [Ink replay]({replay})")
+            emitted = True
+        for c in content.split("\n") if content else []:
+            lines.append(f"{indent}  {c}")
+        emitted = emitted or bool(content)
+    elif notes and props.get("type") == "audio":
+        # A native recording: one link per segment (the asset is an opaque
+        # .m4a the client plays), then whatever note text was typed with it.
+        for seg in props.get("segments") or []:
+            asset = _asset_ref(seg, "asset") if isinstance(seg, dict) else ""
+            if AUDIO_REF_RE.fullmatch(asset):
+                lines.append(f"{indent}- [Audio recording]({asset}) ({seg.get('duration', 0)}s)")
+                emitted = True
+        for c in content.split("\n") if content else []:
+            lines.append(f"{indent}  {c}")
+        emitted = emitted or bool(content)
     elif content:
         clines = content.split("\n")
         lines.append(f"{indent}- {clines[0]}")

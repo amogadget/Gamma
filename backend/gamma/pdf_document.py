@@ -20,20 +20,35 @@ each chunk's text into styled inline spans (bold, italic, code, strike,
 ``==marked==``, links, ``$…$`` math). Links become real /Link annotations and
 page titles become PDF bookmarks, so a folder export is navigable.
 
+The two native (iPad) block kinds are here too, each rendered as what it
+actually is (docs/dev/handwriting.md): a ``type: "pdf_ink"`` annotation shows
+its readable picture — the high-resolution per-stroke replay derivative when
+one exists, else the whole-block PNG preview, never strokes invented from a
+raster, since Apple's PKDrawing cannot be opened here — under a caption naming
+its page; a ``type: "audio"`` recording becomes its segment durations and links
+to the stored ``.m4a`` files, because a PDF has no player and embedding audio
+would only pretend otherwise. A downloaded document has no origin of its own, so
+those links go through ``render_document``'s ``asset_link`` resolver: the export
+endpoint passes ``absolute_asset_link``, and every link comes out absolute and
+naming the workspace the export was made in (see that helper — no credentials,
+and never a share token).
+
 The whole page is drawn in ``pdf_typeset``'s y-down frame and flipped into user
 space by one ``cm`` at the top of the content stream.
 """
 
 import io
 import re
+from urllib.parse import quote
 
 from PyPDF2 import PdfWriter
 from PyPDF2.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 from . import vector_text
 from .logbuf import log
+from .native_ink import AUDIO_REF_RE
 from .note_markup import MATH, TEXT, latex_spans
-from .pdf_export import parse_css_color
+from .pdf_export import native_ink_image, native_ink_picture, parse_css_color
 from .pdf_glyphs import GlyphFonts
 from .pdf_image import XObjectStore
 from .pdf_typeset import (
@@ -315,12 +330,14 @@ class _Canvas:
     images and link boxes each page ends up needing. Every draw call
     paginates itself, so callers never track the page break."""
 
-    def __init__(self, writer: PdfWriter, uploads_dir=None, resolve_ref=None):
+    def __init__(self, writer: PdfWriter, uploads_dir=None, resolve_ref=None,
+                 asset_link=None):
         self.writer = writer
         self.uploads_dir = uploads_dir
         self.images = XObjectStore(writer, uploads_dir)
         self.glyphs = GlyphFonts(writer)
         self.resolve_ref = resolve_ref   # [[id]] → {content, page_title} | None
+        self.asset_link = asset_link     # stored /api/… ref → the URL to write
         self.pages = []
         self.outline = []          # (title, page index, level) → PDF bookmarks
         self._new_page()
@@ -458,6 +475,53 @@ class _Canvas:
             ink_file, lambda px, py: (x + (px - box[0]) * scale, top + (py - box[1]) * scale), scale))
         self.y += h + IMAGE_GAP
         return True
+
+    def native_ink(self, props: dict, x: float, width: float) -> dict | None:
+        """A native (iPad) PencilKit annotation's picture, fitted to the column
+        (never enlarged). → ``{"source", "strokes"}`` for the caption, or None
+        when neither its PNG preview nor a replay derivative is readable.
+
+        A document has no page position to preserve, so resolution wins: the
+        per-stroke ``.inkjson`` derivative is preferred (the web's Notes pane
+        makes the same choice, with the block's whole-block PNG as its
+        fallback), trimmed to the strokes' own bounds. Nothing is invented —
+        Apple's PKDrawing cannot be drawn here, so a block with neither
+        rendering is reported as such by the caller and its vector ink is never
+        faked from a picture."""
+        picture = native_ink_picture(self.uploads_dir, props, prefer_replay=True,
+                                     crop_to_content=True)
+        if not picture:
+            return None
+        frame_w, frame_h = picture["frame"]
+        scale = min(1.0, width / frame_w) if frame_w else 1.0
+        cap = PAGE_H - MARGIN_TOP - MARGIN_BOTTOM
+        if frame_h * scale > cap:
+            scale = cap / frame_h
+        if scale <= 0:
+            return None
+        self.need(frame_h * scale)
+        top = self.y
+        drawn = 0
+        for draw in picture["draws"]:
+            built = native_ink_image(self.writer, draw["data"])
+            if not built:
+                continue
+            name, ref = built
+            bx, by, bw, bh = draw["box"]
+            w, h = bw * scale, bh * scale
+            if w <= 0 or h <= 0:
+                continue
+            # The y-down frame, like image(): the picture's top edge sits at
+            # top + by·scale, so the flipped matrix flips about that edge.
+            self.page["ops"].append(b"q %s 0 0 %s %s %s cm /%s Do Q" % (
+                num(w), num(-h), num(x + bx * scale), num(top + (by + bh) * scale),
+                name.encode("ascii")))
+            self.page["xobjects"][name] = ref
+            drawn += 1
+        if not drawn:
+            return None
+        self.y += frame_h * scale + IMAGE_GAP
+        return {"source": picture["source"], "strokes": picture.get("strokes")}
 
     def display_math(self, tex: str, x: float, width: float, size: float = BODY_SIZE):
         drawn = vector_text.math(tex, size * DISPLAY_MATH_SCALE)
@@ -758,6 +822,87 @@ def _emit_chunks(cv: _Canvas, md: str, x: float, width: float, color=TEXT_COLOR,
         first = False
 
 
+def _clock(seconds: float) -> str:
+    """A recording duration as ``h:mm:ss`` / ``m:ss`` — the shape a player
+    shows. Whole seconds, from the finalized segments' own durations: the
+    document repeats a recording's timeline, it never invents one."""
+    total = max(0, int(round(float(seconds))))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
+
+
+def absolute_asset_link(base_url: str, workspace: str | None = None):
+    """``render_document``'s ``asset_link``: a stored local reference
+    (``/api/assets/<hash>.m4a``) → the URL an exported document must carry.
+
+    A downloaded PDF has no origin: a bare ``/api/assets/…`` resolves against
+    whatever base the reader's viewer happens to assume, and the same file
+    fetched without ``?ws=`` comes from the READER's default workspace rather
+    than the one the export was made in. So the link is absolute and names its
+    workspace explicitly. ``base_url`` may carry a deployment's root path
+    (``https://host/gamma``) — the reference is appended to it verbatim.
+
+    Nothing else is added: no session, no credentials, and NEVER a share token.
+    An exported file is not a capability — a reader still needs their own
+    Gamma session (or membership) and access to that workspace, and a view
+    share must not turn into durable access to the workspace's assets just
+    because someone exported the notes. Non-local references (``https://…``,
+    ``data:``, a bare name) pass through untouched."""
+    base = str(base_url or "").strip().rstrip("/")
+    ws = str(workspace).strip() if workspace else ""
+
+    def link(ref):
+        if not isinstance(ref, str) or not ref.startswith("/api/"):
+            return ref
+        url = f"{base}{ref}"
+        if not ws:
+            return url
+        return f"{url}{'&' if '?' in url else '?'}ws={quote(ws)}"
+
+    return link
+
+
+def audio_summary(props: dict, link=None) -> tuple[str, list[tuple[str, str | None]]]:
+    """A native recording's text for the notes document: a one-line summary
+    (segment count and total duration) plus one line per finalized segment,
+    each linked to its stored ``.m4a``.
+
+    A PDF has no audio player, so the recording is NOT embedded and no playback
+    is implied — the document carries what a reader can actually use: how long
+    each segment is and where the file lives. ``link`` (``render_document``'s
+    asset-link resolver, i.e. ``absolute_asset_link`` at the export endpoint)
+    rewrites that local reference into the URL a reader of the downloaded file
+    needs; without it the stored reference is written as-is, which is what a
+    standalone document wants. Durations come from the finalized segments (or
+    the server-derived ``duration``); a block with no segments says so rather
+    than showing a made-up ``0:00``, and an asset reference that is not a local
+    ``/api/assets/<hash>.m4a`` stays plain text — never a dead link."""
+    segments = [s for s in (props.get("segments") or []) if isinstance(s, dict)]
+    durations = []
+    for segment in segments:
+        value = segment.get("duration")
+        durations.append(float(value) if isinstance(value, (int, float))
+                         and not isinstance(value, bool) and value > 0 else 0.0)
+    total = props.get("duration")
+    if not isinstance(total, (int, float)) or isinstance(total, bool) or total <= 0:
+        total = sum(durations)
+    if segments:
+        summary = (f"audio recording · {len(segments)} segment"
+                   f"{'s' if len(segments) != 1 else ''} · {_clock(total)} total"
+                   " · audio not embedded")
+    else:
+        summary = "audio recording · no finalized segments"
+    lines = []
+    for n, segment in enumerate(segments, 1):
+        asset = segment.get("asset")
+        href = asset if isinstance(asset, str) and AUDIO_REF_RE.fullmatch(asset) else None
+        if href is not None and link is not None:
+            href = link(href)
+        lines.append((f"Segment {n} · {_clock(durations[n - 1])}", href))
+    return summary, lines
+
+
 def _emit_block(cv: _Canvas, node: dict, depth: int, highlights: bool, notes: bool):
     """One block and its subtree. Mirrors the Markdown export's switches: with
     highlights off a highlight block keeps its own writing as a plain bullet;
@@ -767,9 +912,15 @@ def _emit_block(cv: _Canvas, node: dict, depth: int, highlights: bool, notes: bo
     is_highlight = bool(props.get("highlight_id"))
     is_link = bool(props.get("link_url"))
     is_ink = bool(props.get("ink_url"))
-    if is_highlight or is_link or is_ink:
+    # Native (iPad) annotations: handwriting is a PDF region too, so the
+    # highlights switch governs it exactly as it does for ink_url and
+    # highlights (the Markdown export's rule); a recording follows the notes
+    # switch instead, because it is writing, not a mark on the paper.
+    is_native_ink = props.get("type") == "pdf_ink"
+    is_audio = props.get("type") == "audio"
+    if is_highlight or is_link or is_ink or is_native_ink:
         if not highlights:
-            props, is_highlight, is_link, is_ink = {}, False, False, False
+            props, is_highlight, is_link, is_ink, is_native_ink = {}, False, False, False, False
         if not notes:
             content = ""
     elif not notes:
@@ -800,6 +951,29 @@ def _emit_block(cv: _Canvas, node: dict, depth: int, highlights: bool, notes: bo
             inset = QUOTE_PAD if emitted else 0
             _emit_chunks(cv, content, x + inset, width - inset, bullet=bool(depth or inset))
             emitted = True
+    elif is_native_ink:
+        cv.gap(BLOCK_GAP)
+        drawn = cv.native_ink(props, x + QUOTE_PAD, width - QUOTE_PAD)
+        page_no = props.get("pdf_page")
+        if drawn:
+            caption = f"handwriting, p. {page_no}" if page_no else "handwriting"
+            if drawn.get("strokes"):
+                caption += f" · {drawn['strokes']} strokes"
+        else:
+            # Explicit, not silent: the block really is handwriting, and the
+            # picture it renders with is simply not on this server any more.
+            caption = (f"handwriting, p. {page_no} · no preview available" if page_no
+                       else "handwriting · no preview available")
+        # ``bullet`` is the MARKER to draw ("" = the outliner dot, a string =
+        # that number, None = none) — not the "nested?" flag the content lines
+        # take, which is why a nested block crashed here before.
+        cv.paragraph([(TEXT, caption, 0, PLAIN)], x + QUOTE_PAD, width - QUOTE_PAD,
+                     SMALL_SIZE, color=MUTED, bullet="" if depth else None)
+        emitted = True
+        if content:
+            cv.gap(BLOCK_GAP)
+            _emit_chunks(cv, content, x + QUOTE_PAD, width - QUOTE_PAD, bullet=True)
+            emitted = True
     elif is_highlight:
         quote = (props.get("quote") or "").strip()
         bar = tuple(max(0.0, c * 0.7) for c in parse_css_color(props.get("color"))[:3])
@@ -818,6 +992,19 @@ def _emit_block(cv: _Canvas, node: dict, depth: int, highlights: bool, notes: bo
             cv.gap(BLOCK_GAP)
             inset = QUOTE_PAD if emitted else 0
             _emit_chunks(cv, content, x + inset, width - inset, bullet=bool(depth or inset))
+            emitted = True
+    elif is_audio and notes:
+        summary, segments = audio_summary(props, cv.asset_link)
+        cv.gap(BLOCK_GAP)
+        cv.paragraph([(TEXT, summary, 0, PLAIN)], x, width, SMALL_SIZE,
+                     color=MUTED, bullet="" if depth else None)
+        for label, href in segments:
+            cv.paragraph([(TEXT, label, 0, Style(LINK, href) if href else PLAIN)],
+                         x + QUOTE_PAD, width - QUOTE_PAD, SMALL_SIZE, color=MUTED)
+        emitted = True
+        if content:
+            cv.gap(BLOCK_GAP)
+            _emit_chunks(cv, content, x, width, bullet=True)
             emitted = True
     elif content:
         cv.gap(BLOCK_GAP)
@@ -861,15 +1048,21 @@ def _emit_page(cv: _Canvas, page: dict, highlights: bool, notes: bool):
 
 
 def render_document(pages, uploads_dir=None, highlights: bool = True,
-                    notes: bool = True, resolve_ref=None) -> bytes:
+                    notes: bool = True, resolve_ref=None, asset_link=None) -> bytes:
     """Page trees (``markdown_export.build_tree`` nodes) → a PDF document, one
     page starting on a fresh sheet. ``highlights``/``notes`` are the export
     dialog's switches; ``uploads_dir`` is where ``/api/uploads/…`` refs are
     read from (without it images degrade to their alt text); ``resolve_ref``
     (block id → {content, page_title} | None) lets [[refs]] read as their
-    target's text and ``![[embeds]]`` render the synced block's content."""
+    target's text and ``![[embeds]]`` render the synced block's content.
+
+    ``asset_link`` (a stored local reference → the URL to write) is how the
+    export endpoint turns the recording links into absolute, workspace-scoped
+    URLs a reader of the downloaded file can follow (``absolute_asset_link``).
+    Left out, the references are written exactly as stored — the standalone
+    rendering this function also is."""
     writer = PdfWriter()
-    canvas = _Canvas(writer, uploads_dir, resolve_ref)
+    canvas = _Canvas(writer, uploads_dir, resolve_ref, asset_link)
     for n, page in enumerate(pages):
         if n:
             canvas.page_break()

@@ -139,8 +139,13 @@ export async function inkEditingScenarios({ server, browser, alice, bob, makePdf
     const beforeA = decodeStroke((await stored()).strokes[0])[0];
     const beforeB = decodeStroke((await stored(secondId)).strokes[0])[0];
     await dragTouch(await point(140, 245), await point(170, 280), assertHandlesFollowSelection);
-    await until(async () => decodeStroke((await stored()).strokes[0])[0].y > beforeA.y + 30);
-    assert(decodeStroke((await stored(secondId)).strokes[0])[0].y > beforeB.y + 30, "both groups moved");
+    // The two groups are separate blocks, so their saves land one after the
+    // other (two uploads + two PATCHes). Await the pair instead of asserting the
+    // second one immediately — the requirement is unchanged: BOTH must move, so
+    // a dropped save still fails here.
+    await until(async () => decodeStroke((await stored()).strokes[0])[0].y > beforeA.y + 30
+      && decodeStroke((await stored(secondId)).strokes[0])[0].y > beforeB.y + 30,
+      { what: "both ink groups to move" });
     await page.getByRole("button", { name: "Undo ink", exact: true }).tap();
     await until(async () => decodeStroke((await stored()).strokes[0])[0].y === beforeA.y
       && decodeStroke((await stored(secondId)).strokes[0])[0].y === beforeB.y);

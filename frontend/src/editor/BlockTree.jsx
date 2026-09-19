@@ -25,6 +25,10 @@ import { PeerChips } from "../collaboration/Presence";
 import { ContextMenu, MenuItem } from "../shared/ui/Menus";
 import { API, apiJson, assetUrl, copyText, withWorkspace } from "../shared/lib/utils";
 import { CopyIcon, ExportIcon, MessageSquareIcon, PlusIcon, Trash2Icon } from "../shared/ui/Icons";
+import { inkBlockPreview } from "../native/inkBlock.js";
+import { audioSegments, formatAudioDuration } from "../native/audioBlock.js";
+import { StaticInkPreview } from "../native/ReplayInkLayer.jsx";
+import { NATIVE_CONTROL_REASON, isNativeClaim } from "../native/nativeClaim.js";
 import {
   applyImageEdit, applyTableEdit, formatTables, htmlTableToMarkdown,
   MdImage, MdTableWrap, parseTable, scanTables, tsvToMarkdown,
@@ -32,6 +36,62 @@ import {
 
 // Module-level ref for native HTML5 drag-and-drop (shared with App's drop handlers)
 const _dragState = { draggingId: null, dropTarget: null };
+
+// Native audio block: one recording session, its finalized segments in order,
+// plus the way into Note Replay. The player itself lives in App (it drives the
+// PDF layers), so this asks for it with the same event the notes pane uses.
+function NativeAudioPreview({ block, readOnly }) {
+  const segments = audioSegments(block);
+  if (!segments.length) return null;
+  return (
+    <figure className="nativeAudio" aria-label="Audio recording">
+      {segments.map((s) => (
+        <div key={s.id} className="nativeAudioRow">
+          <audio controls preload="metadata" src={assetUrl(s.url)} />
+          <span>{formatAudioDuration(s.duration)}</span>
+        </div>
+      ))}
+      <figcaption>
+        Audio · {formatAudioDuration(block.properties.duration)}
+        {!readOnly ? (
+          <button className="uiBtn sm" style={{ marginLeft: 8 }}
+            onClick={() => window.dispatchEvent(new CustomEvent("gamma-start-replay", { detail: { blockID: block.id } }))}>
+            Open Note Replay
+          </button>
+        ) : null}
+      </figcaption>
+    </figure>
+  );
+}
+
+// Native handwriting block: the high-resolution per-stroke preview when its
+// `.inkjson` derivative is loaded (the SAME images Replay masks and the PDF
+// layer draws, so sharpness does not change when replay ends), else the
+// whole-block PNG the iPad also uploads. The editable PKDrawing stays on iPad.
+function NativeInkPreview({ block, data }) {
+  const preview = inkBlockPreview(block);
+  const [unavailable, setUnavailable] = useState(false);
+  useEffect(() => setUnavailable(false), [preview?.url]);
+  if (!preview) return null;
+  return (
+    <figure className="nativeInkCard">
+      {data ? <StaticInkPreview data={data} /> : unavailable ? (
+        <span className="nativeInkMissing">Handwriting preview unavailable. Sign in to the owning Gamma account.</span>
+      ) : (
+        <img
+          src={assetUrl(preview.url)}
+          alt={`Handwriting${preview.page ? ` on PDF page ${preview.page}` : ""}`}
+          loading="lazy"
+          onError={() => setUnavailable(true)}
+          style={{ display: "block", maxWidth: "100%", maxHeight: 360, objectFit: "contain" }}
+        />
+      )}
+      <figcaption>
+        Handwriting{preview.page ? ` · Page ${preview.page}` : ""} · Edit ink on iPad
+      </figcaption>
+    </figure>
+  );
+}
 
 // Source → markdown the renderer understands: sized images (Obsidian
 // ![alt|300] and legacy Logseq {:width}), ![[embeds]],
@@ -614,6 +674,8 @@ function BlockRow({
   setFocusedId,
   onJump,
   onInkJump,
+  onNativeInkJump,
+  nativeInkPreviews,
   onEnterAttachMode,
   onUnlinkHighlight,
   onOpenLinkTarget,
@@ -889,6 +951,12 @@ function BlockRow({
   // A handwriting group (docs/dev/handwriting.md): pen marker + the strokes
   // as a card; its content is the caption.
   const isInk = block.properties?.ink_url !== undefined;
+  // Native (iPad) handwriting: a `pdf_ink` block whose strokes were drawn and
+  // are editable on the iPad only. Same pen marker idea, its own glyph (a
+  // rounded square) so the two kinds stay distinguishable, and its own jump —
+  // native blocks carry canonical crop-space bounds rather than a
+  // pdf_position.
+  const isNativeInk = block.properties?.type === "pdf_ink";
   const hasChildren = (block.children?.length || 0) > 0;
 
   function handleFileDragOver(e) {
@@ -1139,6 +1207,14 @@ function BlockRow({
           // not just the little colored dot. Ctrl+click appends the quote to
           // the chat selection, same as clicking the highlight on the PDF.
           if (block.highlightId) onJump?.(block.highlightId, e.ctrlKey || e.metaKey);
+          // A native handwriting block: clicking its row or picture asks the
+          // viewer for the strokes themselves. The caption still opens for
+          // editing, but a click ON the picture only jumps — the picture is
+          // not text to place a caret in.
+          else if (isNativeInk) {
+            onNativeInkJump?.(block.id);
+            if (e.target.closest("figure")) return;
+          }
           // Ctrl on any other block: decided on click (below) — a Ctrl+drag
           // selects note text for a chip instead, so the editor must not open
           // and the selection must be allowed to start.
@@ -1209,6 +1285,15 @@ function BlockRow({
               >⊕</button>
             ) : null}
           </>
+        ) : isNativeInk && !block.editMode ? (
+          <button
+            className="collapseBtn dotSlot inkDotBtn"
+            title="Jump to handwriting"
+            aria-label="Jump to handwriting"
+            onClick={(e) => { e.stopPropagation(); onNativeInkJump?.(block.id); }}
+          >
+            <span className="inkDot" aria-hidden="true">✎</span>
+          </button>
         ) : isInk && !block.editMode ? (
           <button
             className="collapseBtn highlightDotBtn dotSlot"
@@ -1383,7 +1468,11 @@ function BlockRow({
                 } else if (e.key === "ArrowLeft" && (block.children?.length || 0) > 0 && !block.collapsed) {
                   e.preventDefault();
                   onToggle(block.id);
-                } else if (e.key === "Backspace" && (block._isEmpty || !(block.content || "").trim()) && !(block.quote || "").trim()) {
+                } else if (e.key === "Backspace" && (block._isEmpty || !(block.content || "").trim()) && !(block.quote || "").trim()
+                  // A native handwriting block is not just its caption: an
+                  // empty caption must not turn one Backspace into "delete the
+                  // strokes' block" (the iPad owns that source).
+                  && block.properties?.type !== "pdf_ink") {
                   e.preventDefault();
                   onDelete(block.id);
                 }
@@ -1420,6 +1509,8 @@ function BlockRow({
             <AreaSnapshot block={block} captureArea={captureArea} docNonce={docNonce} />
           ) : null}
           {isInk ? <InkCard block={block} onJump={onInkJump} /> : null}
+          {isNativeInk ? <NativeInkPreview block={block} data={nativeInkPreviews?.[block.id]?.data} /> : null}
+          <NativeAudioPreview block={block} readOnly={readOnly} />
           {(block.properties?.link_url || block.properties?.link_page_id) ? (
             <button
               type="button"
@@ -1498,12 +1589,25 @@ function subtreeMarkdown(b, depth) {
   return [own, ...(b.children || []).map((c) => subtreeMarkdown(c, depth + 1))].join("\n");
 }
 
+// Copying or moving an ordinary ancestor also carries every native manifest
+// beneath it. Same-page nesting is separate: it changes no payload or page scope.
+function subtreeClaimsNative(block) {
+  return isNativeClaim(block.properties) || (block.children || []).some(subtreeClaimsNative);
+}
+
 function SortableBlockRow({ block, ...rowProps }) {
   const depth = rowProps.depth || 0;
   // Notion-style handle: drag moves the block, a plain click opens the block
   // menu (copy link / reference / embed, delete).
   const [handleMenu, setHandleMenu] = useState(null); // {x, y}
   const draggedRef = useRef(false);
+  // A block carrying a native payload (a `pdf_ink`/`audio` annotation, or a note
+  // beneath one) is owned by the iPad endpoints: the server refuses a generic
+  // copy (`guard_generic_insert`), and moving an annotation to another page would
+  // detach it from the document its writer validates. Those two rows are
+  // disabled HERE, with the reason, rather than offered and then dropped by the
+  // resync that follows a rejected batch.
+  const nativeClaim = subtreeClaimsNative(block);
 
   function onDragStart(e) {
     e.dataTransfer.setData("text/plain", block.id);
@@ -1594,14 +1698,18 @@ function SortableBlockRow({ block, ...rowProps }) {
           {block.id !== "root" ? (
             <MenuItem
               icon={CopyIcon}
-              title="Insert a copy below (sub-blocks included; highlight anchors are not copied)"
+              disabled={nativeClaim}
+              title={nativeClaim ? NATIVE_CONTROL_REASON : "Insert a copy below (sub-blocks included; highlight anchors are not copied)"}
               onClick={() => { setHandleMenu(null); rowProps.onDuplicate?.(block.id); }}
             >Duplicate</MenuItem>
           ) : null}
           {block.id !== "root" ? (
             <MenuItem
               icon={ExportIcon}
-              title="Move this block and its sub-blocks to the end of another page"
+              disabled={nativeClaim}
+              title={nativeClaim
+                ? "An iPad annotation belongs to its page and its document — moving it elsewhere is not supported"
+                : "Move this block and its sub-blocks to the end of another page"}
               onClick={() => { setHandleMenu(null); rowProps.onMoveToPage?.(block.id); }}
             >Move to page…</MenuItem>
           ) : null}

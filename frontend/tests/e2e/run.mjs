@@ -27,6 +27,8 @@ import { inkScenarios } from "./scenarios/ink.mjs";
 import { inkEditingScenarios } from "./scenarios/inkEditing.mjs";
 import { pdfLoadScenarios } from "./scenarios/pdfload.mjs";
 import { pdfTouchScenarios } from "./scenarios/pdfTouch.mjs";
+import { nativeScenarios } from "./scenarios/nativeInk.mjs";
+import { blankPdfScenarios } from "./scenarios/blankPdf.mjs";
 
 const server = new Server();
 let browser;
@@ -93,6 +95,8 @@ try {
   await fileScenarios(env);
   await collabScenarios(env);
   await shareScenarios(env, { ...notes, ...pdf });
+  await nativeScenarios(env);
+  await blankPdfScenarios(env);
 } catch (e) {
   if (!results.length || results[results.length - 1].ok) console.log(`\nsetup failed: ${e.stack || e}`);
 } finally {

@@ -49,10 +49,21 @@ else; in dev, Vite proxies `/api` → `127.0.0.1:9001`.
   the workspace for the block writers — `POST /blocks`, `PUT /blocks/{id}`,
   `DELETE /blocks/{id}`, `PUT /blocks/{id}/children`, `POST /blocks/{id}/reorder`,
   `POST /pages/{id}/ops` (and the page websocket, view or edit),
-  `POST /upload-image`, `POST /upload-file` — each of which confines the touched blocks to the
+  `POST /upload-image`, `POST /upload-file`, and the native annotation writers
+  (`POST /assets`, `PUT /blocks/{id}/ink|replay-preview|audio|note|highlight`) —
+  each of which confines the touched blocks to the
   shared page (no new pages, no deleting/moving the page itself, no changes to
   the page root's properties). Everything else stays session-only.
   Keep that read/write + scope distinction when adding endpoints.
+- **Assets** are served from the request's workspace
+  (`GET /uploads/{filename}`, `GET /assets/{filename}`), and a `?share=` request
+  is confined to the files its own page's subtree references
+  (`uploads._share_can_read_upload`, `native_ink._asset_in_page`) — a token
+  cannot walk the rest of the workspace by guessing content hashes. Browser
+  media elements (`<img>`, `<audio>`) cannot send the workspace header, so
+  asset URLs may carry the scope explicitly: the frontend's
+  `shared/lib/assetUrl.js` appends `?ws=` / `?share=` to `/api/uploads/…` and
+  `/api/assets/…` links.
 - Outbound fetches of user-supplied URLs (PDF proxy/resolver, AI PDF
   re-download) go through `gamma.net_guard.guarded_urlopen`, which blocks
   non-http(s) schemes (`file:`, `ftp:`, …) and hosts that resolve to
@@ -166,14 +177,90 @@ guarded fetch path.
 | POST | `/resolve-pdf` | URL/arXiv/DOI → fetchable PDF (citation_pdf_url sniffing, Unpaywall OA fallback) |
 | GET | `/pdf` | proxy/download a PDF (`save=1` caches it server-side) |
 | POST | `/uploads`, `/upload-image` | store a PDF / an image (content-hash names, dedup'd; quota-gated) |
+| PUT | `/blank-pdfs/{page_id}` | create (or recognize, by creation fingerprint) a blank notebook page — see [Blank notebooks](#blank-notebooks-blank_pdfpy) |
 | POST | `/upload-file` | store a file for a block to reference as `[name](/api/uploads/<hash>.<ext>)` — the file chip. Any extension except executables (`storage.BLOCKED_EXTENSIONS`: exe, msi, bat, dll, ps1, …; 400 "not accepted (executable)"); the extension comes from the uploaded name, lowercased, `.bin` when there is none; images route like `/upload-image`, a `.pdf` must be a real PDF and lands under the same `<hash>.pdf` the PDF ingest mints (so it can be opened as a document page later); same hashing + limits → `{url, name, size, already_existed}` |
 | POST | `/upload-ink` | store a handwriting group's `gamma-ink` JSON (the request body; validated against `gamma/ink.py`'s schema and limits, canonical bytes so identical strokes dedup) as `<hash>.ink` → `{url, size, strokes, bbox, pdf_position, already_existed}`; editors and edit shares. [handwriting.md](handwriting.md) |
 | GET | `/pdf-info/{doc_id}` | the document manifest the viewer lays a PDF out from before pdf.js has parsed it (`gamma/pdf_meta.py`, [pdf_loading.md](pdf_loading.md)): `{doc_id, bytes, pages, dims: [[w, h], …]}` in PDF points, rotation applied; same access rule as the file; computed in pdfium on first request when the upload-time background walk has not run (`pages: 0` for an unreadable file, not cached); 400 malformed id, 404 no such file |
-| GET, HEAD | `/uploads/{filename}` | serve stored files (HEAD: the headers alone, which is how the viewer learns a file's size before choosing its transport); with their media type (`storage.FILE_MEDIA_TYPES`, else `application/octet-stream`); pdf / images / txt / md render inline, everything else is `Content-Disposition: attachment` (html additionally sandboxed like svg); blocked or malformed extensions 400 |
+| GET, HEAD | `/uploads/{filename}` | serve stored files (HEAD: the headers alone, which is how the viewer learns a file's size before choosing its transport); with their media type (`storage.FILE_MEDIA_TYPES`, else `application/octet-stream`); pdf / images / txt / md render inline, everything else is `Content-Disposition: attachment` (html additionally sandboxed like svg); blocked or malformed extensions 400. A native asset name (`<64hex>.pkdrawing|png|m4a|inkjson`) is served by the native handler instead — same bytes, same scope and private cache headers as `/assets/{filename}` (`native_ink.asset_response`) |
 | GET | `/quota` | the limits that apply to uploads into the request's workspace — the account's for a personal one (`used_bytes` = all its personal workspaces), the workspace's own for a shared one — with `workspace_bytes` and `account` (the person, or "") |
 | POST | `/share/{page_id}` | create the page's share link (defaults `anyone`/`view`; optional body `{audience, role, users}` applies to a NEW link) or return the existing one unchanged — root blocks only (400 otherwise); workspace editors and owners |
 | GET/PUT/DELETE | `/share-settings/{page_id}` | read settings (`{token: null}` when unshared; any member) / change `audience`, `role`, `users` (`["carol"]` or `[{name, role}]`; validated: `edit`+`anyone` → 400, unknown usernames or roles → 400; the token stays) / stop sharing (the token dies) — editors and owners |
 | GET | `/share/{token}` | resolve a link for this viewer → `{page_id, doc_id, username (who shared it), workspace_id, audience, role, can_edit, viewer, viewer_is_guest}` (`doc_id` = the page's PDF attachment id via `page_attachment`, `""` without one; `viewer`/`viewer_is_guest` let the share view offer "Open in my library" or "Add to my library"); 404 unknown, 401 sign in first, 403 signed in but not allowed |
+
+#### Blank notebooks (`blank_pdf.py`)
+
+`PUT /api/blank-pdfs/{page_id}` mints a blank notebook: a normal root page whose
+PDF is generated here (A4/Letter, portrait/landscape, 1–100 empty pages), so the
+viewer, notes, highlights, AI context and export all work on it unchanged — an
+iPad PencilKit annotation targets it like any other page (`pdf_page` is the
+sheet it was written on). `page_id` is the canonical lowercase UUID the client
+minted (422 otherwise) and the call is **idempotent on the creation payload**:
+the request's fingerprint is stored as `properties.blank_pdf_creation`, so a
+retry returns the page as it stands — a rename in between included — while the
+same id with a different payload is 409. Body `{title, page_size, orientation,
+page_count, folder}` (unknown fields 422, blank title 422; `folder` is
+normalized through `foldertags.clean_path`). → the ordinary full block, with the
+PDF attachment props (`doc_id`, `source_url` — the generated file, whose
+metadata carries `/GammaNotebookID: <page_id>` so two identical-geometry
+notebooks never share a document identity), `pdf_kind: "blank"` and the geometry
+in `blank_pdf`. Quota applies (413/507) and a refusal publishes nothing. Editors
+and owners only; a `?share=` request is refused (creating a page is a library
+action, like `POST /blocks` with `parent_id: "root"`).
+
+### Native iPad annotations (`native_ink.py`, `native_highlights.py`)
+
+Two handwriting generations coexist and share the file store, quota, backups and
+exports, but not a route or a property: the browser's `gamma-ink` stroke groups
+(`POST /upload-ink`, a block's `properties.ink_url` — [handwriting.md](handwriting.md))
+and the iPad client's native payloads below. Native assets and mutations are
+workspace-scoped exactly like every other writer (`?ws=` / the
+`X-Gamma-Workspace` header; `?user=` is never read), and a `?share=` edit token
+may write only inside its own page. Every mutation is one `gamma/ops.py` batch
+(CAS check, write, op-log row and room fan-out in one transaction —
+[collab.md](collab.md)), so a native save shows up live in an open Web editor.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/assets` | store one native asset. Multipart `file`; `.pkdrawing` accepts `application/octet-stream`/`application/x-pkdrawing` and stays opaque (Linux cannot validate Apple's serialization), `.png` requires `image/png` and a structurally valid PNG (signature + chunk CRCs + IHDR, no image library), `.m4a` requires `audio/mp4`/`audio/x-m4a` and a plausible ISO-BMFF `ftyp` box, `.inkjson` requires `application/json` and the strict `gamma-ink-replay-v1` schema (bounded strokes/points, monotonic times, base64 PNGs, no data URLs). Empty or mismatched types 400, over 32 MiB 413. → `{filename, url, size, already_existed}` with `filename` the FULL sha256 plus extension and `url` `/api/assets/<filename>`; quota gates new bytes only (413/507); native assets are excluded from automatic cleanup |
+| GET | `/assets/{filename}` | one stored asset (`<64hex>.pkdrawing|png|m4a|inkjson`), 404 unknown; any workspace member, or a share confined to its own page's references; `Cache-Control: private, no-cache`, `Vary: Cookie, Authorization`, `nosniff`. `/uploads/<same name>` serves identical bytes and headers |
+| PUT | `/blocks/{id}/ink` | create/update one PencilKit annotation (canonical lowercase UUID or 422). Body `{parent_id, pdf_page, ink_asset, preview_asset, replay_asset?, bounds, crop_box, coordinate_space?, expected_revision?}` (unknown fields 422): coordinates are **unrotated PDF crop-box points, origin top-left**; `bounds` must be finite, positive and crop-contained. `parent_id` must be an existing top-level Gamma PDF page (404 unknown, 409 not a PDF page); an existing id must already be an ink block under the same parent and page (409). Stores `type: "pdf_ink"`, the fields and `ink_revision` from 1. Assets must already be stored (404), and a replay's `source_sha256` must equal the drawing's digest. An exact payload replay returns the block unchanged — no new revision, even with a stale expectation; otherwise `expected_revision` (0 = create-only) must match `ink_revision` or it is 409 `{message, current_revision}`; omitted `replay_asset` keeps the stored replay only while the drawing is unchanged, explicit `null` clears it |
+| PUT | `/blocks/{id}/replay-preview` | attach a replay generated later: body `{ink_asset, replay_asset}` only. The block must be an existing `pdf_ink` one and `ink_asset` its CURRENT drawing; the replay must exist, parse and match that digest. Touches `replay_asset` alone — no `ink_revision`, content, children or other properties. Idempotent; source mismatch 409 |
+| PUT | `/blocks/{id}/audio` | create/update one recording block. Body `{parent_id, audio_state, segments, replay_events?, expected_revision?}`; each segment `{id (canonical UUID), asset (/api/assets/<64hex>.m4a), duration}` — unique ids, ≤1,000 segments, ≤24 h total, assets must be stored. The server derives each segment's cumulative `start_time` and the block's `duration`; the same idempotency and `expected_revision` rules as ink (comparing the client-owned segment fields, plus the timeline when one is sent). `replay_events` is optional for compatibility — omitting it preserves a stored timeline, `[]` clears it; each event `{id, kind: stroke|page|note, segment_id, start, end, pdf_page, block_id?, stroke_id?}` must reference a segment in the same payload, with unique canonical UUID ids and `end >= start`. Block references are WEAK: the server never resolves or discloses them |
+| PUT | `/blocks/{id}/note` | idempotent native child-note upsert (the offline outbox path): body `{parent_id, content, expected_revision?}`. `parent_id` must be an existing ink block or a `native_note` descendant of one, within 64 levels — cycles, plain-text intermediaries and detached ink are 409. Creates `{native_note: true, note_revision: 1}`; an unchanged content replay returns the block; `expected_revision` otherwise gates the write. Updates preserve children and other properties |
+| PUT | `/blocks/{id}/highlight` | create one ordinary page-scoped highlight with a client-minted UUID: body `{parent_id, quote, color, pdf_position}` in the Web viewport convention (`pdf_position.pageNumber` must match every rect, 422 otherwise). A retry returns the block as it stands — later Web edits included — and a UUID already used by another block, or by a different parent, is 409 rather than hijacked |
+
+**Reserved properties.** `gamma/native_ink.py` owns everything that describes a
+recording; generic writers (the block endpoints, the page-ops endpoint, the AI
+tools, `PUT /blocks/{id}/children`) may edit a native block's text, children and
+unrelated properties but not those keys — `type`, `ink_asset`, `preview_asset`,
+`replay_asset`, `ink_revision`, `bounds`, `crop_box`, `coordinate_space`,
+`pdf_page` on ink; `type`, `audio_state`, `segments`, `duration`,
+`replay_events`, `audio_revision` on audio; `native_note`, `note_revision` on a
+native note — and may not invent them on a new block (409; deleting counts as
+touching). A Web text edit of a native note moves `note_revision`, so a queued
+offline save conflicts instead of overwriting it. Copying an annotation is
+therefore a native write (a fresh UUID through the endpoint above), not a
+generic insert.
+
+For native ink/audio saves, `parent_id` names the anchoring root PDF page.
+A browser may indent an existing annotation within that same page; native
+updates preserve this nesting and verify its actual page root. Naming a
+different PDF page remains a conflict, not an implicit move.
+
+**Assets in the data directory.** They live in the workspace `uploads/`
+directory under their full digest, so quota, the backup zip (`/api/export`,
+`/api/import-data`) and scoped exports cover them: `?mode=gamma` bundles them
+under `uploads/`, `?mode=readable` under `assets/` (and renders the preview,
+the editable drawing and the replay as links), and the orphan sweep keeps a file
+that any block's content or properties reference as `/api/uploads/<name>` or
+`/api/assets/<name>`. **Native assets are never automatically deleted**, even
+when old and unreferenced: they can belong to an offline outbox, an older
+editable drawing or a delayed replay. Block deletion and startup do not reclaim
+these bytes. They remain quota-accounted and included in whole-workspace
+backups (page exports include only that page's references). There is currently
+no native garbage-collection endpoint; reclaiming these files requires a
+separate explicitly approved, backup-first administrative procedure. Ordinary
+non-native upload cleanup is unchanged. No schema migration was needed.
 
 ### Search (`search.py`, `gamma/block_index.py`, `gamma/pdf_index.py`)
 | Method | Path | Purpose |
@@ -256,7 +343,7 @@ the request's workspace — the extension names none, so its personal one.
 | POST | `/import/pdf-annotations` | import annotations embedded in the PDF (idempotent; optional `strip`) |
 | POST | `/import/zotero` | Zotero library import: zip of a "Zotero RDF" export (multipart `file`; `strip`, optional `folder` prefix). Items→pages+metadata, collections→folders, tags→labels, notes→blocks; embedded annotations via the same importer. Idempotent by file hash / `zotero_key` |
 | GET | `/pages/{id}/export` | page export (`?mode=readable|obsidian|notes-pdf|logseq-graph|zotero-rdf|gamma` + `highlights=&notes=&pdf=`); `obsidian` = a vault zip (`<folder>/<Title>.md`, wikilinks, `attachments/`, `.obsidian/app.json`); `notes-pdf` = the notes typeset as their own PDF (works without a paper); `gamma` = scoped backup for `/import-data?mode=merge` |
-| GET | `/pages/{id}/export-pdf` | the page's own PDF with annotations written back (`?highlights=&notes=`) |
+| GET | `/pages/{id}/export-pdf` | the page's own PDF with annotations written back (`?highlights=&notes=`), including native PencilKit preview/replay pictures as raster page content; `X-Native-Ink-Drawn` counts those separately from `X-Annotations-Written`. Does not mutate the stored PDF; format/fidelity limits are in [import_export.md](import_export.md) |
 | GET | `/folders/export` | whole-folder export, same modes/flags (`?name=` + `mode=`); subfolders become Zotero collections or vault directories, `notes-pdf` one PDF for the whole folder |
 | GET | `/folders/export-progress` | per-page progress of a running folder export (`{active, total, done, title}`) |
 

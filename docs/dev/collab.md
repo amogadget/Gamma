@@ -45,21 +45,140 @@ deleted or inserted; `parent: "root"` is refused (ops never create pages). A
 bad op fails the whole batch and nothing is written. Only touched rows get
 `updated_at`; the page root is stamped once per batch (home-feed order and the
 notes-index fingerprint). The orphan-upload sweep runs only for batches that
-delete blocks or drop an `/api/uploads/` reference; the data.db purge only
-when blocks were deleted.
+delete blocks or touch a block that mentions an uploaded file
+(`/api/uploads/` or `/api/assets/`, `ops._mentions_upload`); the data.db purge
+only when blocks were deleted.
 
-`apply_ops(conn, page_id, ops, actor=, client=, share_scoped=)` applies and
-commits; `after_commit(ws, conn, result)` does the derived-data work and
-publishes; `commit_ops(ws, page_id, ops, actor=)` is both on a fresh
-connection — `ws` the workspace id, `actor` the account making the change. Every server-side writer
+`apply_ops(conn, page_id, ops, actor=, client=, share_scoped=, cursor=,
+allow_native=)` applies and commits; `after_commit(ws, conn, result)` does the
+derived-data work and publishes; `commit_ops(ws, page_id, ops, actor=)` is both
+on a fresh connection — `ws` the workspace id, `actor` the account making the
+change. Every server-side writer
 goes through them — the single-block endpoints in `routers/blocks.py` are thin
-wrappers, page attach/detach, the metadata write, the clip endpoints and the AI
+wrappers, page attach/detach, the metadata write, the clip endpoints, the AI
 tools (`edit_block`, `create_block`, `move_block`, `rename_page`, `move_page`)
+and the native iPad writers (`routers/native_ink.py`, `routers/native_highlights.py`)
 call them directly — so everything a page's viewers see comes from one path
 and one log. Writers that rewrite a tree wholesale (`PUT /blocks/{id}/children`,
 imports into an existing page, the target half of a cross-page move) log and
 publish a `reload` instead; a cross-page move's source page gets a `delete`
 (`record_ops`).
+
+### Reserved native properties
+
+A native annotation (ink, audio, a native note) is an ordinary block whose
+payload belongs to the iPad endpoints (`gamma/native_ink.py`). The guards live
+here, on the one write path, because every generic writer passes through it:
+
+- a generic `set.props` may not touch the keys that describe the payload
+  (including deleting them), and a generic `insert` may not create a block
+  claiming one — 409 with the endpoint that owns it;
+- an insert that converges on an existing native block (a retried batch, a
+  client re-inserting a block it dropped) keeps the RECORDED payload instead of
+  the copy the client sent (`_Batch.native_safe_props`); undoing a deletion the
+  Web itself made is the other half of that rule — see below;
+- a Web text edit of a native note advances `note_revision`, so an offline save
+  computed against the old revision conflicts rather than overwriting it;
+- `PUT /blocks/{id}/children` preserves the recorded payload per block
+  (`native_ink.preserve_native_properties`) for the same reason.
+
+The AI agent is covered by the same guards rather than by rules of its own: its
+block writes call `apply_ops` too (`client="ai"`), and no agent tool even
+exposes a properties argument — `edit_block`/`create_block` write content only,
+`move_block` a position, `move_page` a page's `folder`. So the model can edit an
+annotation's caption (and, on a native note, advances the revision the outbox
+compares against like any other writer) without any path to a recorded payload
+(`tests/test_native_ai_protection.py`).
+
+`allow_native=True` — passed only by the native routers, never read from a
+request — is what lets those endpoints write the reserved keys themselves. The
+CAS check runs in the same transaction (`BEGIN IMMEDIATE` + `expected_revision`
+against the stored revision), so a retry cannot double-advance a revision or
+race a Web edit.
+
+### Undoing a deletion (the Web's Ctrl+Z)
+
+The guard above would otherwise make deleting an iPad annotation in the Web
+irreversible: the page's undo stack restores the tree it kept
+(`editor/blockHistory.js`), the editor's session diffs it
+(`shared/model/blockOps.js`, `diffTrees`) and posts that diff as ops — so Ctrl+Z
+after a delete is an `insert` carrying the block's FULL properties, and once the
+delete has committed there is no row left to compare them against.
+
+So a delete records what it removed. `_Batch.delete` reads the subtree rows it is
+about to drop and, **for the native rows only**, attaches
+`{id, parent, content, properties}` to the delete entry it logs:
+`{"op": "delete", "id": X, "deleted": [...]}`. The record is built from the
+database rows, never from request data (a client-supplied `deleted` field is not
+read), and a delete of a block that does not exist records nothing.
+
+A later generic insert of a block id **this page's** log records as deleted is
+checked against that record instead of being refused
+(`_Batch.recorded_deletion` → `native_ink.restored_native_properties`). The
+lookup is exact and finished in SQL: the newest `delete` entry whose recorded
+snapshot carries this id (`deleted[].id`), page-scoped. A row that merely
+*mentions* the id — a note quoting it, an audio manifest's
+`replay_events[].block_id`, a property value — can neither satisfy it nor hide
+the real record, because the match is structural rather than textual and there
+is no window: the walk is bounded by the page's own log (`KEEP_OPS` rows; a
+couple of milliseconds for a full walk at that bound, and usually the first row
+checked). It runs only for an insert that claims a native payload, so ordinary
+inserts never read the log.
+
+What a restore may do is narrow:
+
+- the writer must reproduce the recorded native payload **exactly** — every key
+  of the recorded kind's reserved set, compared as parsed values (so a float
+  written `1e-05` by one client and `0.00001` by another is the same number). A
+  queued offline save, a stale Web tree or a hand-written request therefore
+  cannot turn a deletion into a new annotation, a new asset set, an escalated
+  revision or an invented replay reference;
+- what gets **stored** is the record: reserved payload, revisions and the
+  unrelated properties it had, so an undo restores the server's last state for
+  that block rather than a stale copy of it. The one thing the writer keeps is a
+  caption — text on ink and audio is ordinary note text, editable on a live block
+  too (the same rule as `preserve_native_properties`). A native **note**'s text
+  *is* its payload, so there it must match the recorded text and the batch is
+  refused otherwise; a genuinely new note belongs on `PUT /api/blocks/{id}/note`,
+  which has a revision CAS of its own;
+- the scope is the workspace (the `pages.db` the batch runs on), the page (the
+  log it reads) and the id (the key). The same id and payload in a different
+  page — or another workspace — is still a forgery and 409, as is an id no
+  deletion ever recorded.
+
+**This is the Web undoing its own deletion, not a general resurrection.** The
+native write endpoints do not consult the record at all, so a queued iPad update
+of a block somebody deleted on purpose stays what it is: an explicit revision
+conflict (`routers/native_ink.py`, `current_revision: 0`). A stale client may
+not silently bring an annotation back, and `_recorded_deletion` is deliberately
+private so no route is tempted to try.
+
+The record is provenance for the server, not history for readers: `_wire_ops`
+strips the `deleted` payload from the ops `apply_ops` returns (the HTTP response
+and the room fan-out) and from `ops_since` catch-up batches, so clients — and a
+share viewer who joins after the deletion — see exactly the
+`{"op": "delete", "id"}` they always saw. It rides in the log row itself: no new
+table, nothing to migrate, and it travels in whole-workspace backups with
+`pages.db`.
+
+**Bounds and gaps — the retention is the page's log, so this is best-effort.**
+The record lives and dies with the page's op log: `KEEP_OPS` rows per page,
+pruned every `PRUNE_EVERY` batches, counting that page's batches only. A page
+under heavy editing reaches that bound, and Ctrl+Z on a deletion that has since
+been pruned is a 409 that does not restore anything — the block stays deleted and
+has to come back from the iPad. A restored `pages.db` (a `mode=replace` import,
+or a backup from before the deletion) has the same effect. Treat the restore as
+recovery of the recent past, not as a guarantee, and do not build a
+"recycle bin" expectation on it. A delete and the restore that undoes it also
+have to be separate batches, since the row is written when the batch commits —
+which is what the editor's undo sends (`blockHistory.js` restores the tree, so
+the delete has long since committed). Write paths that do not go through ops
+record nothing: `PUT /blocks/{id}/children` (bulk imports, the paste-tree path),
+a root **page** delete (`routers/blocks.py` deletes the page outside ops),
+`record_ops` cross-page moves (the block still exists on the target page) and the
+native endpoints' own `allow_native` batches. An undo of such a delete is still
+refused; `tests/test_native_undo.py` pins that limitation as well as the working
+path.
 
 ## The op log
 
@@ -67,7 +186,8 @@ publish a `reload` instead; a cross-page move's source page gets a `delete`
 (`db.PAGES_SCHEMA`), one row per applied batch, `seq` counting up per page
 (the write lock is taken up front with `BEGIN IMMEDIATE`, so it never
 collides). `actor` is the account that made the change (a share editor's own
-name), `client` the tab's id or `"ai"`. Pruned to the newest `KEEP_OPS` rows
+name), `client` the tab's id, `"ai"` for an agent write or `"native"` for an
+iPad annotation. Pruned to the newest `KEEP_OPS` rows
 per page, checked every `PRUNE_EVERY` batches. `GET /api/pages/{id}/ops?since=`
 returns the batches after a seq (410 when the log no longer reaches back: the
 client reloads the tree); `GET /blocks/{id}/subtree` on a page carries the

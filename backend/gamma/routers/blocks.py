@@ -25,6 +25,12 @@ from ..blocks_store import (
 from .. import block_index, collab
 from ..db import connect_pages_db, page_now, ws_uploads_dir
 from ..markdown_export import build_tree
+from ..native_ink import (
+    NativeScopeError,
+    guard_generic_insert,
+    native_kind,
+    preserve_native_properties,
+)
 from ..ops import OpError, commit_ops, latest_seq, note_reload, record_ops
 from ..storage import cleanup_orphan_uploads, display_filename
 from ..textnorm import fuzzy_pattern
@@ -343,6 +349,10 @@ async def ub_create_block(payload: UBCreateRequest, request: Request):
         # A new page: not an op on any page. Share editors never get here.
         if scope is not None:
             raise HTTPException(status_code=403, detail="not accessible via this share link")
+        try:
+            guard_generic_insert(payload.properties)
+        except NativeScopeError as e:
+            raise HTTPException(status_code=409, detail=str(e))
         now = page_now()
         with connect_pages_db(ws) as conn:
             try:
@@ -431,6 +441,20 @@ async def ub_put_children(block_id: str, payload: UBPutChildrenRequest, request:
         if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
             raise HTTPException(status_code=404, detail="block not found")
         assert_block_in_page(conn, block_id, scope)
+        # A subtree replace sends the client's copy of the subtree. It owns the
+        # text, the children and unrelated properties — never a native payload,
+        # which a stale copy would otherwise roll back, and never a brand-new
+        # native one (gamma/native_ink.py).
+        for r in rows:
+            old = conn.execute("SELECT content, properties FROM unified_blocks WHERE id = ?",
+                               (r["id"],)).fetchone()
+            try:
+                r["properties"] = json.dumps(preserve_native_properties(
+                    json.loads(old[1] or "{}") if old else {},
+                    old[0] if old else "",
+                    json.loads(r["properties"] or "{}"), r["content"]))
+            except NativeScopeError as e:
+                raise HTTPException(status_code=409, detail=str(e))
         delete_children(conn, block_id)
         for r in rows:
             conn.execute(
@@ -466,6 +490,8 @@ async def ub_reorder_block(block_id: str, payload: UBReorderRequest, request: Re
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"invalid before/after: {e}")
     with connect_pages_db(ws) as conn:
+        # Keep subtree validation and a cross-page move in one write lock.
+        conn.execute("BEGIN IMMEDIATE")
         src_page = page_root_id(conn, block_id)
         if not src_page:
             raise HTTPException(status_code=404, detail="block not found")
@@ -479,8 +505,11 @@ async def ub_reorder_block(block_id: str, payload: UBReorderRequest, request: Re
         if dst_page != src_page:
             if scope is not None:
                 raise HTTPException(status_code=403, detail="not accessible via this share link")
-            if parent in {r[0] for r in fetch_subtree(conn, block_id)}:
+            subtree = fetch_subtree(conn, block_id)
+            if parent in {r[0] for r in subtree}:
                 raise HTTPException(status_code=400, detail="cannot move a block into its own subtree")
+            if any(native_kind(json.loads(r[4] or "{}")) is not None for r in subtree):
+                raise HTTPException(status_code=409, detail="native annotations and recordings must stay in their PDF page")
             now = page_now()
             conn.execute(
                 "UPDATE unified_blocks SET parent_id = ?, position = ?, updated_at = ? WHERE id = ?",

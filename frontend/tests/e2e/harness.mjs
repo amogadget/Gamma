@@ -145,6 +145,15 @@ export class Account {
 
 export async function launchBrowser() {
   const opts = { headless: !flags.headed };
+  // An explicitly named engine wins: CHROME_PATH / GAMMA_E2E_CHROME_PATH points
+  // at a build with proprietary codecs (Chrome for Testing), which is what the
+  // AAC/Note-Replay media assertions need — Playwright's stock Chromium cannot
+  // decode AAC at all.
+  const explicit = process.env.GAMMA_E2E_CHROME_PATH || process.env.CHROME_PATH || "";
+  if (explicit && process.env.GAMMA_E2E_BROWSER !== "webkit") {
+    if (!fs.existsSync(explicit)) throw new Error(`CHROME_PATH does not exist: ${explicit}`);
+    return await chromium.launch({ ...opts, executablePath: explicit });
+  }
   if (process.env.GAMMA_E2E_BROWSER === "webkit") return webkit.launch(opts);
   try {
     return await chromium.launch(opts);

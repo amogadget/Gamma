@@ -192,13 +192,25 @@ export function createCollabSession({ clientId, api, openSocket, keepalivePost, 
       } catch (err) {
         const status = err?.status || 0;
         if (status >= 400 && status < 500 && status !== 408 && status !== 429) {
-          // The server refused the batch (stale ids, a permission change):
-          // resync rather than loop on it.
-          o().onStatus?.(`Save rejected: ${err.message}`);
+          // The server refused THIS batch for good (stale ids, a permission
+          // change, or a native restore its bounded provenance no longer
+          // recognises): resync rather than loop on it. What the user queued
+          // WHILE it was out is a separate change and must not go down with it,
+          // so the self-contained `set` ops among those are re-queued — a
+          // structural op was computed against the tree this reload replaces, so
+          // it is reported instead of replayed blind. (Silent loss is the one
+          // outcome a refusal must not produce.)
+          const later = s.queue;
+          const kept = later.filter((op) => op.op === "set");
+          const dropped = later.length - kept.length;
           s.queue = [];
           s.inflight.clear();
           s.deferred.clear();
+          o().onStatus?.(`Save rejected: ${err.message}`
+            + (kept.length ? ` — keeping ${kept.length} later edit${kept.length === 1 ? "" : "s"}` : "")
+            + (dropped ? ` (${dropped} later structural change${dropped === 1 ? "" : "s"} could not be kept)` : ""));
           if (s === st.session) o().onReload?.(page);
+          if (kept.length) enqueue(kept, true, s);
         } else if (s.retries < MAX_RETRIES) {
           s.retries += 1;
           o().onStatus?.(`Save failed: ${err.message} — retrying…`);
@@ -222,8 +234,10 @@ export function createCollabSession({ clientId, api, openSocket, keepalivePost, 
     return p;
   }
 
-  function enqueue(ops, now = false) {
-    const s = st.session;
+  // `target` defaults to the page on screen; a rejected batch is re-queued on
+  // ITS OWN session, which may be a page the user has already left.
+  function enqueue(ops, now = false, target = st.session) {
+    const s = target;
     st.sessions.add(s);
     for (const op of ops) {
       // inflight counts queued-or-sent set ops per block; a keystroke that

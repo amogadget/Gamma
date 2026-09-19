@@ -8,7 +8,10 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "test": "node --test tests/*.test.mjs",
-    "e2e": "node tests/e2e/run.mjs"
+    "e2e": "node tests/e2e/run.mjs",
+    "e2e:native": "node tests/e2e/nativeHandoff.mjs",
+    "e2e:notereplay": "node tests/e2e/noteReplay.mjs",
+    "e2e:blankpdf": "node tests/e2e/blankPdf.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",

@@ -27,4 +27,13 @@ run-local.bat
 # Private workspace exports, media captures, and render intermediates
 /tmp
 
+# Machine-local deployment evidence (not upstream source)
+/DEPLOYMENT.md
+/MIGRATION.md
+/ipad/NEW_MAC_VALIDATION.md
+/ipad/CONTINUITY_VALIDATION.md
+/ipad/TIM_INK_VALIDATION.md
+/ipad/*.local.md
+/ipad/artifacts/
+
 CLAUDE.md

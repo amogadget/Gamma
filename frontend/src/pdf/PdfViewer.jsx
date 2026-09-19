@@ -19,9 +19,13 @@ import { InkLayer } from "../ink/InkLayer";
 import { canvasSize } from "../shared/lib/canvasSize.js";
 import { installVerticalScrollSnap } from "./verticalScrollSnap.js";
 import { segmentPage } from "./pdfTranslate";
+import { captureNativeViewport } from "../native/nativeBridge.js";
 import { BACKFILL_DELAY_MS, chooseTransport, docIdOf, layoutFromManifest, rangeOpenOptions } from "./pdfSource";
 import { normalizeChars } from "../shared/lib/textnorm";
-import { apiJson, withShare, withWorkspace } from "../shared/lib/utils";
+import { apiJson, assetUrl, withShare, withWorkspace } from "../shared/lib/utils";
+import { pdfInkPlacement } from "../native/inkBlock.js";
+import { inkJumpPosition } from "../native/inkNavigation.js";
+import ReplayInkLayer from "../native/ReplayInkLayer.jsx";
 import { ChatMarkdown } from "../shared/ui/Widgets";
 import { PdfCitationOverlay } from "./PdfCitationOverlay";
 import { citationRuns } from "./pdfCitation.js";
@@ -347,8 +351,22 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
 // inkPenTool what a stylus draws with when nothing is armed, inkFlash
 // {id, nonce} outlines a group after a jump; strokes and erasures report
 // back through onInkStroke / onInkErase, a click on ink through onInkJump.
-function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, hideEmbeddedAnnots, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkEraserSize = 1, inkLassoMode = "free", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
+//
+// Native handwriting (native/, docs/dev/handwriting.md "Native handwriting
+// blocks") rides alongside, deliberately under its own names: `nativeInkBlocks`
+// are this page's `pdf_ink` blocks, shown as images the browser never edits;
+// `nativeInkPreviews` is the document's loaded `.inkjson` derivative set (shared
+// with the Notes pane); `replay` (null, or {time, events, page, assets})
+// switches those layers into timed rendering; `inkJumpRequest` ({id, nonce})
+// scrolls to a block's strokes and outlines them; `headerAction` hosts the
+// host app's native handoff button in the viewer's top-right control row.
+function PdfViewer({ url, viewportRef, citation = null, headerAction = null, highlights, pdfScaleValue, scrollRef, onJump, onHighlightJump, onLinkHighlight, onSelectionFinished, onAreaSelection, onHighlightContext, searchRef, captureRef, onEffectiveScale, onZoomTo, findMarks, onExternalLink, onLinkContext, onBeforeLinkJump, onLoadState, retryRef, areaMode, hideEmbeddedAnnots, darkPage = false, translateKey = "", translateParallel = 3, onTranslate, translateCtlRef, onTranslateState, inkBlocks = EMPTY_MARKS, inkTool = null, inkPenTool = null, inkPenOnly = true, inkPressure = true, inkEraserMode = "stroke", inkEraserSize = 1, inkLassoMode = "free", inkSelection = null, inkFlash = null, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump, nativeInkBlocks = EMPTY_MARKS, nativeInkPreviews = null, replay = null, inkJumpRequest = null, onReplaySeek }) {
   const viewerRef = useRef(null);
+  useLayoutEffect(() => {
+    if (!viewportRef) return;
+    viewportRef.current = () => captureNativeViewport(viewerRef.current);
+    return () => { viewportRef.current = null; };
+  }, [viewportRef]);
   const [pdfDoc, setPdfDoc] = useState(null);
   const [numPages, setNumPages] = useState(0);
   const [docSeq, setDocSeq] = useState(0); // bumped per document — keys the page tree so swaps are atomic
@@ -589,6 +607,20 @@ function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef,
     }
     return map;
   }, [inkBlocks, displayedUrl, url]);
+
+  // Native `pdf_ink` blocks per page, under the same document guard: they are
+  // images (or replay layers) drawn above the canvas and never edited here.
+  const nativeInkByPage = useMemo(() => {
+    const map = new Map();
+    if (displayedUrl !== url) return map;
+    for (const b of nativeInkBlocks || []) {
+      const p = b.properties?.pdf_page;
+      if (!p) continue;
+      if (!map.has(p)) map.set(p, []);
+      map.get(p).push(b);
+    }
+    return map;
+  }, [nativeInkBlocks, displayedUrl, url]);
 
   // Expose full-text search over the loaded document (used by the search
   // panel). Each page's text runs are joined into one string — so matches can
@@ -1053,6 +1085,59 @@ function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef,
     };
     if (scrollRef) scrollRef.current = scrollToPositionRef.current;
   }, [scrollRef, scale, pdfDoc]);
+
+  // Native handwriting jump: the recorded page events drive the view during
+  // Replay, so the audio clock decides where we are — one frame's delay keeps
+  // the scroll off the audio callback's critical path.
+  useEffect(() => {
+    if (replay?.page && replay.page <= numPages) {
+      const frame = requestAnimationFrame(() => scrollToPositionRef.current?.({ position: { pageNumber: replay.page }, offset: 0 }));
+      return () => cancelAnimationFrame(frame);
+    }
+  }, [replay?.page, numPages, pdfDoc]);
+
+  // Clicking a native ink block's marker/card asks for its strokes, not just
+  // its page: scroll to the block's bounds through the SAME crop/rotation
+  // affine transform the ink layer draws with, then outline them briefly. The
+  // nonce makes a repeat click on the same block flash again.
+  const [flashingInk, setFlashingInk] = useState(null);
+  const nativeInkBlocksRef = useRef(nativeInkBlocks);
+  nativeInkBlocksRef.current = nativeInkBlocks;
+  useEffect(() => {
+    setFlashingInk(null);
+    if (!inkJumpRequest || !pdfDoc) return;
+    const block = nativeInkBlocksRef.current.find((b) => b.id === inkJumpRequest.id);
+    const pageNumber = block?.properties?.pdf_page;
+    if (!pageNumber || pageNumber > pdfDoc.numPages) return;
+    let cancelled = false, timer;
+    (async () => {
+      try {
+        const page = await pdfDoc.getPage(pageNumber);
+        if (cancelled) return;
+        const position = inkJumpPosition(block, page.getViewport({ scale: 1 }));
+        if (position) await scrollToPositionRef.current?.({ position, behavior: "auto", offset: 100 });
+        if (cancelled) return;
+        // At a zoom where the strokes extend past the edge, centre them
+        // horizontally as well.
+        const container = viewerRef.current, rectangle = position?.boundingRect;
+        const element = container?.querySelector(`[data-page="${pageNumber}"]`);
+        if (container && element && rectangle) {
+          const pageBox = element.getBoundingClientRect(), viewBox = container.getBoundingClientRect();
+          const left = pageBox.left + rectangle.x1 / rectangle.width * pageBox.width;
+          const right = pageBox.left + rectangle.x2 / rectangle.width * pageBox.width;
+          if (left < viewBox.left + 16 || right > viewBox.right - 16) {
+            const delta = right - left > viewBox.width - 32
+              ? left - viewBox.left - 16
+              : (left + right - viewBox.left - viewBox.right) / 2;
+            container.scrollLeft += delta;
+          }
+        }
+        setFlashingInk({ id: block.id, nonce: inkJumpRequest.nonce });
+        timer = setTimeout(() => setFlashingInk(null), 1800);
+      } catch { /* the load/retry state already reports unavailable pages */ }
+    })();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [inkJumpRequest, pdfDoc]);
 
   // Wait for this document, then mount only the cited page. Matching happens
   // after its actual text layer has rendered, including on zoom changes.
@@ -1574,29 +1659,37 @@ function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef,
           </button>
         </div>
       ) : null}
-      {numPages > 0 ? (
-        <div className="pdfPageWidget" title="Type a page number and press Enter to jump">
-          <input
-            type="text"
-            inputMode="numeric"
-            value={pageInput ?? String(curPage)}
-            style={{ width: `${Math.max(1, (pageInput ?? String(curPage)).length)}ch` }}
-            onFocus={(e) => { setPageInput(String(curPage)); e.target.select(); }}
-            onChange={(e) => setPageInput(e.target.value.replace(/[^0-9]/g, ""))}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                jumpToPage(parseInt(pageInput, 10));
-                e.currentTarget.blur();
-                e.stopPropagation();
-              } else if (e.key === "Escape") {
-                e.currentTarget.blur();
-                e.stopPropagation();
-              }
-            }}
-            onBlur={() => setPageInput(null)}
-            aria-label="Current page"
-          />
-          <span className="pdfPageTotal">/ {numPages}</span>
+      {numPages > 0 || headerAction ? (
+        // One top-right row: the host's own action (the iPad's native handoff
+        // button) and the current-page widget share it, so on a narrow or
+        // portrait viewport they wrap instead of overlapping.
+        <div className="pdfTopRightControls">
+          {headerAction}
+          {numPages > 0 ? (
+            <div className="pdfPageWidget" title="Type a page number and press Enter to jump">
+              <input
+                type="text"
+                inputMode="numeric"
+                value={pageInput ?? String(curPage)}
+                style={{ width: `${Math.max(1, (pageInput ?? String(curPage)).length)}ch` }}
+                onFocus={(e) => { setPageInput(String(curPage)); e.target.select(); }}
+                onChange={(e) => setPageInput(e.target.value.replace(/[^0-9]/g, ""))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    jumpToPage(parseInt(pageInput, 10));
+                    e.currentTarget.blur();
+                    e.stopPropagation();
+                  } else if (e.key === "Escape") {
+                    e.currentTarget.blur();
+                    e.stopPropagation();
+                  }
+                }}
+                onBlur={() => setPageInput(null)}
+                aria-label="Current page"
+              />
+              <span className="pdfPageTotal">/ {numPages}</span>
+            </div>
+          ) : null}
         </div>
       ) : null}
       {outline && outlineOpen ? (
@@ -1655,6 +1748,11 @@ function PdfViewer({ url, citation = null, highlights, pdfScaleValue, scrollRef,
           onInkAction={onInkAction ? stableCbs.onInkAction : undefined}
           onInkMoveSelection={onInkMoveSelection ? stableCbs.onInkMoveSelection : undefined}
           onInkJump={onInkJump ? stableCbs.onInkJump : undefined}
+          nativeInkBlocks={nativeInkByPage.get(i + 1) || EMPTY_MARKS}
+          nativeInkPreviews={nativeInkPreviews}
+          replay={replay}
+          flashingInk={flashingInk}
+          onReplaySeek={onReplaySeek}
         />
       ))}
       </div>
@@ -1838,7 +1936,7 @@ function TransPending({ lines, busy }) {
   );
 }
 
-const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkEraserSize, inkLassoMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump }) {
+const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scale, highlights, onJump, onHighlightJump, onLinkHighlight, onHighlightContext, readOnly, forceRender, reservedHeight, reservedWidth, findMarks, onInternalLink, onExternalLink, onLinkContext, onPainted, onAreaSelected, pendingArea, areaMode, hideEmbeddedAnnots, trans, transKey, transShown, inkBlocks = EMPTY_MARKS, inkTool, inkPenTool, inkPenOnly, inkPressure, inkEraserMode, inkEraserSize, inkLassoMode, inkSelection, inkFlash, onInkStroke, onInkErase, onInkErasePartial, onInkSelect, onInkAction, onInkMoveSelection, onInkJump, nativeInkBlocks = EMPTY_MARKS, nativeInkPreviews = null, replay = null, flashingInk = null, onReplaySeek }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const textRef = useRef(null);
@@ -2190,6 +2288,42 @@ const PdfPage = React.memo(function PdfPage({ citation, pageNumber, pdfDoc, scal
           }}
         />
       ))}
+      {/* Native handwriting (native/ReplayInkLayer.jsx). With a loaded
+          per-stroke derivative the layer draws the strokes themselves — full
+          PNGs for finished ones, a progressive mask for the one in progress,
+          nothing for future ones; during Replay `replay` is set and a click on
+          a timed stroke seeks the audio. Without one, the block's whole-block
+          preview PNG is placed through the same affine transform. */}
+      {pageSize && nativeInkBlocks.map((block) => {
+        const viewport = pageRef.current?.getViewport({ scale });
+        const manifest = (replay?.assets ?? nativeInkPreviews)?.[block.id]?.data;
+        if (manifest) {
+          return <ReplayInkLayer key={block.id} block={block} data={manifest} viewport={viewport}
+            replay={replay} onSeek={onReplaySeek} />;
+        }
+        const ink = pdfInkPlacement(block, viewport);
+        if (!ink) return null;
+        return (
+          <img key={block.id} src={assetUrl(ink.url)} alt="" aria-hidden="true"
+            data-ink-block-id={block.id} draggable={false}
+            style={{
+              position: "absolute", left: 0, top: 0, width: ink.width, height: ink.height,
+              maxWidth: "none", transformOrigin: "0 0", transform: `matrix(${ink.matrix.join(",")})`,
+              pointerEvents: "none", userSelect: "none", zIndex: 3,
+            }} />
+        );
+      })}
+      {pageSize && nativeInkBlocks.filter((block) => block.id === flashingInk?.id).map((block) => {
+        const ink = pdfInkPlacement(block, pageRef.current?.getViewport({ scale }));
+        return ink ? (
+          <div key={`${block.id}-${flashingInk.nonce}`} className="inkJumpFlash" data-ink-jump-target={block.id}
+            style={{
+              position: "absolute", left: 0, top: 0, width: ink.width, height: ink.height,
+              transformOrigin: "0 0", transform: `matrix(${ink.matrix.join(",")})`,
+              pointerEvents: "none", zIndex: 5,
+            }} />
+        ) : null;
+      })}
       {highlights.map(h => {
         const rects = h.position?.rects || (h.position?.boundingRect ? [h.position.boundingRect] : []);
         const storedW = h.position?.boundingRect?.width || rects[0]?.width || 1;

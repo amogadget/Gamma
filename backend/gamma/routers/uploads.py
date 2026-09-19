@@ -146,6 +146,16 @@ def pdf_info(doc_id: str, request: Request):
 # answers a HEAD with the headers alone).
 @router.api_route("/uploads/{filename}", methods=["GET", "HEAD"])
 async def serve_upload(filename: str, request: Request):
+    # A native annotation's asset (gamma/native_ink.py) lives in this same
+    # uploads directory but answers to both names. It must NOT fall through to
+    # the public month-long cache policy below — its bytes are the user's — so
+    # /api/uploads/<native asset> and /api/assets/<native asset> are served by
+    # one function with one set of headers. 64-hex names are minted only by the
+    # native asset store, so no other upload can reach this branch.
+    from ..native_ink import ASSET_NAME_RE
+    if ASSET_NAME_RE.fullmatch(filename):
+        from .native_ink import asset_response
+        return asset_response(filename, request)
     # Sanitize: only allow [hex].ext pattern, no path traversal
     dot = filename.rfind(".")
     if dot < 0:

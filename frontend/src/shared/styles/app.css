@@ -1703,11 +1703,28 @@ body {
 .pdfFullscreenBox { bottom: 14px; left: 14px; }
 
 /* Current-page widget — top-right, same elevated look as the zoom column.
-   The number is an input: type a page and press Enter to jump. */
-.pdfPageWidget {
+   The number is an input: type a page and press Enter to jump.
+   It shares one row with any host-supplied action (the iPad's "Pencil & Audio"
+   handoff button): the row wraps and ellipsizes rather than letting the two
+   overlap on a narrow or portrait viewport. */
+.pdfTopRightControls {
   position: absolute;
   top: 8px;
   right: 14px;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: calc(100% - 72px);
+  pointer-events: none;
+}
+.pdfTopRightControls > * { pointer-events: auto; flex: 0 0 auto; }
+.pdfTopRightControls .pdfNativeAction { position: static; width: auto; max-width: 100%; padding: 3px 5px; }
+.pdfNativeAction button { display: block; width: auto; max-width: 100%; padding: 0 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pdfPageWidget {
+  position: static;
   z-index: 20;
   display: flex;
   align-items: center;
@@ -1725,6 +1742,7 @@ body {
   outline: none;
   padding: 0;
   min-width: 1ch;
+  max-width: 8ch;
   color: var(--text-primary);
   font: inherit;
   text-align: right;
@@ -4908,3 +4926,43 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .mcpConnectionDetails { margin: 16px 0; font-size: 13px; }
 .mcpConnectionDetails summary { cursor: pointer; color: var(--text-secondary); }
 .mcpConsentActions { display: grid; gap: 8px; margin-bottom: 16px; }
+
+/* --- Native handwriting, audio and Note Replay (native/, docs/dev/handwriting.md) --
+   The iPad's `pdf_ink` and `audio` blocks. Their strokes are images the web
+   only displays: a marker in the notes, a preview card, and a layer over the
+   PDF that Replay masks per stroke. Colours match the upstream handwriting
+   group marker's tool so the two kinds of ink read as one family. */
+.inkDot { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border: 1px solid currentColor; border-radius: 4px; color: #66869c; font-size: 13px; line-height: 1; }
+.inkDotBtn:hover .inkDot { color: var(--text-primary); background: var(--bg-input); }
+.inkJumpFlash { outline: 2px solid #66869c; outline-offset: 4px; border-radius: 3px; background: rgba(102,134,156,.10); animation: inkJumpPulse 1.8s ease-out; }
+@keyframes inkJumpPulse { from { opacity: 1; } to { opacity: 0; } }
+/* Preview cards carry their own paper: the strokes are dark ink on white. */
+.nativeInkCard { margin: 8px 0; padding: 8px; background: #fff; border-radius: 6px; }
+.nativeInkCard figcaption, .nativeAudio figcaption { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.nativeInkCard figcaption { margin-top: 4px; }
+.nativeAudio { margin: 8px 0; }
+.nativeAudioRow { display: flex; align-items: center; gap: 8px; }
+.nativeAudioRow audio { flex: 1; min-width: 0; max-width: 100%; }
+.nativeInkMissing { color: var(--text-muted); }
+
+.noteReplayBar { flex: 0 0 auto; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg-input); }
+.noteReplayControls { display: flex; align-items: center; gap: 8px; }
+.noteReplayControls strong { font-size: 10px; letter-spacing: .08em; white-space: nowrap; }
+.noteReplayControls input[type="range"] { min-width: 70px; flex: 1; }
+.noteReplayControls > span { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.noteReplayMessage { margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+.noteReplayMessage label { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; }
+.pdfViewer.pdfDark .pdfReplayInk, .pdfViewer.pdfDark .pdfStaticInk { filter: invert(0.94) hue-rotate(180deg); }
+@media (max-width: 600px) {
+  .noteReplayControls { flex-wrap: wrap; }
+  .noteReplayControls input[type="range"] { min-width: 120px; }
+}
+
+/* --- New blank PDF (library/BlankPDFDialog.jsx) -------------------------- */
+/* One labelled grid row per option: the label column is fixed so the four
+   controls line up whatever their text length. */
+.blankPDFModal > label { display: grid; grid-template-columns: 92px minmax(0,1fr); gap: 10px; align-items: center; font-size: 13px; color: var(--text-secondary); }
+.blankPDFModal input, .blankPDFModal select { width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--radius-control); padding: 7px 9px; font: inherit; background: var(--bg-input); color: var(--text-primary); }
+.blankPDFModal input:focus, .blankPDFModal select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.blankPDFModal input:disabled, .blankPDFModal select:disabled { opacity: .65; }
+.blankPDFModal > p { margin: 0; }

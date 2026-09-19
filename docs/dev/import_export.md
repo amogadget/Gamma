@@ -213,7 +213,10 @@ selected page subtrees verbatim (same block ids), a `data.db` with their AI
 chats (plus the folder view's own `home:<path>` chat buckets on a folder
 export), `uploads/` with just the referenced files (doc_id PDFs + anything
 matching `UPLOAD_RE` in content/properties — the orphan-cleanup reference
-rule), and a `manifest.json`. **There is no new import code**: any Gamma
+rule; `UPLOAD_RE` matches `/api/assets/<name>` as well as `/api/uploads/<name>`,
+so a native iPad annotation's `.pkdrawing` / `.png` / `.m4a` / `.inkjson` assets
+travel too, and the readable Markdown bundle writes them under `assets/`), and a
+`manifest.json`. **There is no new import code**: any Gamma
 imports it through the existing `/api/import-data?mode=merge` — additive,
 deduped by block id / doc id / content hash, so re-importing adds nothing. The
 ⋮ Import dialog's "Gamma export (.zip)" source feeds the zip to that endpoint
@@ -392,6 +395,42 @@ reads as its target's first line in link colour, an embed renders the synced
 block's content as a card with a soft bar and a muted `from <page>` source
 line (nested embeds degrade to refs so transclusion can't recurse).
 
+Native (iPad) blocks read as themselves rather than as an asset URL. A
+`type: "pdf_ink"` annotation shows its picture in the flow — the per-stroke
+replay derivative first (the higher-resolution rendering the web's Notes pane
+prefers, trimmed to the strokes' own bounds), the block's whole-block PNG
+preview as the fallback — under a `handwriting, p. N` caption (`· K strokes`
+when the derivative supplied it). A block whose picture is missing from this
+server says `no preview available` instead of vanishing, and the PKDrawing
+itself is never converted: Apple's format cannot be opened here, so the
+editable source stays on iPad. A `type: "audio"` recording becomes text —
+`audio recording · 2 segments · 1:23 total · audio not embedded`, then one
+linked line per finalized segment (`Segment 1 · 0:42`) — because a PDF has no
+player, and embedding the audio would only imply one that is not there.
+The switches keep their meaning: native handwriting rides the Highlights
+switch (it is a region of the paper, like `ink_url`), a recording the Notes
+switch (it is writing). Both render at any depth — real libraries hold them
+below the page's own children (a migrated or edited tree) — and their caption
+lines take the outliner bullet the rest of the renderer draws
+(`bullet="" if depth else None`; a bool there is not a marker and used to abort
+the whole export).
+
+Those segment links are the document's only *local* references, so the export
+writes them as URLs a downloaded file can actually follow: absolute, and naming
+the workspace the export was made in (`…/api/assets/<hash>.m4a?ws=<workspace>`).
+A bare `/api/assets/…` resolves against whatever base a PDF reader assumes, and
+the same path fetched without `?ws=` answers from the reader's OWN default
+workspace — the wrong library whenever the export came from a non-default one.
+The origin is `GAMMA_PUBLIC_URL` when the deployment pins one (the knob the MCP
+endpoints advertise by; a configured path prefix is kept), else the request's
+own base, which carries a mounted root path. Nothing else is added: **no
+session, no credentials, and never a share token** — an export is not a
+capability, so a reader still needs their own Gamma login and access to that
+workspace, and a view share does not become durable access to the workspace's
+assets because someone exported the notes. `render_document(asset_link=…)` is
+what applies this (`absolute_asset_link`); with no resolver the stored
+references are written verbatim, which is what a standalone document wants.
+
 Pagination is per line, not per block: the canvas breaks a page between lines
 so nothing is ever clipped, and code lines carry their leading whitespace as an
 x offset because wrapping drops spaces at the start of a line.
@@ -424,6 +463,33 @@ mapped through the same rect → user-space conversion, `/BS /W` the mean
 drawn width, the caption on the first, an `/NM`, and a private `/GammaInk`
 string holding the bucket's `gamma-ink` strokes for a lossless re-import.
 Same skip rule as highlights for ink still embedded in the file.
+
+Native (iPad) `pdf_ink` blocks take the other route, because the honest one is
+different: their editable source is Apple's private PKDrawing, which nothing
+here can draw or turn into strokes, so the export places the annotation's
+readable PICTURE as page content — its PNG `preview_asset` (the whole-block
+rendering the viewer shows), or the per-stroke `.inkjson` derivative when the
+preview is not readable — and claims nothing about vector editing. The picture
+is drawn in the unrotated crop-local frame the native client records in
+(`pdf-crop-top-left-v1`, the frame `frontend/src/native/inkBlock.js` maps from:
+the declared frame is scaled onto the page's crop box and y flipped), so
+/Rotate is deliberately NOT applied — the recording is already unrotated and the
+viewer turns the page, picture included, exactly as it turns the handwriting on
+screen. A block claiming a coordinate space this writer does not know, whose
+geometry is self-contradictory, or whose assets are unreadable is left out and
+logged rather than placed by guesswork; the response counts these pictures
+apart from the annotations (`X-Native-Ink-Drawn`, page content not /Annots),
+and `highlights=0` — "a clean PDF" — drops them with the rest of the annotation
+layer. The pictures draw under a **Multiply** ExtGState (the file is stamped
+`%PDF-1.4`, the version blend modes need): both renderings come from PencilKit
+on a transparent background and `pdf_image` bakes that onto white, so a normal
+draw would paste an opaque white rectangle over the very text the annotation
+was written on — multiplied, the white parts let the paper through and dark ink
+darkens it, like ink on paper (a light-coloured pen therefore darkens rather
+than covers what is under it). Two limits worth knowing: the annotation's own
+caption and child notes are not painted onto the page (they travel in the notes
+document, the Markdown and Gamma exports), and the Zotero export's bundled PDF
+copies still burn in highlights only.
 
 ### Notes drawn on the page
 

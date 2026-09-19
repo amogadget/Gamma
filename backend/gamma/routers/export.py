@@ -46,8 +46,13 @@ from ..markdown_export import (
 )
 from ..logbuf import log
 from ..obsidian_export import APP_JSON, VaultContext, referenced_blocks, render_vault_page
-from ..pdf_document import render_document
-from ..pdf_export import annotate_pdf, highlight_note_text
+from ..pdf_document import absolute_asset_link, render_document
+from ..pdf_export import (
+    annotate_pdf,
+    annotate_pdf_result,
+    highlight_note_text,
+    native_ink_picture,
+)
 from ..pdf_notes import render_notes
 from ..zotero_export import (
     IMAGE_MIME,
@@ -65,6 +70,18 @@ def _content_disposition(filename: str) -> str:
     """attachment header carrying both an ASCII fallback and a UTF-8 name."""
     ascii_name = filename.encode("ascii", "ignore").decode() or "export"
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
+def _link_base(request: Request) -> str:
+    """The origin an exported document's links must carry.
+
+    A downloaded PDF has no origin of its own, so the notes document writes
+    absolute URLs. ``GAMMA_PUBLIC_URL`` wins when the deployment sets a
+    canonical one (the same knob the MCP/OAuth endpoints advertise by); else
+    the request's own base, which already includes a deployment's root path
+    prefix (``request.base_url`` is built from the app root path)."""
+    return (os.environ.get("GAMMA_PUBLIC_URL", "").strip().rstrip("/")
+            or str(request.base_url).rstrip("/"))
 
 
 def _md_response(md: str, slug: str) -> Response:
@@ -188,6 +205,34 @@ def _collect_ink(blocks, uploads_dir) -> list[dict]:
     return groups
 
 
+def _collect_native_ink(blocks, uploads_dir) -> list[dict]:
+    """Native (iPad) ``pdf_ink`` blocks → ``annotate_pdf``'s native ink groups
+    (the readable picture, the block's properties and its id).
+
+    The iPad's editable source is Apple's private PKDrawing, which nothing on
+    this server can draw or convert to strokes, so the picture comes from one
+    of the two renderings the iPad already uploaded: the block's PNG preview
+    (the whole annotation, which is what the viewer puts on the page, at the
+    block's own bounds) or — when the preview is missing or unreadable — the
+    per-stroke ``.inkjson`` derivative. A block with neither is left out and
+    logged rather than drawn from a guess.
+
+    No ``imported_annot`` skip rule here: unlike `ink_url` blocks, a native
+    annotation is never read out of the PDF's own annotations, so there is no
+    double-drawing case to avoid."""
+    groups = []
+    for b in blocks:
+        props = b["properties"]
+        if props.get("type") != "pdf_ink":
+            continue
+        picture = native_ink_picture(uploads_dir, props)
+        if not picture:
+            log.info(f"native ink {b['id']}: no readable preview or replay derivative; not exported")
+            continue
+        groups.append({"props": props, "picture": picture, "id": b["id"]})
+    return groups
+
+
 # Pasted images above this size stay attachments only — a data URI this big
 # would bloat the note beyond what Zotero's editor handles gracefully.
 _EMBED_IMAGE_CAP = 4_000_000
@@ -229,6 +274,9 @@ class _Builder:
         self.uploads_dir = ws_uploads_dir(ws)
         self.entries, self.assets = [], set()
         self.files, self.blobs = [], []
+        # The public origin this export should write absolute links against
+        # (_link_base); only the notes PDF emits local references as links.
+        self.link_base = ""
 
     def begin(self, conn, root_ids):
         """Sees the whole export set before any page is walked (the request's
@@ -427,7 +475,8 @@ class _ZoteroBuilder(_Builder):
                         try:
                             data, _ = annotate_pdf(data, marks, author=self.ws)
                         except Exception as e:
-                            log(f"zotero export: annotating '{title}' failed, exporting bare PDF: {e}")
+                            log.warning(f"zotero export: annotating '{title}' failed, "
+                                        f"exporting bare PDF: {e}")
                             data = pdf_path.read_bytes()
                 pdf_arc = f"files/{n}/{slugify(title, '')}.pdf"
                 self.blobs.append((f"{self.base}/{pdf_arc}", data))
@@ -621,7 +670,11 @@ class _NotesPdfBuilder(_Builder):
     metadata, the block tree typeset as nested bullets with quotes, code,
     images and math. The only builder whose download isn't a zip — one PDF
     holds every selected page, each starting on a fresh sheet — so it
-    overrides ``response`` instead of accumulating zip parts."""
+    overrides ``response`` instead of accumulating zip parts. It is also the
+    only one that writes local references as LINK annotations (a recording's
+    segments), which is why it needs the export's public origin: the document
+    is downloaded, so ``/api/assets/…`` alone resolves nowhere (and a bare
+    fetch would come from the reader's default workspace)."""
     suffix = "-notes.pdf"
 
     def __init__(self, ws, base, opts):
@@ -635,13 +688,16 @@ class _NotesPdfBuilder(_Builder):
         try:
             # The request's connection is closed by the time response() runs,
             # so [[ref]]/![[embed]] resolution opens its own (read-only use).
+            asset_link = absolute_asset_link(self.link_base, self.ws) if self.link_base else None
             with connect_pages_db(self.ws) as conn:
                 pdf_bytes = render_document(
                     self.pages, uploads_dir=self.uploads_dir,
                     highlights=self.opts["highlights"], notes=self.opts["notes"],
-                    resolve_ref=_block_ref_resolver(conn))
+                    resolve_ref=_block_ref_resolver(conn), asset_link=asset_link)
         except Exception as e:
-            log(f"notes PDF export failed for '{self.base}': {e}")
+            # ``log`` is a Logger, not a function: calling it raised a second
+            # TypeError that hid the real cause of a failed export.
+            log.error(f"notes PDF export failed for '{self.base}': {e}")
             raise HTTPException(status_code=400, detail=f"could not build the PDF: {e}")
         return Response(
             content=pdf_bytes,
@@ -661,13 +717,16 @@ _BUILDERS = {
 
 
 def _run_export(conn, ws, mode: str, root_ids, base: str, opts: dict,
-                progress: dict | None = None) -> _Builder:
+                progress: dict | None = None, link_base: str = "") -> _Builder:
     """The shared export driver: one pass over the selected pages, each handed
-    to the mode's builder. ``progress`` is the /folders/export-progress dict."""
+    to the mode's builder. ``progress`` is the /folders/export-progress dict;
+    ``link_base`` the public origin an absolute-linking builder writes against
+    (``_link_base`` — only the notes PDF uses it)."""
     cls = _BUILDERS.get(mode)
     if cls is None:
         raise HTTPException(status_code=400, detail=f"unknown export mode: {mode}")
     builder = cls(ws, base, opts)
+    builder.link_base = link_base
     builder.begin(conn, root_ids)
     for n, root_id in enumerate(root_ids, 1):
         rows = fetch_subtree(conn, root_id)
@@ -707,7 +766,8 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
             raise HTTPException(status_code=404, detail="page not found")
         row = conn.execute("SELECT content FROM unified_blocks WHERE id = ?", (block_id,)).fetchone()
         slug = slugify(row[0], block_id)
-        builder = _run_export(conn, ws, mode, [block_id], slug, opts)
+        builder = _run_export(conn, ws, mode, [block_id], slug, opts,
+                              link_base=_link_base(request))
 
     # A single readable page referencing no local assets is just the .md.
     if mode == "readable" and not builder.assets:
@@ -720,10 +780,16 @@ def export_page(block_id: str, request: Request, mode: str = "readable", pdf: in
 def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights: int = 1):
     """The page's PDF with its highlights burned in as standard /Highlight
     annotations (notes become the annotation popup text), so they survive in
-    any external PDF viewer. ``notes=1`` additionally paints every non-empty
-    note onto the page itself, in the nearest free space with a leader line
-    back to its highlight — readable without opening popups, and printable.
-    ``highlights=0`` skips the annotation layer, so ``highlights=0&notes=1``
+    any external PDF viewer. Handwriting rides along: a ``gamma-ink`` block
+    becomes ``/Ink`` annotations (vectors, re-importable), and a native iPad
+    ``pdf_ink`` block is drawn onto the page as its PNG preview (or its
+    per-stroke replay picture), correctly placed for the page's crop box and
+    rotation — the private PKDrawing itself is not convertible here, so the
+    annotation appears as the picture it is, not as editable strokes.
+    ``notes=1`` additionally paints every non-empty note onto the page itself,
+    in the nearest free space with a leader line back to its highlight —
+    readable without opening popups, and printable. ``highlights=0`` skips the
+    annotation layer and the handwriting pictures, so ``highlights=0&notes=1``
     gives a clean PDF carrying only the written notes."""
     ws = resolve_ws(request)
     scope = share_scope_page(request)
@@ -747,13 +813,19 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
     marks = _collect_marks(blocks)
 
     written = 0
+    native_drawn = 0
     pdf_bytes = pdf_path.read_bytes()
     if highlights:
+        uploads_dir = ws_uploads_dir(ws)
         try:
-            pdf_bytes, written = annotate_pdf(pdf_bytes, marks, author=request.state.user or "",
-                                              ink=_collect_ink(blocks, ws_uploads_dir(ws)))
+            result = annotate_pdf_result(
+                pdf_bytes, marks, author=request.state.user or "",
+                ink=_collect_ink(blocks, uploads_dir),
+                native_ink=_collect_native_ink(blocks, uploads_dir))
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"could not annotate PDF: {e}")
+        pdf_bytes = result["pdf"]
+        written, native_drawn = result["annotations"], result["native_ink"]
 
     drawn = 0
     if notes:
@@ -772,6 +844,10 @@ def export_page_pdf(block_id: str, request: Request, notes: int = 0, highlights:
         headers={
             "Content-Disposition": _content_disposition(f"{slug}{suffix}.pdf"),
             "X-Annotations-Written": str(written),
+            # Native pictures are page content, not annotations: counted apart
+            # so a caller can tell "the handwriting is in the file" from
+            # "an annotation viewer will find something".
+            "X-Native-Ink-Drawn": str(native_drawn),
             "X-Notes-Rendered": str(drawn),
         },
     )
@@ -833,7 +909,8 @@ def export_folder(request: Request, name: str, mode: str = "readable", pdf: int 
         _folder_export_progress[ws] = prog
         try:
             builder = _run_export(conn, ws, mode, [b["id"] for b in matches],
-                                  folder_slug, opts, progress=prog)
+                                  folder_slug, opts, progress=prog,
+                                  link_base=_link_base(request))
         finally:
             prog["active"] = False
     return builder.response()
