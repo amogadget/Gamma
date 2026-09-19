@@ -77,6 +77,44 @@ def test_only_page_roots_can_be_shared(bob):
     assert bob.post("/api/share/does_not_exist").status_code == 404
 
 
+def test_shared_chat_is_scoped_and_read_only(bob, carol, anon):
+    page = make_page(bob, "Shared conversation")
+    other = make_page(bob, "Private conversation")
+    saved = {"messages": [{"role": "user", "text": "Explain this page"},
+                           {"role": "assistant", "text": "Saved answer"}],
+             "title": "Page discussion"}
+    assert bob.put(f"/api/chats/{page['id']}", json=saved).status_code == 200
+    token = bob.post(f"/api/share/{page['id']}").json()["token"]
+    q = {"share": token}
+
+    for viewer in (anon, carol, bob):
+        assert viewer.get(f"/api/chats/{page['id']}", params=q).json() == saved
+        for bucket in (other["id"], "home", "home:private/folder"):
+            assert viewer.get(f"/api/chats/{bucket}", params=q).status_code == 403
+    assert anon.get(f"/api/chats/{page['id']}").status_code == 401
+    assert anon.get(f"/api/chats/{page['id']}", params={"share": "invalid"}).status_code == 401
+
+    # Even a page-edit share, or its owner, cannot change chat via the link.
+    bob.put(f"/api/share-settings/{page['id']}", json={"audience": "users", "role": "edit"})
+    for viewer in (anon, carol, bob):
+        for method, path, body in (
+            ("PUT", f"/api/chats/{page['id']}", {"messages": []}),
+            ("DELETE", f"/api/chats/{page['id']}", None),
+            ("POST", "/api/chats/folder-rename", {"src": "private", "dst": "renamed"}),
+            ("POST", "/api/chat-history/archive", {"bucket": page["id"]}),
+            ("POST", "/api/chat-history/entry/open", {"bucket": page["id"]}),
+            ("PUT", "/api/chat-history/entry", {"title": "Changed"}),
+            ("DELETE", "/api/chat-history/entry", None),
+        ):
+            assert viewer.request(method, path, params=q, json=body).status_code == 403
+    assert bob.get(f"/api/chats/{page['id']}").json() == saved
+    assert anon.get(f"/api/chats/{page['id']}", params=q).status_code == 401
+    bob.put(f"/api/share-settings/{page['id']}", json={"audience": "list", "role": "view"})
+    assert carol.get(f"/api/chats/{page['id']}", params=q).status_code == 403
+    bob.delete(f"/api/share-settings/{page['id']}")
+    assert anon.get(f"/api/chats/{page['id']}", params=q).status_code == 401
+
+
 def test_share_token_is_stable_per_page(bob):
     page = make_page(bob, "Stable link")
     t1 = bob.post(f"/api/share/{page['id']}").json()["token"]

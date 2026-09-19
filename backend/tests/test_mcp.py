@@ -232,8 +232,7 @@ def test_token_management_requires_owner_session(anon, connection):
 
 def test_shared_dispatch_enforces_permissions(connection):
     _, ws, _ = connection
-    for kwargs in [{"permissions": {"list": False}}, {"allowed_tools": set()}]:
-        result, action = run_agent_tool(ws, {"type": "folder"}, "list_pages", {}, **kwargs)
-        assert action["error"] and "not enabled" in result
+    result, action = run_agent_tool(ws, {"type": "folder"}, "list_pages", {}, allowed_tools=set())
+    assert action["error"] and "not enabled" in result
     assert all(s["name"] not in {"rename_page", "move_page", "edit_block", "create_block", "move_block"}
                for s in agent_tools("folder", can_write=False))

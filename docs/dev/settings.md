@@ -29,17 +29,13 @@ Five everyday destinations are defined by `PREFERENCE_NAV` in
 
 - **Appearance**: theme choices and dark PDF pages (account-synced), control
   size and status bar (this browser).
-  [SettingsAppearance.jsx](../../frontend/src/settings/SettingsAppearance.jsx): six
-  theme cards (`PictureChoices`) with palette sketches and short
-  descriptions, a PDF sample that follows the page tint and the dark-page
-  switch, and the interface controls. Cards wrap into two columns on narrow
-  screens, where the descriptions move to tooltips. The rows have no hover
-  fill.
+  [SettingsAppearance.jsx](../../frontend/src/settings/SettingsAppearance.jsx):
+  eight theme cards (`PictureChoices`), a PDF sample that follows the page
+  tint and the dark-page switch, and the interface controls.
 - **Reading & editing**: imported annotations, the handwriting input rules
   (stylus draws right away, fingers never draw, pressure), translation
   shortcut and language, Enter behavior and search expansion. Vertical
-  scroll alignment and note badges on highlights are always on; their
-  former keys `gamma-snap-vertical` and `gamma-hl-note-badge` are ignored.
+  scroll alignment and note badges on highlights are always on.
 - **Library**: thumbnails, folder/label display, metadata lookup, open-access
   fallback and saving external PDFs. These are browser preferences. Display
   is one live `PageCard` beside three switches (thumbnails, folders, labels);
@@ -56,6 +52,9 @@ Five everyday destinations are defined by `PREFERENCE_NAV` in
 Larger management areas open their own navigation with Back to settings.
 Shorter pages keep the main sidebar:
 
+- **AI › External assistants** ([SettingsIntegrations.jsx](../../frontend/src/settings/SettingsIntegrations.jsx)):
+  the workspace's assistant connections, the MCP URL, the Codex setup
+  command and the manual-token fallback ([mcp.md](mcp.md)).
 - **Manage workspaces**: workspaces and backups. A workspace's Manage action
   opens an inline detail page; rename and invite are small editor dialogs.
   Import/export, Export all and Back up all remain available. The account
@@ -65,8 +64,15 @@ Shorter pages keep the main sidebar:
   preferences page and the library operations menu.
 - **Administration** (admins only): Users (accounts, each with its personal
   workspaces) and Server (shared workspaces, server-wide storage defaults,
-  server backups and logs).
+  the Assistant connections section with the public server URL, server
+  backups and logs).
 - **Diagnostics** (main sidebar): browser tracing and the browser session log.
+
+Administrators can confirm the **Public server URL** under Server. It is
+prefilled from the browser origin but saved only on confirmation. The saved
+address immediately configures assistant sign-in and the MCP host allowlist;
+it persists in the server `settings` table. An existing `GAMMA_PUBLIC_URL`
+environment override takes precedence and is shown read-only.
 
 Search is backed by [settingsNavigation.js](../../frontend/src/settings/settingsNavigation.js).
 It searches labels and synonyms, filters out inaccessible management pages,
@@ -109,7 +115,7 @@ the exact values without changing them.
 Ordinary rows show a small icon, a label, a short hint and a control, with the
 shared hover background. Put consequences in the visible
 hint; supplementary `title` text appears on hover, without a Details toggle.
-Use the existing shared controls, including `Segmented` for theme choices.
+Use the existing shared controls, including `PictureChoices` for theme choices.
 Editor dialogs accept a `draft` value for dismissal protection. See
 [ui-design.md](ui-design.md) for shared control styling.
 

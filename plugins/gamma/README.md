@@ -45,6 +45,13 @@ Gamma must be running and reachable from the machine running the MCP client.
 The packaged workflow uses the configured tools; installing it alone does not
 establish a connection. Public directory publication is a separate review process.
 
+If setup reports successful login but the assistant has no Gamma tools, inspect
+`codex mcp get gamma` in your terminal. A server disabled by managed requirements
+needs administrator approval in Codex's managed policy; reinstalling or repeating
+OAuth cannot enable it. If the server is enabled, restart the Codex app and start
+a new task, then inspect MCP startup errors if tools are still missing. An OAuth
+entry in Gamma confirms a grant of access, not that Codex loaded its MCP tools.
+
 For remote hosts, HTTPS, troubleshooting, token management, and release
 instructions, see [the integration guide](../../docs/dev/mcp.md).
 

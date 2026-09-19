@@ -9,6 +9,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { scanMathSpans } from "./BlockCmEditor";
 import { scanFences } from "./codeHighlight";
+import { scanImageSyntax } from "./mdMarks";
 import { ContextMenu, MenuItem } from "../shared/ui/Menus";
 import { Segmented } from "../settings/SettingsKit";
 import {
@@ -31,26 +32,13 @@ function protectedSpans(content) {
 }
 const inSpan = (spans, pos) => spans.some((s) => pos >= s.from && pos < s.to);
 
-// ![alt](url), sized Obsidian-style (`![alt|300](url)`) or with the legacy
-// Logseq `{:width N}` suffix — both render, edits write the Obsidian form.
-// `![[embeds]]` can't match — their "alt" contains an unclosed "[" and no "(".
-const IMG_RE = /!\[([^\]\n]*)\]\(([^)\n]+)\)(\{:width\s+(\d+)\})?/g;
-const ALT_WIDTH_RE = /^(.*?)\|(\d+)(?:x\d+)?$/;
-
+// The images the rendered view shows, in order. The syntax (Obsidian
+// `![alt|300]` size, legacy Logseq `{:width N}` suffix) is scanImageSyntax in
+// mdMarks.js, shared with the block editor's live rendering; both forms
+// render, edits write the Obsidian form.
 export function scanImages(content) {
   const spans = protectedSpans(content);
-  const out = [];
-  for (const m of content.matchAll(IMG_RE)) {
-    if (inSpan(spans, m.index)) continue;
-    let alt = m[1], width = m[4] ? Number(m[4]) : null;
-    const pipe = ALT_WIDTH_RE.exec(alt);
-    if (pipe) {
-      alt = pipe[1];
-      if (width == null) width = Number(pipe[2]);
-    }
-    out.push({ from: m.index, to: m.index + m[0].length, alt, url: m[2], width });
-  }
-  return out;
+  return scanImageSyntax(content).filter((im) => !inSpan(spans, im.from));
 }
 
 // actions: "width" (payload px, 0 clears), "alt" (payload caption), "delete".

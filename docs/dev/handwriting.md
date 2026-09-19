@@ -190,45 +190,48 @@ sample bytes.
   the upload replaces `ink_url` with the draft's; a remote `ink_url` change
   on a block with nothing unsaved drops the draft.
 - `ink/InkLayer.jsx`: `InkLayer` (per `PdfPage`, a sibling of the highlight
-  layer): the retained SVG, a `desynchronized` canvas for the stroke in
-  progress, and a capture-phase `pointerdown` listener on the page wrapper
-  that claims the pointer when a tool is armed or a stylus touches the page
-  (`pointerType === "pen"` with *Stylus draws right away*), so text
-  selection and the area drag never see it; other pointers pass through
-  untouched. `getCoalescedEvents()` where available (Safari has none but
-  delivers 120/240 Hz moves). Non-passive capture `touchstart`/`touchmove`
-  listeners cancel the Pencil's touch gesture on iPad Safari (cancelling the
-  pointer events alone does not stop native panning); they match stylus
-  touches, or any touch while a pen pointer is down, and leave finger
-  scrolling and pinch zoom alone between strokes. While a pen is down,
-  finger touches on that page are palms: swallowed, and kept from the
-  viewer's pan/pinch handlers. A pen takes over an unfinished finger stroke
-  when the palm landed first; a second contact never takes over a pen. Lost
-  capture, `pointercancel` and window blur discard the unfinished stroke.
-  `ink/inkInput.js` builds the samples: hardware timestamps (coalesced ones
-  included), the pressure preference snapshotted at stroke start, the
-  pointer-up position with the last contact pressure (up reports zero), and
-  repeated points dropped. The live outline gets the same endpoint treatment
-  as saved ink, so it reaches the pen tip. With `getPredictedEvents()` the
-  pen preview adds at most 16 ms / 12 CSS px of prediction, expiring after
-  32 ms and never encoded. `shared/lib/canvasSize.js` caps the live bitmap (8 Mi
-  pixels / 4096 per edge) and the context transform uses the real
-  backing-to-page ratio; lift and cancel release the bitmap. Canvas and SVG
-  share the dark-page colour filter. Pointer-up encodes the stroke and
-  swallows the click it would deliver to whatever lies beneath. The lasso
-  draws its polygon on the same canvas; a drag inside the selection box
-  moves the selected strokes (previewed as a translated copy, committed on
-  pointer-up). A pending tap/hold state, separate from the drawing, lets a
-  native scroll cancel a touch selection without ink. `InkSelectionMenu` is
-  a portalled `ContextMenu` (its controls sit outside the page's pointer
-  listeners) that measures its own height for placement;
-  `InkTransformHandles` are the resize/rotate buttons; `InkTooltips` shows a
-  button's title on hover or focus for the strip and the menu, since native
-  titles are unreliable under Pencil hover. `InkCard` is the picture in the
-  notes; `InkToolbar` the strip. Edit callbacks are absent on read-only
-  pages and shares. The global `html { touch-action: manipulation }`
-  (app.css) removes Chrome's double-tap zoom everywhere while keeping
-  panning and pinch zoom.
+  layer) is the retained SVG plus a `desynchronized` canvas for the stroke
+  in progress. `InkSelectionMenu` is a portalled `ContextMenu` (its controls
+  sit outside the page's pointer listeners) that measures its own height for
+  placement; `InkTransformHandles` are the resize/rotate buttons;
+  `InkTooltips` shows a button's title on hover or focus for the strip and
+  the menu, since native titles are unreliable under Pencil hover. `InkCard`
+  is the picture in the notes; `InkToolbar` the strip. Edit callbacks are
+  absent on read-only pages and shares.
+  - Claiming input: a capture-phase `pointerdown` listener on the page
+    wrapper takes the pointer when a tool is armed or a stylus touches the
+    page (`pointerType === "pen"` with *Stylus draws right away*), so text
+    selection and the area drag never see it. Other pointers pass through.
+    Pointer-up encodes the stroke and swallows the click it would deliver to
+    whatever lies beneath. Lost capture, `pointercancel` and window blur
+    discard the unfinished stroke.
+  - Touch: non-passive capture `touchstart`/`touchmove` listeners cancel the
+    Pencil's touch gesture on iPad Safari (cancelling the pointer events
+    alone does not stop native panning). They match stylus touches, or any
+    touch while a pen pointer is down, and leave finger scrolling and pinch
+    zoom alone between strokes. The global `html { touch-action:
+    manipulation }` (app.css) removes Chrome's double-tap zoom while keeping
+    panning and pinch zoom.
+  - Palms: while a pen is down, finger touches on that page are swallowed
+    and kept from the viewer's pan/pinch handlers. A pen takes over an
+    unfinished finger stroke when the palm landed first; a second contact
+    never takes over a pen.
+  - Samples (`ink/inkInput.js`): `getCoalescedEvents()` where available
+    (Safari has none but delivers 120/240 Hz moves), hardware timestamps,
+    the pressure preference snapshotted at stroke start, the pointer-up
+    position with the last contact pressure (up reports zero), repeated
+    points dropped. The live outline gets the same endpoint treatment as
+    saved ink, so it reaches the pen tip. With `getPredictedEvents()` the pen
+    preview adds at most 16 ms / 12 CSS px of prediction, expiring after
+    32 ms and never encoded.
+  - Canvas: `shared/lib/canvasSize.js` caps the live bitmap (8 Mi pixels /
+    4096 per edge) and the context transform uses the real backing-to-page
+    ratio; lift and cancel release the bitmap. Canvas and SVG share the
+    dark-page colour filter.
+  - Selection: the lasso draws its polygon on the same canvas. A drag inside
+    the selection box moves the selected strokes (previewed as a translated
+    copy, committed on pointer-up). A pending tap/hold state, separate from
+    the drawing, lets a native scroll cancel a touch selection without ink.
 - `app/App.jsx` owns the tool state: `inkUi` (`open`, the armed `tool` — a
   preset id, `eraser`, `select` or `null` for the hand — its `options` row,
   and `pen`, the last pen preset, which a stylus writes with when nothing
@@ -302,5 +305,5 @@ ids are stored for it). Obsidian vault export writes an ink block's
 caption only. The Notability comparison in the research note lists what a
 closer pen experience still needs (draw-and-hold straightening, an eraser
 that returns to the last tool, the highlighter behind the ink, clipboard
-operations and selection transforms). The broader interaction survey is
+operations). The broader interaction survey is
 [handwriting-interactions.md](../research/handwriting-interactions.md).

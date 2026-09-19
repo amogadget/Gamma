@@ -39,14 +39,14 @@ the original is still embedded).
 ## The Import dialog
 
 The ⋮ menu's single "Import…" entry → `ImportDialog` in `transfers/ImportExport.jsx`, the
-export dialog's counterpart. Step one is a source card (annotations embedded
-in this PDF, a Logseq .pdf + .edn, a Zotero library .zip, Markdown notes — one
-`.md` or a `.zip` such as a Notion export, or a Gamma export .zip); double-click
-or Next confirms. Only sources with an option get a review step: the strip
-switch, which applies to embedded annotations, including those inside Zotero's
-exported PDFs. Markdown, Logseq and Gamma open the file picker directly, with
-their preparation notes under the selected card. `resolveImport` in
-`transfers/transferFormats.js` decides both.
+export dialog's counterpart. Step one is a source card: annotations embedded
+in this PDF, a Logseq .pdf + .edn, a Zotero library .zip, Markdown notes (one
+`.md` or a `.zip` such as a Notion export), or a Gamma export .zip. Double-click
+or Next confirms. Only sources with an option get a review step. That option is
+the strip switch, which applies to embedded annotations, including those
+inside Zotero's exported PDFs. Markdown, Logseq and Gamma open the file picker
+directly, with their preparation notes under the selected card.
+`resolveImport` in `transfers/transferFormats.js` decides both.
 Zotero is the default source (a numbered step guide reusing
 settingsKit's `Step`); with a PDF open, that PDF's own annotations win. Nothing
 is remembered: the switch starts from the Settings preference each time, so the
@@ -72,6 +72,10 @@ exports a toggle's content. In mixed folder uploads, Markdown note pages and PDF
 receive the same subfolder labels; unsupported files are skipped.
 
 ## Markdown zips: Obsidian vaults, Notion exports, Gamma exports, zipped notes
+
+Mermaid fences stay as editable Markdown through import/export and render as
+diagrams in the frontend. The diagram toolbar can download SVG separately;
+backend PDF exports retain code-block output. See [mermaid.md](mermaid.md).
 
 `POST /api/import/markdown-zip` (Import dialog → "Markdown notes", pick a
 `.zip`; `gamma/markdown_zip_import.py`) turns a zip of `.md` files into one
@@ -256,21 +260,22 @@ status line and the transfer row.
 ## The Export dialog
 
 The ⋮ menu's single "Export…" entry → `ExportDialog` in `transfers/ImportExport.jsx`.
-Step one is a format card: the PDF row contains Annotated PDF, the Notes row
-contains PDF and Markdown, and the ZIP row contains Obsidian, Logseq, Zotero
-and Gamma. Double-click or Next confirms. Formats with editable options get a
-review step: the Highlights, Notes and Bundle-the-files switches beside an
-illustrative page (`illustrations/TransferPreview.jsx`, an example of the
-options, not a render of the document). Gamma has fixed contents and a PDF
-without a stored copy can only be the original file, so both export straight
-from step one; Logseq shows only the bundle switch. The breadcrumb returns to
-the cards without losing edits. Both dialogs are a `SubDialog` (focus trap,
-Escape, backdrop) with its close-button header; the footer holds only Next or
-the final action. Zotero's post-export steps expand under "Open this export in
-Zotero". `transfers/transferFormats.js` owns the format table (label, category, hint,
-editable and fixed options, `EXPORT_SWITCH_TEXT`) and `resolveExport`, which
-turns the saved options into the controls, whether a review step is needed
-and the one payload the preview and the download share. Zotero highlights
+Step one is a format card. The PDF row holds Annotated PDF, the Notes row PDF
+and Markdown, the ZIP row Obsidian, Logseq, Zotero and Gamma. Double-click or
+Next confirms. Formats with editable options get a review step: the
+Highlights, Notes and Bundle-the-files switches beside an illustrative page
+(`illustrations/TransferPreview.jsx`, an example of the options, not a render
+of the document). Gamma has fixed contents, and a PDF without a stored copy
+can only be the original file, so both export straight from step one. Logseq
+shows only the bundle switch. The breadcrumb returns to the cards without
+losing edits. Both dialogs are a `SubDialog` (focus trap, Escape, backdrop)
+with its close-button header; the footer holds only Next or the final action.
+Zotero's post-export steps expand under "Open this export in Zotero".
+`transfers/transferFormats.js` owns the format table (label, category, hint,
+editable and fixed options, `EXPORT_SWITCH_TEXT`, the row order `CATEGORIES`)
+and `resolveExport`. The resolver turns the saved options into the controls,
+decides whether a review step is needed, and builds the one payload the
+preview and the download share. Zotero highlights
 live inside bundled PDFs, so turning bundling off disables Highlights without
 changing the saved preference. The chosen format and options are remembered
 in `localStorage` (`gamma-export-opts`). The switches are query flags on two

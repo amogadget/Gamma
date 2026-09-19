@@ -19,6 +19,7 @@ import { FileChipContext, forgetDocPages, rememberDocPage, setUploadReporter, up
 import { CardLabels, KindToggle, ListFindBox, PageCard, ViewToggle } from "../library/FileBrowser";
 import BlankPDFDialog from "../library/BlankPDFDialog";
 import ChatDock from "../chat/ChatDock";
+import { createChatSession } from "../chat/chatSession";
 import SearchPanel from "../search/SearchPanel";
 import { ContextMenu, MenuItem, MenuLabel, MenuSelect, SubMenuItem } from "../shared/ui/Menus";
 import {
@@ -335,6 +336,15 @@ function LibraryApp() {
 
   // Auth state: null=loading, false=logged out, {user, is_guest}=logged in
   const [authUser, setAuthUser] = useState(shareMode ? {user:"_public"} : null);
+  const chatSession = useMemo(() => createChatSession((key, messages) => {
+    if (getExpectedUser() !== authUser?.user || getCurrentWorkspace() !== wsId) {
+      throw new Error("The account or workspace changed.");
+    }
+    return apiJson(`${API}/chats/${encodeURIComponent(key)}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages }),
+    });
+  }), [authUser?.user, wsId]);
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [loginError, setLoginError] = useState("");
@@ -2231,7 +2241,7 @@ function LibraryApp() {
   useEffect(() => {
     if (!openPopover) return;
     function onDown(e) {
-      // Dropdown menus (menus.jsx) portal to <body>: a pick inside a
+      // Dropdown menus (shared/ui/Menus.jsx) portal to <body>: a pick inside a
       // popover's own dropdown is not a click outside the popover.
       if (!(e.target.closest && e.target.closest("[data-popover], .ctxMenu"))) setOpenPopover(null);
     }
@@ -2248,7 +2258,7 @@ function LibraryApp() {
     ? `${window.location.origin}${window.location.pathname}?share=${shareSettings.token}`
     : "";
   const [shareCopied, flashShareCopied, resetShareCopied] = useCopied();
-  // Workspace search lives in search.jsx (SearchPanel); App only holds what
+  // Workspace search lives in search/SearchPanel.jsx (SearchPanel); App only holds what
   // the PDF viewer needs from it: the match highlights and the search hook.
   const [findMarks, setFindMarks] = useState([]); // [{page, rect, active}] painted by PdfViewer
   const [pdfDocNonce, setPdfDocNonce] = useState(0); // bumped when a document finishes rendering
@@ -2757,7 +2767,7 @@ function LibraryApp() {
     }
   }
 
-  // User management moved into Settings → Users (settings.jsx UsersSettings,
+  // User management moved into Settings → Users (settings/SettingsDialog.jsx UsersSettings,
   // admins only) — App just opens that pane and lends it the shared pieces
   // (confirm dialog, status pill, session re-key after a self-rename).
   // PDF passages the next chat question focuses on. Ctrl (additive) appends
@@ -3544,7 +3554,7 @@ function LibraryApp() {
     return () => { cancelled = true; };
   }, [focusedBlockId, shareMode]);
 
-  // The page's live session (collab.js): the tree's transitions become ops
+  // The page's live session (collaboration/usePageCollab.js): the tree's transitions become ops
   // sent in debounced batches, other clients' batches arrive over the page
   // socket and apply below, presence rides the same socket. A load (the
   // suppress flag) makes the tree the session's base instead of a change.
@@ -7836,7 +7846,7 @@ function LibraryApp() {
   const centerNotes = pdfHidden || homeMode || pageOnly;
   const winVisible = {
     notes: Boolean(notesWindow) && !centerNotes,
-    chat: !shareMode && !chatHidden,
+    chat: !chatHidden && (!shareMode || !!focusedBlockId),
   };
   function renderWindow(id) {
     // Phone: windows are full-screen overlays — no dock dragging or collapsing,
@@ -7857,10 +7867,13 @@ function LibraryApp() {
       return (
         <ChatDock
           {...common}
+          session={chatSession}
+          readOnly={shareMode}
           onClose={() => (isPhone ? setPhonePanel(null) : setChatHidden(true))}
           docId={docId} pageAttach={pageAttach} focusedBlockId={focusedBlockId} homeBlocks={homeBlocks} pageTitle={pageTitle}
           openTabs={openTabs}
           onOpenPage={async (id, citation) => {
+            if (shareMode && id !== focusedBlockId) return;
             if (citation && id === focusedBlockId) pushNav();
             setPdfCitation(citation ? { ...citation } : null);
             if (id !== focusedBlockId) await openBlock(id, { pushNav: true });
@@ -7956,7 +7969,7 @@ function LibraryApp() {
               <FileTextIcon className="popoverItemIcon" size={15} /> Notes
             </button>
           ) : null}
-          {!menuReadOnly ? (
+          {(!menuReadOnly || focusedBlockId) ? (
             <button className="popoverItem" onClick={() => setChatHidden((v) => !v)}>
               <span className="check">{!chatHidden ? "✓" : ""}</span>
               <SparklesIcon className="popoverItemIcon" size={15} /> AI Chat
@@ -8911,11 +8924,11 @@ function LibraryApp() {
       {isPhone && winVisible.notes && (phonePanel === "notes" || phoneSeen.current.notes) ? (
         <div className={`phonePanel ${phonePanel === "notes" ? "" : "phonePanelHidden"}`}>{renderWindow("notes")}</div>
       ) : null}
-      {isPhone && !shareMode && (phonePanel === "chat" || phoneSeen.current.chat) ? (
+      {isPhone && (!shareMode || focusedBlockId) && (phonePanel === "chat" || phoneSeen.current.chat) ? (
         <div className={`phonePanel ${phonePanel === "chat" ? "" : "phonePanelHidden"}`}>{renderWindow("chat")}</div>
       ) : null}
       </div>
-      {isPhone && (!centerNotes || !shareMode) ? (
+      {isPhone ? (
         // Phone: one bottom bar — view tabs on the left, the topbar's action
         // buttons on the right. Icon-only, because both groups share the row.
         <div className="phoneBottomBar">
@@ -8940,7 +8953,7 @@ function LibraryApp() {
                 <span>Notes</span>
               </button>
             ) : null}
-            {!shareMode ? (
+            {(!shareMode || focusedBlockId) ? (
               <button
                 className={`phoneTab ${phonePanel === "chat" ? "active" : ""}`}
                 onClick={() => setPhonePanel((p) => (p === "chat" ? null : "chat"))}

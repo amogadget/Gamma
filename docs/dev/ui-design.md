@@ -5,6 +5,9 @@ follow them instead of inventing new patterns.
 
 ## One control set, everywhere
 
+Mermaid diagram previews in notes and chat use the shared component and toolbar
+described in [mermaid.md](mermaid.md); their buttons use `uiBtn sm`.
+
 Reuse the unified classes; never invent a bespoke style for a control that
 already exists. Bespoke CSS classes are for **layout only**.
 
@@ -51,11 +54,11 @@ Two separate size levers, deliberately not one "zoom":
 
 The fullscreen button asks for native fullscreen first. App fullscreen
 (`.app.pseudoFullscreen` + `html.appFocusFullscreen`) is the fallback when
-the Fullscreen API is missing (iOS Safari) or rejects the request: it hides
+the Fullscreen API is missing (iOS Safari) or rejects the request. It hides
 the app bars, confines overscroll, and exits through the same button or
-Escape. The browser's own bars may stay visible. The button handles a
+Escape; the browser's own bars may stay visible. The button handles a
 stationary touch release itself, because a mobile browser may omit the
-compatibility click after a scroll; the click that does follow is consumed
+compatibility click after a scroll. The click that does follow is consumed,
 so one tap cannot toggle twice. Mouse and keyboard keep the plain click path.
 
 ### Menus and submenus
@@ -120,22 +123,13 @@ Library Display is the model: one `PageCard` with independent Thumbnails,
 Folders and Labels switches. Mutually exclusive palettes (themes) use a set
 of miniature cards instead.
 
-Import and Export open on format/source cards grouped by file type.
-Export uses PDF, Notes and ZIP rows; Import uses PDF, MD and ZIP rows.
-Both use app logos for app formats, the shared PDF, notes and Markdown icons
-for document formats, all monochrome at one size. A review step with a live
-illustrative page follows only when the format has editable options. Fixed
-contents get no switches (Gamma exports directly, Logseq offers only file
-bundling), and import sources without options open the file picker
-directly, with their instructions on the selection page. Double-click does
-what the footer button does. The previous step is a `crumbBtn` breadcrumb,
-as in the library, and returning keeps the chosen format and options. The
-`SubDialog` header carries the standard `uiClose` ×; the footer holds only
-Next or the final action. Card names stay short because the row names the
-file type. The rules live in `transfers/transferFormats.js`; the previews are
-hand-coded React and CSS in `shared/illustrations/TransferPreview.jsx` and
-`shared/illustrations/illustrations.css`, examples of the output rather than
-renders of the current document.
+The Import and Export dialogs are the other `PictureChoices` surface: format
+and source cards grouped by file type (app logos for app formats, the shared
+PDF, notes and Markdown icons for document formats, all monochrome at one
+size), then a review step whose switches sit beside an illustrative page
+(`shared/illustrations/TransferPreview.jsx`, an example of the output, not a
+render of the document). The flow and its rules are described in
+[import_export.md](import_export.md).
 
 UI illustrations live in [illustrations/](../../frontend/src/shared/illustrations/README.md),
 one file per subject: React components for drawings that change with
@@ -181,9 +175,10 @@ Settings panes are built only from
 
 ## Theme
 
-Six states: System (default, tracks `prefers-color-scheme` live) or pinned
-Light/Dark/Sepia/Solarized Light/Gray — `gamma-theme` in localStorage (valid values are `THEMES`
-in `app/prefs.js`), applied as `data-theme` on the root element. The choice (plus
+Eight states: System (default, tracks `prefers-color-scheme` live) or pinned
+Light/Dark/Gamma Light/Gamma Dark/Sepia/Solarized Light/Gray — `gamma-theme` in
+localStorage (valid values are `THEMES` in `app/prefs.js`), applied as
+`data-theme` on the root element. The choice (plus
 "Flip page colors") also follows the account through `/api/prefs/appearance` —
 server wins on login and on window focus, changes push back; localStorage
 stays the instant-paint cache the `index.html` script reads. An inline script in `index.html` applies a pinned theme before
@@ -194,6 +189,13 @@ themed rather than left to the OS: a global `scrollbar-width: thin` +
 "Flip page colors" (`gamma-pdf-dark`) is separate and display-only: it
 inverts the PDF canvas (`.pdfDark`), swaps highlight blending from multiply
 to screen, and darkens the scroller surround.
+
+**Gamma Light** and **Gamma Dark** (`gamma-light`, `gamma-dark`) are the
+hero-derived brand themes: warm gray and amber, charcoal and soft gold. They
+add `--on-accent` (text on an accent surface) and `--accent-hover`. Gamma
+Light joins the light-ground and tinted-surround selector lists below; Gamma
+Dark gives the PDF viewer dark pages by default (`[data-theme="gamma-dark"]
+.pdfViewer` rules next to `.pdfDark`), so "Flip page colors" adds nothing there.
 
 **Sepia**, **Solarized Light**, and **Gray** are the eye-comfort modes and the themes that reach
 the PDF page as well as the chrome. Sepia: warm beige surfaces and dark teal
@@ -213,11 +215,12 @@ only the ink, black → `(1−α)·paper` ≈ `#2e2c29` (~12.6:1), the softened
 charcoal the eye-strain guidance recommends over pure black. **Gray** is the
 neutral counterpart — the same machinery driven by different tokens
 (`--pdf-paper: #f4f4f4`, `#2d2d2d` text ladder, Light's role colors) for
-users who want the glare cut without a color cast; the PDF rules select
-`:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`, so a new tinted theme only
+users who want the glare cut without a color cast; the canvas multiply rule
+selects `:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`
+and the viewer surround adds `gamma-light` to that list, so a new tinted theme only
 needs a token block plus membership in those lists. The tint needs no prop — `data-theme` is global, so it is pure CSS
 — and "Flip page colors" wins when both are on. Light-ground rules select
-`:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`;
+`:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`;
 extend that list, don't add another copy.
 
 ## Layout
@@ -249,10 +252,10 @@ extend that list, don't add another copy.
 | `ink/ink.js`, `ink/inkStore.js`, `ink/inkInput.js`, `ink/InkLayer.jsx` | handwriting ([handwriting.md](handwriting.md)): the stroke codec + geometry (pure), the files/drafts store, pointer sampling, and the page layer + selection menu + notes card + tool strip (`.pdfInkBar`: `ctlBtn`s and `colorBtn` swatches) |
 | `search/SearchPanel.jsx`, `library/librarySearch.js` | workspace search (Ctrl+F) and the title scorer shared with chat |
 | `chat/PaperMentionInput.jsx`, `chat/paperMentions.js` | chat mention picker, mention text edits and `MAX_CHAT_REFERENCES` (six attached pages plus the current page) |
-| `editor/BlockTree.jsx`, `shared/model/blockModel.js` | outliner rendering / pure tree ops |
+| `editor/BlockTree.jsx`, `shared/model/blockModel.js` | outliner rendering / pure tree ops (`shared/model/highlightColors.js` is the highlight palette both share with the viewer). Line breaks in a rendered note: one Enter is a hard line break (`remark-breaks`), one blank line the paragraph break, and every further blank line a visible empty line (`expandBlankLines` in `editor/mdMarks.js`, applied by `mdPreprocess` outside math and code) — what the editor shows is what the note renders |
 | `transfers/FileChip.jsx` | the file chip an upload link renders as — a small card (kind icon in a tinted square, name, download arrow), inline so it sits in a sentence, identical for every type; a PDF or markdown chip whose page exists gets an accent "open page" button before the arrow; a `ContextMenu` on right-click with "Open page" / "Add to library" (fed by `FileChipContext` from App and one batched `POST /pages/by-docs` per render) and download; also the shared `postFile` / `uploadFilesAsLines` upload helpers |
 | `editor/MdTools.jsx` | in-place tools on rendered notes: `MdImage` (hover toolbar of `ctlBtn` icons — zoom lightbox, caption via alt text, download, delete — plus a drag grip writing the Obsidian `![alt|300]` size; legacy Logseq `{:width N}` reads and normalizes on edit) and `MdTableWrap` (hover "+" strips, column/row handle menus — insert, align, delete — and click-a-cell in-place editing: an input over the cell, Tab/Shift-Tab hop cells across the commit remount via a module-level session map, Enter commits, Esc cancels; tables are never edited as raw markdown — a cell mousedown stops the block row's edit-on-mousedown), backed by pure source transforms (`scanImages`/`scanTables` locate the nth rendered construct; `applyImageEdit`/`applyTableEdit` rewrite it, tables re-serialized pretty-printed; `formatTables` also runs when a block's raw editor closes) and `htmlTableToMarkdown` for the spreadsheet-paste path |
-| `editor/BlockCmEditor.jsx` | the CodeMirror 6 block editor (textarea-compatible facade) with live in-place rendering of closed `$…$`/`$$…$$` spans, ``` ``` ``` fences (highlight.js cards), `[[ref]]`/`![[embed]]` chips, and markdown (headings, `**`/`*`/`` ` ``/`~~`/`==`, links + bare URLs, clickable `- [ ]` checkboxes, `- ` bullets, `---` rules, quote lines and full `> [!type]` callout boxes) — the construct the caret touches stays raw source (line-level touch for heading/quote prefixes, marker-only touch for list markers so a todo's checkbox survives editing its text). Raw math gets VSCode-style bracket-pair colorization (depth-cycled `--bracket-*` colors, enclosing pair boxed). Decorations come from a `StateField`, not a ViewPlugin — plugin decorations may not replace line breaks (multi-line fences/`$$` would throw). Formatting hotkeys: Ctrl/Cmd+B/I/E, Ctrl+Shift+X/H toggle `**`/`*`/`` ` ``/`~~`/`==` Obsidian-style, Ctrl+K inserts `[sel](url)` (clipboard URL fills the slot); swallowed inside math/fences/inline code |
+| `editor/BlockCmEditor.jsx` | the CodeMirror 6 block editor (textarea-compatible facade) with live in-place rendering of closed `$…$`/`$$…$$` spans, ``` ``` ``` fences (highlight.js cards), `[[ref]]`/`![[embed]]` chips, `![alt](url)` images (the picture, sized like the rendered view, alt as caption; `scanImageSyntax` in `mdMarks.js` is the one image scanner, shared with `MdTools`), and markdown (headings, `**`/`*`/`` ` ``/`~~`/`==`, links + bare URLs, clickable `- [ ]` checkboxes, `- ` bullets, `---` rules, quote lines and full `> [!type]` callout boxes) — the construct the caret touches stays raw source (line-level touch for heading/quote prefixes, marker-only touch for list markers so a todo's checkbox survives editing its text). Raw math gets VSCode-style bracket-pair colorization (depth-cycled `--bracket-*` colors, enclosing pair boxed). Decorations come from a `StateField`, not a ViewPlugin — plugin decorations may not replace line breaks (multi-line fences/`$$` would throw). Formatting hotkeys: Ctrl/Cmd+B/I/E, Ctrl+Shift+X/H toggle `**`/`*`/`` ` ``/`~~`/`==` Obsidian-style, Ctrl+K inserts `[sel](url)` (clipboard URL fills the slot); swallowed inside math/fences/inline code |
 | `editor/mdMarks.js` | the inline-mark table (regex + class per marker) shared by the live renderer and the hotkeys, plus the pure `toggleMark`/`insertLink` transforms (wrap / unwrap / empty pair / per-line for multi-line selections). `scanMarks` allows proper nesting (`**a *b* c**`, `*a **b** c*`; nothing inside inline code) and treats `***x***` as one bold+italic span with two `layers`, so Ctrl+B and Ctrl+I each peel off their own delimiters |
 | `editor/SlashMenu.jsx` | the "/" command catalog + popup (link, embed, equations, highlight, headings, to-do, lists, quote, callout, code, divider, table, image, date) and the "Paste as" chooser shown after a URL paste (gamma block link → mention/synced block/URL, other URLs → URL/titled link); blockTree owns trigger detection and key handling |
 | `editor/callouts.js` | remark plugin for `> [!note] Title` callouts (type aliases → note/tip/warning/danger/important/quote; colors in app.css) |

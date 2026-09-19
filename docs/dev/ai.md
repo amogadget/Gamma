@@ -109,10 +109,10 @@ pages". The built-in chat system prompt frames the model as working inside
 that knowledge base and grounds claims about the pages in text actually read
 (look details up or say they're absent, never fill gaps from memory; cite a
 PDF by page number, say when something comes from the user's notes). With a
-document in context, custom prompt or not, the citation instruction is
-appended: link a passage as `[p. N](/?page=<id>&pdf_page=N&quote=…)` using
-the `[PDF page N]` labels and the `Gamma page ID` each context section
-carries ([pdf_citations.md](pdf_citations.md)).
+document in context, `_CITATION_PROMPT` is appended, custom prompt or not.
+It asks for `[p. N](/?page=<id>&pdf_page=N&quote=…)` links built from the
+`[PDF page N]` labels and the `Gamma page ID` each context section carries
+([pdf_citations.md](pdf_citations.md)).
 
 Whatever went to the model is reported back: the stream's first line is
 `{"context": [...]}` (non-stream: a `context` field) with one entry per
@@ -145,9 +145,8 @@ their page numbers; unlocatable selections fall back to the plain head excerpt.
 
 `chat/PaperMentionInput.jsx` owns the picker. `chat/paperMentions.js` owns mention text edits
 and `MAX_CHAT_REFERENCES`, shared with `chat/ChatDock.jsx`. The six-reference UI limit
-mirrors the API's seven-page limit, leaving one slot for the current page.
-Attached papers and message references use the shared flat `crumbBtn` control,
-`linkChipText` for long titles, and `uiClose` to remove context.
+mirrors the API's seven-page limit (`pages`, de-duplicated server-side),
+leaving one slot for the current page.
 
 Type `@` in the chat composer to search library titles with the same ranking,
 typo tolerance, and separator matching as library search (`library/librarySearch.js`).
@@ -155,8 +154,7 @@ Arrow keys choose a result; Enter or Tab attaches it, Escape dismisses the
 query, and clicking or tapping a result also works. Results include author,
 year, venue, and folder details. A completed mention inserts the title and
 adds a removable context chip; the chip controls which page IDs are sent.
-The `+` menu offers the same library search. Up to six references can be
-attached, plus the open page, with duplicates removed.
+The `+` menu offers the same library search.
 
 References persist for follow-up questions and are saved as `contextPages`
 on each user message. Loading a conversation restores its last references;

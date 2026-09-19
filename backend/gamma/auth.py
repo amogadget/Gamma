@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from . import publisher_sessions
 from .config import USERS_DB
 from .db import page_now
 from .logbuf import log
@@ -206,16 +207,15 @@ async def session_middleware(request: Request, call_next):
         return _finish_request_log(request, resp, started, expected, "session-mismatch")
     # Only interactive PDF operations may use the caller's publisher sessions.
     # Public/share reads and guest accounts must never borrow credentials.
-    from .publisher_sessions import current_user
     publisher_user = (request.state.user
-                      if request.url.path in ("/api/pdf", "/api/resolve-pdf", "/api/clip")
+                      if request.url.path in publisher_sessions.PDF_PATHS
                       and not request.state.is_guest and not request.query_params.get("share")
                       else None)
-    publisher_token = current_user.set(publisher_user)
+    publisher_token = publisher_sessions.current_user.set(publisher_user)
     try:
         response = await call_next(request)
     finally:
-        current_user.reset(publisher_token)
+        publisher_sessions.current_user.reset(publisher_token)
     if new_session_token:
         set_session_cookie(response, new_session_token, request)
     return _finish_request_log(request, response, started, expected)
@@ -228,6 +228,26 @@ def require_user(request: Request) -> str:
     if not user:
         raise HTTPException(status_code=401)
     return user
+
+
+def require_personal_user(request: Request, detail: str) -> str:
+    """A signed-in, non-guest account; guests get 403 `detail`."""
+    username = require_user(request)
+    if request.state.is_guest:
+        raise HTTPException(403, detail)
+    return username
+
+
+async def read_body(request: Request, limit: int, detail: str) -> bytes:
+    """The raw request body, refused with 413 `detail` as soon as it passes
+    `limit` bytes (before the rest is buffered)."""
+    chunks, total = [], 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(413, detail)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def require_admin(request: Request) -> str:

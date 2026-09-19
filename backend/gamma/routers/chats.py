@@ -19,7 +19,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from ..auth import require_ws
+from ..auth import require_ws, resolve_ws, share_scope_page
 from ..db import connect_data_db, page_now
 
 
@@ -28,6 +28,12 @@ history_router = APIRouter(prefix="/api/chat-history", tags=["chats"])
 
 TITLE_MAX = 80
 HISTORY_LIST_CAP = 200
+
+
+def _require_chat_writer(request: Request) -> str:
+    if request.query_params.get("share"):
+        raise HTTPException(status_code=403, detail="shared chat is read-only")
+    return require_ws(request)
 
 
 class ChatSaveRequest(BaseModel):
@@ -103,7 +109,7 @@ async def rename_folder_chats(payload: ChatFolderRenameRequest, request: Request
     already holds a real conversation it wins and the source is dropped; an
     empty destination row (a save-effect echo) is overwritten. History
     entries simply follow their bucket (ids never collide)."""
-    ws = require_ws(request)
+    ws = _require_chat_writer(request)
     src = (payload.src or "").strip().strip("/")
     dst = (payload.dst or "").strip().strip("/")
     if not src:
@@ -145,7 +151,10 @@ async def rename_folder_chats(payload: ChatFolderRenameRequest, request: Request
 
 @router.get("/{block_id:path}")
 async def get_chat(block_id: str, request: Request):
-    ws = require_ws(request)
+    ws = resolve_ws(request)
+    shared_page = share_scope_page(request)
+    if shared_page and block_id != shared_page:
+        raise HTTPException(status_code=403, detail="chat is outside the shared page")
     with connect_data_db(ws) as database:
         row = database.execute(
             "SELECT messages, title FROM chats WHERE block_id = ?", (block_id,)
@@ -155,7 +164,7 @@ async def get_chat(block_id: str, request: Request):
 
 @router.put("/{block_id:path}")
 async def save_chat(block_id: str, payload: ChatSaveRequest, request: Request):
-    ws = require_ws(request)
+    ws = _require_chat_writer(request)
     with connect_data_db(ws) as database:
         # A request without a title (the autosave) keeps the stored one.
         database.execute(
@@ -172,7 +181,7 @@ async def save_chat(block_id: str, payload: ChatSaveRequest, request: Request):
 
 @router.delete("/{block_id:path}")
 async def delete_chat(block_id: str, request: Request):
-    ws = require_ws(request)
+    ws = _require_chat_writer(request)
     with connect_data_db(ws) as database:
         database.execute("DELETE FROM chats WHERE block_id = ?", (block_id,))
         database.commit()
@@ -207,7 +216,7 @@ async def list_history(request: Request, bucket: str = ""):
 async def archive_chat(payload: ChatArchiveRequest, request: Request):
     """"New chat": file the active conversation (the client's copy — the
     autosave may still be pending) into history and clear the bucket."""
-    ws = require_ws(request)
+    ws = _require_chat_writer(request)
     if not payload.bucket:
         raise HTTPException(status_code=400, detail="bucket required")
     with connect_data_db(ws) as database:
@@ -221,7 +230,7 @@ async def open_history(entry_id: str, payload: ChatArchiveRequest, request: Requ
     """Make a history entry the bucket's active conversation: the current
     one (sent by the client) is archived first, then the entry moves back
     into `chats` — so a conversation is always in exactly one place."""
-    ws = require_ws(request)
+    ws = _require_chat_writer(request)
     if not payload.bucket:
         raise HTTPException(status_code=400, detail="bucket required")
     with connect_data_db(ws) as database:
@@ -242,7 +251,7 @@ async def open_history(entry_id: str, payload: ChatArchiveRequest, request: Requ
 
 @history_router.put("/{entry_id}")
 async def rename_history(entry_id: str, payload: ChatTitleRequest, request: Request):
-    ws = require_ws(request)
+    ws = _require_chat_writer(request)
     with connect_data_db(ws) as database:
         cur = database.execute("UPDATE chat_history SET title = ? WHERE id = ?",
                                (_clean_title(payload.title), entry_id))
@@ -254,7 +263,7 @@ async def rename_history(entry_id: str, payload: ChatTitleRequest, request: Requ
 
 @history_router.delete("/{entry_id}")
 async def delete_history(entry_id: str, request: Request):
-    ws = require_ws(request)
+    ws = _require_chat_writer(request)
     with connect_data_db(ws) as database:
         database.execute("DELETE FROM chat_history WHERE id = ?", (entry_id,))
         database.commit()

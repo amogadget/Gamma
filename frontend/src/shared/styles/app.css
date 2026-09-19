@@ -36,6 +36,8 @@
   --danger: #e05c5c;
   --danger-bg: rgba(224, 92, 92, 0.14);
   --danger-border: rgba(224, 92, 92, 0.45);
+  --on-accent: #fff;
+  --accent-hover: #3568a0;
   --accent: #5b9bd5;
   --accent-dark: #3a7bd5;
   --accent-bright: #7ab8f5;
@@ -252,6 +254,88 @@
   color-scheme: light;
 }
 
+/* Gamma branding: warm paper or charcoal with amber accents. */
+[data-theme="gamma-light"] {
+  color-scheme: light;
+  --pdf-paper: var(--bg-surface);
+  --bg-page: #e7e5de;
+  --bg-surface: #efeee9;
+  --bg-elevated: #f2f1ed;
+  --bg-block: #e8e5dc;
+  --bg-card: #efeee9;
+  --bg-deeper: #e1ded5;
+  --bg-input: #efeee9;
+  --bg-raised: #d2cec4;
+  --bg-hover: #e4e0d6;
+  --bg-subtle: #dcd7cb;
+  --bg-active: #ecdfc4;
+  --text-primary: #292822;
+  --text-secondary: #44423c;
+  --text-tertiary: #615e55;
+  --text-muted: #6b6a65;
+  --text-dim: #777268;
+  --text-bright: #292822;
+  --border: #c7c2b6;
+  --border-light: #b9b3a5;
+  --border-hover: #a5a197;
+  --border-subtle: #d3cec2;
+  --accent: #92620e;
+  --accent-dark: #80530a;
+  --accent-bright: #80530a;
+  --accent-bg: #f4e8cf;
+  --accent-bg-light: #faf4e8;
+  --on-accent: #ffffff;
+  --accent-hover: #80530a;
+  --shadow-surface: 0 8px 24px rgba(30, 30, 28, 0.12);
+  --drag-accent: #92620e;
+  --ok: #287956;
+  --danger: #b53d35;
+  --danger-bg: #f9e9e6;
+  --danger-border: #d89a94;
+  --scrollbar-thumb: #d8d4ca;
+  --scrollbar-thumb-hover: #a5a197;
+}
+
+[data-theme="gamma-dark"] {
+  color-scheme: dark;
+  --pdf-paper: var(--bg-surface);
+  --bg-page: #1b1b1a;
+  --bg-surface: #272725;
+  --bg-elevated: #32312e;
+  --bg-block: #32312e;
+  --bg-card: #272725;
+  --bg-deeper: #181817;
+  --bg-input: #222220;
+  --bg-raised: #38362f;
+  --bg-hover: #3c3931;
+  --bg-subtle: #454139;
+  --bg-active: #493b23;
+  --text-primary: #f0ede6;
+  --text-secondary: #ded9cd;
+  --text-tertiary: #c2bdb1;
+  --text-muted: #a9a69e;
+  --text-dim: #9a958a;
+  --text-bright: #fffaf0;
+  --border: #45443f;
+  --border-light: #555248;
+  --border-hover: #787264;
+  --border-subtle: #3a3934;
+  --accent: #e8b451;
+  --accent-dark: #dba13b;
+  --accent-bright: #f1cf88;
+  --accent-bg: #493b23;
+  --accent-bg-light: #332d22;
+  --on-accent: #1b1b1a;
+  --accent-hover: #e8b451;
+  --drag-accent: #e8b451;
+  --ok: #6fc89f;
+  --danger: #f08b80;
+  --danger-bg: #442a26;
+  --danger-border: #8e5149;
+  --scrollbar-thumb: #555248;
+  --scrollbar-thumb-hover: #787264;
+}
+
 * { box-sizing: border-box; }
 
 /* Scrollbars are part of the theme, not OS chrome: a thin bar on a transparent
@@ -284,7 +368,7 @@
 
 /* Shared visual primitives. Components keep their layout and sizing rules,
    while these groups own the recurring surface, field, and hover language. */
-:is(.plainTip, .popover, .ctxMenu, .refPopup, .pdfNoteTip, .mathPreviewTip, .latexAcPopup, .slashMenu) {
+:is(.plainTip, .popover, .ctxMenu, .refPopup, .pdfNoteTip, .mathPreviewTip, .latexAcPopup, .slashMenu, .chatMentionPicker) {
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-surface);
@@ -660,7 +744,7 @@ body {
   padding: 0;
 }
 
-/* CodeMirror-based block editor (blockCmEditor.jsx): styled to be
+/* CodeMirror-based block editor (editor/BlockCmEditor.jsx): styled to be
    indistinguishable from the rendered view's typography so entering/leaving
    edit mode doesn't shift the text. */
 .blockEditorCm { min-height: 24px; overflow: visible; }
@@ -749,6 +833,21 @@ body {
 /* Live task/bullet/rule markers in the editor. */
 .blockEditorCm .cm-line.cmTaskDone { color: var(--text-muted); }
 .blockEditorCm .cmBulletDot { color: var(--text-muted); cursor: text; }
+/* In-place image in the editor (ImageWidget): the rendered view's picture
+   and caption; clicking it expands the ![alt](url) source. */
+.blockEditorCm .cmImgWidget {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+  cursor: pointer;
+}
+.blockEditorCm .cmImgWidget img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+}
+.blockEditorCm .cmImgWidget:hover img { box-shadow: 0 0 0 2px var(--accent-bg-light); }
 .blockEditorCm .cmHrLine {
   display: block;
   border-top: 1px solid var(--border);
@@ -771,7 +870,7 @@ body {
   --bracket-active-bg: rgba(90, 140, 255, 0.28);
   --bracket-active-ring: rgba(140, 170, 255, 0.65);
 }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) {
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) {
   --bracket-1: #0431fa;
   --bracket-2: #319331;
   --bracket-3: #7b3814;
@@ -862,15 +961,15 @@ body {
 .hljs-deletion { color: #f14c4c; }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-comment, .hljs-quote) { color: #6e7781; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag) { color: #cf222e; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_) { color: #0a3069; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-number, .hljs-symbol, .hljs-bullet) { color: #0550ae; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-title, .hljs-section) { color: #8250df; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-title.class_, .hljs-type, .hljs-built_in) { color: #953800; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-params) { color: #0550ae; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-meta, .hljs-selector-id, .hljs-selector-class, .hljs-name) { color: #116329; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .hljs-deletion { color: #e51400; }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-comment, .hljs-quote) { color: #6e7781; }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag) { color: #cf222e; }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-string, .hljs-regexp, .hljs-addition, .hljs-char.escape_) { color: #0a3069; }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-number, .hljs-symbol, .hljs-bullet) { color: #0550ae; }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-title, .hljs-section) { color: #8250df; }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-title.class_, .hljs-type, .hljs-built_in) { color: #953800; }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-property, .hljs-params) { color: #0550ae; }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) :is(.hljs-meta, .hljs-selector-id, .hljs-selector-class, .hljs-name) { color: #116329; }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .hljs-deletion { color: #e51400; }
 
 /* VS Code Solarized Light token colors, shared by notes and chat code. */
 [data-theme="solarized"] :is(.hljs-comment, .hljs-quote) { color: #93a1a1; }
@@ -984,7 +1083,7 @@ body {
   margin: 0 0 2px;
 }
 .blockRendered blockquote.callout p:last-child { margin-bottom: 0; }
-/* Every note table renders inside MdTableWrap (mdTools.jsx): the wrapper owns
+/* Every note table renders inside MdTableWrap (editor/MdTools.jsx): the wrapper owns
    scrolling and, when editable, hosts the hover controls — "+" strips on the
    right/bottom edges and the column/row handle pills. */
 .blockRendered table {
@@ -1691,7 +1790,7 @@ body {
 }
 :is(.pdfCtlBox button, .ctlBtn):disabled { opacity: 0.4; cursor: default; }
 .ctlBtnRow { display: flex; align-items: center; gap: 2px; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfCtlBox {
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfCtlBox {
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 .pdfZoomOverlay {
@@ -1749,7 +1848,7 @@ body {
 }
 .pdfPageWidget input:focus { color: var(--accent); }
 .pdfPageTotal { margin-left: 3px; white-space: nowrap; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfPageWidget { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfPageWidget { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 
 /* The floating status pill — the app's single transient-message surface
    (status messages, PDF load progress, load errors), anchored top-center of
@@ -1817,7 +1916,7 @@ body {
   border-radius: 8px;
   padding: 6px 4px;
 }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfOutlinePanel { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfOutlinePanel { box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 
 .pdfOutlineRow {
   display: flex;
@@ -2972,7 +3071,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 }
 .chatBubble.user {
   background: var(--accent-dark);
-  color: #fff;
+  color: var(--on-accent);
   border-bottom-right-radius: 4px;
 }
 .chatBubble.ai {
@@ -3124,7 +3223,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 :where(button, .uiBtn, .ctlBtn, .uiClose, .switch) { zoom: var(--ui-scale, 1); }
 :where(button, .uiBtn, .ctlBtn, .uiClose, .switch) :where(button, .uiBtn, .ctlBtn, .uiClose, .switch) { zoom: 1; }
 
-/* --- Ctrl+scroll text size (useTextScale in widgets.jsx) ----------------
+/* --- Ctrl+scroll text size (useTextScale in shared/ui/Widgets.jsx) ----------------
    `--text-scale` sits on the notes list / chat transcript and multiplies
    into their base font sizes (.blockRendered, .blockEditorCm, .chatBubble).
    The badge is the panel's first child: a sticky zero-height row so it floats
@@ -3199,8 +3298,8 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   color: var(--text-primary);
 }
 .uiBtn.on:hover:not(:disabled) { background: var(--accent-bg); color: var(--text-primary); }
-.uiBtn.primary { background: var(--accent-dark); border-color: transparent; color: #fff; }
-.uiBtn.primary:hover:not(:disabled) { background: #3568a0; color: #fff; }
+.uiBtn.primary { background: var(--accent-dark); border-color: transparent; color: var(--on-accent); }
+.uiBtn.primary:hover:not(:disabled) { background: var(--accent-hover); color: var(--on-accent); }
 .uiBtn.danger:hover:not(:disabled) {
   color: var(--danger);
   border-color: var(--danger-border);
@@ -3433,18 +3532,14 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .chatMentionInput textarea { width: 100%; min-width: 0; }
 .chatMentionPicker {
   position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 20;
-  background: var(--bg-surface); color: var(--text-secondary); border: 1px solid var(--border);
-  border-radius: 8px; box-shadow: 0 8px 28px #0003; overflow: hidden;
+  color: var(--text-secondary); overflow: hidden;
 }
 .chatMentionHeading, .chatMentionHint { padding: 8px 10px; font-size: 11px; }
 .chatMentionHeading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px; border-bottom: 1px solid var(--border); }
 .chatMentionHeading span, .chatMentionHint { color: var(--text-dim); }
 .chatMentionPicker [role="listbox"] { max-height: min(260px, 35vh); overflow-y: auto; }
-.chatMentionOption {
-  width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 10px;
-  border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; font: inherit;
-}
-.chatMentionOption[aria-selected="true"] { background: var(--bg-hover); }
+/* Option rows are slash-menu rows (`slashMenuItem`) with a two-line label. */
+.chatMentionOption { border-radius: 0; color: inherit; }
 .chatMentionOption[aria-disabled="true"] { opacity: .5; cursor: default; }
 .chatMentionOption > span { flex: 1; min-width: 0; }
 .chatMentionOption svg { flex-shrink: 0; }
@@ -3516,7 +3611,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border: none;
   border-radius: 6px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
@@ -3946,7 +4041,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   padding: 0 3px;
   border-radius: 999px;
   background: var(--accent-dark);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 9px;
   font-weight: 700;
   line-height: 15px;
@@ -3995,7 +4090,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .pdfNoteTip {
   position: fixed;
   z-index: var(--z-popover);
-  /* 520/16 = NOTE_TIP_W / 2·VIEWPORT_PAD in pdfViewer.jsx — keep in sync. */
+  /* 520/16 = NOTE_TIP_W / 2·VIEWPORT_PAD in pdf/PdfViewer.jsx — keep in sync. */
   max-width: min(520px, calc(100vw - 16px));
   max-height: 40vh;
   overflow-y: auto;
@@ -4029,13 +4124,27 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
    inverted, but their multiply blend would vanish on a dark page, so
    highlights and find marks switch to screen — multiply's dark-background
    dual. !important because both the wrap background and the blend modes are
-   inline styles in pdfViewer.jsx. */
+   inline styles in pdf/PdfViewer.jsx. */
 .pdfViewer.pdfDark { background: #181818; color-scheme: dark;
   --scrollbar-thumb: var(--scrollbar-thumb-dark);
   --scrollbar-thumb-hover: var(--scrollbar-thumb-dark-hover); } /* dark surround + scrollbar even in the light theme */
 .pdfViewer.pdfDark .pdfPageWrap { background: #0f0f0f !important; }
 .pdfViewer.pdfDark .pdfPageCanvas { filter: invert(0.94) hue-rotate(180deg); }
-.pdfViewer.pdfDark .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }
+:is(.pdfViewer.pdfDark, [data-theme="gamma-dark"] .pdfViewer) .pdfPageWrap :is([data-hl-id], .pdfFindMark) { mix-blend-mode: screen !important; }
+
+/* Gamma Dark uses its charcoal paper with either PDF color preference.
+   Screen blending maps the inverted canvas's black paper to the surface;
+   softer white ink remains readable without a bright white page. */
+[data-theme="gamma-dark"] .pdfViewer { background: var(--bg-deeper); }
+[data-theme="gamma-dark"] .pdfViewer .pdfPageWrap {
+  background: var(--pdf-paper) !important;
+  isolation: isolate;
+}
+[data-theme="gamma-dark"] .pdfViewer .pdfPageCanvas {
+  filter: invert(1) hue-rotate(180deg);
+  mix-blend-mode: screen;
+  opacity: 0.9;
+}
 
 /* Eye-comfort theme: tint the PDF page to the same warm paper as the
    interface. The canvas MULTIPLIES onto the wrapper's cream background
@@ -4045,9 +4154,9 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
    the blend to the page (the wrapper is the backdrop); the highlight and
    find-mark overlays sit above and keep their own multiply.
    :not(.pdfDark) — "Flip page colors" is the stronger, explicit choice and
-   wins when both are on. !important beats pdfViewer.jsx's inline background. */
-:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) { background: var(--bg-deeper); }
-:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageWrap {
+   wins when both are on. !important beats pdf/PdfViewer.jsx's inline background. */
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"], [data-theme="gamma-light"]) .pdfViewer:not(.pdfDark) { background: var(--bg-deeper); }
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"], [data-theme="gamma-light"]) .pdfViewer:not(.pdfDark) .pdfPageWrap {
   background: var(--pdf-paper) !important;
   isolation: isolate;
 }
@@ -4058,6 +4167,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
    eye-strain guidance) without a contrast() filter, which would darken the
    paper too. Figures fade toward paper by the same 18%, a mild wash. */
 :is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) .pdfPageCanvas { mix-blend-mode: multiply; opacity: 0.82; }
+[data-theme="gamma-light"] .pdfViewer:not(.pdfDark) .pdfPageCanvas { mix-blend-mode: multiply; }
 
 /* --- AI translated view (overlay over the original text runs) ---
    The layer sits between the canvas and the text layer: each block is an
@@ -4124,7 +4234,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   animation: pdfTransShimmer 1.4s linear infinite;
 }
 @keyframes pdfTransShimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-/* AI citation marks (pdfCitationOverlay.jsx) sit under the text layer and
+/* AI citation marks (pdf/PdfCitationOverlay.jsx) sit under the text layer and
    let pointer input through; the notice replaces a match that failed. */
 .pdfCitationMark { z-index: 4; pointer-events: none; }
 .pdfCitationNotice {
@@ -4150,7 +4260,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 /* While a page shows its translation, selection belongs to the TRANSLATED
    text — the invisible original text layer stands down (it sits above the
    overlay, so it would otherwise capture every drag). !important beats the
-   inline userSelect style set in pdfViewer.jsx. Highlights and link boxes
+   inline userSelect style set in pdf/PdfViewer.jsx. Highlights and link boxes
    are separate divs above both and keep working. */
 .pdfPageWrap.transShown .textLayer {
   pointer-events: none !important;
@@ -4162,9 +4272,11 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
    page instead. */
 .pdfViewer.pdfDark :is(.pdfTransMask, .pdfTransText > span) { background: #0f0f0f; }
 .pdfViewer.pdfDark .pdfTransText { color: #c9c9c9; }
+[data-theme="gamma-dark"] .pdfViewer :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
+[data-theme="gamma-dark"] .pdfViewer .pdfTransText { color: var(--text-primary); }
 /* Same for the eye-comfort ground: the masks are opaque divs above the
    canvas, so the page tint's blend never reaches them. */
-:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
+:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"], [data-theme="gamma-light"]) .pdfViewer:not(.pdfDark) :is(.pdfTransMask, .pdfTransText > span) { background: var(--pdf-paper); }
 :is([data-theme="sepia"], [data-theme="solarized"]) .pdfViewer:not(.pdfDark) .pdfTransText { color: #2e2c29; }
 [data-theme="gray"] .pdfViewer:not(.pdfDark) .pdfTransText { color: #2c2c2c; }
 /* Alt held = peek at the original (class set by the viewer). */
@@ -4321,9 +4433,12 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.blockLinkChip:hover { background: var(--accent-dark); border-color: #4a8abf; color: #fff; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .blockLinkChip { background: #e3effa; color: #2b6bcb; border-color: #b5d2ee; }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .blockLinkChip:hover { background: #cfe3f7; color: #1d5ab3; }
+.blockLinkChip:hover { background: var(--accent-dark); border-color: #4a8abf; color: var(--on-accent); }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .blockLinkChip { background: #e3effa; color: #2b6bcb; border-color: #b5d2ee; }
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .blockLinkChip:hover { background: #cfe3f7; color: #1d5ab3; }
+:is([data-theme="gamma-light"], [data-theme="gamma-dark"]) .blockLinkChip { background: var(--accent-bg); color: var(--accent); border-color: var(--border-light); }
+:is([data-theme="gamma-light"], [data-theme="gamma-dark"]) .blockLinkChip:hover { background: var(--bg-active); color: var(--accent-bright); border-color: var(--accent); }
+
 
 /* --- cursor-positioned context menu (shared surface recipe) --- */
 .ctxMenu {
@@ -4449,7 +4564,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   text-overflow: ellipsis;
 }
 
-/* --- LaTeX editing aids in the block editor (see latexEditor.jsx) --- */
+/* --- LaTeX editing aids in the block editor (see editor/LatexEditor.jsx) --- */
 /* Caret-anchored live KaTeX preview of the math span being typed. */
 .mathPreviewTip {
   position: fixed;
@@ -4505,7 +4620,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   white-space: nowrap;
 }
 
-/* "/" command menu in the block editor (slashMenu.jsx). */
+/* "/" command menu in the block editor (editor/SlashMenu.jsx). */
 .slashMenu {
   position: fixed;
   z-index: var(--z-refpopup);
@@ -4592,10 +4707,9 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .transferFormatRow h3 { margin: 16px 0 0; font-size: 12px; color: var(--text-secondary); }
 .transferFormats .setPictureChoices { grid-template-columns: repeat(var(--picture-columns), minmax(0, 1fr)); gap: 8px; padding: 2px; }
 .transferFormats .setPictureChoice.uiBtn { flex-direction: column; align-items: stretch; min-height: 172px; padding: 10px; gap: 8px; }
-.transferFormats .setPictureName { font-size: 13px; }
+.transferFormats .setPictureName { font-size: 13px; padding-right: 16px; }
 .transferFormats .setPictureHint { font-size: 10.5px; line-height: 1.4; display: block; }
 .transferFormats .setPictureCaption { gap: 5px; padding-right: 0; }
-.transferFormats .setPictureName { padding-right: 16px; }
 .transferFormats .formatIllustration { display: grid; place-items: center; width: 100%; height: 68px; flex: 0 0 68px; }
 .transferFormatRowWide .setPictureChoice.uiBtn { flex-direction: row; align-items: center; min-height: 106px; gap: 12px; }
 .transferFormatRowWide .formatIllustration { width: 68px; }
@@ -4657,7 +4771,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .attachPopover { min-width: 280px; }
 .attachPopover .popoverTitle { margin-bottom: 6px; }
 
-/* The file chip (fileChip.jsx): an upload linked from a block, drawn as a
+/* The file chip (transfers/FileChip.jsx): an upload linked from a block, drawn as a
    small card so it stands off the note text — surface background, a real
    border, the kind's icon in a tinted square. Inline so it sits in a
    sentence; the name opens/downloads, the arrow downloads, the rest is in
@@ -4716,7 +4830,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .fileChipBtn:last-child { border-radius: 0 6px 6px 0; }
 .fileChipOpen { color: var(--accent); }
 
-/* --- presence (collab.js): who is on the page, and where ------------------ */
+/* --- presence (collaboration/usePageCollab.js): who is on the page, and where ------------------ */
 :root {
   --peer-0: #e0534f; --peer-1: #2f8f9d; --peer-2: #d98a1f; --peer-3: #7a5cc7;
   --peer-4: #2f9e5a; --peer-5: #c94c9a; --peer-6: #4e7be0; --peer-7: #8a7a2b;
@@ -4764,7 +4878,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   opacity: 0.95;
 }
 
-/* --- Handwriting (inkLayer.jsx, docs/dev/handwriting.md) ------------------ */
+/* --- Handwriting (ink/InkLayer.jsx, docs/dev/handwriting.md) ------------------ */
 /* While a tool is armed the page is a drawing surface (PdfPage turns the
    text layer's user-select off): a crosshair; touch-action stays until
    fingers are meant to draw too. The retained strokes sit with the
@@ -4782,6 +4896,8 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .inkLayer { z-index: 2; overflow: visible; }
 .inkCanvas { z-index: 5; display: none; }
 .pdfViewer .pdfPageWrap.inkHovering, .pdfPageWrap.inkHovering .textLayer { cursor: none; }
+/* Drawn over an arbitrary PDF page, so fixed white/black like the lasso,
+   not theme tokens. */
 .inkCursor {
   display: none; position: absolute; z-index: 8; pointer-events: none;
   transform: translate(-50%, -50%); border: 1px solid #fff; border-radius: 50%;
@@ -4792,17 +4908,17 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .inkCursor[data-tool="eraser"] { background: #ffffff18; }
 .inkTransformHandle {
   position: absolute; z-index: 7; width: 28px; height: 28px; padding: 5px;
-  border-radius: 50%; border: 1px solid #508cff; background: var(--bg-elevated); color: var(--text-primary);
+  border-radius: 50%; border: 1px solid rgba(80, 140, 255, 0.95); background: var(--bg-elevated); color: var(--text-primary);
   touch-action: none; display: grid; place-items: center;
 }
 .inkTransformHandle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; }
 .inkTransform-resize { transform: translate(0, 0); cursor: nwse-resize; }
 .inkTransform-rotate { transform: translate(0, -100%); cursor: grab; }
 .inkTransform-rotate:active { cursor: grabbing; }
-.inkTransformHandle:focus-visible { outline: 2px solid #508cff; outline-offset: 2px; }
-.inkTooltip { position: fixed; z-index: 10001; pointer-events: none; width: max-content; max-width: min(280px, calc(100vw - 16px));
+.inkTransformHandle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.inkTooltip { position: fixed; z-index: var(--z-tip); pointer-events: none; width: max-content; max-width: min(280px, calc(100vw - 16px));
   padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated);
-  color: var(--text-primary); font-size: 12px; line-height: 1.4; box-shadow: 0 2px 8px #0003; }
+  color: var(--text-primary); font-size: 12px; line-height: 1.4; box-shadow: var(--shadow-surface); }
 .inkSelectionHit { position: absolute; z-index: 4; touch-action: none; cursor: move; }
 .inkEditMenu { width: 310px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; }
 .inkEditRow, .inkEditOptions { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px; }
@@ -4810,7 +4926,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .inkEditRow .inkDeleteBtn { color: var(--danger); }
 .inkEditOptions { align-items: center; border-top: 1px solid var(--border); margin-top: 4px; }
 .inkEditOptions .ctlBtn, .inkEditOptions .colorBtn { min-width: 32px; min-height: 32px; }
-.pdfViewer.pdfDark .inkLayer, .pdfViewer.pdfDark .inkCanvas { filter: invert(1) hue-rotate(180deg); }
+:is(.pdfViewer.pdfDark, [data-theme="gamma-dark"] .pdfViewer) :is(.inkLayer, .inkCanvas) { filter: invert(1) hue-rotate(180deg); }
 /* The brief outline after a jump from the notes. */
 .inkFlash {
   fill: none;
@@ -4841,7 +4957,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   width: max-content;              /* not shrink-to-fit: left: 50% would clamp it to half the viewer */
   max-width: calc(100% - 120px);
 }
-:is([data-theme="light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfInkBar {
+:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"]) .pdfInkBar {
   box-shadow: 0 2px 8px rgba(0,0,0,0.12);
 }
 .pdfInkRow, .pdfInkSub {

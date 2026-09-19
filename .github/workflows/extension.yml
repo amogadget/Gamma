@@ -1,5 +1,5 @@
 # Browser extension (Gamma Connector): zips extension/ and releases it as
-# `extension-v<version>`, automatically. Overview: docs/dev/github_actions.md.
+# `extension-v<version>` on dispatch. Overview: docs/dev/github_actions.md.
 #
 # Trigger: manual dispatch only (`gh workflow run extension.yml --ref main`,
 # what the `release` skill does); a merge to main does not release the

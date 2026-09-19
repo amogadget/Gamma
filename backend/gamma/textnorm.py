@@ -1,7 +1,7 @@
 """Search text normalization and fuzzy matching, shared by the PDF FTS index
 (routers/search.py) and block search (routers/blocks.py).
 
-The frontend mirrors these rules in search.jsx / pdfViewer.jsx so a query
+The frontend mirrors these rules in search/SearchPanel.jsx / pdf/PdfViewer.jsx so a query
 matches the same way in the notes DB, the FTS index, and the live pdf.js
 viewer — keep the three in sync when changing them.
 """

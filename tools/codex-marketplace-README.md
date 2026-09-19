@@ -24,6 +24,10 @@ the setup scripts; no Gamma desktop app is required.
 codex plugin marketplace add {install_source}
 ```
 
+Keep the extracted directory in a permanent location before registering it.
+Codex continues reading its marketplace catalog after installation; deleting or
+moving the source can break plugin discovery even when the plugin is cached.
+
 Open the desktop Plugins Directory, select **Gamma PDF**, and install the plugin.
 Start a new chat. Installing the workflow alone does not connect your library.
 Mention Gamma PDF with @ and ask "Let me choose a paper". An MCP Apps-capable

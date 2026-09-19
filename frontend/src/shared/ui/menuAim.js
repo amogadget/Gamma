@@ -15,7 +15,7 @@
 // Deliberately UI-agnostic: plain geometry plus one hook that turns "the
 // pointer entered row X" into "activate X — now, or later". Any menu can
 // inherit it by feeding it the open panel's rect and wrapping its hover
-// handlers in guard(); menus.jsx's ContextMenu/SubMenuItem are just the first
+// handlers in guard(); shared/ui/Menus.jsx's ContextMenu/SubMenuItem are just the first
 // caller.
 import { useCallback, useEffect, useRef } from "react";
 

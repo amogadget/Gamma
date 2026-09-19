@@ -147,7 +147,7 @@ window.fetch = function (input, options) {
 };
 // -----------------------------------------------------------------------------
 
-// One id generator for blocks, uploads and tasks alike (logseqPdfModel owns it
+// One id generator for blocks, uploads and tasks alike (blockModel owns it
 // so the pure model stays import-free).
 const makeId = makeBlockId;
 

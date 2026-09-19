@@ -1,5 +1,5 @@
 # Desktop app: the Windows installer, macOS dmg/zip and Debian/Ubuntu deb,
-# released automatically. Overview of every workflow: docs/dev/github_actions.md.
+# released on dispatch. Overview of every workflow: docs/dev/github_actions.md.
 #
 # Trigger: manual dispatch only (`gh workflow run desktop.yml --ref main`,
 # what the `release` skill does). A merge to main does NOT build the app;

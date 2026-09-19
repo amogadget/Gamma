@@ -16,17 +16,13 @@ repository used a particular editor. A finished GIF rarely identifies the tool
 that made it; vendor customer logos do not establish how those teams made their
 GitHub README assets.
 
-## What limited the old Gamma recordings
+## What made the earlier GIFs look jerky
 
-The repository itself supplies the comparison: the skill's general recipe used
-12 fps, and the reference-links/connector recipes used 10/11 fps. Several sped up
-the whole recording by 1.35–1.7×. Cursor scripts split moves into many Playwright
-steps but did not explicitly pace those steps in time. Some camera ramps were
-linear. Machine-specific browser and ffmpeg paths also made iteration awkward.
-
-Our inference: a modern-looking demo needs readable composition, consistent
-motion, and a concise story before it needs more decoration. Enlarging a low-rate
-GIF or converting it to 60 fps cannot recover missing interaction frames.
+Low frame rates (10 to 12 fps), blanket 1.35 to 1.7× speed-ups of the whole
+recording, and pointer moves split into Playwright steps without a time budget.
+A modern-looking demo needs readable composition, consistent motion and a
+concise story before decoration. Enlarging a low-rate GIF or converting it to
+60 fps cannot recover missing interaction frames.
 
 ## Chosen direction and measured result
 
@@ -38,27 +34,16 @@ after the recorded segment. Do not mock the ink layer or paint a simulated app.
 
 Deliver a single animated WebP per README slot. [Playwright's video documentation](https://playwright.dev/docs/videos)
 explains that video dimensions must be configured explicitly and files finalize
-when the context closes. Record at a matching 1440 x 900 viewport/video size, then
-export at 25 fps and normally 1120 pixels wide (1040 for the combined hero and reference-link clips). The WebP encoder coalesces identical frames
-without shortening holds. No frame interpolation is claimed.
+when the context closes. The WebP encoder coalesces identical frames without
+shortening holds; no frame interpolation is used.
 
 [Google's WebP documentation](https://developers.google.com/speed/webp/faq)
 documents animation support in modern Chrome, Edge, Firefox and Safari, and the
-format's lossy/lossless choices. The ink export uses lossy quality 85: the shortened
-9.6-second ink clip is **1.13 MiB**, versus **3.33 MiB** for its GIF and **3.53 MiB**
-for lossless WebP at the same dimensions. These are measurements of this clip,
-not general compression ratios. Encoded frames are checked in Chromium for text
-legibility and animation integrity. A fixed camera keeps the toolbar, paper and
-note preview in frame without adding motion to every text pixel.
+format's lossy/lossless choices. Measured on one 9.6-second ink clip at the same
+dimensions (2026-09): lossy WebP at quality 85 **1.13 MiB**, GIF **3.33 MiB**,
+lossless WebP **3.53 MiB**. A fixed camera keeps the toolbar, paper and note
+preview in frame without adding motion to every text pixel.
 
-The user requested image-only delivery, so MP4 and superseded GIF copies are
-removed. All seven older cases were recorded again because their original raw
-videos were unavailable. Keep the recordings and intermediate frames in ignored
-scratch storage, and publish only the small images. The paper Q&A and agent
-sequences now share one 28.8-second, 2.18 MiB hero, replacing two clips totaling
-43.3 seconds and 5.23 MiB. The edit removes model waits and cuts from the paper
-to Home for the separate library-wide request. The current inventory and
-sizes live in [the asset directory](../assets/demos/README.md).
-
-The implementation and repeatable commands live in
-[tools/readme-media/README.md](../../tools/readme-media/README.md).
+The delivery rules, the recipe per slot and the published inventory live in
+[tools/readme-media/README.md](../../tools/readme-media/README.md) and
+[the asset directory](../assets/demos/README.md).

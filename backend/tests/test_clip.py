@@ -294,6 +294,50 @@ def test_folders_lists_ancestors_and_labels(guest, upstream, meta_calls):
     assert "Zeta label" in body["labels"]
 
 
+def test_folders_sort_by_recent_views_then_modified(guest, meta_calls):
+    page_ids = []
+    paths = ["Z/recent", "Y/older", "A/unread", "B/modified", "C/tie", "Z/recent"]
+    for i, path in enumerate(paths):
+        r = guest.post("/api/clip", json={
+            "source_url": f"https://example.org/folder-recency/{i}", "folder": path,
+            "labels": ["Zebra", "Alpha"],
+        })
+        assert r.status_code == 200, r.text
+        page_ids.append(r.json()["block_id"])
+    with sqlite3.connect(ws_db_path(workspace_of("guest"), "pages.db")) as conn:
+        for i, page_id in enumerate(page_ids):
+            conn.execute("UPDATE unified_blocks SET updated_at = ? WHERE id = ?",
+                         (f"2026-09-{12 if i in (3, 4) else 10:02d}T00:00:00.000Z", page_id))
+
+    expected = {"Z", "Z/recent", "Y", "Y/older", "A", "A/unread", "B", "B/modified", "C", "C/tie"}
+
+    def folder_order():
+        r = guest.get("/api/library/folders")
+        assert r.status_code == 200, r.text
+        labels = r.json()["labels"]
+        assert labels.index("Alpha") < labels.index("Zebra")
+        return [path for path in r.json()["folders"] if path in expected]
+
+    # Without usable history, newest modifications win; names break ties.
+    for value in (None, {"invalid": True}, [None, {"id": [], "at": 1}]):
+        assert guest.put("/api/prefs/recent-views", json={"value": value}).status_code == 200
+        assert folder_order() == ["B", "B/modified", "C", "C/tie", "A", "A/unread", "Y", "Y/older", "Z", "Z/recent"]
+
+    # Views outrank newer edits; an older page in the same folder cannot
+    # overwrite its latest view. Deleted pages cannot introduce folders.
+    history = [
+        {"id": page_ids[1], "at": "2026-09-08T00:00:00.000Z"},
+        {"id": page_ids[0], "at": "2026-09-09T00:00:00.000Z"},
+        {"id": page_ids[5], "at": "2026-09-07T00:00:00.000Z"},
+        {"id": "deleted-page", "at": "2026-09-16T00:00:00.000Z"},
+    ]
+    assert guest.put("/api/prefs/recent-views", json={"value": history}).status_code == 200
+    assert folder_order() == ["Z", "Z/recent", "Y", "Y/older", "B", "B/modified", "C", "C/tie", "A", "A/unread"]
+    history[0]["at"] = "2026-09-15T00:00:00.000Z"
+    assert guest.put("/api/prefs/recent-views", json={"value": history}).status_code == 200
+    assert folder_order()[:4] == ["Y", "Y/older", "Z", "Z/recent"]
+
+
 def test_clip_note_creates_web_clips_page_and_appends(guest):
     r = guest.post("/api/clip/note", json={
         "text": "First line\n\nSecond line", "source_url": "https://blog.example/post", "title": "A post",

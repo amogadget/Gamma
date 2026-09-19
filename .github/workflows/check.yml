@@ -1,6 +1,6 @@
 # Pull-request check: the fast half of what a merge to main would build,
-# so a broken main (which would become a release — desktop.yml releases
-# on merge) is caught on the PR instead. Backend tests, frontend unit tests
+# so a broken main (whose merge publishes the Docker image) is caught on
+# the PR instead. Backend tests, frontend unit tests
 # + build, the browser suite against an isolated backend, extension zip;
 # no installers. The merge skill waits for this before merging. Overview:
 # docs/dev/github_actions.md.
@@ -16,6 +16,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  branding:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: node tools/branding/build.mjs --check
+      - run: node --test tools/branding/check.test.mjs
+
   backend:
     runs-on: ubuntu-latest
     steps:

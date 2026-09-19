@@ -1,6 +1,5 @@
 """MCP transport adapter over the same tools Gamma chat executes directly."""
 
-import os
 from contextlib import asynccontextmanager
 from urllib.parse import urlencode
 
@@ -18,6 +17,7 @@ from fastapi import HTTPException
 from .ai_tools import agent_tools, run_agent_tool
 from .integrations import resolve_token
 from .mcp_oauth import public_base
+from .server_settings import mcp_allowed_hosts
 from .mcp_picker import PICKER_URI, PICKER_MIME, PICKER_SCHEMA, ICON_URI, picker_html, paper_choices, paper_choices_text
 
 READ_TOOLS = frozenset({"list_pages", "read_page", "read_block", "search_library"})
@@ -48,19 +48,18 @@ class GammaMCP:
                          annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False,
                                                      openWorldHint=False))
                     for s in agent_tools("folder", allowed_tools=READ_TOOLS, can_write=False)]
-            for name, description, meta in [
-                ("show_paper_picker", "Open a searchable Gamma paper picker so the user can select a paper or notes page. "
+            for name, title, description, meta in [
+                ("show_paper_picker", "Choose a Gamma paper", "Open a searchable Gamma paper picker so the user can select a paper or notes page. "
                  "Use when asked to choose, attach, mention, or pick a Gamma paper. Wait for the selection; "
                  "show the text choices if the client cannot render the picker, but do not duplicate a working UI.",
                  {"ui": {"resourceUri": PICKER_URI}, "openai/outputTemplate": PICKER_URI,
                   "openai/toolInvocation/invoking": "Opening Gamma library",
                   "openai/toolInvocation/invoked": "Choose a Gamma paper",
                   "openai/widgetAccessible": True}),
-                ("search_paper_choices", "Search or paginate the Gamma paper picker within the connected workspace.",
+                ("search_paper_choices", "Search Gamma papers", "Search or paginate the Gamma paper picker within the connected workspace.",
                  {"ui": {"visibility": ["app"]}, "openai/widgetAccessible": True}),
             ]:
-                tools.append(Tool(name=name, title="Choose a Gamma paper" if name == "show_paper_picker" else "Search Gamma papers",
-                                  description=description, icons=ICONS, inputSchema=PICKER_SCHEMA,
+                tools.append(Tool(name=name, title=title, description=description, icons=ICONS, inputSchema=PICKER_SCHEMA,
                                   annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False),
                                   _meta=meta))
             return tools
@@ -107,11 +106,10 @@ class GammaMCP:
     @asynccontextmanager
     async def lifespan(self, app):
         # A manager is single-use; fresh instances also allow repeated TestClient lifespans.
-        hosts = [h.strip() for h in os.environ.get("GAMMA_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
         manager = StreamableHTTPSessionManager(
             self.server, stateless=True, json_response=True, max_request_body_size=65536,
             security_settings=TransportSecuritySettings(
-                allowed_hosts=["127.0.0.1", "localhost", "[::1]", "127.0.0.1:*", "localhost:*", "[::1]:*", *hosts],
+                allowed_hosts=mcp_allowed_hosts(),
                 allowed_origins=[]))
         async with manager.run():
             yield {"gamma_mcp_manager": manager}
@@ -144,6 +142,10 @@ class GammaMCP:
         if manager is None:
             await JSONResponse({"detail": "MCP is starting."}, status_code=503)(scope, receive, send)
             return
+        # A confirmed server address applies to the live stateless transport.
+        # Refresh from administrator-controlled settings, never request headers.
+        hosts = await run_in_threadpool(mcp_allowed_hosts)
+        manager.security_settings.allowed_hosts = hosts
         await manager.handle_request(scope, receive, send)
 
     def route(self):

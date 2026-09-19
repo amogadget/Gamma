@@ -2,10 +2,52 @@ import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import fs from "node:fs";
 import { newPageViaUi } from "./notes.mjs";
+import { Account } from "../harness.mjs";
 
 export async function mcpScenarios(env) {
   const { server, browser, alice, step, openPage, assert, assertEq, assertNoProblems, flags, sleep, until } = env;
   if (flags.only && !"mcp".includes(flags.only)) return;
+  await step("mcp: administrator confirms the suggested server URL and it persists", async () => {
+    server.manage("create-user", "mcp-admin", "mcp-admin-pw");
+    server.manage("set-admin", "mcp-admin", "on");
+    const admin = await new Account(server, "mcp-admin", "mcp-admin-pw").login();
+    const ctx = await admin.context(browser);
+    try {
+      const page = await openPage(ctx, server.base);
+      const openServer = async () => {
+        await page.getByRole("button", { name: "Account & settings", exact: true }).click();
+        await page.getByRole("button", { name: "Settings…", exact: true }).click();
+        await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Administration", exact: true }).click();
+        await page.getByRole("textbox", { name: "Public server URL", exact: true }).waitFor();
+      };
+      await openServer();
+      const address = page.getByRole("textbox", { name: "Public server URL", exact: true });
+      await until(() => address.inputValue().then((v) => v === server.base));
+      assertEq((await admin.api("/api/admin/settings")).public_url, "", "suggestion is not implicitly trusted");
+      await page.getByRole("button", { name: "Confirm address", exact: true }).click();
+      await until(() => admin.api("/api/admin/settings").then((v) => v.public_url === server.base));
+      await address.fill("https://draft.example");
+      await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Users", exact: true }).click();
+      await page.getByRole("button", { name: "Keep editing", exact: true }).click();
+      await page.getByRole("button", { name: "Cancel address changes", exact: true }).click();
+      assertEq(await address.inputValue(), server.base);
+      await page.reload();
+      await openServer();
+      await until(() => address.inputValue().then((v) => v === server.base));
+      assert(await page.getByRole("button", { name: "Save address", exact: true }).isDisabled());
+      if (process.env.GAMMA_MCP_SCREENSHOTS) {
+        fs.mkdirSync(process.env.GAMMA_MCP_SCREENSHOTS, { recursive: true });
+        await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "public-url-desktop.png") });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "public-url-mobile.png") });
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "server settings fit mobile width");
+      }
+      assertNoProblems(page);
+    } finally {
+      await admin.api("/api/admin/settings", { method: "PUT", body: { public_url: "" } });
+      await ctx.close();
+    }
+  });
   async function request() {
     const redirect = "https://client.example/callback";
     const verifier = randomBytes(32).toString("base64url");
@@ -31,7 +73,9 @@ export async function mcpScenarios(env) {
       await page.locator('input[type="password"]').fill("alice-pw");
       await page.getByRole("button", { name: "Log in", exact: true }).click();
       await page.getByRole("button", { name: "Allow read-only access" }).waitFor();
-      assertEq(await page.getByLabel("Workspace", { exact: true }).inputValue(), alice.ws);
+      const workspaces = (await alice.api("/api/session")).workspaces || [];
+      const chosen = page.getByRole("button", { name: "Workspace", exact: true });
+      assertEq((await chosen.textContent()).trim(), workspaces.find((w) => w.id === alice.ws)?.name || "");
       if (process.env.GAMMA_MCP_SCREENSHOTS) {
         fs.mkdirSync(process.env.GAMMA_MCP_SCREENSHOTS, { recursive: true });
         await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "consent-desktop.png") });
@@ -75,8 +119,8 @@ export async function mcpScenarios(env) {
       const before = (await alice.api("/api/integrations/tokens")).tokens.length;
       await page.goto((await request()).url);
       await page.getByRole("button", { name: "Allow read-only access" }).waitFor();
-      // Give the asynchronous saved-page restore time to finish. Previously it
-      // replaced ?gamma_oauth with ?block and unmounted the consent screen.
+      // The asynchronous saved-page restore must leave ?gamma_oauth in the
+      // URL and the consent screen mounted; give it time to run.
       await sleep(1500);
       assert(new URL(page.url()).searchParams.has("gamma_oauth"), "authorization URL is preserved");
       assert(await page.getByRole("button", { name: "Allow read-only access" }).isVisible());

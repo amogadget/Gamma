@@ -4,7 +4,7 @@
 // until the upload replaces the block's `ink_url` with the draft's; a
 // remote change of `ink_url` on a block with no unsaved strokes drops the
 // draft. Plain module state with a version counter — React subscribes
-// through useInkVersion (inkLayer.jsx).
+// through useInkVersion (ink/InkLayer.jsx).
 import { API, apiJson } from "../shared/lib/utils";
 
 const files = new Map();     // url → ink | null (null: fetch failed)

@@ -1,7 +1,7 @@
 // Pure page-segmentation for the AI translated view: pdf.js text runs in,
 // paragraph blocks out. No pdf.js/react imports on purpose (like
-// logseqPdfModel.js) — the geometry math is testable in isolation, and
-// pdfViewer.jsx owns turning TextContent items into the flat runs consumed
+// shared/model/blockModel.js) — the geometry math is testable in isolation, and
+// pdf/PdfViewer.jsx owns turning TextContent items into the flat runs consumed
 // here.
 //
 // A run is {str, x, y, w, h}: baseline-left origin at scale-1 viewport

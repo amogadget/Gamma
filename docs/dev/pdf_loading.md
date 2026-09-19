@@ -142,8 +142,8 @@ the pending pdf.js render and text-layer tasks; unmount zeroes the canvas.
 
 `pdf/verticalScrollSnap.js` is the always-on one-finger vertical alignment
 (`installVerticalScrollSnap`, reinstalled on zoom and document changes). It
-judges direction after 8 CSS pixels within a 30° vertical cone and never
-writes scroll offsets while a finger or native momentum is moving: after
+judges direction after 8 CSS pixels within a 30° vertical cone. It never
+writes scroll offsets while a finger or native momentum is moving. After
 `scrollend` (250 ms of quiet after lift on browsers without it) it corrects
 horizontal drift once, instantly under reduced motion. A diagonal start, a
 deliberate sideways turn, a second contact, a cancelled gesture, keyboard or

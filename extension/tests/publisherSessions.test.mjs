@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { connectPublisher, cookiesForHost, publisherHost, secureServer } from "../publisherSessions.js";
+import {
+  REFRESH_AFTER, RETRY_AFTER, ageText, connectPublisher, cookiesForHost, describeSession,
+  publisherHost, publisherRoot, secureServer, shouldAutoRefresh,
+} from "../publisherSessions.js";
 
 const cookie = { name: "session", value: "test-secret", domain: ".aps.org", path: "/", hostOnly: false };
 
@@ -14,6 +17,37 @@ test("publisher and transport boundaries", () => {
   }
   assert.equal(secureServer("http://192.168.1.5:9001"), false);
   assert.equal(secureServer("http://localhost.evil.test"), false);
+});
+
+test("automatic refresh: only a connected host, once stale, throttled per host", () => {
+  const now = 1_800_000_000;
+  const iso = (secondsAgo) => new Date((now - secondsAgo) * 1000).toISOString();
+  const session = (secondsAgo) => ({ host: "journals.aps.org", updated_at: iso(secondsAgo), expires_at: now + 20 * 3600 });
+  assert.equal(publisherRoot("journals.aps.org", ["nature.com", "aps.org"]), "aps.org");
+  assert.equal(publisherRoot("aps.org.evil.test", ["aps.org"]), "");
+  // A host that was never connected by hand is never imported on its own.
+  assert.equal(shouldAutoRefresh({ session: null, now }), false);
+  // A fresh snapshot is kept — it is only re-read once it is an hour old.
+  assert.equal(shouldAutoRefresh({ session: session(REFRESH_AFTER - 1), now }), false);
+  assert.equal(shouldAutoRefresh({ session: session(REFRESH_AFTER), now }), true);
+  // One try per host per RETRY_AFTER, whatever the outcome.
+  assert.equal(shouldAutoRefresh({ session: session(5 * 3600), attempts: { "journals.aps.org": now - RETRY_AFTER + 1 }, now }), false);
+  assert.equal(shouldAutoRefresh({ session: session(5 * 3600), attempts: { "journals.aps.org": now - RETRY_AFTER }, now }), true);
+  assert.equal(shouldAutoRefresh({ session: session(5 * 3600), attempts: { "www.nature.com": now }, now }), true);
+  // A snapshot without a parsable timestamp counts as stale.
+  assert.equal(shouldAutoRefresh({ session: { host: "journals.aps.org", updated_at: "", expires_at: now + 10 }, now }), true);
+});
+
+test("session status text", () => {
+  const now = 1_800_000_000;
+  assert.equal(ageText(20), "just now");
+  assert.equal(ageText(5 * 60), "5 min");
+  assert.equal(ageText(3 * 3600 + 100), "3 h");
+  assert.equal(ageText(2 * 86400), "2 d");
+  const s = { host: "www.nature.com", updated_at: new Date((now - 3 * 3600) * 1000).toISOString(), expires_at: now + 21 * 3600 };
+  assert.equal(describeSession(s, now), "refreshed 3 h ago · expires in 21 h");
+  assert.equal(describeSession({ ...s, updated_at: new Date(now * 1000).toISOString() }, now), "refreshed just now · expires in 21 h");
+  assert.equal(describeSession({ ...s, expires_at: now - 1 }, now), "refreshed 3 h ago · expired");
 });
 
 test("only applicable, unpartitioned publisher cookies are transferred", () => {

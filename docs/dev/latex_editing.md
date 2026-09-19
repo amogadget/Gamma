@@ -30,7 +30,7 @@ Long and tall equations scroll within the preview; clicking it retains editor
 focus. The preview is capped at 720 px wide and 45% of the window height.
 
 Implementation: `editor/latexInput.js` contains delimiter edits and the shared
-`escapedAt` check (also exported by `editor/LatexEditor.jsx`). `editor/BlockCmEditor.jsx` applies
+`escapedAt` check. `editor/BlockCmEditor.jsx` applies
 delimiter edits as atomic CodeMirror transactions. `editor/LatexEditor.jsx` contains
 the command catalog, completion edits, Tab navigation and preview positioning.
 
@@ -41,10 +41,11 @@ node --test tests/latexInput.test.mjs
 node tests/e2e/latexEditor.mjs
 ```
 
-The browser regression uses the real note editor with an isolated in-memory
-fixture; it needs installed Playwright Chromium, but no backend or AI provider.
+The browser regression (`tests/e2e/latexEditor.mjs`) bundles the real note
+editor with esbuild over an in-memory fixture; it needs installed Playwright
+Chromium, but no backend or AI provider, and is not part of `npm run e2e`.
 
-References consulted for the interaction design:
-
-- [Overleaf: Brackets and Parentheses](https://www.overleaf.com/learn/latex/Brackets_and_Parentheses): matching scalable delimiters.
-- [Obsidian LaTeX Suite](https://github.com/artisticat1/obsidian-latex-suite): argument snippets, Tab-out navigation and equation previews. Gamma uses explicit command completion for the added snippets rather than automatically rewriting variable names.
+The delimiter pairing follows Overleaf's scalable-delimiter matching, the
+argument snippets and Tab-out navigation Obsidian's LaTeX Suite; snippets are
+inserted only through explicit command completion, never by rewriting typed
+variable names.

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--base', default='http://127.0.0.1:9001')
 parser.add_argument('--username', default='demo')
-parser.add_argument('--out', type=Path, default=ROOT / 'tmp/readme-media/demo.zip')
+parser.add_argument('--out', type=Path, default=ROOT / 'artifacts/readme-media/demo.zip')
 args = parser.parse_args()
 base = args.base.rstrip('/')
 password = os.environ.get('DEMO_PASSWORD') or getpass.getpass('Demo password: ')

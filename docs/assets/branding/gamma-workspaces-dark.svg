@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">Gamma PDF: your space, a shared place</title>
+  <desc id="desc">Keep Reading list and Project notes in separate personal workspaces. In the shared Quantum lab workspace, you are an owner, Maya is an editor, and Sam is a viewer. Organize papers in folders and collaborate on linked highlights and notes with live edits and cursors. Personal workspaces have one owner; individual pages can be shared by link.</desc>
+  <defs>
+<g id="gammaMark"><svg width="48" height="48" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" id="svg-favicon-32">
+        <rect id="gamma-background" width="32" height="32" rx="7" fill="#1e1e1c"/>
+        <!-- both branches of standing wave -->
+        <path d="M 6 16 C 9 10.5 13 10.5 16 16 C 19 21.5 23 21.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 16 C 9 21.5 13 21.5 16 16 C 19 10.5 23 10.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 4  Q 2 16 6 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <path d="M 26 4 Q 30 16 26 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <rect x="9" y="8" width="13" height="3" rx="0.8" fill="#eeebe4"/>
+        <rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/>
+      </svg></g><g id="gammaLogo">
+  <g transform="scale(2)"><svg width="48" height="48" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" id="svg-favicon-32">
+        <rect id="gamma-background" width="32" height="32" rx="7" fill="#1e1e1c"/>
+        <!-- both branches of standing wave -->
+        <path d="M 6 16 C 9 10.5 13 10.5 16 16 C 19 21.5 23 21.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 16 C 9 21.5 13 21.5 16 16 C 19 10.5 23 10.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 4  Q 2 16 6 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <path d="M 26 4 Q 30 16 26 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <rect x="9" y="8" width="13" height="3" rx="0.8" fill="#eeebe4"/>
+        <rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/>
+      </svg></g>
+  <text x="122" y="83" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="100" font-weight="700" letter-spacing="-2.7" fill="#f0ede6">Gamma<tspan font-weight="400" fill="#e8a020" dx="23">PDF</tspan></text>
+</g>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.24"/>
+    </filter>
+    <g id="folder" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round">
+      <path d="M1 7 V3 H12 L17 7 H29 V25 H1 Z"/>
+    </g>
+    <g id="page" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 1 H15 L22 8 V29 H2 Z M15 1 V8 H22 M7 15 H17 M7 21 H17"/>
+    </g>
+    <g id="lock" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <rect x="2" y="11" width="20" height="17" rx="4"/>
+      <path d="M6 11 V7 A6 6 0 0 1 18 7 V11"/>
+    </g>
+  </defs>
+  <rect width="1920" height="1080" fill="#1b1b1a"/>
+  <!-- Warm paper, amber curves and floating cards match the opening hero. -->
+  <g fill="none" stroke="#e8a020" stroke-width="3" opacity="0.24">
+    <path d="M-60 860 C190 1120 550 1030 800 960 S1430 900 1980 1040"/>
+    <path d="M-60 920 C220 1160 590 1080 850 1010 S1510 970 1980 1100"/>
+  </g>
+  <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
+    <use href="#gammaLogo" transform="translate(120 132) scale(0.6)"/>
+    <text x="120" y="332" font-size="80" font-weight="600" letter-spacing="-2" fill="#f0ede6">Your space.</text>
+    <text x="120" y="424" font-size="80" font-weight="600" letter-spacing="-2" fill="#f0ede6">A shared place.</text>
+    <text x="122" y="494" font-size="28" fill="#a9a69e">Keep personal libraries. Build knowledge together.</text>
+    <text x="122" y="536" font-size="28" fill="#a9a69e">Papers, highlights and notes, organized by workspace.</text>
+
+    <!-- Separate personal libraries belong to one account. -->
+    <rect x="120" y="602" width="664" height="316" rx="20" fill="#272725" stroke="#45443f" stroke-width="1.5" filter="url(#shadow)"/>
+    <use href="#lock" x="150" y="630" color="#a9a69e"/>
+    <text x="190" y="654" font-size="28" font-weight="600" fill="#f0ede6">Your personal workspaces</text>
+    <path d="M150 678 H754" stroke="#45443f"/>
+    <rect x="150" y="700" width="54" height="54" rx="12" fill="#32312e"/>
+    <use href="#folder" x="162" y="713" color="#e8b451"/>
+    <text x="224" y="732" font-size="27" fill="#f0ede6">Reading list</text>
+    <text x="724" y="732" text-anchor="end" font-size="21" fill="#a9a69e">Only you</text>
+    <rect x="150" y="772" width="54" height="54" rx="12" fill="#32312e"/>
+    <use href="#folder" x="162" y="785" color="#e8b451"/>
+    <text x="224" y="804" font-size="27" fill="#f0ede6">Project notes</text>
+    <text x="724" y="804" text-anchor="end" font-size="21" fill="#a9a69e">Only you</text>
+    <text x="152" y="878" font-size="23" fill="#a9a69e">Share individual pages by link when you choose.</text>
+
+    <!-- All three people belong to the same shared library. -->
+    <g fill="none" stroke="#e8a020" stroke-width="2.5" opacity="0.65">
+      <path d="M1024 246 V276 Q1024 292 1040 292 H1320"/>
+      <path d="M1334 246 V320"/>
+      <path d="M1644 246 V276 Q1644 292 1628 292 H1348"/>
+    </g>
+    <g>
+      <rect x="914" y="158" width="220" height="88" rx="44" fill="#272725" stroke="#45443f"/>
+      <circle cx="960" cy="202" r="28" fill="#493b23"/>
+      <text x="960" y="212" text-anchor="middle" font-size="27" font-weight="600" fill="#f1cf88">Y</text>
+      <text x="1004" y="196" font-size="26" font-weight="600" fill="#f0ede6">You</text>
+      <text x="1004" y="224" font-size="21" fill="#a9a69e">Owner</text>
+      <rect x="1224" y="158" width="220" height="88" rx="44" fill="#272725" stroke="#45443f"/>
+      <circle cx="1270" cy="202" r="28" fill="#253e32"/>
+      <text x="1270" y="212" text-anchor="middle" font-size="27" font-weight="600" fill="#6fc89f">M</text>
+      <text x="1314" y="196" font-size="26" font-weight="600" fill="#f0ede6">Maya</text>
+      <text x="1314" y="224" font-size="21" fill="#a9a69e">Editor</text>
+      <rect x="1534" y="158" width="220" height="88" rx="44" fill="#272725" stroke="#45443f"/>
+      <circle cx="1580" cy="202" r="28" fill="#373044"/>
+      <text x="1580" y="212" text-anchor="middle" font-size="27" font-weight="600" fill="#b6a2e4">S</text>
+      <text x="1624" y="196" font-size="26" font-weight="600" fill="#f0ede6">Sam</text>
+      <text x="1624" y="224" font-size="21" fill="#a9a69e">Viewer</text>
+    </g>
+
+    <rect x="870" y="320" width="930" height="600" rx="20" fill="#272725" stroke="#45443f" stroke-width="1.5" filter="url(#shadow)"/>
+    <text x="904" y="374" font-size="32" font-weight="600" fill="#f0ede6">Quantum lab</text>
+    <rect x="1130" y="344" width="214" height="42" rx="21" fill="#493b23"/>
+    <text x="1237" y="372" text-anchor="middle" font-size="22" font-weight="500" fill="#f1cf88">Shared workspace</text>
+    <circle cx="1624" cy="366" r="6" fill="#43a77c"/>
+    <text x="1640" y="374" font-size="22" fill="#a9a69e">3 online</text>
+    <path d="M870 406 H1800 M1114 406 V920" stroke="#45443f" stroke-width="1.5"/>
+
+    <!-- A folder hierarchy organizes the common library. -->
+    <text x="900" y="454" font-size="18" font-weight="600" letter-spacing="2" fill="#a9a69e">LIBRARY</text>
+    <use href="#folder" transform="translate(900 481) scale(0.75)" color="#e8b451"/>
+    <text x="934" y="501" font-size="24" font-weight="600" fill="#f0ede6">Papers</text>
+    <path d="M912 520 V610 M912 540 H926 M912 598 H926" fill="none" stroke="#4c4a43" stroke-width="2"/>
+    <rect x="932" y="519" width="164" height="44" rx="9" fill="#493b23"/>
+    <text x="945" y="548" font-size="23" fill="#f1cf88">Atom arrays</text>
+    <text x="942" y="607" font-size="23" fill="#a9a69e">Cavity QED</text>
+    <use href="#page" transform="translate(900 652) scale(0.8)" color="#a9a69e"/>
+    <text x="932" y="672" font-size="23" fill="#f0ede6">Lab notes</text>
+    <use href="#page" transform="translate(900 710) scale(0.8)" color="#a9a69e"/>
+    <text x="932" y="730" font-size="23" fill="#f0ede6">Reading group</text>
+
+    <!-- The owner and editor work on different blocks; the viewer reads. -->
+    <text x="1150" y="456" font-size="19" fill="#a9a69e">Papers / Atom arrays</text>
+    <text x="1150" y="503" font-size="29" font-weight="600" fill="#f0ede6">Coherence in atom arrays</text>
+    <path d="M1150 525 H1764" stroke="#45443f"/>
+    <rect x="1150" y="547" width="614" height="92" rx="12" fill="#32312e"/>
+    <rect x="1150" y="547" width="6" height="92" rx="3" fill="#f3c65f"/>
+    <text x="1172" y="582" font-family="Georgia, 'Times New Roman', serif" font-size="25" font-style="italic" fill="#a9a69e">“Repeated measurements reveal</text>
+    <text x="1172" y="615" font-family="Georgia, 'Times New Roman', serif" font-size="25" font-style="italic" fill="#a9a69e">the coherence time of the array.”</text>
+    <circle cx="1160" cy="679" r="5" fill="#a5a197"/>
+    <text x="1180" y="687" font-size="24" fill="#f0ede6">Compare the two trapping geometries.</text>
+    <path d="M1596 663 V694" stroke="#e8b451" stroke-width="2.5"/>
+    <rect x="1584" y="700" width="64" height="29" rx="6" fill="#e8b451"/>
+    <text x="1616" y="721" text-anchor="middle" font-size="18" font-weight="600" fill="#272725">You</text>
+    <path d="M1160 704 V794" stroke="#4c4a43" stroke-width="2"/>
+    <circle cx="1186" cy="765" r="5" fill="#a5a197"/>
+    <text x="1205" y="773" font-size="24" fill="#f0ede6">Add the lifetime data</text>
+    <path d="M1429 747 V781" stroke="#6fc89f" stroke-width="2.5"/>
+    <path d="M1461 783 V809 L1468 801 1478 800 Z" fill="#6fc89f" stroke="#272725" stroke-width="1.5"/>
+    <rect x="1476" y="805" width="81" height="30" rx="6" fill="#6fc89f"/>
+    <text x="1516" y="827" text-anchor="middle" font-size="18" font-weight="600" fill="#272725">Maya</text>
+    <path d="M1150 853 H1764" stroke="#45443f"/>
+    <circle cx="1160" cy="883" r="6" fill="#43a77c"/>
+    <text x="1178" y="891" font-size="22" fill="#a9a69e">Live edits and cursors</text>
+    <text x="1764" y="891" text-anchor="end" font-size="21" fill="#a9a69e">Sam is viewing</text>
+    <text x="1335" y="984" text-anchor="middle" font-size="26" fill="#a9a69e">One library. Everyone on the same page.</text>
+  </g>
+</svg>

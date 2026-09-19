@@ -11,6 +11,7 @@ export const DEFAULTS = {
   labels: [],          // default labels
   allowOa: true,       // open-access fallback behind paywalls
   saveCopy: true,      // store the PDF server-side
+  autoRefreshSessions: true,  // re-import a connected publisher's cookies when its page is visited
 };
 
 export class ApiError extends Error {
@@ -70,8 +71,7 @@ async function readError(res) {
   return new ApiError(res.status, message);
 }
 
-// api("/session"), api("/clip", {json: {...}}), api("/uploads", {form})
-export async function api(path, { method, json, form, params, expectedUser, expectedOrigin } = {}) {
+async function request(path, { method, json, form, params, expectedUser, expectedOrigin } = {}) {
   const origin = await serverOrigin();
   if (expectedOrigin && origin !== expectedOrigin) throw new ApiError(409, "Gamma server changed. Reopen the Connector.");
   if (!origin) throw new ApiError(0, "No Gamma server configured — open the extension options.");
@@ -94,14 +94,40 @@ export async function api(path, { method, json, form, params, expectedUser, expe
     throw new ApiError(0, `Can't reach ${origin} (${err.message})`);
   }
   if (!res.ok) throw await readError(res);
+  return { res, origin };
+}
+
+function readResponse(res) {
   const ctype = res.headers.get("content-type") || "";
   return ctype.includes("json") ? res.json() : res.text();
 }
 
-// {user: "tim"} or {user: null}; throws only when the server is unreachable.
+// api("/session"), api("/clip", {json: {...}}), api("/uploads", {form})
+export async function api(path, options) {
+  const { res } = await request(path, options);
+  return readResponse(res);
+}
+
+// Session identity (user is null when signed out) plus the effective origin.
 export async function whoAmI() {
-  const data = await api("/session");
-  return data && data.user ? data : { user: null };
+  const { res, origin } = await request("/session");
+  const data = await readResponse(res);
+  let resolvedOrigin = origin;
+  // Remember a same-host HTTPS upgrade discovered by this read-only check.
+  // Publisher requests still reject redirects, especially cookie uploads.
+  const upgraded = new URL(origin + "/api/session");
+  if (upgraded.protocol === "http:") {
+    upgraded.protocol = "https:";
+    if (res.url === upgraded.href && data && typeof data === "object" && "user" in data) {
+      resolvedOrigin = upgraded.origin;
+    }
+  }
+  const currentOrigin = await serverOrigin();
+  if (currentOrigin !== origin && currentOrigin !== resolvedOrigin) {
+    throw new ApiError(409, "Gamma server changed. Reopen the Connector.");
+  }
+  if (resolvedOrigin !== currentOrigin) await setSettings({ server: resolvedOrigin });
+  return { ...(data && data.user ? data : { user: null }), origin: resolvedOrigin };
 }
 
 export async function login(username, password) {

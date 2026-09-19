@@ -4,7 +4,6 @@ Clients use dynamic registration, S256 authorization codes and opaque,
 revocable 90-day tokens. No refresh tokens or third-party identity service.
 """
 import json
-import os
 import re
 import secrets
 import time
@@ -20,9 +19,10 @@ from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAu
 from pydantic import BaseModel, Field, ValidationError
 
 from . import ratelimit, workspaces
-from .auth import SESSION_COOKIE, require_user
+from .auth import SESSION_COOKIE, read_body, require_personal_user
 from .db import connect_users_db
 from .integrations import create_token, token_digest
+from .server_settings import LOOPBACK_HOSTS, mcp_allowed_hosts, public_url_settings, validate_public_url
 
 router = APIRouter()
 SCOPE = "gamma:read"
@@ -31,17 +31,19 @@ TTL = 90 * 86400
 
 def public_base(request: Request) -> str:
     """Never advertise an issuer from an arbitrary, untrusted Host header."""
-    base = os.environ.get("GAMMA_PUBLIC_URL", "").rstrip("/") or str(request.base_url).rstrip("/")
+    configured = public_url_settings()["public_url"]
+    base = configured or str(request.base_url).rstrip("/")
     url = urlsplit(base)
-    allowed = {h.strip().lower() for h in os.environ.get("GAMMA_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()}
-    local = url.hostname in {"localhost", "127.0.0.1", "::1"}
-    if (url.scheme not in {"https", "http"} or url.username or url.password or url.query or url.fragment
-            or (url.scheme == "http" and not local)):
-        raise HTTPException(400, "MCP browser sign-in requires HTTPS, or localhost for local use.")
-    if url.path not in ("", "/"):
-        raise HTTPException(400, "MCP browser sign-in requires Gamma at the origin root, without a URL path prefix.")
+    allowed = set(mcp_allowed_hosts(configured))
+    local = url.hostname in LOOPBACK_HOSTS
+    try:
+        validate_public_url(base)
+    except ValueError:
+        if url.path not in ("", "/"):
+            raise HTTPException(400, "MCP browser sign-in requires Gamma at the origin root, without a URL path prefix.") from None
+        raise HTTPException(400, "MCP browser sign-in requires HTTPS, or localhost for local use.") from None
     if not local and url.netloc.lower() not in allowed:
-        raise HTTPException(421, "Allow this hostname in GAMMA_MCP_ALLOWED_HOSTS first.")
+        raise HTTPException(421, "Confirm the public server URL in Settings > Administration > Server first.")
     # Even with a configured canonical issuer, reject requests routed via an
     # unexpected Host. Local reverse proxies should preserve the external Host.
     if request.url.netloc.lower() != url.netloc.lower():
@@ -151,14 +153,9 @@ def authorization_metadata(request: Request):
 
 
 async def body(request):
-    chunks = []
-    total = 0
-    async for chunk in request.stream():
-        total += len(chunk)
-        if total > 16384:
-            raise HTTPException(413, "OAuth request is too large.")
-        chunks.append(chunk)
-    request._body = b"".join(chunks)
+    # The SDK handlers read the request again; hand them the capped body
+    # through Starlette's private cache (checked against Starlette 1.3).
+    request._body = await read_body(request, 16384, "OAuth request is too large.")
 
 
 @router.post("/oauth/register")
@@ -173,7 +170,7 @@ async def register(request: Request):
         for uri in metadata.redirect_uris:
             url = urlsplit(str(uri))
             if (url.username or url.password or url.fragment or not url.hostname or
-                    (url.scheme != "https" and not (url.scheme == "http" and url.hostname in {"127.0.0.1", "localhost", "::1"}))):
+                    (url.scheme != "https" and not (url.scheme == "http" and url.hostname in LOOPBACK_HOSTS))):
                 return _no_store({"error": "invalid_redirect_uri"}, 400)
         if (metadata.scope not in (None, SCOPE) or "authorization_code" not in metadata.grant_types
                 or metadata.response_types != ["code"] or len(metadata.client_name or "") > 100):
@@ -213,9 +210,7 @@ async def token(request: Request):
 
 
 def consent_user(request):
-    user = require_user(request)
-    if request.state.is_guest:
-        raise HTTPException(403, "Sign in with a personal account to connect an assistant.")
+    user = require_personal_user(request, "Sign in with a personal account to connect an assistant.")
     origin = request.headers.get("origin")
     if origin and origin.rstrip("/") != f"{request.url.scheme}://{request.url.netloc}":
         raise HTTPException(403, "Cross-origin consent is not allowed.")

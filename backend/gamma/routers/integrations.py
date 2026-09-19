@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from ..auth import require_user, require_ws
+from ..auth import require_personal_user, require_ws
 from ..db import connect_users_db
 from ..integrations import create_token
 from ..mcp_oauth import public_base
@@ -14,9 +14,7 @@ router = APIRouter(prefix="/api/integrations", tags=["integrations"])
 
 
 def _owner(request: Request) -> tuple[str, str]:
-    username = require_user(request)
-    if request.state.is_guest:
-        raise HTTPException(403, "Sign in with a personal account to connect an assistant.")
+    username = require_personal_user(request, "Sign in with a personal account to connect an assistant.")
     origin = request.headers.get("origin")
     if origin and urlsplit(origin).netloc != request.url.netloc:
         raise HTTPException(403, "Cross-origin token management is not allowed.")

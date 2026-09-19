@@ -1,4 +1,6 @@
 archive/
+!/docs/archive/
+!/docs/archive/**
 example/
 HANDOFF.md
 STATUS.md
@@ -24,7 +26,7 @@ HANDOFF.md.bak
 docker-compose.yml
 run-local.bat
 
-# Private workspace exports, media captures, and render intermediates
+# Disposable scratch
 /tmp
 
 # Machine-local deployment evidence (not upstream source)
@@ -35,5 +37,9 @@ run-local.bat
 /ipad/TIM_INK_VALIDATION.md
 /ipad/*.local.md
 /ipad/artifacts/
+
+# Local source recordings, workspace exports, debugging inputs and render output.
+/artifacts/*
+!/artifacts/README.md
 
 CLAUDE.md

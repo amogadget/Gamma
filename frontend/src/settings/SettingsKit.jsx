@@ -45,12 +45,12 @@ export function Section({ title, action, children }) {
 
 // Keep the row compact: icon, label, short hint, and a shared control.
 // Longer explanations use the native hover tooltip.
-export function Row({ icon: Icon, label, hint, title, scope, children }) {
+export function Row({ icon: Icon, label, hint, title, children }) {
   return (
     <div className="settingRow setRow" data-setting={label} title={title}>
       <span className="setIcon">{Icon ? <Icon size={15} /> : null}</span>
       <div className="settingText">
-        <span className="settingLabel">{label}{scope ? <small className="setScope">{scope}</small> : null}</span>
+        <span className="settingLabel">{label}</span>
         {hint ? <span className="settingDesc">{hint}</span> : null}
       </div>
       {children}

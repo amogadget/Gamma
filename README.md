@@ -28,7 +28,7 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 
 ## ✨ Native agentic
 
-![Chat with a PDF, attach a paper with @, then watch the agent search and read the library, with close-ups of its tool calls and results](./docs/assets/demos/demo-native-agentic.webp)
+![Ask a complex question in PDF Chat, follow a citation to the source passage, then box-select a figure and ask a follow-up question](./docs/assets/demos/demo-native-agentic.webp)
 
 - **Chat with your papers** — ask about the open PDF, paste figures, dictate by voice, or attach the whole PDF so the model sees tables and plots. Use Anthropic or OpenAI models, or sign in with your ChatGPT subscription — no API key.
 - **Mention a paper** — type `@` to find and attach a library page. Its details and text stay in context for follow-up questions.
@@ -36,15 +36,22 @@ Open a paper by pasting any link (arXiv, DOI, or a publisher page — Gamma find
 
 ## ✍️ Take notes
 
-![Typing in a note: markdown renders as you go, a LaTeX equation previews live with command autocomplete, then renders in place](./docs/assets/demos/demo-notes.webp)
+![Type markdown and a live LaTeX equation, add a callout, then paste a picture and drag to resize it](./docs/assets/demos/demo-notes.webp)
 
 Highlights and free notes are the same kind of block, so a paper's notes and a plain page are edited the same way:
 
+- **Pictures** — paste an image into a note, then drag its edge to adjust the size.
 - **Outliner** — Enter for a new block, Tab / Shift+Tab to nest, drag to reorder, one undo history for the whole page.
 - **Live preview, Obsidian-style** — markdown, `$…$` / `$$…$$` math, code fences, callouts, and tables render in place while the block you're on stays raw. Math gets bracket-pair coloring, `\command` autocomplete, and Tab hops between `{}` arguments.
 - **Link and embed** — `[[page]]` mentions, `![[block]]` embeds that edit the source in place, and a "/" menu for everything else. Click a highlight block to jump the PDF to it (and back).
 
 ## 🔗 Link and organize
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-library-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-library-light.svg">
+  <img alt="Gamma fills metadata when a paper is downloaded, organizes papers with folders and labels, searches titles, notes and PDF text, and follows references to other papers with Back returning to the previous reading position" src="./docs/assets/branding/gamma-library-light.svg" width="100%">
+</picture>
 
 ![Follow a citation to its reference, then fetch the cited arXiv paper into Gamma with one click](./docs/assets/demos/demo-reference-links.webp)
 
@@ -72,7 +79,18 @@ The **Gamma Connector** extension ([extension/](./extension/)) saves the paper y
 
 The **[Gamma PDF plugin for Codex](./plugins/gamma/)** lets Codex search and read your papers, notes, highlights, and PDF text with read-only access to a workspace you approve. Open **Settings → AI → External assistants → Codex CLI**, copy the setup command for your operating system, and run it on the computer where you use Codex. It installs the plugin from a published Gamma release and opens Gamma sign-in. Approve a workspace, then start a new Codex chat and ask, “Use Gamma to find my notes about…” Requires the Codex CLI and a running, reachable Gamma server. Other MCP assistants can connect using the server URL in the same panel; see the [connection guide](./docs/dev/mcp.md).
 
+For a remotely hosted Gamma, an administrator can enable assistant sign-in in
+**Settings → Administration → Server → Public server URL**. Confirm the suggested
+HTTPS address once; Gamma saves it and applies it immediately, without environment
+variables or a server restart. Then connect from **AI → External assistants**.
+
 ## Share, sync and move your data
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./docs/assets/branding/gamma-workspaces-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="./docs/assets/branding/gamma-workspaces-light.svg">
+  <img alt="Gamma workspaces: separate personal libraries alongside a shared research library, where owners, editors and viewers collaborate on organized papers, highlights and notes with live edits and cursors" src="./docs/assets/branding/gamma-workspaces-light.svg" width="100%">
+</picture>
 
 - **Workspaces** — keep separate personal libraries or collaborate in a shared library created by a server administrator. Owners manage members; editors change pages; viewers read. Switch from the account menu and manage libraries in Settings → Workspaces.
 - **Share a page** — send a link to an annotated paper; invite people with view or edit rights, or open it to anyone with the link.

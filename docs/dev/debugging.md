@@ -87,7 +87,9 @@ ops), `blockHistory` (the undo classifier) and `menuAim` (the safe-triangle
 geometry). A module is testable there when its relative imports carry the
 `.js` extension (node resolves nothing else); modules that import React can
 still be imported for their pure exports. Actual React rendering and
-interactions are exercised by the browser suite below.
+interactions are exercised by the browser suite below, plus one standalone
+browser regression: `node tests/e2e/latexEditor.mjs` bundles the block
+editor with esbuild over an in-memory fixture ([latex_editing.md](latex_editing.md)).
 
 ### Browser end-to-end suite
 
@@ -105,7 +107,7 @@ High-zoom tablet regressions: `npm run e2e -- --only "pdf touch" --keep`.
 `GAMMA_E2E_BROWSER=webkit` (after `npx playwright install webkit`) runs the
 suite in WebKit. Native touch gestures need Chromium's CDP, so under WebKit
 the touch scenario checks only the 400% PDF/ink paint and bitmap release at
-tablet dimensions and DPR 2. Browser emulation, not an iPad measurement.
+tablet dimensions and DPR 2. That is browser emulation, not an iPad measurement.
 
 `frontend/tests/e2e/run.mjs` starts an ISOLATED backend (the project venv's
 python — or the interpreter `GAMMA_E2E_PYTHON` names — over a fresh
@@ -121,8 +123,14 @@ cookie + `X-Gamma-Workspace` for API seeding, browser contexts logged in as
 that account), `makePdf` (a small real PDF with a text layer), and `step()`.
 The scenarios live in `tests/e2e/scenarios/`:
 
+- `mermaid.mjs`: note/chat diagrams, streaming fences, editing, source copying,
+  SVG downloads, theme changes and Markdown round trips. Run with `--only mermaid`;
+  implementation details in [mermaid.md](mermaid.md).
 - `mentions.mjs`: paper search, keyboard and touch selection, reference limits,
   persistence, PDF receipts and textarea shrink after clearing context. Run with `--only mentions`.
+- `chatNavigation.mjs`: a library or PDF chat reply keeps streaming and is
+  saved while the user navigates away and back, before or after it finishes.
+  `--only "chat navigation"`.
 
 - `notes.mjs`: New page → title → first block (the seed-block insert),
   Shift+Enter / Tab / Shift+Tab / Backspace, Enter as a line break vs the
@@ -135,25 +143,22 @@ The scenarios live in `tests/e2e/scenarios/`:
   highlighting its quote on the cited page ([pdf_citations.md](pdf_citations.md)).
 - `transfers.mjs`: the Import and Export dialogs — format/source cards,
   the review step and its switches, direct export for fixed formats.
-- `ink.mjs`: handwriting — the tool strip and its presets (options row,
-  duplicate, remove, persistence), two mouse strokes becoming an
-  ink block with an `.ink` upload, persistence across a reload, the eraser
-  (by its key), stroke undo/redo, the partial eraser cutting a stroke, a
-  lasso move + delete, the notes card's jump + outline, `/Ink` in the
-  exported PDF; pen input (coalesced sample timing, pressure and lift
-  endpoints in the uploaded file, transient prediction, palm suppression,
-  palm-first pen takeover, cleanup after `pointercancel` / lost capture);
-  Chromium's native touch and pen (finger drawing without panning, pen
-  pressure in Hand mode, finger scrolling without ink in pen-only mode);
-  synthetic Pencil events for Safari's handler order. Stylus latency and OS
-  palm rejection still need a real tablet.
-- `inkEditing.mjs`: tap-to-select and the selection menu — colour/width
+- `ink.mjs`: handwriting. The tool strip and its presets, mouse strokes
+  becoming an ink block with an `.ink` upload, persistence across a reload,
+  the eraser, stroke undo/redo, the partial eraser, a lasso move + delete,
+  the notes card's jump + outline, `/Ink` in the exported PDF. Pen input:
+  coalesced sample timing, pressure and lift endpoints in the uploaded
+  file, prediction, palm suppression and palm-first pen takeover, cleanup
+  after `pointercancel` / lost capture. Chromium's native touch and pen,
+  and synthetic Pencil events for Safari's handler order. Stylus latency
+  and OS palm rejection still need a real tablet.
+- `inkEditing.mjs`: tap-to-select and the selection menu. Colour/width
   edits keeping pressure and time, duplicate ids, selective delete, the
   Undo/Redo buttons, a finger lasso-move across groups in pen-only mode,
-  swipe/hold arbitration, a pen resuming through a selection, menu placement
-  on a small screen, view/edit shares; native Chromium touch/pen, asserting
-  on the persisted stroke files. `--only "ink edit:"`; `--only ink` runs
-  both files.
+  swipe/hold arbitration, a pen resuming through a selection, menu
+  placement on a small screen, view/edit shares. Native Chromium touch/pen,
+  asserting on the persisted stroke files. `--only "ink edit:"`; `--only
+  ink` runs both files.
 - `pdfTouch.mjs`: 400% rendering under an emulated canvas limit, distant-page
   release/repaint, live ink, native touch swipes ([pdf_loading.md](pdf_loading.md)).
   `--only "pdf touch"`.

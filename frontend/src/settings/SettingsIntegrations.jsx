@@ -30,23 +30,33 @@ export function IntegrationSettings({ workspaceId }) {
   const [method, setMethod] = React.useState("settings");
   const [platform, setPlatform] = React.useState(() => /Windows/i.test(navigator.userAgent) ? "windows" : "unix");
   const [loadError, setLoadError] = React.useState("");
-  const endpoint = `${API}/integrations/tokens?ws=${encodeURIComponent(workspaceId)}`;
+  const endpoint = `${API}/integrations/tokens`;
+  const loadVersion = React.useRef(0);
+  const refresh = React.useCallback(async (notice = "") => {
+    const version = ++loadVersion.current;
+    setMessage(notice);
+    try {
+      const value = await apiJson(endpoint);
+      // A focus refresh started before a revocation must not restore its row.
+      if (version !== loadVersion.current) return;
+      setData(value); setLoadError("");
+    } catch (err) {
+      if (version === loadVersion.current) setLoadError(err.message);
+    }
+  }, [endpoint]);
   React.useEffect(() => {
-    let active = true;
     setData(null); setSecret(null); setMessage(""); setLoadError("");
-    const load = () => apiJson(endpoint).then((value) => { if (active) { setData(value); setLoadError(""); } })
-      .catch((err) => { if (active) setLoadError(err.message); });
+    const load = () => refresh();
     load();
     window.addEventListener("focus", load);
     const visible = () => { if (document.visibilityState === "visible") load(); };
     document.addEventListener("visibilitychange", visible);
     return () => {
-      active = false;
+      ++loadVersion.current;
       window.removeEventListener("focus", load);
       document.removeEventListener("visibilitychange", visible);
     };
-  }, [endpoint]);
-  const refresh = async () => { setData(await apiJson(endpoint)); setLoadError(""); };
+  }, [refresh]);
   const create = async () => {
     setBusy(true); setMessage("");
     try {
@@ -57,13 +67,14 @@ export function IntegrationSettings({ workspaceId }) {
     } catch (err) { setMessage(err.message); }
     finally { setBusy(false); }
   };
-  const revoke = async (id) => {
+  const revoke = async ({ id, name: connectionName }) => {
     setBusy(true); setMessage("");
     try {
-      await apiJson(`${API}/integrations/tokens/${id}?ws=${encodeURIComponent(workspaceId)}`, { method: "DELETE" });
+      await apiJson(`${API}/integrations/tokens/${id}`, { method: "DELETE" });
       if (secret?.id === id) setSecret(null);
-      await refresh();
-      setMessage("Assistant disconnected. It can no longer access this workspace.");
+      // DELETE succeeded even if reloading the remaining connections fails.
+      setData((value) => value ? { ...value, tokens: value.tokens.filter((item) => item.id !== id) } : value);
+      await refresh(`Access revoked for the selected “${connectionName}” connection.`);
     } catch (err) { setMessage(err.message); }
     finally { setBusy(false); }
   };
@@ -76,7 +87,7 @@ export function IntegrationSettings({ workspaceId }) {
     </PaneHead>
     {loadError ? <div className="integrationDetails" role="alert">
       <p>Could not load your connections. {loadError}</p>
-      <button className="uiBtn" onClick={() => refresh().catch((err) => setLoadError(err.message))}>Try again</button>
+      <button className="uiBtn" onClick={() => refresh()}>Try again</button>
     </div> : null}
     <Section title="Connect an assistant">
       {data ? <div className="integrationDetails">
@@ -104,16 +115,16 @@ export function IntegrationSettings({ workspaceId }) {
           <p className="settingDesc">Keep Gamma reachable from your assistant. Shared content is handled by the assistant and its provider.</p>
         </> : <>
           <p>Browser sign-in is not available for this Gamma address yet.</p>
-          <p>Ask your server administrator to enable it, or open manual setup below to connect with a token.</p>
+          <p>An administrator can enable it by confirming the public server URL in Settings → Administration → Server.</p>
           <details><summary>Server setup details</summary><p>{data.oauth_error}</p></details>
         </>}
       </div> : !loadError ? <p role="status">Loading connection settings…</p> : null}
     </Section>
-    <Section title="Workspace access" action={<button className="uiBtn sm" onClick={() => refresh().catch((err) => setLoadError(err.message))}>Refresh connections</button>}>
+    <Section title="Workspace access" action={<button className="uiBtn sm" onClick={() => refresh()}>Refresh connections</button>}>
       {data ? data.tokens.length ? data.tokens.map((item) =>
         <Row key={item.id} label={item.name}
           hint={`${item.expires_at * 1000 <= Date.now() ? "Expired" : "Read-only · Expires"} ${new Date(item.expires_at * 1000).toLocaleDateString()}`}>
-          <button className="uiBtn" disabled={busy} onClick={() => revoke(item.id)}>Disconnect</button>
+          <button className="uiBtn" disabled={busy} onClick={() => revoke(item)}>Disconnect</button>
         </Row>) : <div className="integrationDetails"><p>No assistants have access to this workspace yet.</p>
           <p className="settingDesc">The workspace you choose on the approval screen determines what your assistant can read.</p></div> : null}
     </Section>

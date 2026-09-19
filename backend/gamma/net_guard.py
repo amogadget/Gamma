@@ -19,6 +19,8 @@ import urllib.parse
 from urllib.error import URLError
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, build_opener
 
+from .publisher_sessions import cookie_jar
+
 _ALLOWED_SCHEMES = ("http", "https")
 
 
@@ -89,6 +91,5 @@ def guarded_urlopen(req, timeout=30):
     """
     url = req.full_url if hasattr(req, "full_url") else req
     validate_public_url(url)
-    from .publisher_sessions import cookie_jar
     opener = build_opener(_GuardedRedirectHandler, HTTPCookieProcessor(cookie_jar()))
     return opener.open(req, timeout=timeout)

@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { chromium, ROOT } from './runtime.mjs';
 import { Server, Account } from '../../frontend/tests/e2e/harness.mjs';
 
-const scratch = path.resolve(process.env.MEDIA_SCRATCH || path.join(ROOT, 'tmp/readme-media'));
+const scratch = path.resolve(process.env.MEDIA_SCRATCH || path.join(ROOT, 'artifacts/readme-media'));
 const archive = process.env.DEMO_EXPORT || path.join(scratch, 'demo.zip');
 if (!fs.existsSync(archive)) throw new Error('Set DEMO_EXPORT to an API export of the curated demo workspace. See README.md.');
 fs.mkdirSync(scratch, { recursive: true });

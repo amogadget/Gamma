@@ -14,25 +14,27 @@
   h1 { font-size: 19px; margin: 0; }
   p { margin: 4px 0 14px; }
   .muted { color: var(--color-text-secondary, light-dark(#646973, #b6bac1)); font-size: 13px; }
-  #search, footer, .actions { display: flex; gap: 8px; align-items: center; }
+  /* Served standalone into a sandboxed iframe, so the app's theme tokens are
+     out of reach: the accent values below are app.css's light/dark --accent. */
+  #search:not([hidden]), footer:not([hidden]), .actions:not([hidden]) { display: flex; gap: 8px; align-items: center; }
   input, button, textarea { font: inherit; border: 1px solid var(--color-border-primary, light-dark(#ddd, #555)); border-radius: 8px; padding: 9px 12px; background: var(--color-background-primary, light-dark(#fff, #202124)); color: inherit; }
   input { min-width: 0; flex: 1; }
   button { cursor: pointer; }
   button:disabled { opacity: .5; cursor: default; }
-  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #4285ef; outline-offset: 2px; }
+  button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid light-dark(#3a7bd5, #5b9bd5); outline-offset: 2px; }
   #status { min-height: 20px; margin: 10px 0; }
   #results { display: grid; gap: 8px; max-height: 340px; overflow-y: auto; padding: 2px; }
   .paper { width: 100%; text-align: left; padding: 12px; overflow-wrap: anywhere; }
-  .paper[aria-pressed="true"] { border-color: #4285ef; background: light-dark(#eff5ff, #26354b); }
+  .paper[aria-pressed="true"] { border-color: light-dark(#3a7bd5, #5b9bd5); background: light-dark(#eff5ff, #26354b); }
   .paper strong, .paper small { display: block; }
   .paper small { margin-top: 4px; }
   footer { flex-wrap: wrap; justify-content: space-between; margin-top: 16px; }
-  #use { background: #2867d7; color: #fff; border-color: #2867d7; }
+  #use { background: light-dark(#3a7bd5, #5b9bd5); color: #fff; border-color: light-dark(#3a7bd5, #5b9bd5); }
   #question { width: 100%; margin-top: 12px; }
   #confirmation { padding-top: 12px; }
   #fallback { margin-top: 14px; }
   textarea { width: 100%; resize: vertical; }
-  [hidden] { display: none !important; }
+  [hidden] { display: none; }
   @media (max-width: 420px) { main { padding: 12px; } footer { align-items: stretch; } #use { width: 100%; } }
 </style>
 </head>
@@ -143,7 +145,7 @@
   }
   el("searchButton").onclick = () => search(0);
   el("query").onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); search(0); } };
-  el("previous").onclick = () => search(Math.max(0, data.offset - 20));
+  el("previous").onclick = () => search(Math.max(0, data.offset - data.page_size));
   el("next").onclick = () => search(data.next_offset);
   el("question").oninput = controls;
   el("question").onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); el("use").click(); } };

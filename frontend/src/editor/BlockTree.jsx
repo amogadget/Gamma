@@ -11,6 +11,8 @@ import { withLegacyAccessors } from "../shared/model/blockModel";
 import { COLORS } from "../shared/model/highlightColors.js";
 import { InkCard } from "../ink/InkLayer";
 import { handleMarkdownCopy } from "../shared/ui/Widgets";
+import { MermaidDiagram, mermaidCodeProps } from "../shared/ui/MermaidDiagram";
+import { mapOutsideCodeFences, remarkMermaid } from "../shared/lib/mermaidMarkdown.js";
 import { LinkIcon, PenIcon } from "../shared/ui/Icons";
 import { FileChip, parseUploadUrl, postFile, uploadFilesAsLines } from "../transfers/FileChip";
 import {
@@ -18,6 +20,7 @@ import {
   LatexAcPopup, MathLivePreview, mathTabJump,
 } from "./LatexEditor";
 import { BlockCmEditor, scanMathSpans } from "./BlockCmEditor";
+import { expandBlankLines } from "./mdMarks";
 import { fenceInnerAt, highlightCode, makeCopyButton, scanFences } from "./codeHighlight";
 import { filterSlashCommands, SlashMenuPopup } from "./SlashMenu";
 import { remarkCallouts } from "./callouts";
@@ -111,6 +114,10 @@ function applyOutsideSpans(text, spans, fn) {
 }
 
 function mdPreprocess(content, nested) {
+  return mapOutsideCodeFences(content, (prose) => mdPreprocessProse(prose, nested));
+}
+
+function mdPreprocessProse(content, nested) {
   // The editor centres every $$…$$ on its own row (cmMathDisplay); remark-math
   // only does that when the fences sit alone on their lines (same-line content
   // becomes "meta" and is dropped — raw source in the rendered view). So a
@@ -118,6 +125,10 @@ function mdPreprocess(content, nested) {
   // (blank-line separated, KaTeX display mode → centred like the editor); one
   // embedded mid-sentence collapses onto one line instead, which remark-math
   // reads as inline math and the sentence stays intact.
+  // Two or more blank lines stay visible (expandBlankLines): markdown would
+  // fold them into the one paragraph break. Done first and outside math, so
+  // a blank line the display-math reshape below adds is never counted.
+  content = applyOutsideSpans(content, scanMathSpans(content).map((s) => ({ from: s.from, to: s.to })), expandBlankLines);
   const displays = scanMathSpans(content).filter((s) => s.display);
   for (let i = displays.length - 1; i >= 0; i--) {
     const s = displays[i];
@@ -240,7 +251,7 @@ function toggleTaskMarker(content, idx, checked) {
 }
 
 // The file chip (`[name](/api/uploads/<hash>.ext)`, what a dropped file
-// becomes) and the upload helpers live in fileChip.jsx.
+// becomes) and the upload helpers live in transfers/FileChip.jsx.
 
 // The files on a clipboard (a screenshot, files copied in the file manager):
 // what a paste uploads instead of inserting text.
@@ -301,7 +312,18 @@ function useMathUi() {
     if (typing) setMathAcIdx(0);
   }
 
-  return { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi };
+  // Accept an autocomplete entry into the editor `ta` and close the popup.
+  function acceptCompletion(ta, c) {
+    if (!ta || !mathUi?.ac) return;
+    const { start } = mathUi.ac;
+    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
+    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
+    setMathUi(null);
+    ta.focus();
+    updateMathUi(ta, false);
+  }
+
+  return { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi, acceptCompletion };
 }
 
 // ![[id]] transclusion: the referenced block's content rendered in a card.
@@ -315,7 +337,7 @@ function useMathUi() {
 // card is the jump link.
 function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEdit }) {
   const [draft, setDraft] = useState(null); // non-null while editing in place
-  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi } = useMathUi();
+  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi, acceptCompletion } = useMathUi();
   const editorRef = useRef(null);
   const editable = !!onEmbedEdit && refBlock?.content != null;
 
@@ -331,16 +353,7 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
     });
   };
 
-  function acceptLatexAc(c) {
-    const ta = editorRef.current;
-    if (!ta || !mathUi?.ac) return;
-    const { start } = mathUi.ac;
-    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
-    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
-    setMathUi(null);
-    ta.focus();
-    updateMathUi(ta, false);
-  }
+  function acceptLatexAc(c) { acceptCompletion(editorRef.current, c); }
 
   // Paste while editing: files upload and insert at the caret (images
   // inline, anything else — a PDF copied from the file manager — as a file
@@ -494,6 +507,11 @@ function BlockEmbedCard({ refId, refBlock, refLabels, onBlockRefClick, onEmbedEd
 // The copy button is the shared DOM one (makeCopyButton — same behavior as
 // the editor's code card), mounted once outside React's reconciliation.
 function CodePre({ children }) {
+  const diagram = mermaidCodeProps(children);
+  return diagram ? <MermaidDiagram {...diagram} /> : <HighlightedCodePre>{children}</HighlightedCodePre>;
+}
+
+function HighlightedCodePre({ children }) {
   const codeProps = React.Children.toArray(children).find((c) => c?.props)?.props || {};
   const lang = /language-([\w+#-]+)/.exec(codeProps.className || "")?.[1] || "";
   const raw = textOf(codeProps.children).replace(/\n$/, "");
@@ -537,7 +555,7 @@ const BlockMarkdown = React.memo(function BlockMarkdown({ content, blockId, refL
       // remark-breaks: a single Enter inside a note renders as a real line
       // break (the editor lets you type them), not markdown's soft-break space.
       // remarkCallouts must run before it (it eats the marker line's "\n").
-      remarkPlugins={[remarkGfm, remarkMath, remarkCallouts, remarkBreaks]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkCallouts, remarkBreaks, remarkMermaid]}
       rehypePlugins={[rehypeRaw, rehypeKatex]}
       // Upload URLs get the workspace / share token here (assetUrl): the
       // browser fetches <img> src and link hrefs without the API header.
@@ -798,7 +816,7 @@ function BlockRow({
   const [refPopup, setRefPopup] = useState(null); // { query, rect }
   const [refSelectedIdx, setRefSelectedIdx] = useState(0);
   // Live LaTeX aids (preview + \command autocomplete) — the shared hook.
-  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi } = useMathUi();
+  const { mathUi, setMathUi, mathAcIdx, setMathAcIdx, updateMathUi, acceptCompletion } = useMathUi();
   // "/" command menu: { start, query, items, anchor }. Opened only by TYPING
   // the slash (caret moves just keep or close it), suppressed inside math.
   const [slashMenu, setSlashMenu] = useState(null);
@@ -853,16 +871,7 @@ function BlockRow({
     });
   }
 
-  function acceptLatexAc(c) {
-    const ta = ref.current;
-    if (!ta || !mathUi?.ac) return;
-    const { start } = mathUi.ac;
-    const edit = latexCompletionEdit(ta.value, start, ta.selectionStart, c, mathUi.display);
-    ta.view?.dispatch({ ...edit, userEvent: "input.complete" });
-    setMathUi(null);
-    ta.focus();
-    updateMathUi(ta, false);
-  }
+  function acceptLatexAc(c) { acceptCompletion(ref.current, c); }
 
   // "/" trigger: a slash starting a word, with the query typed so far after
   // it. Recomputed on edits (typing=true, may open) and caret moves

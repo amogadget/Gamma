@@ -324,6 +324,9 @@ export const UndoIcon = (p) => (
 export const RedoIcon = (p) => (
   <Icon {...p}><path d="m15 4 5 5-5 5" /><path d="M20 9H10a6 6 0 0 0 0 12" /></Icon>
 );
+export const ResizeIcon = (p) => (
+  <Icon {...p}><path d="M7 17 17 7M7 11v6h6M11 7h6v6" /></Icon>
+);
 export const PaletteIcon = (p) => (
   <Icon {...p}><path d="M12 3a9 9 0 1 0 0 18h1a2 2 0 0 0 1.5-3.3 1.8 1.8 0 0 1 1.4-3H18a3 3 0 0 0 3-3A9 9 0 0 0 12 3Z" /><circle cx="7.5" cy="10" r=".6" /><circle cx="11" cy="6.5" r=".6" /><circle cx="16" cy="8" r=".6" /><circle cx="7.5" cy="15" r=".6" /></Icon>
 );

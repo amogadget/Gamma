@@ -22,7 +22,7 @@ function NoteSample({ annotation = false }) {
 }
 
 function Paper({ original = false, highlights, notes }) {
-  return <div className={`transferPaper${original ? " transferOriginalPaper" : ""}`}>
+  return <div className="transferPaper" data-preview={original ? "original" : undefined}>
     <div className="transferPaperTitle">Patterns in nature</div>
     <div className="transferPaperByline">A. Rivera · 2026</div>
     {original ? <><PaperLines /><div className="transferPaperFigure" aria-hidden="true"><i /><i /><i /></div></> : null}

@@ -20,14 +20,20 @@ def write_archive(package: Path, destination: Path) -> None:
                 bundle.write(file, (Path(package.name) / file.relative_to(package)).as_posix())
 
 
+def validate_repo(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value):
+        raise ValueError("GitHub repository must be owner/repo.")
+    return value
+
+
 def build(target: Path, github_repo: str | None = None, archive: bool = False):
     """Export only distributable plugin files, never local connections or caches."""
     target = target.resolve()
     archive_path = target.with_name(target.name + ".zip")
     if target.exists() or (archive and archive_path.exists()):
         raise ValueError("Output already exists. Choose a new directory to preserve the existing package.")
-    if github_repo and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", github_repo):
-        raise ValueError("GitHub repository must be owner/repo.")
+    if github_repo:
+        validate_repo(github_repo)
     source = Path(__file__).resolve().parents[1] / "plugins" / "gamma"
     manifest = json.loads((source / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
     if manifest.get("name") != "gamma" or manifest.get("mcpServers") or manifest.get("apps"):
@@ -72,6 +78,7 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
     print(f"Marketplace written to {target}")
+    print("Keep this directory: Codex reads the marketplace source after installation.")
     print(f'Add it with: codex plugin marketplace add "{target}"')
     print("Install Gamma PDF in the plugin browser, then start a new conversation.")
 

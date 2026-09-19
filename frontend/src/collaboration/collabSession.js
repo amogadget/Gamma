@@ -1,5 +1,5 @@
 // The page's live session as a plain state machine — no React, no globals:
-// the hook in collab.js wires it to the app (fetch, WebSocket, React state)
+// the hook in collaboration/usePageCollab.js wires it to the app (fetch, WebSocket, React state)
 // and the node tests drive it with fakes. One session per tab; it
 //   - turns the block tree's transitions into ops (blockOps.diffTrees) and
 //     sends them in debounced batches to POST /api/pages/{id}/ops — the

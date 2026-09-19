@@ -27,6 +27,9 @@ PUBLISHER_ROOTS = (
     "tandfonline.com", "pnas.org", "rsc.org", "optica.org",
 )
 current_user = ContextVar("publisher_session_user", default=None)
+# The only requests that may borrow the caller's publisher sessions: the
+# interactive PDF operations (auth.py sets current_user for them).
+PDF_PATHS = ("/api/pdf", "/api/resolve-pdf", "/api/clip")
 MAX_AGE = 30 * 24 * 3600
 SESSION_AGE = 24 * 3600
 
