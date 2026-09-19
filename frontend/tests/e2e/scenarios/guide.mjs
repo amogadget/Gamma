@@ -13,7 +13,7 @@ export async function guideScenarios(env) {
     try {
       await page.waitForSelector('[data-guide-overlay="welcome"] .guideCard');
       assert(!page.url().includes("guide="), "the guide param is consumed");
-      for (const id of anchorsForView("home")) {
+      for (const id of anchorsForView("home").filter((id) => !ANCHORS[id].open)) {
         assertEq(await page.locator(`[data-guide="${id}"]`).count(), 1, `anchor ${id} (${ANCHORS[id].description}) present once`);
       }
       await page.click(".guideCard .uiBtn.primary");
@@ -27,6 +27,12 @@ export async function guideScenarios(env) {
       await page.keyboard.press("Escape");
       await until(async () => await page.locator(".guideCard").count() === 0);
       assertEq(await page.evaluate(() => JSON.parse(localStorage.getItem("gamma-guide:first-run")).state), "dismissed");
+      // Manual re-entry: the account menu's "Take the tour".
+      await page.click('[data-guide="header.account"]');
+      await page.click('[data-guide="account.tour"]');
+      await page.waitForSelector('[data-guide-overlay="welcome"] .guideCard');
+      await until(async () => await page.locator(".userPopover").count() === 0);
+      await page.keyboard.press("Escape");
       assertNoProblems(page);
     } finally { await ctx.close(); }
   });

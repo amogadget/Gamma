@@ -12,7 +12,7 @@ from . import version
 from .auth import session_middleware
 from .db import connect_data_db, connect_pages_db, connect_users_db
 from .logbuf import log, setup_logging
-from .mcp_server import GammaMCP
+from .mcp_lazy import LazyMCP
 from .mcp_oauth import router as mcp_oauth_router
 from .routers import (
     admin,
@@ -103,7 +103,7 @@ def _startup_maintenance():
 def create_app() -> FastAPI:
     setup_logging()
     _silence_windows_connection_reset()
-    mcp = GammaMCP()
+    mcp = LazyMCP()
     app = FastAPI(title="Gamma PDF Annotator", lifespan=mcp.lifespan)
 
     app.middleware("http")(session_middleware)

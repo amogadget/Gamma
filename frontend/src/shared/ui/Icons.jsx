@@ -116,6 +116,9 @@ export const PlusIcon = (p) => (
 export const InfoIcon = (p) => (
   <Icon {...p}><circle cx="12" cy="12" r="9" /><path d="M12 16v-5" /><path d="M12 8h.01" /></Icon>
 );
+export const HelpCircleIcon = (p) => (
+  <Icon {...p}><circle cx="12" cy="12" r="9" /><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4" /><path d="M12 17h.01" /></Icon>
+);
 export const AlertCircleIcon = (p) => (
   <Icon {...p}><path d="M12 8v5" /><path d="M12 16.5h.01" /><circle cx="12" cy="12" r="9" /></Icon>
 );

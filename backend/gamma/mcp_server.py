@@ -11,12 +11,8 @@ from mcp.types import CallToolResult, TextContent, Tool, ToolAnnotations, Resour
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.routing import Route
-from fastapi import HTTPException
 
 from .ai_tools import agent_tools, run_agent_tool
-from .integrations import resolve_token
-from .mcp_oauth import public_base
 from .server_settings import mcp_allowed_hosts
 from .mcp_picker import PICKER_URI, PICKER_MIME, PICKER_SCHEMA, ICON_URI, picker_html, paper_choices, paper_choices_text
 
@@ -115,29 +111,9 @@ class GammaMCP:
             yield {"gamma_mcp_manager": manager}
 
     async def __call__(self, scope, receive, send):
+        # The lightweight LazyMCP route authenticates before loading this SDK
+        # adapter, and supplies the lifespan-owned manager in request state.
         request = Request(scope, receive)
-        # Native MCP clients do not need browser origins; reject them rather than
-        # exposing this token-authenticated endpoint to arbitrary websites.
-        if request.headers.get("origin"):
-            await JSONResponse({"detail": "Browser origins are not supported."}, status_code=403)(scope, receive, send)
-            return
-        scheme, _, token = request.headers.get("authorization", "").partition(" ")
-        try:
-            base = public_base(request)
-        except HTTPException:
-            base = None  # Manual tokens still support existing HTTP LAN setups.
-        resource = base + "/mcp" if base else None
-        identity = await run_in_threadpool(resolve_token, token, resource) if scheme.lower() == "bearer" else None
-        if identity is None:
-            await JSONResponse({"detail": "A valid Gamma integration token is required."}, status_code=401,
-                               headers={"WWW-Authenticate": (
-                                   f'Bearer resource_metadata="{base}/.well-known/oauth-protected-resource/mcp", scope="gamma:read"'
-                                   if base else "Bearer"), "Cache-Control": "no-store"})(scope, receive, send)
-            return
-        request.state.gamma_integration = identity
-        # Use the same canonical origin for picker and read-tool citations.
-        # Manual tokens still support HTTP LAN addresses without an OAuth issuer.
-        request.state.gamma_base = base or str(request.base_url).rstrip("/")
         manager = getattr(request.state, "gamma_mcp_manager", None)
         if manager is None:
             await JSONResponse({"detail": "MCP is starting."}, status_code=503)(scope, receive, send)
@@ -148,5 +124,3 @@ class GammaMCP:
         manager.security_settings.allowed_hosts = hosts
         await manager.handle_request(scope, receive, send)
 
-    def route(self):
-        return Route("/mcp", self, methods=["GET", "POST", "DELETE"])

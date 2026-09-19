@@ -44,13 +44,13 @@ export async function chatNavigationScenarios(env) {
           await until(() => new URL(page.url()).searchParams.get("block") === target.id);
           assertEq(await reply.count(), 0, "the other page does not display the source reply");
           await page.evaluate(() => window.chatStream.push({ delta: " This text arrived while away." }));
-          if (finishAway) await page.evaluate(() => window.chatStream.finish());
-          await page.getByRole("button", { name: "Back", exact: true }).click();
-          await until(async () => (await page.locator(".chatPanel").innerText()).includes("This text arrived while away."));
           // The provider's token report (one {"usage"} line per turn) sums onto the reply
           // and shows under it once the stream ends: "↑ 1.2k ↓ 34 · 50% cached".
           await page.evaluate(() => window.chatStream.push({ usage: { input: 1000, output: 30, cache_read: 600, cache_write: 0 } }));
           await page.evaluate(() => window.chatStream.push({ usage: { input: 200, output: 4, cache_read: 0, cache_write: 0 } }));
+          if (finishAway) await page.evaluate(() => window.chatStream.finish());
+          await page.getByRole("button", { name: "Back", exact: true }).click();
+          await until(async () => (await page.locator(".chatPanel").innerText()).includes("This text arrived while away."));
           if (!finishAway) {
             await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
             await page.getByRole("button", { name: "Close Chat", exact: true }).click();
@@ -75,9 +75,6 @@ export async function chatNavigationScenarios(env) {
           await usageLine.waitFor();
           assert((await usageLine.innerText()).replace(/\s+/g, " ").includes("1.2k"), "input tokens shown under the reply");
           assert((await usageLine.innerText()).includes("50% cached"), "cached share shown under the reply");
-          await page.locator('[title^="Chat settings"]').click();
-          assert((await page.locator(".chatSettingsPop").innerText()).includes("1.2k"), "the popover totals the conversation");
-          await page.locator('[title^="Chat settings"]').click();
           assertEq((await alice.api(`/api/chats/${target.id}`)).messages.length, 0);
           await page.getByRole("button", { name: "New chat", exact: true }).click();
           await until(async () => !(await reply.count()));

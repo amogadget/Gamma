@@ -11,6 +11,7 @@ through barrel files. `main.jsx` remains the Vite entry point.
 | `chat/` | AI conversation panel (`ChatDock.jsx`), paper mentions, chat permission settings, and the token-usage formatting (`tokenUsage.js`) shared with Settings |
 | `collaboration/` | `usePageCollab.js`, the pure `collabSession.js` state machine, and presence UI |
 | `editor/` | Outliner (`BlockTree.jsx`), CodeMirror (`BlockCmEditor.jsx`), undo history, Markdown and LaTeX editing, and slash commands |
+| `guide/` | The first-run guide: `anchors.js` (the `data-guide` registry), `events.js` (the event bus), `useGuide.js` + `GuideOverlay.jsx` (engine and spotlight/card), `tours/` (one data file per tour) — [docs/dev/onboarding.md](../../docs/dev/onboarding.md) |
 | `ink/` | Handwriting codec and geometry, input sampling, draft storage, and `InkLayer.jsx` |
 | `library/` | Library cards and browsing controls (`FileBrowser.jsx`), folder/page rules, title scoring, and `library.css` |
 | `pdf/` | `PdfViewer.jsx`, document loading, citations, translation, and scroll alignment |

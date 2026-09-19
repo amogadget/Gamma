@@ -1,9 +1,20 @@
 # Onboarding: the first-run guide
 
-**Status: designed, not implemented.** This doc is the architecture to build
-against. Nothing under `frontend/src/guide/` exists yet; the seeded welcome
-page in `gamma/seed.py` is the only onboarding Gamma has today (guest
-workspaces only, hard-coded block tuples, screenshots from GitHub raw).
+**Status: the engine is built (build-order steps 1 to 3 plus a first tour);
+the welcome page, the `onboarding` pref, the invitation card, the checklist
+and hints are still design.** What exists: `frontend/src/guide/` (registry,
+event bus, `useGuide`, `GuideOverlay`, `tours/firstRun.js`), six `data-guide`
+anchors in the topbar, one `popover.opened` emit point in App, the node test
+`tests/guide.test.mjs` and the e2e step `scenarios/guide.mjs`. A tour starts
+from `/?guide=first-run` or the account menu's **Take the tour**; progress is a localStorage key
+(`gamma-guide:<tourId>`), not yet the synced pref. The seeded welcome page in
+`gamma/seed.py` is unchanged (guest workspaces only, hard-coded block tuples).
+
+Two behaviours the build settled that the design below did not spell out:
+a step whose event fires is marked **done** (a check in the card, the primary
+button turns from Skip into Next) rather than jumping on, so whatever the user
+just opened stays open until they move on; and the app closes any open
+popover on every step change (`onStepChange` from `useGuide`).
 
 The survey behind these choices is [docs/research/onboarding.md](../research/onboarding.md).
 
@@ -173,7 +184,7 @@ State machine: `idle` → `offered` (the small invitation card) → `running
 |---|---|
 | First sign-in of an account (no `onboarding` pref yet) | Home opens with the welcome page's card first; the invitation card appears once: "Take the 2-minute tour" / "Not now". Never a spotlight without consent. |
 | `/?guide=<tourId>` | Starts that tour (deep links from the user guide, the website and the e2e suite). Removed from the URL once started. |
-| Account menu → "Getting started" | Opens the checklist popover; each item has "Show me", which runs the tour from that step. |
+| Account menu → "Take the tour" (built) | Starts the first-run tour. Once the checklist exists this becomes "Getting started", opening the checklist popover where each item has "Show me", which runs the tour from that step. |
 | Checklist complete or dismissed | The menu item stays; the badge on the account button goes away. |
 | A tour's `version` is bumped | The invitation is offered again with "What changed"; progress for that tour resets. |
 | Guest account | Everything works from localStorage only; the daily wipe resets it, which is right for a demo. |

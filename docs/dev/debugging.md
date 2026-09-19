@@ -159,6 +159,10 @@ The scenarios live in `tests/e2e/scenarios/`:
   placement on a small screen, view/edit shares. Native Chromium touch/pen,
   asserting on the persisted stroke files. `--only "ink edit:"`; `--only
   ink` runs both files.
+- `guide.mjs`: the first-run guide ([onboarding.md](onboarding.md)) — `?guide=`
+  starts a tour and is consumed from the URL, every registered home-view anchor
+  is present once, a click through the spotlight checks the step off, Next
+  closes what the step opened, Esc leaves and records the dismissal.
 - `ipad.mjs`: the installed web app ([ipad.md](ipad.md)) — the manifest
   and its icons, `theme-color` following the theme, the standalone-mode
   block in the bundled stylesheet (`display-mode` cannot be emulated in

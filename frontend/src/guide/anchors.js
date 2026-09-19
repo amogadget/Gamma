@@ -15,6 +15,7 @@ export const ANCHORS = {
   "header.search": { view: "any", description: "Workspace search (Ctrl+F)" },
   "header.share": { view: "page", description: "The page's Share button" },
   "header.account": { view: "any", description: "Account & settings menu" },
+  "account.tour": { view: "any", open: ["header.account"], description: "Take the tour, in the account menu" },
 };
 
 export const ATTR = "data-guide";
