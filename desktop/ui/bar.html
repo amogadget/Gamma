@@ -76,6 +76,18 @@
   .item .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .item .sub { color: var(--text-dim); font-size: 11px; margin-left: 6px; }
   .item .check { color: var(--accent); display: inline-flex; width: 14px; }
+  /* A workspace row's trailing chip: on a remote server "keep offline" (on
+     hover) or, once it has one, "offline copy" (always shown — click opens
+     the copy); on a local copy "original" (opens the workspace it follows). */
+  .item .rowAct {
+    display: none; align-items: center; gap: 4px; flex-shrink: 0;
+    color: var(--text-muted); border: 1px solid var(--border); border-radius: 99px;
+    padding: 1px 7px 1px 5px; margin-right: 2px; font-size: 11px; font-weight: 500; white-space: nowrap;
+  }
+  .item:hover .rowAct, .item:focus-within .rowAct, .item .rowAct.on { display: inline-flex; }
+  .item .rowAct.on { color: var(--accent); background: var(--accent-bg-light); border-color: transparent; }
+  .item .rowAct:hover { background: var(--accent-bg-light); color: var(--accent); border-color: var(--accent); }
+  .item .rowAct svg { width: 13px; height: 13px; }
   .item .check svg { width: 14px; height: 14px; }
   .item.current { font-weight: 600; }
   .sep { height: 1px; background: var(--border); margin: 5px 4px; }
@@ -120,7 +132,9 @@
     grid: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>',
+    download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 13v8"/><path d="m8 17 4 4 4-4"/><path d="M4.4 15.2A5 5 0 0 1 7 6a7 7 0 0 1 13.2 2.3A4.5 4.5 0 0 1 19.6 17"/></svg>',
   };
+  const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   const ROLE = { owner: 'owner', editor: 'can edit', viewer: 'view only' };
   const $ = (id) => document.getElementById(id);
   document.body.dataset.platform = gammaShell.platform;
@@ -186,24 +200,30 @@
         const b = document.createElement('button');
         b.className = 'item wsItem' + (isCur ? ' current' : '');
         b.dataset.ws = w.id;
-        b.title = w.mirror_of ? `Offline copy of ${w.mirror_of} — synced with the remote when it is reachable`
+        b.title = w.mirror_of ? `Offline copy of ${w.mirror_of} — kept in step with the original whenever it is reachable`
           : w.personal ? 'Your personal workspace' : `Shared · ${w.members} member${w.members === 1 ? '' : 's'} · you ${ROLE[w.role] || w.role}`;
-        b.innerHTML = `<span class="badge"></span><span class="label"></span><span class="sub">${w.mirror_of ? 'offline copy' : w.personal ? 'personal' : (ROLE[w.role] || w.role)}</span><span class="check">${isCur ? ICONS.check : ''}</span>`;
+        if (w.copy) b.title += ` · has an offline copy on ${w.copy.serverName}`;
+        // The trailing chip (see .rowAct): open the copy / open the original / keep offline.
+        const chip = w.copy
+          ? `<span class="rowAct on" role="button" tabindex="0" data-act="copy" title="Open the offline copy on ${esc(w.copy.serverName)}${w.copy.running ? ' — syncing in the background' : ''}">${ICONS.local}offline copy</span>`
+          : w.original
+          ? `<span class="rowAct on" role="button" tabindex="0" data-act="original" title="Open the original: ${esc(w.original.name)} on ${esc(w.original.serverName)}">${ICONS.remote}original</span>`
+          : state.current.type === 'remote' && !w.mirror_of
+          ? `<span class="rowAct" role="button" tabindex="0" data-act="keep" title="Keep an offline copy of ${esc(w.name)} on this computer — opens without a connection, edits go both ways">${ICONS.download}keep offline</span>`
+          : '';
+        b.innerHTML = `<span class="badge"></span><span class="label"></span><span class="sub">${w.mirror_of ? 'offline copy' : w.personal ? 'personal' : (ROLE[w.role] || w.role)}</span>` +
+          chip + `<span class="check">${isCur ? ICONS.check : ''}</span>`;
         b.querySelector('.badge').textContent = (w.name || '?').charAt(0).toUpperCase();
         b.querySelector('.label').textContent = w.name;
         b.onclick = () => { closeMenu(); if (!isCur) gammaShell.openWorkspace(w.id).catch(() => {}); };
+        const act = b.querySelector('.rowAct');
+        if (act) {
+          const run = act.dataset.act === 'copy' ? gammaShell.openCopy : act.dataset.act === 'original' ? gammaShell.openOriginal : gammaShell.keepOffline;
+          const go = (e) => { e.stopPropagation(); e.preventDefault(); closeMenu(); run(w.id).catch(() => {}); };
+          act.onclick = go;
+          act.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') go(e); };
+        }
         menu.appendChild(b);
-      }
-      // A remote server's open workspace can be kept as a copy on a local one.
-      const cur = g.list.find((w) => w.id === g.current);
-      if (state.current.type === 'remote' && cur && !cur.mirror_of) {
-        const k = document.createElement('button');
-        k.className = 'item';
-        k.id = 'menuKeepOffline';
-        k.title = 'Make a copy of this workspace on a local server, kept in step both ways, that opens without a connection';
-        k.innerHTML = `<span class="ico">${ICONS.local || ''}</span><span class="label">Keep an offline copy…</span>`;
-        k.onclick = () => { closeMenu(); gammaShell.keepOffline(cur.id).catch(() => {}); };
-        menu.appendChild(k);
       }
       const sep = document.createElement('div'); sep.className = 'sep'; menu.appendChild(sep);
     }

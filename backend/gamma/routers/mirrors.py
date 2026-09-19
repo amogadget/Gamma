@@ -5,7 +5,7 @@ merges it decided on its own. Session-only, the mirror's owner only."""
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .. import sync_engine, workspaces
+from .. import config, sync_engine, workspaces
 from ..auth import require_personal_user
 
 router = APIRouter(prefix="/api/mirrors", tags=["mirrors"])
@@ -36,7 +36,9 @@ def _mine(request: Request, ws: str) -> dict:
 
 def _info(mirror: dict) -> dict:
     info = workspaces.get(mirror["workspace_id"])
-    return {**mirror, "name": info["name"] if info else ""}
+    return {**mirror, "name": info["name"] if info else "",
+            "conflicts_open": sync_engine.open_conflicts(mirror["workspace_id"]),
+            "interval_s": config.sync_interval_s()}
 
 
 @router.get("")
@@ -78,9 +80,9 @@ def run_sync(ws: str, request: Request, wait: int = 0):
     returned."""
     mirror = _mine(request, ws)
     if wait:
-        return {"status": sync_engine.sync_workspace(ws)}
+        return {"status": sync_engine.sync_workspace(ws), "conflicts_open": sync_engine.open_conflicts(ws)}
     sync_engine.sync_in_background(ws)
-    return {"status": mirror["status"]}
+    return {"status": mirror["status"], "conflicts_open": sync_engine.open_conflicts(ws)}
 
 
 @router.delete("/{ws}")
@@ -89,6 +91,14 @@ def delete_mirror(ws: str, request: Request):
     _mine(request, ws)
     sync_engine.remove_mirror(ws)
     return {"ok": True}
+
+
+@router.get("/{ws}/log")
+def sync_log(ws: str, request: Request, limit: int = 50):
+    """What the last rounds did, newest first: ``{changes: [{id, at,
+    page_id, title, action, exists}]}``."""
+    _mine(request, ws)
+    return {"changes": sync_engine.list_log(ws, limit)}
 
 
 @router.get("/{ws}/conflicts")

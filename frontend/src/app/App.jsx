@@ -78,6 +78,7 @@ import GuideOverlay from "../guide/GuideOverlay";
 import { guideEvents } from "../guide/events";
 import { Empty, QuotaMeter, Section } from "../settings/SettingsKit";
 import { CopyBox, SharePopover } from "../sharing/SharePopover";
+import { MirrorPopover } from "../collaboration/MirrorPopover";
 import {
   addFolderTag,
   cleanFolderPath,
@@ -8152,6 +8153,17 @@ function LibraryApp() {
           </button>
           {openPopover === "share" ? sharePopover : null}
         </span>
+      ) : null}
+      {authUser?.user && workspace?.mirror_of ? (
+        <MirrorPopover
+          key={workspace.id}
+          wsId={workspace.id}
+          mirrorOf={workspace.mirror_of}
+          open={openPopover === "mirror"}
+          onToggle={() => setOpenPopover(openPopover === "mirror" ? null : "mirror")}
+          openPage={(id) => { setOpenPopover(null); openPage(id); }}
+          onOpenSettings={() => { setSettingsOpen("workspaces"); setOpenPopover(null); }}
+        />
       ) : null}
       {authUser?.user && (
         <span data-popover="user" className="popoverAnchor">

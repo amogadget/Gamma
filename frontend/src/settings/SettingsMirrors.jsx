@@ -9,6 +9,7 @@ import React from "react";
 import { API, apiJson } from "../shared/lib/utils";
 import { Section, Row, SubDialog, Field, Segmented, Empty } from "./SettingsKit";
 import { AlertCircleIcon, CheckIcon, CloudDownloadIcon, HardDriveIcon, PlusIcon, RefreshIcon } from "../shared/ui/Icons";
+import { roundSummary } from "../collaboration/MirrorPopover";
 
 const KIND_TEXT = {
   merged: "Both sides changed this block; the two edits were merged.",
@@ -38,12 +39,13 @@ export function useMirrors(enabled = true) {
 
 export function mirrorStatusLine(m) {
   const s = m.status || {};
-  if (s.running) return "syncing…";
-  if (s.last_error) return `problem: ${s.last_error}`;
-  if (!s.last_sync) return "not synced yet";
-  const parts = [`synced ${when(s.last_sync)}`];
-  if (s.mode === "pull") parts.push("read-only copy");
-  return parts.join(" · ");
+  const dir = s.mode === "pull" || m.mode === "pull" ? "read-only copy" : "both ways";
+  const p = s.progress;
+  if (s.running) return `${dir} · ${p?.total ? `${p.first ? "copying" : "syncing"} ${p.done} of ${p.total} pages…` : "syncing…"}`;
+  if (s.last_error) return `${dir} · problem: ${s.last_error}`;
+  if (!s.last_sync) return `${dir} · ${s.interrupted ? "the first copy was interrupted, it continues at the next round" : "not copied yet"}`;
+  const moved = roundSummary(s);
+  return `${dir} · up to date ${when(s.last_sync)} · last round: ${moved || "nothing had changed"}`;
 }
 
 export function MirrorDialog({ busy, error, onSubmit, onClose }) {
@@ -170,7 +172,7 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
       const d = await apiJson(`${API}/mirrors/${encodeURIComponent(m.workspace_id)}/sync?wait=1`, { method: "POST" });
       const s = d.status || {};
       setStatus?.(s.last_error ? `Sync problem: ${s.last_error}`
-        : `Synced — ${s.pages_pulled || 0} page${s.pages_pulled === 1 ? "" : "s"} in, ${s.pages_pushed || 0} out.`);
+        : `Up to date — ${roundSummary(s) || "nothing had changed on either side"}.`);
     } catch (err) {
       setStatus?.(`Sync failed: ${err.message}`);
     } finally {
@@ -215,18 +217,21 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
             {m.name || w?.name}
             {current ? <span className="uiTag">open</span> : null}
             {s.last_error ? <span className="uiTag">problem</span> : null}
+            {m.conflicts_open ? <span className="uiTag">{m.conflicts_open} to review</span> : null}
           </span>
           <span className="aiProvDesc" title={m.remote_url}>
-            copy of {m.remote_name} on {host} · {mirrorStatusLine(m)}
+            copy of {m.remote_name} on {host}
           </span>
+          <span className="aiProvDesc">{mirrorStatusLine(m)}</span>
         </span>
         <span className="aiProvActions">
           {!current ? <button className="uiBtn sm" onClick={() => { closeSettings?.(); switchWorkspace(m.workspace_id); }}>Open</button> : null}
           <button className="uiBtn sm" disabled={busy || s.running} onClick={() => syncNow(m)} title="Run a sync round now">
             <RefreshIcon size={13} /> Sync now
           </button>
-          <button className="uiBtn sm" disabled={busy} onClick={() => setConflictsOf({ ...m, name: m.name || w?.name })} title="Changes the sync had to decide on its own">
-            Merges
+          <button className={`uiBtn sm ${m.conflicts_open ? "primary" : ""}`} disabled={busy} onClick={() => setConflictsOf({ ...m, name: m.name || w?.name })}
+            title="When both sides changed the same thing, the sync decided on its own; the decisions wait here for you to check">
+            Merges{m.conflicts_open ? ` (${m.conflicts_open})` : ""}
           </button>
           <button className="uiBtn sm" disabled={busy} onClick={() => stop(m)}>Stop</button>
         </span>
@@ -244,6 +249,15 @@ export function MirrorsSection({ mirrors, refresh, workspaces, currentId, switch
           </button>
         )}
       >
+        {mirrors?.length ? (
+          <p className="settingDesc mirrorIntro">
+            A copy of a workspace on another Gamma, kept in step: edits made here go to the original when it is reachable,
+            edits made there arrive here — every {""}
+            30 seconds and on <b>Sync now</b>. When both sides changed the same block, the two edits are merged and the
+            result waits under <b>Merges</b> for you to keep, or replace with your version or theirs. The sync pill in the
+            header shows the same state while the copy is open.
+          </p>
+        ) : null}
         {mirrors === null ? <Empty icon={CloudDownloadIcon}>Loading…</Empty>
           : mirrors.length ? mirrors.map(row)
           : <Empty icon={CloudDownloadIcon}>

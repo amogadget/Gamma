@@ -240,6 +240,15 @@ PAGES_SCHEMA = [
         base TEXT NOT NULL DEFAULT '{}',
         synced_at TEXT NOT NULL
     )""",
+    # sync_log = what the last rounds did, page by page (the header pill's
+    # "recent changes"); pruned to the newest SYNC_LOG_KEEP rows.
+    """CREATE TABLE IF NOT EXISTS sync_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at TEXT NOT NULL,
+        page_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        action TEXT NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS sync_conflicts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         page_id TEXT NOT NULL,

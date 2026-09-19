@@ -12,7 +12,8 @@ Code: `gamma/sync_engine.py` (the engine and the mirror registry),
 `gamma/routers/sync.py` (the change feed and `whoami`, what a mirror reads
 on the remote), `gamma/routers/mirrors.py` (the mirror API on the server
 that holds the copy), `frontend/src/settings/SettingsMirrors.jsx` (Settings →
-Workspaces → Offline copies), `desktop/main.js` `keepOffline` (the shell's
+Workspaces → Offline copies), `frontend/src/collaboration/MirrorPopover.jsx`
+(the header's sync pill), `desktop/main.js` `keepOffline` (the shell's
 one-click flow). Research: [research/collaboration.md](../research/collaboration.md)
 for why the model is ops plus a three-way merge and not a CRDT; the study
 that led here is the upstream feature audit in `todos/`.
@@ -97,14 +98,62 @@ tree.
 ## Rounds
 
 `config.sync_interval_s()` (`GAMMA_SYNC_INTERVAL`, default 30 s, 0 = off)
-drives a background loop over every mirror of the server; "Sync now"
-(`POST /api/mirrors/{ws}/sync`, `?wait=1` for the answer) runs one on
-demand. Rounds of one mirror never overlap. A round that cannot reach the
-remote records the error on the mirror and moves no cursor; a page that
-fails inside a round is reported and retried next time. The status the
-Settings row shows is the mirror's `status` JSON (`last_sync`,
-`last_error`, `pages_pulled`, `pages_pushed`, `files_pulled`,
-`files_pushed`, `mode`, `remote_role`).
+drives a background loop over every mirror of the server — its first pass
+`FIRST_PASS_S` (5 s) after startup, so a copy whose first fill was cut short
+by a restart continues at once; "Sync now" (`POST /api/mirrors/{ws}/sync`,
+`?wait=1` for the answer) runs one on demand. Rounds of one mirror never
+overlap. A round that cannot reach the remote records the error on the
+mirror and moves no cursor. A page that fails inside a round — whatever the
+exception — is reported, kept on the mirror's `retry` list with the flags
+it had, and worked again next round (the feeds' cursors have moved past
+it). Nothing a round does can leave the `running` flag up: every exception
+brings it down with `last_error`, and a process stopped in the middle of a
+round (the desktop app quit) is caught at the next startup by
+`reset_interrupted`, which clears the flag and notes `interrupted`; the
+next round simply continues, a round is idempotent.
+
+The status the Settings row and the header pill show is the mirror's
+`status` JSON: `last_sync`, `last_error`, `pages_pulled`, `pages_pushed`,
+`pages_deleted`, `files_pulled`, `files_pushed`, `mode`, `remote_role`,
+`remote_user`, `retry`, `interrupted`, and while a round runs `running`
+with `progress` (`done`, `total`, `page` — the title being worked —,
+`first` for the first fill, `at`), saved before every page so "21 of 79
+pages" moves. What a round did, page by page, is the copy's `sync_log`
+(`pulled`, `pushed`, `created here` / `there`, `deleted here` / `there`,
+`restored here` / `there`; the newest 500 rows, `GET
+/api/mirrors/{ws}/log`).
+
+## What the person sees
+
+- **The header's sync pill** (`MirrorPopover.jsx`), shown while an offline
+  copy is open, in the desktop app and in a browser alike: *up to date
+  14:37*, *copying 21/79* (the first fill) or *syncing 3/5*, *sync
+  problem*, *N to review* (open merges), *not copied yet*. Click: a
+  sentence on what the copy is (the original's host, who you are there,
+  which way edits travel), then the state in plain words — *Making the
+  first copy · 21 of 79 pages* with a bar and the page being worked, *Up to
+  date · checked 14:37* with what the last round moved and how often it
+  checks (`interval_s`), *The original can't be reached* with what happens
+  to edits meanwhile, *The first copy was interrupted* — then *Sync now*,
+  *Review N merges* (→ Settings → Workspaces) and the recent changes from
+  the log, each one opening its page. Polls the mirror every 20 s, every
+  2 s while a round runs (the log too while the popover is open).
+- **Settings → Workspaces → Offline copies** (`SettingsMirrors.jsx`): one
+  row per mirror — direction, the same state line (progress while a round
+  runs), a *N to review* tag — with Open, Sync now, Merges (the decisions
+  the engine took on its own: keep the merge, use mine, use theirs) and
+  Stop; an intro paragraph says what mirroring does. *Mirror a remote
+  workspace* asks for the server address, a write token made there, a
+  name and the direction.
+- **The desktop switcher**: on a remote server every workspace row carries
+  a *keep offline* chip on hover; once a copy exists the chip reads
+  *offline copy* and opens it (one copy per workspace — a second *keep
+  offline* opens the existing one); on the local server the copy's row
+  reads *offline copy* and its *original* chip opens the workspace it
+  follows. The shell keeps a map of copies in its registry and starts the
+  local servers that hold them when the app launches, so copies sync in
+  the background whichever server the window shows
+  ([desktop/docs/architecture.md](../../desktop/docs/architecture.md)).
 
 ## Credentials
 
@@ -137,9 +186,10 @@ ordinary one and drops its sync state.
 |---|---|---|
 | GET | `/api/mirrors` | the caller's mirrors with status |
 | POST | `/api/mirrors` | `{remote_url, token, name?, mode?}` → the mirror (validated against the remote's `whoami` first; a read token or a viewer's role makes it `pull`); the first fill runs in the background |
-| GET | `/api/mirrors/{ws}` | one mirror |
+| GET | `/api/mirrors/{ws}` | one mirror, with `conflicts_open` and `interval_s` (the loop's period, 0 = off) |
 | POST | `/api/mirrors/{ws}/sync[?wait=1]` | a round now |
 | DELETE | `/api/mirrors/{ws}` | stop mirroring |
+| GET | `/api/mirrors/{ws}/log?limit=` | what the last rounds did, page by page, newest first (`exists`: the page is still here) |
 | GET | `/api/mirrors/{ws}/conflicts[?resolved=1]` | the decisions to look at |
 | POST | `/api/mirrors/{ws}/conflicts/{id}` | `{choice: keep \| mine \| theirs}` |
 
@@ -155,7 +205,11 @@ fill, edits both ways, different-block and same-span merges with the
 conflict rows and their resolution, edit-versus-delete both ways, pages
 created and deleted on either side, files by hash, pull-only, stopping.
 `test_sync_tree.py` pins the diff; `test_token_api.py` the bearer rules;
-`test_sync_feed.py` the feed.
+`test_sync_feed.py` the feed. The progress reports, the interrupted-flag
+reset and the retry of a page that failed are in `test_mirror.py` too. The
+desktop's flow — the *keep offline* chip, the registry map, the
+*offline copy* / *original* cross-links, one copy per workspace — is a step
+of `desktop/test/e2e.js`.
 
 ## Limits and next steps
 

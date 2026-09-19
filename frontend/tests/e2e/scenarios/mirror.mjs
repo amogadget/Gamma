@@ -38,7 +38,7 @@ export async function mirrorScenarios(env) {
 
       // Sync now runs a round inline; the status line then says when.
       await row.getByRole("button", { name: "Sync now", exact: true }).click();
-      await until(() => row.locator(".aiProvDesc").textContent().then((t) => /synced \d/.test(t)),
+      await until(() => row.locator(".aiProvDesc").last().textContent().then((t) => /up to date \d/.test(t)),
         { timeout: 20000, what: "the row reports a sync" });
       const mirrors = await user.api("/api/mirrors");
       assertEq(mirrors.mirrors.length, 1);
@@ -49,7 +49,7 @@ export async function mirrorScenarios(env) {
       const tree = await r.json();
       assertEq(tree.block.children[0]?.content, "a note to copy");
 
-      await row.getByRole("button", { name: "Merges", exact: true }).click();
+      await row.getByRole("button", { name: /^Merges/ }).click();
       await page.getByText("Nothing to decide", { exact: false }).waitFor();
       await page.getByRole("button", { name: "Back", exact: true }).click();
       await row.waitFor();
@@ -59,6 +59,18 @@ export async function mirrorScenarios(env) {
       await until(() => Promise.resolve(new URL(page.url()).searchParams.get("ws") === copy.workspace_id), { what: "the copy is open" });
       await page.waitForSelector(".folderNewBtn", { timeout: 15000 });
       await page.getByText("Mirrored paper", { exact: true }).first().waitFor();
+      // the header's sync pill: state at a glance, recent changes in the popover
+      const pill = page.getByRole("button", { name: "Sync status", exact: true });
+      await until(() => pill.textContent().then((t) => /up to date/.test(t)), { what: "the pill reports the sync" });
+      await pill.click();
+      const pop = page.getByRole("dialog", { name: "Sync status", exact: true });
+      await pop.getByText("Recent changes", { exact: true }).waitFor();
+      await pop.getByText("Mirrored paper", { exact: true }).waitFor();
+      await pop.getByRole("button", { name: "Sync now", exact: true }).click();
+      await until(() => pop.textContent().then((t) => /Up to date/.test(t) && !/Syncing/.test(t)), { timeout: 20000, what: "the popover settles after Sync now" });
+      assert((await pop.textContent()).includes("Checks again every"), "the popover says how often it checks");
+      await pop.getByText("Mirrored paper", { exact: true }).click();
+      await page.getByText("a note to copy", { exact: true }).waitFor();
       assertNoProblems(page);
 
       // Stop keeps the workspace, drops the mirror.

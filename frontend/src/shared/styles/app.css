@@ -2319,6 +2319,32 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
   gap: 4px;
 }
 .popoverTitle { font-size: 13px; font-weight: 600; color: var(--text-primary); padding: 2px 4px; }
+
+/* The offline copy's sync pill (collaboration/MirrorPopover.jsx): an icon
+   button that also carries a word or two; the tone colours the text. */
+.topbar .iconBtn.mirrorPill { width: auto; gap: 5px; padding: 0 9px; }
+.mirrorPill .mirrorPillText { font-size: 12px; font-weight: 500; color: var(--text-secondary); white-space: nowrap; }
+.mirrorPill.warn .mirrorPillText, .mirrorPill.warn svg { color: var(--warning, #c47a10); }
+.mirrorPill.busy svg { animation: mirrorSpin 1.2s linear infinite; }
+@keyframes mirrorSpin { to { transform: rotate(360deg); } }
+@media (max-width: 640px) { .mirrorPill .mirrorPillText { display: none; } .topbar .iconBtn.mirrorPill { padding: 0; width: 32px; } }
+.mirrorPopover { width: 340px; max-width: calc(100vw - 24px); }
+.mirrorPopHead { display: flex; flex-direction: column; gap: 2px; padding-bottom: 6px; }
+.mirrorPopState { display: flex; align-items: flex-start; gap: 7px; padding: 6px 4px 8px; font-size: 13px; color: var(--text-primary); }
+.mirrorPopState > svg { flex-shrink: 0; margin-top: 2px; }
+.mirrorPopState.ok > svg { color: var(--accent-dark); }
+.mirrorPopState.warn > svg { color: var(--warning, #c47a10); }
+.mirrorPopState.busy > svg { animation: mirrorSpin 1.2s linear infinite; }
+.mirrorPopStateText { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.mirrorPopStateText .popoverHint { padding: 0; }
+.mirrorPopBar { height: 4px; border-radius: 2px; background: var(--bg-hover); overflow: hidden; margin: 2px 0; }
+.mirrorPopBar span { display: block; height: 100%; background: var(--accent); transition: width 0.4s ease; }
+.mirrorPopActions { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 4px 8px; }
+.mirrorPopLog { list-style: none; margin: 0; padding: 0; max-height: 260px; overflow: auto; }
+.mirrorPopItem { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; }
+.mirrorPopItem:disabled { opacity: 0.6; cursor: default; }
+.mirrorPopItemTitle { font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.mirrorPopItemMeta { font-size: 11px; color: var(--text-dim); }
 .popoverHint { font-size: 11px; color: var(--text-muted); line-height: 1.45; padding: 0 4px; }
 .popoverSection {
   font-size: 10px;

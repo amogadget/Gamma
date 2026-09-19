@@ -250,6 +250,81 @@ def test_pull_only_with_a_read_token():
     assert remote.texts(page["id"])["r1"] == "alpha beta gamma DELTA"
 
 
+def test_the_sync_log_names_what_a_round_did():
+    remote, local, _ = _pair()
+    page = remote.page("Logged")
+    remote.insert(page["id"], "lg1", "one")
+    _sync(local)
+    local.ops(page["id"], [{"op": "set", "id": "lg1", "content": "one (local)"}])
+    gone = remote.page("Gone")
+    _sync(local)
+    remote.client.delete(f"/api/blocks/{gone['id']}").raise_for_status()
+    _sync(local)
+    log = local.client.get(f"/api/mirrors/{local.ws}/log").json()["changes"]
+    actions = [(c["action"], c["title"]) for c in log]
+    assert actions[0] == ("deleted here", "Gone")  # newest first
+    # a round works its pages in id order, so the middle two may swap
+    assert set(actions[1:3]) == {("created here", "Gone"), ("pushed", "Logged")}
+    assert actions[3] == ("created here", "Logged")
+    assert log[0]["exists"] is False and next(c for c in log if c["action"] == "pushed")["exists"] is True
+    info = local.client.get(f"/api/mirrors/{local.ws}").json()
+    assert info["conflicts_open"] == 0 and info["status"]["last_sync"]
+
+
+def test_a_round_reports_its_progress_and_an_interrupted_one_is_reset(monkeypatch):
+    remote, local, _ = _pair()
+    for i in range(3):
+        remote.page(f"Progress {i}")
+    seen = []
+    real = sync_engine._sync_page
+
+    def spy(ws, *a, **kw):
+        seen.append(sync_engine.get_mirror(ws)["status"]["progress"])
+        return real(ws, *a, **kw)
+
+    monkeypatch.setattr(sync_engine, "_sync_page", spy)
+    _sync(local)
+    assert [(p["done"], p["total"], p["first"]) for p in seen] == [(0, 3, True), (1, 3, True), (2, 3, True)]
+    info = local.client.get(f"/api/mirrors/{local.ws}").json()
+    assert info["status"]["running"] is False and "progress" not in info["status"]
+    assert info["interval_s"] == 0  # the tests run with GAMMA_SYNC_INTERVAL=0
+    # a later round is no longer "first"
+    remote.page("Later")
+    seen.clear()
+    _sync(local)
+    assert seen and all(p["first"] is False for p in seen)
+    # the server stopped in the middle of a round: the flag it left is reset at startup
+    sync_engine._save(local.ws, status={**info["status"], "running": True, "started_at": "2026-01-01T00:00:00.000000Z",
+                                        "progress": {"done": 1, "total": 9}})
+    sync_engine.reset_interrupted()
+    st = sync_engine.get_mirror(local.ws)["status"]
+    assert st["running"] is False and st["interrupted"] is True and "progress" not in st
+    assert "interrupted" not in _sync(local)  # the next round clears the note
+
+
+def test_an_unexpected_error_in_one_page_does_not_stick_the_round(monkeypatch):
+    remote, local, _ = _pair()
+    bad = remote.page("Explodes")
+    good = remote.page("Fine")
+    real = sync_engine._sync_page
+
+    def boom(ws, remote_, page_id, **kw):
+        if page_id == bad["id"]:
+            raise KeyError("a bug in the engine")
+        return real(ws, remote_, page_id, **kw)
+
+    monkeypatch.setattr(sync_engine, "_sync_page", boom)
+    r = local.client.post(f"/api/mirrors/{local.ws}/sync?wait=1")
+    status = r.json()["status"]
+    assert status["running"] is False and bad["id"] in status["last_error"]
+    assert good["id"] in local.pages() and bad["id"] not in local.pages()
+    monkeypatch.setattr(sync_engine, "_sync_page", real)
+    assert list(status["retry"]) == [bad["id"]]
+    _sync(local)  # retried next time from the mirror's retry list (the feed's cursor has moved past it)
+    assert sync_engine.get_mirror(local.ws)["status"]["retry"] == {}
+    assert bad["id"] in local.pages()
+
+
 def test_stop_mirroring_keeps_the_workspace():
     remote, local, _ = _pair()
     page = remote.page("Stays")

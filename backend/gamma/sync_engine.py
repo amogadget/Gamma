@@ -50,6 +50,7 @@ from .routers.sync import changes as local_changes
 from .sync_tree import (ancestors, diff, snapshot_from_rows, snapshot_from_tree, subtree_ids, tree_order,
                         upload_refs)
 
+SYNC_LOG_KEEP = 500        # rows of sync_log kept per mirror
 CLIENT = "sync"            # the op-log client of every local write the engine makes
 ACTOR = "mirror"           # ...and its actor (the remote's per-op authors are not carried over)
 MODES = ("two-way", "pull")
@@ -220,6 +221,7 @@ def remove_mirror(ws: str) -> None:
     with connect_pages_db(ws) as conn:
         conn.execute("DELETE FROM sync_pages")
         conn.execute("DELETE FROM sync_conflicts")
+        conn.execute("DELETE FROM sync_log")
         conn.commit()
 
 
@@ -230,6 +232,36 @@ def _conflict(conn, page_id: str, block_id: str, kind: str, mine="", theirs="", 
         "INSERT INTO sync_conflicts (page_id, block_id, kind, mine, theirs, result, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
         (page_id, block_id, kind, mine or "", theirs or "", result or "", page_now()))
     conn.commit()
+
+
+def _note(ws: str, page_id: str, action: str, title: str = "") -> None:
+    """One sync_log row: what a round did to a page (``pulled``, ``pushed``,
+    ``created here``, ``created there``, ``deleted here``, ``deleted
+    there``, ``restored here``, ``restored there``)."""
+    with connect_pages_db(ws) as conn:
+        if not title:
+            row = conn.execute("SELECT content FROM unified_blocks WHERE id = ?", (page_id,)).fetchone()
+            title = (row[0] if row else "") or ""
+        conn.execute("INSERT INTO sync_log (at, page_id, title, action) VALUES (?, ?, ?, ?)",
+                     (page_now(), page_id, title[:200], action))
+        conn.execute("DELETE FROM sync_log WHERE id <= (SELECT MAX(id) FROM sync_log) - ?", (SYNC_LOG_KEEP,))
+        conn.commit()
+
+
+def list_log(ws: str, limit: int = 50) -> list[dict]:
+    """The newest sync_log rows: ``[{id, at, page_id, title, action,
+    exists}]`` (``exists``: the page is still here, so it can be opened)."""
+    with connect_pages_db(ws) as conn:
+        rows = conn.execute(
+            "SELECT l.id, l.at, l.page_id, l.title, l.action, "
+            "EXISTS (SELECT 1 FROM unified_blocks b WHERE b.id = l.page_id) FROM sync_log l "
+            "ORDER BY l.id DESC LIMIT ?", (max(1, min(int(limit or 50), 500)),)).fetchall()
+    return [{**dict(zip(("id", "at", "page_id", "title", "action"), r[:5])), "exists": bool(r[5])} for r in rows]
+
+
+def open_conflicts(ws: str) -> int:
+    with connect_pages_db(ws) as conn:
+        return conn.execute("SELECT COUNT(*) FROM sync_conflicts WHERE resolved = 0").fetchone()[0]
 
 
 def list_conflicts(ws: str, *, resolved: bool = False) -> list[dict]:
@@ -426,11 +458,14 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
                     _save_state(conn, page_id, seq, remote_after or local)
                     _conflict(conn, page_id, page_id, "page_restored", mine=local[page_id]["content"],
                               result="the other side deleted this page; it was edited here, so it came back there")
+                _note(ws, page_id, "restored there", local[page_id]["content"])
                 report["pages_pushed"] += 1
             return
+        title = local[page_id]["content"]
         with connect_pages_db(ws) as conn:
             delete_page(ws, conn, page_id, actor=ACTOR)
             _drop_state(conn, page_id)
+        _note(ws, page_id, "deleted here", title)
         report["pages_deleted"] += 1
         return
     if local_gone and local is None:
@@ -445,6 +480,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             remote.delete(f"/api/blocks/{page_id}")
             with connect_pages_db(ws) as conn:
                 _drop_state(conn, page_id)
+            _note(ws, page_id, "deleted there", remote_tree[page_id]["content"])
             report["pages_pushed"] += 1
             return
         # the remote edited it since (or we may not delete there): it comes back here
@@ -456,6 +492,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             _save_state(conn, page_id, seq, remote_tree)
             _conflict(conn, page_id, page_id, "page_restored_from_remote", theirs=remote_tree[page_id]["content"],
                       result="this page was deleted here but edited on the other side, so it came back")
+        _note(ws, page_id, "restored here", remote_tree[page_id]["content"])
         report["pages_pulled"] += 1
         return
 
@@ -474,6 +511,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             remote_after, seq = _remote_tree(remote, page_id)
             with connect_pages_db(ws) as conn:
                 _save_state(conn, page_id, seq, remote_after or local)
+            _note(ws, page_id, "created there", local[page_id]["content"])
             report["pages_pushed"] += 1
         # else: the feed said it changed, but it is gone now (deleted after the feed): next round's tombstone
         return
@@ -485,6 +523,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
         _apply_local(ws, page_id, diff({page_id: remote_tree[page_id]}, remote_tree, page_id, with_base=False))
         with connect_pages_db(ws) as conn:
             _save_state(conn, page_id, seq, remote_tree)
+        _note(ws, page_id, "created here", remote_tree[page_id]["content"])
         report["pages_pulled"] += 1
         return
 
@@ -501,6 +540,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
                         and op["content"] != sent[op["id"]]["content"]:
                     _conflict(conn, page_id, op["id"], "merged", mine=local[op["id"]]["content"],
                               theirs=sent[op["id"]]["content"], result=op["content"])
+        _note(ws, page_id, "pulled", remote_tree[page_id]["content"])
         report["pages_pulled"] += 1
     # 2. what still differs here goes there
     with connect_pages_db(ws) as conn:
@@ -518,6 +558,7 @@ def _sync_page(ws: str, remote: Remote, page_id: str, *, remote_seq_hint: int | 
             _apply_local(ws, page_id, settle)
         with connect_pages_db(ws) as conn:
             _save_state(conn, page_id, seq, remote_after)
+        _note(ws, page_id, "pushed", local_now[page_id]["content"])
         report["pages_pushed"] += 1
     else:
         # the base is always the remote's tree: what is not there is a local
@@ -585,7 +626,9 @@ def sync_workspace(ws: str, *, fetch=None) -> dict:
 
 def _round(ws: str, mirror: dict, fetch) -> dict:
     remote = Remote(mirror["remote_url"], mirror["remote_ws"], mirror["token"], fetch)
-    status = {**mirror["status"], "running": True, "started_at": page_now()}
+    first = not mirror["status"].get("last_sync")  # the first fill (or one that never completed)
+    status = {**mirror["status"], "running": True, "started_at": page_now(), "progress": None}
+    status.pop("interrupted", None)
     _save(ws, status=status)
     report = {"pages_pulled": 0, "pages_pushed": 0, "pages_deleted": 0, "files_pulled": 0,
               "files_pushed": 0, "errors": []}
@@ -600,44 +643,94 @@ def _round(ws: str, mirror: dict, fetch) -> dict:
         local_pages, local_deleted, local_cursor = _local_feed_all(ws, mirror["local_cursor"])
         if mode != "two-way":
             local_pages, local_deleted = set(), set()
-        todo = set(remote_pages) | set(remote_deleted) | local_pages | local_deleted
-        for page_id in sorted(todo):
+        todo = {}
+        for page_id in set(remote_pages) | set(remote_deleted) | local_pages | local_deleted:
+            todo[page_id] = {"seq": remote_pages.get(page_id),
+                             "remote_gone": page_id in remote_deleted and page_id not in remote_pages,
+                             "local_gone": page_id in local_deleted and page_id not in local_pages}
+        # pages a previous round could not finish come back with the flags they had then
+        # (the cursors have moved past them, so the feeds alone would not list them again)
+        for page_id, flags in (mirror["status"].get("retry") or {}).items():
+            todo.setdefault(page_id, flags)
+        failed = {}
+        for n, page_id in enumerate(sorted(todo)):
+            flags = todo[page_id]
+            # the pill and the popover read this while the round runs: "21 of 79 pages"
+            status["progress"] = {"done": n, "total": len(todo), "page": _title_of(ws, page_id),
+                                  "first": first, "at": page_now()}
+            _save(ws, status=status)
             try:
-                _sync_page(ws, remote, page_id,
-                           remote_seq_hint=remote_pages.get(page_id),
-                           remote_gone=page_id in remote_deleted and page_id not in remote_pages,
-                           local_gone=page_id in local_deleted and page_id not in local_pages,
-                           mode=mode, report=report)
-            except (RemoteError, OpError) as e:
+                _sync_page(ws, remote, page_id, remote_seq_hint=flags["seq"], remote_gone=flags["remote_gone"],
+                           local_gone=flags["local_gone"], mode=mode, report=report)
+            except Exception as e:  # noqa: BLE001 — one page must not sink the round; it is retried next time
+                failed[page_id] = flags
                 report["errors"].append(f"{page_id}: {e}")
                 log.warning(f"[mirror] {ws}: page {page_id}: {e}")
         # cursors move only when the round could talk to the remote at all
         _save(ws, remote_cursor=remote_cursor, local_cursor=local_cursor)
         status = {**status, **report, "running": False, "last_sync": page_now(), "mode": mode,
                   "remote_role": role, "remote_user": me.get("user") if me else None,
-                  "last_error": report["errors"][0] if report["errors"] else ""}
-    except (RemoteError, ValueError, OSError) as e:
+                  "last_error": report["errors"][0] if report["errors"] else "", "retry": failed}
+    except Exception as e:  # noqa: BLE001 — whatever happens, the running flag comes down
         status = {**status, "running": False, "last_error": str(e), "last_attempt": page_now()}
         log.warning(f"[mirror] {ws}: {e}")
     status.pop("errors", None)
+    status.pop("progress", None)
     _save(ws, status=status)
     return status
 
 
+def _title_of(ws: str, page_id: str) -> str:
+    with connect_pages_db(ws) as conn:
+        row = conn.execute("SELECT content FROM unified_blocks WHERE id = ?", (page_id,)).fetchone()
+    return ((row[0] if row else "") or "")[:120]
+
+
 def sync_in_background(ws: str) -> None:
-    threading.Thread(target=lambda: sync_workspace(ws), name=f"mirror-{ws}", daemon=True).start()
+    def run():
+        try:
+            sync_workspace(ws)
+        except Exception as e:  # noqa: BLE001 — a background round reports, never dies silently
+            log.warning(f"[mirror] {ws}: {e}")
+
+    threading.Thread(target=run, name=f"mirror-{ws}", daemon=True).start()
+
+
+def reset_interrupted() -> None:
+    """At startup: a mirror the previous process left ``running`` (the server
+    was stopped in the middle of a round) is not running any more; the
+    round's progress is dropped and the next round picks up where it was —
+    nothing is lost, a round is idempotent."""
+    with connect_users_db() as conn:
+        for ws, raw in conn.execute("SELECT workspace_id, status FROM mirrors").fetchall():
+            status = json.loads(raw or "{}")
+            if not status.get("running"):
+                continue
+            status.update(running=False, interrupted=True)
+            status.pop("progress", None)
+            conn.execute("UPDATE mirrors SET status = ? WHERE workspace_id = ?", (json.dumps(status), ws))
+            log.warning(f"[mirror] {ws}: the last round was interrupted; it continues at the next one")
+        conn.commit()
+
+
+FIRST_PASS_S = 5  # the loop's first round after startup (a copy interrupted mid-fill continues at once)
 
 
 def start_loop() -> None:
-    """Every ``config.sync_interval_s()`` seconds, one round per mirror.
-    Started once at app startup; off when the interval is 0."""
+    """Every ``config.sync_interval_s()`` seconds, one round per mirror,
+    the first one ``FIRST_PASS_S`` after startup. Started once at app
+    startup; off when the interval is 0 (the interrupted flags are still
+    reset)."""
+    reset_interrupted()
     interval = config.sync_interval_s()
     if interval <= 0:
         return
 
     def run():
+        wait = min(FIRST_PASS_S, interval)
         while True:
-            time.sleep(interval)
+            time.sleep(wait)
+            wait = interval
             try:
                 with connect_users_db() as conn:
                     ids = [r[0] for r in conn.execute("SELECT workspace_id FROM mirrors").fetchall()]

@@ -82,7 +82,8 @@ Manage:
   Sync now, Merges — an inline list of the decisions the sync took on its
   own with Keep / Use mine / Use theirs —, Stop) and "Mirror a remote
   workspace" (a `SubDialog`: server address, write token, name, direction)
-  — [mirror.md](mirror.md).
+  — [mirror.md](mirror.md). The same state sits in the header as the sync
+  pill (`collaboration/MirrorPopover.jsx`) while a copy is open.
 - **Backups**: server-kept snapshots per workspace.
 - **Library maintenance**: workspace storage, search-index rebuilding and
   the per-paper metadata / text / index health table.

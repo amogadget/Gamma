@@ -21,6 +21,8 @@ if (window.location.protocol === 'file:') {
     open: (id) => ipcRenderer.invoke('shell:open', id),
     openWorkspace: (id) => ipcRenderer.invoke('shell:open-workspace', id),
     keepOffline: (id) => ipcRenderer.invoke('shell:keep-offline', id),
+    openCopy: (id) => ipcRenderer.invoke('shell:open-copy', id),
+    openOriginal: (id) => ipcRenderer.invoke('shell:open-original', id),
     launcher: () => ipcRenderer.invoke('shell:launcher'),
     reload: () => ipcRenderer.invoke('shell:reload'),
     revealData: (id) => ipcRenderer.invoke('shell:reveal-data', id),

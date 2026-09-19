@@ -54,9 +54,9 @@ All state is SQLite + files on disk under a data directory (env
   (`page_id`, `deleted_at`, `actor`; written by `ops.delete_page`, which also
   drops the page's log rows, cleared when a page is created under the same
   id — so a copy of the workspace can tell a deleted page from one it never
-  had), and `sync_pages` / `sync_conflicts` — a mirror's per-page base tree
-  and the merges it decided on its own ([mirror.md](mirror.md); empty in a
-  workspace that mirrors nothing). Open it ONLY through `db.connect_pages_db(ws)`:
+  had), and `sync_pages` / `sync_conflicts` / `sync_log` — a mirror's
+  per-page base tree, the merges it decided on its own and what its rounds
+  did ([mirror.md](mirror.md); empty in a workspace that mirrors nothing). Open it ONLY through `db.connect_pages_db(ws)`:
   WAL journal mode (readers never wait on a writer — several browsers,
   several members), a 10 s busy timeout, and the schema statements (so a
   restored backup gains `page_ops` and `deleted_pages`). Backups copy it with
