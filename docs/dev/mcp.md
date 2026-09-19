@@ -15,12 +15,12 @@ servers, and connecting Codex does not invoke Gamma's AI provider.
 | `gamma/server_settings.py` | the admin-confirmed public URL and the MCP host allowlist |
 | `gamma/routers/integrations.py` | the session-only token management API |
 | `users.db` tables `integration_tokens`, `mcp_oauth` | migrations 6 and 7 ([migrations.md](migrations.md)) |
-| `frontend/src/settings/SettingsIntegrations.jsx`, `frontend/src/auth/McpConsent.jsx` | the External assistants pane, the consent screen |
+| `frontend/src/settings/SettingsIntegrations.jsx`, `frontend/src/auth/McpConsent.jsx` | the Integrations pane, the consent screen |
 | `plugins/gamma/`, `tools/*codex*`, `.github/workflows/codex-plugin.yml` | the Codex plugin and its packaging |
 
 ## Connect
 
-Open Gamma in your browser and go to **Settings → AI → External assistants**.
+Open Gamma in your browser and go to **Settings → Integrations**.
 Copy its server URL into your assistant's MCP settings and choose its sign-in
 option. Select **Codex CLI** in the panel for commands using your actual URL:
 
@@ -116,7 +116,7 @@ rendered PDF figures, no handwriting recognition.
 ## Self-hosted and remote connections
 
 Open Gamma at its public HTTPS address, then sign in as an administrator and
-open **Settings → Administration → Server → Public server URL**. The field
+open **Settings → Server → Public server URL**. The field
 suggests the browser's origin. Check it and click **Confirm address** once.
 Gamma stores the address in `users.db` and immediately uses it for OAuth,
 MCP links, and the MCP hostname allowlist. No environment variables or restart
@@ -168,7 +168,7 @@ Clients use `token_endpoint_auth_method=none`. Dynamic client registrations expi
 after 90 days; sign-in requests expire after 10 minutes and authorization codes
 after two minutes. Access tokens last 90 days. Refresh tokens are not issued;
 sign in again after expiration or revocation. OAuth connections appear alongside
-manual tokens in **External assistants**, where users can revoke them.
+manual tokens in **Integrations**, where users can revoke them.
 
 ## Permissions and credentials
 
@@ -201,7 +201,7 @@ DELETE /api/integrations/tokens/{id}
 
 ### Install from a Gamma release
 
-Open **Settings → AI → External assistants → Codex CLI** in browser or self-hosted
+Open **Settings → Integrations → Codex CLI** in browser or self-hosted
 Gamma (the same walkthrough ships in `plugins/gamma/README.md`). Select **Windows PowerShell** or **macOS / Linux**, copy the setup command,
 and run it on the computer where you use Codex. The Codex CLI must already be
 installed. Setup installs **Gamma PDF**, adds this server's MCP URL, and opens
@@ -305,7 +305,7 @@ Official references: [Codex MCP configuration](https://learn.chatgpt.com/docs/ex
   confirm the Codex process inherited the variable. Account/workspace access must
   still exist. OAuth tokens are bound to the exact server URL used when signing in.
 - **421:** the request's host is neither loopback nor the confirmed public
-  server URL (Settings → Administration → Server); confirm the address first.
+  server URL (Settings → Server); confirm the address first.
 - **503:** the ASGI lifespan is not running.
 - **Connection refused:** Gamma is stopped, the desktop port changed, or the MCP
   client is running on a different machine where localhost means that machine.

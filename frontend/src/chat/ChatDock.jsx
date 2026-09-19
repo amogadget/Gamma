@@ -1106,11 +1106,7 @@ export default function ChatDock({
           <div className="chatEmpty">
             {loadError || (readOnly ? "No saved conversation for this page." : aiInfo && !aiInfo.enabled ? (
               openAiKeysEditor ? (
-                <>
-                  AI is not configured —{" "}
-                  <button className="chatEmptyLink" onClick={openAiKeysEditor}>add an AI provider</button>
-                  {" "}with your API key to enable it.
-                </>
+                <>Connect an AI provider to start — <button className="chatEmptyLink" onClick={openAiKeysEditor}>Set up AI</button>.</>
               ) : "AI is not configured."
             ) : focusedBlockId ? "Ask AI about this page…"
               : agentIntro || "Ask AI anything, or generate a report from your pages…")}
@@ -1405,10 +1401,10 @@ export default function ChatDock({
             : pdfSelections.length ? "Ask about the selection…"
             : chatNotes?.length > 1 ? `Ask about the ${chatNotes.length} attached notes…`
             : chatNotes?.length ? (chatNotes[0].kind === "block" ? "Ask about the attached block…" : "Ask about the selected note…")
-            : cursorChip ? "Ask about the block at your cursor…"
+            : cursorChip ? "Ask about this block…"
             : chatDocs.length ? `Ask about ${chatDocs.length} attached page${chatDocs.length > 1 ? "s" : ""}…`
             : agentAsk || "Ask…"
-          ) + " (@ to mention a paper)"}
+          ) + " (@ paper)"}
         />
         {chatLoading ? (
           <button className="uiBtn chatCircleBtn chatStopBtn" type="button" onClick={stopChat} title="Stop generating" aria-label="Stop generating">

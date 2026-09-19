@@ -27,7 +27,8 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       assert(await dialog.evaluate((el) => el.contains(document.activeElement)), "reverse tab from the heading stays in the dialog");
       assertEq(await dialog.getByRole("group", { name: "Export format" }).getByRole("button").count(), 6);
       assertEq(await choice(dialog, "PDF").getAttribute("aria-pressed"), "true");
-      for (const [type, count] of [["Notes", 2], ["ZIP", 4]]) {
+      for (const [type, count] of [["This paper", 0], ["Notes", 2], ["Library", 4]]) {
+        if (!count) { assertEq(await dialog.getByRole("group", { name: `${type} choices`, exact: true }).count(), 0); continue; }
         assertEq(await dialog.getByRole("group", { name: `${type} choices`, exact: true }).getByRole("button").count(), count);
       }
       await choice(dialog, "Markdown").hover();
@@ -121,7 +122,7 @@ export async function transferScenarios({ server, browser, alice, makePdf, step,
       dialog = await openDialog(page, "Import");
       assertEq(await dialog.getByRole("group", { name: "Import from" }).getByRole("button").count(), 5);
       assertEq(await choice(dialog, "Annotations in this PDF").getAttribute("aria-pressed"), "true");
-      for (const [type, count] of [["PDF", 2], ["MD", 1], ["ZIP", 2]]) {
+      for (const [type, count] of [["This paper", 2], ["Notes", 1], ["Library", 2]]) {
         assertEq(await dialog.getByRole("group", { name: `${type} choices`, exact: true }).getByRole("button").count(), count);
       }
       if (flags.keep) await page.screenshot({ animations: "disabled", path: `${server.dir}/import-sources.png` });

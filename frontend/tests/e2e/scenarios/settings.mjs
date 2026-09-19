@@ -46,7 +46,7 @@ export async function settingsScenarios(env) {
         if (body.api_key === "old-key") oldResponseSent = true;
       });
       await openSettings(page);
-      await nav(page, "AI").click();
+      await nav(page, "Connections").click();
       await page.getByRole("button", { name: "+ Add provider", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "Add key", exact: true });
       await dialog.getByRole("button", { name: "AI service", exact: true }).click();
@@ -105,11 +105,11 @@ export async function settingsScenarios(env) {
         await route.fulfill({ json: { models: ["gpt-test", "gpt-new-model"] } });
       });
       await openSettings(page);
-      await nav(page, "AI").click();
+      await nav(page, "Connections").click();
       await page.getByRole("button", { name: "+ Add provider", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "Add key", exact: true });
       await dialog.getByRole("button", { name: "AI service", exact: true }).click();
-      await page.getByText("ChatGPT subscription", { exact: true }).click();
+      await page.getByRole("button", { name: "ChatGPT subscription", exact: true }).click();
       await dialog.getByRole("button", { name: "Open ChatGPT sign-in", exact: true }).click();
       await until(() => page.evaluate(() => !!window.testSignInUrl));
       const state = await page.evaluate(() => new URL(window.testSignInUrl).searchParams.get("state"));
@@ -130,8 +130,7 @@ export async function settingsScenarios(env) {
     const { ctx, page } = await setup();
     try {
       await openSettings(page);
-      await nav(page, "AI").click();
-      await nav(page, "External assistants").click();
+      await nav(page, "Integrations").click();
       const serverUrl = page.getByRole("textbox", { name: "Gamma MCP server URL" });
       await serverUrl.waitFor();
       assertEq(await serverUrl.inputValue(), `${server.base}/mcp`);
@@ -279,7 +278,7 @@ export async function settingsScenarios(env) {
       await row(page, "Control size").getByRole("button", { name: "Reset", exact: true }).click();
       if (flags.keep) await page.screenshot({ path: `${server.dir}/settings-appearance.png`, animations: "disabled" });
       await nav(page, "Diagnostics").click();
-      assertEq(await nav(page, "Back to settings").count(), 0, "short pages keep the main settings navigation");
+      assertEq(await nav(page, "Back to settings").count(), 0, "one sidebar: no second-level navigation");
       await nav(page, "Library").click();
       if (flags.keep) await page.screenshot({ path: `${server.dir}/settings-library.png`, animations: "disabled" });
       await page.getByRole("checkbox", { name: "Labels", exact: true }).uncheck();
@@ -291,9 +290,7 @@ export async function settingsScenarios(env) {
       await row(page, "Parallel requests").locator("input").fill("7");
       await row(page, "Parallel requests").locator("input").press("Tab");
       await until(() => page.evaluate(() => localStorage.getItem("gamma-translate-parallel")).then((v) => v === "7"));
-      await nav(page, "Back to settings").click();
-      await nav(page, "Manage workspaces").click();
-      await page.getByRole("dialog", { name: "Workspace manager" }).waitFor();
+      await nav(page, "Workspaces").click();
       await page.getByRole("button", { name: "Manage", exact: true }).first().click();
       await page.getByRole("button", { name: "Back to workspaces", exact: true }).waitFor();
       assertEq(await page.getByRole("dialog").count(), 1, "workspace details stay in the manager instead of stacking a dialog");
@@ -305,8 +302,8 @@ export async function settingsScenarios(env) {
       await page.getByRole("button", { name: "Back to workspaces", exact: true }).click();
       await nav(page, "Backups").click();
       await row(page, "Backups").waitFor();
-      await nav(page, "Back to settings").click();
-      assertEq(await nav(page, "Administration").count(), 0, "non-admin has no administration navigation");
+      assertEq(await nav(page, "Server").count(), 0, "non-admin has no server navigation");
+      assertEq(await nav(page, "Users").count(), 0, "non-admin has no users navigation");
       await page.getByRole("searchbox", { name: "Search settings" }).fill("administration");
       assertEq(await page.locator(".settingsSearchResult").count(), 0);
       await page.getByRole("button", { name: "Close settings", exact: true }).click();
@@ -338,14 +335,13 @@ export async function settingsScenarios(env) {
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
       assertEq(await input.inputValue(), original);
       await input.fill("Saved test prompt");
-      await page.getByRole("button", { name: "Save prompts", exact: true }).click();
+      await page.getByRole("button", { name: "Save", exact: true }).click();
       await page.getByRole("button", { name: "Close settings", exact: true }).click();
       await openSettings(page);
       await search(page, "custom prompts", "Custom prompts");
       await page.getByRole("button", { name: /Chat system prompt/ }).click();
       assertEq(await page.locator(".promptTextarea").first().inputValue(), "Saved test prompt");
-      await nav(page, "Back to settings").click();
-      await nav(page, "AI").click();
+      await nav(page, "Connections").click();
       await page.getByRole("button", { name: "+ Add provider", exact: true }).click();
       const dialog = page.getByRole("dialog", { name: "Add key", exact: true });
       await dialog.getByRole("button", { name: "AI service", exact: true }).click();
@@ -361,7 +357,7 @@ export async function settingsScenarios(env) {
       await dialog.press("Escape");
       await dialog.getByRole("button", { name: "Discard changes", exact: true }).click();
       assertEq(await dialog.count(), 0);
-      assertEq(await page.getByRole("dialog", { name: "AI settings", exact: true }).count(), 1);
+      assertEq(await page.getByRole("dialog", { name: "Settings", exact: true }).count(), 1);
       assertNoProblems(page);
     } finally { await ctx.close(); }
   });
@@ -387,7 +383,7 @@ export async function settingsScenarios(env) {
     const { ctx, page } = await setup();
     try {
       await openSettings(page);
-      await nav(page, "AI").click();
+      await nav(page, "Connections").click();
       await row(page, "Default chat model").waitFor();
       await row(page, "Default chat model").getByRole("button").first().click();
       await page.getByText("test-model-b", { exact: true }).last().click();
@@ -402,16 +398,16 @@ export async function settingsScenarios(env) {
       await popover.getByRole("checkbox", { name: "Allow tools in all chats" }).uncheck();
       await page.locator('[title^="Chat settings"]').click();
       await openSettings(page);
-      await nav(page, "AI").click();
+      await nav(page, "Connections").click();
       assert((await row(page, "Default chat model").innerText()).includes("test-model-a"));
-      await nav(page, "Assistant").click();
-      assertEq(await page.getByRole("checkbox", { name: "Allow assistant tools" }).isChecked(), false);
+      await nav(page, "Chat").click();
+      assertEq(await page.getByRole("checkbox", { name: "Assistant tools" }).isChecked(), false);
       await nav(page, "Advanced").click();
       assertEq(await row(page, "Single paper").locator('input[type="number"]').inputValue(), "42000");
-      await nav(page, "Assistant").click();
-      await page.getByRole("checkbox", { name: "Allow assistant tools" }).check();
-      await row(page, "Folder chat").getByRole("button").click();
-      await page.getByText("Read & search", { exact: true }).last().click();
+      await nav(page, "Chat").click();
+      await page.getByRole("checkbox", { name: "Assistant tools" }).check();
+      // the per-chat chips: turning Rename off for folder chats
+      await row(page, "Folder chat").getByRole("button", { name: /^Rename/ }).click();
       await page.getByRole("button", { name: "Close settings", exact: true }).click();
       await page.locator('[title^="Chat settings"]').click();
       assertEq(await popover.getByRole("checkbox", { name: "Allow tools in all chats" }).isChecked(), true);
@@ -471,18 +467,21 @@ export async function settingsScenarios(env) {
       await nav(page, "Account").click();
       await page.locator(".settingsPane .aiProvRow").waitFor();
       assertEq(await page.locator(".settingsPane .aiProvRow").count(), 1);
-      await nav(page, "Administration").click();
+      await nav(page, "Server").click();
       const limit = row(page, "Default max upload").locator("input");
       await limit.waitFor();
       const originalLimit = await limit.inputValue();
+      // limits save on commit, like every other setting
       await limit.fill("77");
-      await nav(page, "Users").click();
-      await page.getByRole("button", { name: "Keep editing", exact: true }).click();
-      await page.getByRole("button", { name: "Cancel", exact: true }).click();
-      assertEq(await limit.inputValue(), originalLimit);
+      await limit.press("Enter");
+      await until(() => user.api("/api/admin/settings").then((s) => s.max_upload_mb === 77), { what: "limit saved on Enter" });
+      await limit.fill(originalLimit);
+      await limit.press("Enter");
+      await until(() => user.api("/api/admin/settings").then((s) => String(s.max_upload_mb) === originalLimit), { what: "limit restored" });
       await limit.fill("77");
+      await limit.press("Enter");
       await row(page, "Default quota").locator("input").fill("1200");
-      await page.getByRole("button", { name: "Save limits", exact: true }).click();
+      await row(page, "Default quota").locator("input").press("Enter");
       await until(() => user.api("/api/admin/settings").then((v) => v.max_upload_mb === 77 && v.quota_mb === 1200));
       await nav(page, "Users").click();
       await until(() => page.locator(".settingsPane .aiProvRow").count().then((n) => n > 1));

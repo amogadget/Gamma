@@ -15,7 +15,7 @@ import {
   useTextScale,
 } from "../shared/ui/Widgets";
 import { BlockTree, _dragState } from "../editor/BlockTree";
-import { FileChipContext, forgetDocPages, rememberDocPage, setUploadReporter, uploadFilesAsLines } from "../transfers/FileChip";
+import { FileChipContext, forgetDocPages, rememberDocPage, setUploadReporter, uploadFilesAsLines, xhrUpload } from "../transfers/FileChip";
 import { CardLabels, KindToggle, ListFindBox, PageCard, ViewToggle } from "../library/FileBrowser";
 import ChatDock from "../chat/ChatDock";
 import { createChatSession } from "../chat/chatSession";
@@ -76,7 +76,7 @@ import SettingsDialog from "../settings/SettingsDialog";
 import { useGuide } from "../guide/useGuide";
 import GuideOverlay from "../guide/GuideOverlay";
 import { guideEvents } from "../guide/events";
-import { QuotaMeter, Section } from "../settings/SettingsKit";
+import { Empty, QuotaMeter, Section } from "../settings/SettingsKit";
 import { CopyBox, SharePopover } from "../sharing/SharePopover";
 import {
   addFolderTag,
@@ -295,6 +295,39 @@ function CardCarousel({ label, children, className }) {
 
 // The share popover's invite box: the account directory as a picker, fetched
 // only while the popover is open (the box mounts with it).
+// One line of the background-tasks popover: status glyph, kind glyph, the
+// name (with a thin progress bar under it while the work can measure
+// itself), the info text, and a stop button while the work can be stopped.
+// The row clips long names and messages; hovering shows the whole thing
+// (a failed import's full reason, a long URL).
+function TransferRow({ status, icon, name, info, progress, onStop }) {
+  return (
+    <div className={`transferRow ${status}`} title={info ? `${name} — ${info}` : name}>
+      <span className={`transferStatus ${status}`}>
+        {status === "active" ? <span className="transferSpin inline" />
+          : status === "done" ? <CheckIcon size={12} strokeWidth={2.6} />
+            : status === "cancelled" ? <XIcon size={12} strokeWidth={2.4} />
+              : <AlertCircleIcon size={12} strokeWidth={2.4} />}
+      </span>
+      <span className="transferKind">{icon}</span>
+      <span className="transferMain">
+        <span className="transferName">{name}</span>
+        {status === "active" && typeof progress === "number" ? (
+          <span className="transferBar" role="progressbar" aria-valuemin={0} aria-valuemax={100}
+            aria-valuenow={Math.round(Math.max(0, Math.min(1, progress)) * 100)}>
+            <span style={{ width: `${Math.round(Math.max(0, Math.min(1, progress)) * 100)}%` }} />
+          </span>
+        ) : null}
+      </span>
+      <span className="transferInfo">{info || ""}</span>
+      {onStop ? (
+        <button type="button" className="uiClose uiCloseSm transferStop" title="Stop" aria-label={`Stop ${name}`}
+          onClick={(e) => { e.stopPropagation(); onStop(); }}>×</button>
+      ) : <span className="transferStopSlot" />}
+    </div>
+  );
+}
+
 export default function App() {
   // Authorization must never mount library effects (saved-page restore,
   // autosave, navigation hotkeys). They can otherwise replace its URL.
@@ -539,7 +572,8 @@ function LibraryApp() {
     });
   }
   async function downloadWorkspaceExport({ url, progressUrl, label }) {
-    const tid = addTransfer({ name: label, kind: "download", info: "preparing…" });
+    const ctl = new AbortController();
+    const tid = addTransfer({ name: label, kind: "download", info: "preparing…", cancel: () => ctl.abort() });
     postPill("backup", { msg: "Preparing export — the server is zipping your data…", spinner: true });
     // The response only starts once the server finished zipping; until then,
     // poll the zipping percent from the export-progress side-channel.
@@ -549,14 +583,15 @@ function LibraryApp() {
         if (p.active && p.total) {
           const pct = Math.min(99, Math.floor((p.done / p.total) * 100));
           postPill("backup", { msg: `Preparing export — zipping… ${pct}% (${fmtBytes(p.done)} of ${fmtBytes(p.total)})`, spinner: true });
-          updateTransfer(tid, { info: `zipping… ${pct}%` });
+          updateTransfer(tid, { info: `zipping… ${pct}%`, progress: p.done / p.total });
         }
       } catch {}
     }, 500);
     try {
-      const res = await fetch(url, { credentials: "include" });
+      const res = await fetch(url, { credentials: "include", signal: ctl.signal });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || res.statusText);
       clearInterval(zipPoll);
+      updateTransfer(tid, { progress: undefined });
       const total = Number(res.headers.get("content-length")) || 0;
       const reader = res.body.getReader();
       const chunks = [];
@@ -580,7 +615,7 @@ function LibraryApp() {
             : `Downloading backup… ${fmtBytes(loaded)}`,
           spinner: true,
         });
-        updateTransfer(tid, { info: total ? `${fmtBytes(loaded)} / ${fmtBytes(total)}` : fmtBytes(loaded) });
+        updateTransfer(tid, { info: total ? `${fmtBytes(loaded)} / ${fmtBytes(total)}` : fmtBytes(loaded), progress: total ? loaded / total : undefined });
       }
       const blob = new Blob(chunks, { type: "application/zip" });
       const m = /filename="?([^";]+)/.exec(res.headers.get("content-disposition") || "");
@@ -596,7 +631,7 @@ function LibraryApp() {
       clearInterval(zipPoll);
       updateTransfer(tid, { status: "error", info: String(err.message || err) });
       postPill("backup", null);
-      setStatus(`Export failed: ${err.message}`);
+      if (!ctl.signal.aborted) setStatus(`Export failed: ${err.message}`);
     }
   }
 
@@ -2090,19 +2125,43 @@ function LibraryApp() {
 
   // Background tasks: client-side transfers (downloads/uploads) plus
   // server-side work (library indexing), shown in one popover.
-  const [transfers, setTransfers] = useState([]); // [{id, name, kind, status, info}]
+  // [{id, name, kind, status, info, progress?, cancel?}] — progress is 0..1
+  // when the work can measure itself (bytes, pages, papers), cancel a
+  // function when it can be stopped (the row then shows a stop button).
+  const [transfers, setTransfers] = useState([]);
   const [indexTask, setIndexTask] = useState(null); // {total, done, active} from /api/tasks
   // The server remembers the last run's progress forever; this hides the
   // finished row after "Clear" until a new indexing run starts.
   const [indexTaskCleared, setIndexTaskCleared] = useState(false);
   const transferByUrlRef = useRef({});
+  // Rows the user stopped: the work's own late reports (an abort error, a
+  // "done" that raced the stop) must not overwrite "stopped".
+  const cancelledTransfersRef = useRef(new Set());
   function addTransfer(t) {
     const id = makeId();
     setTransfers((prev) => [{ id, status: "active", ...t }, ...prev].slice(0, 20));
     return id;
   }
   function updateTransfer(id, patch) {
+    if (patch.status && cancelledTransfersRef.current.has(id)) return;
     setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }
+  // A row that starts over (a re-download of the same url) is a live row again.
+  function reviveTransfer(id, patch) {
+    cancelledTransfersRef.current.delete(id);
+    setTransfers((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }
+  function cancelTransfer(id) {
+    setTransfers((prev) => prev.map((t) => {
+      if (t.id !== id || t.status !== "active") return t;
+      cancelledTransfersRef.current.add(id);
+      try { t.cancel?.(); } catch {}
+      return { ...t, status: "cancelled", info: "stopped", cancel: null, progress: undefined };
+    }));
+  }
+  // The server's indexer: one per workspace, stoppable from the popover.
+  function cancelIndexing() {
+    apiJson(`${API}/tasks/indexing`, { method: "DELETE" }).then(() => setTasksNonce((n) => n + 1)).catch(() => {});
   }
   // Byte-level download state reported by the PDF viewer (skips local uploads).
   // One row per URL: a re-download (LRU eviction, retry) reactivates the
@@ -2198,16 +2257,17 @@ function LibraryApp() {
     if (st.phase === "start") {
       const prevId = transferByUrlRef.current[url];
       if (prevId) {
-        updateTransfer(prevId, { status: "active", info: "downloading…" });
+        reviveTransfer(prevId, { status: "active", info: "downloading…", cancel: st.cancel, progress: undefined });
         return;
       }
       const name = (pageTitle || decodeURIComponent((url.split("source_url=")[1] || url).split("/").pop() || "PDF")).slice(0, 60);
-      transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…" });
+      transferByUrlRef.current[url] = addTransfer({ name, kind: "download", info: "downloading…", cancel: st.cancel });
     } else if (st.phase === "progress") {
       const id = transferByUrlRef.current[url];
       if (id) updateTransfer(id, {
         status: "active",
         info: st.total ? `${fmtBytes(st.loaded)} / ${fmtBytes(st.total)}` : `${fmtBytes(st.loaded)}…`,
+        progress: st.total ? st.loaded / st.total : undefined,
       });
     } else {
       const id = transferByUrlRef.current[url];
@@ -2980,11 +3040,14 @@ function LibraryApp() {
   function handleTranslateState(st) {
     setPdfTransState(st);
     if (st.running && !transTaskRef.current) {
-      transTaskRef.current = addTransfer({ name: `Translate ${st.label} → ${translateLangLabel}`, kind: "ai", info: "0%" });
+      transTaskRef.current = addTransfer({
+        name: `Translate ${st.label} → ${translateLangLabel}`, kind: "ai", info: "0%", progress: 0,
+        cancel: () => pdfTranslateCtl.current?.halt(),
+      });
     }
     if (transTaskRef.current) {
       if (st.running) {
-        updateTransfer(transTaskRef.current, { info: `${Math.round(st.progress * 100)}%` });
+        updateTransfer(transTaskRef.current, { info: `${Math.round(st.progress * 100)}%`, progress: st.progress });
       } else {
         const full = st.progress >= 0.999;
         updateTransfer(transTaskRef.current, { status: "done", info: full ? "100%" : `stopped at ${Math.round(st.progress * 100)}%` });
@@ -3038,11 +3101,12 @@ function LibraryApp() {
   // Shared by the open-page fetch and the bulk-upload follow-up; throws on
   // failure (with the task already marked).
   async function fetchMetadataRequest(block, force = false) {
-    const taskId = addTransfer({ name: `Metadata — ${(block.content || "paper").slice(0, 48)}`, kind: "ai", info: "fetching…" });
+    const ctl = new AbortController();
+    const taskId = addTransfer({ name: `Metadata — ${(block.content || "paper").slice(0, 48)}`, kind: "ai", info: "fetching…", cancel: () => ctl.abort() });
     setMetaFetchingIds((prev) => new Set(prev).add(block.id));
     try {
       const data = await apiJson(`${API}/metadata/fetch`, {
-        method: "POST",
+        method: "POST", signal: ctl.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           block_id: block.id,
@@ -3211,10 +3275,11 @@ function LibraryApp() {
     const targetId = blockArg?.id || focusedBlockId;
     if (!targetId || pptCiteBusy) return;
     setPptCiteBusy(true);
-    const taskId = addTransfer({ name: `Slide citation — ${(blockArg?.content || pageTitle || "paper").slice(0, 48)}`, kind: "ai", info: "generating…" });
+    const ctl = new AbortController();
+    const taskId = addTransfer({ name: `Slide citation — ${(blockArg?.content || pageTitle || "paper").slice(0, 48)}`, kind: "ai", info: "generating…", cancel: () => ctl.abort() });
     try {
       const data = await apiJson(`${API}/metadata/cite`, {
-        method: "POST",
+        method: "POST", signal: ctl.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ block_id: targetId, prompt: citePrompt || "", model: chatSendModel || "", force }),
       });
@@ -3222,7 +3287,7 @@ function LibraryApp() {
       if (focusedBlockIdRef.current === targetId) setPptCite(data.citation || "");
     } catch (err) {
       updateTransfer(taskId, { status: "error", info: (err.message || "failed") });
-      setStatus(`Citation failed: ${err.message}`);
+      if (!ctl.signal.aborted) setStatus(`Citation failed: ${err.message}`);
     } finally {
       setPptCiteBusy(false);
     }
@@ -3995,7 +4060,13 @@ function LibraryApp() {
       const filename = uploadLeafName(file, "upload.pdf");
       const form = new FormData();
       form.append("file", file, filename);
-      const data = await apiJson(`${API}/uploads`, { method: "POST", body: form });
+      // An XHR so the task row gets byte progress and a stop button.
+      const data = await xhrUpload(`${API}/uploads`, form, {
+        onProgress: (loaded, total) => updateTransfer(taskId, {
+          info: `${fmtBytes(loaded)} / ${fmtBytes(total)}`, progress: total ? loaded / total : undefined,
+        }),
+        onAbortable: (abort) => updateTransfer(taskId, { cancel: abort }),
+      });
       return { doc_id: data.doc_id, source_url: data.source_url, original_filename: filename,
         viewerUrl: data.source_url, note: "" };
     }
@@ -4106,6 +4177,7 @@ function LibraryApp() {
     setLoading(true);
     const done = [];
     const failed = [];
+    const stopped = []; // stopped from the tasks popover — not a failure
     try {
       for (const { file, filename, folder } of items) {
         // Pre-check only with the quota info loaded — otherwise let the
@@ -4121,7 +4193,8 @@ function LibraryApp() {
             ? { ...(await uploadOnePdf(file, folder)), kind: "pdf" }
             : await importOneMarkdown(file, folder));
         } catch (err) {
-          failed.push(`${filename} (${err.message})`);
+          if (err.aborted) stopped.push(filename);
+          else failed.push(`${filename} (${err.message})`);
         }
       }
       const pdfDone = done.filter((item) => item.kind === "pdf");
@@ -4140,8 +4213,10 @@ function LibraryApp() {
         setStatus(failed.length
           ? `Imported ${done.length} of ${items.length} files — failed: ${failed.join(", ")}`
           : `Imported ${done.length} files.`);
-      } else {
+      } else if (failed.length) {
         setStatus(`Upload failed: ${failed.join(", ")}`);
+      } else if (stopped.length) {
+        setStatus(`Upload stopped: ${stopped.join(", ")}`);
       }
       // Runs after the upload/import UI work and never delays its completion.
       queueMetadataForUploads(pdfDone);
@@ -4188,17 +4263,18 @@ function LibraryApp() {
   // inside the exported PDFs, so strip works exactly like for "this PDF".
   async function importZotero(file, strip = embAnnots === "strip") {
     if (shareMode) return;
-    const taskId = addTransfer({ name: `Zotero import — ${file.name.slice(0, 48)}`, kind: "import", info: "importing…" });
+    const ctl = new AbortController();
+    const taskId = addTransfer({ name: `Zotero import — ${file.name.slice(0, 48)}`, kind: "import", info: "importing…", cancel: () => ctl.abort() });
     setStatus("Importing Zotero library — this can take a while for big exports…");
     try {
-      const { data, summary } = await importZoteroZip(file, strip);
+      const { data, summary } = await importZoteroZip(file, strip, ctl.signal);
       updateTransfer(taskId, { status: "done", info: `${data.pages_created + data.pages_merged} pages` });
       setStatus(`Zotero import: ${summary}.`);
       refreshQuota?.();
       await fetchHomeBlocks();
     } catch (err) {
       updateTransfer(taskId, { status: "error", info: (err.message || "failed") });
-      setStatus(`Zotero import failed: ${err.message}`);
+      if (!ctl.signal.aborted) setStatus(`Zotero import failed: ${err.message}`);
     }
   }
 
@@ -4206,13 +4282,14 @@ function LibraryApp() {
   // export, any zipped folder of .md): one page per note, into the open folder.
   async function importMarkdownZip(file) {
     if (shareMode) return;
-    const taskId = addTransfer({ name: `Markdown import — ${file.name.slice(0, 48)}`, kind: "import", info: "importing…" });
+    const ctl = new AbortController();
+    const taskId = addTransfer({ name: `Markdown import — ${file.name.slice(0, 48)}`, kind: "import", info: "importing…", cancel: () => ctl.abort() });
     setStatus("Importing Markdown notes…");
     const form = new FormData();
     form.append("file", file);
     form.append("folder", homeMode && folderFilter ? folderFilter : "");
     try {
-      const data = await apiJson(`${API}/import/markdown-zip`, { method: "POST", body: form });
+      const data = await apiJson(`${API}/import/markdown-zip`, { method: "POST", body: form, signal: ctl.signal });
       (data.warnings || []).forEach((w) => console.warn(`Markdown import: ${w.title} — ${w.reason}`));
       const summary = [
         `${data.pages_created} new page${data.pages_created === 1 ? "" : "s"}`,
@@ -4227,7 +4304,7 @@ function LibraryApp() {
       await fetchHomeBlocks();
     } catch (err) {
       updateTransfer(taskId, { status: "error", info: (err.message || "failed") });
-      setStatus(`Markdown import failed: ${err.message}`);
+      if (!ctl.signal.aborted) setStatus(`Markdown import failed: ${err.message}`);
     }
   }
 
@@ -4413,8 +4490,8 @@ function LibraryApp() {
     const showPill = (msg) => { pill.shown++; postPill("upload", { msg, spinner: true }); };
     const dropPill = () => { if (pill.shown) { pill.shown = 0; postPill("upload", null); } };
     setUploadReporter({
-      start: (file) => ({
-        tid: addTransfer({ name: uploadLeafName(file, "file"), kind: "upload", info: fmtBytes(file.size) }),
+      start: (file, abort) => ({
+        tid: addTransfer({ name: uploadLeafName(file, "file"), kind: "upload", info: fmtBytes(file.size), cancel: abort }),
         name: uploadLeafName(file, "file"), size: file.size, at: Date.now(), lastPct: -1,
       }),
       progress: (u, loaded, total) => {
@@ -4422,14 +4499,14 @@ function LibraryApp() {
         const pct = total ? Math.min(99, Math.floor((loaded / total) * 100)) : 0;
         if (pct === u.lastPct) return;
         u.lastPct = pct;
-        updateTransfer(u.tid, { info: `${fmtBytes(loaded)} / ${fmtBytes(total)} — ${pct}%` });
+        updateTransfer(u.tid, { info: `${fmtBytes(loaded)} / ${fmtBytes(total)} — ${pct}%`, progress: total ? loaded / total : undefined });
         if (Date.now() - u.at > 400 || total > 2 * 1024 * 1024) showPill(`Uploading ${u.name}… ${pct}%`);
       },
       done: (u, ok, detail) => {
         if (!u) return;
         updateTransfer(u.tid, ok ? { status: "done", info: fmtBytes(u.size) } : { status: "error", info: detail || "failed" });
         dropPill();
-        if (!ok) setStatus(`Upload of ${u.name} failed: ${detail || "refused"}`);
+        if (!ok && !cancelledTransfersRef.current.has(u.tid)) setStatus(`Upload of ${u.name} failed: ${detail || "refused"}`);
         else if (Date.now() - u.at > 400) setStatus(`Uploaded ${u.name}.`);
       },
     });
@@ -5317,10 +5394,11 @@ function LibraryApp() {
     if (!docId || shareMode || aiTitleBusy) return;
     setAiTitleBusy(true);
     setStatus("Asking AI for the title…");
-    const taskId = addTransfer({ name: `AI title — ${(pageTitle || "paper").slice(0, 48)}`, kind: "ai", info: "asking…" });
+    const ctl = new AbortController();
+    const taskId = addTransfer({ name: `AI title — ${(pageTitle || "paper").slice(0, 48)}`, kind: "ai", info: "asking…", cancel: () => ctl.abort() });
     try {
       const data = await apiJson(`${API}/ai/chat`, {
-        method: "POST",
+        method: "POST", signal: ctl.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: "Extract the exact title of this document. Reply with ONLY the title text — no quotes, no authors, no extra words.",
@@ -6778,13 +6856,21 @@ function LibraryApp() {
                             </div>
                           ) : null}
                           <div className="metaRow">
-                            <span className="metaKey">PDF text</span>
-                            <span className="metaVal" style={{ flex: 1, display: "flex", alignItems: "center", gap: 6 }}>
-                              {!pdfTextInfo || pdfTextInfo.checking ? "checking…"
-                                : pdfTextInfo.error ? `check failed — ${pdfTextInfo.error}`
-                                : !pdfTextInfo.found ? "file not on server"
-                                : pdfTextInfo.ok ? "✓ extracted"
-                                : "✗ none — scanned or image-only? AI can't read it"}
+                            <span className="metaKey">Status</span>
+                            <span className="metaVal metaStatus">
+                              <span className={`metaCell ${!pdfTextInfo || pdfTextInfo.checking || pdfTextInfo.error ? "muted" : pdfTextInfo.ok ? "ok" : "bad"}`}
+                                title={!pdfTextInfo || pdfTextInfo.checking ? "Checking whether the PDF has a text layer"
+                                  : pdfTextInfo.error ? `Text check failed — ${pdfTextInfo.error}`
+                                  : !pdfTextInfo.found ? "The PDF file is not on the server"
+                                  : pdfTextInfo.ok ? "The PDF has a text layer — the AI and search can read it"
+                                  : "No text layer — scanned or image-only? The AI can't read it"}>
+                                <i className="setDot" />{!pdfTextInfo || pdfTextInfo.checking ? "checking" : pdfTextInfo.error ? "text ?" : !pdfTextInfo.found ? "no file" : pdfTextInfo.ok ? "text" : "no text"}
+                              </span>
+                              <span className={`metaCell ${!pdfTextInfo || pdfTextInfo.checking || pdfTextInfo.error || pdfTextInfo.indexed === undefined ? "muted" : pdfTextInfo.indexed ? "ok" : "muted"}`}
+                                title="Whether library-wide search can find text in this paper. Papers index automatically in the background; Settings → Library maintenance → Rebuild forces a full re-index.">
+                                <i className="setDot" />{!pdfTextInfo || pdfTextInfo.checking ? "…" : pdfTextInfo.error || pdfTextInfo.indexed === undefined ? "index ?"
+                                  : pdfTextInfo.indexed ? "indexed" : pdfTextInfo.index_stale ? "stale index" : "not indexed"}
+                              </span>
                               {pdfTextInfo?.ok ? (
                                 <button className="searchToggle metaRowBtn" style={{ marginLeft: "auto" }}
                                   title="Preview the extracted text (what the AI reads)"
@@ -6798,16 +6884,6 @@ function LibraryApp() {
                                   onClick={() => checkPdfText(true)}
                                 >↻</button>
                               ) : null}
-                            </span>
-                          </div>
-                          <div className="metaRow">
-                            <span className="metaKey">Index</span>
-                            <span className="metaVal" title="Whether library-wide search can find text in this paper. Papers index automatically in the background; Settings → Search → Rebuild forces a full re-index.">
-                              {!pdfTextInfo || pdfTextInfo.checking ? "checking…"
-                                : pdfTextInfo.error || pdfTextInfo.indexed === undefined ? "—"
-                                : pdfTextInfo.indexed ? "✓ indexed for search"
-                                : pdfTextInfo.index_stale ? "stale — re-indexes automatically"
-                                : "not yet indexed"}
                             </span>
                           </div>
                           {pdfTextPreview ? (
@@ -7759,8 +7835,8 @@ function LibraryApp() {
       <button
         className={`iconBtn ${openPopover === "menu" ? "activeIcon" : ""}`}
         onClick={() => setOpenPopover((p) => (p === "menu" ? null : "menu"))}
-        title="Settings"
-        aria-label="Settings"
+        title="View — windows, import, export"
+        aria-label="View"
       >
         <MenuIcon size={17} />
       </button>
@@ -7923,7 +7999,7 @@ function LibraryApp() {
               data-guide="add.urlInput"
               value={addUrl}
               onChange={(e) => setAddUrl(e.target.value)}
-              placeholder="PDF URL, arXiv id, DOI, or a Gamma share link — press Enter"
+              placeholder="Paste a URL, DOI or arXiv id"
               onKeyDown={(e) => {
                 if (e.key === "Enter" && addUrl.trim() && !loading) {
                   setOpenPopover(null);
@@ -7942,6 +8018,7 @@ function LibraryApp() {
               </div>
             ) : null}
             <label className="popoverItem" style={{ cursor: loading ? "not-allowed" : "pointer" }}>
+              <UploadIcon className="popoverItemIcon" size={15} />
               Upload files…
               <input
                 type="file"
@@ -7957,6 +8034,7 @@ function LibraryApp() {
               style={{ cursor: loading ? "not-allowed" : "pointer" }}
               title="Import every PDF and Markdown note in a folder — subfolders become folder labels"
             >
+              <FolderIcon className="popoverItemIcon" size={15} />
               Upload folder…
               <input
                 type="file"
@@ -7966,7 +8044,10 @@ function LibraryApp() {
                 onChange={(e) => { const files = Array.from(e.target.files || []); e.target.value = ""; setOpenPopover(null); if (files.length) uploadFiles(files); }}
               />
             </label>
-            <button className="popoverItem" onClick={() => createPage()}>New page</button>
+            <button className="popoverItem" onClick={() => createPage()}>
+              <FilePlusIcon className="popoverItemIcon" size={15} />
+              New page
+            </button>
           </div>
         ) : null}
       </span>
@@ -8009,44 +8090,29 @@ function LibraryApp() {
                 >Clear</button>
               </div>
               {!transfers.length && !(indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0))) ? (
-                <div className="popoverHint">No background tasks — downloads, uploads, indexing, metadata and AI jobs show up here.</div>
+                <Empty icon={ActivityIcon}>Nothing running</Empty>
               ) : null}
               {indexTask && (indexTask.active || (!indexTaskCleared && indexTask.total > 0)) ? (
-                <div className="transferRow">
-                  <span className={`transferStatus ${indexTask.active ? "active" : "done"}`}>
-                    {indexTask.active
-                      ? <span className="transferSpin inline" />
-                      : <CheckIcon size={12} strokeWidth={2.6} />}
-                  </span>
-                  <span className="transferKind">
-                    <SearchIcon size={12} />
-                  </span>
-                  <span className="transferName">Indexing PDF library for search</span>
-                  <span className="transferInfo">{indexTask.done}/{indexTask.total}</span>
-                </div>
+                <TransferRow
+                  status={indexTask.active ? "active" : indexTask.done < indexTask.total ? "cancelled" : "done"}
+                  icon={<SearchIcon size={12} />} name="Indexing PDFs for search"
+                  info={`${indexTask.done}/${indexTask.total}`}
+                  progress={indexTask.active && indexTask.total ? indexTask.done / indexTask.total : undefined}
+                  onStop={indexTask.active ? cancelIndexing : null}
+                />
               ) : null}
               {transfers.map((t) => (
-                // The row clips long names and messages; hovering shows the
-                // whole thing (a failed import's full reason, a long URL).
-                <div key={t.id} className="transferRow" title={t.info ? `${t.name} — ${t.info}` : t.name}>
-                  <span className={`transferStatus ${t.status}`}>
-                    {t.status === "active" ? <span className="transferSpin inline" />
-                      : t.status === "done"
-                        ? <CheckIcon size={12} strokeWidth={2.6} />
-                        : <AlertCircleIcon size={12} strokeWidth={2.4} />}
-                  </span>
-                  <span className="transferKind">
-                    {t.kind === "upload"
-                      ? <UploadIcon size={12} />
-                      : t.kind === "ai"
-                        ? <SparklesIcon size={12} />
-                        : t.kind === "import"
-                          ? <FileIcon size={12} />
-                          : <DownloadIcon size={12} />}
-                  </span>
-                  <span className="transferName">{t.name}</span>
-                  <span className="transferInfo">{t.info || ""}</span>
-                </div>
+                <TransferRow
+                  key={t.id} status={t.status} name={t.name} info={t.info} progress={t.progress}
+                  icon={t.kind === "upload"
+                    ? <UploadIcon size={12} />
+                    : t.kind === "ai"
+                      ? <SparklesIcon size={12} />
+                      : t.kind === "import"
+                        ? <FileIcon size={12} />
+                        : <DownloadIcon size={12} />}
+                  onStop={t.status === "active" && t.cancel ? () => cancelTransfer(t.id) : null}
+                />
               ))}
             </div>
           ) : null}
@@ -8157,7 +8223,7 @@ function LibraryApp() {
                   title="All your workspaces: rename, members, export and import, create another"
                 >
                   <UsersIcon className="popoverItemIcon" size={15} />
-                  Manage workspaces…
+                  Workspaces…
                 </button>
               ) : null}
               <div className="popoverDivider" />
@@ -8165,26 +8231,6 @@ function LibraryApp() {
                 <SettingsIcon className="popoverItemIcon" size={15} />
                 Settings…
               </button>
-              {!authUser.is_guest ? (
-                <button
-                  className="popoverItem"
-                  onClick={() => { setSettingsOpen("backups"); setOpenPopover(null); }}
-                  title="Snapshots of your workspaces: take one, download, restore"
-                >
-                  <DatabaseIcon className="popoverItemIcon" size={15} />
-                  Backups…
-                </button>
-              ) : null}
-              {authUser.is_admin ? (
-                <button
-                  className="popoverItem"
-                  onClick={() => { setSettingsOpen("server"); setOpenPopover(null); }}
-                  title="Accounts, every workspace, storage defaults, server backups and log"
-                >
-                  <ServerIcon className="popoverItemIcon" size={15} />
-                  Administration…
-                </button>
-              ) : null}
               <div className="popoverDivider" />
               <button
                 className="popoverItem"

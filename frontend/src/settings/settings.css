@@ -574,6 +574,25 @@
 .setPictureCheck { position: absolute; right: 0; top: 0; width: 14px; height: 14px; display: grid; place-items: center; }
 .setPictureChoice.on .setPictureCheck { border-radius: 50%; background: var(--accent); color: var(--on-accent); }
 .appearanceFootnote { font-size: 11px; line-height: 1.6; color: var(--text-secondary); margin: 8px 0 0; }
+
+/* IconChoices: stacked tiles — glyph over name over hint, centered. */
+.setIconTiles { margin: 2px 0 4px; }
+.setIconTiles .setPictureChoice.uiBtn { flex-direction: column; align-items: center; gap: 6px; padding: 10px 8px 8px; }
+.setIconTiles .setPictureCaption { flex: auto; width: 100%; align-items: center; text-align: center; padding-right: 0; gap: 1px; }
+.setIconTiles .setPictureCheck { top: -30px; right: -2px; }
+.setTileIcon {
+  flex: 0 0 34px; width: 34px; height: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 9px;
+  background: var(--bg-block);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+.setPictureChoice.on .setTileIcon { background: var(--accent-bg); border-color: transparent; color: var(--accent); }
+@media (max-width: 620px) {
+  .setIconTiles .setPictureChoices { grid-template-columns: repeat(var(--picture-columns, 3), minmax(0, 1fr)); }
+  .setIconTiles .setPictureHint { display: block; }
+}
 .appearancePdf { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px 10px; }
 .appearancePdfPreview { flex: 0 0 40px; width: 40px; height: 49px; }
 .appearancePdfControls { flex: 1; min-width: 0; }

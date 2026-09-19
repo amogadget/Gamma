@@ -27,7 +27,7 @@ export async function shareScenarios({ server, browser, alice, bob, step, until,
       if (phone) {
         await page.getByRole("button", { name: "AI chat", exact: true }).click();
       } else {
-        await page.getByRole("button", { name: "Settings", exact: true }).click();
+        await page.getByRole("button", { name: "View", exact: true }).click();
         await page.locator(".popoverItem", { hasText: "AI Chat" }).click();
       }
       await page.locator(".chatMessages strong", { hasText: "saved answer" }).waitFor();

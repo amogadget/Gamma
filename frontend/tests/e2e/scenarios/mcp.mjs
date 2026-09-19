@@ -17,24 +17,27 @@ export async function mcpScenarios(env) {
       const openServer = async () => {
         await page.getByRole("button", { name: "Account & settings", exact: true }).click();
         await page.getByRole("button", { name: "Settings…", exact: true }).click();
-        await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Administration", exact: true }).click();
+        await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Server", exact: true }).click();
         await page.getByRole("textbox", { name: "Public server URL", exact: true }).waitFor();
       };
       await openServer();
       const address = page.getByRole("textbox", { name: "Public server URL", exact: true });
       await until(() => address.inputValue().then((v) => v === server.base));
       assertEq((await admin.api("/api/admin/settings")).public_url, "", "suggestion is not implicitly trusted");
-      await page.getByRole("button", { name: "Confirm address", exact: true }).click();
+      await page.getByRole("button", { name: "Confirm", exact: true }).click();
       await until(() => admin.api("/api/admin/settings").then((v) => v.public_url === server.base));
       await address.fill("https://draft.example");
+      // an unconfirmed edit is a draft: leaving the pane asks, discarding restores the stored address
       await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Users", exact: true }).click();
       await page.getByRole("button", { name: "Keep editing", exact: true }).click();
-      await page.getByRole("button", { name: "Cancel address changes", exact: true }).click();
-      assertEq(await address.inputValue(), server.base);
+      assertEq(await address.inputValue(), "https://draft.example");
+      await page.getByRole("navigation", { name: "Settings categories" }).getByRole("button", { name: "Users", exact: true }).click();
+      await page.getByRole("button", { name: "Discard changes", exact: true }).click();
       await page.reload();
       await openServer();
       await until(() => address.inputValue().then((v) => v === server.base));
-      assert(await page.getByRole("button", { name: "Save address", exact: true }).isDisabled());
+      assertEq(await page.getByRole("button", { name: "Confirm", exact: true }).count(), 0, "a confirmed, unchanged address needs no button");
+      assert((await page.locator(".settingsPane .uiTag", { hasText: "confirmed" }).count()) >= 1, "the confirmed chip shows");
       if (process.env.GAMMA_MCP_SCREENSHOTS) {
         fs.mkdirSync(process.env.GAMMA_MCP_SCREENSHOTS, { recursive: true });
         await page.screenshot({ path: path.join(process.env.GAMMA_MCP_SCREENSHOTS, "public-url-desktop.png") });

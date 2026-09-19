@@ -207,6 +207,7 @@ guarded fetch path.
 | GET | `/pdf-search` | the PDF-only predecessor (same `pdf_fts` index; hits `{block_id, doc_id, title, page, snippet}`) — the Ctrl+F panel's library group still uses it (with `/block-search` for notes: fuzzy/regex + flags that FTS does not offer) |
 | POST | `/search-reindex` | full rebuild (PDF text re-extracted in the background, every note page stamped stale for the next search), or just `doc_ids` from the body |
 | GET | `/tasks` | background task progress (indexing, downloads) |
+| DELETE | `/tasks/indexing` | stop the workspace's running indexer after the current paper (`{cancelled}`); the skipped papers stay stale and index on the next search; editors and owners |
 
 The notes index is rebuilt lazily per page: a search first refreshes every
 page whose `block_fts_meta` row is missing, older than `textnorm.INDEX_VERSION`,

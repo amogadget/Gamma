@@ -110,6 +110,20 @@ export function PictureChoices({ label, value, onChange, onConfirm, options, col
   </div>;
 }
 
+// Picture choices whose picture is an icon tile: stacked glyph / name / hint,
+// three or four to a row — an audience, an input mode, any small exclusive
+// set that reads faster as tiles than as a dropdown. `options` are
+// [{value, label, hint, Icon}].
+export function IconChoices({ label, value, onChange, options, columns }) {
+  return <div className="setIconTiles">
+    <PictureChoices label={label} value={value} onChange={onChange} columns={columns || options.length}
+      options={options.map(({ value: id, label: name, hint, Icon }) => ({
+        value: id, label: name, hint,
+        preview: <span className="setTileIcon" aria-hidden="true"><Icon size={18} /></span>,
+      }))} />
+  </div>;
+}
+
 // A row of small icon + short-name chips, each an independent on/off switch
 // (the multi-select counterpart of Segmented): the agent's per-tool
 // permissions, any "which of these" choice. `options` are

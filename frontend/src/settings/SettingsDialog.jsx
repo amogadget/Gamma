@@ -2,7 +2,7 @@ import React from "react";
 import { API, apiJson, fmtBytes, isUnverifiedPaperMeta, metaSourceInfo, getCurrentWorkspace } from "../shared/lib/utils";
 import { MenuSelect } from "../shared/ui/Menus";
 import {
-  PaneHead, Section, Row, Toggle, Segmented, ToggleGroup, UnitInput, CharSlider, approxPages,
+  PaneHead, Section, Row, Toggle, Segmented, ToggleGroup, IconChoices, UnitInput, CharSlider, approxPages,
   Stat, Empty, QuotaMeter, LogBox, SettingsDraftContext, useSettingsDraft,
 } from "./SettingsKit";
 import { LibraryDisplaySettings } from "./SettingsLibraryDisplay";
@@ -13,7 +13,6 @@ import { UsersSettings } from "./SettingsUsers";
 import { WorkspacesSettings } from "./SettingsWorkspace";
 import { WorkspaceBackups } from "./SettingsBackups";
 import { ServerSettings } from "./SettingsServer";
-import { permissionPreset, presetPermissions } from "../chat/chatSettings";
 import { resolveSettingsPane, searchSettings } from "./settingsNavigation";
 import { TRANSLATE_LANGS } from "../app/prefs";
 import {
@@ -27,6 +26,7 @@ import {
   FileTextIcon,
   FolderIcon,
   GlobeIcon,
+  HandIcon,
   LinkIcon,
   HardDriveIcon,
   HighlightIcon,
@@ -42,6 +42,7 @@ import {
   RefreshIcon,
   SearchIcon,
   ServerIcon,
+  SlidersIcon,
   SparklesIcon,
   TerminalIcon,
   TypeIcon,
@@ -49,32 +50,40 @@ import {
   UsersIcon,
 } from "../shared/ui/Icons";
 
-// Everyday preferences and management tasks have separate navigation.
+// One sidebar, three groups: everyday preferences, AI, management. Every
+// pane is one click from any other; nothing opens a second dialog.
 const PREFERENCE_NAV = [
   ["appearance", "Appearance", ContrastIcon],
   ["reading", "Reading & editing", BookIcon],
   ["library", "Library", ListIcon],
-  ["ai", "AI", SparklesIcon],
   ["account", "Account", UserIcon],
 ];
-const MANAGEMENT_NAV = [
-  ["workspaces", "Manage workspaces", UsersIcon],
-  ["maintenance", "Library maintenance", DatabaseIcon],
-  ["server", "Administration", ServerIcon],
-  ["diagnostics", "Diagnostics", ActivityIcon],
-];
-
 const AI_NAV = [
-  ["ai", "Connections & models", SparklesIcon],
-  ["assistant", "Assistant", MessageSquareIcon],
+  ["ai", "Connections", SparklesIcon],
+  ["assistant", "Chat", MessageSquareIcon],
   ["ai-advanced", "Advanced", ActivityIcon],
   ["prompts", "Prompts", TypeIcon],
-  ["integrations", "External assistants", LinkIcon],
+  ["integrations", "Integrations", LinkIcon],
+];
+const MANAGEMENT_NAV = [
+  ["workspaces", "Workspaces", UsersIcon],
+  ["backups", "Backups", DatabaseIcon],
+  ["maintenance", "Library maintenance", HardDriveIcon],
+  ["users", "Users", UsersIcon],
+  ["server", "Server", ServerIcon],
+  ["diagnostics", "Diagnostics", ActivityIcon],
 ];
 
 // --- Editor: notes + search + PDF viewer -----------------------------------
 
-function ViewerSettings({ value }) {
+// What draws on the page with the handwriting tools open: the stored
+// preference is "fingers never draw" (inkPenOnly), pictured as two tiles.
+const DRAW_WITH = [
+  { value: "pen", label: "Pen only", hint: "fingers scroll and zoom", Icon: PenIcon },
+  { value: "any", label: "Pen and finger", hint: "for screens without a stylus", Icon: HandIcon },
+];
+
+function ViewerSettings({ value, onTranslationModels }) {
   return (
     <>
 
@@ -82,29 +91,25 @@ function ViewerSettings({ value }) {
         <Row
           icon={HighlightIcon}
           label="Imported annotations"
-          hint="Annotations become Gamma highlights. Removing originals also rewrites the stored PDF."
-          title={"Highlights, notes and rectangles saved inside a PDF file (a Gamma export, SumatraPDF, Acrobat…) are imported as regular highlights. This controls the embedded originals so they don't render twice: Hide leaves the file untouched, Strip removes them from the stored PDF on import."}
+          hint="Annotations saved inside a PDF become highlights"
+          title={"Highlights, notes and rectangles saved inside a PDF file (a Gamma export, SumatraPDF, Acrobat…) are imported as regular highlights. Keep originals leaves the file untouched (the viewer hides them); Remove originals rewrites the stored PDF without them."}
         >
-          <MenuSelect label="Imported annotations" value={value.embAnnots} onChange={value.setEmbAnnots}
-            options={[["hide", "Keep PDF unchanged"], ["strip", "Remove originals after import"]]} />
+          <Segmented value={value.embAnnots} onChange={value.setEmbAnnots}
+            options={[["hide", "Keep originals"], ["strip", "Remove originals"]]} />
         </Row>
       </Section>
       <Section title="Handwriting">
+        <div data-setting="Draws with">
+          <IconChoices label="Draws with" value={value.inkPenOnly ? "pen" : "any"}
+            onChange={(choice) => value.setInkPenOnly(choice === "pen")} options={DRAW_WITH} />
+        </div>
         <Toggle
           icon={PenIcon}
           label="Stylus draws right away"
-          hint="A pen writes without opening the tools first"
+          hint="Without opening the tools first"
           title="With a stylus (Apple Pencil, Surface Pen, Wacom…), touching the page draws with the pen tool even when the handwriting tools are closed. Fingers and the mouse still select text. Turn off if your stylus keeps leaving marks while you navigate."
           checked={value.inkAutoPen}
           onChange={value.setInkAutoPen}
-        />
-        <Toggle
-          icon={HighlightIcon}
-          label="Fingers never draw"
-          hint="Touch scrolls and zooms; only a stylus or mouse draws"
-          title="With the handwriting tools open, a finger on the page keeps scrolling and pinch-zooming instead of drawing. Turn off on a device without a stylus to draw with a finger. Defaults on for touch screens."
-          checked={value.inkPenOnly}
-          onChange={value.setInkPenOnly}
         />
         <Toggle
           icon={ActivityIcon}
@@ -115,11 +120,15 @@ function ViewerSettings({ value }) {
           onChange={value.setInkPressure}
         />
       </Section>
-      <Section title="Translation">
+      <Section title="Translation" action={
+        <button className="uiBtn sm" onClick={onTranslationModels} title="Translation model, effort and parallel requests (AI › Advanced)">
+          <SlidersIcon size={13} /> Model & speed
+        </button>
+      }>
         <Toggle
           icon={LanguagesIcon}
-          label="Show translation shortcut"
-          hint="Show the viewer button; translation only runs when you ask"
+          label="Translation button"
+          hint="In the viewer; nothing translates until you ask"
           title="Show the translate button in the PDF viewer. Click translates the current page (or shows/hides an existing translation); right-click or long-press opens the options, including translating the whole document. Nothing translates until you ask."
           checked={value.translateEnabled}
           onChange={value.setTranslateEnabled}
@@ -127,7 +136,7 @@ function ViewerSettings({ value }) {
         <Row
           icon={GlobeIcon}
           label="Translate into"
-          hint="Language for the viewer's translated view"
+          hint="The translated view's language"
           title="The translated view (the languages button in the PDF viewer's zoom column) redraws each paragraph in this language in place — figures and layout stay put, and holding Alt peeks at the original. Paragraph translations are cached per language and model, so re-reading a page is free."
         >
           <MenuSelect
@@ -137,7 +146,6 @@ function ViewerSettings({ value }) {
             options={TRANSLATE_LANGS}
           />
         </Row>
-        <p className="setNotice">Translation models and performance options are in AI settings.</p>
       </Section>
     </>
   );
@@ -200,27 +208,23 @@ function TranslateModelSelect({ value }) {
   );
 }
 
+const SEARCH_SHAPES = [["panel", "Full panel"], ["bar", "Find bar"]];
+
 function SearchSettings({ value }) {
   return (
     <>
 
-      <Section title="Search - expand results automatically">
-        <Toggle
-          icon={HomeIcon}
-          label="On the home page"
-          hint="Search from the library opens with full result lists"
-          title="With no PDF open the compact find bar has nothing to show, so the home page defaults to expanded. Turn off to start collapsed anyway."
-          checked={value.searchDetailsHome}
-          onChange={value.setSearchDetailsHome}
-        />
-        <Toggle
-          icon={PaperIcon}
-          label="On a page"
-          hint="Off: search opens as a compact browser-style find bar"
-          title="On a page, Ctrl+F defaults to the compact find bar (match counter and next/previous only). Turn on to open with the full grouped result lists instead."
-          checked={value.searchDetailsPaper}
-          onChange={value.setSearchDetailsPaper}
-        />
+      <Section title="Search opens as">
+        <Row icon={HomeIcon} label="On the home page" hint="Full panel: grouped result lists"
+          title="With no PDF open the compact find bar has nothing to show, so the home page defaults to the full panel.">
+          <Segmented value={value.searchDetailsHome ? "panel" : "bar"} onChange={(v) => value.setSearchDetailsHome(v === "panel")}
+            options={SEARCH_SHAPES} />
+        </Row>
+        <Row icon={PaperIcon} label="On a page" hint="Find bar: match counter and next / previous"
+          title="On a page, Ctrl+F defaults to the compact browser-style find bar; the full panel adds the grouped result lists.">
+          <Segmented value={value.searchDetailsPaper ? "panel" : "bar"} onChange={(v) => value.setSearchDetailsPaper(v === "panel")}
+            options={SEARCH_SHAPES} />
+        </Row>
       </Section>
     </>
   );
@@ -287,12 +291,10 @@ function StorageCard() {
 // Collections become folders, tags labels, notes child blocks; annotations ride
 // inside the exported PDFs and reuse the embedded-annotations importer (the
 // strip-vs-hide choice follows the standing Settings → PDF viewer preference).
-function LibrarySettings({ value, onManage }) {
+function LibrarySettings({ value }) {
   return (
     <>
-      <PaneHead icon={ListIcon} title="Library">
-        Library display and automatic downloads. Changes apply immediately in this browser.
-      </PaneHead>
+      <PaneHead icon={ListIcon} title="Library" />
       <Section title="Display">
         <LibraryDisplaySettings value={value} />
       </Section>
@@ -322,9 +324,6 @@ function LibrarySettings({ value, onManage }) {
           onChange={value.setPdfSaveLocal}
         />
       </Section>
-      <Row icon={DatabaseIcon} label="Library maintenance" hint="Check metadata, extract text, or rebuild the search index">
-        <button className="uiBtn sm" onClick={onManage}>Open maintenance</button>
-      </Row>
     </>
   );
 }
@@ -335,7 +334,7 @@ function LibrarySettings({ value, onManage }) {
 // index, so "unknown" means not visited yet, not broken; Reindex fills it in.
 function MaintenanceSettings({ value }) {
   return <>
-    <PaneHead icon={DatabaseIcon} title="Library maintenance">Health and storage for the current workspace. Repairs run in the background.</PaneHead>
+    <PaneHead icon={HardDriveIcon} title="Library maintenance" />
       <Section title="Storage">
         <StorageCard />
       </Section>
@@ -726,16 +725,13 @@ function PromptsSettings({ value }) {
   useSettingsDraft("prompts", dirty, discard);
   return (
     <>
-      <PaneHead icon={TypeIcon} title="Custom prompts">Instructions for chat, metadata, citations, and the library agent.</PaneHead>
-      <p className="setNotice">Prompts are saved in this browser. Save to apply your edits, or Cancel to discard them.</p>
+      <PaneHead icon={TypeIcon} title="Custom prompts" />
       <Section
         title="Prompts"
         action={
           <span className="setControlGroup">
             <button className="uiBtn sm" disabled={!dirty} onClick={discard}>Cancel</button>
-            <button className={`uiBtn sm ${dirty ? "primary" : ""}`} disabled={!dirty} onClick={value.savePrompts}>
-              {dirty ? "Save prompts" : "Saved"}
-            </button>
+            <button className="uiBtn sm primary" disabled={!dirty} onClick={value.savePrompts}>Save</button>
           </span>
         }
       >
@@ -772,9 +768,9 @@ const AGENT_PERM_ROWS = [
 // The three chat kinds, each with its own permission map (prefs.js
 // CHAT_KINDS): [kind, icon, label, hint, agent scope].
 export const CHAT_KIND_ROWS = [
-  ["folder", FolderIcon, "Folder chat", "Home and folder views — the library organizer", "folder"],
-  ["pdf", FileTextIcon, "PDF chat", "A page with a PDF attached", "page"],
-  ["notes", OutlineIcon, "Notes chat", "A page of notes without a PDF", "page"],
+  ["folder", FolderIcon, "Folder chat", "Home and folder views", "folder"],
+  ["pdf", FileTextIcon, "PDF chat", "Pages with a PDF", "page"],
+  ["notes", OutlineIcon, "Notes chat", "Note pages", "page"],
 ];
 
 // One chat kind's tool chips (a ToggleGroup) bound to the stored permission
@@ -794,68 +790,28 @@ export function AgentToolPicker({ kind, perms, setPerms, disabled }) {
   );
 }
 
-function PermissionSetting({ kind, icon, label, hint, perms, setPerms, disabled }) {
-  const [custom, setCustom] = React.useState(false);
-  const preset = permissionPreset(kind, perms?.[kind]);
-  return <div className="setPermission">
-    <Row icon={icon} label={label} hint={hint}>
-      <fieldset disabled={disabled} className="setControlGroup">
-        <MenuSelect label={`${label} permissions`} value={custom ? "custom" : preset}
-          onChange={(next) => {
-            setCustom(next === "custom");
-            if (next !== "custom") setPerms((previous) => ({ ...previous, [kind]: presetPermissions(kind, next) }));
-          }} options={[["read", "Read & search"], ["edit", "Read, search & edit"], ["custom", "Custom"]]} />
-      </fieldset>
-    </Row>
-    {custom || preset === "custom" ? <div className="setPermissionCustom">
-      <AgentToolPicker kind={kind} perms={perms} setPerms={setPerms} disabled={disabled} />
-    </div> : null}
-  </div>;
-}
-
-function AssistantSettings({ value, onAdvanced }) {
-  const budgets = [value.chatContextChars, value.metaContextChars, value.multiContextChars];
-  const contextPreset = budgets.every((n, i) => n === [60000, 6000, 120000][i]) ? "standard"
-    : budgets.every((n, i) => n === [120000, 12000, 240000][i]) ? "larger" : "custom";
+// Chat: the tools each chat kind may use, one chip row per kind — the same
+// chips the chat header's settings popover shows for the open chat.
+function AssistantSettings({ value }) {
   return (
-    <>
-      <Section title="Assistant permissions">
-        <Toggle icon={SparklesIcon} label="Allow assistant tools"
-          hint="Global switch for reading, searching, and editing in all chats"
-          checked={value.agentEnabled} onChange={value.setAgentEnabled} />
-        {!value.agentEnabled ? <p className="setNotice">Tools are off in all chats. Your permission choices are kept for when you turn them on again.</p> : null}
-        {CHAT_KIND_ROWS.map(([kind, icon, label, hint]) => (
-          <PermissionSetting key={kind} kind={kind} icon={icon} label={label} hint={hint}
-            perms={value.agentPerms} setPerms={value.setAgentPerms} disabled={!value.agentEnabled} />
-        ))}
-
-      </Section>
-      <Section title="Chat">
-        <Toggle
-          icon={RectSelectIcon}
-          label="Clear snapshots on click"
-          hint="A plain click in the PDF also drops pending snapshots"
-          title="A plain click in the PDF clears the quoted text selections under the chat. Turn this on to also drop pending rectangle snapshots with that click — images pasted into the chat are never touched."
-          checked={value.chatImgAutoClear}
-          onChange={value.setChatImgAutoClear}
-        />
-      </Section>
-      <Row icon={BookIcon} label="Context budget"
-        hint="Larger budgets include more document text and use more tokens">
-        <MenuSelect label="Context budget" value={contextPreset}
-          onChange={(preset) => {
-            if (preset === "custom") { onAdvanced(); return; }
-            const factor = preset === "larger" ? 2 : 1;
-            value.setChatContextChars(60000 * factor);
-            value.setMetaContextChars(6000 * factor);
-            value.setMultiContextChars(120000 * factor);
-          }} options={[["standard", "Standard"], ["larger", "Larger"], ["custom", "Custom"]]} />
-      </Row>
-    </>
+    <Section title="Tools">
+      <Toggle icon={SparklesIcon} label="Assistant tools"
+        hint="Let chats read, search and edit your library"
+        title="The master switch for tools in every chat. Off keeps your per-chat choices below for when you turn it on again."
+        checked={value.agentEnabled} onChange={value.setAgentEnabled} />
+      {CHAT_KIND_ROWS.map(([kind, icon, label, hint]) => (
+        <Row key={kind} icon={icon} label={label} hint={hint}>
+          <AgentToolPicker kind={kind} perms={value.agentPerms} setPerms={value.setAgentPerms} disabled={!value.agentEnabled} />
+        </Row>
+      ))}
+    </Section>
   );
 }
 
 function AdvancedAiSettings({ value, ai, papers }) {
+  const budgets = [value.chatContextChars, value.metaContextChars, value.multiContextChars];
+  const contextPreset = budgets.every((n, i) => n === [60000, 6000, 120000][i]) ? "standard"
+    : budgets.every((n, i) => n === [120000, 12000, 240000][i]) ? "larger" : "custom";
   const shared = "Extracted PDF text is measured in characters. Larger budgets can improve answers but cost more tokens.";
   const limits = [
     [FileTextIcon, "Single paper", "Read from the open paper for one chat message",
@@ -869,7 +825,7 @@ function AdvancedAiSettings({ value, ai, papers }) {
 
   return <>
 
-        <Row icon={ActivityIcon} label="Default reasoning effort" hint="Used by all chats in this browser; leave Default unless your model supports it">
+        <Row icon={ActivityIcon} label="Default reasoning effort" hint="Leave Default unless your model supports it">
           <MenuSelect label="Default reasoning effort" value={ai.chatEffort} onChange={ai.setChatEffort}
             options={[["", "Default"], ...(ai.aiInfo?.efforts || ["low", "medium", "high"]).map((v) => [v, v])]} />
         </Row>
@@ -891,7 +847,16 @@ function AdvancedAiSettings({ value, ai, papers }) {
         </Section>
       <Section
         title="Context size"
-        action={<button className="uiBtn sm" onClick={value.reset} title="Back to 60000 / 6000 / 120000 characters">Reset</button>}
+        action={
+          <MenuSelect label="Context budget" value={contextPreset}
+            onChange={(preset) => {
+              if (preset === "custom") return; // the sliders below are the custom values
+              const factor = preset === "larger" ? 2 : 1;
+              value.setChatContextChars(60000 * factor);
+              value.setMetaContextChars(6000 * factor);
+              value.setMultiContextChars(120000 * factor);
+            }} options={[["standard", "Standard"], ["larger", "Larger"], ["custom", "Custom"]]} />
+        }
       >
         {limits.map(([icon, label, hint, current, setCurrent, title]) => (
           <Row key={label} icon={icon} label={label} hint={`${hint} · ${approxPages(current)}`}
@@ -901,6 +866,16 @@ function AdvancedAiSettings({ value, ai, papers }) {
         ))}
       </Section>
         <Section title="Translation performance"><TranslationModels value={papers} advanced /></Section>
+        <Section title="Chat">
+          <Toggle
+            icon={RectSelectIcon}
+            label="Clear snapshots on click"
+            hint="A plain click in the PDF also drops pending snapshots"
+            title="A plain click in the PDF clears the quoted text selections under the chat. Turn this on to also drop pending rectangle snapshots with that click — images pasted into the chat are never touched."
+            checked={value.chatImgAutoClear}
+            onChange={value.setChatImgAutoClear}
+          />
+        </Section>
   </>;
 }
 
@@ -910,9 +885,7 @@ function AdvancedAiSettings({ value, ai, papers }) {
 function AdvancedSettings({ value }) {
   return (
     <>
-      <PaneHead icon={ActivityIcon} title="Diagnostics">
-        Debug logging and events from this browser session.
-      </PaneHead>
+      <PaneHead icon={ActivityIcon} title="Diagnostics" />
       <Section title="Tracing">
         <Toggle
           icon={BugIcon}
@@ -958,19 +931,10 @@ export default function SettingsDialog({
     if (id === "server") return !!server;
     return true;
   };
-  const allNav = [...PREFERENCE_NAV, ...MANAGEMENT_NAV, ...AI_NAV.filter(([id]) => id !== "ai"), ["backups", "Backups", DatabaseIcon], ["users", "Users", UsersIcon]];
+  const allNav = [...PREFERENCE_NAV, ...AI_NAV, ...MANAGEMENT_NAV];
   const allowed = allNav.filter(([id]) => available(id));
   const requested = resolveSettingsPane(activePane);
   const pane = allowed.some(([id]) => id === requested) ? requested : "appearance";
-  const aiArea = AI_NAV.some(([id]) => id === pane);
-  const management = aiArea || ["workspaces", "backups", "server", "users"].includes(pane);
-  const manageTitle = aiArea ? "AI settings" : ["workspaces", "backups"].includes(pane) ? "Workspace manager"
-    : ["server", "users"].includes(pane) ? "Administration" : allNav.find(([id]) => id === pane)?.[1];
-  const managementItems = aiArea ? AI_NAV : ["workspaces", "backups"].includes(pane)
-    ? [["workspaces", "Workspaces", UsersIcon], ["backups", "Backups", DatabaseIcon]]
-    : ["server", "users"].includes(pane)
-      ? [["users", "Users", UsersIcon], ["server", "Server", ServerIcon]]
-      : MANAGEMENT_NAV.filter(([id]) => id === pane);
   const guard = (action) => {
     if (drafts.current.size) setPending(() => action);
     else action();
@@ -1016,7 +980,7 @@ export default function SettingsDialog({
     <SettingsDraftContext.Provider value={drafts}>
       <div className="reportOverlay" onClick={() => guard(onClose)}>
         <div className={`settingsModal ${mobileIndex ? "settingsIndexOpen" : ""}`}
-          role="dialog" aria-modal="true" aria-label={management ? manageTitle : "Settings"}
+          role="dialog" aria-modal="true" aria-label="Settings"
           tabIndex={-1} ref={modalRef} onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
@@ -1035,7 +999,7 @@ export default function SettingsDialog({
           }}>
           <div className="settingsTopbar">
             <button className="uiBtn sm settingsMobileBack" onClick={() => guard(() => { setMobileIndex(true); setQuery(""); })}>Back</button>
-            <span className="settingsTopTitle">{management ? manageTitle : "Settings"}</span>
+            <span className="settingsTopTitle">Settings</span>
             <div className="settingsSearch">
               <SearchIcon size={16} />
               <input className="aiKeyInput" type="search" aria-label="Search settings" placeholder="Search settings..." value={query}
@@ -1049,15 +1013,11 @@ export default function SettingsDialog({
           </div>
           <div className="settingsBody" inert={pending ? "" : undefined}>
             <nav className="settingsSidebar" aria-label="Settings categories">
-              {management ? <>
-                <button className="settingsNavBtn" onClick={() => navigate("appearance")}>Back to settings</button>
-                <div className="settingsNavGroup">{manageTitle}</div>
-                {managementItems.filter(([id]) => available(id)).map(navButton)}
-              </> : <>
-                {PREFERENCE_NAV.filter(([id]) => available(id)).map(navButton)}
-                <div className="settingsNavGroup">Manage</div>
-                {MANAGEMENT_NAV.filter(([id]) => available(id)).map(navButton)}
-              </>}
+              {PREFERENCE_NAV.filter(([id]) => available(id)).map(navButton)}
+              <div className="settingsNavGroup">AI</div>
+              {AI_NAV.filter(([id]) => available(id)).map(navButton)}
+              <div className="settingsNavGroup">Manage</div>
+              {MANAGEMENT_NAV.filter(([id]) => available(id)).map(navButton)}
             </nav>
             <main className="settingsPane" ref={paneRef} key={pane}>
               {query.trim() ? <>
@@ -1068,30 +1028,30 @@ export default function SettingsDialog({
               </> : <>
                 {pane === "appearance" ? <AppearanceSettings value={papers} diagnostics={diagnostics} /> : null}
                 {pane === "reading" ? <>
-                  <PaneHead icon={BookIcon} title="Reading & editing">PDF viewing, notes, and search. Changes apply immediately in this browser.</PaneHead>
-                  <ViewerSettings value={papers} /><NotesSettings value={notes} /><SearchSettings value={search} />
-                  <button className="uiBtn sm settingsInlineLink" onClick={() => navigate("ai", "Translation model")}>Translation models and performance</button>
+                  <PaneHead icon={BookIcon} title="Reading & editing" />
+                  <ViewerSettings value={papers} onTranslationModels={() => navigate("ai-advanced", "Translation effort")} />
+                  <NotesSettings value={notes} /><SearchSettings value={search} />
                 </> : null}
-                {pane === "library" ? <LibrarySettings value={{ ...papers, ...library }} onManage={() => navigate("maintenance")} /> : null}
+                {pane === "library" ? <LibrarySettings value={{ ...papers, ...library }} /> : null}
                 {pane === "maintenance" ? <MaintenanceSettings value={library} /> : null}
                 {pane === "ai" ? <>
-                  <PaneHead icon={SparklesIcon} title="Connections & models">Connections follow your account. Model choices apply to all chats in this browser.</PaneHead>
+                  <PaneHead icon={SparklesIcon} title="Connections" />
                   <AiSettings value={aiValue} taskModels={<TranslationModels value={paperValue} />}
                     confirm={workspace?.confirm} setStatus={workspace?.setStatus} />
                 </> : null}
                 {pane === "assistant" ? <>
-                  <PaneHead icon={MessageSquareIcon} title="Assistant">Shared settings for all chats in this browser, including changes from the chat settings shortcut.</PaneHead>
-                  <AssistantSettings value={context} onAdvanced={() => navigate("ai-advanced", "Single paper")} />
+                  <PaneHead icon={MessageSquareIcon} title="Chat" />
+                  <AssistantSettings value={context} />
                 </> : null}
                 {pane === "ai-advanced" ? <>
-                  <PaneHead icon={ActivityIcon} title="Advanced AI settings">Context budgets, tool limits, and translation performance. Saved in this browser.</PaneHead>
+                  <PaneHead icon={ActivityIcon} title="Advanced" />
                   <AdvancedAiSettings value={context} ai={aiValue} papers={paperValue} />
                 </> : null}
                 {pane === "prompts" ? <PromptsSettings value={prompts} /> : null}
                 {pane === "integrations" ? <IntegrationSettings key={getCurrentWorkspace()} workspaceId={getCurrentWorkspace()} /> : null}
                 {pane === "account" ? <UsersSettings value={users} selfOnly /> : null}
                 {pane === "users" ? <UsersSettings value={users} /> : null}
-                {pane === "workspaces" ? <WorkspacesSettings value={workspace} /> : null}
+                {pane === "workspaces" ? <WorkspacesSettings value={workspace} onServer={available("server") ? () => navigate("server", "Shared workspaces") : null} /> : null}
                 {pane === "backups" && backups ? <WorkspaceBackups value={backups} /> : null}
                 {pane === "server" ? <ServerSettings value={server} /> : null}
                 {pane === "diagnostics" ? <AdvancedSettings value={diagnostics} /> : null}

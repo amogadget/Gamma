@@ -106,8 +106,8 @@ rules close it; on phones the bottom bar's popover rule spans it across the
 screen), built from the settings kit like the workspace Manage dialog:
 `Section`s — Link (the address as the row hint, Copy link and a danger
 `iconSq` Stop sharing), Access (pictured, not described: three
-`PictureChoices` tiles with a glyph where a preview would be — Anyone /
-Signed in / Invited only — and, as the section's action, one View / Edit
+`IconChoices` tiles — Anyone / Signed in / Invited only — and, as the
+section's action, one View / Edit
 `Segmented`; one summary sentence under the tiles is the only prose, amber
 `.shareWarn` when a link is editable without sign-in), People (`aiProvRow`
 rows: the owner, then each invited account with its own View / Edit

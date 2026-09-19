@@ -221,8 +221,17 @@ save path, workspaces, auth or rendering of URLs should add a step here; the
   `pdf <phase> +<ms>` (ms since the viewer started opening that url) and as
   a `performance.mark("pdf-<phase>")` for devtools' Performance panel — the
   phases and what a healthy open looks like: [pdf_loading.md](pdf_loading.md).
-- **Background tasks** — the tasks popover (`GET /api/tasks`) shows indexing
-  and download progress. The client polls it every 2 s only while the popover
+- **Background tasks** — the tasks popover shows every client-side job
+  (downloads, uploads, imports, metadata / citation / title / translation AI
+  jobs) and the server's indexing (`GET /api/tasks`). A row carries a
+  progress bar while the work can measure itself (bytes, translated pages,
+  indexed papers) and a stop button (hover) while it can be stopped: the
+  viewer's download and the export download abort their fetch, uploads abort
+  their XHR, the AI jobs and zip imports abort their request, translation
+  halts the engine, indexing asks the server (`DELETE /api/tasks/indexing`,
+  which finishes the current paper and skips the rest). A stopped row reads
+  "stopped" and ignores the job's own late reports (`cancelledTransfersRef`
+  in App.jsx). The client polls `/api/tasks` every 2 s only while the popover
   is open or indexing is known to run; otherwise a 60 s heartbeat, and
   nothing at all while the tab is hidden (one refresh when it comes back).
   Anything that starts indexing (the search panel's library query, the

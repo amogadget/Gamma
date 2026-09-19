@@ -229,7 +229,7 @@ export async function noteScenarios({ server, browser, alice, step, until, sleep
   });
 
   await step("notes: Export… as an Obsidian vault downloads a zip", async () => {
-    await page.click("button[aria-label='Settings']");
+    await page.click("button[aria-label='View']");
     await page.locator(".popoverItem", { hasText: "Export…" }).click();
     const dialog = page.getByRole("dialog", { name: "Export", exact: true });
     await dialog.waitFor();

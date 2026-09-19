@@ -81,10 +81,7 @@ export function IntegrationSettings({ workspaceId }) {
   const config = data ? `[mcp_servers.gamma]\nurl = ${JSON.stringify(data.mcp_url)}\nbearer_token_env_var = "GAMMA_TOKEN"` : "";
   const setup = data ? codexSetupCommand(data.mcp_url, platform) : "";
   return <>
-    <PaneHead icon={LinkIcon} title="External assistants">
-      Connect Codex or another assistant to read your pages, notes, highlights, and PDFs.
-      You choose which workspace to share. Your assistant cannot edit your library.
-    </PaneHead>
+    <PaneHead icon={LinkIcon} title="Integrations">Read-only access for Codex or any MCP assistant.</PaneHead>
     {loadError ? <div className="integrationDetails" role="alert">
       <p>Could not load your connections. {loadError}</p>
       <button className="uiBtn" onClick={() => refresh()}>Try again</button>
@@ -93,7 +90,7 @@ export function IntegrationSettings({ workspaceId }) {
       {data ? <div className="integrationDetails">
         {data.oauth_available ? <>
           <div role="group" aria-label="Connection method">
-            <Segmented value={method} onChange={setMethod} options={[["settings", "Assistant settings"], ["terminal", "Codex CLI"]]} />
+            <Segmented value={method} onChange={setMethod} options={[["settings", "Any assistant"], ["terminal", "Codex CLI"]]} />
           </div>
           <Step n={1} title={method === "settings" ? "Add Gamma to your assistant" : "Install and connect Gamma PDF"}
             hint={method === "settings" ? "In your assistant's settings, add an MCP server with this URL." : "Run this command on the computer where you use Codex. It installs the plugin and opens Gamma sign-in."}>
@@ -112,10 +109,9 @@ export function IntegrationSettings({ workspaceId }) {
             hint="Follow your assistant's sign-in prompt. Approve read-only access in Gamma. No token to create or paste." />
           <Step n={3} title="Start a new chat"
             hint={method === "terminal" ? 'Mention @Gamma PDF and ask about a paper, or say “Let me choose a paper”.' : 'Try asking: “Use Gamma to find my notes about…”'} />
-          <p className="settingDesc">Keep Gamma reachable from your assistant. Shared content is handled by the assistant and its provider.</p>
         </> : <>
           <p>Browser sign-in is not available for this Gamma address yet.</p>
-          <p>An administrator can enable it by confirming the public server URL in Settings → Administration → Server.</p>
+          <p>An administrator can enable it by confirming the public server URL in Settings → Server.</p>
           <details><summary>Server setup details</summary><p>{data.oauth_error}</p></details>
         </>}
       </div> : !loadError ? <p role="status">Loading connection settings…</p> : null}
@@ -126,7 +122,7 @@ export function IntegrationSettings({ workspaceId }) {
           hint={`${item.expires_at * 1000 <= Date.now() ? "Expired" : "Read-only · Expires"} ${new Date(item.expires_at * 1000).toLocaleDateString()}`}>
           <button className="uiBtn" disabled={busy} onClick={() => revoke(item)}>Disconnect</button>
         </Row>) : <div className="integrationDetails"><p>No assistants have access to this workspace yet.</p>
-          <p className="settingDesc">The workspace you choose on the approval screen determines what your assistant can read.</p></div> : null}
+          </div> : null}
     </Section>
     {message ? <p role="status">{message}</p> : null}
     <details className="integrationAdvanced">

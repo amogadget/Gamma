@@ -289,11 +289,12 @@ async function fetchPdfData(url, onLoadState, isCancelled) {
     onLoadState?.(url, { phase: "cached" });
     return disk;
   }
-  onLoadState?.(url, { phase: "start" });
   // Stall watchdog: abort when the connection goes silent — the proxy may sit
   // for a while before its upstream download produces the first byte, but a
-  // connection with no bytes for STALL_MS is dead, not slow.
+  // connection with no bytes for STALL_MS is dead, not slow. The same
+  // controller is the tasks popover's stop button (`cancel`).
   const ctrl = new AbortController();
+  onLoadState?.(url, { phase: "start", cancel: () => ctrl.abort() });
   let loaded = 0, total = 0, lastByteAt = Date.now(), lastReport = 0, stalled = false;
   const watchdog = setInterval(() => {
     if (Date.now() - lastByteAt > STALL_MS) { stalled = true; ctrl.abort(); }

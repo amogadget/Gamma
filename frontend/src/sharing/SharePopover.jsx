@@ -13,7 +13,7 @@
 // View / Edit toggle on top, whatever the tiles say.
 import React from "react";
 import { MenuSelect } from "../shared/ui/Menus";
-import { AccountPicker, Empty, PictureChoices, Row, Section, Segmented } from "../settings/SettingsKit";
+import { AccountPicker, Empty, IconChoices, Row, Section, Segmented } from "../settings/SettingsKit";
 import { useAccounts } from "../settings/SettingsWorkspace";
 import {
   AlertCircleIcon, CheckIcon, CopyIcon, EyeIcon, GlobeIcon, LinkIcon, PenIcon, PlusIcon,
@@ -156,12 +156,8 @@ export function SharePopover({
                 />
               ) : null}
             >
-              <PictureChoices
-                label="Who can open the link" value={settings.audience}
-                options={AUDIENCE_TILES.map(({ value, label, hint, Icon }) => ({
-                  value, label, hint,
-                  preview: <span className="shareTileIcon" aria-hidden="true"><Icon size={18} /></span>,
-                }))}
+              <IconChoices
+                label="Who can open the link" value={settings.audience} options={AUDIENCE_TILES}
                 onChange={(audience) => {
                   if (audience === settings.audience) return;
                   // Opening a link up to everyone never silently makes it editable.

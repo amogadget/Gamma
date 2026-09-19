@@ -19,15 +19,11 @@ const DARK = THEMES.find((theme) => theme[0] === "dark");
 export function AppearanceSettings({ value, diagnostics }) {
   return (
     <div className="appearanceSettings">
-      <PaneHead icon={ContrastIcon} title="Appearance">
-        A comfortable space to read and think. Changes apply as you choose.
-      </PaneHead>
+      <PaneHead icon={ContrastIcon} title="Appearance" />
 
       <Section title="Theme" action={<span className="setScope">Your account</span>}>
-        <p className="appearanceHint">Choose the colors around your work.</p>
         <PictureChoices label="Theme" value={value.theme} onChange={value.setTheme}
           options={THEMES.map((theme) => ({ value: theme[0], label: theme[1], hint: theme[2], preview: <ThemePreview theme={theme} dark={DARK} /> }))} />
-        <p className="appearanceFootnote">Gamma themes also match PDF pages to the interface. Sepia, Solarized Light and Gray tint PDF pages and soften ink.</p>
       </Section>
 
       <Section title="PDF pages" action={<span className="setScope">Your account</span>}>
@@ -35,16 +31,17 @@ export function AppearanceSettings({ value, diagnostics }) {
           <PdfPreview dark={value.pdfDarkPage || value.theme === "gamma-dark"} />
           <div className="appearancePdfControls">
             <Toggle icon={MoonIcon} label="Dark PDF pages"
-              hint={value.theme === "gamma-dark" ? "Gamma Dark already uses dark pages." : "Light text on a dark page, with any theme."}
+              hint={value.theme === "gamma-dark" ? "Gamma Dark already uses dark pages." : "Light text on a dark page; figures invert too."}
+              title="Display only — your files and exports keep their original colors."
               checked={value.pdfDarkPage} onChange={value.setPdfDarkPage} />
-            <p className="appearanceFootnote">Photos and figures invert too. Your files and exports keep their original colors.</p>
           </div>
         </div>
       </Section>
 
       <Section title="Interface" action={<span className="setScope">This browser</span>}>
         <div className="appearanceInterface">
-          <Row icon={MaximizeIcon} label="Control size" hint="Make buttons, icons and switches smaller or larger.">
+          <Row icon={MaximizeIcon} label="Control size" hint="Buttons, icons and switches."
+            title="To resize notes or chat text instead, hold Ctrl (⌘ on Mac) and scroll over that panel.">
             <Stepper value={value.uiScale} onChange={value.setUiScale}
               min={UI_SCALE.min} max={UI_SCALE.max} step={UI_SCALE.step} reset={UI_SCALE.default}
               format={(v) => `${Math.round(v * 100)}%`} />
@@ -52,7 +49,6 @@ export function AppearanceSettings({ value, diagnostics }) {
           <Toggle icon={LayoutIcon} label="Status bar" hint="Show the latest activity below your tabs."
             checked={diagnostics.statusBarVisible} onChange={diagnostics.setStatusBarVisible} />
         </div>
-        <p className="appearanceFootnote">To resize notes or chat text, hold Ctrl (⌘ on Mac) and scroll over that panel.</p>
       </Section>
     </div>
   );

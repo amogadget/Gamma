@@ -24,57 +24,74 @@ session caches are ignored because their account owner cannot be determined.
 
 ## The Settings dialog
 
-Five everyday destinations are defined by `PREFERENCE_NAV` in
-[SettingsDialog.jsx](../../frontend/src/settings/SettingsDialog.jsx):
+One dialog, one sidebar in three groups, defined by `PREFERENCE_NAV`,
+`AI_NAV` and `MANAGEMENT_NAV` in
+[SettingsDialog.jsx](../../frontend/src/settings/SettingsDialog.jsx). Every
+pane is one click from any other; nothing opens a second dialog or a
+"back" link. Panes carry no explanatory subtitle: a section rule's right-hand
+tag ("Your account" / "This browser") says where a setting lives, a row's
+short hint what it does, and the hover `title` the rest.
 
-- **Appearance**: theme choices and dark PDF pages (account-synced), control
-  size and status bar (this browser).
-  [SettingsAppearance.jsx](../../frontend/src/settings/SettingsAppearance.jsx):
-  eight theme cards (`PictureChoices`), a PDF sample that follows the page
-  tint and the dark-page switch, and the interface controls.
-- **Reading & editing**: imported annotations, the handwriting input rules
-  (stylus draws right away, fingers never draw, pressure), translation
-  shortcut and language, Enter behavior and search expansion. Vertical
-  scroll alignment and note badges on highlights are always on.
-- **Library**: thumbnails, folder/label display, metadata lookup, open-access
-  fallback and saving external PDFs. These are browser preferences. Display
-  is one live `PageCard` beside three switches (thumbnails, folders, labels);
-  the two chip switches map onto the four `fileLabels` modes.
-  [SettingsLibraryDisplay.jsx](../../frontend/src/settings/SettingsLibraryDisplay.jsx).
-- **AI**: opens a second-level sidebar with Connections & models, Assistant,
-  Advanced and Prompts. Assistant contains permissions and context presets;
-  Advanced contains exact context budgets, technical limits and translation
-  performance. Connections & models includes connection checks, the
-  account's token usage (server-side rows, [ai.md](ai.md) "Token usage") and
-  models for metadata, translation and dictation.
-- **Account**: the signed-in account only, including for admins. Existing
-  administrator-only account editing rules still apply.
+Preferences:
 
-Larger management areas open their own navigation with Back to settings.
-Shorter pages keep the main sidebar:
+- **Appearance**: the eight theme cards (`PictureChoices`), the dark-page
+  switch with its live PDF sample, control size and the status bar.
+  [SettingsAppearance.jsx](../../frontend/src/settings/SettingsAppearance.jsx).
+- **Reading & editing**: imported annotations (a Keep / Remove segmented
+  choice), handwriting as two `IconChoices` tiles ("Draws with": pen only /
+  pen and finger — the stored preference is still `inkPenOnly`) plus the
+  stylus-draws-right-away and pressure switches, translation (button and
+  language; the section's action jumps to AI › Advanced for model and
+  speed), the Enter key, and how search opens on the home page and on a
+  page (Full panel / Find bar).
+- **Library**: the live card demo with the thumbnails / folders / labels
+  switches ([SettingsLibraryDisplay.jsx](../../frontend/src/settings/SettingsLibraryDisplay.jsx)),
+  open-access fallback, metadata auto-fetch and saving external PDFs.
+- **Account**: the signed-in account's row and storage meter.
 
-- **AI › External assistants** ([SettingsIntegrations.jsx](../../frontend/src/settings/SettingsIntegrations.jsx)):
+AI:
+
+- **Connections**: the provider list (empty state: one sentence and the Add
+  button), the login connection check, the models (default chat, metadata,
+  dictation, translation) and the account's token usage
+  ([ai.md](ai.md) "Token usage"). The check, models and usage sections
+  appear only once a provider exists.
+- **Chat**: the tools master switch and, per chat kind (folder / PDF /
+  notes), the tool chips (`AgentToolPicker`, the same `ToggleGroup` the chat
+  header's settings popover shows for the open chat). No presets.
+- **Advanced**: reasoning effort, tool limits, the context budgets (the
+  section's action is the Standard / Larger / Custom preset), translation
+  effort and parallel requests, and the snapshot-clearing switch.
+- **Prompts**: the accordion with one Cancel / Save pair.
+- **Integrations** ([SettingsIntegrations.jsx](../../frontend/src/settings/SettingsIntegrations.jsx)):
   the workspace's assistant connections, the MCP URL, the Codex setup
   command and the manual-token fallback ([mcp.md](mcp.md)).
-- **Manage workspaces**: workspaces and backups. A workspace's Manage action
-  opens an inline detail page; rename and invite are small editor dialogs.
-  Import/export, Export all and Back up all remain available. The account
-  popover links to this manager beside the workspace switcher.
-- **Library maintenance** (main sidebar): workspace storage, search-index rebuilding and the
-  per-paper metadata/text/index health table. Also linked from the Library
-  preferences page and the library operations menu.
-- **Administration** (admins only): Users (accounts, each with its personal
-  workspaces) and Server (the dashboard — build, uptime, warnings, the
-  update check — shared workspaces, server-wide storage defaults, the
-  Assistant connections section with the public server URL, server backups
-  and the log with its level filter; [user_db.md](user_db.md)).
-- **Diagnostics** (main sidebar): browser tracing and the browser session log.
 
-Administrators can confirm the **Public server URL** under Server. It is
-prefilled from the browser origin but saved only on confirmation. The saved
-address immediately configures assistant sign-in and the MCP host allowlist;
-it persists in the server `settings` table. An existing `GAMMA_PUBLIC_URL`
-environment override takes precedence and is shown read-only.
+Manage:
+
+- **Workspaces**: storage meter, personal and shared workspaces (each row:
+  Open, a Data menu with export and import, Manage — an inline detail page;
+  rename and invite are small editor dialogs), New workspace, Export all.
+  The empty Shared section offers admins "New shared workspace" (a jump to
+  Server). The account popover's "Workspaces…" opens this pane.
+- **Backups**: server-kept snapshots per workspace.
+- **Library maintenance**: workspace storage, search-index rebuilding and
+  the per-paper metadata / text / index health table.
+- **Users** (admins): accounts, each with its personal workspaces and
+  labelled Storage / Edit buttons.
+- **Server** (admins): the dashboard (build, uptime, warnings, the update
+  check), the public server URL, storage defaults (each box saves on Enter
+  or blur), shared workspaces, server backups and the log with its level
+  filter ([user_db.md](user_db.md)).
+- **Diagnostics**: browser tracing and the browser session log.
+
+Administrators confirm the **Public server URL** under Server: the row shows
+a "confirmed" / "not confirmed" tag and, while the address is unconfirmed or
+edited, one Confirm button. It is prefilled from the browser origin but saved
+only on confirmation; the saved address immediately configures assistant
+sign-in and the MCP host allowlist and persists in the server `settings`
+table. An existing `GAMMA_PUBLIC_URL` environment override is shown
+read-only.
 
 Search is backed by [settingsNavigation.js](../../frontend/src/settings/settingsNavigation.js).
 It searches labels and synonyms, filters out inaccessible management pages,
@@ -87,11 +104,12 @@ The desktop surface has a persistent search header and labeled sidebar. On
 phones the Back button opens a labeled category list, replacing the old strip
 of unlabeled icons. All controls remain reachable by keyboard and touch.
 
-Most preferences apply immediately. Prompts use Save/Cancel. Credential,
-account and workspace editor dialogs protect unsaved drafts on Cancel,
-Escape and backdrop dismissal. `useSettingsDraft` registers dirty editors
-with the settings navigation guard. Server storage defaults save together,
-so saving one limit cannot discard an unsaved change to the other.
+Most preferences apply immediately, the server storage defaults included
+(each box saves when it commits). Prompts and the public server URL use a
+draft with Cancel / Save (Confirm). Credential, account and workspace editor
+dialogs protect unsaved drafts on Cancel, Escape and backdrop dismissal.
+`useSettingsDraft` registers dirty editors with the settings navigation
+guard.
 
 ## Chat settings are global
 
@@ -100,9 +118,8 @@ model, reasoning effort, single-paper context budget and tool permissions.
 The Tools button and checkbox also edit the global `agentEnabled` preference;
 there is no conversation-local tools override or reset on New chat.
 Permissions remain scoped by chat kind (folder, PDF, notes), applying to all
-chats of that kind in this browser. Read & search / Read, search & edit /
-Custom presets retain access to the individual permissions. Existing custom
-maps are preserved until the user explicitly picks a preset.
+chats of that kind in this browser. Both surfaces show the same tool
+chips per chat kind; there are no presets.
 
 These browser preferences persist locally; this does not make them
 account-synced. Provider selection and credentials retain their existing
@@ -117,7 +134,10 @@ the exact values without changing them.
 Ordinary rows show a small icon, a label, a short hint and a control, with the
 shared hover background. Put consequences in the visible
 hint; supplementary `title` text appears on hover, without a Details toggle.
-Use the existing shared controls, including `PictureChoices` for theme choices.
+Use the existing shared controls: `PictureChoices` for illustrated choices,
+`IconChoices` for a small exclusive set pictured as icon tiles (the share
+popover's audience, handwriting's "Draws with"), `Segmented` for two or three
+short words, `ToggleGroup` for independent chips.
 Editor dialogs accept a `draft` value for dismissal protection. See
 [ui-design.md](ui-design.md) for shared control styling.
 
@@ -135,7 +155,7 @@ another build cannot replace the assets while the suite runs.
 
 Two limits per account: max upload size per file (`max_upload_mb`, default
 50) and total uploads quota (`quota_mb`, 0 = unlimited). Server-wide defaults
-are admin-editable in Settings / Administration / Server; per-account overrides (NULL =
+are admin-editable in Settings → Server; per-account overrides (NULL =
 inherit) in the Users pane. They apply to the account's personal workspaces
 together; a shared workspace has its own optional quota (admins, Settings →
 Workspaces / Members & sharing — [workspaces.md](workspaces.md)). `GET

@@ -472,7 +472,7 @@ show what a week cost. Code: `gamma/ai_usage.py`, `ai_client.normalize_usage`,
   {calls, input, output, cache_read, cache_write}, kinds: {kind → the same}
   and models: [{provider_id, provider_name, model, …}] over the last 30
   days, first_at, keep_days}`; `DELETE /api/ai/usage` forgets the account's
-  rows. Settings → AI → Connections & models → **Token usage** renders three
+  rows. Settings → AI › Connections → **Token usage** renders three
   tiles (today / 7 days / 30 days), the all-time line with Reset, and a
   by-model table (plus a by-kind block when more than one kind ran).
   Guests never see it (no providers). No prices anywhere: they differ per

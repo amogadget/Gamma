@@ -344,12 +344,12 @@ export function AiSettings({ value, taskModels, confirm, setStatus }) {
         <>
           {providers.length === 0 && !value.aiKeysForm ? (
             <Empty icon={KeyIcon}>
-              {canEdit
-                ? "No keys yet — add one to enable chat, metadata extraction and citations."
-                : "Guest accounts cannot store API keys. Ask the admin for an account."}
+              {canEdit ? <>
+                <span>No AI connection yet.</span>
+                <button className="uiBtn primary" onClick={value.startAddAiProvider}>+ Add provider</button>
+              </> : "Guest accounts cannot store API keys. Ask the admin for an account."}
             </Empty>
           ) : null}
-          <p className="setNotice">Choose the connection used by AI requests. Credentials are saved to your account.</p>
           {providers.map((provider) => {
             const protocol = value.aiProtocolOf(provider.protocol);
             const test = value.aiKeyTests?.[provider.id];
@@ -441,12 +441,12 @@ export function AiSettings({ value, taskModels, confirm, setStatus }) {
               </label>
             );
           })}
-          {canEdit ? (
+          {canEdit && providers.length ? (
             <div className="reportModalBtns settingsAlignStart">
               <button className="uiBtn primary" onClick={value.startAddAiProvider}>+ Add provider</button>
             </div>
           ) : null}
-          {canEdit ? (
+          {canEdit && providers.length ? (
             <Section title="Connection check">
               <Row icon={RefreshIcon} label="Check at login"
                 hint="Verify the active provider when Gamma opens"
@@ -474,16 +474,13 @@ export function AiSettings({ value, taskModels, confirm, setStatus }) {
           ) : null}
         </>
       ) : null}
-      <Section title="Models - this browser">
+      {providers.length ? <>
+      <Section title="Models" action={<span className="setScope">This browser</span>}>
         {(value.aiModels || []).length ? <Row icon={SparklesIcon} label="Default chat model"
-          hint="Also used by citations and generated titles. The chat settings shortcut changes this same preference.">
+          hint="Also used by citations and generated titles">
           <MenuSelect label="Default chat model" value={value.chatModel} onChange={value.setChatModel}
             options={(value.aiModels || []).map((model) => [model.id, model.model])} />
-        </Row> : <p className="setNotice">Connect a service to choose models.</p>}
-      </Section>
-      {value.aiKeysInfo?.can_edit ? <AiUsageSection confirm={confirm} setStatus={setStatus} /> : null}
-
-      <Section title="Models for other tasks">
+        </Row> : <p className="setNotice">Pick models on the connection (Manage) to choose one here.</p>}
         <Row icon={PaperIcon} label="Metadata model"
           hint="Used only when identifiers cannot resolve the paper"
           title="Metadata first tries arXiv and DOI records. This model is used only when metadata has to be AI-extracted from PDF text; a fast, cheap model is usually enough.">
@@ -499,7 +496,7 @@ export function AiSettings({ value, taskModels, confirm, setStatus }) {
           />
         </Row>
         <Row icon={MicIcon} label="Dictation model"
-          hint="Speech-to-text for the chat mic button"
+          hint="For the chat mic button; needs an OpenAI key"
           title="gpt-4o-transcribe is what ChatGPT dictation uses; it needs an OpenAI-protocol provider key.">
           <MenuSelect
             label="Dictation model" value={value.dictationModel} onChange={value.setDictationModel}
@@ -520,6 +517,8 @@ export function AiSettings({ value, taskModels, confirm, setStatus }) {
         </Row>
       {taskModels}
       </Section>
+      {value.aiKeysInfo?.can_edit ? <AiUsageSection confirm={confirm} setStatus={setStatus} /> : null}
+      </> : null}
       {!value.aiKeysForm && value.aiKeysError ? <div className="settingsPaneHint aiKeysError">{value.aiKeysError}</div> : null}
     </>
   );

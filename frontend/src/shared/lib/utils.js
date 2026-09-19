@@ -344,11 +344,11 @@ async function apiJson(url, options = {}) {
 // Upload a zipped "Zotero RDF" export (shared by the Import dialog and the
 // Settings → Library row). Logs per-item problems to the console; returns
 // {data, summary} — summary is the ready-made status-line text.
-async function importZoteroZip(file, strip) {
+async function importZoteroZip(file, strip, signal) {
   const form = new FormData();
   form.append("file", file);
   form.append("strip", strip ? "true" : "false");
-  const data = await apiJson(`${API}/import/zotero`, { method: "POST", body: form });
+  const data = await apiJson(`${API}/import/zotero`, { method: "POST", body: form, signal });
   const problems = (data.skipped?.length || 0) + (data.warnings?.length || 0);
   [...(data.skipped || []), ...(data.warnings || [])].forEach((s) =>
     console.warn(`Zotero import: ${s.title} — ${s.reason}`));

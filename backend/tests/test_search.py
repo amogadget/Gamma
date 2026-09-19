@@ -260,3 +260,10 @@ def test_tasks_endpoint_shape(guest):
     assert r.status_code == 200
     idx = r.json()["indexing"]
     assert set(idx) >= {"total", "done", "active"}
+
+
+def test_stop_indexing_reports_whether_one_was_running(guest):
+    # nothing running: a no-op, not an error
+    r = guest.delete("/api/tasks/indexing")
+    assert r.status_code == 200
+    assert r.json() == {"cancelled": False}

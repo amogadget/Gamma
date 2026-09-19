@@ -56,9 +56,9 @@ export async function chatNavigationScenarios(env) {
             await page.getByRole("button", { name: "Close Chat", exact: true }).click();
             await until(async () => !(await page.locator(".chatPanel").count()));
             await page.evaluate(() => window.chatStream.push({ delta: " Continued with the panel closed." }));
-            await page.getByRole("button", { name: "Settings", exact: true }).click();
+            await page.getByRole("button", { name: "View", exact: true }).click();
             await page.locator(".menuPopover").getByRole("button", { name: "AI Chat" }).click();
-            await page.getByRole("button", { name: "Settings", exact: true }).click();
+            await page.getByRole("button", { name: "View", exact: true }).click();
             await until(async () => (await page.locator(".chatPanel").innerText()).includes("Continued with the panel closed."));
             await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
             // Text after the last report counts as a "~" estimate next to the Responding pill.

@@ -35,7 +35,7 @@ e2e `tests/e2e/scenarios/ink.mjs` and `inkEditing.mjs`.
   **lasso**'s row: *freeform* circles strokes (more than half their
   samples inside), *box* drags a rectangle; the dashed box then moves by
   dragging and deletes with `Delete`. Both work across groups on the page.
-- **Tap existing ink to select it.** With *Fingers never draw* on, a finger
+- **Tap existing ink to select it.** With *Draws with: Pen only* (the `inkPenOnly` preference), a finger
   tap or a 450 ms stationary hold selects the nearest stroke (10 CSS px hit
   tolerance, topmost wins). A mouse click in Hand mode and a short tap with
   the lasso select the same way. A swipe still scrolls: more than 8 CSS px
@@ -69,9 +69,9 @@ e2e `tests/e2e/scenarios/ink.mjs` and `inkEditing.mjs`.
   disabled state follows it and resets on leaving the page. Selecting alone
   is not an entry.
 - **A stylus draws right away** even with the strip closed (Settings →
-  Editor → PDF viewer → Handwriting; on by default), with the last pen
+  Reading & editing → Handwriting; on by default), with the last pen
   preset armed on the strip. **Fingers never draw**
-  when *Fingers never draw* is on (default on touch screens): they keep
+  when *Draws with* is *Pen only* (`inkPenOnly`, default on touch screens): they keep
   scrolling and pinch-zooming. The pen's eraser end and barrel button erase.
 - Strokes on one page join the **current group** until *New group*, a
   stroke on another page, or leaving the page. A group is one block in the

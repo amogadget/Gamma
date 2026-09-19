@@ -7,7 +7,7 @@
 // workspaces — stay in Users; per-workspace backups in Backups.
 import React from "react";
 import { API, apiJson } from "../shared/lib/utils";
-import { PaneHead, Section, Row, Segmented, StatText, UnitInput, LogBox, useSettingsDraft } from "./SettingsKit";
+import { PaneHead, Section, Row, Segmented, StatText, UnitInput, LogBox } from "./SettingsKit";
 import { WorkspacesAdmin } from "./SettingsWorkspacesAdmin";
 import { ServerBackups } from "./SettingsBackups";
 import { PublicUrlSettings } from "./SettingsPublicUrl";
@@ -16,9 +16,7 @@ import { ActivityIcon, AlertCircleIcon, CloudDownloadIcon, ImportIcon, ServerIco
 export function ServerSettings({ value }) {
   return (
     <>
-      <PaneHead icon={ServerIcon} title="Server">
-        What this server runs and how it is doing, storage defaults, the shared workspaces, snapshots of the whole data directory, and the server log.
-      </PaneHead>
+      <PaneHead icon={ServerIcon} title="Server" />
       <Section title="Dashboard">
         <ServerDashboard />
       </Section>
@@ -118,49 +116,40 @@ function ServerDashboard() {
 
 // Server-wide default storage limits (users.db via /api/admin/settings).
 // Per-account overrides live in the Users pane.
+// Each limit saves when its box commits (Enter / blur), like every other
+// setting; an invalid entry snaps back to the stored value.
 function ServerLimitRows({ setStatus, refreshQuota }) {
   const [saved, setSaved] = React.useState(null);
-  const [draft, setDraft] = React.useState({ max_upload_mb: "", quota_mb: "" });
   const [error, setError] = React.useState("");
-  const [busy, setBusy] = React.useState(false);
-  const asDraft = (value) => ({ max_upload_mb: String(value.max_upload_mb), quota_mb: String(value.quota_mb) });
   React.useEffect(() => {
-    apiJson(`${API}/admin/settings`).then((value) => { setSaved(value); setDraft(asDraft(value)); })
-      .catch((err) => setError(err.message));
+    apiJson(`${API}/admin/settings`).then(setSaved).catch((err) => setError(err.message));
   }, []);
-  const dirty = !!saved && Object.keys(draft).some((key) => draft[key] !== String(saved[key]));
-  const valid = /^\d+$/.test(draft.max_upload_mb) && Number(draft.max_upload_mb) >= 1
-    && /^\d+$/.test(draft.quota_mb);
-  const discard = () => { if (saved) setDraft(asDraft(saved)); setError(""); };
-  useSettingsDraft("server-limits", dirty, discard);
-  async function save() {
-    if (!dirty || !valid || busy) return;
-    setBusy(true); setError("");
+  async function commit(key, raw, min) {
+    const n = Number.parseInt(String(raw).trim(), 10);
+    if (!Number.isFinite(n) || n < min) { setSaved((s) => ({ ...s })); return; } // re-render restores the stored value
+    if (n === saved[key]) return;
+    setError("");
     try {
+      // Only this field: two boxes committing back to back must not overwrite each other.
       const value = await apiJson(`${API}/admin/settings`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ max_upload_mb: Number(draft.max_upload_mb), quota_mb: Number(draft.quota_mb) }),
+        body: JSON.stringify({ [key]: n }),
       });
-      setSaved(value); setDraft(asDraft(value)); refreshQuota?.();
+      setSaved(value); refreshQuota?.();
       setStatus("Storage defaults saved.");
     } catch (err) { setError(`Could not save: ${err.message}`); }
-    finally { setBusy(false); }
   }
   return <>
     {saved ? <>
-      <Row icon={ImportIcon} label="Default max upload" hint="Largest single PDF or image per account. Users can have individual overrides.">
-        <UnitInput unit="MB" min={1} value={draft.max_upload_mb}
-          onChange={(next) => setDraft((previous) => ({ ...previous, max_upload_mb: next }))} onEnter={save} />
+      <Row icon={ImportIcon} label="Default max upload" hint="Largest single file; Users can override per account">
+        <UnitInput key={`u${saved.max_upload_mb}`} unit="MB" min={1} value={String(saved.max_upload_mb)}
+          onCommit={(raw) => commit("max_upload_mb", raw, 1)} />
       </Row>
-      <Row icon={ServerIcon} label="Default quota" hint="Total personal-workspace uploads per account. 0 means unlimited; shared workspaces have their own quota.">
-        <UnitInput unit="MB" min={0} value={draft.quota_mb}
-          onChange={(next) => setDraft((previous) => ({ ...previous, quota_mb: next }))} onEnter={save} />
+      <Row icon={ServerIcon} label="Default quota" hint="Personal uploads per account; 0 = unlimited">
+        <UnitInput key={`q${saved.quota_mb}`} unit="MB" min={0} value={String(saved.quota_mb)}
+          onCommit={(raw) => commit("quota_mb", raw, 0)} />
       </Row>
-      <div className="reportModalBtns">
-        <button className="uiBtn sm" disabled={!dirty || busy} onClick={discard}>Cancel</button>
-        <button className="uiBtn sm primary" disabled={!dirty || !valid || busy} onClick={save}>{busy ? "Saving..." : "Save limits"}</button>
-      </div>
-    </> : !error ? <p className="setNotice">Loading storage defaults...</p> : null}
+    </> : !error ? <p className="setNotice">Loading…</p> : null}
     {error ? <p className="settingsPaneHint aiKeysError" role="alert">{error}</p> : null}
   </>;
 }
