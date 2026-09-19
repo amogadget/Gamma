@@ -54,24 +54,18 @@ export async function shareScenarios({ server, browser, alice, bob, step, until,
   const up = await account.upload("/api/upload-image", PNG_1PX, "dot.png", "image/png");
   await account.api("/api/blocks", { method: "POST", body: { parent_id: pdfPageId, content: `figure ![](${up.url})` } });
 
-  await step("share: the dialog creates a link and shows it on the copy button", async () => {
+  await step("share: the popover creates a link and shows it on the copy button", async () => {
     const ctx = await account.context(browser);
     const page = await openPage(ctx, `${server.base}/?page=${pdfPageId}&ws=${account.ws}`);
     await waitForPdf(page, 1);
     await page.click("button[aria-label='Share']");
-    await page.waitForSelector(".shareDialog");
-    await page.locator(".shareDialog button", { hasText: "Create link" }).click();
-    const copyBtn = page.locator(".shareDialog button", { hasText: /Copy link|Copied/ }).first();
+    await page.waitForSelector(".sharePopover");
+    await page.locator(".sharePopover button", { hasText: "Create link" }).click();
+    const copyBtn = page.locator(".sharePopover button", { hasText: /Copy link|Copied/ }).first();
     await copyBtn.waitFor({ timeout: 10000 });
-    const tokenOf = async () => new URL(await copyBtn.getAttribute("title")).searchParams.get("share");
-    const first = await tokenOf();
-    // Reset link: a new address, the settings stay
-    await page.locator(".shareDialog button", { hasText: "Reset link" }).click();
-    await until(async () => (await tokenOf()) !== first, { what: "link reset" });
-    token = await tokenOf();
-    assert((await account.api(`/api/share/${first}`).catch((e) => e)).status === 404, "the old link is dead");
+    token = new URL(await copyBtn.getAttribute("title")).searchParams.get("share");
     await page.keyboard.press("Escape");
-    await page.locator(".shareDialog").waitFor({ state: "detached" });
+    await page.locator(".sharePopover").waitFor({ state: "detached" });
     if (!token) token = (await account.api(`/api/share-settings/${pdfPageId}`)).token;
     assert(token, "share token");
     assertNoProblems(page);

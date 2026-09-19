@@ -1,7 +1,6 @@
 """Unified blocks API (/api/blocks/*) and block search."""
 
 import json
-import re
 import secrets
 
 from fastapi import APIRouter, HTTPException, Request
@@ -14,19 +13,19 @@ from ..blocks_store import (
     ancestor_chains,
     assert_block_in_page,
     block_to_dict,
+    create_page,
     delete_children,
-    delete_subtree,
     fetch_subtree,
     flatten_tree,
     get_or_create_doc_page,
     page_for_doc,
     page_root_id,
 )
-from .. import block_index, collab
+from .. import block_index
 from ..db import connect_pages_db, page_now, ws_uploads_dir
 from ..markdown_export import build_tree
-from ..ops import OpError, commit_ops, latest_seq, note_reload, record_ops
-from ..storage import cleanup_orphan_uploads, display_filename
+from ..ops import OpError, commit_ops, delete_page, latest_seq, note_reload, record_ops
+from ..storage import cleanup_orphan_uploads
 from ..textnorm import fuzzy_pattern
 
 router = APIRouter(prefix="/api", tags=["blocks"])
@@ -76,47 +75,6 @@ def _block_kind(parent_id: str, properties: str) -> str:
     if props.get("highlight_id"):
         return "highlight"
     return "note"
-
-
-def _repair_upload_path_titles(conn) -> int:
-    """Repair titles created while directory paths leaked into filenames.
-
-    This is deliberately compare-and-swap-like: original_filename is always
-    reduced to a leaf, but content changes only when it exactly matches the
-    old generated Markdown stem or PDF auto_title. User-renamed pages cannot
-    match those guards.
-    """
-    repaired = 0
-    rows = conn.execute(
-        "SELECT id, content, properties FROM unified_blocks "
-        "WHERE parent_id = 'root' AND json_extract(properties, '$.original_filename') IS NOT NULL"
-    ).fetchall()
-    for block_id, content, props_json in rows:
-        try:
-            props = json.loads(props_json or "{}")
-        except (TypeError, ValueError):
-            continue
-        raw = str(props.get("original_filename") or "").replace("\\", "/").strip()
-        leaf = display_filename(raw)
-        if not leaf or leaf == raw:
-            continue
-        next_content = content
-        if props.get("markdown_import"):
-            old_stem = re.sub(r"\.(?:md|markdown)$", "", raw, flags=re.I)
-            if content == old_stem:
-                next_content = re.sub(r"\.(?:md|markdown)$", "", leaf, flags=re.I)
-        elif props.get("auto_title") == content and display_filename(content) == leaf:
-            next_content = leaf
-            props["auto_title"] = leaf
-        props["original_filename"] = leaf
-        conn.execute(
-            "UPDATE unified_blocks SET content = ?, properties = ? WHERE id = ?",
-            (next_content, json.dumps(props), block_id),
-        )
-        repaired += int(next_content != content)
-    if rows:
-        conn.commit()
-    return repaired
 
 
 @router.get("/block-search")
@@ -197,10 +155,11 @@ async def ub_get_or_create_by_doc(doc_id: str, payload: UBByDocCreate, request: 
     # The page carrying this PDF, created when absent (PDF ingest from the
     # app and the extension, and "Open as document" on a PDF file block) — a
     # write, so it requires a real session (never the ?share= read principal).
-    with connect_pages_db(require_ws(request, write=True)) as conn:
+    ws = require_ws(request, write=True)
+    with connect_pages_db(ws) as conn:
         return get_or_create_doc_page(
             conn, doc_id, payload.default_title, payload.source_url, payload.original_filename,
-            folder=payload.folder or "")
+            folder=payload.folder or "", ws=ws, actor=request.state.user or "")
 
 
 @router.get("/blocks/{block_id}/children")
@@ -214,8 +173,6 @@ async def ub_get_children(block_id: str, request: Request):
             if not conn.execute("SELECT 1 FROM unified_blocks WHERE id = ?", (block_id,)).fetchone():
                 raise HTTPException(status_code=404, detail="block not found")
         assert_block_in_page(conn, block_id, scope)
-        if block_id == "root":
-            _repair_upload_path_titles(conn)
         rows = conn.execute(
             f"SELECT {BLOCK_COLUMNS} FROM unified_blocks WHERE parent_id = ? ORDER BY position ASC",
             (block_id,),
@@ -343,19 +300,13 @@ async def ub_create_block(payload: UBCreateRequest, request: Request):
         # A new page: not an op on any page. Share editors never get here.
         if scope is not None:
             raise HTTPException(status_code=403, detail="not accessible via this share link")
-        now = page_now()
+        try:
+            new_pos = generate_key_between(payload.before, payload.after)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"invalid before/after: {e}")
         with connect_pages_db(ws) as conn:
-            try:
-                new_pos = generate_key_between(payload.before, payload.after)
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"invalid before/after: {e}")
-            conn.execute(
-                "INSERT INTO unified_blocks (id, parent_id, position, content, properties, created_at, updated_at) "
-                "VALUES (?, 'root', ?, ?, ?, ?, ?)",
-                (block_id, new_pos, payload.content, json.dumps(payload.properties), now, now))
-            conn.commit()
-        return {"id": block_id, "parent_id": "root", "position": new_pos, "content": payload.content,
-                "properties": payload.properties, "created_at": now, "updated_at": now}
+            return create_page(conn, payload.content, payload.properties,
+                               block_id=block_id, position=new_pos)
     with connect_pages_db(ws) as conn:
         page_id = page_root_id(conn, payload.parent_id)
     if not page_id:
@@ -406,13 +357,8 @@ async def ub_delete_block(block_id: str, request: Request):
             # any) is told to reload, which surfaces the 404.
             if scope is not None:
                 raise HTTPException(status_code=403, detail="share editors cannot delete the shared page")
-            deleted_ids = [r[0] for r in fetch_subtree(conn, block_id)]
-            delete_subtree(conn, block_id)
-            conn.commit()
-            removed = cleanup_orphan_uploads(conn, ws_uploads_dir(ws))
-            block_index.purge_page_data(ws, conn, deleted_ids)
-            collab.publish_reload(ws, block_id)
-            return {"ok": True, "id": block_id, "removed_uploads": removed}
+            result = delete_page(ws, conn, block_id, actor=request.state.user or "")
+            return {"ok": True, "id": block_id, "removed_uploads": result["removed_uploads"]}
     result = _ops(ws, page_id, [{"op": "delete", "id": block_id}], request, scope)
     return {"ok": True, "id": block_id, "removed_uploads": result["removed_uploads"]}
 

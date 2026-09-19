@@ -19,9 +19,8 @@ Workspace members keep their workspace role on top (gamma/auth.py
 share_access). The token confines reads (and edit writes) to that page's
 subtree and assets (share_grant / share_scope_page).
 
-The token lives until "Stop sharing" (DELETE) or "Reset link" (POST
-/share/{page_id}/reset — a new token, same settings, for a link that
-leaked). Unknown tokens are counted per IP (gamma/auth.py note_share_miss).
+The token lives until "Stop sharing" (DELETE; sharing again mints a new
+one). Unknown tokens are counted per IP (gamma/auth.py note_share_miss).
 """
 
 import json
@@ -136,23 +135,6 @@ async def create_share(page_id: str, request: Request, payload: ShareSettings | 
             (token, ws, page_id, request.state.user, fields["audience"], fields["role"],
              serialize_share_users(fields["users"]), page_now()),
         )
-        conn.commit()
-    return _settings(share_lookup(token))
-
-
-@router.post("/share/{page_id}/reset")
-async def reset_share(page_id: str, request: Request):
-    """Mint a NEW token for the page's existing share, keeping audience,
-    role and the invited people — for a link that got around further than
-    intended. The old link stops opening at once. 404 when the page is not
-    shared."""
-    ws = require_ws(request, write=True)
-    existing = _page_share(ws, page_id)
-    if not existing:
-        raise HTTPException(status_code=404, detail="page is not shared")
-    token = secrets.token_urlsafe(12)
-    with connect_users_db() as conn:
-        conn.execute("UPDATE shares SET token = ? WHERE workspace_id = ? AND page_id = ?", (token, ws, page_id))
         conn.commit()
     return _settings(share_lookup(token))
 

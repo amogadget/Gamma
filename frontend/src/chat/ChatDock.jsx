@@ -8,12 +8,13 @@ import { API, apiJson, copyText, isPdfFile, readNdjson } from "../shared/lib/uti
 import { DockWindow, ChatMarkdown, AutoGrowTextarea, useCopied, useTextScale } from "../shared/ui/Widgets";
 import PaperMentionInput from "./PaperMentionInput";
 import { MAX_CHAT_REFERENCES } from "./paperMentions";
+import { addUsage, cachedPercent, conversationUsage, fmtTokens, usageDetail } from "./tokenUsage";
 import { createTitleScorer } from "../library/librarySearch";
 import { pageAttachment } from "../library/libraryUtils";
 import { MenuSelect } from "../shared/ui/Menus";
 import { CharSlider, approxPages } from "../settings/SettingsKit";
 import { AgentToolPicker, CHAT_KIND_ROWS } from "../settings/SettingsDialog";
-import { AlertCircleIcon, ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloudDownloadIcon, CopyIcon, FileIcon, FolderIcon, GlobeIcon, HistoryIcon, InfoIcon, ListIcon, MicIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersIcon, StopIcon, TrashIcon, XIcon } from "../shared/ui/Icons";
+import { AlertCircleIcon, ArrowDownIcon, ArrowUpIcon, BookIcon, CheckIcon, ChevronDownIcon, ChevronUpIcon, CloudDownloadIcon, CopyIcon, FileIcon, FolderIcon, GlobeIcon, HistoryIcon, InfoIcon, ListIcon, MicIcon, PaperclipIcon, PencilIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersIcon, StopIcon, TrashIcon, XIcon } from "../shared/ui/Icons";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -78,6 +79,23 @@ function ContextCoverage({ items }) {
         </span>
       ))}
     </div>
+  );
+}
+
+// The token line under a reply, Claude Code style: prompt in, reply out,
+// and the share of the prompt the provider served from its cache. Every
+// count comes from the provider's own report ({"usage"} lines of the chat
+// stream, summed over an agent reply's rounds); a reply without one shows
+// nothing.
+function UsageLine({ usage, className = "chatMsgUsage" }) {
+  if (!usage || !(usage.input || usage.output)) return null;
+  const cached = cachedPercent(usage);
+  return (
+    <span className={className} title={usageDetail(usage)}>
+      <span className="chatMsgUsagePart"><ArrowUpIcon size={9} />{fmtTokens(usage.input)}</span>
+      <span className="chatMsgUsagePart"><ArrowDownIcon size={9} />{fmtTokens(usage.output)}</span>
+      {cached ? <span className="chatMsgUsagePart">{cached}% cached</span> : null}
+    </span>
   );
 }
 
@@ -569,10 +587,12 @@ export default function ChatDock({
     let acc = ""; // streamed reply so far — kept on Stop
     const actions = []; // organizer mutations streamed for this reply
     let coverage = null; // {"context": [...]} — what the model was given, per document
+    let usage = null; // the provider's token report, summed over the reply's rounds
     const aiMsg = (extra = {}) => ({
       role: "ai", text: acc,
       ...(actions.length ? { actions: [...actions] } : {}),
       ...(coverage ? { context: coverage } : {}),
+      ...(usage ? { usage } : {}),
       ...extra,
     });
     try {
@@ -622,6 +642,8 @@ export default function ChatDock({
             onAgentEvent?.({ type: "progress", ...ev.progress });
           } else if (ev.context) {
             coverage = ev.context;
+          } else if (ev.usage) {
+            usage = addUsage(usage, ev.usage);
           } else {
             acc += ev.delta || "";
           }
@@ -852,11 +874,13 @@ export default function ChatDock({
           const multiProvider = new Set(models.map((m) => m.provider)).size > 1;
           const currentId = models.some((m) => m.id === chatModel) ? chatModel : models[0].id;
           const currentModel = models.find((m) => m.id === currentId);
+          const totalUsage = conversationUsage(chatMessages);
+          const usageTitle = totalUsage ? `; this conversation: ${fmtTokens(totalUsage.input)} tokens in, ${fmtTokens(totalUsage.output)} out` : "";
           return (
             <span data-popover="chatsettings" className="popoverAnchor">
               <button type="button" className={`ctlBtn ${settingsOpen ? "modeActive" : ""}`}
                 onClick={() => setOpenPopover((p) => (p === "chatsettings" ? null : "chatsettings"))}
-                title={`Chat settings — ${currentModel?.model || "model"}${chatEffort ? `, effort: ${chatEffort}` : ""}, context ${chatContextChars.toLocaleString()} chars`}
+                title={`Chat settings — ${currentModel?.model || "model"}${chatEffort ? `, effort: ${chatEffort}` : ""}, context ${chatContextChars.toLocaleString()} chars${usageTitle}`}
                 aria-label="Chat settings" aria-expanded={settingsOpen}>
                 <SettingsIcon size={15} />
               </button>
@@ -902,6 +926,15 @@ export default function ChatDock({
                   <div className="popoverHint">
                     Applies to all {chatKindLabel.toLowerCase()} conversations in this browser.
                   </div>
+                  <div className="popoverSection">Tokens · this conversation</div>
+                  {totalUsage ? (
+                    <div className="chatUsageTotal" title={usageDetail(totalUsage)}>
+                      <UsageLine usage={totalUsage} className="chatMsgUsage inline" />
+                      <span className="popoverHint">{chatMessages.filter((m) => m.role === "ai" && m.usage).length} replies counted, as the provider reported them. Totals per day and model: Settings / AI / Token usage.</span>
+                    </div>
+                  ) : (
+                    <div className="popoverHint">No token counts yet — they appear under each reply once the provider reports them.</div>
+                  )}
                 </div>
               ) : null}
             </span>
@@ -1178,7 +1211,9 @@ export default function ChatDock({
                       </div>
                     ) : null}
                   </div>
-                  {!isResponding ? <div className="chatMsgActions">
+                  {!isResponding ? <div className="chatMsgFoot">
+                    {!isUser ? <UsageLine usage={m.usage} /> : null}
+                    <div className="chatMsgActions">
                     <button type="button" className="chatMsgActionBtn" title="Copy message"
                       onClick={() => copyChatMessage(i, m.text)}>
                       {copiedMsgIdx === i
@@ -1191,6 +1226,7 @@ export default function ChatDock({
                         <PencilIcon size={13} />
                       </button>
                     ) : null}
+                    </div>
                   </div> : null}
                 </div>
               </div>

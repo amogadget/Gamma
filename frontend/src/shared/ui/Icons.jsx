@@ -102,6 +102,9 @@ export const ArrowLeftIcon = (p) => (
 export const ArrowUpIcon = (p) => (
   <Icon {...p}><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></Icon>
 );
+export const ArrowDownIcon = (p) => (
+  <Icon {...p}><path d="M12 5v14" /><path d="m19 12-7 7-7-7" /></Icon>
+);
 export const ArrowUpDownIcon = (p) => (
   <Icon {...p}><path d="m21 16-4 4-4-4" /><path d="M17 20V4" /><path d="m3 8 4-4 4 4" /><path d="M7 4v16" /></Icon>
 );

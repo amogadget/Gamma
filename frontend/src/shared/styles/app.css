@@ -473,6 +473,15 @@ body {
   height: 100dvh;
 }
 
+/* Installed as a home-screen app (docs/dev/ipad.md): the document itself
+   must not rubber-band — only the panes scroll — and the bottom edge keeps
+   clear of the home indicator. The status bar sits above the viewport
+   (status-bar-style "default"), so there is no top inset to absorb. */
+@media (display-mode: standalone) {
+  html, body { overscroll-behavior: none; }
+  .app { padding-bottom: env(safe-area-inset-bottom); }
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -2336,12 +2345,60 @@ button.pdfOutlineChevron:hover { background: rgba(128, 128, 128, 0.28); color: v
 .topbar .iconBtn.activeIcon { background: var(--bg-hover); color: var(--text-primary); }
 /* Fixed width: the BibTeX pre would otherwise stretch the popover to its
    longest line — it scrolls inside instead. */
-/* The Share dialog (sharing/ShareDialog.jsx): settings rows and people rows
-   from the settings kit; only the long link needs its own rule. */
-.shareDialog .settingText { min-width: 0; }
-.shareDialog .setRow .settingDesc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.settingsPaneHint.shareWarn { display: flex; align-items: flex-start; gap: 6px; color: #d9822b; }
+/* The Share popover (sharing/SharePopover.jsx): hangs off the topbar's link
+   button like the account menu, at the workspace dialogs' width; settings
+   rows, audience tiles and people rows from the settings kit. The link
+   row's long address ellipsizes; the audience tiles carry an icon where a
+   picture choice would show a preview; one summary line replaces per-row
+   hints. On phones the bottom bar's popover rule takes over. */
+.sharePopover { width: 440px; max-width: calc(100vw - 24px); max-height: min(80vh, calc(100dvh - 80px)); overflow-y: auto; padding: 10px 12px 12px; }
+.sharePopoverHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 2px; }
+/* Beat the generic ".topbar button" pill: controls inside keep the shared
+   uiBtn look (.on / .primary / .danger still win, they are more specific). */
+.topbar .sharePopover .uiBtn:where(:not(.on, .primary, .danger)) { background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-secondary); }
+.topbar .sharePopover .uiBtn:where(:not(.on, .primary, .danger)):hover:not(:disabled) { background: var(--bg-hover); }
+.sharePopover .settingText { min-width: 0; }
+.sharePopover .setRow .settingDesc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shareLinkBtns { display: inline-flex; align-items: center; gap: 6px; }
+.sharePopover .setPictureChoices { margin: 2px 0 4px; }
+/* Stacked tiles: glyph over name over hint, centered - three fit the width. */
+.sharePopover .setPictureChoice.uiBtn { flex-direction: column; align-items: center; gap: 6px; padding: 10px 8px 8px; }
+.sharePopover .setPictureCaption { flex: auto; width: 100%; align-items: center; text-align: center; padding-right: 0; gap: 1px; }
+.sharePopover .setPictureCheck { top: -30px; right: -2px; }
+.shareTileIcon {
+  flex: 0 0 34px; width: 34px; height: 34px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 9px;
+  background: var(--bg-block);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+}
+.setPictureChoice.on .shareTileIcon { background: var(--accent-bg); border-color: transparent; color: var(--accent); }
+/* Phones: the three tiles still fit side by side (the kit drops to two). */
+@media (max-width: 620px) {
+  .sharePopover .setPictureChoices { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .sharePopover .setPictureHint { display: block; }
+}
+.settingsPaneHint.shareSummary { display: flex; align-items: flex-start; gap: 6px; padding: 0 8px 2px; }
+.settingsPaneHint.shareWarn { color: #d9822b; }
 .shareWarn svg { flex-shrink: 0; margin-top: 2px; }
+.sharePopover .aiProvActions { display: inline-flex; align-items: center; gap: 6px; }
+/* Inline invite under the people list: picker, then role + buttons. */
+.shareInvite { display: flex; flex-direction: column; gap: 6px; padding: 4px 8px 6px; }
+.shareInviteRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.shareInviteBtns { display: inline-flex; gap: 6px; }
+/* Slide citation / BibTeX: a sub-label line, then a copy box. */
+.citeHead { display: flex; align-items: baseline; gap: 4px; padding: 6px 8px 4px; }
+.citeLabel { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.copyBox {
+  position: relative;
+  background: var(--bg-block);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 44px 8px 10px;
+}
+.copyBoxBody { min-width: 0; }
+.copyBoxBtn { position: absolute; top: 6px; right: 6px; }
 .userPopover { min-width: 268px; }
 
 /* workspace switcher rows in the account popover */
@@ -2942,7 +2999,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   pointer-events: none;
 }
 .metaValWarn { color: var(--danger); }
-/* Provenance beside "Slide citation" in the share popover (same "!" dot, inline) */
+/* Provenance beside "Slide citation" in the share dialog (same "!" dot, inline) */
 .citeSourceTag {
   display: inline-flex;
   align-items: center;
@@ -2954,7 +3011,7 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 }
 .citeSourceTag.warn { color: var(--danger); }
 .metaWarnDot.inline { position: static; display: inline-block; }
-.citeWarnHint { color: var(--danger); margin-bottom: 4px; }
+.citeWarnHint { color: var(--danger); padding: 0 8px 4px; }
 .sourcePopover { min-width: 300px; right: 0; }
 
 .searchResult.active { background: color-mix(in srgb, var(--accent-dark) 14%, transparent); }
@@ -3669,6 +3726,25 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
 .chatBubbleRow.user .chatMsgCol { align-items: flex-end; }
 .chatBubbleRow.ai .chatMsgCol { max-width: 96%; }
 .chatMsgCol .chatBubble { max-width: 100%; }
+/* Under a reply: the token line (always visible, dim) and the hover actions. */
+.chatMsgFoot { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.chatBubbleRow.user .chatMsgFoot { justify-content: flex-end; }
+.chatMsgUsage {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 4px 0;
+  font-size: calc(10px * var(--text-scale, 1));
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+}
+.chatMsgUsage.inline { padding: 0; font-size: 12px; color: var(--text-muted); }
+.chatMsgUsagePart { display: inline-flex; align-items: center; gap: 2px; }
+.chatMsgUsagePart svg { opacity: 0.8; }
+.chatUsageTotal { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 4px; }
+.chatUsageTotal .popoverHint { padding: 0; }
 .chatMsgActions {
   display: flex;
   gap: 2px;
@@ -4316,20 +4392,10 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   border-radius: 2px;
 }
 
-.pptCiteBox {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  background: var(--bg-block);
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  padding: 8px 10px;
-}
-.pptCitePreview { flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary); }
+.pptCitePreview { min-width: 0; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
 .pptCitePreview p { margin: 0; }
-/* Full BibTeX entry in the share popover: scrolls instead of growing. */
+/* Full BibTeX entry in the share dialog: scrolls instead of growing. */
 .bibtexPre {
-  flex: 1;
   min-width: 0;
   max-height: 160px;
   overflow: auto;
@@ -4340,9 +4406,6 @@ html.appFocusFullscreen, html.appFocusFullscreen body { overflow: hidden; oversc
   color: var(--text-secondary);
   white-space: pre;
 }
-/* Beat the generic ".topbar button" pill when the box renders inside the
-   topbar (share popover) — keep the flat icon look it has elsewhere. */
-.pptCiteBox .chatMsgActionBtn,
 
 /* --- paper metadata popover --- */
 .metaPopover { min-width: 340px; max-width: 420px; }

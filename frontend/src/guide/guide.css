@@ -1,0 +1,124 @@
+/* The guide overlay: dimmed sheet with a spotlight hole, a card beside it.
+   Uses the app's surface tokens so it follows every theme. */
+.guideRoot {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-tip);
+  pointer-events: none;
+}
+.guideDim {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+/* The painted part swallows clicks; the evenodd hole is not painted, so
+   pointer events fall through to the real control beneath it. */
+.guideDimFill {
+  fill: rgba(0, 0, 0, 0.42);
+  transition: d 180ms ease;
+}
+.guideRing {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  pointer-events: none;
+  animation: guidePulse 1.8s ease-in-out infinite;
+}
+@keyframes guidePulse {
+  0%, 100% { stroke-opacity: 0.95; }
+  50% { stroke-opacity: 0.45; }
+}
+
+.guideCard {
+  position: fixed;
+  pointer-events: auto;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--shadow-surface);
+  padding: 12px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  animation: guideIn 160ms ease-out;
+}
+@keyframes guideIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+.guideCardCentered {
+  top: 50%;
+  left: 50%;
+  width: 340px;
+  transform: translate(-50%, -50%);
+  animation: none;
+  padding: 18px 20px 16px;
+}
+.guideHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 18px;
+}
+.guideStep {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.guideClose { margin-right: -4px; }
+.guideDone {
+  margin-left: 8px;
+  color: var(--accent);
+}
+.guideRoot.done .guideRing { animation: none; stroke-opacity: 1; }
+.guideTitle {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.guideCardCentered .guideTitle { font-size: 17px; }
+.guideBody {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.guideBody p { margin: 0; }
+.guideBody p + p { margin-top: 6px; }
+.guideBody code {
+  font-size: 11.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+.guideFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+}
+.guideDots { display: inline-flex; gap: 4px; }
+.guideDots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--border-light);
+}
+.guideDots i.done { background: var(--accent-bg); }
+.guideDots i.on { background: var(--accent); width: 14px; border-radius: 3px; }
+.guideBtns { display: inline-flex; gap: 6px; }
+
+/* Narrow screens: the card becomes a bottom sheet; the spotlight stays. */
+@media (max-width: 640px) {
+  .guideCard:not(.guideCardCentered) {
+    top: auto !important;
+    left: 12px !important;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    width: auto !important;
+  }
+  .guideCardCentered { width: min(340px, calc(100vw - 32px)); }
+}

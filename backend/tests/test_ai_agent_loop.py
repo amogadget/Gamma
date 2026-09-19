@@ -225,7 +225,7 @@ def test_chat_reports_context_coverage(org, monkeypatch):
 
     monkeypatch.setattr(ai_mod, "_open_ai", lambda *a, **kw: _Ctx([
         {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "ok"}}]))
-    monkeypatch.setattr(ai_mod, "_read_reply", lambda resp, proto: "ok")
+    monkeypatch.setattr(ai_mod, "_read_reply", lambda resp, proto, *a: "ok")
     r = c.post("/api/ai/chat", json={"prompt": "hi", "doc_id": doc_id, "stream": False,
                                      "context_char_limit": 500})
     assert r.status_code == 200 and r.json()["context"][0]["partial"] is True

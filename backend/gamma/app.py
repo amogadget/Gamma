@@ -1,5 +1,6 @@
 """FastAPI application assembly: middleware, routers, startup maintenance, SPA serving."""
 
+import mimetypes
 import sys
 from pathlib import Path
 
@@ -142,6 +143,10 @@ def create_app() -> FastAPI:
     static_dir = Path(config.STATIC_DIR) if config.STATIC_DIR else None
     if static_dir and static_dir.is_dir():
         index_html = static_dir / "index.html"
+        # The web app manifest (/media/manifest.webmanifest, the "Add to Home
+        # Screen" install): FileResponse guesses types from the OS table,
+        # which lacks this one on Windows and in slim images.
+        mimetypes.add_type("application/manifest+json", ".webmanifest")
 
         def revalidating(file: Path, request: Request):
             """An unhashed file (index.html, favicons) changes in place on

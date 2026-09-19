@@ -351,6 +351,32 @@ def _v7_mcp_oauth(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _v8_ai_usage(conn: sqlite3.Connection) -> None:
+    """Adds the ``ai_usage`` table (+ index) in users.db: per-account token counts of AI calls."""
+    for stmt in USERS_SCHEMA:
+        if "ai_usage" in stmt:
+            conn.execute(stmt)
+    conn.commit()
+
+
+def _v9_upload_path_titles(conn: sqlite3.Connection) -> None:
+    """Runs the content normalizers over every workspace's pages.db once
+    more: the ``upload_path_titles`` step (a directory path that leaked into
+    ``original_filename`` and the generated title) used to be repaired on
+    every library listing, with raw SQL outside the op log; now it is a
+    one-time rewrite like the other content shapes."""
+    if not config.WORKSPACES_DIR.is_dir():
+        return
+    for ws_root in sorted(config.WORKSPACES_DIR.iterdir()):
+        pages_db = ws_root / "pages.db"
+        if not ws_root.is_dir() or not pages_db.is_file():
+            continue
+        with closing(sqlite3.connect(str(pages_db))) as pdb:
+            for stmt in PAGES_SCHEMA:
+                pdb.execute(stmt)
+            normalize_pages_db(pdb)
+
+
 STEPS = [
     (1, "baseline", _v1_baseline),
     (2, "workspaces", _v2_workspaces),
@@ -359,4 +385,6 @@ STEPS = [
     (5, "publisher_sessions", _v5_publisher_sessions),
     (6, "integration_tokens", _v6_integration_tokens),
     (7, "mcp_oauth", _v7_mcp_oauth),
+    (8, "ai_usage", _v8_ai_usage),
+    (9, "upload_path_titles", _v9_upload_path_titles),
 ]

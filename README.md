@@ -109,6 +109,7 @@ variables or a server restart. Then connect from **AI → External assistants**.
 Get the Windows app from the [**Microsoft Store**](https://apps.microsoft.com/detail/9N8WGWR2J2MV), or download standalone installers from [**GitHub Releases**](https://github.com/tim4431/Gamma/releases/latest).
 
 - **Desktop app** (Windows installer, macOS dmg, Debian/Ubuntu deb) — a self-contained Gamma with local libraries on your disk, no Docker, Python, or Node. It also opens any Gamma server you host (the NAS, a VPS) as another workspace and switches between them from the toolbar. Details: [desktop/](./desktop/). Builds are not notarized: Windows SmartScreen → *More info → Run anyway*; macOS says *Apple could not verify Gamma* on first launch → *System Settings → Privacy & Security → Open Anyway* (once); Linux: `sudo apt install ./Gamma-<version>-linux-amd64.deb`. Windows and Linux apps update themselves.
+- **iPad** — open your server in Safari, Share → *Add to Home Screen*: Gamma runs full screen from the icon, and the Apple Pencil writes on papers with pressure while fingers scroll. Chrome and Edge offer *Install Gamma* for the same on other tablets and desktops. Details: [docs/dev/ipad.md](./docs/dev/ipad.md).
 - **Gamma Connector** browser extension (`gamma-connector-<version>.zip`, in its own `extension-v<version>` release) — unzip, then `chrome://extensions` → *Developer mode* → *Load unpacked*.
 - **Server** — the Docker image below, built from `main` on every merge.
 

@@ -45,11 +45,15 @@ All state is SQLite + files on disk under a data directory (env
   `pdf_position` in their JSON `properties` column; free notes are blocks
   without. Next to it, `page_ops` — the per-page operation log (one row per
   applied batch, `seq` counting up per page, pruned to the newest 2000;
-  [collab.md](collab.md)). Open it ONLY through `db.connect_pages_db(ws)`:
+  [collab.md](collab.md)) and `deleted_pages` — a tombstone per deleted page
+  (`page_id`, `deleted_at`, `actor`; written by `ops.delete_page`, which also
+  drops the page's log rows, cleared when a page is created under the same
+  id — so a copy of the workspace can tell a deleted page from one it never
+  had). Open it ONLY through `db.connect_pages_db(ws)`:
   WAL journal mode (readers never wait on a writer — several browsers,
   several members), a 10 s busy timeout, and the schema statements (so a
-  restored backup gains `page_ops`). Backups copy it with the sqlite backup
-  API, which is WAL-safe.
+  restored backup gains `page_ops` and `deleted_pages`). Backups copy it with
+  the sqlite backup API, which is WAL-safe.
 - `workspaces/<id>/data.db` — the workspace's derived data: AI `chats` +
   `chat_history`, `page_snaps` (the recents-card cover thumbnails, synced via
   `/api/page-snaps` — too big for the prefs KV), the viewer's per-document

@@ -44,8 +44,9 @@ Five everyday destinations are defined by `PREFERENCE_NAV` in
 - **AI**: opens a second-level sidebar with Connections & models, Assistant,
   Advanced and Prompts. Assistant contains permissions and context presets;
   Advanced contains exact context budgets, technical limits and translation
-  performance. Connections & models includes connection checks and models for
-  metadata, translation and dictation.
+  performance. Connections & models includes connection checks, the
+  account's token usage (server-side rows, [ai.md](ai.md) "Token usage") and
+  models for metadata, translation and dictation.
 - **Account**: the signed-in account only, including for admins. Existing
   administrator-only account editing rules still apply.
 

@@ -353,24 +353,6 @@ def test_anyone_edit_link_lets_a_stranger_write_under_a_display_name(bob, guest,
     assert anon.get(f"/api/share/{token}").json()["can_edit"] is False
 
 
-def test_reset_link_mints_a_new_token_and_keeps_the_settings(bob, carol, anon):
-    page = make_page(bob, "Leaked link")
-    old = _share(bob, page["id"], audience="list", role="edit", users=[{"name": "carol_share", "role": "edit"}])["token"]
-    r = bob.post(f"/api/share/{page['id']}/reset")
-    assert r.status_code == 200, r.text
-    new = r.json()["token"]
-    assert new != old and len(new) >= 16
-    assert (r.json()["audience"], r.json()["role"], r.json()["users"]) == ("list", "edit", [{"name": "carol_share", "role": "edit"}])
-    assert bob.get(f"/api/share-settings/{page['id']}").json()["token"] == new
-    # the old address is dead at once, the new one works for the invited editor
-    assert carol.get(f"/api/share/{old}").status_code == 404
-    assert carol.get(f"/api/share/{new}").json()["can_edit"] is True
-    # only an editor of the workspace, and only for a shared page
-    assert carol.post(f"/api/share/{page['id']}/reset").status_code == 404
-    assert anon.post(f"/api/share/{page['id']}/reset").status_code == 401
-    assert bob.post(f"/api/share/{make_page(bob, 'Never shared')['id']}/reset").status_code == 404
-
-
 def test_unknown_share_tokens_are_throttled_per_ip_and_logged(bob, anon, monkeypatch):
     from gamma import auth
     from gamma.logbuf import tail

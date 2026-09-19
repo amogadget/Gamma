@@ -53,10 +53,19 @@ commits; `after_commit(ws, conn, result)` does the derived-data work and
 publishes; `commit_ops(ws, page_id, ops, actor=)` is both on a fresh
 connection — `ws` the workspace id, `actor` the account making the change. Every server-side writer
 goes through them — the single-block endpoints in `routers/blocks.py` are thin
-wrappers, page attach/detach, the metadata write, the clip endpoints and the AI
+wrappers, page attach/detach, the metadata write, the clip endpoints, the
+attachment-marker backfill of `get_or_create_doc_page`, the `annot_stripped`
+marks after an embedded-annotation strip, and the AI
 tools (`edit_block`, `create_block`, `move_block`, `rename_page`, `move_page`)
 call them directly — so everything a page's viewers see comes from one path
-and one log. Writers that rewrite a tree wholesale (`PUT /blocks/{id}/children`,
+and one log. Reads never write: a stored shape that needs repairing is a
+`normalize.py` step ([migrations.md](migrations.md)), not a fix-up on a
+listing. Pages themselves are not blocks of any page: creating one is
+`blocks_store.create_page` (a plain insert) and deleting one is
+`ops.delete_page` — the subtree, the page's log rows, then a `deleted_pages`
+tombstone (`page_id`, `deleted_at`, `actor`; cleared if the id is created
+again), so another copy of the workspace can tell "deleted" from "never
+seen". Writers that rewrite a tree wholesale (`PUT /blocks/{id}/children`,
 imports into an existing page, the target half of a cross-page move) log and
 publish a `reload` instead; a cross-page move's source page gets a `delete`
 (`record_ops`).
@@ -67,7 +76,9 @@ publish a `reload` instead; a cross-page move's source page gets a `delete`
 (`db.PAGES_SCHEMA`), one row per applied batch, `seq` counting up per page
 (the write lock is taken up front with `BEGIN IMMEDIATE`, so it never
 collides). `actor` is the account that made the change (a share editor's own
-name), `client` the tab's id or `"ai"`. Pruned to the newest `KEEP_OPS` rows
+name), `client` the tab's id, `"ai"` (the agent's tools) or `"meta"` (the
+paper-metadata worker's property writes — the one content write opening a
+page can cause, [paper_metadata.md](paper_metadata.md)). Pruned to the newest `KEEP_OPS` rows
 per page, checked every `PRUNE_EVERY` batches. `GET /api/pages/{id}/ops?since=`
 returns the batches after a seq (410 when the log no longer reaches back: the
 client reloads the tree); `GET /blocks/{id}/subtree` on a page carries the

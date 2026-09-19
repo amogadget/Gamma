@@ -28,7 +28,7 @@ from .config import USERS_DB, WORKSPACES_DIR
 # The data-directory schema version this code expects (users.db
 # ``PRAGMA user_version``). Bump it together with a new step in
 # gamma/migrations.py — never without one, never without bumping.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 
 class SchemaOutdated(RuntimeError):
@@ -64,6 +64,22 @@ def safe_doc_id(doc_id: str) -> str:
 
 
 USERS_SCHEMA = [
+    # One row per AI call an account made, from the provider's own token
+    # report (gamma/ai_usage.py); Settings -> AI sums them.
+    """CREATE TABLE IF NOT EXISTS ai_usage (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL,
+        at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        provider_id TEXT NOT NULL DEFAULT '',
+        provider_name TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        input INTEGER NOT NULL DEFAULT 0,
+        output INTEGER NOT NULL DEFAULT 0,
+        cache_read INTEGER NOT NULL DEFAULT 0,
+        cache_write INTEGER NOT NULL DEFAULT 0
+    )""",
+    "CREATE INDEX IF NOT EXISTS ai_usage_user_at ON ai_usage (username, at)",
     """CREATE TABLE IF NOT EXISTS mcp_oauth (
         kind TEXT NOT NULL,
         key_hash TEXT NOT NULL,
@@ -184,6 +200,16 @@ PAGES_SCHEMA = [
         updated_at TEXT NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_ub_parent ON unified_blocks(parent_id, position)",
+    # deleted_pages = tombstones of deleted pages (gamma/ops.py delete_page):
+    # a page's id, when it went and who removed it. A page listing can't
+    # tell "never existed" from "deleted since you last looked"; anything
+    # that reconciles two copies of a workspace (a backup merge, a mirror)
+    # needs the difference. Creating a page under the same id clears it.
+    """CREATE TABLE IF NOT EXISTS deleted_pages (
+        page_id TEXT PRIMARY KEY,
+        deleted_at TEXT NOT NULL,
+        actor TEXT NOT NULL DEFAULT ''
+    )""",
     # page_ops = the per-page operation log (gamma/ops.py): one row per
     # applied batch, `seq` counting up per page. Live clients follow it over
     # the page's websocket; a reconnecting client catches up with

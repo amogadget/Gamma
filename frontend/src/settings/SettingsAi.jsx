@@ -2,11 +2,13 @@
 // and the add/edit-key wizard. All state and handlers live in App.jsx (the
 // aiKeys* group) — these components only render it.
 import React from "react";
+import { API, apiJson } from "../shared/lib/utils";
 import { parseFolderTags } from "../library/libraryUtils";
 import { MenuSelect } from "../shared/ui/Menus";
+import { cachedPercent, fmtTokens, usageDetail } from "../chat/tokenUsage";
 import { ModelPicker } from "./ModelPicker";
-import { Section, SubDialog, Step, Field, Empty, PercentMeter, Row, PasswordInput } from "./SettingsKit";
-import { GlobeIcon, KeyIcon, MicIcon, PaperIcon, RefreshIcon, SparklesIcon, Trash2Icon } from "../shared/ui/Icons";
+import { Section, SubDialog, Step, Field, Empty, PercentMeter, Row, PasswordInput, StatText } from "./SettingsKit";
+import { ActivityIcon, GlobeIcon, KeyIcon, MicIcon, PaperIcon, RefreshIcon, SparklesIcon, Trash2Icon } from "../shared/ui/Icons";
 
 const DICTATION_LANGS = [
   ["", "Auto-detect"], ["en", "English"], ["zh", "中文"], ["ja", "日本語"], ["ko", "한국어"],
@@ -225,7 +227,108 @@ function ProviderForm({ value, onCancel }) {
   );
 }
 
-export function AiSettings({ value, taskModels }) {
+const USAGE_KIND_LABELS = { chat: "Chat", translate: "Translation", metadata: "Metadata", cite: "Citations", test: "Connection tests" };
+
+// Settings → AI → Token usage: what the account's AI calls cost in tokens,
+// as the providers reported it (GET /api/ai/usage — one row per call in
+// users.db, see gamma/ai_usage.py). Three tiles for today / 7 days /
+// 30 days, the all-time line with Reset, then the last 30 days by model
+// and by kind. No prices: they differ per provider and change.
+function AiUsageSection({ confirm, setStatus }) {
+  const [data, setData] = React.useState(null);
+  const [error, setError] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const load = React.useCallback(async () => {
+    setBusy(true);
+    try {
+      setData(await apiJson(`${API}/ai/usage`));
+      setError("");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+
+  function reset() {
+    const run = async () => {
+      try {
+        await apiJson(`${API}/ai/usage`, { method: "DELETE" });
+        setStatus?.("Token usage reset");
+        load();
+      } catch (err) {
+        setStatus?.(`Couldn't reset token usage: ${err.message}`);
+      }
+    };
+    if (confirm) {
+      confirm({ title: "Reset token usage", message: "Forget every recorded token count of this account? The providers' own dashboards are not affected.", confirmLabel: "Reset", danger: true, onConfirm: run });
+    } else run();
+  }
+
+  const w = data?.windows || {};
+  const tile = (label, u, icon = ActivityIcon) => (
+    <StatText icon={icon} label={label}
+      value={u?.calls ? `↑ ${fmtTokens(u.input)} · ↓ ${fmtTokens(u.output)}` : "—"}
+      hint={u?.calls ? `${u.calls} call${u.calls === 1 ? "" : "s"}${cachedPercent(u) ? ` · ${cachedPercent(u)}% cached` : ""}` : "no calls"}
+      title={u?.calls ? usageDetail(u) : "No AI calls in this window"} />
+  );
+  const all = w.all;
+  const since = data?.first_at ? new Date(data.first_at).toLocaleDateString() : "";
+  const models = data?.models || [];
+  const kinds = Object.entries(data?.kinds || {}).sort((a, b) => (b[1].input + b[1].output) - (a[1].input + a[1].output));
+  return (
+    <>
+      <Section title="Token usage" action={
+        <button className="uiBtn sm" disabled={busy} title="Fetch the latest counts" onClick={load}>
+          <RefreshIcon size={12} /> Refresh
+        </button>} />
+      {error ? <p className="settingsPaneHint aiKeysError" role="alert">Usage unavailable: {error}</p> : null}
+      {!data && !error ? <p className="setNotice">Loading…</p> : null}
+      {data ? <>
+        <div className="setStats">
+          {tile("today", w.today)}
+          {tile("last 7 days", w.week)}
+          {tile("last 30 days", w.month)}
+        </div>
+        <Row icon={ActivityIcon} label="All time"
+          hint={all?.calls
+            ? `↑ ${fmtTokens(all.input)} in · ↓ ${fmtTokens(all.output)} out · ${all.calls} calls${since ? ` since ${since}` : ""}`
+            : "No AI calls recorded yet — counts appear once a provider reports them."}
+          title={`Prompt tokens in, reply tokens out, as each provider reported them. Rows older than ${data.keep_days} days are dropped. ${usageDetail(all)}`}>
+          <button className="uiBtn sm danger" disabled={!all?.calls} onClick={reset}>Reset</button>
+        </Row>
+        {models.length ? (
+          <div className="aiUsageTable" role="table" aria-label="Token usage by model, last 30 days">
+            <div className="aiUsageRow aiUsageHeader" role="row">
+              <span>Model · last 30 days</span><span>calls</span><span>in</span><span>out</span><span>cached</span>
+            </div>
+            {models.map((m) => (
+              <div className="aiUsageRow" role="row" key={`${m.provider_id}:${m.model}`} title={usageDetail(m)}>
+                <span className="aiUsageModel">{m.model}{m.provider_name ? <em> · {m.provider_name}</em> : null}</span>
+                <span>{m.calls}</span>
+                <span>{fmtTokens(m.input)}</span>
+                <span>{fmtTokens(m.output)}</span>
+                <span>{cachedPercent(m) ? `${cachedPercent(m)}%` : "—"}</span>
+              </div>
+            ))}
+            {kinds.length > 1 ? kinds.map(([kind, u]) => (
+              <div className="aiUsageRow aiUsageKind" role="row" key={kind} title={usageDetail(u)}>
+                <span className="aiUsageModel">{USAGE_KIND_LABELS[kind] || kind}</span>
+                <span>{u.calls}</span>
+                <span>{fmtTokens(u.input)}</span>
+                <span>{fmtTokens(u.output)}</span>
+                <span>{cachedPercent(u) ? `${cachedPercent(u)}%` : "—"}</span>
+              </div>
+            )) : null}
+          </div>
+        ) : null}
+      </> : null}
+    </>
+  );
+}
+
+export function AiSettings({ value, taskModels, confirm, setStatus }) {
   const closeKeyForm = () => { value.setAiKeysForm(null); value.setAiKeysError(""); };
   const activeKeyId = value.aiKeysInfo?.providers.some((item) => item.id === value.aiProvider)
     ? value.aiProvider
@@ -378,6 +481,8 @@ export function AiSettings({ value, taskModels }) {
             options={(value.aiModels || []).map((model) => [model.id, model.model])} />
         </Row> : <p className="setNotice">Connect a service to choose models.</p>}
       </Section>
+      {value.aiKeysInfo?.can_edit ? <AiUsageSection confirm={confirm} setStatus={setStatus} /> : null}
+
       <Section title="Models for other tasks">
         <Row icon={PaperIcon} label="Metadata model"
           hint="Used only when identifiers cannot resolve the paper"

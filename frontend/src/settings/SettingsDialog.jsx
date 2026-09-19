@@ -1076,7 +1076,8 @@ export default function SettingsDialog({
                 {pane === "maintenance" ? <MaintenanceSettings value={library} /> : null}
                 {pane === "ai" ? <>
                   <PaneHead icon={SparklesIcon} title="Connections & models">Connections follow your account. Model choices apply to all chats in this browser.</PaneHead>
-                  <AiSettings value={aiValue} taskModels={<TranslationModels value={paperValue} />} />
+                  <AiSettings value={aiValue} taskModels={<TranslationModels value={paperValue} />}
+                    confirm={workspace?.confirm} setStatus={workspace?.setStatus} />
                 </> : null}
                 {pane === "assistant" ? <>
                   <PaneHead icon={MessageSquareIcon} title="Assistant">Shared settings for all chats in this browser, including changes from the chat settings shortcut.</PaneHead>

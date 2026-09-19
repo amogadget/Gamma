@@ -4,7 +4,7 @@
     "design/brand/compositions/hero-light.svg": "79bfe8a876dc90d712aecf8801b0102c3e111b8a45826ef0122b1c6c5d1c578f",
     "design/brand/compositions/logo.svg": "14872e644f9397c2ef2468d9e170b0910833931b4df92c88a2115cfe2393379a",
     "design/brand/marks/favicon.svg": "aa87ab7a445627b7cb8ffa71b63b36ceb6848815549233a0c6f6d8bd48a2002b",
-    "design/brand/outputs.json": "0936243bdae03b54aac8d58bdd54c4eb6e599b8ab0d242e74a8d510858280e0f",
+    "design/brand/outputs.json": "7660db6c75ec88438651e87e224b1079ca8c78e34f97f242bdbe2e4eeee5fe75",
     "design/brand/tokens.json": "8778598768aefb172e4dc17f43e060fff18f87717ffa00977b64494e341c397f",
     "frontend/package-lock.json": "abe9fbcd79def8f77486d434b0699da29b27142ce726b32717172439e08cf1e2",
     "frontend/src/shared/illustrations/brands/LICENSE.md": "9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5",
@@ -17,10 +17,10 @@
     "tools/branding/build-connections.py": "b3ceeb30085c4c4944ba87b755ce88db46a0312b436224b26ec20276565d77c0",
     "tools/branding/build-library.py": "0d44cd6106c399eca96cf0a60a1b871ebb9302d9369d2e86ec73189ca6238bbb",
     "tools/branding/build-workspaces.py": "2edf1b5344f995e1976dcb313dc77e11fb12e3a2cf01d27f6b549070c5801f98",
-    "tools/branding/build.mjs": "8f084fd8997238d8f8fa9038d5de5f5389b1c7d210ec3570c8b357e109b43395",
+    "tools/branding/build.mjs": "7fdbe04220328fd708dc47300e9bb7b5d5011db392b2e5b16b03c24d5d099ccf",
     "tools/branding/check.test.mjs": "ceeaf77e8f668d8bb5f9ef9efcd3b3adb68b6974e35c433443cd1ec23e175d9c",
     "tools/branding/logo.mjs": "43bf2a2afdcdc7723a48e65c60bb6f8ba1debb9a108565fd962952bda22195f4",
-    "tools/branding/mark.mjs": "d5e8ea7c2c313e3658d67a897cf5c3fb535b9c153d3cfbac963ec7aaf9fadf9b",
+    "tools/branding/mark.mjs": "058db1f84fb4faa93e179f6b565eeb015b0598efe8dbd861c9e946317ef961e3",
     "tools/branding/render.mjs": "1a28eaead43ccd8ecf96e07b0b1b39b0c10b73c0ece25eba4476b5a93c5f2b92",
     "tools/branding/runtime.mjs": "7c1ba52f4b42922a9384e860132311affe5887370430399423311d8bca975836",
     "tools/branding/store-layouts.mjs": "5c8cb3841cbec2a5ee9a3c30a6a81a863fe16f0b64e88af99763aac516e9a915",
@@ -125,6 +125,42 @@
         1080
       ],
       "sha256": "f4b2c6750a7f1b50abf46ea5395a51ebb3a6a9bfd73e861171980b92163821f6"
+    },
+    "frontend/public/media/icons/apple-touch-icon.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon-bleed-0",
+      "size": [
+        180,
+        180
+      ],
+      "sha256": "9589fb2c765a503b286de74133607f460a5458b32b9735d920040d3726f2c743"
+    },
+    "frontend/public/media/icons/icon-192.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon-bleed-0",
+      "size": [
+        192,
+        192
+      ],
+      "sha256": "2a11f0b812f952ea3b56699ad70fd6b7bb6f8562e47d365d95a4c20b12477efa"
+    },
+    "frontend/public/media/icons/icon-512.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon-bleed-0",
+      "size": [
+        512,
+        512
+      ],
+      "sha256": "071e65866731666eb14cc5d77e5ea2931516e81f548ba05a49c87c89991d53e2"
+    },
+    "frontend/public/media/icons/icon-maskable-512.png": {
+      "source": "marks/favicon.svg",
+      "variant": "icon-bleed-4",
+      "size": [
+        512,
+        512
+      ],
+      "sha256": "f1e739f99b99a5bc7be50ea3a03d3806219f48c89bb894efad5246b09e5d0232"
     },
     "desktop/assets/icon.png": {
       "source": "marks/favicon.svg",

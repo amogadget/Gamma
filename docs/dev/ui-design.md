@@ -97,155 +97,31 @@ Destructive affordances all read from one set of tokens — `--danger`,
 secondary, `.uiBtn.danger` and a menu's `danger` row are the same red in both
 themes. Never hardcode a red.
 
-### The share dialog
+### The share popover
 
-`sharing/ShareDialog.jsx` (the topbar link button) is the one place a page is
-published. It is built exactly like the workspace Manage dialog: a
-`SubDialog` of `Section`s — Link (the address as the row hint, Copy link),
-General access (`Row`s with a `MenuSelect` for Anyone with the link /
-Signed-in users / Only people invited and one for Can view / Can edit, an
-amber `.shareWarn` hint when a link is editable without sign-in), People
-(`aiProvRow` rows: the owner, then each invited account with its own
-`MenuSelect` and a `uiBtn sm iconSq` remove; the section's action opens the
-invite sub-dialog: `AccountPicker` + access), the page's Citation section
-(App.jsx owns it) and Actions (Reset link, Stop sharing `uiBtn sm danger`).
-Every change saves at once; nothing is a bespoke control. The read-only view
-shows the counterpart tag ("Can edit · shared by …", and "as <name>" for a
-visitor without an account) in its top bar.
+`sharing/SharePopover.jsx` (the topbar link button) is the one place a page
+is published. It is a popover under its button, like the account menu (App
+wraps it in a `data-popover="share"` anchor, so the outside-click and Escape
+rules close it; on phones the bottom bar's popover rule spans it across the
+screen), built from the settings kit like the workspace Manage dialog:
+`Section`s — Link (the address as the row hint, Copy link and a danger
+`iconSq` Stop sharing), Access (pictured, not described: three
+`PictureChoices` tiles with a glyph where a preview would be — Anyone /
+Signed in / Invited only — and, as the section's action, one View / Edit
+`Segmented`; one summary sentence under the tiles is the only prose, amber
+`.shareWarn` when a link is editable without sign-in), People (`aiProvRow`
+rows: the owner, then each invited account with its own View / Edit
+`Segmented` and a `uiBtn sm iconSq` remove; the section's Invite action
+toggles an inline form — compact `AccountPicker` + access — a popover can't
+host a modal) and the page's Citation section (App.jsx owns it: a `citeHead`
+label line, then a `CopyBox` — text with the copy button pinned top-right —
+for the slide citation and for BibTeX; the section's action regenerates).
+Every change saves at once; nothing is a bespoke control. There is no
+"reset link": stopping and sharing again mints a new address. The read-only
+view shows the counterpart tag ("Can edit · shared by …", and "as <name>" for
+a visitor without an account) in its top bar.
 
-## Settings primitives
-
-### Show the result while editing
-
-A setting that changes a visible surface shows one live example of that
-surface with its controls beside it. Each control adds, removes or updates
-the matching element at once. Reuse the real product component so the
-preview stays accurate, and keep its shared styling and states (hover,
-shadow, focus). Bespoke CSS around it is layout only. On small screens the
-controls go below the preview.
-
-Library Display is the model: one `PageCard` with independent Thumbnails,
-Folders and Labels switches. Mutually exclusive palettes (themes) use a set
-of miniature cards instead.
-
-The Import and Export dialogs are the other `PictureChoices` surface: format
-and source cards grouped by file type (app logos for app formats, the shared
-PDF, notes and Markdown icons for document formats, all monochrome at one
-size), then a review step whose switches sit beside an illustrative page
-(`shared/illustrations/TransferPreview.jsx`, an example of the output, not a
-render of the document). The flow and its rules are described in
-[import_export.md](import_export.md).
-
-UI illustrations live in [illustrations/](../../frontend/src/shared/illustrations/README.md),
-one file per subject: React components for drawings that change with
-controls, SVG files for fixed ones, and one shared stylesheet. They reuse
-existing icons and widgets; control logic and layout stay with their owners.
-
-Settings panes are built only from
-[SettingsKit.jsx](../../frontend/src/settings/SettingsKit.jsx):
-
-- `PaneHead` / `Section` / `Row` / `Toggle`: small icon, readable label, short
-  hint and shared control. Rows use the shared hover background without a drop
-  shadow. Important effects stay visible; supplementary help uses a hover
-  tooltip, without an explicit Details toggle.
-- Larger areas (AI, workspace management and administration) get second-level
-  navigation with Back to settings. Short pages keep the main sidebar. Search
-  opens the relevant page and focuses the matching setting.
-- Appearance uses `PictureChoices` theme cards (`uiBtn` + `on`) with small
-  decorative SVG palette sketches beside the labels (stacked on narrow
-  screens). Its rows are not interactive surfaces, so they suppress the
-  shared hover fill; grouped rows use straight dividers. A PDF sample
-  reflects the current tint and dark-page switch. Account and browser scopes
-  sit beside section headings; the controls are the shared `Row`, `Toggle`
-  and `Stepper`.
-- Editor dialogs: `SubDialog` › `.settingsForm` › `Step` (numbered wizard
-  stages) or `Field` (caption + hint + one control), closed by a
-  `.reportModalBtns` footer. Pass the draft to `SubDialog` so unsaved edits are
-  protected on Cancel, Escape and backdrop clicks.
-- Shared controls: `Segmented` (joined pills for exclusive choices),
-  `PictureChoices` (illustrated cards for one exclusive choice: the theme
-  cards, the import/export format cards; `onConfirm` fires on double-click),
-  `ToggleGroup` (its multi-select counterpart: a wrapping row of small
-  icon + short-name chips, each an independent on/off — `uiBtn sm` with the
-  shared `on` state; the agent's per-tool permissions in Settings and in the
-  chat's ⚙ popover are one of these, never a column of checkboxes),
-  `UnitInput` (number + unit suffix — units never live in labels),
-  `Stepper` (−/+ around a readout for a small numeric range; the readout
-  is followed by the shared Reset button),
-  `PasswordInput` (a password box with a show/hide eye — a `ctlBtn` over the
-  input's right edge, outside the Tab order; it wraps the input's own class,
-  so the login page uses it with `loginInput` and every secret field in
-  Settings — account passwords, API keys — with `aiKeyInput`),
-  `CharSlider` (log-scaled character budget), `Stat` and `StatText` (the
-  numeric and the text tiles of a `.setStats` grid — the Server dashboard),
-  `LogBox` (level badges, an `extra` slot for a filter), `Empty`, `QuotaMeter`.
-
-## Theme
-
-Eight states: System (default, tracks `prefers-color-scheme` live) or pinned
-Light/Dark/Gamma Light/Gamma Dark/Sepia/Solarized Light/Gray — `gamma-theme` in
-localStorage (valid values are `THEMES` in `app/prefs.js`), applied as
-`data-theme` on the root element. The choice (plus
-"Flip page colors") also follows the account through `/api/prefs/appearance` —
-server wins on login and on window focus, changes push back; localStorage
-stays the instant-paint cache the `index.html` script reads. An inline script in `index.html` applies a pinned theme before
-first paint; `color-scheme` follows so native controls match. Scrollbars are
-themed rather than left to the OS: a global `scrollbar-width: thin` +
-`scrollbar-color: var(--scrollbar-thumb) transparent` (with a
-`::-webkit-scrollbar` fallback for older WebKit/Blink) in `shared/styles/app.css`.
-"Flip page colors" (`gamma-pdf-dark`) is separate and display-only: it
-inverts the PDF canvas (`.pdfDark`), swaps highlight blending from multiply
-to screen, and darkens the scroller surround.
-
-**Gamma Light** and **Gamma Dark** (`gamma-light`, `gamma-dark`) are the
-hero-derived brand themes: warm gray and amber, charcoal and soft gold. They
-add `--on-accent` (text on an accent surface) and `--accent-hover`. Gamma
-Light joins the light-ground and tinted-surround selector lists below; Gamma
-Dark gives the PDF viewer dark pages by default (`[data-theme="gamma-dark"]
-.pdfViewer` rules next to `.pdfDark`), so "Flip page colors" adds nothing there.
-
-**Sepia**, **Solarized Light**, and **Gray** are the eye-comfort modes and the themes that reach
-the PDF page as well as the chrome. Sepia: warm beige surfaces and dark teal
-text (`#073642`). Solarized Light (`solarized`) follows
-[VS Code's Solarized Light](https://github.com/microsoft/vscode/blob/main/extensions/theme-solarized-light/themes/solarized-light-color-theme.json):
-cream content surfaces (`#fdf6e3`), `#eee8d5` chrome, blue-gray text
-(`#657b83`), the stock Solarized accents and Solarized `.hljs-*` token
-colors; the desktop shell (`desktop/ui/theme.css`, `desktop/main.js`) and the
-`index.html` first-paint background carry the same palette. All three tint
-the PDF page the same way:
-`[data-theme="sepia"] .pdfViewer:not(.pdfDark)` tints the page by giving the
-page wrapper the `--pdf-paper` ground and letting the canvas `multiply` onto
-it. Multiply, not a `sepia()`/`hue-rotate` filter: white paper lands exactly
-on the ground color while figures only warm slightly. The canvas also gets
-`opacity: 0.82` — under multiply that leaves the paper invariant and lifts
-only the ink, black → `(1−α)·paper` ≈ `#2e2c29` (~12.6:1), the softened
-charcoal the eye-strain guidance recommends over pure black. **Gray** is the
-neutral counterpart — the same machinery driven by different tokens
-(`--pdf-paper: #f4f4f4`, `#2d2d2d` text ladder, Light's role colors) for
-users who want the glare cut without a color cast; the canvas multiply rule
-selects `:is([data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`
-and the viewer surround adds `gamma-light` to that list, so a new tinted theme only
-needs a token block plus membership in those lists. The tint needs no prop — `data-theme` is global, so it is pure CSS
-— and "Flip page colors" wins when both are on. Light-ground rules select
-`:is([data-theme="light"], [data-theme="gamma-light"], [data-theme="sepia"], [data-theme="solarized"], [data-theme="gray"])`;
-extend that list, don't add another copy.
-
-## Layout
-
-- Desktop: dockable windows via `react-resizable-panels` **v2** (v4 has an
-  incompatible API).
-- Phone (< 700 px, or a short coarse-pointer viewport): single full-width
-  panel with a bottom tab bar (`useIsPhone`, `.phoneTabBar` / `.phonePanel`).
-- View modes come from the URL query, no router lib: `/` home,
-  `/?page=<id>` paper, `/?share=<token>` read-only, `/?block=<id>`
-  jump-to-block.
-- Icons are hand-rolled SVGs in [Icons.jsx](../../frontend/src/shared/ui/Icons.jsx) —
-  add there, keep the stroke style.
-
-## File map (frontend/src)
-
-| File | Owns |
-|---|---|
+---|---|
 | `app/App.jsx` | routing, block-tree editor state, docks, the page's live session glue, AI chat glue (decomposition in progress) |
 | `collaboration/usePageCollab.js`, `shared/model/blockOps.js`, `collaboration/Presence.jsx` | the live session (ops out, ops + presence in), the pure tree diff/apply, the avatar stack / row chips ([collab.md](collab.md)) |
 | `app/prefs.js` | every localStorage preference (`useAppPrefs`) |

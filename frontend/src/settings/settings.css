@@ -388,6 +388,36 @@
 .aiProvModelsLabel { color: var(--text-dim); font-size: 10px; align-self: center; margin-right: 2px; }
 /* Provider rows double as the active-key picker in the Providers pane. */
 .aiProvSelectable { cursor: pointer; }
+/* Token usage by model (AI pane): a compact grid table, numbers right-aligned. */
+.aiUsageTable {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  margin: 6px 0 4px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.aiUsageRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px 64px 64px 60px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  min-height: 28px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.aiUsageRow > span:not(:first-child) { text-align: right; color: var(--text-muted); }
+.aiUsageRow:last-child { border-bottom: none; }
+.aiUsageHeader { font-weight: 600; color: var(--text-muted); background: var(--bg-surface); }
+.aiUsageHeader > span:first-child { color: var(--text-muted); }
+.aiUsageKind { background: var(--bg-block); }
+.aiUsageModel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.aiUsageModel em { font-style: normal; color: var(--text-dim); }
+@media (max-width: 600px) {
+  .aiUsageRow { grid-template-columns: minmax(0, 1fr) 40px 52px 52px; }
+  .aiUsageRow > span:last-child { display: none; }
+}
 /* The row is avatar · meta · actions — meta takes the slack so the text starts
    right after the glyph instead of floating in the middle of the row. */
 /* min-width is the wrap trigger: below it the actions move to their own

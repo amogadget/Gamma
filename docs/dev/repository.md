@@ -57,7 +57,8 @@ to move into a media directory.
 The frontend's `/assets/` URL namespace belongs to Vite's generated,
 content-hashed bundles. The backend sends those files with an immutable,
 one-year cache policy. Unversioned public files belong under `/media/`, sent
-`no-cache` with a real `304` on revalidation (`gamma/app.py`).
+`no-cache` with a real `304` on revalidation (`gamma/app.py`) — the favicon,
+the web app manifest and the home-screen icons ([ipad.md](ipad.md)).
 
 The pdf.js worker is one of those hashed assets: `frontend/src/pdf/PdfViewer.jsx`
 imports `pdfjs-dist/legacy/build/pdf.worker.min.mjs?url`, so it is always the

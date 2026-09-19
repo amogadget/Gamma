@@ -15,17 +15,19 @@ that may still carry the shape.
 """
 
 import json
+import re
 import sqlite3
 
 from .db import page_now
 from .note_markup import LEGACY_WIDTH_RE, obsidian_image_sizes
+from .storage import display_filename
 
 # The automatic title prefix Gamma used to give uploaded PDFs. Migrated pages
 # get the bare name plus an ``auto_title`` marker, so the metadata worker may
 # still replace the title exactly as for new pages.
 PDF_NOTES_PREFIX = "PDF Notes - "
 
-PAGES_STEPS = ("source_url_key", "image_width", "pdf_notes_title")
+PAGES_STEPS = ("source_url_key", "image_width", "pdf_notes_title", "upload_path_titles")
 
 # Tables data.db used to hold and no longer does: `annotations` and a
 # per-user `shares` (superseded by unified_blocks / the global shares table
@@ -88,6 +90,36 @@ def normalize_pages_db(conn: sqlite3.Connection) -> dict:
             "UPDATE unified_blocks SET content = ?, properties = ?, updated_at = ? WHERE id = ?",
             (title, json.dumps(props), now, block_id))
         counts["pdf_notes_title"] += 1
+
+    # (4) Pages whose original_filename kept a directory path (a browser
+    # once leaked a relative path into the file name): the marker becomes
+    # the leaf, and the title follows only while it still equals the
+    # generated one (a user-renamed page cannot match).
+    for block_id, content, raw in conn.execute(
+            "SELECT id, content, properties FROM unified_blocks WHERE parent_id = 'root' "
+            "AND properties LIKE '%\"original_filename\"%' "
+            "AND (properties LIKE '%/%' OR properties LIKE '%\\%')"
+    ).fetchall():
+        props = _load_props(raw)
+        if props is None:
+            continue
+        original = str(props.get("original_filename") or "").replace("\\", "/").strip()
+        leaf = display_filename(original)
+        if not leaf or leaf == original:
+            continue
+        next_content = content
+        if props.get("markdown_import"):
+            old_stem = re.sub(r"\.(?:md|markdown)$", "", original, flags=re.I)
+            if content == old_stem:
+                next_content = re.sub(r"\.(?:md|markdown)$", "", leaf, flags=re.I)
+        elif props.get("auto_title") == content and display_filename(content) == leaf:
+            next_content = leaf
+            props["auto_title"] = leaf
+        props["original_filename"] = leaf
+        conn.execute(
+            "UPDATE unified_blocks SET content = ?, properties = ?, updated_at = ? WHERE id = ?",
+            (next_content, json.dumps(props), now, block_id))
+        counts["upload_path_titles"] += 1
 
     conn.commit()
     return counts

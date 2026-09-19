@@ -366,6 +366,23 @@ export async function settingsScenarios(env) {
     } finally { await ctx.close(); }
   });
 
+  await step("settings: token usage section lists the account's AI calls", async () => {
+    const { ctx, page } = await setup();
+    try {
+      await openSettings(page);
+      await search(page, "token", "Token usage");
+      const section = page.locator(".settingsPane");
+      await row(page, "All time").waitFor();
+      assert((await row(page, "All time").innerText()).includes("No AI calls recorded yet"));
+      assertEq(await row(page, "All time").getByRole("button", { name: "Reset" }).isDisabled(), true);
+      const usage = await user.api("/api/ai/usage");
+      assertEq(usage.windows.all.calls, 0);
+      assertEq((await user.api("/api/ai/usage", { method: "DELETE" })).deleted, 0);
+      assert((await section.innerText()).includes("no calls"), "the window tiles say no calls");
+      assertNoProblems(page);
+    } finally { await ctx.close(); }
+  });
+
   await step("settings: chat shortcuts update global model, context, and tool preferences", async () => {
     const { ctx, page } = await setup();
     try {

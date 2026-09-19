@@ -427,6 +427,52 @@ deliberately nothing on disk; it makes halts/retries/re-shows free until a
 restart. Duplicate paragraphs within a request go upstream once. Caps: 200
 texts / 60k chars per request.
 
+## Token usage
+
+Every AI call's token counts come back from the provider itself and are
+kept per account, so the chat can show what a reply cost and Settings can
+show what a week cost. Code: `gamma/ai_usage.py`, `ai_client.normalize_usage`,
+`frontend/src/chat/tokenUsage.js`.
+
+- **On the wire.** `sse_events` ends every stream with a `("usage", {input,
+  output, cache_read, cache_write})` event when the provider reported one:
+  Anthropic's `message_start` (input, cache read/write) + the final
+  `message_delta` (output); the Responses wire's `response.completed`;
+  Chat Completions' trailing usage chunk, which the request asks for with
+  `stream_options.include_usage` (OpenAI, vLLM, Ollama, llama.cpp, LiteLLM
+  all honour it). Non-stream JSON bodies carry `usage` and `read_reply` /
+  `call_ai` pass it to an `on_usage` callback. `input` is the whole prompt as
+  the provider counted it (Anthropic's uncached + cache-read + cache-write
+  parts summed, the way OpenAI's `prompt_tokens` already includes
+  `cached_tokens`); `cache_read` / `cache_write` are the cached parts of it.
+  A provider that reports nothing (some gateways) yields no event, and
+  nothing else changes.
+- **In the chat stream.** `/api/ai/chat` emits `{"usage": …}` lines — one per
+  provider turn, so an agent reply with three tool rounds sends three; the
+  client sums them onto the reply (`usage` on the saved message, like
+  `context` and `actions`). Non-stream callers get one summed `usage` field.
+  The panel shows a dim line under each reply (↑ input, ↓ output, "N%
+  cached" when the provider served part of the prompt from its cache) and
+  the conversation total in the chat-settings popover and the button's
+  tooltip. Replies saved before this carry no counts and show nothing.
+- **Stored.** `ai_usage.record` writes one row per call to `ai_usage` in
+  `users.db` (account, time, kind, provider id + name, model, the four
+  counts); `ai_usage.recorder(kind, entry, rt)` is the `on_usage` callback the
+  call sites bind (`rt["user"]` names the account). Kinds: `chat` (every
+  chat turn, agent rounds included), `translate` (each batch), `metadata`
+  (AI extraction), `cite` (the slide citation), `test` (the Test button and
+  the login test). Dictation has no token report. Rows older than
+  `KEEP_DAYS` (400) go on the next write. Recording never raises.
+- **Shown.** `GET /api/ai/usage` → `{windows: {today, week, month, all} →
+  {calls, input, output, cache_read, cache_write}, kinds: {kind → the same}
+  and models: [{provider_id, provider_name, model, …}] over the last 30
+  days, first_at, keep_days}`; `DELETE /api/ai/usage` forgets the account's
+  rows. Settings → AI → Connections & models → **Token usage** renders three
+  tiles (today / 7 days / 30 days), the all-time line with Reset, and a
+  by-model table (plus a by-kind block when more than one kind ran).
+  Guests never see it (no providers). No prices anywhere: they differ per
+  provider and change; the tokens are what every provider agrees on.
+
 ## Chat history buckets
 
 Focused page id in the paper view, `home` at the library root,

@@ -8,7 +8,7 @@ through barrel files. `main.jsx` remains the Vite entry point.
 | --- | --- |
 | `app/` | `App.jsx` connects the application views, navigation, saves, and docks; `prefs.js` and `sessionState.js` manage browser preferences and session restoration |
 | `auth/` | Login, session/share access screens (`LoginPage.jsx`) and MCP authorization (`McpConsent.jsx`) |
-| `chat/` | AI conversation panel (`ChatDock.jsx`), paper mentions, and chat permission settings |
+| `chat/` | AI conversation panel (`ChatDock.jsx`), paper mentions, chat permission settings, and the token-usage formatting (`tokenUsage.js`) shared with Settings |
 | `collaboration/` | `usePageCollab.js`, the pure `collabSession.js` state machine, and presence UI |
 | `editor/` | Outliner (`BlockTree.jsx`), CodeMirror (`BlockCmEditor.jsx`), undo history, Markdown and LaTeX editing, and slash commands |
 | `ink/` | Handwriting codec and geometry, input sampling, draft storage, and `InkLayer.jsx` |
@@ -16,7 +16,7 @@ through barrel files. `main.jsx` remains the Vite entry point.
 | `pdf/` | `PdfViewer.jsx`, document loading, citations, translation, and scroll alignment |
 | `search/` | Workspace search (`SearchPanel.jsx`) |
 | `settings/` | `SettingsDialog.jsx`, individual settings panes, shared pane controls (`SettingsKit.jsx`), navigation, integration setup, and `settings.css` |
-| `sharing/` | The page Share dialog (`ShareDialog.jsx`): link, general access, invited people, reset / stop |
+| `sharing/` | The page Share popover (`SharePopover.jsx`): link, access, invited people, stop sharing |
 | `transfers/` | Import/export dialogs (`ImportExport.jsx`), format rules, and upload/file chips (`FileChip.jsx`) |
 | `shared/model/` | Block tree helpers (`blockModel.js`), block operations (`blockOps.js`), and highlight colors |
 | `shared/lib/` | API transport and helpers (`utils.js`), search text normalization, and canvas sizing |

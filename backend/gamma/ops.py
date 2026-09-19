@@ -382,6 +382,26 @@ def commit_ops(ws: str, page_id: str, ops: list[dict], *, actor: str, client: st
         return after_commit(ws, conn, result)
 
 
+def delete_page(ws: str, conn, page_id: str, *, actor: str) -> dict:
+    """Delete a page: the subtree, its op log, then a ``deleted_pages``
+    tombstone (so a copy of the workspace can later tell a deleted page
+    from one it never had). Commits, sweeps orphan uploads, purges the
+    page's data.db rows, and tells the page's room to reload (which
+    surfaces the 404). Returns ``{deleted_ids, removed_uploads}``. Pages
+    are not blocks of any page, so this is the one writer outside the op
+    batches — every other block write goes through ``apply_ops``."""
+    deleted_ids = [r[0] for r in fetch_subtree(conn, page_id)]
+    delete_subtree(conn, page_id)
+    conn.execute("DELETE FROM page_ops WHERE page_id = ?", (page_id,))
+    conn.execute("INSERT OR REPLACE INTO deleted_pages (page_id, deleted_at, actor) VALUES (?, ?, ?)",
+                 (page_id, page_now(), actor))
+    conn.commit()
+    removed = cleanup_orphan_uploads(conn, ws_uploads_dir(ws))
+    block_index.purge_page_data(ws, conn, deleted_ids)
+    collab.publish_reload(ws, page_id)
+    return {"deleted_ids": deleted_ids, "removed_uploads": removed}
+
+
 def record_ops(ws: str, conn, page_id: str, ops: list[dict], *, actor: str) -> int:
     """Log + publish ops a writer performed with its own SQL (a cross-page
     move, whose two halves are a delete on one page and an arrival on the
