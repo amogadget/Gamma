@@ -24,7 +24,7 @@
       </svg></g>
   <text x="122" y="83" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="100" font-weight="700" letter-spacing="-2.7" fill="#1a1a18">Gamma<tspan font-weight="400" fill="#e8a020" dx="23">PDF</tspan></text>
 </g>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
       <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.10"/>
     </filter>
     <g id="folder" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round">
@@ -39,15 +39,26 @@
     </g>
   </defs>
   <rect width="1920" height="1080" fill="#f6f4ef"/>
-  <!-- Warm paper, amber curves and floating cards match the opening hero. -->
-  <g fill="none" stroke="#e8a020" stroke-width="3" opacity="0.24">
-    <path d="M-60 860 C190 1120 550 1030 800 960 S1430 900 1980 1040"/>
-    <path d="M-60 920 C220 1160 590 1080 850 1010 S1510 970 1980 1100"/>
+  <g fill="none" stroke="#e8a020" stroke-width="3" opacity="0.22">
+    <path d="M-60 920 C200 1160 510 1070 810 1000 S1400 920 1980 1080"/>
+    <path d="M-60 985 C240 1210 590 1110 920 1055 S1530 1010 1980 1150"/>
   </g>
   <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-    <use href="#gammaLogo" transform="translate(120 132) scale(0.6)"/>
-    <text x="120" y="332" font-size="80" font-weight="600" letter-spacing="-2" fill="#1a1a18">Your space.</text>
-    <text x="120" y="424" font-size="80" font-weight="600" letter-spacing="-2" fill="#1a1a18">A shared place.</text>
+    <g transform="translate(120 92) scale(0.5)">
+  <g transform="scale(2)"><svg width="48" height="48" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" id="svg-favicon-32">
+        <rect id="gamma-background" width="32" height="32" rx="7" fill="#1e1e1c"/>
+        <!-- both branches of standing wave -->
+        <path d="M 6 16 C 9 10.5 13 10.5 16 16 C 19 21.5 23 21.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 16 C 9 21.5 13 21.5 16 16 C 19 10.5 23 10.5 26 16" stroke="#e8a020" stroke-width="1.2" fill="none" opacity="0.6" stroke-linecap="round"/>
+        <path d="M 6 4  Q 2 16 6 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <path d="M 26 4 Q 30 16 26 28" stroke="#e8a020" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.9"/>
+        <rect x="9" y="8" width="13" height="3" rx="0.8" fill="#eeebe4"/>
+        <rect x="9" y="8" width="3" height="15" rx="0.8" fill="#eeebe4"/>
+      </svg></g>
+  <text x="122" y="83" font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="100" font-weight="700" letter-spacing="-2.7" fill="#1a1a18">Gamma<tspan font-weight="400" fill="#e8a020" dx="23">PDF</tspan></text>
+</g>
+    <text x="120" y="332" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">Your space.</text>
+    <text x="120" y="424" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">A shared place.</text>
     <text x="122" y="494" font-size="28" fill="#6b6a65">Keep personal libraries. Build knowledge together.</text>
     <text x="122" y="536" font-size="28" fill="#6b6a65">Papers, highlights and notes, organized by workspace.</text>
 
@@ -129,6 +140,6 @@
     <circle cx="1160" cy="883" r="6" fill="#43a77c"/>
     <text x="1178" y="891" font-size="22" fill="#6b6a65">Live edits and cursors</text>
     <text x="1764" y="891" text-anchor="end" font-size="21" fill="#6b6a65">Sam is viewing</text>
-    <text x="1335" y="984" text-anchor="middle" font-size="26" fill="#6b6a65">One library. Everyone on the same page.</text>
+    <text x="1335" y="984" text-anchor="middle" font-size="28" fill="#6b6a65">One library. Everyone on the same page.</text>
   </g>
 </svg>

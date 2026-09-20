@@ -47,3 +47,8 @@ reuse `design/brand/compositions/logo.svg`. Run the full build after modifying a
 Consumer copies stay committed at existing paths. The generator does not alter
 recordings, screenshots, third-party logos, or frontend theme CSS. The Gamma
 Light/Dark app themes remain in `frontend/src/shared/styles/app.css`.
+
+README feature illustrations share the logo placement, warm paper background, amber
+curves and card shadow defined in `branding.py`, with 72 px headings and 28 px
+introductory copy on a 1920 ? 1080 canvas. The real recordings use the matching
+16:9 paper frame in `tools/readme-media/media_output.py`.

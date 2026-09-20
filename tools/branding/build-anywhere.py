@@ -1,6 +1,6 @@
-"""Regenerate the light/dark 'read from any place' illustrations: one library on the
+"""Regenerate the light 'read from any place' illustrations: one library on the
 server, edited from the iPad, and the edit reaching every other device as it is typed."""
-from branding import MARK, DARK_PALETTE, to_dark, write_svg, typewriter
+from branding import MARK, write_svg, typewriter, SCENE_LOGO, SCENE_SHADOW, SCENE_BACKGROUND
 
 LOOP = 8  # seconds: a note is typed on the shared page, the sync runs, every device shows it
 K = lambda *ts: ';'.join(f'{t / LOOP:.4f}' for t in ts)  # keyTimes from seconds
@@ -19,9 +19,7 @@ svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" vie
   <desc id="desc">One library on the lab server, open on the office desktop, an iPad with a pencil and a phone. A note is typed on the shared page from the iPad; the sync button between the devices spins, and the new line appears on every other device's screen.</desc>
   <defs>
 MARK
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
-      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.10"/>
-    </filter>
+    {SCENE_SHADOW}
     <g id="server" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
       <rect x="2" y="3" width="36" height="12" rx="4"/><rect x="2" y="21" width="36" height="12" rx="4"/>
       <circle cx="9" cy="9" r="1.6" fill="currentColor"/><circle cx="9" cy="27" r="1.6" fill="currentColor"/>
@@ -37,18 +35,13 @@ MARK
       <rect x="0" y="0" width="150" height="6" rx="3"/><rect x="0" y="14" width="150" height="6" rx="3"/><rect x="0" y="28" width="110" height="6" rx="3"/>
     </g>
   </defs>
-  <rect width="1920" height="1080" fill="#f6f4ef"/>
-  <!-- Warm paper and amber curves match the opening hero. -->
-  <g fill="none" stroke="#e8a020" stroke-width="3" opacity="0.22">
-    <path d="M-60 900 C220 1140 560 1040 820 970 S1440 930 1980 1060"/>
-    <path d="M-60 960 C260 1180 620 1090 880 1020 S1520 1000 1980 1120"/>
-  </g>
+  {SCENE_BACKGROUND}
   <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-    <use href="#gammaLogo" transform="translate(120 132) scale(0.6)"/>
-    <text x="120" y="338" font-size="80" font-weight="600" letter-spacing="-2" fill="#1a1a18">Read from</text>
-    <text x="120" y="430" font-size="80" font-weight="600" letter-spacing="-2" fill="#1a1a18">any place.</text>
-    <text x="122" y="500" font-size="28" fill="#6b6a65">One library on your server, open on every device.</text>
-    <text x="122" y="542" font-size="28" fill="#6b6a65">A note written on one is on all of them as you type.</text>
+    {SCENE_LOGO}
+    <text x="120" y="332" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">Read from</text>
+    <text x="120" y="424" font-size="72" font-weight="600" letter-spacing="-2" fill="#1a1a18">any place.</text>
+    <text x="122" y="494" font-size="28" fill="#6b6a65">One library on your server, open on every device.</text>
+    <text x="122" y="536" font-size="28" fill="#6b6a65">A note written on one is on all of them as you type.</text>
     <g font-size="22" font-weight="500" fill="#5a4a24">
       <rect x="122" y="596" width="176" height="44" rx="22" fill="#ecdfc4"/><text x="210" y="625" text-anchor="middle">Any browser</text>
       <rect x="314" y="596" width="184" height="44" rx="22" fill="#ecdfc4"/><text x="406" y="625" text-anchor="middle">iPad + Pencil</text>
@@ -133,5 +126,3 @@ MARK
 '''.replace('MARK', MARK)
 
 write_svg('gamma-anywhere-light', svg)
-palette = {**DARK_PALETTE, '#8d8a82': '#8a877f', '#b9b6ae': '#5b5952', '#ffe28f': '#b98a2a', '#d8d4ca': '#4c4a43', '#cfccc4': '#4c4a43', '#a5a197': '#7d7a72', '#f3c65f': '#b98a2a'}
-write_svg('gamma-anywhere-dark', to_dark(svg, palette, '0.10'))

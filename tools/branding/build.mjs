@@ -91,7 +91,7 @@ if (check) {
     const result = spawnSync(process.env.PYTHON || 'python', [script], { cwd: ROOT, encoding: 'utf8' });
     if (result.error || result.status !== 0) throw new Error(result.error?.message || result.stderr || result.stdout);
     for (const p of result.stdout.split(/\r?\n/).map(line => line.trim().replaceAll(path.sep, '/')).filter(line => line.startsWith('docs/assets/branding/'))) {
-      emit(p, read(p), { source: script, variant: p.endsWith('-dark.svg') ? 'dark' : 'light' });
+      emit(p, read(p), { source: script, variant: 'light' });
     }
   }
   const browser = await chromium.launch({ headless: true });
@@ -105,7 +105,7 @@ if (check) {
     for (const [p, width, height, svg, transparent] of storeJobs) {
       emit(p, await renderPng(browser, svg, width, height, transparent), { source: 'tools/branding/store-layouts.mjs', variant: path.basename(p, '.png') });
     }
-    for (const theme of ['light', 'dark']) {
+    for (const theme of ['light']) {
       const p = `docs/assets/branding/gamma-hero-${theme}`;
       emit(`${p}.png`, await renderPng(browser, read(`${p}.svg`).toString(), 1920, 1080, false), { source: `${p}.svg`, variant: theme });
     }

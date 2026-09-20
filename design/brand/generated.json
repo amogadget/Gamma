@@ -1,10 +1,9 @@
 {
   "inputs": {
-    "design/brand/compositions/hero-dark.svg": "1596cca982e3e3fed0993cfe95a6382763b4fa5d67fe1996edc4e95c394da171",
     "design/brand/compositions/hero-light.svg": "79bfe8a876dc90d712aecf8801b0102c3e111b8a45826ef0122b1c6c5d1c578f",
     "design/brand/compositions/logo.svg": "14872e644f9397c2ef2468d9e170b0910833931b4df92c88a2115cfe2393379a",
     "design/brand/marks/favicon.svg": "aa87ab7a445627b7cb8ffa71b63b36ceb6848815549233a0c6f6d8bd48a2002b",
-    "design/brand/outputs.json": "7660db6c75ec88438651e87e224b1079ca8c78e34f97f242bdbe2e4eeee5fe75",
+    "design/brand/outputs.json": "4425bb552b190c549a96e91163a12c936a62e89ae9af521541fce7355847a2d6",
     "design/brand/tokens.json": "8778598768aefb172e4dc17f43e060fff18f87717ffa00977b64494e341c397f",
     "frontend/package-lock.json": "abe9fbcd79def8f77486d434b0699da29b27142ce726b32717172439e08cf1e2",
     "frontend/src/shared/illustrations/brands/LICENSE.md": "9046848b63a5c92bff14e4accca80bd987e0623b74adf9226ce5198d312b79d5",
@@ -15,17 +14,17 @@
     "frontend/src/shared/illustrations/brands/obsidian.svg": "ceee016a3e7afcfa931e19b3dfa9eb26685fc8a9b4f177ff921e358d628abb33",
     "frontend/src/shared/illustrations/brands/openai.svg": "2b4a04ddc2395b20d168694d3850ce2050a702c4a0cdeb4d8b31b9a970481a8c",
     "frontend/src/shared/illustrations/brands/zotero.png": "30c76a7a6441884df75567287db08ee40be6b763af7309f452a434800e069cd4",
-    "tools/branding/branding.py": "d6f93c728ca1f578eecec9504704e2d0b4cef05c57332dae5db63ef5794db175",
-    "tools/branding/build-anywhere.py": "7aa3a8621d3ead8540dda38f51de70ec767f5b764712299ee38e1b7d36529db1",
-    "tools/branding/build-connections.py": "4c2eb8e29073bc1c224001abfb5e9083ccc6b0967d0bb3ba74b0ebe92a9ad1ff",
+    "tools/branding/branding.py": "b80a46029c0783fd9229da74fb6a16997f4952459c4265741c3959c10170dbf9",
+    "tools/branding/build-anywhere.py": "af5f9fc0c5f5f9c5705a5b7be2d63a12f479e0a86bb4fcbaea222d852f479f66",
+    "tools/branding/build-connections.py": "0ca2bfc6bd5ddeea0e706e4860935aa4b04a0d78c1d51fdbee076ab3e377e993",
     "tools/branding/build-demos.py": "11ee38fd99d2c30bafbde6991f1d29d20deddce15b7583e825dc4e9ef8c24c91",
-    "tools/branding/build-library.py": "0d44cd6106c399eca96cf0a60a1b871ebb9302d9369d2e86ec73189ca6238bbb",
-    "tools/branding/build-workspaces.py": "89e36c71e07c1306612f38606066b07e29eb0a14f27b87058c8c2d9f86445c0b",
-    "tools/branding/build.mjs": "52cae29fa9a8658d6c83059fd22f01b6ae59bd21e860f7c0e4afd2506928be78",
+    "tools/branding/build-library.py": "f968a5f0aa5b9431f6e6ee6ca6948405c2e969fa73fb9283cf2a1ba02f830bba",
+    "tools/branding/build-workspaces.py": "1773e276ee16bb0e110f671bd77be4c27b333503c9c58c0d4aed7173f24b3a76",
+    "tools/branding/build.mjs": "667f07381a4ffbfa1c5d0f69b45f87430098dde193c09c151da774f4084fded6",
     "tools/branding/check.test.mjs": "ceeaf77e8f668d8bb5f9ef9efcd3b3adb68b6974e35c433443cd1ec23e175d9c",
     "tools/branding/logo.mjs": "43bf2a2afdcdc7723a48e65c60bb6f8ba1debb9a108565fd962952bda22195f4",
     "tools/branding/mark.mjs": "058db1f84fb4faa93e179f6b565eeb015b0598efe8dbd861c9e946317ef961e3",
-    "tools/branding/render.mjs": "70fc1b5ec2d2a282722ce5c82a482e6f063fa51a0e710506752c9d026696db06",
+    "tools/branding/render.mjs": "6a1bf0808bd8aaba7f8446b9d843530e11b028693c1066ccacb5ff2bc813014b",
     "tools/branding/runtime.mjs": "7c1ba52f4b42922a9384e860132311affe5887370430399423311d8bca975836",
     "tools/branding/store-layouts.mjs": "fe18376358075cd3ace68a155865c4b38ac20664b926c2491796169fbc4f3a23",
     "tools/branding/svg-source.mjs": "5b4843f96d03859e4f79b7f1ad8489b9e0e89507ab4636fe25e9ce55aa9fc020",
@@ -59,15 +58,6 @@
       ],
       "sha256": "4e34a59241ed8348ab4581df51aa010c3a739b4c2f11902921ef3b8932cf4b4d"
     },
-    "docs/assets/branding/gamma-hero-dark.svg": {
-      "source": "compositions/hero-dark.svg",
-      "variant": "hero",
-      "size": [
-        1920,
-        1080
-      ],
-      "sha256": "23881595e48efc540d3e0c95ed5211ca83e3a87e1739cdb5637ce27481d51314"
-    },
     "docs/assets/branding/gamma-logo.svg": {
       "source": "compositions/logo.svg",
       "variant": "logo",
@@ -84,16 +74,7 @@
         1920,
         1080
       ],
-      "sha256": "d93c36f21c3b69acdfdece8467b3bcf84542f11e63315bae338f12f851d3b299"
-    },
-    "docs/assets/branding/gamma-anywhere-dark.svg": {
-      "source": "tools/branding/build-anywhere.py",
-      "variant": "dark",
-      "size": [
-        1920,
-        1080
-      ],
-      "sha256": "80d379caef839d136b4596a1b79fa6edd079e19c9101b9480b7ffb24f309031f"
+      "sha256": "4ee016aea9f53473d0eceab41ce63e7b13096113bacdbc6598949581bd5e09e6"
     },
     "docs/assets/branding/gamma-connections-light.svg": {
       "source": "tools/branding/build-connections.py",
@@ -102,16 +83,7 @@
         1920,
         1080
       ],
-      "sha256": "3a73fb6800a879b2e43e00dafda87969373de223f1e8e63a942dfefcad958931"
-    },
-    "docs/assets/branding/gamma-connections-dark.svg": {
-      "source": "tools/branding/build-connections.py",
-      "variant": "dark",
-      "size": [
-        1920,
-        1080
-      ],
-      "sha256": "f76983bf77c0ba842215e235ebeb407a83ed89fdfe80609500c3317735df97d2"
+      "sha256": "5ed331696e6c0e2513bd5f735b5e949c8f51f32a0c7dcf382e4e80f79cb292e5"
     },
     "docs/assets/branding/gamma-demo-annotate-light.svg": {
       "source": "tools/branding/build-demos.py",
@@ -147,16 +119,7 @@
         1920,
         1080
       ],
-      "sha256": "c156f70f25de8526cb2d0fcf7fbb6186d03b1c5dcaf857f1fa3568e288e6278d"
-    },
-    "docs/assets/branding/gamma-library-dark.svg": {
-      "source": "tools/branding/build-library.py",
-      "variant": "dark",
-      "size": [
-        1920,
-        1080
-      ],
-      "sha256": "f4b2c6750a7f1b50abf46ea5395a51ebb3a6a9bfd73e861171980b92163821f6"
+      "sha256": "b7fe67ab2aff4603196f1e4b37ac70f2f67a2e36fbdb60e4150e4ad073f1c6c4"
     },
     "docs/assets/branding/gamma-workspaces-light.svg": {
       "source": "tools/branding/build-workspaces.py",
@@ -165,16 +128,7 @@
         1920,
         1080
       ],
-      "sha256": "9d8afcb6116d0fca895d2a99f7a021caa20d78604bf9cb4cf3d545bb898296b0"
-    },
-    "docs/assets/branding/gamma-workspaces-dark.svg": {
-      "source": "tools/branding/build-workspaces.py",
-      "variant": "dark",
-      "size": [
-        1920,
-        1080
-      ],
-      "sha256": "9ca9ac794a432eb37c01b609591c40856a876c8be67a2d772ae954020c70f34a"
+      "sha256": "5ba539205b7ea881f4cb0445b222fb0895c8be8194b92447ed7a52b0ce868f10"
     },
     "frontend/public/media/icons/apple-touch-icon.png": {
       "source": "marks/favicon.svg",
@@ -859,15 +813,6 @@
         1080
       ],
       "sha256": "4ffba8909ec5de392db0bf2fe128ac609227d49be1d0d5f7568b788021ebc08c"
-    },
-    "docs/assets/branding/gamma-hero-dark.png": {
-      "source": "docs/assets/branding/gamma-hero-dark.svg",
-      "variant": "dark",
-      "size": [
-        1920,
-        1080
-      ],
-      "sha256": "86a60cab8c4b911688e02ce4982f21fc3539248570558289d2b98359b3e5ef02"
     }
   }
 }

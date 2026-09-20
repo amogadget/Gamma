@@ -7,8 +7,10 @@ import time
 from imageio_ffmpeg import get_ffmpeg_exe
 
 ROOT = Path(__file__).resolve().parents[2]
-# The neutral 24 px frame around a 1440 x 900 capture that unifies the clips.
-FRAME = 'pad=1488:948:24:24:color=0xe8edf5'
+# Match the illustrations: warm paper, a fine card edge, and a 16:9 canvas.
+# Captures stay at 1440 px wide; detail crops are centered without stretching.
+FRAME = ('pad=iw+4:ih+4:2:2:color=0xe3e0d8,'
+         'pad=1728:972:(ow-iw)/2:(oh-ih)/2:color=0xf6f4ef')
 
 
 def concat_segments(master, sources, parts, tail):

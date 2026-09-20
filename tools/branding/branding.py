@@ -16,19 +16,16 @@ _logo = re.fullmatch(r'<svg\b[^>]*>(.*)</svg>', _logo, re.S).group(1)
 _logo = _logo.replace('{{gamma-mark}}', _mark).replace('{{logo-text}}', '#1a1a18')
 MARK += f'<g id="gammaLogo">{_logo}</g>'
 
-# Light-theme colours of the workspace and library scenes and their dark counterparts.
-DARK_PALETTE = {
-    '#f6f4ef': '#1b1b1a', '#ffffff': '#272725', '#e3e0d8': '#45443f',
-    '#1a1a18': '#f0ede6', '#6b6a65': '#a9a69e', '#f2f0ea': '#32312e',
-    '#ecdfc4': '#493b23', '#5a4a24': '#f1cf88', '#9a6b18': '#e8b451',
-    '#e1f1e9': '#253e32', '#287956': '#6fc89f',
-}
-
-
-def to_dark(svg, palette, shadow):
-    """Swap every palette colour and deepen the card shadow (light -> dark flood-opacity)."""
-    dark = re.sub(r'#[0-9a-f]{6}', lambda m: palette.get(m[0], m[0]), svg)
-    return dark.replace(f'flood-opacity="{shadow}"', 'flood-opacity="0.24"')
+# Shared framing for the README feature illustrations (1920 x 1080).
+SCENE_LOGO = f'<g transform="translate(120 92) scale(0.5)">{_logo}</g>'
+SCENE_SHADOW = '''<filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
+      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="0.10"/>
+    </filter>'''
+SCENE_BACKGROUND = '''<rect width="1920" height="1080" fill="#f6f4ef"/>
+  <g fill="none" stroke="#e8a020" stroke-width="3" opacity="0.22">
+    <path d="M-60 920 C200 1160 510 1070 810 1000 S1400 920 1980 1080"/>
+    <path d="M-60 985 C240 1210 590 1110 920 1055 S1530 1010 1980 1150"/>
+  </g>'''
 
 
 def write_svg(stem, svg):

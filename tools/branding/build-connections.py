@@ -1,8 +1,8 @@
-﻿"""Regenerate the light/dark connections illustrations (Python standard library)."""
+﻿"""Regenerate the light connections illustrations (Python standard library)."""
 import base64
 import xml.etree.ElementTree as ET
 
-from branding import ROOT, MARK, write_svg
+from branding import ROOT, MARK, write_svg, SCENE_LOGO, SCENE_SHADOW, SCENE_BACKGROUND
 
 BRANDS = ROOT / 'frontend/src/shared/illustrations/brands'
 
@@ -14,34 +14,25 @@ def icon_path(name):
 openai, claude, obsidian, notion = map(icon_path, ('openai', 'claude', 'obsidian', 'notion'))
 zotero = base64.b64encode((BRANDS / 'zotero.png').read_bytes()).decode('ascii')
 
-for theme in ('light', 'dark'):
-    dark = theme == 'dark'
-    bg, card, ink, muted, edge, inset, chip, chipink = (
-        ('#1b1b1a', '#262624', '#f0ede6', '#a9a69e', '#3a3936', '#2f2f2c', '#3a3122', '#f0c470') if dark else
-        ('#f6f4ef', '#ffffff', '#1a1a18', '#6b6a65', '#e3e0d8', '#f2f0ea', '#ecdfc4', '#5a4a24')
-    )
-    svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+bg, card, ink, muted, edge, inset, chip, chipink = (
+    ('#f6f4ef', '#ffffff', '#1a1a18', '#6b6a65', '#e3e0d8', '#f2f0ea', '#ecdfc4', '#5a4a24')
+)
+svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
   <title id="title">Gamma PDF: your research, connected</title>
   <desc id="desc">Gamma in the middle of three connections. Left: an assistant prompt in Codex or Claude Code that mentions @Gamma and a paper card and asks how the blockade radius is measured; Gamma answers with papers and notes. Right: Obsidian, Notion and Zotero, with an Export arrow above and an Import arrow below. Bottom: the Gamma Connector browser extension saving a paper from a journal page, with the publisher sign-in saved per journal so the server can fetch its PDFs later.</desc>
   <defs>
 {MARK.replace('#1a1a18', ink)}
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
-      <feDropShadow dx="0" dy="16" stdDeviation="18" flood-color="#000000" flood-opacity="{'0.24' if dark else '0.10'}"/>
-    </filter>
+    {SCENE_SHADOW}
     <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
       <path d="M2 2 8 5 2 8" fill="none" stroke="#e8a020" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
-  <rect width="1920" height="1080" fill="{bg}"/>
-  <g fill="none" stroke="#e8a020" stroke-width="3" opacity="0.18">
-    <path d="M-50 920 C230 1130 610 1090 920 1010 S1520 1020 1980 1110"/>
-    <path d="M-50 960 C260 1170 620 1130 960 1055 S1560 1070 1980 1150"/>
-  </g>
+  {SCENE_BACKGROUND}
   <g font-family="Inter, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">
-    <use href="#gammaLogo" transform="translate(140 80) scale(0.6)"/>
-    <text x="140" y="235" font-size="64" font-weight="600" letter-spacing="-2" fill="{ink}">Your research. Connected.</text>
-    <text x="142" y="288" font-size="26" fill="{muted}">Ask an assistant about your papers, save from the journal page,</text>
-    <text x="142" y="326" font-size="26" fill="{muted}">and move notes to and from the tools you already use.</text>
+    {SCENE_LOGO}
+    <text x="120" y="235" font-size="72" font-weight="600" letter-spacing="-2" fill="{ink}">Your research. Connected.</text>
+    <text x="122" y="288" font-size="28" fill="{muted}">Ask an assistant about your papers, save from the journal page,</text>
+    <text x="122" y="326" font-size="28" fill="{muted}">and move notes to and from the tools you already use.</text>
 
     <!-- Each surrounding cluster has one box and its own connection to Gamma. -->
     <g fill="none" stroke="#e8a020" stroke-width="3" stroke-linecap="round">
@@ -68,9 +59,9 @@ for theme in ('light', 'dark'):
     <text x="202" y="562" font-size="24" fill="{ink}">measured?</text>
     <rect x="330" y="540" width="2.5" height="28" fill="#e8a020"><animate attributeName="opacity" values="1;1;0;0" dur="1.1s" repeatCount="indefinite"/></rect>
     <path d="M202 598 H558" stroke="{edge}"/>
-    <path d="{openai}" transform="translate(184 646) scale(1.75)" fill="{'#45c5a1' if dark else '#10a37f'}"/>
+    <path d="{openai}" transform="translate(184 646) scale(1.75)" fill="#10a37f"/>
     <text x="238" y="678" font-size="26" font-weight="600" fill="{ink}">Codex</text>
-    <path d="{claude}" transform="translate(340 646) scale(1.75)" fill="{'#e5a185' if dark else '#c15f3c'}"/>
+    <path d="{claude}" transform="translate(340 646) scale(1.75)" fill="#c15f3c"/>
     <text x="394" y="678" font-size="26" font-weight="600" fill="{ink}">Claude Code</text>
     <text x="184" y="716" font-size="19" fill="{muted}">Any MCP client · one workspace you approve</text>
 
@@ -81,7 +72,7 @@ for theme in ('light', 'dark'):
 
     <rect x="1300" y="380" width="480" height="340" rx="22" fill="{card}" stroke="{edge}" stroke-width="1.5" filter="url(#shadow)"/>
     <text x="1344" y="432" font-size="24" font-weight="600" fill="{muted}">NOTES &amp; REFERENCE MANAGERS</text>
-    <path d="{obsidian}" transform="translate(1344 465) scale(2)" fill="{'#a78bfa' if dark else '#7c3aed'}"/>
+    <path d="{obsidian}" transform="translate(1344 465) scale(2)" fill="#7c3aed"/>
     <text x="1420" y="503" font-size="34" font-weight="600" fill="{ink}">Obsidian</text>
     <path d="{notion}" transform="translate(1344 543) scale(2)" fill="{ink}"/>
     <text x="1420" y="581" font-size="34" font-weight="600" fill="{ink}">Notion</text>
@@ -120,4 +111,4 @@ for theme in ('light', 'dark'):
   </g>
 </svg>
 '''
-    write_svg(f'gamma-connections-{theme}', svg)
+write_svg('gamma-connections-light', svg)

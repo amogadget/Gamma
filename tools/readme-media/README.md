@@ -16,6 +16,7 @@ Delivery rules (every renderer applies them; `media_output.py` checks the result
 | Rule | Value |
 |---|---|
 | Capture | 1440 x 900 viewport = video size, light UI, visible cursor, eased pointer travel |
+| Frame | Warm paper `#f6f4ef`, fine card edge `#e3e0d8`, centered capture on a 1728 ? 972 (16:9) canvas; detail crops retain their proportions |
 | Edit | trim setup and static waits; never speed up typing, drawing or streaming |
 | Export | 25 fps animated WebP, below 5 MiB, no MP4 or GIF copy; encode from the capture or a lossless master |
 | Raster | 1120 px wide, quality 85, effort 6; `annotate-and-ink` and `reference-links` 1040 / 75 / 4; `native-agentic` 960 / 65 / 6 |

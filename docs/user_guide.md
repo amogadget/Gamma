@@ -116,7 +116,6 @@ The **link button** in the top bar shares the open page, Notion-style:
 ## Workspaces
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/branding/gamma-workspaces-dark.svg">
   <img alt="Personal workspaces next to a shared research library where an owner and an editor type into two blocks of the same page at the same time and a viewer reads along" src="assets/branding/gamma-workspaces-light.svg" width="100%">
 </picture>
 
@@ -131,7 +130,6 @@ A workspace is a separate library — its own pages, PDFs and chats. Your accoun
 ## Offline copies
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/branding/gamma-anywhere-dark.svg">
   <img alt="One library on the lab server, open on a desktop, an iPad and a phone; a note typed from the iPad appears on every other device as the sync between them runs" src="assets/branding/gamma-anywhere-light.svg" width="100%">
 </picture>
 
@@ -165,7 +163,6 @@ Many journal PDFs need a subscription your browser has (through the campus netwo
 ## Assistants: Codex and Claude Code
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/branding/gamma-connections-dark.svg">
   <img alt="Gamma in the middle of an assistant prompt that mentions @Gamma and a paper, the Obsidian, Notion and Zotero import and export arrows, and the Gamma Connector saving a paper with the publisher sign-in kept per journal" src="assets/branding/gamma-connections-light.svg" width="100%">
 </picture>
 

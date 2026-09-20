@@ -10,7 +10,7 @@ import subprocess
 import sys
 
 from imageio_ffmpeg import get_ffmpeg_exe
-from media_output import ROOT, concat_segments, encode_webp, publish
+from media_output import ROOT, FRAME, concat_segments, encode_webp, publish
 
 FF = get_ffmpeg_exe()
 SUITE = ROOT / 'artifacts/readme-media/suite'
@@ -112,7 +112,7 @@ def render(name):
             segments.append((cursor, a)); cursor = b
     segments.append((cursor, end))
     parts = [f'[0:v]trim=start={a:.3f}:end={b:.3f},setpts=PTS-STARTPTS' for a, b in segments]
-    tail = 'fps=25' + (f',{crop}' if crop else '') + ',scale=1440:-2:flags=lanczos,pad=iw+48:ih+48:24:24:color=0xe8edf5,setsar=1'
+    tail = 'fps=25' + (f',{crop}' if crop else '') + f',scale=1440:-2:flags=lanczos,{FRAME},setsar=1'
     master = directory / 'master.mkv'
     concat_segments(master, [source], parts, tail)
     output = directory / 'rendered.webp'
