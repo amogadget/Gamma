@@ -198,7 +198,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       } else {
         ctx.fillStyle = use.color;
         const pts = getStroke([...d.samples, ...(d.predicted || [])].map((s) => [s.x, s.y, s.p]),
-          outlineOptions({ size: use.size, pen: d.pen }));
+          outlineOptions({ size: use.size, pen: d.pen, brush: use.brush }));
         ctx.fill(new Path2D(svgPathFromPoints(pts)));
       }
     };
@@ -374,7 +374,7 @@ export function InkLayer({ pageNumber, wrapRef, width, height, blocks, tool, pen
       appendInkSample(d, e, true);
       const { use } = d;
       const stroke = encodeStroke({
-        tool: use.tool, color: use.color, size: use.size, opacity: use.opacity ?? 1, pen: d.pen,
+        tool: use.tool, brush: use.brush, color: use.color, size: use.size, opacity: use.opacity ?? 1, pen: d.pen,
         t0: d.t0, samples: d.samples, ch: d.pen ? "xypt" : "xyt",
       });
       L.onStroke?.(pageNumber, stroke, { width: L.width, height: L.height });
@@ -718,7 +718,7 @@ export function InkToolbar({ tools, active, options, eraserMode, eraserSize, las
         {tools.map((t, i) => {
           const hl = t.kind === "highlighter";
           const sizes = sizesFor(t.kind), k = Math.max(0, sizes.indexOf(t.size));
-          const label = `${hl ? "Highlighter" : "Pen"} ${t.color}, ${t.size} pt (${i + 1})` + (active === t.id ? " — tap again for options" : "");
+          const label = `${hl ? "Highlighter" : t.brush === "monoline" ? "Monoline" : "Pen"} ${t.color}, ${t.size} pt (${i + 1})` + (active === t.id ? " — tap again for options" : "");
           return btn(t.id, label, hl ? <HighlightIcon size={15} /> : <PenIcon size={15} />,
             <span className="inkToolInk" style={{ background: t.color, height: hl ? 3 + Math.round(k / 2) : 2 + Math.round(k / 3),
               opacity: hl ? 0.85 : 1 }} />);
@@ -738,6 +738,11 @@ export function InkToolbar({ tools, active, options, eraserMode, eraserSize, las
       </div>
       {options && preset ? (
         <div className="pdfInkSub" data-ink-options="tool">
+          {preset.kind === "pen" ? <>
+            {seg(preset.brush !== "monoline", "Pen", <PenIcon size={14} />, () => edit({ brush: "pen" }), "Pen: width follows stylus pressure")}
+            {seg(preset.brush === "monoline", "Monoline", <LineWidthIcon size={14} />, () => edit({ brush: "monoline" }), "Monoline: an even line at every pressure")}
+            <span className="pdfInkSep" />
+          </> : null}
           {palette.map((c) => (
             <button key={c} type="button" className={"colorBtn inkSwatch" + (preset.color === c ? " selected" : "")}
               style={{ background: c }} onClick={() => edit({ color: c })} title={c} aria-label={`Colour ${c}`} />

@@ -18,6 +18,7 @@ duplicate.
 | [latex-editing.md](latex-editing.md) | How LaTeX Workshop, Obsidian's LaTeX Suite and Overleaf complete `\commands` (fuzzy ranking, `@`/typed shorthands, snippet slots) and place their equation previews (hover with a caret marker, a strip anchored to the equation), and which of those Gamma's completion tiers, abbreviation table and docked preview took. |
 | [onboarding.md](onboarding.md) | How VS Code walkthroughs, Notion, Linear, Figma, Logseq, Readwise Reader and the tour libraries onboard a first user (content, task-driven tours, checklists, coach marks), why tours rot (selectors), and which pieces Gamma's guide took. |
 | [website.md](website.md) | What thirteen note and reading apps (Obsidian, Zotero, Readwise, Paperpile, Joplin, …) put on their front page, which patterns recur and which are optional, and the section order and tone gammapdf.com took from them. |
+| [hosting.md](hosting.md) | What running Gamma as a multi-tenant service with open registration would take: where the code assumes one machine (local uploads, per-workspace SQLite, in-process rooms, native sync work), the sharded-SQLite-plus-R2 shape picked over Supabase Postgres, R2 as a cache-backed primary and a two-layer backup target, and the registration, limit, abuse and operations gaps. |
 
 Conventions: one file per topic, dated where the survey has a shelf life,
 written after the fact from what was actually found. Add a row here for
